@@ -154,19 +154,38 @@ impl Painter<'_, '_> {
         let opacity = f32::from(record.opacity) / 255.0;
         let dev = self.device(rect);
 
-        // Background and border.
+        // Background and border. A uniform border is one stroked quad; a
+        // border that differs per side — a tab's underline, a banner's left
+        // bar — is the fill plus up to four thin quads, square-cornered.
         let fill = self.color(record.bg, None);
-        let border_w = style.border.t.max(style.border.r).max(style.border.b).max(style.border.l) * scale;
+        let b = style.border;
+        let uniform = b.t == b.r && b.r == b.b && b.b == b.l;
+        let border_w = b.t.max(b.r).max(b.b).max(b.l) * scale;
         let stroke = if border_w > 0.0 { self.color(record.border_color, None) } else { None };
         let radius = self.scene.theme.radius(record.radius).unwrap_or(0.0) * scale;
-        if fill.is_some() || stroke.is_some() {
-            self.push(Quad {
-                rect: dev,
-                params: [radius, if stroke.is_some() { border_w } else { 0.0 }, 0.0, opacity],
-                fill: fill.unwrap_or([0.0; 4]),
-                stroke: stroke.unwrap_or([0.0; 4]),
-                uv: [0.0; 4],
-            });
+        if uniform {
+            if fill.is_some() || stroke.is_some() {
+                self.push(Quad {
+                    rect: dev,
+                    params: [radius, if stroke.is_some() { border_w } else { 0.0 }, 0.0, opacity],
+                    fill: fill.unwrap_or([0.0; 4]),
+                    stroke: stroke.unwrap_or([0.0; 4]),
+                    uv: [0.0; 4],
+                });
+            }
+        } else {
+            if let Some(fill) = fill {
+                self.push(Quad { rect: dev, params: [radius, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4] });
+            }
+            if let Some(stroke) = stroke {
+                let [x, y, w, h] = dev;
+                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4] };
+                let (t, r, bo, l) = ((b.t * scale).round(), (b.r * scale).round(), (b.b * scale).round(), (b.l * scale).round());
+                if t > 0.0 { self.push(edge([x, y, w, t])); }
+                if bo > 0.0 { self.push(edge([x, y + h - bo, w, bo])); }
+                if l > 0.0 { self.push(edge([x, y, l, h])); }
+                if r > 0.0 { self.push(edge([x + w - r, y, r, h])); }
+            }
         }
 
         // Foreground colour inherits down the tree; text.default is the floor.

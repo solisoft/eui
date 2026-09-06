@@ -17,12 +17,17 @@ use crate::geom::{Constraint, Rect, Size};
 use crate::measure::TextMeasurer;
 use crate::style::{Length, Style};
 
-/// Border-box size and first baseline, margins excluded.
+/// Border-box size and first baseline, margins excluded. `content_w` /
+/// `content_h` are the border-box size the content alone asks for, before the
+/// node's own `width`/`height` and the parent's `Exact` constraint apply —
+/// the CSS min-content size, used for the automatic minimum of §4.3.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Metrics {
     w: f32,
     h: f32,
     baseline: f32,
+    content_w: f32,
+    content_h: f32,
 }
 
 /// One child placed inside its container, relative to the container's
@@ -298,7 +303,7 @@ impl Layout {
             _ => st.clamp_h(h, ch),
         };
         let baseline = baseline.map_or(h, |b| b + st.padding.t + st.border.t);
-        Metrics { w, h, baseline }
+        Metrics { w, h, baseline, content_w: content.w + st.inset_h(), content_h: content.h + st.inset_v() }
     }
 
     // ------------------------------------------------------------- arrange
@@ -475,6 +480,9 @@ impl Layout {
             frozen: bool,
             virtual_: bool,
             baseline: f32,
+            /// §4.3 automatic minimum: the content main size, below which a
+            /// non-scrolling child with an `auto` main-axis `min` never shrinks.
+            auto_min: Option<f32>,
         }
         let mut items: Vec<Item> = Vec::new();
         let mut cursor = 0.0f32; // for virtualisation, main-axis position so far
@@ -503,6 +511,16 @@ impl Layout {
                 self.hyp_main(f, c, cst, main_c, cross_c, row)
             };
             let hyp = if row { cst.clamp_w(hyp, main_c) } else { cst.clamp_h(hyp, main_c) };
+            let min_dim = if row { cst.min_width } else { cst.min_height };
+            let scrolls = matches!(f.session.node(c).map(|n| n.kind), Some(NodeKind::Scroll | NodeKind::List)) || cst.scroll_both;
+            let auto_min = if !virtual_ && cst.shrink > 0.0 && !scrolls && min_dim.resolve(main_c).is_none() {
+                // min(content size, specified size), as CSS does: a box given
+                // `width: 200` with nothing inside still shrinks.
+                let m = self.measure_axes(f, c, row, main_c.loosen().shrink(m_before + m_after), cross_c.loosen());
+                Some(if row { m.content_w.min(m.w) } else { m.content_h.min(m.h) })
+            } else {
+                None
+            };
             cursor += hyp + m_before + m_after + st.gap;
             items.push(Item {
                 ix: c,
@@ -517,6 +535,7 @@ impl Layout {
                 frozen: false,
                 virtual_,
                 baseline: 0.0,
+                auto_min,
             });
         }
 
@@ -590,6 +609,7 @@ impl Layout {
                     for &i in &live {
                         if let Some(it) = items.get_mut(i) {
                             let clamped = if row { it.st.clamp_w(it.main, main_c) } else { it.st.clamp_h(it.main, main_c) };
+                            let clamped = it.auto_min.map_or(clamped, |m| clamped.max(m));
                             if (clamped - it.main).abs() > 1e-3 {
                                 it.main = clamped;
                                 it.frozen = true;
@@ -752,7 +772,7 @@ impl Layout {
             let align = self.align_of(st, cst);
             let cw = match (align, cst.width, inner_w) {
                 _ if cst.width.resolve(inner_w).is_some() => Constraint::Exact(cst.width.resolve(inner_w).unwrap_or(0.0)),
-                (AlignItems::Stretch, Length::Auto, Constraint::Exact(_)) if !absolute_only => avail_w,
+                (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if !absolute_only => Constraint::Exact((b - cst.margin.horizontal()).max(0.0)),
                 _ => avail_w,
             };
             let ch = match (align, cst.height, inner_h) {

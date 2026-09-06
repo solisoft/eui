@@ -218,7 +218,10 @@ impl TextEngine {
             FontWeight::Bold => Weight::BOLD,
         };
         let attrs = Attrs::new().family(Family::Name(family)).weight(weight);
-        buffer.set_size(&mut self.fonts, max_width.filter(|w| w.is_finite() && *w >= 0.0), None);
+        // Layout re-measures a run at exactly the width it first reported; a
+        // wrap at float equality would then split it. A hair of slack keeps
+        // "measure, then lay out at that size" a fixed point.
+        buffer.set_size(&mut self.fonts, max_width.filter(|w| w.is_finite() && *w >= 0.0).map(|w| w + 0.05), None);
         buffer.set_text(&mut self.fonts, text, attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut self.fonts, false);
 

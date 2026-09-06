@@ -5,7 +5,7 @@
 //! running Soli, mount `<name>`'s component, fetch its assets, and render it
 //! in light and dark. `EUI_ALLOW_INSECURE_LOOPBACK=1` for a `ws://` URL.
 
-#![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, ThemeMode, Welcome};
@@ -123,5 +123,23 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32) {
         let file = format!("{name}-{mode_name}");
         std::fs::write(format!("{out}/{file}.rgba"), &px).unwrap();
         println!("{file} {dw} {dh} quads={} nodes={}", list.quads.len(), driver.session().live_nodes());
+        if std::env::var_os("SNAPSHOT_DUMP").is_some() {
+            if let Some(root) = driver.session().root() {
+                dump(&driver, root, 0);
+            }
+        }
+    }
+}
+
+/// `SNAPSHOT_DUMP=1`: one line per node, indented by depth — kind, id, rect
+/// and the text, for reading a layout without a screen.
+fn dump(driver: &Driver, ix: eui_tree::NodeIx, depth: usize) {
+    let s = driver.session();
+    let Some(node) = s.node(ix) else { return };
+    let rect = driver.layout().rect(ix).map_or("absent".to_owned(), |r| format!("{:.0},{:.0} {:.0}x{:.0}", r.x, r.y, r.w, r.h));
+    let text = s.text_of(ix).map_or(String::new(), |t| format!(" {t:?}"));
+    println!("{:indent$}{:?}#{} {rect}{text}", "", node.kind, node.id, indent = depth * 2);
+    for c in s.children(ix) {
+        dump(driver, *c, depth + 1);
     }
 }

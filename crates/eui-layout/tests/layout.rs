@@ -314,6 +314,61 @@ fn grid_lays_out_equal_columns_row_major() {
 // ------------------------------------------------------- scroll and list
 
 #[test]
+fn an_overflowing_column_does_not_squash_text_below_its_content_size() {
+    // Three 22 px lines in a 40 px column: CSS `min-height: auto` — the texts
+    // keep their height and overflow the box, they are not stacked on each other.
+    let mut b = B::default();
+    let c = b.style(col());
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 3);
+    let a = b.text(t, "one");
+    let bb = b.text(t, "two");
+    let cc = b.text(t, "three");
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 40.0);
+    assert_rect(&l, &s, a, 0.0, 0.0, 300.0, 22.0);
+    assert_rect(&l, &s, bb, 0.0, 22.0, 300.0, 22.0);
+    assert_rect(&l, &s, cc, 0.0, 44.0, 300.0, 22.0);
+}
+
+#[test]
+fn a_stack_stretches_auto_sized_children_on_both_axes() {
+    // A page column layered under a sheet fills the window, not its content
+    // width; an absolute layer keeps its own size.
+    let mut b = B::default();
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let t = b.style(st());
+    let layer = b.style(StyleRecord { position: Position::Absolute, width: px(100), ..st() });
+    b.push(NodeKind::Box, stack, 2);
+    let page = b.push(NodeKind::Box, t, 1);
+    b.text(t, "hi");
+    let sheet = b.push(NodeKind::Box, layer, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 300.0);
+    assert_rect(&l, &s, page, 0.0, 0.0, 400.0, 300.0);
+    assert_rect(&l, &s, sheet, 0.0, 0.0, 100.0, 300.0);
+}
+
+#[test]
+fn a_scroll_child_still_shrinks_to_fit_its_column() {
+    // A `scroll` has no automatic minimum: with a 22 px sibling in a 100 px
+    // column it takes the remaining 78 px and scrolls the rest.
+    let mut b = B::default();
+    let c = b.style(col());
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 2);
+    let head = b.text(t, "head");
+    let scroll = b.push(NodeKind::Scroll, c, 10);
+    let rows: Vec<u32> = (0..10).map(|i| b.text(t, &format!("row {i}"))).collect();
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 100.0);
+    assert_rect(&l, &s, head, 0.0, 0.0, 300.0, 22.0);
+    assert_rect(&l, &s, scroll, 0.0, 22.0, 300.0, 78.0);
+    assert_rect(&l, &s, rows[0], 0.0, 22.0, 300.0, 22.0);
+    assert_eq!(l.content_size(s.lookup(scroll).unwrap()), Some(Size::new(300.0, 220.0)));
+}
+
+#[test]
 fn scroll_clips_offsets_and_reports_content_size() {
     let mut b = B::default();
     let c = b.style(col());
@@ -393,16 +448,24 @@ fn display_none_is_absent_and_absolute_children_leave_the_flow() {
 
 #[test]
 fn a_tree_at_the_depth_limit_lays_out_without_blowing_the_stack() {
-    let mut b = B::default();
-    let c = b.style(StyleRecord { padding: [1; 4], ..col() }); // 2 px each side
-    for i in 0..255 {
-        b.push(NodeKind::Box, c, u32::from(i < 254));
-    }
-    let s = b.session();
-    let (l, _) = lay(&s, 2000.0, 2000.0);
-    let innermost = r(&l, &s, 255);
-    assert!((innermost.x - 508.0).abs() < 0.01, "{innermost:?}");
-    assert!((innermost.w - 984.0).abs() < 0.01, "{innermost:?}");
+    // Layout recurses per level. Measured for depth 255: under 512 KiB in
+    // release, ~2.3 MiB unoptimised — more than the 2 MiB a test thread gets.
+    // The thread below has the smallest main-thread stack among targets
+    // (1 MiB, Windows) in release, so the guarantee is what is tested.
+    let run = || {
+        let mut b = B::default();
+        let c = b.style(StyleRecord { padding: [1; 4], ..col() }); // 2 px each side
+        for i in 0..255 {
+            b.push(NodeKind::Box, c, u32::from(i < 254));
+        }
+        let s = b.session();
+        let (l, _) = lay(&s, 2000.0, 2000.0);
+        let innermost = r(&l, &s, 255);
+        assert!((innermost.x - 508.0).abs() < 0.01, "{innermost:?}");
+        assert!((innermost.w - 984.0).abs() < 0.01, "{innermost:?}");
+    };
+    let stack = if cfg!(debug_assertions) { 8 << 20 } else { 1 << 20 };
+    std::thread::Builder::new().stack_size(stack).spawn(run).unwrap().join().unwrap();
 }
 
 #[test]

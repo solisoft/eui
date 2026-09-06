@@ -97,7 +97,12 @@ If `free > 0`, each child with `grow > 0` receives `free × grow / Σ grow`.
 If `free < 0`, each child with `shrink > 0` loses
 `−free × (shrink × hypothetical) / Σ (shrink × hypothetical)`.
 
-Then clamp each child by its `min`/`max`. A child whose clamp changed its size
+Then clamp each child by its `min`/`max`. A child whose main-axis `min` is
+`auto` has an **automatic minimum** equal to its content main size (its size
+measured under a loosened main constraint), unless it is a `scroll` or `list`
+node or its `overflow` is `scroll`: such children shrink to zero. This is the
+CSS `min-width: auto` rule — a column that overflows its box overflows, it does
+not squash its children's text onto each other. A child whose clamp changed its size
 is **frozen** at the clamped size, the free space is recomputed over the
 remaining children, and the step repeats — at most eight times, after which
 remaining children keep their last computed size. This is the CSS resolution
@@ -136,8 +141,10 @@ them; a container with indefinite cross size takes their sum.
 
 Every child, in-flow or absolute, is laid out against the container's content
 box independently of its siblings. A child's size comes from its `width`/
-`height` when resolved, otherwise its content size given the container's inner
-size as available space. It is then positioned by `align_self` on the vertical
+`height` when resolved; otherwise an in-flow child under `stretch` (the
+default) fills the container's definite inner size on that axis, and any other
+child takes its content size given the container's inner size as available
+space. It is then positioned by `align_self` on the vertical
 axis and `justify` on the horizontal, with its margins as offsets from the
 chosen edge. Children paint in ascending `z`, ties in child order.
 
