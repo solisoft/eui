@@ -23,7 +23,8 @@ crates/
   eui-client driver, WSS transport, winit window                     [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
-  counter-app     the counter as a Soli app: `router_eui` + two functions
+  counter-app     counter, todo and a 10 000-row table as a Soli app, with
+                  the widget catalogue in app/controllers/eui_builders.sl
   snapshot        render the counter off-screen, for machines with no display
 www/         the documentation site, itself a Soli app
 ```

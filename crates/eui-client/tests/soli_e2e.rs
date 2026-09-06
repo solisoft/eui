@@ -136,3 +136,115 @@ fn the_counter_runs_end_to_end_against_soli() {
     assert_eq!(value(&driver).as_deref(), Some("3"));
     assert!(!driver.session().is_poisoned());
 }
+
+/// Connect, wait for the first mount, and hand back the pieces.
+fn open(port: u16, component: &str, w: f32, h: f32) -> (Driver, eui_client::Connection, mpsc::Receiver<()>) {
+    let url = format!("ws://127.0.0.1:{port}/_eui/session/{component}");
+    let mut driver = Driver::new(w, h, 1.0, 0);
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let conn = connect(&url, driver.hello().encode(), move || {
+        let _ = wake_tx.send(());
+    })
+    .expect("connect to soli");
+    pump(&mut driver, &conn, &wake_rx, |d| d.session().root().is_some());
+    (driver, conn, wake_rx)
+}
+
+fn click(driver: &mut Driver, conn: &eui_client::Connection, ix: eui_tree::NodeIx) {
+    let _ = driver.paint(800, 600);
+    let r = driver.layout().rect(ix).expect("target laid out");
+    driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    driver.input(Input::PointerDown(0));
+    for f in driver.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+}
+
+/// All text under a node, depth first.
+fn texts(d: &Driver, ix: eui_tree::NodeIx) -> Vec<String> {
+    d.session().preorder(ix).filter_map(|n| d.session().text_of(n).map(str::to_owned)).collect()
+}
+
+fn root(d: &Driver) -> eui_tree::NodeIx {
+    d.session().root().unwrap()
+}
+
+#[test]
+fn todo_toggles_by_prop_and_keeps_keyed_rows() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "todo", 800.0, 600.0);
+    assert!(texts(&d, root(&d)).iter().any(|t| t == "Ship the counter through Soli"));
+    assert!(texts(&d, root(&d)).iter().any(|t| t == "1 left"));
+
+    // The third row's checkbox: the rows column is the root's third child.
+    let rows = d.session().children(root(&d))[2];
+    let third = d.session().children(rows)[2];
+    let third_id = d.session().node(third).unwrap().id;
+    let checkbox = d.session().children(third)[0];
+    click(&mut d, &conn, checkbox);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "0 left"));
+    // Toggling patched the row in place: same row node id.
+    let rows = d.session().children(root(&d))[2];
+    assert_eq!(d.session().node(d.session().children(rows)[2]).unwrap().id, third_id);
+
+    // Type into the field and submit with Enter: a new keyed row appears.
+    let field = d.session().children(d.session().children(root(&d))[1])[0];
+    click(&mut d, &conn, field);
+    d.input(Input::Text("Fuzz the decoder".into()));
+    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // Wait for the *row*, not the text: the field shows the draft locally
+    // before the server has answered.
+    pump(&mut d, &conn, &wake, |d| d.session().children(d.session().children(root(d))[2]).len() == 4);
+    let rows = d.session().children(root(&d))[2];
+    assert!(texts(&d, rows).iter().any(|t| t == "Fuzz the decoder"));
+    assert!(texts(&d, root(&d)).iter().any(|t| t == "1 left"));
+
+    // Clear done removes three keyed rows and leaves the new one, id intact.
+    let new_row_id = d.session().node(d.session().children(rows)[3]).unwrap().id;
+    let footer = d.session().children(root(&d))[3];
+    let clear = d.session().children(footer)[2];
+    click(&mut d, &conn, clear);
+    pump(&mut d, &conn, &wake, |d| d.session().children(d.session().children(root(d))[2]).len() == 1);
+    let rows = d.session().children(root(&d))[2];
+    assert_eq!(d.session().node(d.session().children(rows)[0]).unwrap().id, new_row_id);
+}
+
+#[test]
+fn ten_thousand_rows_mount_within_budget_and_sort_by_moves() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let start = Instant::now();
+    let (mut d, conn, wake) = open(port, "table", 800.0, 600.0);
+    let mounted = start.elapsed();
+    // header row, column header, list → 10 000 rows × 5 nodes.
+    assert!(d.session().live_nodes() > 50_000, "{} nodes", d.session().live_nodes());
+    let list = d.session().children(root(&d))[2];
+    assert_eq!(d.session().children(list).len(), 10_000);
+    let first_row_id = d.session().node(d.session().children(list)[0]).unwrap().id;
+
+    // Layout and paint of 10 000 rows is virtualised: quick, and few quads.
+    let t = Instant::now();
+    let list_draw = d.paint(800, 600);
+    let painted = t.elapsed();
+    assert!(list_draw.quads.len() < 600, "{} quads for a 400 px list — a non-virtualised paint would be ~200 000", list_draw.quads.len());
+    eprintln!("table-10k: mounted in {mounted:?}, painted in {painted:?}, {} quads", list_draw.quads.len());
+    assert!(painted < Duration::from_millis(250), "paint took {painted:?}");
+
+    // Sort: the server answers with moves; the row that was first is now
+    // last, with the same id, and nothing was rebuilt.
+    let header = d.session().children(root(&d))[0];
+    let sort = *d.session().children(header).last().unwrap();
+    click(&mut d, &conn, sort);
+    pump(&mut d, &conn, &wake, |d| {
+        let list = d.session().children(root(d))[2];
+        d.session().node(*d.session().children(list).last().unwrap()).unwrap().id == first_row_id
+    });
+    let list = d.session().children(root(&d))[2];
+    assert_eq!(d.session().children(list).len(), 10_000);
+    let _ = d.paint(800, 600);
+}

@@ -136,12 +136,21 @@ binary builds exactly as before.
   interns atoms and styles per session, a tree diff, and a binary socket that
   validates every client event against the tree it last sent before it
   becomes a handler call.
-- `examples/counter-app` is the counter as a Soli app: two functions and a
-  file of builder functions, nothing native.
-- The end-to-end test starts the real `soli serve`, connects the real client
-  transport, clicks, and checks that three clicks leave the same nine nodes
-  with the same ids, and that a resync carries Soli's state with no
-  redefinitions.
+- `examples/counter-app` holds three components as a Soli app — the counter,
+  a todo list (keyed rows, a text field, checkboxes that report which item
+  they belong to through the node's props), and a 10 000-row table sorted by
+  `MoveChild` — plus `eui_builders.sl`, twenty-odd widgets composed from the
+  primitives: buttons in four variants, checkbox, switch, badge, card, tabs,
+  spinner, toast, dialog, field, form, table header and rows. Nothing native.
+- Measured against a **debug** `soli`: ten thousand rows mount in about 2 s
+  and paint in about 50 ms as 423 quads; a non-virtualised paint would be
+  around 200 000.
+- Three end-to-end tests start the real `soli serve` and drive it through
+  the real client transport: the counter's clicks leave the same nine nodes
+  with the same ids and a resync carries Soli's state; the todo toggles a row
+  in place by prop, adds a keyed row from a typed field, and clears three
+  rows leaving the fourth's id intact; the table mounts ten thousand keyed
+  rows and re-sorts them by moves.
 - Touched in `lang/`: `Cargo.toml`, three `#[cfg(feature = "eui")]`
   insertions in `src/serve/mod.rs`, one builtin in `router.rs`, and the new
   `src/serve/eui/` module. `src/live/`, `src/template/`, `src/vm/` and
