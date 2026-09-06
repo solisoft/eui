@@ -115,6 +115,8 @@ pub enum Instr {
     JumpIfFalse(usize),
     SetText(u32),
     SetProp(u32, u32),
+    /// Point the node with this key at a style table id, locally.
+    SetStyle(u32, u32),
     Emit(u32),
     Return,
 }
@@ -125,6 +127,7 @@ impl Instr {
         match self {
             Self::PushInt(_) | Self::PushStr(_) | Self::PushBool(_) | Self::Load(_) => (0, 1),
             Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) => (1, 0),
+            Self::SetStyle(..) => (0, 0),
             Self::Dup => (1, 2),
             Self::Add | Self::Sub | Self::Mul | Self::Eq | Self::Lt | Self::Gt | Self::And | Self::Or | Self::Concat => (2, 1),
             Self::Neg | Self::Not | Self::ToStr => (1, 1),
@@ -204,6 +207,11 @@ impl Chunk {
                     Instr::SetProp(node, atom)
                 }
                 0x32 => Instr::Emit(r.varint32().map_err(trunc)?),
+                0x33 => {
+                    let key = r.varint32().map_err(trunc)?;
+                    let style = r.varint32().map_err(trunc)?;
+                    Instr::SetStyle(key, style)
+                }
                 0x40 => Instr::Return,
                 other => return Err(VmError::UnknownOp(other)),
             };
@@ -287,6 +295,8 @@ pub trait Host {
     fn set_text(&mut self, node: u32, text: String) -> bool;
     /// Set a node's prop.
     fn set_prop(&mut self, node: u32, atom: u32, value: Value) -> bool;
+    /// Point a node at a style id.
+    fn set_style(&mut self, node: u32, style: u32) -> bool;
     /// Queue a server event named by `atom`.
     fn emit(&mut self, atom: u32);
 }
@@ -412,6 +422,11 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
                     return Err(VmError::Host("set_prop refused"));
                 }
             }
+            Instr::SetStyle(node, style) => {
+                if !host.set_style(node, style) {
+                    return Err(VmError::Host("set_style refused"));
+                }
+            }
             Instr::Emit(atom) => host.emit(atom),
             Instr::Return => return Ok(()),
         }
@@ -489,6 +504,13 @@ impl Asm {
         self.code.push(0x31);
         self.varint(node);
         self.varint(atom);
+        self
+    }
+    /// `set_style`.
+    pub fn set_style(mut self, node: u32, style: u32) -> Self {
+        self.code.push(0x33);
+        self.varint(node);
+        self.varint(style);
         self
     }
     /// `emit`.

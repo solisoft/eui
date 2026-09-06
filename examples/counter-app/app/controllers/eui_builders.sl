@@ -76,25 +76,10 @@ def input(value, on_change)
   }
 end
 
-# A button is a box with a click handler. Variants are roles, so it follows
-# the viewer into dark mode without the server knowing.
+# The primary button: accent roles, so it follows the viewer into dark mode
+# without the server knowing.
 def button(label, on_click)
-  {
-    "k": "box",
-    "s": {
-      "display": "row",
-      "justify": "center",
-      "align": "center",
-      "pad": [2, 4, 2, 4],
-      "min_width": 44,
-      "bg": "accent.base",
-      "fg": "accent.on",
-      "radius": 2,
-      "cursor": "pointer"
-    },
-    "on": {"click": on_click},
-    "c": [text(label, {"weight": "semibold"})]
-  }
+  button_variant(label, on_click, "accent.base", "accent.on")
 end
 
 def keyed(key, n)
@@ -128,21 +113,39 @@ def muted(content)
   )
 end
 
+# A button: a box with a click handler, and hover/pressed states that run
+# locally — the client repoints the node at a declared style on pointer
+# enter/down/up/leave, so feedback never waits for the network. The node is
+# keyed so the local handler can name it (`self`).
 def button_variant(label, on_click, bg, fg)
+  base = {
+    "display": "row",
+    "justify": "center",
+    "align": "center",
+    "pad": [2, 4, 2, 4],
+    "min_width": 44,
+    "bg": bg,
+    "fg": fg,
+    "radius": 2,
+    "cursor": "pointer"
+  }
+  hover = base.merge({
+    "bg": bg == "accent.base" ? "accent.hover" : bg,
+    "border": 1,
+    "border_color": "border.strong"
+  })
+  active = base.merge({"bg": bg == "accent.base" ? "accent.active" : "surface.sunken"})
   {
     "k": "box",
-    "s": {
-      "display": "row",
-      "justify": "center",
-      "align": "center",
-      "pad": [2, 4, 2, 4],
-      "min_width": 44,
-      "bg": bg,
-      "fg": fg,
-      "radius": 2,
-      "cursor": "pointer"
+    "key": "btn:" + on_click + ":" + label,
+    "s": base,
+    "on": {
+      "click": on_click,
+      "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
+      "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}},
+      "pointer_down": {"local": "self.style = @active", "styles": {"active": active}},
+      "pointer_up": {"local": "self.style = @hover", "styles": {"hover": hover}}
     },
-    "on": {"click": on_click},
     "c": [text(label, {"weight": "semibold"})]
   }
 end
@@ -402,7 +405,7 @@ end
 # `program` is the assembly list of spec/07; node targets are keys.
 def local_button(label, program, after)
   b = button(label, after)
-  b["on"] = {"click": {"local": program, "then": after}}
+  b["on"]["click"] = {"local": program, "then": after}
   b
 end
 

@@ -187,10 +187,13 @@ ship with, per `spec/07-bytecode.md`, now normative.
   exhausted budget aborts it and nothing is sent.
 - Chunks arrive inline in the session (`DefChunkBytes`, ≤ 64 KiB), so no
   asset endpoint and no HTTP client were needed for this step.
-- On the Soli side a local handler is written as an assembly list in the
-  view and targets nodes by key; the counter's `+` now increments its local
-  copy, rewrites the value, and *then* tells the server, which confirms or
-  corrects on the next batch. The `local { }` source syntax is not built.
+- On the Soli side a local handler is a small statement language —
+  `state.count += 1; value.text = str(state.count)`, `if … else`,
+  `self.style = @hover`, `emit("…")` — compiled by the server to a chunk;
+  the counter's `+` increments its local copy, rewrites the value, and *then*
+  tells the server, which confirms or corrects on the next batch. Every
+  catalogue button uses it for hover and pressed states, and the end-to-end
+  test watches the style id change under the pointer with no frame sent.
 - 7 VM tests; the driver runs a local handler with no round trip and stays
   silent when a chunk fails verification; the Soli end-to-end counter uses
   one.
@@ -206,6 +209,9 @@ Normative, in `spec/`, and stable enough to build against:
   version 1 leaves out.
 - **Events** (`spec/06`) — kinds, payloads, dispatch and emission rules;
   implemented by `eui-client`.
+- **Primitives, painting, focus** (`spec/03`) and **security** (`spec/08`),
+  each requirement naming where it is enforced. The specification set is
+  complete except for the conformance vectors document (`spec/09`).
 - **Transport** (`spec/01`) — discovery, the signed manifest, content-addressed
   assets, the session, framing.
 - **Budgets** (`spec/10`) — the wire numbers measured, the runtime numbers as
@@ -213,21 +219,12 @@ Normative, in `spec/`, and stable enough to build against:
 
 ## Designed, not yet specified
 
-Described on these pages in enough detail to argue with, but their normative
-spec documents (`spec/03` to `spec/09`) are **not written yet**. Until they
-are, the doc page is the design and there is nothing more precise to appeal to.
-
-- **Security** — the threat model. Its memory-safety half is built; the rest is
-  design.
-- **Widgets** — the fourteen primitives are in the wire format; the catalogue
-  is a list.
 
 ## Not started
 
 - `eui-vm` — the verifier and the metered interpreter.
 - Capability prompts and the manifest check in the client.
-- The `local { }` syntax in Soli views; chunk delivery by content hash and
-  the asset endpoint.
+- Chunk delivery by content hash and the asset endpoint; images.
 
 ## Scope, stated plainly
 

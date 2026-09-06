@@ -32,18 +32,10 @@ def counter_view(state)
         count.to_s,
         {"size": 7, "weight": "bold"}
       )),
-      row({"gap": 2}, [
-        button("−", "decrement"),
-        local_button("+", [
-          ["load", "count"],
-          ["push", 1],
-          ["add"],
-          ["dup"],
-          ["store", "count"],
-          ["to_str"],
-          ["set_text", "value"]
-        ], "increment")
-      ]),
+      row(
+        {"gap": 2},
+        [button("−", "decrement"), local_button("+", "state.count += 1; value.text = str(state.count)", "increment")]
+      ),
       text(
         "− is a round trip; + updates locally, then tells Soli.",
         {"fg": "text.muted", "size": 1}

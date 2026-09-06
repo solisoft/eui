@@ -69,6 +69,7 @@ its operands. All varints are as in [`02-wire-format.md`](02-wire-format.md).
 | `0x21` | `jump_if_false` | `i16` | `bool →` | |
 | `0x30` | `set_text` | `key:varint` | `str →` | the text of the first node whose key is atom `key`, locally |
 | `0x31` | `set_prop` | `key:varint atom:varint` | `any →` | that node's prop, locally |
+| `0x33` | `set_style` | `key:varint style:varint` | | point that node at a style table id, locally |
 | `0x32` | `emit` | `atom:varint` | | queue a server event named by the atom, payload = the root props |
 | `0x40` | `return` | | | stop |
 

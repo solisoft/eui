@@ -124,9 +124,17 @@ fn the_counter_runs_end_to_end_against_soli() {
     let _ = driver.paint(420, 260);
     let plus_ix = plus(&driver).unwrap();
     let r = driver.layout().rect(plus_ix).unwrap();
-    driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
-    driver.input(Input::PointerDown(0));
+    // Hover and press are local handlers Soli compiled from `self.style = @hover`:
+    // the button's style id changes with the pointer, and no frame leaves.
+    let base_style = driver.session().node(plus_ix).unwrap().style;
+    assert!(driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0)).is_empty());
+    let hover_style = driver.session().node(plus_ix).unwrap().style;
+    assert_ne!(hover_style, base_style, "pointer_enter repointed the button at its hover style");
+    assert!(driver.input(Input::PointerDown(0)).is_empty());
+    let active_style = driver.session().node(plus_ix).unwrap().style;
+    assert!(active_style != hover_style && active_style != base_style, "pointer_down: active style");
     let out = driver.input(Input::PointerUp(0));
+    assert_eq!(driver.session().node(plus_ix).unwrap().style, hover_style, "pointer_up: back to hover");
     assert!(matches!(out.as_slice(), [Frame::Event(e)] if e.event == EventKind::Click), "{out:?}");
     conn.tx.send(out[0].encode()).unwrap();
 
@@ -146,6 +154,9 @@ fn the_counter_runs_end_to_end_against_soli() {
             conn.tx.send(f.encode()).unwrap();
         }
     }
+    // Leaving the button restores its base style, locally.
+    driver.input(Input::PointerMove(1.0, 1.0));
+    assert_eq!(driver.session().node(plus_ix).unwrap().style, base_style, "pointer_leave: base style");
     assert_eq!(value(&driver).as_deref(), Some("3"), "the local copy is ahead");
     pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() >= Some(4));
     assert_eq!(value(&driver).as_deref(), Some("3"), "the server caught up");

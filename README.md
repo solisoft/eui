@@ -12,7 +12,7 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ## Layout
 
 ```
-spec/        02 wire, 04 layout, 05 theme, 06 events, 07 bytecode normative; 10 measured
+spec/        01–08 normative, 10 measured; 09 (conformance vectors) still to write
 crates/
   eui-proto  encode and decode. No dependencies, no unsafe            [built]
   eui-tree   session tables, node arena, patch application           [built]

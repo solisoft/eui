@@ -13,6 +13,7 @@ struct Mem {
     texts: HashMap<u32, String>,
     props: HashMap<(u32, u32), Value>,
     emitted: Vec<u32>,
+    styles: HashMap<u32, u32>,
     refuse_nodes: bool,
 }
 
@@ -38,9 +39,21 @@ impl Host for Mem {
         self.props.insert((node, atom), value);
         true
     }
+    fn set_style(&mut self, node: u32, style: u32) -> bool {
+        self.styles.insert(node, style);
+        true
+    }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
     }
+}
+
+#[test]
+fn set_style_repoints_a_node() {
+    let chunk = Chunk::verify(&Asm::new(1).set_style(9, 4).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.styles[&9], 4);
 }
 
 const COUNT: u32 = 1;

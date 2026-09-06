@@ -73,22 +73,31 @@ two places should look alike, they call the same function.
 `"on": {"click": "increment"}` names a **server** event: a round trip, the
 handler runs, the view re-renders, the diff comes back.
 
-A handler can also run **locally first**. The counter's `+` does:
+A handler can also run **locally first**. The counter's `+`:
 
 ```soli
-local_button("+", [
-  ["load", "count"], ["push", 1], ["add"], ["dup"], ["store", "count"],
-  ["to_str"], ["set_text", "value"]
-], "increment")
+local_button("+", "state.count += 1; value.text = str(state.count)", "increment")
 ```
 
-That list is assembled by the server into a chunk of the bytecode in
-`spec/07`, delivered once per session, verified by the client before its
-first run, and executed with a fuel budget: it reads the root node's props
-(`with_state({"count": count}, ...)` puts them there), increments, rewrites
-the node keyed `"value"`, and only *then* sends `increment` to the server —
-whose next batch confirms or corrects. No wait for the answer, no drift the
-server does not resolve.
+That string is a small statement language — assignments to `state.x`, to a
+keyed node's `.text` or `.style`, arithmetic and comparisons, `if … else`,
+`emit("name")`, and `self` for the node carrying the handler. Soli compiles
+it to a chunk of the bytecode in `spec/07`, delivers it once per session,
+and the client verifies it before its first run and executes it with a fuel
+budget. It reads the root node's props (`with_state({"count": count}, ...)`
+puts them there), rewrites the node keyed `"value"`, and only *then* sends
+`increment` to the server — whose next batch confirms or corrects.
+
+Every button in the catalogue uses the same mechanism for its states:
+
+```soli
+"pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}}
+```
+
+The `styles` map declares the records a handler may point at; the client
+switches the node between session styles it already holds, so hover and
+press cost no network and no allocation. An assembly-list form of `local`
+also exists for tooling.
 
 The rule stays: a local handler's effect is advisory, and **authorisation is
 never local**. A `local { … }` source syntax over this is not built yet; the

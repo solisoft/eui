@@ -175,6 +175,21 @@ impl Session {
         true
     }
 
+    /// Point a node at a style id from a local handler. The id must exist;
+    /// a chunk cannot invent styles, only pick among the session's.
+    pub fn set_style_local(&mut self, ix: NodeIx, style: u32) -> bool {
+        if style != 0 && self.styles.get(style).is_none() {
+            return false;
+        }
+        match self.arena.get_mut(ix) {
+            Some(n) => {
+                n.style = style;
+                self.arena.mark_dirty(ix).is_ok()
+            }
+            None => false,
+        }
+    }
+
     /// Set any node's prop from a local handler; `false` for an unknown node.
     pub fn set_prop_local(&mut self, ix: NodeIx, atom: u32, value: Value) -> bool {
         let Some(n) = self.arena.get_mut(ix) else { return false };

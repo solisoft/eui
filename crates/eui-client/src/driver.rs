@@ -590,6 +590,11 @@ impl eui_vm::Host for SessionHost<'_> {
         self.touched = true;
         self.session.set_prop_local(ix, atom, to_wire(value))
     }
+    fn set_style(&mut self, key: u32, style: u32) -> bool {
+        let Some(ix) = self.session.lookup_key(key) else { return false };
+        self.touched = true;
+        self.session.set_style_local(ix, style)
+    }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
     }
