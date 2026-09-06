@@ -280,9 +280,19 @@ impl ApplicationHandler<Wake> for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Nothing scheduled: `ControlFlow::Wait` sleeps until the OS or the
-        // transport wakes us.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A running transition is the only thing that ever wakes the loop by
+        // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
+        // transport speaks.
+        if self.driver.tick(std::time::Instant::now()) {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(match self.driver.next_frame_at() {
+            Some(at) => ControlFlow::WaitUntil(at),
+            None => ControlFlow::Wait,
+        });
     }
 }
 

@@ -3,12 +3,13 @@
 //! asked. Pure enough to be tested without a display or a network.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{paint, Atlas, DrawList, ImageAtlas, Scene};
+use eui_render::{colors_of, Colors, paint, Atlas, DrawList, ImageAtlas, Scene};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -64,6 +65,47 @@ struct Pointer {
     pressed_on: Option<NodeIx>,
 }
 
+/// One running transition: the colours it left, the colours it reaches,
+/// and when.
+#[derive(Debug, Clone, Copy)]
+struct Anim {
+    from: Colors,
+    to: Colors,
+    start: Instant,
+    duration: Duration,
+}
+
+impl Anim {
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.duration
+    }
+
+    /// The colours at `now`, eased; exactly `to` once the time is up.
+    fn at(&self, now: Instant) -> Colors {
+        if self.done(now) {
+            return self.to;
+        }
+        let t = now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32().max(1e-3);
+        let k = eui_theme::scale::ease(t);
+        Colors {
+            bg: mix(self.from.bg, self.to.bg, k),
+            fg: mix(self.from.fg, self.to.fg, k),
+            border: mix(self.from.border, self.to.border, k),
+            opacity: self.from.opacity + (self.to.opacity - self.from.opacity) * k,
+        }
+    }
+}
+
+/// Blend two optional colours; an absent side fades through transparent.
+fn mix(a: Option<[f32; 4]>, b: Option<[f32; 4]>, k: f32) -> Option<[f32; 4]> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(a), Some(b)) => Some([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k]),
+        (None, Some(b)) => Some([b[0], b[1], b[2], b[3] * k]),
+        (Some(a), None) => Some([a[0], a[1], a[2], a[3] * (1.0 - k)]),
+    }
+}
+
 /// The driver.
 pub struct Driver {
     session: Session,
@@ -81,6 +123,11 @@ pub struct Driver {
     focused: Option<NodeIx>,
     /// Focus came from the keyboard or the server: draw the ring (spec 03 §3).
     focus_visible: bool,
+    /// Running transitions (spec 03 §5), the clock they run on, and when the
+    /// next frame is due — the only reason the window ever wakes itself.
+    anims: Vec<(NodeIx, Anim)>,
+    now: Instant,
+    next_due: Option<Instant>,
     edits: HashMap<u32, String>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
@@ -119,6 +166,9 @@ impl Driver {
             pointer: Pointer::default(),
             focused: None,
             focus_visible: false,
+            anims: Vec::new(),
+            now: Instant::now(),
+            next_due: None,
             edits: HashMap::new(),
             chunks: HashMap::new(),
             granted: granted & caps::ALL,
@@ -196,6 +246,7 @@ impl Driver {
         match self.session.apply(batch) {
             Ok(()) => {
                 self.invalidate();
+                self.note_style_changes();
                 // Focus and edits follow the tree.
                 if self.focused.is_some_and(|f| self.session.node(f).is_none()) {
                     self.focused = None;
@@ -224,6 +275,58 @@ impl Driver {
     fn invalidate(&mut self) {
         self.layout_valid = false;
         self.redraw = true;
+    }
+
+    // ---------------------------------------------------------- transitions
+
+    /// Spec 03 §5: every style change whose new record asks for a transition
+    /// becomes an animation from the old record's colours — or, if the node
+    /// was already mid-transition, from wherever it visibly is.
+    fn note_style_changes(&mut self) {
+        for (ix, old) in self.session.take_style_changes() {
+            if self.session.node(ix).is_none() {
+                continue;
+            }
+            let new = self.session.style_of(ix);
+            let Some(ms) = new.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))) else { continue };
+            let to = colors_of(&self.session, &self.resolved, &new);
+            let from = match self.anims.iter().position(|(n, _)| *n == ix) {
+                Some(i) => self.anims.remove(i).1.at(self.now),
+                None => self.session.style(old).map_or(to, |r| colors_of(&self.session, &self.resolved, r)),
+            };
+            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)) }));
+            self.next_due = Some(self.now);
+            self.redraw = true;
+        }
+    }
+
+    /// Advance the clock. True when a transition frame is due, so the window
+    /// should redraw; false at rest, which is almost always.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        self.now = now;
+        match self.next_due {
+            Some(due) if now >= due => {
+                self.redraw = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// When the next transition frame is due — `None` at rest. The window
+    /// sleeps until then and not a moment less.
+    pub fn next_frame_at(&self) -> Option<Instant> {
+        self.next_due
+    }
+
+    /// True while any transition runs.
+    pub fn animating(&self) -> bool {
+        !self.anims.is_empty()
+    }
+
+    /// A role's colour under the viewer's current theme, `0xRRGGBBAA`.
+    pub fn theme_color(&self, role: eui_theme::Role) -> u32 {
+        self.resolved.color(role)
     }
 
     // --------------------------------------------------------------- input
@@ -660,8 +763,11 @@ impl Driver {
     /// Lay out if needed and produce this frame's draw list for a
     /// `w × h` device-pixel target. Clears the redraw flag.
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
+        self.note_style_changes();
         self.ensure_layout();
         self.redraw = false;
+        let now = self.now;
+        let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
         let list = paint(&mut Scene {
             session: &self.session,
             layout: &self.layout,
@@ -672,8 +778,12 @@ impl Driver {
             scale: self.scale,
             size: (device_w, device_h),
             focus: if self.focus_visible { self.focused } else { None },
+            overrides: &overrides,
         });
         self.session.clear_all_dirty();
+        // A finished transition painted its final colours this frame.
+        self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
+        self.next_due = if self.anims.is_empty() { None } else { Some(now + Duration::from_millis(16)) };
         list
     }
 

@@ -97,7 +97,8 @@ resolution against a parent.
 | 57 | 1 | `position` | 0 `flow`, 1 `absolute` (meaningful inside `stack`) |
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
-| 60 | 4 | — | reserved, MUST be zero |
+| 60 | 1 | `transition` | 0 none, else `motion` scale index + 1: colours and opacity animate into this record (03 §5) |
+| 61 | 3 | — | reserved, MUST be zero |
 
 A decoder MUST reject a record whose reserved bytes are non-zero, and MUST
 reject any enumerated field whose value is outside the range defined above.

@@ -28,6 +28,7 @@ struct VOut {
     @location(3) fill: vec4<f32>,
     @location(4) stroke: vec4<f32>,
     @location(5) uv: vec2<f32>,
+    @location(6) extra: vec4<f32>,
 };
 
 @vertex
@@ -53,6 +54,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     out.fill = inst.fill;
     out.stroke = inst.stroke;
     out.uv = mix(inst.uv.xy, inst.uv.zw, c);
+    out.extra = inst.extra;
     return out;
 }
 
@@ -63,7 +65,12 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let r = min(in.params.x, min(half.x, half.y));
     let q = abs(p) - half + vec2<f32>(r, r);
     let d = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
-    let coverage = 1.0 - clamp(d + 0.5, 0.0, 1.0);
+    var coverage = 1.0 - clamp(d + 0.5, 0.0, 1.0);
+    // A shadow: the rect was grown by the blur; fade from opaque one blur
+    // inside the true edge to nothing at the grown edge.
+    if (in.extra.y > 0.0) {
+        coverage = 1.0 - smoothstep(-2.0 * in.extra.y, 0.0, d);
+    }
 
     var color = in.fill;
     let border = in.params.y;

@@ -32,3 +32,39 @@ pub const RADIUS_FULL: f32 = 9999.0;
 
 /// Number of `radius` entries.
 pub const RADIUS_LEN: usize = 5;
+
+/// The motion easing curve of 05 §4, `cubic-bezier(0.2, 0, 0, 1)`, as
+/// progress `0..=1` → eased `0..=1`. Solved for the parameter by Newton's
+/// method: five steps are plenty for a monotone curve.
+pub fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let (x1, y1, x2, y2) = (0.2f32, 0.0f32, 0.0f32, 1.0f32);
+    let bez = |a: f32, b: f32, s: f32| 3.0 * a * (1.0 - s) * (1.0 - s) * s + 3.0 * b * (1.0 - s) * s * s + s * s * s;
+    let dbez = |a: f32, b: f32, s: f32| 3.0 * a * (1.0 - s) * (1.0 - 3.0 * s) + 3.0 * b * s * (2.0 - 3.0 * s) + 3.0 * s * s;
+    let mut s = t;
+    for _ in 0..5 {
+        let d = dbez(x1, x2, s);
+        if d.abs() < 1e-6 {
+            break;
+        }
+        s = (s - (bez(x1, x2, s) - t) / d).clamp(0.0, 1.0);
+    }
+    bez(y1, y2, s)
+}
+
+#[cfg(test)]
+mod ease_tests {
+    #[test]
+    fn the_curve_is_monotone_and_pinned_at_both_ends() {
+        assert_eq!(super::ease(0.0), 0.0);
+        assert!((super::ease(1.0) - 1.0).abs() < 1e-5);
+        let mut last = 0.0;
+        for i in 1..=20 {
+            let v = super::ease(i as f32 / 20.0);
+            assert!(v >= last, "{i}: {v} < {last}");
+            last = v;
+        }
+        // Ease-out: past the midpoint of time, most of the way there.
+        assert!(super::ease(0.5) > 0.8, "{}", super::ease(0.5));
+    }
+}

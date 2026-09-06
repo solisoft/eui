@@ -366,6 +366,9 @@ pub struct StyleRecord {
     pub z: u8,
     /// Pointer shape.
     pub cursor: Cursor,
+    /// `0` none, else a `motion` scale index + 1: colours and opacity
+    /// animate into this record when a node's style changes to it.
+    pub transition: u8,
 }
 
 impl Default for StyleRecord {
@@ -408,6 +411,7 @@ impl Default for StyleRecord {
             position: Position::Flow,
             z: 0,
             cursor: Cursor::Default,
+            transition: 0,
         }
     }
 }
@@ -453,7 +457,11 @@ impl StyleRecord {
             position: Position::from_u8(f.u8()?)?,
             z: f.u8()?,
             cursor: Cursor::from_u8(f.u8()?)?,
+            transition: f.u8()?,
         };
+        if out.transition > 3 {
+            return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
+        }
 
         if out.text_decoration & !0b11 != 0 {
             return Err(DecodeError::IllegalValue("text_decoration has unknown bits"));
@@ -461,7 +469,7 @@ impl StyleRecord {
         // The reserved tail is where a future field will go. Accepting garbage
         // there today would make that future field unusable, because some
         // deployed server would already be putting something else in it.
-        if f.array::<4>()? != [0; 4] {
+        if f.array::<3>()? != [0; 3] {
             return Err(DecodeError::IllegalValue("reserved bytes must be zero"));
         }
         f.finish()?;
@@ -508,7 +516,8 @@ impl StyleRecord {
             .u8(self.position.to_u8())
             .u8(self.z)
             .u8(self.cursor.to_u8())
-            .raw(&[0; 4]);
+            .u8(self.transition)
+            .raw(&[0; 3]);
     }
 }
 

@@ -22,8 +22,8 @@ who did not write it.
 | [`06-events.md`](06-events.md) | **normative** | Event kinds, payloads, dispatch and emission rules |
 | [`07-bytecode.md`](07-bytecode.md) | **normative** | The local-handler chunk format, verifier and metering |
 | [`08-security.md`](08-security.md) | **normative** | Threat model and requirements, each with where it is enforced |
-| [`09-conformance.md`](09-conformance.md) | planned | Test vectors and how to run them |
-| [`10-budgets.md`](10-budgets.md) | planned | Performance budgets, enforced in CI |
+| [`09-conformance.md`](09-conformance.md) | **normative** | What a conforming implementation passes, and the harness that runs it |
+| [`10-budgets.md`](10-budgets.md) | **normative** | Performance budgets, measured by `xtask bench` |
 
 ## Conventions
 

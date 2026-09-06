@@ -38,6 +38,9 @@ pub struct Session {
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
+    /// `(node, previous style id)` for every style change since the last
+    /// [`Session::take_style_changes`]: what a client transitions from.
+    style_changes: Vec<(NodeIx, u32)>,
     poisoned: bool,
     last_seq: Option<u64>,
 }
@@ -67,6 +70,7 @@ impl Session {
             arena: Arena::default(),
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
+            style_changes: Vec::new(),
             poisoned: false,
             last_seq: None,
         }
@@ -183,7 +187,9 @@ impl Session {
         }
         match self.arena.get_mut(ix) {
             Some(n) => {
+                let old = n.style;
                 n.style = style;
+                self.style_changes.push((ix, old));
                 self.arena.mark_dirty(ix).is_ok()
             }
             None => false,
@@ -283,6 +289,12 @@ impl Session {
         }
     }
 
+    /// The style changes since the last call, oldest first, as `(node,
+    /// previous style id)`. A node removed since is still listed; look it up.
+    pub fn take_style_changes(&mut self) -> Vec<(NodeIx, u32)> {
+        std::mem::take(&mut self.style_changes)
+    }
+
     /// True when any node changed since the dirty bits were last cleared.
     pub fn is_dirty(&self) -> bool {
         self.root().and_then(|r| self.arena.get(r)).is_some_and(|n| n.dirty != 0)
@@ -375,7 +387,10 @@ impl Session {
                     self.styles.require(*style)?;
                 }
                 let ix = self.find(*node)?;
-                self.arena.require_mut(ix)?.style = *style;
+                let n = self.arena.require_mut(ix)?;
+                let old = n.style;
+                n.style = *style;
+                self.style_changes.push((ix, old));
                 self.arena.mark_dirty(ix)
             }
             Op::SetText { node, text } => {

@@ -127,7 +127,8 @@ def button_variant(label, on_click, bg, fg)
     "bg": bg,
     "fg": fg,
     "radius": 2,
-    "cursor": "pointer"
+    "cursor": "pointer",
+    "transition": "fast"
   }
   hover = base.merge({
     "bg": bg == "accent.base" ? "accent.hover" : bg,
@@ -262,6 +263,7 @@ def card(style, children)
   style["radius"] = 3
   style["border"] = 1
   style["border_color"] = "border.subtle"
+  style["shadow"] = style["shadow"] ?? 1
   style["pad"] = style["pad"] ?? 5
   style["display"] = "column"
   node("box", style, children)
@@ -312,6 +314,7 @@ def toast(message, tone)
       "gap": 3,
       "pad": [3, 4, 3, 4],
       "radius": 2,
+      "shadow": 2,
       "bg": tone + ".subtle",
       "border": 1,
       "border_color": tone + ".base"
@@ -711,6 +714,7 @@ def menu(items, on_pick)
       "gap": 0,
       "pad": 1,
       "radius": 2,
+      "shadow": 2,
       "bg": "surface.overlay",
       "border": 1,
       "border_color": "border.subtle",
@@ -787,6 +791,7 @@ def popover(anchor, content, open)
         "margin": [0, 0, 0, 0],
         "pad": 3,
         "radius": 2,
+        "shadow": 2,
         "bg": "surface.overlay",
         "border": 1,
         "border_color": "border.subtle",
@@ -967,6 +972,7 @@ def dropdown(anchor, content, open)
         "margin": [40, 0, 0, 0],
         "pad": 1,
         "radius": 2,
+        "shadow": 2,
         "bg": "surface.overlay",
         "border": 1,
         "border_color": "border.subtle",

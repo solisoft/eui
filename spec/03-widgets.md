@@ -51,9 +51,24 @@ snapped horizontally to whole device pixels and vertically to the line's
 baseline. Anti-aliasing is by signed distance to the edge, so the same
 pipeline draws boxes, hairlines and glyphs.
 
-Shadows (`s.shadow`) are specified here as **required in version 1.1** and
-MAY be ignored by a version 1 client. `canvas` paths (§1.1) are part of
+A non-zero `s.shadow` paints, before the background, a black rounded
+rectangle offset by the scale's `y`, grown by its `blur` on every side, with
+coverage falling from opaque at the border box's edge to nothing at the
+grown edge, at the scale's opacity. `canvas` paths (§1.1) are part of
 version 1.
+
+## 5. Transitions
+
+A style record's `transition` byte (02 §3, offset 60) names a `motion` scale
+index plus one; `0` is none. When a node's style changes — by `SetStyle`, or
+by a local handler's `set_style` — and the **new** record's `transition` is
+non-zero, the client animates `bg`, `fg`, `border_color` and `opacity` from
+the old record's resolved values to the new over that duration, along the
+theme's easing curve. Nothing else animates: layout never runs per frame,
+and a node that is mounted or replaced appears at once. The server is never
+told; a transition is the client's rendering of a state change it already
+knows about, and a client MAY skip it (reduced motion) without any
+difference on the wire.
 
 ### 1.1 `canvas` paths
 

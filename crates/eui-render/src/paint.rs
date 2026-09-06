@@ -17,6 +17,20 @@ pub const TEXTURED: u32 = 1;
 /// Flag bit: sample the image atlas for colour and alpha.
 pub const TEXTURED_RGBA: u32 = 2;
 
+/// A node's resolved paint colours, linear RGBA; `None` draws nothing.
+/// What a transition interpolates.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Colors {
+    /// Background.
+    pub bg: Option<[f32; 4]>,
+    /// Foreground, inherited by text.
+    pub fg: Option<[f32; 4]>,
+    /// Border.
+    pub border: Option<[f32; 4]>,
+    /// Opacity, `0..=1`.
+    pub opacity: f32,
+}
+
 /// One instance. Layout matches the vertex buffer in `shader.wgsl`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -65,6 +79,9 @@ pub struct Scene<'a> {
     pub images: &'a ImageAtlas,
     /// The node wearing the focus ring, when focus is keyboard-visible.
     pub focus: Option<NodeIx>,
+    /// Nodes mid-transition (03 §5) with the colours to paint this frame,
+    /// in place of their record's.
+    pub overrides: &'a [(NodeIx, Colors)],
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -107,15 +124,7 @@ impl Painter<'_, '_> {
     }
 
     fn color(&self, c: ColorRef, inherit: Option<[f32; 4]>) -> Option<[f32; 4]> {
-        if c.is_none() {
-            return inherit;
-        }
-        let rgba = if c.is_literal() {
-            self.scene.session.color(u32::from(c.index()))?
-        } else {
-            self.scene.theme.color_by_id(c.index())?
-        };
-        Some(linear(rgba))
+        resolve_color(self.scene.session, self.scene.theme, c).or(inherit)
     }
 
     fn device(&self, r: Rect) -> [f32; 4] {
@@ -158,18 +167,34 @@ impl Painter<'_, '_> {
         }
         let record = self.scene.session.style_of(ix);
         let scale = self.scene.scale;
-        let opacity = f32::from(record.opacity) / 255.0;
+        let over = self.scene.overrides.iter().find(|(n, _)| *n == ix).map(|(_, c)| *c);
+        let opacity = over.map_or(f32::from(record.opacity) / 255.0, |c| c.opacity);
         let dev = self.device(rect);
+        let radius = self.scene.theme.radius(record.radius).unwrap_or(0.0) * scale;
+
+        // Spec 03 §2: the shadow first — black, offset, grown by the blur,
+        // fading across it (`extra[1]` is the blur for the fragment stage).
+        if let Some(&(dy, blur, alpha)) = self.scene.theme.shadow.get(usize::from(record.shadow)).filter(|_| record.shadow != 0) {
+            let (dy, blur) = (dy * scale, blur * scale);
+            let [x, y, w, h] = dev;
+            self.push(Quad {
+                rect: [x - blur, y + dy - blur, w + 2.0 * blur, h + 2.0 * blur],
+                params: [radius + blur, 0.0, 0.0, opacity],
+                fill: [0.0, 0.0, 0.0, alpha],
+                stroke: [0.0; 4],
+                uv: [0.0; 4],
+                extra: [0.0, blur, 0.0, 0.0],
+            });
+        }
 
         // Background and border. A uniform border is one stroked quad; a
         // border that differs per side — a tab's underline, a banner's left
         // bar — is the fill plus up to four thin quads, square-cornered.
-        let fill = self.color(record.bg, None);
+        let fill = over.map_or_else(|| self.color(record.bg, None), |c| c.bg);
         let b = style.border;
         let uniform = b.t == b.r && b.r == b.b && b.b == b.l;
         let border_w = b.t.max(b.r).max(b.b).max(b.l) * scale;
-        let stroke = if border_w > 0.0 { self.color(record.border_color, None) } else { None };
-        let radius = self.scene.theme.radius(record.radius).unwrap_or(0.0) * scale;
+        let stroke = if border_w > 0.0 { over.map_or_else(|| self.color(record.border_color, None), |c| c.border) } else { None };
         if uniform {
             if fill.is_some() || stroke.is_some() {
                 self.push(Quad {
@@ -212,7 +237,7 @@ impl Painter<'_, '_> {
 
         // Foreground colour inherits down the tree; text.default is the floor.
         let parent_fg = self.inherited_fg.last().copied().unwrap_or_else(|| linear(self.scene.theme.color(Role::TextDefault)));
-        let fg = self.color(record.fg, Some(parent_fg)).unwrap_or(parent_fg);
+        let fg = over.and_then(|c| c.fg).unwrap_or_else(|| self.color(record.fg, Some(parent_fg)).unwrap_or(parent_fg));
         self.inherited_fg.push(fg);
 
         let virtual_ = self.scene.layout.is_virtual(ix);
@@ -417,6 +442,26 @@ fn num(v: &Value) -> Option<f32> {
         Value::Int(n) => Some(*n as f32),
         Value::Float(f) => Some(*f as f32),
         _ => None,
+    }
+}
+
+/// A colour reference against the session's literal table and the theme,
+/// linear RGBA; `None` for "none" or an unknown id.
+pub fn resolve_color(session: &Session, theme: &Resolved, c: ColorRef) -> Option<[f32; 4]> {
+    if c.is_none() {
+        return None;
+    }
+    let rgba = if c.is_literal() { session.color(u32::from(c.index()))? } else { theme.color_by_id(c.index())? };
+    Some(linear(rgba))
+}
+
+/// The colours a record paints with, for a transition's endpoints.
+pub fn colors_of(session: &Session, theme: &Resolved, record: &eui_proto::StyleRecord) -> Colors {
+    Colors {
+        bg: resolve_color(session, theme, record.bg),
+        fg: resolve_color(session, theme, record.fg),
+        border: resolve_color(session, theme, record.border_color),
+        opacity: f32::from(record.opacity) / 255.0,
     }
 }
 

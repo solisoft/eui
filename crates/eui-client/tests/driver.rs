@@ -437,3 +437,47 @@ fn the_focus_ring_is_painted_for_keyboard_and_server_focus_only() {
     d.input(Input::PointerUp(0));
     assert!(!ring_around(&d.paint(400, 300), other));
 }
+
+/// The button's box: the first quad that is not a glyph.
+fn box_fill(list: &eui_render::DrawList) -> [f32; 4] {
+    list.quads.iter().find(|q| q.params[2] == 0.0).expect("a box").fill
+}
+
+#[test]
+fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let accent = box_fill(&d.paint(400, 300));
+    // Restyle the button: danger background, `base` motion (180 ms).
+    let danger = StyleRecord { display: Display::Row, padding: [3; 4], bg: ColorRef::role(Role::DangerBase.id()), fg: ColorRef::role(Role::AccentOn.id()), radius: 2, transition: 2, ..Default::default() };
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: danger }, Op::SetStyle { node: 3, style: 3 }] }));
+    assert!(d.animating());
+    assert_eq!(d.next_frame_at(), Some(t0), "a frame is due at once");
+    // At t0 the button still wears its old colour.
+    let at_start = box_fill(&d.paint(400, 300));
+    assert_eq!(at_start, accent);
+    assert_eq!(d.next_frame_at(), Some(t0 + Duration::from_millis(16)));
+    // Halfway: somewhere between, and a frame is due when asked at that time.
+    assert!(!d.tick(t0 + Duration::from_millis(5)), "not due yet");
+    assert!(d.tick(t0 + Duration::from_millis(90)));
+    let mid = box_fill(&d.paint(400, 300));
+    assert!(mid != accent && mid[0] != 0.0, "{mid:?}");
+    // Past the end: exactly the new colour, and the driver is at rest again.
+    d.tick(t0 + Duration::from_millis(200));
+    let end = box_fill(&d.paint(400, 300));
+    assert_eq!(end, eui_render::linear(d.theme_color(Role::DangerBase)));
+    assert!(!d.animating());
+    assert_eq!(d.next_frame_at(), None);
+    assert!(!d.tick(t0 + Duration::from_millis(300)));
+}
+
+#[test]
+fn a_style_change_without_a_transition_is_immediate() {
+    let mut d = welcomed();
+    let danger = StyleRecord { display: Display::Row, padding: [3; 4], bg: ColorRef::role(Role::DangerBase.id()), ..Default::default() };
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: danger }, Op::SetStyle { node: 3, style: 3 }] }));
+    assert!(!d.animating());
+    assert_eq!(box_fill(&d.paint(400, 300)), eui_render::linear(d.theme_color(Role::DangerBase)));
+}

@@ -29,4 +29,4 @@ pub mod paint;
 
 pub use atlas::{Atlas, ImageAtlas, Region};
 pub use gpu::{Offscreen, RenderError, Renderer, FORMAT};
-pub use paint::{linear, paint, DrawList, Quad, Scene, TEXTURED, TEXTURED_RGBA};
+pub use paint::{colors_of, linear, paint, resolve_color, Colors, DrawList, Quad, Scene, TEXTURED, TEXTURED_RGBA};

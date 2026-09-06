@@ -27,6 +27,14 @@ sees; and the server learns nothing about the person using it.
 each pairing a size with a line height · `weight.regular/medium/semibold/bold` ·
 `shadow.sm/md/lg` · `motion.fast/base/slow` with their curves
 
+A style's `shadow` index paints a soft black rectangle under the box — offset,
+blurred and weighted by the scale, drawn by the same quad pipeline as the box
+with a fade across the blur. A style's `transition` names a `motion` index:
+when a node's style changes to it, the client eases the background, foreground,
+border colour and opacity from the old values over that duration, along
+`cubic-bezier(0.2, 0, 0, 1)`. Layout never animates, the server never hears of
+it, and the window wakes only while a transition runs — at rest it sleeps.
+
 ## The three viewer axes
 
 Applied on top of whatever the application shipped, always:

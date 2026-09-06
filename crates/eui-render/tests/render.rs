@@ -44,7 +44,7 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None })
+    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[] })
 }
 
 fn gpu() -> Option<Renderer> {
@@ -382,4 +382,34 @@ fn a_canvas_line_lands_on_its_pixels() {
     assert!(close(pixel(&px, 100, 30, 30), accent, 2));
     assert!(close(pixel(&px, 100, 20, 35), ground, 2), "{:?}", pixel(&px, 100, 20, 35));
     assert!(close(pixel(&px, 100, 60, 10), ground, 2));
+}
+
+#[test]
+fn a_shadow_is_a_grown_black_quad_painted_before_its_box() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [6; 4], ..Default::default() };
+    let card = StyleRecord { bg: ColorRef::role(Role::SurfaceRaised.id()), width: Dim::Px(40), height: Dim::Px(20), shadow: 2, radius: 2, ..Default::default() };
+    let mut fx = fixture(vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
+    let r = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
+    let list = draw(&mut fx, 200, 100, 1.0);
+    assert_eq!(list.quads.len(), 2, "{list:#?}");
+    let (dy, blur, alpha) = fx.theme.shadow[2];
+    let shadow = &list.quads[0];
+    assert_eq!(shadow.rect, [r.x - blur, r.y + dy - blur, r.w + 2.0 * blur, r.h + 2.0 * blur]);
+    assert_eq!(shadow.fill, [0.0, 0.0, 0.0, alpha]);
+    assert_eq!(shadow.extra[1], blur, "the fragment stage fades across the blur");
+    assert_eq!(shadow.params[0], fx.theme.radius(2).unwrap() + blur);
+    assert_eq!(list.quads[1].rect, [r.x, r.y, r.w, r.h]);
+}
+
+#[test]
+fn overrides_replace_a_nodes_colours_for_the_frame() {
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), height: Dim::Px(10), ..Default::default() };
+    let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
+    let ix = fx.session.lookup(2).unwrap();
+    let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5 };
+    let overrides = [(ix, mid)];
+    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides });
+    assert_eq!(list.quads[0].fill, [0.5, 0.25, 0.125, 1.0]);
+    assert_eq!(list.quads[0].params[3], 0.5);
 }

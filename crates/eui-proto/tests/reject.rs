@@ -399,10 +399,15 @@ fn unknown_text_decoration_bits_are_rejected() {
 }
 
 #[test]
+fn a_transition_past_the_motion_scale_is_rejected() {
+    assert_eq!(style_with(60, &[4]), E::IllegalValue("transition is a motion index + 1, at most 3"));
+}
+
+#[test]
 fn non_zero_reserved_bytes_are_rejected() {
-    for i in 0..4 {
+    for i in 0..3 {
         let mut raw = style_bytes();
-        raw[60 + i] = 1;
+        raw[61 + i] = 1;
         assert_eq!(
             StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(),
             E::IllegalValue("reserved bytes must be zero"),

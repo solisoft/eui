@@ -219,6 +219,19 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**Conformance.** `spec/09` now says what conforming means and where each
+vector lives; `cargo run -p xtask -- conform` runs the workspace suite,
+clippy with warnings denied, and the Soli end-to-end suite when
+`EUI_SOLI_BIN` is set.
+
+**Shadows and transitions.** A record's `shadow` paints a grown, offset,
+black quad under the box, faded across the blur in the fragment stage;
+`transition` (the last reserved byte of the 64, now spent) names a `motion`
+index, and a node whose style changes to such a record eases its colours and
+opacity from the old ones. The driver keeps a clock, the window switches to
+`WaitUntil` for the next frame only while something animates, and the
+catalogue's buttons fade between their hover and pressed states.
+
 **Charts.** `canvas` paths are in (spec 03 §1.1): five kinds — polyline,
 rectangle, area, circle, arc — that the renderer draws with the one quad
 pipeline it already has, a rotation added to the vertex stage so a segment
