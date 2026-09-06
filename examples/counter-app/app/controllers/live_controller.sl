@@ -164,7 +164,10 @@ def todo_view(state)
       "bg": "surface.base"
     },
     [
-      h1("Todo"),
+      row(
+        {"gap": 3, "align": "center"},
+        [avatar("public/images/avatar.png", 32), h1("Todo")]
+      ),
       row({"gap": 2}, [
         {
           "k": "input",

@@ -5,15 +5,17 @@
 //! shape means one pipeline and one draw call per scissor region.
 
 use eui_layout::{Layout, Rect, Style};
-use eui_proto::{ColorRef, Display, NodeKind};
+use eui_proto::{ColorRef, Display, NodeKind, Value};
 use eui_theme::{Resolved, Role};
 use eui_tree::{NodeIx, Session};
 use eui_text::TextEngine;
 
-use crate::atlas::Atlas;
+use crate::atlas::{Atlas, ImageAtlas};
 
-/// Flag bit: sample the atlas for alpha.
+/// Flag bit: sample the glyph atlas for alpha.
 pub const TEXTURED: u32 = 1;
+/// Flag bit: sample the image atlas for colour and alpha.
+pub const TEXTURED_RGBA: u32 = 2;
 
 /// One instance. Layout matches the vertex buffer in `shader.wgsl`.
 #[repr(C)]
@@ -56,6 +58,8 @@ pub struct Scene<'a> {
     pub text: &'a mut TextEngine,
     /// The glyph atlas.
     pub atlas: &'a mut Atlas,
+    /// The image atlas, filled by the client as assets arrive.
+    pub images: &'a ImageAtlas,
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -172,6 +176,23 @@ impl Painter<'_, '_> {
 
         let virtual_ = self.scene.layout.is_virtual(ix);
         match node.kind {
+            NodeKind::Image => {
+                let hash = node.props.iter().find_map(|(_, v)| match v {
+                    Value::Asset(h) => Some(*h),
+                    _ => None,
+                });
+                if let Some(region) = hash.and_then(|h| self.scene.images.get(&h)) {
+                    let n = self.scene.images.size() as f32;
+                    let (rx, ry, rw, rh) = (region.x as f32, region.y as f32, region.w as f32, region.h as f32);
+                    self.push(Quad {
+                        rect: dev,
+                        params: [radius, 0.0, TEXTURED_RGBA as f32, opacity],
+                        fill: [1.0, 1.0, 1.0, 1.0],
+                        stroke: [0.0; 4],
+                        uv: [rx / n, ry / n, (rx + rw) / n, (ry + rh) / n],
+                    });
+                }
+            }
             NodeKind::Divider => {
                 let mut q = Quad { rect: dev, params: [0.0, 0.0, 0.0, opacity], fill: self.color(record.bg, None).unwrap_or_else(|| linear(self.scene.theme.color(Role::BorderDefault))), stroke: [0.0; 4], uv: [0.0; 4] };
                 q.rect[3] = q.rect[3].max(1.0);

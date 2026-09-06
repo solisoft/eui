@@ -103,6 +103,18 @@ The rule stays: a local handler's effect is advisory, and **authorisation is
 never local**. A `local { … }` source syntax over this is not built yet; the
 assembly list is the interface today.
 
+## Images
+
+```soli
+avatar("public/images/avatar.png", 32)
+image("public/images/chart.png", 320, 200)
+```
+
+The path is a file in the application. The server hashes it and sends the
+hash; the client fetches it once from `/_eui/asset/<hash>`, verifies the
+bytes against the name, and caches it for good. Without an explicit size the
+image takes its own. PNG only, in version 1.
+
 ## Lists
 
 Give repeated children a key and re-sorting becomes moves rather than

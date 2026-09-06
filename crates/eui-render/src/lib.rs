@@ -12,7 +12,7 @@
 //!   target, and can read an off-screen target back — so the renderer is
 //!   tested by looking at pixels, on a machine with no display.
 //!
-//! Not yet: shadows, images, canvas paths.
+//! Not yet: shadows, canvas paths.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -27,6 +27,6 @@ pub mod atlas;
 pub mod gpu;
 pub mod paint;
 
-pub use atlas::{Atlas, Region};
+pub use atlas::{Atlas, ImageAtlas, Region};
 pub use gpu::{Offscreen, RenderError, Renderer, FORMAT};
-pub use paint::{linear, paint, DrawList, Quad, Scene, TEXTURED};
+pub use paint::{linear, paint, DrawList, Quad, Scene, TEXTURED, TEXTURED_RGBA};

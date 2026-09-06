@@ -71,12 +71,19 @@ impl App {
                         closed = Some(e.to_string());
                         break;
                     }
+                    Incoming::Asset(hash, Ok(bytes)) => self.driver.asset_ready(hash, bytes),
+                    Incoming::Asset(hash, Err(why)) => self.driver.asset_failed(hash, why),
                 }
             }
         }
         for f in frames {
             let out = self.driver.handle_frame(f);
             self.send(out);
+        }
+        for hash in self.driver.pending_assets() {
+            if let Some(conn) = &self.conn {
+                conn.request_asset(hash);
+            }
         }
         if let Some(why) = closed {
             eprintln!("eui: session ended: {why}");
@@ -122,7 +129,8 @@ impl App {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        gpu.renderer.render(&view, (w, h), &list, self.driver.atlas_mut());
+        let (atlas, images) = self.driver.atlases_mut();
+        gpu.renderer.render(&view, (w, h), &list, atlas, images);
         frame.present();
     }
 }

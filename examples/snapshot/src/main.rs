@@ -39,7 +39,8 @@ fn main() {
         }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
-        renderer.render_offscreen(&target, &list, driver.atlas_mut());
+        let (atlas, images) = driver.atlases_mut();
+        renderer.render_offscreen(&target, &list, atlas, images);
         let px = renderer.read_back(&target).expect("read back");
         std::fs::write(format!("{out}/{name}.rgba"), &px).unwrap();
         println!("{name} {dw} {dh} quads={} mount_bytes={wire}", list.quads.len());

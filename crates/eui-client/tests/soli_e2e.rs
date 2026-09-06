@@ -81,6 +81,8 @@ fn pump(driver: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receive
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => driver.asset_failed(hash, why),
             }
         }
     }
@@ -209,6 +211,25 @@ fn todo_toggles_by_prop_and_keeps_keyed_rows() {
     assert!(texts(&d, root(&d)).iter().any(|t| t == "Ship the counter through Soli"));
     assert!(texts(&d, root(&d)).iter().any(|t| t == "1 left"));
 
+    // The header's avatar arrived as a hash. Fetch it from Soli's asset
+    // endpoint over plain HTTP (loopback), verify, deliver, and the image
+    // gets its size and its pixels.
+    let pending = d.pending_assets();
+    assert_eq!(pending.len(), 1, "one image, asked for once");
+    let hash = pending[0];
+    let bytes = eui_client::assets::fetch(&conn.origin, &hash).expect("soli serves the asset");
+    assert!(bytes.starts_with(b"\x89PNG"));
+    assert_eq!(bytes.len(), 164, "the avatar file, byte for byte");
+    d.asset_ready(hash, bytes);
+    let list = d.paint(800, 600);
+    assert_eq!(list.quads.iter().filter(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA).count(), 1);
+    let header = d.session().children(root(&d))[0];
+    let avatar = d.session().children(header)[0];
+    let r = d.layout().rect(avatar).unwrap();
+    assert_eq!((r.w, r.h), (32.0, 32.0));
+    // A wrong hash is refused by the server with a 404, not served.
+    assert!(eui_client::assets::fetch(&conn.origin, &[0u8; 32]).is_err());
+
     // The third row's checkbox: the rows column is the root's third child.
     let rows = d.session().children(root(&d))[2];
     let third = d.session().children(rows)[2];
@@ -322,6 +343,7 @@ fn probe_session_frames() {
                     eprintln!("PROBE closed: {e}; server alive: {}", server.0.try_wait().ok().flatten().is_none());
                     return;
                 }
+                Incoming::Asset(..) => {}
             }
         }
     }

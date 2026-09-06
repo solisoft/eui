@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::atlas::Atlas;
+use crate::atlas::{Atlas, ImageAtlas};
 use crate::paint::{DrawList, Quad};
 
 /// Why the renderer could not start or draw.
@@ -41,6 +41,7 @@ pub struct Renderer {
     uniform_bind: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
     atlas_tex: wgpu::Texture,
+    img_tex: wgpu::Texture,
     atlas_bind: wgpu::BindGroup,
     atlas_size: u32,
     instances: wgpu::Buffer,
@@ -118,6 +119,18 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -177,7 +190,7 @@ impl Renderer {
         });
 
         let atlas_size = Atlas::INITIAL;
-        let (atlas_tex, atlas_bind) = Self::make_atlas(&device, &atlas_layout, atlas_size);
+        let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&device, &atlas_layout, atlas_size);
 
         Ok(Self {
             device,
@@ -187,6 +200,7 @@ impl Renderer {
             uniform_bind,
             atlas_layout,
             atlas_tex,
+            img_tex,
             atlas_bind,
             atlas_size,
             instances,
@@ -195,17 +209,21 @@ impl Renderer {
         })
     }
 
-    fn make_atlas(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32) -> (wgpu::Texture, wgpu::BindGroup) {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("atlas"),
-            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+    fn make_atlas(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32) -> (wgpu::Texture, wgpu::Texture, wgpu::BindGroup) {
+        let make = |label: &str, size: u32, format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let tex = make("atlas", size, wgpu::TextureFormat::R8Unorm);
+        let img = make("images", ImageAtlas::SIZE, wgpu::TextureFormat::Rgba8UnormSrgb);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("atlas"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -213,15 +231,18 @@ impl Renderer {
             ..Default::default()
         });
         let view = tex.create_view(&Default::default());
+        let img_view = img.create_view(&Default::default());
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("atlas"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&img_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         });
-        (tex, bind)
+        (tex, img, bind)
     }
 
     /// The adapter's name, for diagnostics.
@@ -239,13 +260,25 @@ impl Renderer {
         &self.queue
     }
 
-    /// Upload the atlas if it changed, growing the texture with it.
-    fn sync_atlas(&mut self, atlas: &mut Atlas) {
+    /// Upload the atlases if they changed, growing the glyph texture with
+    /// its atlas.
+    fn sync_atlas(&mut self, atlas: &mut Atlas, images: &mut ImageAtlas) {
         if atlas.size() != self.atlas_size {
-            let (tex, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size());
+            let (tex, img, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size());
             self.atlas_tex = tex;
+            self.img_tex = img;
             self.atlas_bind = bind;
             self.atlas_size = atlas.size();
+            images.mark_dirty_all();
+        }
+        if images.is_dirty() {
+            self.queue.write_texture(
+                wgpu::ImageCopyTexture { texture: &self.img_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                images.pixels(),
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(images.size()) },
+                wgpu::Extent3d { width: images.size(), height: images.size(), depth_or_array_layers: 1 },
+            );
+            images.mark_clean();
         }
         if !atlas.is_dirty() {
             return;
@@ -260,8 +293,8 @@ impl Renderer {
     }
 
     /// Draw a list into a target view of the given device size.
-    pub fn render(&mut self, view: &wgpu::TextureView, size: (u32, u32), list: &DrawList, atlas: &mut Atlas) {
-        self.sync_atlas(atlas);
+    pub fn render(&mut self, view: &wgpu::TextureView, size: (u32, u32), list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+        self.sync_atlas(atlas, images);
         if list.quads.len() > self.instance_cap {
             self.instance_cap = list.quads.len().next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -327,9 +360,9 @@ impl Renderer {
     }
 
     /// Draw into an off-screen target.
-    pub fn render_offscreen(&mut self, target: &Offscreen, list: &DrawList, atlas: &mut Atlas) {
+    pub fn render_offscreen(&mut self, target: &Offscreen, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         let view = target.texture.create_view(&Default::default());
-        self.render(&view, (target.width, target.height), list, atlas);
+        self.render(&view, (target.width, target.height), list, atlas, images);
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

@@ -8,6 +8,8 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_smp: sampler;
+@group(1) @binding(2) var img_tex: texture_2d<f32>;
+@group(1) @binding(3) var img_smp: sampler;
 
 struct Inst {
     @location(0) rect: vec4<f32>,
@@ -62,7 +64,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         let inner = 1.0 - clamp(d + border + 0.5, 0.0, 1.0);
         color = mix(in.stroke, in.fill, inner);
     }
-    if (in.params.z >= 1.0) {
+    if (in.params.z >= 2.0) {
+        let t = textureSample(img_tex, img_smp, in.uv);
+        color = vec4<f32>(t.rgb, t.a * in.fill.a);
+    } else if (in.params.z >= 1.0) {
         color.a = color.a * textureSample(atlas_tex, atlas_smp, in.uv).r;
     }
     let a = color.a * coverage * in.params.w;

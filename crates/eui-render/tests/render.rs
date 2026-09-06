@@ -19,6 +19,7 @@ struct Fx {
     theme: Resolved,
     text: TextEngine,
     atlas: Atlas,
+    images: ImageAtlas,
 }
 
 fn fixture(styles: Vec<StyleRecord>, nodes: Vec<FlatNode>, props: Vec<(u32, Value)>, atoms: &[&str], w: f32, h: f32) -> Fx {
@@ -31,7 +32,7 @@ fn fixture(styles: Vec<StyleRecord>, nodes: Vec<FlatNode>, props: Vec<(u32, Valu
     let mut text = TextEngine::new();
     let mut layout = Layout::new();
     layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(w, h));
-    Fx { session, layout, theme, text, atlas: Atlas::new() }
+    Fx { session, layout, theme, text, atlas: Atlas::new(), images: ImageAtlas::new() }
 }
 
 fn node(kind: NodeKind, id: u32, style: u32, children: u32) -> FlatNode {
@@ -43,7 +44,7 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, scale, size: (w, h) })
+    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h) })
 }
 
 fn gpu() -> Option<Renderer> {
@@ -61,7 +62,7 @@ fn pixel(px: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     [px[i], px[i + 1], px[i + 2], px[i + 3]]
 }
 
-fn rgba(c: u32) -> [u8; 4] {
+fn rgba_of(c: u32) -> [u8; 4] {
     [(c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8, c as u8]
 }
 
@@ -145,10 +146,10 @@ fn clear_colour_is_the_surface_role() {
     let mut fx = fixture(vec![col], vec![node(NodeKind::Box, 1, 1, 0)], vec![], &[], 64.0, 64.0);
     let list = draw(&mut fx, 64, 64, 1.0);
     let target = r.offscreen(64, 64);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     assert_eq!(px.len(), 64 * 64 * 4);
-    let want = rgba(fx.theme.color(Role::SurfaceBase));
+    let want = rgba_of(fx.theme.color(Role::SurfaceBase));
     assert!(close(pixel(&px, 64, 0, 0), want, 1), "{:?} vs {:?}", pixel(&px, 64, 0, 0), want);
     assert!(close(pixel(&px, 64, 63, 63), want, 1));
 }
@@ -161,10 +162,10 @@ fn a_filled_box_lands_where_layout_put_it_with_its_role_colour() {
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
     let list = draw(&mut fx, 100, 100, 1.0);
     let target = r.offscreen(100, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
-    let accent = rgba(fx.theme.color(Role::AccentBase));
-    let surface = rgba(fx.theme.color(Role::SurfaceBase));
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     // Inside the box: accent. Just outside every edge: surface.
     assert!(close(pixel(&px, 100, 28, 18), accent, 2), "centre {:?}", pixel(&px, 100, 28, 18));
     assert!(close(pixel(&px, 100, 9, 9), accent, 2), "top-left inside");
@@ -192,11 +193,11 @@ fn rounded_corners_and_borders_render() {
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 80.0, 80.0);
     let list = draw(&mut fx, 80, 80, 1.0);
     let target = r.offscreen(80, 80);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
-    let accent = rgba(fx.theme.color(Role::AccentBase));
-    let surface = rgba(fx.theme.color(Role::SurfaceBase));
-    let stroke = rgba(fx.theme.color(Role::BorderStrong));
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    let stroke = rgba_of(fx.theme.color(Role::BorderStrong));
     assert!(close(pixel(&px, 80, 30, 30), accent, 2), "centre is fill");
     assert!(close(pixel(&px, 80, 0, 0), surface, 2), "the corner is cut away");
     assert!(close(pixel(&px, 80, 30, 0), stroke, 8), "top edge is border: {:?}", pixel(&px, 80, 30, 0));
@@ -212,9 +213,9 @@ fn text_puts_ink_inside_its_rect_and_nowhere_else() {
     let list = draw(&mut fx, 200, 100, 1.0);
     assert!(list.quads.iter().all(|q| q.params[2] as u32 == TEXTURED), "only glyph quads");
     let target = r.offscreen(200, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
-    let surface = rgba(fx.theme.color(Role::SurfaceBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     let rect = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
     let mut ink_inside = 0;
     let mut ink_outside = 0;
@@ -233,7 +234,7 @@ fn text_puts_ink_inside_its_rect_and_nowhere_else() {
     assert!(ink_inside > 100, "three 38 px H's leave ink: {ink_inside}");
     assert_eq!(ink_outside, 0);
     // The ink is dark: text.default on a light surface.
-    let text_col = rgba(fx.theme.color(Role::TextDefault));
+    let text_col = rgba_of(fx.theme.color(Role::TextDefault));
     let darkest = (0..100u32).flat_map(|y| (0..200u32).map(move |x| (x, y))).map(|(x, y)| pixel(&px, 200, x, y)).min_by_key(|p| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])).unwrap();
     assert!(close(darkest, text_col, 12), "darkest {darkest:?} vs {text_col:?}");
 }
@@ -247,10 +248,10 @@ fn scroll_clips_at_the_pixel_level() {
     let mut fx = fixture(vec![col, sc, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Scroll, 2, 2, 1), node(NodeKind::Box, 3, 3, 0)], vec![], &[], 50.0, 100.0);
     let list = draw(&mut fx, 50, 100, 1.0);
     let target = r.offscreen(50, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
-    let danger = rgba(fx.theme.color(Role::DangerBase));
-    let surface = rgba(fx.theme.color(Role::SurfaceBase));
+    let danger = rgba_of(fx.theme.color(Role::DangerBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     assert!(close(pixel(&px, 50, 25, 10), danger, 2), "inside the scroll box");
     assert!(close(pixel(&px, 50, 25, 29), danger, 2), "last row inside");
     assert!(close(pixel(&px, 50, 25, 30), surface, 2), "first row outside is clipped");
@@ -267,7 +268,47 @@ fn stack_paints_in_z_order() {
     let mut fx = fixture(vec![stack, low, high], vec![node(NodeKind::Box, 1, 1, 2), node(NodeKind::Box, 2, 3, 0), node(NodeKind::Box, 3, 2, 0)], vec![], &[], 40.0, 40.0);
     let list = draw(&mut fx, 40, 40, 1.0);
     let target = r.offscreen(40, 40);
-    r.render_offscreen(&target, &list, &mut fx.atlas);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
-    assert!(close(pixel(&px, 40, 20, 20), rgba(fx.theme.color(Role::SuccessBase)), 2));
+    assert!(close(pixel(&px, 40, 20, 20), rgba_of(fx.theme.color(Role::SuccessBase)), 2));
+}
+
+#[test]
+fn an_image_paints_its_pixels() {
+    let Some(mut r) = gpu() else { return };
+    const AVATAR: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.png");
+    // Decode by hand here to keep eui-render free of the png crate: the
+    // avatar's centre 8×8 is white and its corners are transparent, which is
+    // all this test needs — so build the RGBA from that knowledge.
+    let mut rgba = vec![0u8; 32 * 32 * 4];
+    for y in 0..32 {
+        for x in 0..32 {
+            let i = (y * 32 + x) * 4;
+            let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
+            if (12..20).contains(&x) && (12..20).contains(&y) {
+                rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+            } else if dx * dx + dy * dy <= 15.5 * 15.5 {
+                rgba[i..i + 4].copy_from_slice(&[0x22, 0x29, 0xa8, 255]);
+            }
+        }
+    }
+    let _ = AVATAR.len();
+    let hash = [7u8; 32];
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [4; 4], ..Default::default() }; // 12 px
+    let img = StyleRecord { width: Dim::Px(32), height: Dim::Px(32), ..Default::default() };
+    let mut nodes = vec![node(NodeKind::Box, 1, 1, 1)];
+    nodes.push(FlatNode { kind: NodeKind::Image, id: 2, style: 2, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 0 });
+    let mut fx = fixture(vec![col, img], nodes, vec![(1, Value::Asset(hash))], &["src"], 100.0, 100.0);
+    fx.images.insert(hash, 32, 32, &rgba);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    assert_eq!(list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED_RGBA).count(), 1);
+    let target = r.offscreen(100, 100);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // Centre of the image (12+16, 12+16): white. Corner (12, 12): the surface shows through.
+    assert!(close(pixel(&px, 100, 28, 28), [255, 255, 255, 255], 2), "{:?}", pixel(&px, 100, 28, 28));
+    assert!(close(pixel(&px, 100, 12, 12), surface, 2), "{:?}", pixel(&px, 100, 12, 12));
+    // A point on the disc: ultramarine.
+    assert!(close(pixel(&px, 100, 16, 28), [0x22, 0x29, 0xa8, 255], 3), "{:?}", pixel(&px, 100, 16, 28));
 }

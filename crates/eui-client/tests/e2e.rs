@@ -42,6 +42,8 @@ fn pump(driver: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receive
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => driver.asset_failed(hash, why),
             }
         }
     }
@@ -138,7 +140,7 @@ fn a_forged_event_ends_the_session() {
                 }
             }
             Ok(Incoming::Closed(_)) => panic!("closed before the error frame"),
-            Err(_) => {}
+            Ok(Incoming::Asset(..)) | Err(_) => {}
         }
     }
 }

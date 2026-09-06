@@ -25,8 +25,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync",
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 pollster = "0.4"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+blake3 = "1"
+png = "0.17"
 
 [dev-dependencies]
+eui-render = { path = "../eui-render", version = "0.1.0" }
+eui-theme = { path = "../eui-theme", version = "0.1.0" }
 counter-server = { path = "../../examples/counter-server", version = "0.1.0" }
 
 [lints]

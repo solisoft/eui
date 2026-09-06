@@ -18,8 +18,10 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 pub mod app;
+pub mod assets;
 pub mod driver;
 pub mod transport;
 
+pub use assets::{AssetError, AssetStore, Image};
 pub use driver::{Close, Driver, Input};
 pub use transport::{check_url, connect, Connection, Incoming, TransportError};

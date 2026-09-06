@@ -414,3 +414,25 @@ def with_state(state, root)
   root["p"] = state
   root
 end
+
+# An image asset from the application, by path. The server hashes the file
+# and the client fetches it once, by content, and caches it forever.
+def image(src, width, height)
+  {
+    "k": "image",
+    "p": {"src": src},
+    "s": {"width": width, "height": height}
+  }
+end
+
+def avatar(src, size)
+  {
+    "k": "image",
+    "p": {"src": src},
+    "s": {
+      "width": size,
+      "height": size,
+      "radius": 4
+    }
+  }
+end

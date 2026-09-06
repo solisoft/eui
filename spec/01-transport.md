@@ -53,6 +53,11 @@ immutable` is always correct and a hostile CDN cannot substitute content.
 An asset response larger than the session's remaining asset budget
 ([`10-budgets.md`](10-budgets.md)) MUST be abandoned mid-stream.
 
+The client's request carries no cookie and no session: an asset is
+addressed by content, so the response is the same for everyone and a proxy
+may serve it to anyone. A server MUST answer `404` for a hash it does not
+hold, never a redirect.
+
 ### 2.3 Session
 
 The session is a WebSocket over TLS carrying **binary** frames only. A client

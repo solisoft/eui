@@ -121,7 +121,8 @@ fn bench() -> Vec<Row> {
     let mut atlas = eui_render::Atlas::new();
     let mut text = eui_text::TextEngine::new();
     layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0));
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); let _ = eui_render::paint(&mut eui_render::Scene { session: &session, layout: &layout, theme: &theme, text: &mut text, atlas: &mut atlas, scale: 1.0, size: (800, 600) }); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); let images = eui_render::ImageAtlas::new();
+        let _ = eui_render::paint(&mut eui_render::Scene { session: &session, layout: &layout, theme: &theme, text: &mut text, atlas: &mut atlas, images: &images, scale: 1.0, size: (800, 600) }); s.elapsed() }).collect();
     let d = median(t);
     rows.push(Row { what: "paint only, table-10k, layout done (median)", value: format!("{d:?}"), budget: "info", ok: true });
     let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0)); s.elapsed() }).collect();

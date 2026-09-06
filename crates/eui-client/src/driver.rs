@@ -4,11 +4,13 @@
 
 use std::collections::HashMap;
 
-use eui_layout::{Env, Layout, Size};
+use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{paint, Atlas, DrawList, Scene};
+use eui_render::{paint, Atlas, DrawList, ImageAtlas, Scene};
+
+use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
 use eui_theme::{Resolved, Theme, Viewer};
 use eui_tree::{Chunk, NodeIx, Session};
@@ -71,6 +73,8 @@ pub struct Driver {
     viewer: Viewer,
     text: TextEngine,
     atlas: Atlas,
+    images: ImageAtlas,
+    assets: AssetStore,
     size: Size,
     scale: f32,
     pointer: Pointer,
@@ -106,6 +110,8 @@ impl Driver {
             viewer,
             text: TextEngine::new(),
             atlas: Atlas::new(),
+            images: ImageAtlas::new(),
+            assets: AssetStore::default(),
             size: Size::new(w, h),
             scale,
             pointer: Pointer::default(),
@@ -248,9 +254,52 @@ impl Driver {
 
     fn ensure_layout(&mut self) {
         if !self.layout_valid {
-            self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut self.text }, self.size);
+            let mut measurer = Measurer { text: &mut self.text, assets: &self.assets };
+            self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
             self.layout_valid = true;
         }
+    }
+
+    // -------------------------------------------------------------- assets
+
+    /// Hashes the tree needs and the client has not fetched: images'
+    /// `src` props and chunks defined by hash. The caller fetches them from
+    /// the session's origin and calls [`Self::asset_ready`].
+    pub fn pending_assets(&mut self) -> Vec<Hash> {
+        if let Some(root) = self.session.root() {
+            let wanted: Vec<Hash> = self
+                .session
+                .preorder(root)
+                .filter_map(|ix| self.session.node(ix))
+                .filter(|n| n.kind == NodeKind::Image)
+                .flat_map(|n| n.props.iter().filter_map(|(_, v)| if let Value::Asset(h) = v { Some(*h) } else { None }))
+                .collect();
+            for h in wanted {
+                self.assets.want(h);
+            }
+        }
+        self.assets.take_pending()
+    }
+
+    /// Deliver verified bytes for a hash. Images are decoded and packed for
+    /// the renderer; the tree is relaid out because an image now has a size.
+    pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
+        self.assets.deliver(hash, bytes);
+        if let Some(img) = self.assets.image(&hash) {
+            self.images.insert(hash, img.width, img.height, &img.rgba);
+        }
+        self.invalidate();
+    }
+
+    /// Record that a hash could not be fetched.
+    pub fn asset_failed(&mut self, hash: Hash, why: String) {
+        eprintln!("eui: asset {}: {why}", crate::assets::hex(&hash));
+        self.assets.fail(hash, why);
+    }
+
+    /// The asset store.
+    pub fn assets(&self) -> &AssetStore {
+        &self.assets
     }
 
     /// The nearest node at or above `from` carrying a handler for `kind`.
@@ -321,7 +370,15 @@ impl Driver {
             None => {
                 let result = match self.session.chunk(chunk_id) {
                     Some(Chunk::Bytes(bytes)) => eui_vm::Chunk::verify(bytes).map_err(|e| e.to_string()),
-                    Some(Chunk::Hash(_)) => Err("chunk by hash: asset fetching is not implemented".into()),
+                    Some(Chunk::Hash(h)) => match self.assets.raw(h) {
+                        Some(bytes) => eui_vm::Chunk::verify(&bytes).map_err(|e| e.to_string()),
+                        None => {
+                            // Ask for it; until it arrives the handler is inert.
+                            let h = *h;
+                            self.assets.want(h);
+                            return Err("chunk not fetched yet".into());
+                        }
+                    },
                     None => Err("undefined chunk".into()),
                 };
                 match result {
@@ -330,7 +387,9 @@ impl Driver {
                         c
                     }
                     Err(e) => {
-                        self.chunks.insert(chunk_id, None);
+                        if e != "chunk not fetched yet" {
+                            self.chunks.insert(chunk_id, None);
+                        }
                         return Err(e);
                     }
                 }
@@ -519,6 +578,7 @@ impl Driver {
             theme: &self.resolved,
             text: &mut self.text,
             atlas: &mut self.atlas,
+            images: &self.images,
             scale: self.scale,
             size: (device_w, device_h),
         });
@@ -526,9 +586,9 @@ impl Driver {
         list
     }
 
-    /// The atlas, for the renderer's upload.
-    pub fn atlas_mut(&mut self) -> &mut Atlas {
-        &mut self.atlas
+    /// The atlases, for the renderer's upload.
+    pub fn atlases_mut(&mut self) -> (&mut Atlas, &mut ImageAtlas) {
+        (&mut self.atlas, &mut self.images)
     }
 
     /// The node under the pointer, if any.
@@ -597,5 +657,23 @@ impl eui_vm::Host for SessionHost<'_> {
     }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
+    }
+}
+
+
+/// Layout's view of text and assets: shaping from the text engine, image
+/// sizes from the store. An image not yet fetched has no size, and gets one
+/// the moment it arrives.
+struct Measurer<'a> {
+    text: &'a mut TextEngine,
+    assets: &'a AssetStore,
+}
+
+impl TextMeasurer for Measurer<'_> {
+    fn measure(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> TextMetrics {
+        self.text.measure(text, font, max_width, line_clamp)
+    }
+    fn asset_size(&mut self, hash: &[u8; 32]) -> Option<(f32, f32)> {
+        self.assets.image(hash).map(|i| (i.width as f32, i.height as f32))
     }
 }

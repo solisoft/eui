@@ -21,7 +21,7 @@ crates/
   eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
-  eui-client driver, WSS transport, winit window                     [built]
+  eui-client driver, WSS transport, assets over HTTPS, winit window  [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   counter-app     counter, todo and a 10 000-row table as a Soli app, with

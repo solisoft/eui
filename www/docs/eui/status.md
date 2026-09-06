@@ -198,6 +198,17 @@ ship with, per `spec/07-bytecode.md`, now normative.
   silent when a chunk fails verification; the Soli end-to-end counter uses
   one.
 
+**Assets and images.** `GET /_eui/asset/<blake3>` on the Soli side, from a
+process-wide content-addressed store: an image in a view is a file path,
+hashed and served immutable, so a client caches it forever and nothing on
+the path can substitute it. On the client, a deliberately small HTTP/1.1
+reader over TLS — status 200, one `Content-Length` body, no chunked
+encoding — verifies the hash before anything is decoded, decodes PNG, and
+packs images into an RGBA atlas beside the glyph atlas. An image with no
+explicit size takes its intrinsic size the moment it arrives. Chunks defined
+by hash go through the same path. The todo's header carries an avatar that
+the end-to-end test fetches from the real server.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -224,7 +235,6 @@ Normative, in `spec/`, and stable enough to build against:
 
 - `eui-vm` — the verifier and the metered interpreter.
 - Capability prompts and the manifest check in the client.
-- Chunk delivery by content hash and the asset endpoint; images.
 
 ## Scope, stated plainly
 

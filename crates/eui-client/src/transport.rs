@@ -37,22 +37,48 @@ impl std::fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
-/// What arrives from the socket.
+/// What arrives from the socket, or from an asset fetch.
 #[derive(Debug)]
 pub enum Incoming {
     /// A binary message.
     Message(Vec<u8>),
     /// The connection ended.
     Closed(TransportError),
+    /// An asset fetch finished: verified bytes, or why not.
+    Asset([u8; 32], Result<Vec<u8>, String>),
 }
 
 /// A live connection: send bytes in, receive [`Incoming`] out.
-#[derive(Debug)]
 pub struct Connection {
     /// Outgoing messages.
     pub tx: mpsc::Sender<Vec<u8>>,
     /// Incoming messages; the receiver end belongs to the caller.
     pub rx: mpsc::Receiver<Incoming>,
+    /// The HTTPS origin assets come from.
+    pub origin: String,
+    in_tx: mpsc::Sender<Incoming>,
+    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection").field("origin", &self.origin).finish()
+    }
+}
+
+impl Connection {
+    /// Fetch an asset on a worker thread; the result arrives as
+    /// [`Incoming::Asset`] and the notifier is called.
+    pub fn request_asset(&self, hash: [u8; 32]) {
+        let origin = self.origin.clone();
+        let tx = self.in_tx.clone();
+        let notify = std::sync::Arc::clone(&self.notify);
+        let _ = thread::Builder::new().name("eui-asset".into()).spawn(move || {
+            let result = crate::assets::fetch(&origin, &hash).map_err(|e| e.to_string());
+            let _ = tx.send(Incoming::Asset(hash, result));
+            notify();
+        });
+    }
 }
 
 /// Enforce `spec/01-transport.md` §1: TLS only. A release build refuses
@@ -73,15 +99,22 @@ pub fn check_url(url: &str) -> Result<(), TransportError> {
 
 /// Connect, spawning the socket's runtime on a background thread. `first` is
 /// sent as soon as the socket is open — the `Hello` frame.
-pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + 'static) -> Result<Connection, TransportError> {
+pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'static) -> Result<Connection, TransportError> {
     check_url(url)?;
+    let origin = crate::assets::origin_for(url).map_err(|e| TransportError::Connect(e.to_string()))?;
     let url = url.to_owned();
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
     let (in_tx, in_rx) = mpsc::channel::<Incoming>();
+    let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(notify);
+    let in_tx_for_assets = in_tx.clone();
+    let notify_for_thread = std::sync::Arc::clone(&notify);
+    let notify = notify_for_thread.clone();
+    let notify_thread = move || notify_for_thread();
 
     thread::Builder::new()
         .name("eui-transport".into())
         .spawn(move || {
+            let notify = notify_thread;
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(rt) => rt,
                 Err(e) => {
@@ -143,5 +176,5 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + 'static) ->
         })
         .map_err(|e| TransportError::Connect(e.to_string()))?;
 
-    Ok(Connection { tx: out_tx, rx: in_rx })
+    Ok(Connection { tx: out_tx, rx: in_rx, origin, in_tx: in_tx_for_assets, notify })
 }
