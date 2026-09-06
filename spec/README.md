@@ -18,7 +18,7 @@ who did not write it.
 | [`02-wire-format.md`](02-wire-format.md) | **normative** | Atoms, styles, nodes, patches — byte level |
 | [`03-widgets.md`](03-widgets.md) | planned | Primitive node kinds and their semantics |
 | [`04-layout.md`](04-layout.md) | planned | The layout algorithm, normatively |
-| [`05-theme.md`](05-theme.md) | planned | Roles, scales, modes, resolution rules |
+| [`05-theme.md`](05-theme.md) | **normative** | Roles, scales, modes, the resolution algorithm |
 | [`06-events.md`](06-events.md) | planned | Event kinds and payloads |
 | [`07-bytecode.md`](07-bytecode.md) | planned | Verified bytecode subset, host surface, metering |
 | [`08-security.md`](08-security.md) | planned | Threat model and normative requirements |

@@ -88,7 +88,7 @@ resolution against a parent.
 | 48 | 1 | `shadow` | `shadow` scale index |
 | 49 | 1 | `opacity` | 0–255, 255 = opaque |
 | 50 | 1 | `font_family` | 0 `sans`, 1 `mono`, 2+ granted font roles |
-| 51 | 1 | `font_size` | `text` scale index |
+| 51 | 1 | `font_size` | `text` scale index; the default record carries `2`, `base` |
 | 52 | 1 | `font_weight` | 0 `regular`, 1 `medium`, 2 `semibold`, 3 `bold` |
 | 53 | 1 | `text_align` | 0 `start`, 1 `center`, 2 `end`, 3 `justify` |
 | 54 | 1 | `line_clamp` | 0 = unlimited |

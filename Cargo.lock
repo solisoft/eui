@@ -7,6 +7,13 @@ name = "eui-proto"
 version = "0.1.0"
 
 [[package]]
+name = "eui-theme"
+version = "0.1.0"
+dependencies = [
+ "eui-proto",
+]
+
+[[package]]
 name = "eui-tree"
 version = "0.1.0"
 dependencies = [

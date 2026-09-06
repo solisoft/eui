@@ -113,7 +113,7 @@ fn default_style_record_bytes() {
         0x00,                   // shadow
         0xFF,                   // opacity
         0x00,                   // font_family: sans
-        0x00,                   // font_size
+        0x02,                   // font_size: base
         0x00,                   // font_weight: regular
         0x00,                   // text_align: start
         0x00,                   // line_clamp

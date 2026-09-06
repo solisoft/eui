@@ -123,12 +123,13 @@
     The wire format and the session state. <code>eui-proto</code> encodes and
     decodes every construct on this page with no dependencies and no
     <code>unsafe</code>; <code>eui-tree</code> applies the patches, checks
-    every reference before placing anything, and enforces the quotas. 91 tests,
-    46 of them rejection cases.
+    every reference before placing anything, and enforces the quotas;
+    <code>eui-theme</code> resolves roles to colours with contrast met by
+    construction. 108 tests, 46 of them rejection cases.
   </p>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--spec">Specified</span>
-    The transport and the budgets, normatively. Layout, theming, events,
+    The transport, the theme, and the budgets, normatively. Layout, events,
     bytecode and the security model are designed on these pages; their spec
     documents are still to write.
   </p>

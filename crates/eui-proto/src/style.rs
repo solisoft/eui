@@ -397,7 +397,9 @@ impl Default for StyleRecord {
             shadow: 0,
             opacity: 255,
             font_family: FontFamily::Sans,
-            font_size: 0,
+            // Index 2 is `base` on the text scale (`spec/05-theme.md` §2); a
+            // default of 0 would be `xs`.
+            font_size: 2,
             font_weight: FontWeight::Regular,
             text_align: TextAlign::Start,
             line_clamp: 0,

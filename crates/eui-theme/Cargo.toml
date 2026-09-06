@@ -1,0 +1,14 @@
+[package]
+name = "eui-theme"
+description = "EUI theme resolution: roles and scales to concrete values, per spec/05-theme.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eui-proto = { path = "../eui-proto" }
+
+[lints]
+workspace = true

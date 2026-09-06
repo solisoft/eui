@@ -1,5 +1,8 @@
 # Theming
 
+> Normative in `spec/05-theme.md` and implemented by `eui-theme`: the
+> resolution algorithm below is what the client runs.
+
 The server never sends a colour. It sends a **role**, and the client resolves it.
 
 That one decision buys three things at once: switching to dark mode costs zero
@@ -50,9 +53,11 @@ theme "brand" do
 end
 ```
 
-The WCAG AA contrast of **every role pair that can meet on screen** is checked
-at build time, in every mode. A theme that fails does not ship. Contrast is not
-something to discover from a user's bug report.
+Contrast is not something to discover from a user's bug report, and it is not
+a check either. The resolver assigns each role a lightness target per mode,
+then nudges every specified pair — body text on each surface at 7:1, muted
+text at 4.5:1, accents and borders at 3:1 — apart until it passes. A theme
+cannot fail contrast, because the algorithm does not have a failing path.
 
 ## Literals, and when they are right
 

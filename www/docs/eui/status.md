@@ -33,12 +33,28 @@ with a free list, and `apply` for every op in the wire format.
 - 27 tests, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
+**`eui-theme` — theme resolution.** Roles and scale indices to concrete
+values, per `spec/05-theme.md`, which is now normative.
+
+- OKLab/OKLCH conversions, gamut clipping by chroma reduction, WCAG contrast.
+- Contrast is met **by construction**: after the per-mode lightness targets
+  are assigned, each specified pair is nudged apart until it passes. A test
+  drives 300 random seed pairs and the corner cases through all three modes
+  and asserts every pair in the spec's table; none fail.
+- The `EUIT` theme document, encoded and decoded; unknown keys are an error,
+  because a content-addressed document has no version skew to be lenient
+  about.
+- `check_style` rejects a style record whose indices run off a scale, so a
+  bad index is a rejected batch rather than a surprise at paint time.
+- 17 tests.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
 
 - **Wire format** (`spec/02`) — implemented by `eui-proto` and pinned by test
   vectors.
+- **Theme** (`spec/05`) — implemented by `eui-theme`.
 - **Transport** (`spec/01`) — discovery, the signed manifest, content-addressed
   assets, the session, framing.
 - **Budgets** (`spec/10`) — the wire numbers measured, the runtime numbers as
@@ -51,7 +67,6 @@ spec documents (`spec/03` to `spec/09`) are **not written yet**. Until they
 are, the doc page is the design and there is nothing more precise to appeal to.
 
 - **Layout** — flex, stack, grid, virtualised scroll, intrinsic sizing.
-- **Theming** — roles, scales, modes, and the rules for resolving them.
 - **Events** — the twenty-one kinds exist in `eui-proto`; their payloads are
   not pinned down.
 - **Bytecode** — the verified subset, the host surface, the metering.
@@ -62,8 +77,8 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 ## Not started
 
-- `eui-layout`, `eui-text`, `eui-theme` — the parts that can be tested without a
-  GPU, and where the CPU budgets are won or lost.
+- `eui-layout`, `eui-text` — the parts that can be tested without a GPU, and
+  where the CPU budgets are won or lost.
 - `eui-render` — the wgpu renderer.
 - `eui-vm` — the verifier and the metered interpreter.
 - `eui-client` — the window, the session, the capability prompts.

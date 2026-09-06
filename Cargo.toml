@@ -3,9 +3,10 @@ resolver = "2"
 members = [
     "crates/eui-proto",
     "crates/eui-tree",
+    "crates/eui-theme",
 ]
 # Added as each lands (see spec/README.md "Ordre d'implémentation"):
-#   crates/eui-theme, eui-layout, eui-text, eui-render,
+#   crates/eui-layout, eui-text, eui-render,
 #   crates/eui-vm, eui-client, eui-conform, xtask
 
 [workspace.package]
