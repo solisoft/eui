@@ -21,6 +21,7 @@ use crate::tables::DefineOnce;
 pub struct Session {
     limits: Limits,
     atoms: DefineOnce<String>,
+    atom_ids: std::collections::HashMap<String, u32>,
     atom_bytes: usize,
     styles: DefineOnce<StyleRecord>,
     colors: DefineOnce<u32>,
@@ -49,6 +50,7 @@ impl Session {
         Self {
             limits,
             atoms: DefineOnce::new(Table::Atom, limits.max_atoms),
+            atom_ids: std::collections::HashMap::new(),
             atom_bytes: 0,
             styles: DefineOnce::new(Table::Style, limits.max_styles),
             colors: DefineOnce::new(Table::Color, limits.max_colors),
@@ -114,6 +116,12 @@ impl Session {
         self.atoms.get(id).map(String::as_str)
     }
 
+    /// The first atom defined with this exact value, if any. Used to find
+    /// well-known prop names such as `columns` and `item_height`.
+    pub fn atom_id(&self, value: &str) -> Option<u32> {
+        self.atom_ids.get(value).copied()
+    }
+
     /// A style record.
     pub fn style(&self, id: u32) -> Option<&StyleRecord> {
         self.styles.get(id)
@@ -141,6 +149,12 @@ impl Session {
     /// Live node count.
     pub fn live_nodes(&self) -> u32 {
         self.arena.live()
+    }
+
+    /// One past the highest arena index ever used — the size a per-node side
+    /// table needs.
+    pub fn arena_len(&self) -> usize {
+        self.arena.len()
     }
 
     /// Bytes of atom values defined so far.
@@ -220,6 +234,7 @@ impl Session {
                     return Err(ApplyError::AtomBudget);
                 }
                 self.atoms.define(*id, value.clone())?;
+                self.atom_ids.entry(value.clone()).or_insert(*id);
                 self.atom_bytes = total;
                 Ok(())
             }

@@ -25,6 +25,13 @@ impl NodeIx {
         !self.is_none()
     }
 
+    /// The raw index, for callers that keep per-node side tables (layout
+    /// results, paint caches). Stable while the node is live; a freed slot is
+    /// reused by a later node, so a side table must be cleared with the tree.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
     fn usize(self) -> usize {
         self.0 as usize
     }
@@ -89,6 +96,10 @@ pub(crate) struct Arena {
 impl Arena {
     pub(crate) fn live(&self) -> u32 {
         self.live
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.nodes.len()
     }
 
     pub(crate) fn lookup(&self, id: u32) -> Option<NodeIx> {

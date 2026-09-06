@@ -43,8 +43,10 @@ loading state), `link`, `icon_button`, `segmented_control`, `menu`,
 `context_menu`, `command_palette`, `toolbar`
 
 **Input.** `text_field`, `password_field`, `textarea`, `select`, `combobox`,
-`checkbox`, `radio_group`, `switch`, `slider`, `date_picker`, `time_picker`,
-`calendar`, `color_picker`, `rating`, `file_drop`, `form` with error display
+`checkbox`, `radio_group`, `switch`, `slider`, `date_picker`,
+`datetime_picker`, `date_range_picker` (one calendar engine, two selections),
+`time_picker`, `calendar`, `color_picker`, `rating`, `file_drop`, `form` with
+error display
 
 **Structure.** `card`, `panel`, `sheet`, `dialog`, `drawer`, `popover`,
 `tooltip`, `tabs`, `accordion`, `split_pane`, `resizable`, `stepper`
@@ -59,6 +61,17 @@ loading state), `link`, `icon_button`, `segmented_control`, `menu`,
 
 Every one of them is themeable through roles, keyboard-navigable, and carries
 documented accessibility semantics.
+
+## Not in version 1: video
+
+A video player is the one thing on this page that does not compose from the
+primitives, and it is worth saying why. Decoding video in the client means
+either shipping a codec library — tens of megabytes and a large attack surface,
+everything EUI refuses — or handing the stream to the **platform's** decoder
+(AVFoundation, Media Foundation, GStreamer with VA-API) and drawing its output
+as a texture. The second keeps the client small and is the design. It needs a
+fifteenth primitive, `video`, and adding a primitive is a protocol version
+bump, so it is EUI/2 work. Audio follows the same path.
 
 ## How a button is a box
 

@@ -48,6 +48,22 @@ values, per `spec/05-theme.md`, which is now normative.
   bad index is a rejected batch rather than a surprise at paint time.
 - 17 tests.
 
+**`eui-layout` — the layout engine.** One algorithm, `spec/04-layout.md`,
+now normative.
+
+- Flow (`row`/`column`) with wrap, grow, shrink, gap, every `justify` and
+  `align` value including baseline; a bounded freeze loop for min/max
+  conflicts, so a pathological set of constraints costs eight passes rather
+  than a hang.
+- `stack` with z ordering, a one-shape `grid`, `scroll` with clamped offsets,
+  and a `list` that **does not measure rows it cannot see** — a thousand-row
+  list shapes about a dozen.
+- Two phases: `measure` is memoised per frame and pure, `arrange` runs once
+  per node. Hit-testing honours stacking order and scroll clipping.
+- Text shaping is behind a trait; tests use a fixed-pitch stand-in so the
+  goldens pin exact pixels.
+- 18 golden tests.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -55,6 +71,8 @@ Normative, in `spec/`, and stable enough to build against:
 - **Wire format** (`spec/02`) — implemented by `eui-proto` and pinned by test
   vectors.
 - **Theme** (`spec/05`) — implemented by `eui-theme`.
+- **Layout** (`spec/04`) — implemented by `eui-layout`; §9 lists what
+  version 1 leaves out.
 - **Transport** (`spec/01`) — discovery, the signed manifest, content-addressed
   assets, the session, framing.
 - **Budgets** (`spec/10`) — the wire numbers measured, the runtime numbers as
@@ -66,7 +84,6 @@ Described on these pages in enough detail to argue with, but their normative
 spec documents (`spec/03` to `spec/09`) are **not written yet**. Until they
 are, the doc page is the design and there is nothing more precise to appeal to.
 
-- **Layout** — flex, stack, grid, virtualised scroll, intrinsic sizing.
 - **Events** — the twenty-one kinds exist in `eui-proto`; their payloads are
   not pinned down.
 - **Bytecode** — the verified subset, the host surface, the metering.
@@ -77,8 +94,8 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 ## Not started
 
-- `eui-layout`, `eui-text` — the parts that can be tested without a GPU, and
-  where the CPU budgets are won or lost.
+- `eui-text` — shaping and the glyph atlas, behind the trait `eui-layout`
+  already calls.
 - `eui-render` — the wgpu renderer.
 - `eui-vm` — the verifier and the metered interpreter.
 - `eui-client` — the window, the session, the capability prompts.

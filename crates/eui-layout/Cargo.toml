@@ -1,0 +1,16 @@
+[package]
+name = "eui-layout"
+description = "EUI layout engine: flow, stack, grid, scroll and virtualised lists, per spec/04-layout.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eui-proto = { path = "../eui-proto" }
+eui-tree = { path = "../eui-tree" }
+eui-theme = { path = "../eui-theme" }
+
+[lints]
+workspace = true
