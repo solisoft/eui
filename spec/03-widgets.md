@@ -51,8 +51,33 @@ snapped horizontally to whole device pixels and vertically to the line's
 baseline. Anti-aliasing is by signed distance to the edge, so the same
 pipeline draws boxes, hairlines and glyphs.
 
-Shadows (`s.shadow`) and `canvas` paths are specified here as **required in
-version 1.1** and MAY be ignored by a version 1 client.
+Shadows (`s.shadow`) are specified here as **required in version 1.1** and
+MAY be ignored by a version 1 client. `canvas` paths (§1.1) are part of
+version 1.
+
+### 1.1 `canvas` paths
+
+A `canvas` carries its drawing in the `paths` prop: a `List` of paths, each
+a `List` beginning with an `Int` kind and a colour, followed by numbers.
+Coordinates are logical px from the node's content box; the drawing is
+clipped to the border box. The colour is a `Color` (a server resolves role
+names and `#RRGGBB[AA]` before encoding); a client MUST also accept an `Int`
+role id and, for hand-written trees, a `Str` role name or hex literal.
+
+| kind | Path | Meaning |
+|---:|---|---|
+| `0` | `[0, colour, width, x0, y0, x1, y1, …]` | A polyline stroked `width` px wide, round caps and joins |
+| `1` | `[1, colour, x, y, w, h, radius]` | A filled rectangle |
+| `2` | `[2, colour, base_y, x0, y0, x1, y1, …]` | The area between a polyline and the horizontal `base_y` |
+| `3` | `[3, colour, cx, cy, r]` | A filled circle |
+| `4` | `[4, colour, width, cx, cy, r, a0, a1]` | An arc of radius `r` from angle `a0` to `a1`, radians, `0` along +x, increasing clockwise on screen |
+
+Paths paint in order. A path with an unknown kind, a colour that does not
+resolve, or too few numbers is skipped, never an error: a chart with a bad
+series still shows its grid. The reference client draws every kind with its
+rounded-rectangle pipeline — a segment is a rotated capsule, an area a strip
+per device column, an arc a fan of chords at most 6° apart — so a canvas adds
+no shader, no tessellator and no allocation beyond its quads.
 
 ## 3. Focus and keyboard
 

@@ -24,7 +24,7 @@ the entire vocabulary the protocol can express.
 | `textarea` | A multi-line editable field |
 | `scroll` | A clipping viewport with offsets |
 | `list` | A virtualised child list — only the visible window is laid out |
-| `canvas` | A retained path list, for charts and custom marks |
+| `canvas` | A retained path list in the `paths` prop — polylines, rectangles, areas, circles, arcs — for charts and custom marks |
 | `spacer` | Flexible empty space. Leaf |
 | `divider` | A hairline rule. Leaf |
 | `overlay` | A layer above the flow: menus, tooltips, dialogs |

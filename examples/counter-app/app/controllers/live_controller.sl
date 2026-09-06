@@ -368,6 +368,47 @@ def gallery_view(raw_state)
       )
     ]
   )
+  charts = row(
+    {
+      "gap": 4,
+      "wrap": "wrap",
+      "align": "start"
+    },
+    [
+      labelled("Line", chart_line([
+        3,
+        5,
+        4,
+        8,
+        6,
+        9,
+        7
+      ], 240, 120)),
+      labelled("Area", chart_area([
+        2,
+        4,
+        3,
+        6,
+        5,
+        8,
+        9
+      ], 240, 120)),
+      labelled("Bars", chart_bar([
+        4,
+        7,
+        3,
+        8,
+        5,
+        6
+      ], 240, 120)),
+      labelled("Donut", chart_donut([
+        5,
+        3,
+        2,
+        1
+      ], 120, 120))
+    ]
+  )
   sections = [
     {
       "id": "a",
@@ -439,6 +480,7 @@ def gallery_view(raw_state)
       ),
       stepper(["Spec", "Client", "Soli", "Ship"], 2),
       pickers,
+      charts,
       row(
         {"gap": 4, "align": "start"},
         [
@@ -461,7 +503,7 @@ def gallery_view(raw_state)
       ),
       empty_state(
         "Nothing here yet",
-        "Widgets that need canvas paths — charts — wait for the renderer.",
+        "Filters that match nothing land here. Clear them to see everything.",
         "Noted",
         "noop"
       ),

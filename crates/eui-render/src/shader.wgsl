@@ -17,6 +17,7 @@ struct Inst {
     @location(2) fill: vec4<f32>,
     @location(3) stroke: vec4<f32>,
     @location(4) uv: vec4<f32>,
+    @location(5) extra: vec4<f32>, // x: rotation about the centre, radians
 };
 
 struct VOut {
@@ -36,7 +37,13 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
     let c = corners[vi];
-    let px = inst.rect.xy + c * inst.rect.zw;
+    // Rotate about the centre; the SDF below works in unrotated local
+    // space, so a canvas segment gets the same anti-aliased edge as a box.
+    let centre = inst.rect.xy + inst.rect.zw * 0.5;
+    let local = (c - vec2<f32>(0.5, 0.5)) * inst.rect.zw;
+    let ca = cos(inst.extra.x);
+    let sa = sin(inst.extra.x);
+    let px = centre + vec2<f32>(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
     let ndc = vec2<f32>(px.x / u.viewport.x * 2.0 - 1.0, 1.0 - px.y / u.viewport.y * 2.0);
     var out: VOut;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);

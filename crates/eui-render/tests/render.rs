@@ -312,3 +312,74 @@ fn an_image_paints_its_pixels() {
     // A point on the disc: ultramarine.
     assert!(close(pixel(&px, 100, 16, 28), [0x22, 0x29, 0xa8, 255], 3), "{:?}", pixel(&px, 100, 16, 28));
 }
+
+// ------------------------------------------------------------- canvas
+
+fn canvas_fixture(paths: Value, w: f32, h: f32) -> Fx {
+    // A 100 × 50 canvas at the top-left of a column (the root itself would
+    // take the viewport).
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let cv = StyleRecord { width: Dim::Px(100), height: Dim::Px(50), ..Default::default() };
+    let mut nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Canvas, 2, 2, 0)];
+    nodes[1].props = (0, 1);
+    fixture(vec![col, cv], nodes, vec![(1, paths)], &["paths"], w, h)
+}
+
+#[test]
+fn canvas_paths_become_capsules_strips_circles_and_arcs() {
+    let i = Value::Int;
+    let paths = Value::List(vec![
+        Value::List(vec![i(0), Value::Str("accent.base".into()), i(2), i(0), i(0), i(30), i(40)]),
+        Value::List(vec![i(1), Value::Str("#ff0000".into()), i(10), i(10), i(20), i(5), i(0)]),
+        Value::List(vec![i(2), Value::Color(ColorRef::role(Role::InfoSubtle.id())), i(50), i(0), i(50), i(10), i(40)]),
+        Value::List(vec![i(3), Value::Str("info.base".into()), i(50), i(25), i(5)]),
+        Value::List(vec![i(4), Value::Int(i64::from(Role::SuccessBase.id())), i(4), i(80), i(25), i(15), Value::Float(0.0), Value::Float(std::f64::consts::FRAC_PI_2)]),
+        Value::List(vec![i(9), Value::Str("accent.base".into()), i(1)]),
+        Value::List(vec![i(0), Value::Str("no.such.role".into()), i(1), i(0), i(0), i(9), i(9)]),
+    ]);
+    let mut fx = canvas_fixture(paths, 200.0, 100.0);
+    let list = draw(&mut fx, 200, 100, 1.0);
+    // The canvas clips to its box.
+    assert_eq!(list.clips, vec![[0, 0, 200, 100], [0, 0, 100, 50]]);
+    let rotated: Vec<&Quad> = list.quads.iter().filter(|q| q.extra[0] != 0.0).collect();
+    // The diagonal: one capsule, length 50 plus the width, round caps.
+    let seg = rotated.iter().find(|q| (q.rect[2] - 52.0).abs() < 0.01).expect("the segment");
+    assert!((seg.extra[0] - 40f32.atan2(30.0)).abs() < 1e-5);
+    assert_eq!(seg.params[0], 1.0, "radius is half the width");
+    assert_eq!(seg.fill, linear(fx.theme.color(Role::AccentBase)));
+    // The rectangle, in literal red.
+    assert!(list.quads.iter().any(|q| q.rect == [10.0, 10.0, 20.0, 5.0] && q.fill == linear(0xFF00_00FF)));
+    // The area: one strip per device column down to the base; the column
+    // at x = 0 sits on the base line and is empty, so ten strips.
+    let strips: Vec<&Quad> = list.quads.iter().filter(|q| q.rect[2] == 1.0 && q.fill == linear(fx.theme.color(Role::InfoSubtle))).collect();
+    assert_eq!(strips.len(), 10);
+    assert_eq!(strips[0].rect, [1.0, 49.0, 1.0, 1.0]);
+    assert_eq!(strips[9].rect, [10.0, 40.0, 1.0, 10.0]);
+    // The circle: a 10 × 10 quad with a 5 px radius.
+    assert!(list.quads.iter().any(|q| q.rect == [45.0, 20.0, 10.0, 10.0] && q.params[0] == 5.0 && q.fill == linear(fx.theme.color(Role::InfoBase))));
+    // The quarter arc at 6° pitch: fifteen capsules in success.base.
+    let arc = rotated.iter().filter(|q| q.fill == linear(fx.theme.color(Role::SuccessBase))).count();
+    assert_eq!(arc, 15);
+    // The unknown kind and the unknown colour drew nothing.
+    assert_eq!(rotated.len(), 16);
+}
+
+#[test]
+fn a_canvas_line_lands_on_its_pixels() {
+    let Some(mut r) = gpu() else { return };
+    let i = Value::Int;
+    let paths = Value::List(vec![Value::List(vec![i(0), Value::Str("accent.base".into()), i(6), i(0), i(0), i(40), i(40)])]);
+    let mut fx = canvas_fixture(paths, 100.0, 50.0);
+    let list = draw(&mut fx, 100, 50, 1.0);
+    let target = r.offscreen(100, 50);
+    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // On the diagonal: the line. Off it: the surface. The strip is one
+    // strip: no gap between the two clipped halves of the capsule.
+    assert!(close(pixel(&px, 100, 20, 20), accent, 2), "{:?}", pixel(&px, 100, 20, 20));
+    assert!(close(pixel(&px, 100, 30, 30), accent, 2));
+    assert!(close(pixel(&px, 100, 20, 35), ground, 2), "{:?}", pixel(&px, 100, 20, 35));
+    assert!(close(pixel(&px, 100, 60, 10), ground, 2));
+}

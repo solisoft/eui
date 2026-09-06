@@ -218,7 +218,13 @@ menu, toolbar, navbar, sidebar, tree view, code block, field and form,
 table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
-Charts wait on `canvas` paths in the renderer.
+
+**Charts.** `canvas` paths are in (spec 03 §1.1): five kinds — polyline,
+rectangle, area, circle, arc — that the renderer draws with the one quad
+pipeline it already has, a rotation added to the vertex stage so a segment
+is a capsule and an arc a fan of them. Soli resolves the colours before
+encoding. The catalogue's `chart_line`, `chart_area`, `chart_bar` and
+`chart_donut` build the paths server-side; the gallery shows all four.
 
 **Keyboard focus, and the widgets that needed it.** The client walks `Tab`
 order itself — editable fields and anything with a `click` handler, in

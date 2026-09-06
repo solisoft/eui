@@ -19,7 +19,8 @@ fn main() {
         let name = args.get(4).expect("name");
         let w: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1000.0);
         let h: f32 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(900.0);
-        snapshot_soli(&out, url, name, w, h);
+        let scale: f32 = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(2.0);
+        snapshot_soli(&out, url, name, w, h, scale);
         return;
     }
     let (w, h, scale) = (420.0f32, 260.0f32, 2.0f32);
@@ -62,12 +63,11 @@ fn main() {
 
 
 /// Render a component served by a running Soli, in both modes.
-fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32) {
+fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     use eui_client::{connect, Incoming, Input};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    let scale = 2.0f32;
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
     for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {

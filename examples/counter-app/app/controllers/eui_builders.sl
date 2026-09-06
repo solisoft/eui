@@ -1192,3 +1192,115 @@ end
 def labelled(title, child)
   card({"gap": 3}, [text(title, {"weight": "bold"}), child])
 end
+
+# ---- Charts ----------------------------------------------------------------
+
+# A chart is a `canvas` with a `paths` prop, spec 03 §1.1: each path is a
+# list — kind, colour, then numbers in logical px from the content box.
+#   [0, colour, width, x0, y0, x1, y1, …]   polyline, round caps and joins
+#   [1, colour, x, y, w, h, radius]          filled rectangle
+#   [2, colour, base_y, x0, y0, x1, y1, …]   area between a polyline and base_y
+#   [3, colour, cx, cy, r]                   filled circle
+#   [4, colour, width, cx, cy, r, a0, a1]    arc, radians, clockwise from +x
+def canvas(width, height, paths)
+  {
+    "k": "canvas",
+    "s": {"width": width, "height": height},
+    "p": {"paths": paths}
+  }
+end
+
+def chart_max(values)
+  top = 0
+  for v in values
+    top = v if v > top
+  end
+  top > 0 ? top : 1
+end
+
+# A series scaled into `w × h` with 4 px of breathing room, as [x, y] pairs.
+def chart_points(values, w, h)
+  top = chart_max(values)
+  count = values.length()
+  step = count > 1 ? (w - 8) / (count - 1) : 0
+  range(0, count).map(fn(i) { [4 + i * step, 4 + (h - 8) * (top - values[i]) / top] })
+end
+
+# Four hairlines, so a series has something to be read against.
+def chart_grid(w, h)
+  range(0, 4).map(fn(i) { [
+    0,
+    "border.subtle",
+    1,
+    4,
+    4 + (h - 8) * i / 3,
+    w - 4,
+    4 + (h - 8) * i / 3
+  ] })
+end
+
+def flatten_points(points)
+  flat = []
+  for p in points
+    flat = flat.concat(p)
+  end
+  flat
+end
+
+def chart_line(values, w, h)
+  points = chart_points(values, w, h)
+  line = [0, "accent.base", 2].concat(flatten_points(points))
+  dots = points.map(fn(p) { [
+    3,
+    "accent.base",
+    p[0],
+    p[1],
+    3
+  ] })
+  canvas(w, h, chart_grid(w, h).concat([line]).concat(dots))
+end
+
+def chart_area(values, w, h)
+  flat = flatten_points(chart_points(values, w, h))
+  area = [2, "info.subtle", h - 4].concat(flat)
+  line = [0, "info.base", 2].concat(flat)
+  canvas(w, h, chart_grid(w, h).concat([area, line]))
+end
+
+def chart_bar(values, w, h)
+  top = chart_max(values)
+  count = values.length()
+  slot = (w - 8) / count
+  bars = range(0, count).map(fn(i) {
+    bar_h = (h - 8) * values[i] / top;
+    [1, "accent.base", 4 + i * slot + slot / 8, h - 4 - bar_h, slot - slot / 4, bar_h, 1]
+  })
+  canvas(w, h, chart_grid(w, h).concat(bars))
+end
+
+# A donut: one arc per part, in the four "base" roles, a small gap between.
+def chart_donut(parts, w, h)
+  total = parts.sum()
+  total = 1 if total == 0
+  roles = ["accent.base", "info.base", "success.base", "warning.base"]
+  radius = (w < h ? w : h) / 2 - 10
+  arcs = []
+  start = -1.5707963
+  i = 0
+  for p in parts
+    sweep = 6.2831853 * p / total
+    arcs = arcs.concat([ [
+      4,
+      roles[i % 4],
+      14,
+      w / 2,
+      h / 2,
+      radius,
+      start,
+      start + sweep - 0.04
+    ]])
+    start = start + sweep
+    i = i + 1
+  end
+  canvas(w, h, arcs)
+end

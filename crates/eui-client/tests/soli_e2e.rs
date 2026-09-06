@@ -436,7 +436,27 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     let target = within(&d, "Range", "10");
     click(&mut d, &conn, target);
     pump(&mut d, &conn, &wake, |d| has(d, "2026-09-10 → 2026-09-20"));
-    let _ = d.paint(1000, 900);
+
+    // Charts: four canvases carrying resolved paths; a line segment paints
+    // as a rotated quad.
+    let paths = d.session().atom_id("paths").expect("the paths atom");
+    let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
+    assert_eq!(canvases.len(), 4);
+    for c in &canvases {
+        match d.session().node(*c).unwrap().prop(paths) {
+            Some(eui_proto::Value::List(p)) => {
+                assert!(!p.is_empty());
+                assert!(p.iter().all(|path| matches!(path, eui_proto::Value::List(items) if matches!(items.get(1), Some(eui_proto::Value::Color(_))))), "colours resolved server-side");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    // The charts sit below the first 900 px: grow the window to paint them.
+    for f in d.input(Input::Resized(1000.0, 1600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let list = d.paint(1000, 1600);
+    assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
 }
 
 /// The node showing `text` inside the titled card `title` — the card is the

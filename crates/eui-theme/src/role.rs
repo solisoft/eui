@@ -63,6 +63,11 @@ impl Role {
         self as u16
     }
 
+    /// The role written as in the spec, `accent.base`, if it is one.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|r| r.name() == name)
+    }
+
     /// The role's name as written in the spec, `surface.base`.
     pub const fn name(self) -> &'static str {
         match self {

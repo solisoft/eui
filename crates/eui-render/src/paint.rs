@@ -7,7 +7,7 @@
 use eui_layout::{Layout, Rect, Style};
 use eui_proto::{ColorRef, Display, NodeKind, Value};
 use eui_theme::{Resolved, Role};
-use eui_tree::{NodeIx, Session};
+use eui_tree::{Node, NodeIx, Session};
 use eui_text::TextEngine;
 
 use crate::atlas::{Atlas, ImageAtlas};
@@ -31,6 +31,9 @@ pub struct Quad {
     pub stroke: [f32; 4],
     /// Atlas `u0, v0, u1, v1`.
     pub uv: [f32; 4],
+    /// `angle` in radians about the rect's centre (a canvas segment), then
+    /// three spare floats.
+    pub extra: [f32; 4],
 }
 
 /// A frame's worth of quads, in paint order, grouped by scissor rect.
@@ -131,7 +134,9 @@ impl Painter<'_, '_> {
     }
 
     fn push(&mut self, q: Quad) {
-        if self.visible(q.rect) && q.rect[2] > 0.0 && q.rect[3] > 0.0 {
+        // A rotated quad's `rect` is not its bounding box; the scissor
+        // handles it, the cull does not.
+        if (q.extra[0] != 0.0 || self.visible(q.rect)) && q.rect[2] > 0.0 && q.rect[3] > 0.0 {
             self.list.quads.push(q);
         }
     }
@@ -173,15 +178,16 @@ impl Painter<'_, '_> {
                     fill: fill.unwrap_or([0.0; 4]),
                     stroke: stroke.unwrap_or([0.0; 4]),
                     uv: [0.0; 4],
+                extra: [0.0; 4],
                 });
             }
         } else {
             if let Some(fill) = fill {
-                self.push(Quad { rect: dev, params: [radius, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4] });
+                self.push(Quad { rect: dev, params: [radius, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
             }
             if let Some(stroke) = stroke {
                 let [x, y, w, h] = dev;
-                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4] };
+                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] };
                 let (t, r, bo, l) = ((b.t * scale).round(), (b.r * scale).round(), (b.b * scale).round(), (b.l * scale).round());
                 if t > 0.0 { self.push(edge([x, y, w, t])); }
                 if bo > 0.0 { self.push(edge([x, y + h - bo, w, bo])); }
@@ -200,6 +206,7 @@ impl Painter<'_, '_> {
                 fill: [0.0; 4],
                 stroke: linear(self.scene.theme.color(Role::FocusRing)),
                 uv: [0.0; 4],
+            extra: [0.0; 4],
             });
         }
 
@@ -224,14 +231,16 @@ impl Painter<'_, '_> {
                         fill: [1.0, 1.0, 1.0, 1.0],
                         stroke: [0.0; 4],
                         uv: [rx / n, ry / n, (rx + rw) / n, (ry + rh) / n],
+                    extra: [0.0; 4],
                     });
                 }
             }
             NodeKind::Divider => {
-                let mut q = Quad { rect: dev, params: [0.0, 0.0, 0.0, opacity], fill: self.color(record.bg, None).unwrap_or_else(|| linear(self.scene.theme.color(Role::BorderDefault))), stroke: [0.0; 4], uv: [0.0; 4] };
+                let mut q = Quad { rect: dev, params: [0.0, 0.0, 0.0, opacity], fill: self.color(record.bg, None).unwrap_or_else(|| linear(self.scene.theme.color(Role::BorderDefault))), stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] };
                 q.rect[3] = q.rect[3].max(1.0);
                 self.push(q);
             }
+            NodeKind::Canvas => self.canvas(node, rect, &style, opacity),
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea if !virtual_ => {
                 self.text(ix, rect, &style, fg, opacity);
             }
@@ -285,8 +294,129 @@ impl Painter<'_, '_> {
                 fill: fg,
                 stroke: [0.0; 4],
                 uv: [rx / atlas_size, ry / atlas_size, (rx + rw) / atlas_size, (ry + rh) / atlas_size],
+            extra: [0.0; 4],
             });
         }
+    }
+}
+
+impl Painter<'_, '_> {
+    /// Spec 03 §1.1: a `canvas` node's `paths`, in logical px from its
+    /// content box, clipped to its border box. Everything becomes the one
+    /// rounded-rectangle quad: a segment is a rotated capsule, an area is a
+    /// strip per device column, an arc is a fan of capsules.
+    fn canvas(&mut self, node: &Node, rect: Rect, style: &Style, opacity: f32) {
+        let session: &Session = self.scene.session;
+        let Some(atom) = session.atom_id("paths") else { return };
+        let Some(Value::List(paths)) = node.prop(atom) else { return };
+        let scale = self.scene.scale;
+        let dev = self.device(rect);
+        let saved = self.clip;
+        let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
+        self.list.clips.push(intersect(parent, dev));
+        self.set_clip(self.list.clips.len() as u32 - 1);
+        let (cx0, cy0) = (rect.x + style.border.l + style.padding.l, rect.y + style.border.t + style.padding.t);
+        let (ox, oy) = (cx0 * scale, cy0 * scale);
+        for path in paths {
+            let Value::List(p) = path else { continue };
+            let Some(Value::Int(kind)) = p.first() else { continue };
+            let Some(color) = p.get(1).and_then(|c| self.path_color(c)) else { continue };
+            let n: Vec<f32> = p.iter().skip(2).filter_map(num).collect();
+            let at = |i: usize| n.get(i).copied().unwrap_or(0.0);
+            let pt = |i: usize| (ox + at(i) * scale, oy + at(i + 1) * scale);
+            match kind {
+                0 => {
+                    let w = at(0) * scale;
+                    for i in (1..n.len().saturating_sub(2)).step_by(2) {
+                        self.segment(pt(i), pt(i + 2), w, color, opacity);
+                    }
+                }
+                1 => {
+                    let q = self.device(Rect::new(cx0 + at(0), cy0 + at(1), at(2), at(3)));
+                    self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                }
+                2 => {
+                    let base = oy + at(0) * scale;
+                    for i in (1..n.len().saturating_sub(2)).step_by(2) {
+                        let ((x0, y0), (x1, y1)) = (pt(i), pt(i + 2));
+                        if x1 <= x0 {
+                            continue;
+                        }
+                        let mut x = x0.ceil();
+                        while x <= x1.floor() {
+                            let y = y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+                            self.push(Quad { rect: [x, y.min(base), 1.0, (base - y).abs()], params: [0.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                            x += 1.0;
+                        }
+                    }
+                }
+                3 => {
+                    let (cx, cy) = pt(0);
+                    let r = at(2) * scale;
+                    self.push(Quad { rect: [cx - r, cy - r, 2.0 * r, 2.0 * r], params: [r, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                }
+                4 => {
+                    let w = at(0) * scale;
+                    let (cx, cy) = pt(1);
+                    let r = at(3) * scale;
+                    let (a0, a1) = (at(4), at(5));
+                    // 6° chords: a 14 px ring shows no facets at that pitch.
+                    let steps = ((a1 - a0).abs() / 6f32.to_radians()).ceil().max(1.0) as usize;
+                    let step = (a1 - a0) / steps as f32;
+                    let on = |a: f32| (cx + r * a.cos(), cy + r * a.sin());
+                    for i in 0..steps {
+                        let a = a0 + step * i as f32;
+                        self.segment(on(a), on(a + step), w, color, opacity);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.set_clip(saved);
+    }
+
+    /// A capsule from `a` to `b`: a quad `width` tall, rotated about its
+    /// centre, with a radius of half the width so the ends are round — which
+    /// also covers the joins of a polyline.
+    fn segment(&mut self, a: (f32, f32), b: (f32, f32), width: f32, color: [f32; 4], opacity: f32) {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = (dx * dx + dy * dy).sqrt();
+        let w = width.max(1.0);
+        let (mx, my) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+        let angle = if len < 1e-3 { 0.0 } else { dy.atan2(dx) };
+        self.push(Quad {
+            rect: [mx - (len + w) / 2.0, my - w / 2.0, len + w, w],
+            params: [w / 2.0, 0.0, 0.0, opacity],
+            fill: color,
+            stroke: [0.0; 4],
+            uv: [0.0; 4],
+            extra: [angle, 0.0, 0.0, 0.0],
+        });
+    }
+
+    /// A path colour: resolved on the wire (`Color`), a role id, or — for a
+    /// hand-written tree — a role name or `#RRGGBB[AA]`.
+    fn path_color(&self, v: &Value) -> Option<[f32; 4]> {
+        match v {
+            Value::Color(c) => self.color(*c, None),
+            Value::Int(id) => u16::try_from(*id).ok().and_then(|id| self.scene.theme.color_by_id(id)).map(linear),
+            Value::Str(s) => {
+                if let Some(hex) = s.strip_prefix('#') {
+                    let n = u32::from_str_radix(hex, 16).ok()?;
+                    return Some(linear(if hex.len() == 6 { (n << 8) | 0xFF } else { n }));
+                }
+                Role::from_name(s).map(|r| linear(self.scene.theme.color(r)))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn num(v: &Value) -> Option<f32> {
+    match v {
+        Value::Int(n) => Some(*n as f32),
+        Value::Float(f) => Some(*f as f32),
+        _ => None,
     }
 }
 
