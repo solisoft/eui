@@ -104,6 +104,12 @@ This is deliberately unforgiving. A patch stream that has drifted is a bug on
 one side or an attack from the other; both are better served by a clean rebuild
 than by a heuristic.
 
+`Resync` is not an error. The client MUST NOT send an `Error` frame for a
+batch it could not apply — `Error` ends the session on both sides, which is the
+opposite of what a resync is for. The server answers `Resync` with a `Mount`
+that references the session's existing tables and MUST NOT repeat definitions
+the session already holds (§02 §2: tables are never cleared).
+
 ## 5. Idle behaviour
 
 `Ping` is sent by whichever side has been silent for 30 s. A client MUST NOT

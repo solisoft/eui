@@ -99,6 +99,32 @@ scissor region.
   scroll clipping at the pixel, stack z order.
 - 10 tests. Not yet: shadows, images, canvas paths.
 
+**`eui-client` — the client.** Three parts kept apart so two can be tested
+without the third.
+
+- The **driver**: session, layout, input dispatch and painting, with no
+  window and no socket. Dispatch is spec 06's one walk — the nearest handler
+  on the path from the hit node to the root, no bubbling. Clicks are a press
+  and a release resolving to the same handler; typing edits an `input`
+  locally and commits on `Enter` or blur; the wheel scrolls the nearest
+  `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
+  trip. 13 tests.
+- The **transport**: a WebSocket over TLS on its own thread, binary frames
+  only. `ws://` is refused except on loopback in a debug build with an
+  explicit opt-in.
+- The **window**: winit in `ControlFlow::Wait` over a wgpu surface. There is
+  no render loop; a redraw happens when a frame arrived, the viewer acted, or
+  the OS asked. Compiled, not yet exercised on a display.
+- **End to end**, over a real socket against the example counter server:
+  Welcome, Mount, a click leaving as an event of under 40 bytes, the new
+  value coming back, a resync that restores the server's state, and a forged
+  event that the server refuses. 2 tests.
+
+The end-to-end run found a protocol mistake on both sides: a re-mount after
+`Resync` was repeating definitions, and the client was answering a rejected
+batch with an `Error` frame — which is fatal. Both fixed; `spec/01` §4 now
+says so explicitly.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -108,6 +134,8 @@ Normative, in `spec/`, and stable enough to build against:
 - **Theme** (`spec/05`) — implemented by `eui-theme`.
 - **Layout** (`spec/04`) — implemented by `eui-layout`; §9 lists what
   version 1 leaves out.
+- **Events** (`spec/06`) — kinds, payloads, dispatch and emission rules;
+  implemented by `eui-client`.
 - **Transport** (`spec/01`) — discovery, the signed manifest, content-addressed
   assets, the session, framing.
 - **Budgets** (`spec/10`) — the wire numbers measured, the runtime numbers as
@@ -119,8 +147,6 @@ Described on these pages in enough detail to argue with, but their normative
 spec documents (`spec/03` to `spec/09`) are **not written yet**. Until they
 are, the doc page is the design and there is nothing more precise to appeal to.
 
-- **Events** — the twenty-one kinds exist in `eui-proto`; their payloads are
-  not pinned down.
 - **Bytecode** — the verified subset, the host surface, the metering.
 - **Security** — the threat model. Its memory-safety half is built; the rest is
   design.
@@ -130,8 +156,10 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 ## Not started
 
 - `eui-vm` — the verifier and the metered interpreter.
-- `eui-client` — the window, the session, the capability prompts.
+- Capability prompts and the manifest check in the client.
 - The Soli integration: `lang/src/eui/`, and `soli serve . --eui`.
+- `eui-vm`, the verifier and the metered interpreter: a `Handler::Local`
+  currently does nothing, and says so in the code.
 
 ## Scope, stated plainly
 

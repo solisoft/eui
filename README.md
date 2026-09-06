@@ -12,7 +12,7 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ## Layout
 
 ```
-spec/        02 (wire), 04 (layout), 05 (theme) normative; 10 measured
+spec/        02 wire, 04 layout, 05 theme, 06 events normative; 10 measured
 crates/
   eui-proto  encode and decode. No dependencies, no unsafe            [built]
   eui-tree   session tables, node arena, patch application           [built]
@@ -20,6 +20,10 @@ crates/
   eui-layout flow, stack, grid, scroll, virtualised list             [built]
   eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
+  eui-client driver, WSS transport, winit window                     [built]
+examples/
+  counter-server  the counter over a loopback socket, for the client to
+                  talk to before Soli speaks EUI
 www/         the documentation site, itself a Soli app
 ```
 
@@ -30,10 +34,14 @@ list honest.
 ## Try it
 
 ```sh
-cargo test                                               # 144 tests, pixel tests need any GPU adapter
+cargo test                                               # 159 tests; pixel tests need any GPU adapter
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
 cd www && soli serve . --dev                             # the docs, on :5011
+
+# The counter, end to end, in a window:
+cargo run -p counter-server                              # ws://127.0.0.1:5090
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
 ```
 
 ## Where the design is written down

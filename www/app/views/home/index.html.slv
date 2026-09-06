@@ -129,18 +129,19 @@
     specified algorithm and a list that never measures what it cannot see;
     <code>eui-text</code> shapes with two embedded faces and never reads a
     system font; <code>eui-render</code> draws every one of them as a rounded
-    rectangle through one pipeline, and is tested by reading its pixels back.
-    144 tests, 46 of them rejection cases.
+    rectangle through one pipeline, and is tested by reading its pixels back;
+    <code>eui-client</code> runs the counter end to end over a real socket.
+    159 tests, 46 of them rejection cases.
   </p>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--spec">Specified</span>
-    The transport, the layout, the theme, and the budgets, normatively.
-    Events, bytecode and the security model are designed on these pages;
-    their spec documents are still to write.
+    The transport, the layout, the theme, the events, and the budgets,
+    normatively. Bytecode and the security model are designed on these
+    pages; their spec documents are still to write.
   </p>
   <p style="color:var(--ink-muted);">
-    The client — window, session, capabilities — and the Soli integration
-    have not started. Every
+    The window is compiled and not yet run on glass; the Soli integration
+    and the local-handler VM have not started. Every
     number above comes from a test you can run;
     <a href="/docs/budgets">the budgets page</a> names each one.
     If you want the argument rather than the numbers,

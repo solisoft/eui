@@ -187,6 +187,35 @@ impl Session {
         Preorder { session: self, stack: if self.arena.get(ix).is_some() { vec![ix] } else { Vec::new() } }
     }
 
+    /// Set a scroll node's offsets from local input. The client clamps against
+    /// the layout's content size; this only records the value.
+    pub fn set_scroll(&mut self, ix: NodeIx, x: i64, y: i64) -> bool {
+        match self.arena.get_mut(ix) {
+            Some(n) if matches!(n.kind, NodeKind::Scroll | NodeKind::List) => {
+                n.scroll = (x, y);
+                self.arena.mark_dirty(ix).is_ok()
+            }
+            _ => false,
+        }
+    }
+
+    /// Replace an editable node's text from local input, ahead of the server.
+    /// The next server `SetText` wins; this is the optimistic half of typing.
+    pub fn set_text_local(&mut self, ix: NodeIx, text: String) -> bool {
+        match self.arena.get_mut(ix) {
+            Some(n) if matches!(n.kind, NodeKind::Input | NodeKind::TextArea) => {
+                n.text = Some(TextRef::Inline(text));
+                self.arena.mark_dirty(ix).is_ok()
+            }
+            _ => false,
+        }
+    }
+
+    /// True when any node changed since the dirty bits were last cleared.
+    pub fn is_dirty(&self) -> bool {
+        self.root().and_then(|r| self.arena.get(r)).is_some_and(|n| n.dirty != 0)
+    }
+
     /// Clear the dirty bits on `ix` alone.
     pub fn clear_dirty(&mut self, ix: NodeIx) {
         if let Some(n) = self.arena.get_mut(ix) {

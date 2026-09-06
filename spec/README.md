@@ -19,7 +19,7 @@ who did not write it.
 | [`03-widgets.md`](03-widgets.md) | planned | Primitive node kinds and their semantics |
 | [`04-layout.md`](04-layout.md) | **normative** | The layout algorithm; §9 lists what v1 omits |
 | [`05-theme.md`](05-theme.md) | **normative** | Roles, scales, modes, the resolution algorithm |
-| [`06-events.md`](06-events.md) | planned | Event kinds and payloads |
+| [`06-events.md`](06-events.md) | **normative** | Event kinds, payloads, dispatch and emission rules |
 | [`07-bytecode.md`](07-bytecode.md) | planned | Verified bytecode subset, host surface, metering |
 | [`08-security.md`](08-security.md) | planned | Threat model and normative requirements |
 | [`09-conformance.md`](09-conformance.md) | planned | Test vectors and how to run them |

@@ -1,0 +1,32 @@
+[package]
+name = "eui-client"
+description = "The EUI client: session driver, HTTPS/WSS transport, and the native window."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "eui"
+path = "src/main.rs"
+
+[dependencies]
+eui-proto = { path = "../eui-proto" }
+eui-tree = { path = "../eui-tree" }
+eui-theme = { path = "../eui-theme" }
+eui-layout = { path = "../eui-layout" }
+eui-text = { path = "../eui-text" }
+eui-render = { path = "../eui-render" }
+winit = "0.30"
+wgpu = "23"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+pollster = "0.4"
+
+[dev-dependencies]
+counter-server = { path = "../../examples/counter-server" }
+
+[lints]
+workspace = true
