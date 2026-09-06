@@ -1,0 +1,15 @@
+[package]
+name = "eui-proto"
+description = "EUI/1 wire format: encoding and decoding. No dependencies, no unsafe."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Deliberately empty. This crate parses bytes from the network; every
+# dependency here would be attack surface we did not write and cannot fuzz.
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+<article class="prose"><%- html %></article>
+
+<p class="colophon">
+  The normative text lives in <code>spec/</code> in the repository; this page is
+  rendered from <code>docs/eui/</code>. Where the two disagree, the spec wins —
+  and that is a bug worth reporting.
+</p>

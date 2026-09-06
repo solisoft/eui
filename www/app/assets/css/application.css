@@ -1,0 +1,340 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   EUI documentation
+   --------------------------------------------------------------------------
+   The site obeys the protocol it documents: no third-party requests, no web
+   font beyond the two self-hosted Titillium faces (124 KB total), no analytics.
+   Monospace is the system stack — a hex digit does not need a downloaded face,
+   and 270 KB for one weight would sit badly under a page about 8.9 bytes a node.
+   ========================================================================== */
+
+@font-face {
+    font-family: "Titillium Web";
+    src: url("/fonts/TitilliumWeb-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Titillium Web";
+    src: url("/fonts/TitilliumWeb-Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+@theme {
+    --font-sans: "Titillium Web", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "DejaVu Sans Mono", Consolas, monospace;
+}
+
+:root {
+    /* Drafting film and ink. The ink is a real green-black, not a tinted grey. */
+    --ground: #e6e9e2;
+    --ground-sunk: #dbdfd5;
+    --ground-raise: #eff1ec;
+    --ink: #0e1712;
+    --ink-muted: #57655b;
+    --ink-faint: #869184;
+    --rule: #c4cbbe;
+    --rule-strong: #a7b0a2;
+    /* One signal, used only where a byte carries meaning. */
+    --signal: #2229a8;
+    --signal-wash: #2229a814;
+
+    --measure: 68ch;
+    --rail: 15rem;
+    color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ground: #0e1712;
+        --ground-sunk: #0a110d;
+        --ground-raise: #16211b;
+        --ink: #e2e7dd;
+        --ink-muted: #93a096;
+        --ink-faint: #6b786f;
+        --rule: #26332b;
+        --rule-strong: #3a4a40;
+        --signal: #9aa2ff;
+        --signal-wash: #9aa2ff1a;
+        color-scheme: dark;
+    }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.6;
+    font-variant-numeric: tabular-nums;
+}
+
+a { color: var(--signal); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 2px;
+}
+
+code, pre, .mono { font-family: var(--font-mono); }
+
+/* --------------------------------------------------------------- chrome -- */
+
+.bar {
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+    padding: 0.85rem 1.5rem;
+    border-bottom: 1px solid var(--rule);
+    position: sticky;
+    top: 0;
+    background: var(--ground);
+    z-index: 10;
+}
+.bar__mark {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    font-size: 1.0625rem;
+    color: var(--ink);
+    text-decoration: none;
+}
+.bar__mark span { color: var(--signal); }
+.bar nav { margin-left: auto; display: flex; gap: 1.25rem; }
+.bar nav a { color: var(--ink-muted); text-decoration: none; }
+.bar nav a:hover, .bar nav a[aria-current] { color: var(--ink); text-decoration: underline; }
+
+.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); }
+@media (max-width: 60rem) { .shell { grid-template-columns: minmax(0, 1fr); } }
+
+.rail {
+    border-right: 1px solid var(--rule);
+    padding: 1.75rem 1.25rem 4rem;
+    position: sticky;
+    top: 3.25rem;
+    align-self: start;
+    height: calc(100vh - 3.25rem);
+    overflow-y: auto;
+}
+@media (max-width: 60rem) {
+    .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+}
+.rail h2 {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--ink-faint);
+    margin: 1.75rem 0 0.5rem;
+}
+.rail h2:first-child { margin-top: 0; }
+.rail ol { list-style: none; margin: 0; padding: 0; }
+.rail li { margin: 0; }
+.rail a {
+    display: block;
+    padding: 0.2rem 0 0.2rem 0.75rem;
+    margin-left: -0.75rem;
+    border-left: 2px solid transparent;
+    color: var(--ink-muted);
+    text-decoration: none;
+    font-size: 0.9375rem;
+}
+.rail a:hover { color: var(--ink); }
+.rail a[aria-current="page"] {
+    color: var(--ink);
+    border-left-color: var(--signal);
+    font-weight: 700;
+}
+
+.main { padding: 3rem 2rem 6rem; min-width: 0; max-width: 76rem; }
+@media (max-width: 40rem) { .main { padding: 2rem 1.25rem 4rem; } }
+
+/* ------------------------------------------------------------- hex dump -- */
+
+.dump {
+    border: 1px solid var(--rule-strong);
+    background: var(--ground-raise);
+    overflow-x: auto;
+    padding: 1.25rem 0;
+}
+.dump table { border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8125rem; width: 100%; }
+.dump td { padding: 0.22rem 1rem; white-space: nowrap; vertical-align: baseline; }
+.dump .off { color: var(--ink-faint); text-align: right; padding-right: 0.5rem; user-select: none; }
+.dump .hex { color: var(--ink); letter-spacing: 0.04em; }
+.dump .op { color: var(--signal); font-weight: 700; }
+.dump .elide { color: var(--ink-faint); }
+.dump .note { color: var(--ink-muted); font-family: var(--font-sans); font-size: 0.875rem; width: 99%; }
+.dump .note b { color: var(--ink); font-weight: 700; }
+
+/* The result those bytes describe, drawn with those very tokens. */
+.render {
+    border: 1px solid var(--rule-strong);
+    background: var(--ground-raise);
+    display: grid;
+    place-items: center;
+    min-height: 100%;
+    padding: 2rem;
+}
+.render__box {
+    background: var(--ground-sunk);
+    border-radius: 4px;
+    padding: 4px;
+    color: var(--ink-muted);
+    font-size: 1.25rem;
+}
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 11rem; gap: 1px; background: var(--rule-strong); border: 0; }
+.split > * { border: 0; }
+@media (max-width: 52rem) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+.caption {
+    max-width: 76rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.8125rem;
+    color: var(--ink-muted);
+    margin-top: 0.5rem;
+}
+@media (max-width: 46rem) { .caption { display: block; } .caption span { display: block; } }
+
+/* ---------------------------------------------------------------- facts -- */
+
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 3.5rem 0; }
+@media (max-width: 46rem) { .facts { grid-template-columns: minmax(0, 1fr); } }
+.fact { padding: 1.25rem 1.5rem 1.25rem 0; border-top: 2px solid var(--ink); }
+.fact + .fact { padding-left: 1.5rem; border-left: 1px solid var(--rule); }
+@media (max-width: 46rem) { .fact + .fact { padding-left: 0; border-left: 0; } }
+.fact__n { font-size: 2rem; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
+.fact__what { color: var(--ink); margin-top: 0.35rem; }
+.fact__vs { color: var(--ink-muted); font-size: 0.9375rem; }
+.fact__vs a { color: var(--ink-muted); }
+
+/* --------------------------------------------------------------- refuse -- */
+
+.refuse { border-top: 1px solid var(--rule); margin-top: 1rem; }
+.refuse dl { display: grid; grid-template-columns: 16rem minmax(0, 1fr); margin: 0; }
+@media (max-width: 52rem) { .refuse dl { grid-template-columns: minmax(0, 1fr); } }
+.refuse dt {
+    font-weight: 700;
+    padding: 0.9rem 1.5rem 0.9rem 0;
+    border-bottom: 1px solid var(--rule);
+}
+.refuse dd {
+    margin: 0;
+    max-width: var(--measure);
+    padding: 0.9rem 0;
+    color: var(--ink-muted);
+    border-bottom: 1px solid var(--rule);
+}
+@media (max-width: 52rem) {
+    .refuse dt { border-bottom: 0; padding-bottom: 0.2rem; }
+    .refuse dd { padding-top: 0; }
+}
+
+/* ---------------------------------------------------------------- prose -- */
+
+/* Prose gets a container; running text gets the measure inside it. Code and
+   tables then use the full container instead of being clipped by a line length
+   that exists for reading, not for reading data. */
+.prose { max-width: 58rem; }
+.prose p,
+.prose li,
+.prose h1, .prose h2, .prose h3, .prose h4,
+.prose blockquote { max-width: var(--measure); }
+.prose > * + * { margin-top: 1.1em; }
+.prose h1 { font-size: 2.25rem; line-height: 1.15; letter-spacing: -0.025em; margin: 0 0 0.5em; }
+.prose h2 {
+    font-size: 1.5rem;
+    letter-spacing: -0.015em;
+    margin-top: 2.5em;
+    padding-top: 0.6em;
+    border-top: 1px solid var(--rule);
+}
+.prose h3 { font-size: 1.1875rem; margin-top: 2em; }
+.prose h4 { font-size: 1rem; margin-top: 1.6em; }
+.prose p, .prose li { color: var(--ink-muted); }
+.prose strong { color: var(--ink); font-weight: 700; }
+/* Tailwind's preflight strips list markers; a documentation list needs them. */
+.prose ul { list-style: disc; padding-left: 1.25rem; }
+.prose ol { list-style: decimal; padding-left: 1.5rem; }
+.prose li::marker { color: var(--ink-faint); }
+.prose li + li { margin-top: 0.3em; }
+.prose blockquote {
+    margin-left: 0;
+    padding-left: 1rem;
+    border-left: 2px solid var(--signal);
+    color: var(--ink-muted);
+}
+.prose code {
+    font-size: 0.875em;
+    background: var(--ground-sunk);
+    padding: 0.05em 0.25em;
+    border-radius: 2px;
+}
+.prose pre {
+    background: var(--ground-raise);
+    border: 1px solid var(--rule);
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    max-width: 100%;
+}
+.prose pre code { background: none; padding: 0; font-size: inherit; }
+.prose table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: none;
+    font-size: 0.9375rem;
+    display: block;
+    overflow-x: auto;
+}
+.prose tbody td:first-child { color: var(--ink); }
+.prose th {
+    text-align: left;
+    font-weight: 700;
+    border-bottom: 2px solid var(--ink);
+    padding: 0.5rem 1rem 0.5rem 0;
+    white-space: nowrap;
+}
+.prose td { border-bottom: 1px solid var(--rule); padding: 0.5rem 1rem 0.5rem 0; color: var(--ink-muted); }
+.prose th:last-child, .prose td:last-child { padding-right: 0; }
+.prose hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5em 0; }
+
+/* Wide content still scrolls inside itself rather than widening the page. */
+.prose pre, .prose table { max-width: 100%; }
+
+/* --------------------------------------------------------------- status -- */
+
+.stamp {
+    display: inline-block;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+}
+.stamp--built { color: var(--signal); }
+.stamp--spec { color: var(--ink-muted); }
+
+.colophon {
+    border-top: 1px solid var(--rule);
+    margin-top: 5rem;
+    padding-top: 1.5rem;
+    color: var(--ink-faint);
+    font-size: 0.875rem;
+    max-width: var(--measure);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

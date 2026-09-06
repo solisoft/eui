@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> — EUI</title>
+  <meta name="description" content="EUI is a binary protocol for delivering application interfaces over HTTPS without HTML, CSS, or JavaScript.">
+  <link rel="stylesheet" href="<%= public_path("css/application.css") %>">
+</head>
+<body>
+  <%- partial("layouts/bar", {"here": "home"}) %>
+  <main class="main"><%= yield %></main>
+</body>
+</html>

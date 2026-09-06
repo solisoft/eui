@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> — EUI</title>
+  <meta name="description" content="<%= lead %>">
+  <link rel="stylesheet" href="<%= public_path("css/application.css") %>">
+</head>
+<body>
+  <%- partial("layouts/bar", {"here": "docs"}) %>
+  <div class="shell">
+    <nav class="rail" aria-label="Documentation">
+      <% for section in sections %>
+        <h2><%= section["title"] %></h2>
+        <ol>
+          <% for item in section["items"] %>
+            <li>
+              <a href="/docs/<%= item["slug"] %>"<% if item["slug"] == slug %> aria-current="page"<% end %>><%= item["title"] %></a>
+            </li>
+          <% end %>
+        </ol>
+      <% end %>
+    </nav>
+    <main class="main"><%= yield %></main>
+  </div>
+</body>
+</html>

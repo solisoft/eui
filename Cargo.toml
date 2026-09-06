@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/eui-proto",
+    "crates/eui-tree",
+]
+# Added as each lands (see spec/README.md "Ordre d'implémentation"):
+#   crates/eui-theme, eui-layout, eui-text, eui-render,
+#   crates/eui-vm, eui-client, eui-conform, xtask
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/solisoft/eui"
+rust-version = "1.75"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# The decode path must never panic on hostile input. These lints are the
+# mechanical half of that promise; the fuzz targets are the other half.
+indexing_slicing = "warn"
+panic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+arithmetic_side_effects = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Fuzzing and the conformance runner want overflow checks even in release.
+[profile.release-checked]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
