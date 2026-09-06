@@ -1,0 +1,23 @@
+[package]
+name = "eui-render"
+description = "EUI renderer: one instanced rounded-rect pipeline over wgpu, with a glyph atlas."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eui-proto = { path = "../eui-proto" }
+eui-tree = { path = "../eui-tree" }
+eui-theme = { path = "../eui-theme" }
+eui-layout = { path = "../eui-layout" }
+eui-text = { path = "../eui-text" }
+# The GPU boundary. `unsafe` lives inside wgpu, behind its safe API; this
+# crate itself stays forbid(unsafe_code).
+wgpu = "23"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+
+[lints]
+workspace = true

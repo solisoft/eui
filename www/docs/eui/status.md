@@ -81,6 +81,24 @@ text that must not be reinvented.
 - Line clamping truncates; it does not yet append an ellipsis.
 - 8 tests, one of which lays out real glyphs through `eui-layout`.
 
+**`eui-render` — the renderer.** One shape, one pipeline, one draw call per
+scissor region.
+
+- Everything on screen is a rounded rectangle: a box's fill and border, a
+  divider, a glyph textured from the atlas. The fragment shader anti-aliases
+  from the signed distance to the edge, so boxes, hairlines, borders and
+  glyphs share one instanced pipeline over `wgpu`.
+- Glyphs are rasterised on demand into a single R8 atlas, shelf-packed, grown
+  once.
+- Quads are snapped to device pixels at paint time; `scroll` and `list`
+  become scissor rects; anything outside its clip is culled before it reaches
+  the GPU; virtualised rows paint their box and shape no text.
+- Off-screen targets can be read back, so the renderer is **tested by its
+  pixels** on a machine with no display: clear colour, box placement, corner
+  radius and border, text ink confined to its rect in the text role's colour,
+  scroll clipping at the pixel, stack z order.
+- 10 tests. Not yet: shadows, images, canvas paths.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -111,7 +129,6 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 ## Not started
 
-- `eui-render` — the wgpu renderer.
 - `eui-vm` — the verifier and the metered interpreter.
 - `eui-client` — the window, the session, the capability prompts.
 - The Soli integration: `lang/src/eui/`, and `soli serve . --eui`.

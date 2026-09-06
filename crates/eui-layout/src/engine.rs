@@ -58,6 +58,7 @@ pub struct Layout {
     baseline: Vec<f32>,
     content: Vec<Size>,
     present: Vec<bool>,
+    virtual_: Vec<bool>,
     styles: Vec<Option<Style>>,
     memo: HashMap<MemoKey, Metrics>,
     columns_atom: Option<u32>,
@@ -94,6 +95,8 @@ impl Layout {
         self.content.resize(n, Size::default());
         self.present.clear();
         self.present.resize(n, false);
+        self.virtual_.clear();
+        self.virtual_.resize(n, false);
         self.styles.clear();
         self.styles.resize(n, None);
         self.memo.clear();
@@ -110,6 +113,13 @@ impl Layout {
     pub fn rect(&self, ix: NodeIx) -> Option<Rect> {
         let i = ix.raw() as usize;
         if self.present.get(i).copied().unwrap_or(false) { self.rect.get(i).copied() } else { None }
+    }
+
+    /// True for a virtualised list row that was assigned a size but never
+    /// measured: it has a rect and no laid-out content, so a painter must
+    /// draw its box and nothing inside it.
+    pub fn is_virtual(&self, ix: NodeIx) -> bool {
+        self.virtual_.get(ix.raw() as usize).copied().unwrap_or(false)
     }
 
     /// First baseline from the node's top, if laid out.
@@ -321,6 +331,9 @@ impl Layout {
                 }
                 if let Some(pr) = self.present.get_mut(ci) {
                     *pr = true;
+                }
+                if let Some(v) = self.virtual_.get_mut(ci) {
+                    *v = true;
                 }
                 continue;
             }

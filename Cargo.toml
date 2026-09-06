@@ -6,9 +6,9 @@ members = [
     "crates/eui-theme",
     "crates/eui-layout",
     "crates/eui-text",
+    "crates/eui-render",
 ]
 # Added as each lands (see spec/README.md "Ordre d'implémentation"):
-#   crates/eui-render,
 #   crates/eui-vm, eui-client, eui-conform, xtask
 
 [workspace.package]
