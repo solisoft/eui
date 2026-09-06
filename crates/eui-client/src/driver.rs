@@ -29,6 +29,12 @@ pub enum Input {
     Wheel(f32, f32),
     /// Committed text.
     Text(String),
+    /// An input method's composition in progress: shown in the focused
+    /// field, never reported. An empty string ends the composition.
+    ImePreedit(String),
+    /// An input method committed `text`: the composition ends and the text
+    /// is inserted as if typed.
+    ImeCommit(String),
     /// A named key, with modifiers, pressed or released.
     Key {
         /// W3C `KeyboardEvent.key` name.
@@ -63,6 +69,14 @@ struct Pointer {
     y: f32,
     over: Option<NodeIx>,
     pressed_on: Option<NodeIx>,
+}
+
+/// A field's local edit: the value the server last saw (`seed`) and the
+/// value typed since. `change` fires only when they differ.
+#[derive(Debug, Clone)]
+struct Edit {
+    seed: String,
+    value: String,
 }
 
 /// One running transition: the colours it left, the colours it reaches,
@@ -128,7 +142,9 @@ pub struct Driver {
     anims: Vec<(NodeIx, Anim)>,
     now: Instant,
     next_due: Option<Instant>,
-    edits: HashMap<u32, String>,
+    edits: HashMap<u32, Edit>,
+    /// The composition an input method is building in the focused field.
+    preedit: String,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     granted: u32,
@@ -170,6 +186,7 @@ impl Driver {
             now: Instant::now(),
             next_due: None,
             edits: HashMap::new(),
+            preedit: String::new(),
             chunks: HashMap::new(),
             granted: granted & caps::ALL,
             welcomed: false,
@@ -351,6 +368,14 @@ impl Driver {
             Input::PointerUp(button) => self.pointer_up(button),
             Input::Wheel(dx, dy) => self.wheel(dx, dy),
             Input::Text(t) => self.text_input(&t),
+            Input::ImePreedit(t) => {
+                self.preedit(t);
+                Vec::new()
+            }
+            Input::ImeCommit(t) => {
+                self.preedit(String::new());
+                self.text_input(&t)
+            }
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::Unfocused => {
                 let out = self.set_focus(None, false);
@@ -599,6 +624,8 @@ impl Driver {
         let mut out = Vec::new();
         if new != self.focused {
             if let Some(old) = self.focused.take() {
+                self.preedit.clear();
+                self.show_edit(old);
                 out.extend(self.commit_edit(old));
                 out.extend(self.emit(old, EventKind::Blur, Value::Null));
             }
@@ -703,17 +730,41 @@ impl Driver {
         }
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
         let seed = self.session.text_of(f).unwrap_or("").to_owned();
-        Some(self.edits.entry(id).or_insert(seed))
+        Some(&mut self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed }).value)
     }
 
     fn text_input(&mut self, t: &str) -> Vec<Frame> {
         let Some(f) = self.focused else { return Vec::new() };
         let Some(buf) = self.edit_buf(f) else { return Vec::new() };
         buf.push_str(t);
-        let value = buf.clone();
+        self.show_edit(f);
+        self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
+    }
+
+    /// Spec 06 §3: a composition is local. The field shows its buffer plus
+    /// the preedit; nothing leaves the client until the method commits.
+    fn preedit(&mut self, t: String) {
+        let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else { return };
+        self.preedit = t;
+        let _ = self.edit_buf(f);
+        self.show_edit(f);
+    }
+
+    /// Put the field's buffer, with any composition, into the tree.
+    fn show_edit(&mut self, f: NodeIx) {
+        let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
+        let Some(edit) = self.edits.get(&id) else { return };
+        let mut value = edit.value.clone();
+        value.push_str(&self.preedit);
         self.session.set_text_local(f, value);
         self.invalidate();
-        self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
+    }
+
+    /// Where an input method should put its candidate window: the focused
+    /// editable node's box, if any.
+    pub fn ime_area(&self) -> Option<eui_layout::Rect> {
+        let f = self.focused.filter(|f| self.is_editable(*f))?;
+        self.layout.rect(f)
     }
 
     fn key(&mut self, key: &str, modifiers: u32, down: bool) -> Vec<Frame> {
@@ -732,9 +783,7 @@ impl Driver {
                 "Backspace" if editable => {
                     if let Some(buf) = self.edit_buf(f) {
                         buf.pop();
-                        let value = buf.clone();
-                        self.session.set_text_local(f, value);
-                        self.invalidate();
+                        self.show_edit(f);
                     }
                 }
                 "Enter" if self.session.node(f).map(|n| n.kind) == Some(NodeKind::Input) => {
@@ -750,12 +799,16 @@ impl Driver {
         out
     }
 
+    /// `change`, if the field's value differs from what the server has.
     fn commit_edit(&mut self, f: NodeIx) -> Vec<Frame> {
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
-        match self.edits.get(&id).cloned() {
-            Some(value) => self.emit(f, EventKind::Change, Value::Str(value)),
-            None => Vec::new(),
+        let Some(edit) = self.edits.get_mut(&id) else { return Vec::new() };
+        if edit.value == edit.seed {
+            return Vec::new();
         }
+        edit.seed = edit.value.clone();
+        let value = edit.value.clone();
+        self.emit(f, EventKind::Change, Value::Str(value))
     }
 
     // --------------------------------------------------------------- paint

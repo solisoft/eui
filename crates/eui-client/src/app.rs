@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use eui_proto::Frame;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -103,8 +104,17 @@ impl App {
     fn input(&mut self, i: Input) {
         let out = self.driver.input(i);
         self.send(out);
-        if self.driver.needs_redraw() {
-            if let Some(w) = &self.window {
+        if let Some(w) = &self.window {
+            // An input method is welcome exactly while a field has focus,
+            // and its candidate window sits under that field.
+            match self.driver.ime_area() {
+                Some(r) => {
+                    w.set_ime_allowed(true);
+                    w.set_ime_cursor_area(LogicalPosition::new(r.x, r.y), LogicalSize::new(r.w, r.h));
+                }
+                None => w.set_ime_allowed(false),
+            }
+            if self.driver.needs_redraw() {
                 w.request_redraw();
             }
         }
@@ -268,6 +278,8 @@ impl ApplicationHandler<Wake> for App {
                 }
                 self.input(Input::Key { key: name, modifiers: self.modifiers, down });
             }
+            WindowEvent::Ime(Ime::Preedit(text, _)) => self.input(Input::ImePreedit(text)),
+            WindowEvent::Ime(Ime::Commit(text)) => self.input(Input::ImeCommit(text)),
             WindowEvent::Focused(false) => self.input(Input::Unfocused),
             WindowEvent::ThemeChanged(t) => {
                 let mode = match t {

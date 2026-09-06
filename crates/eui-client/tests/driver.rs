@@ -195,9 +195,17 @@ fn typing_into_a_field_edits_locally_and_commits_on_enter() {
     let names: Vec<(EventKind, u32, Value)> = out.iter().filter_map(|f| if let Frame::Event(e) = f { Some((e.event, e.name, e.payload.clone())) } else { None }).collect();
     assert_eq!(names[0], (EventKind::Change, 1, Value::Str("abdé".into())));
     assert_eq!(names[1], (EventKind::Submit, 2, Value::Null));
-    // Blurring commits too, and typing with nothing focused goes nowhere.
-    assert!(d.input(Input::Unfocused).iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Change)));
+    // Blurring commits too — but the server already has this value, so
+    // nothing is repeated; and typing with nothing focused goes nowhere.
+    assert!(d.input(Input::Unfocused).iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Change)));
     assert!(d.input(Input::Text("z".into())).is_empty());
+    // Edit again, then blur: now it is a change.
+    let (x, y) = centre(&mut d, 2);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    d.input(Input::Text("!".into()));
+    assert!(d.input(Input::Unfocused).iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Change && e.payload == Value::Str("abdé!".into()))));
 }
 
 #[test]
@@ -480,4 +488,35 @@ fn a_style_change_without_a_transition_is_immediate() {
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: danger }, Op::SetStyle { node: 3, style: 3 }] }));
     assert!(!d.animating());
     assert_eq!(box_fill(&d.paint(400, 300)), eui_render::linear(d.theme_color(Role::DangerBase)));
+}
+
+#[test]
+fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    assert_eq!(d.ime_area(), None, "nothing focused: no input method");
+    tab(&mut d, false);
+    let field = d.session().lookup(2).unwrap();
+    assert_eq!(d.ime_area(), d.layout().rect(field));
+    // Composing: the field shows it, nothing is sent.
+    assert!(d.input(Input::ImePreedit("か".into())).is_empty());
+    assert_eq!(d.session().text_of(field), Some("aか"));
+    assert!(d.input(Input::ImePreedit("かん".into())).is_empty());
+    assert_eq!(d.session().text_of(field), Some("aかん"));
+    // Committing inserts once; there is no text_input handler, so still nothing on the wire.
+    assert!(d.input(Input::ImeCommit("感".into())).is_empty());
+    assert_eq!(d.session().text_of(field), Some("a感"));
+    // A composition abandoned by leaving the field is dropped; the commit is what changed.
+    d.input(Input::ImePreedit("x".into()));
+    assert_eq!(d.session().text_of(field), Some("a感x"));
+    let out = d.input(Input::Unfocused);
+    assert_eq!(d.session().text_of(field), Some("a感"));
+    assert_eq!(events(&out), vec![(EventKind::Change, 2, 1)]);
+    assert_eq!(d.ime_area(), None);
+    // Focus on a button: no input method either.
+    tab(&mut d, false);
+    tab(&mut d, false);
+    assert_eq!(d.focused(), d.session().lookup(3));
+    assert_eq!(d.ime_area(), None);
 }

@@ -47,7 +47,10 @@ op, wears a 2 px ring in `focus.ring` outside its border box; a node focused
 by a pointer click does not. `Enter` or `Space` on a focused button emits the
 `click` it stands for, at the node's centre, so a server never distinguishes a
 keyboard press from a pointer one. `Enter` in a field is `submit`; `Escape`
-drops focus. None of `Tab`, `Shift+Tab` or `Escape` is ever reported.
+drops focus. None of `Tab`, `Shift+Tab` or `Escape` is ever reported. An
+input method's composition is shown in the field as it is built and reported
+only once committed, as one `text_input`; the candidate window is anchored
+to the field.
 
 ## What the client will not report
 

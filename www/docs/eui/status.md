@@ -219,6 +219,12 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**Input methods.** The window allows an IME exactly while a field has
+focus and anchors the candidate window to it; a composition in progress is
+shown in the field and reported nowhere; the commit arrives as one
+`text_input`. A field's `change` fires only when its value differs from
+what the server last had.
+
 **Conformance.** `spec/09` now says what conforming means and where each
 vector lives; `cargo run -p xtask -- conform` runs the workspace suite,
 clippy with warnings denied, and the Soli end-to-end suite when

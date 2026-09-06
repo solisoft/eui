@@ -63,6 +63,9 @@ Events `KeyboardEvent.key` value (`"Enter"`, `"a"`, `"ArrowLeft"`).
 - Keystrokes outside a focused editable node, other than to a node that
   explicitly holds a `key_down` handler and has focus. There is no global key
   capture.
+- An input method's composition in progress. The client shows the preedit
+  in the focused field and reports nothing; the committed text arrives as
+  one `text_input`, and a composition abandoned by a blur leaves no trace.
 - `Tab`, `Shift+Tab` and `Escape`: they move or drop focus (spec 03 §3) and
   are consumed by the client. `Enter` and `Space` on a focused activatable
   node arrive as the `click` they stand for, at the node's centre.
