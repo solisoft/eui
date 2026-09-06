@@ -125,6 +125,28 @@ The end-to-end run found a protocol mistake on both sides: a re-mount after
 batch with an `Error` frame — which is fatal. Both fixed; `spec/01` §4 now
 says so explicitly.
 
+**The Soli integration.** `lang/` gained a cargo feature, `eui`, off by
+default. On, it adds the `router_eui(component, handler, view)` builtin and
+the `/_eui/session/<component>` socket; off, none of it is compiled and the
+binary builds exactly as before.
+
+- An EUI component *is* a LiveView component — same registry, same frame
+  lock, same worker channel, same `{event, params, state}` handler. The only
+  additions: a view action returning a tree as plain data, a converter that
+  interns atoms and styles per session, a tree diff, and a binary socket that
+  validates every client event against the tree it last sent before it
+  becomes a handler call.
+- `examples/counter-app` is the counter as a Soli app: two functions and a
+  file of builder functions, nothing native.
+- The end-to-end test starts the real `soli serve`, connects the real client
+  transport, clicks, and checks that three clicks leave the same nine nodes
+  with the same ids, and that a resync carries Soli's state with no
+  redefinitions.
+- Touched in `lang/`: `Cargo.toml`, three `#[cfg(feature = "eui")]`
+  insertions in `src/serve/mod.rs`, one builtin in `router.rs`, and the new
+  `src/serve/eui/` module. `src/live/`, `src/template/`, `src/vm/` and
+  `src/interpreter/` are untouched.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -157,7 +179,6 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 - `eui-vm` — the verifier and the metered interpreter.
 - Capability prompts and the manifest check in the client.
-- The Soli integration: `lang/src/eui/`, and `soli serve . --eui`.
 - `eui-vm`, the verifier and the metered interpreter: a `Handler::Local`
   currently does nothing, and says so in the code.
 
@@ -171,7 +192,8 @@ widgets. The full catalogue, real accessibility, and mobile come after.
 
 ## The Soli integration is additive
 
-`lang/` is a production binary at 2.0.7, 276 000 lines. EUI enters it as a new
-`src/eui/` module behind a cargo feature that is **off by default**. No line of
-`src/live/`, `src/template/`, `src/serve/`, `src/vm/` or `src/interpreter/`
-changes. With the feature off, the published binary is identical.
+`lang/` is a production binary at 2.0.7, 276 000 lines. EUI enters it as
+`src/serve/eui/` behind a cargo feature that is **off by default** — a child
+of `serve` rather than the planned `src/eui/`, so it can reuse `serve`'s
+private helpers instead of duplicating them. With the feature off, none of it
+is compiled.

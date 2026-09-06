@@ -1,94 +1,108 @@
 # Writing views
 
-> This page describes a design that is **neither specified nor built yet**. It is
-> here so the shape of the thing is arguable before it is written.
-> [What works today](/docs/status) says what does exist.
+> Built, and running: `examples/counter-app` is served by a `soli` compiled
+> with `--features eui`, and `crates/eui-client/tests/soli_e2e.rs` clicks its
+> button through the real socket.
 
-A view is a `.eui.sl` file. It is Soli, evaluated by the engine already in the
-binary, and it produces a node tree rather than a string of HTML.
+An EUI component is a LiveView component with a different render. Same
+registration, same handler contract, same registry and worker pool; only the
+view — a function of state returning a **node tree as plain data** — and the
+wire differ.
 
 ```soli
-view "counter" do
-  props count: Int
+# config/routes.sl
+router_eui("counter", "live#counter", "live#counter_view")
+```
 
-  column(gap: @space.4, pad: @space.6, align: :center) do
-    text("Compteur", style: @text.xl, weight: :semibold)
-    text(count.to_s, style: @text.4xl, color: @accent.base, key: "value")
+```soli
+# app/controllers/live_controller.sl
 
-    row(gap: @space.2) do
-      button("−", variant: :secondary,
-             on_click: local { state.count -= 1 })
-      button("+", variant: :primary,
-             on_click: local { state.count += 1 })
-      button("Sauver", variant: :ghost, on_click: server("save"))
-    end
+# The handler: exactly a LiveView handler.
+def counter(event_data)
+  event = event_data["event"]
+  count = event_data["state"]["count"] ?? 0
+  if event == "increment"
+    {"count": count + 1}
+  elsif event == "decrement"
+    {"count": count - 1}
+  else
+    {"count": count}
   end
+end
+
+# The view: state in, tree out. Nothing here is native.
+def counter_view(state)
+  count = state["count"] ?? 0
+  column({"pad": 6, "gap": 4, "align": "start", "bg": "surface.base"}, [
+    text("Counter", {"size": 4, "weight": "semibold"}),
+    text(count.to_s, {"size": 7, "weight": "bold"}),
+    row({"gap": 2}, [
+      button("−", "decrement"),
+      button("+", "increment")
+    ]),
+    text("Every click is a round trip.", {"fg": "text.muted", "size": 1})
+  ])
 end
 ```
 
-Server-side it is a component like a LiveView one: `router_eui("counter",
-"eui#counter")` in `config/routes.sl`, with `mount` and `handle_event`.
+`column`, `row`, `text`, `button` and the rest are ordinary Soli functions in
+`app/controllers/eui_builders.sl`. Each returns a hash:
+
+```
+{"k": "box", "s": {style}, "t": text, "c": [children], "on": {"click": "increment"}, "key": ..., "p": {props}}
+```
+
+The server turns that into nodes, interns every atom and every distinct
+style once per session, diffs against the tree it last sent, and encodes the
+patch. A view author never sees a `StyleRecord` and never sees a byte.
 
 ## There is no CSS
 
-Style is named arguments, and the values are **theme roles**, not literals:
-`@space.4`, `@surface.base`, `@text.xl`. The server resolves those to a computed
-style record and interns it; a thousand rows that pass the same arguments share
-one style id.
+Style is a hash of the spec's own vocabulary — `gap`, `pad`, `bg`, `size`,
+`weight`, `radius`, `width`, `align` — and colours are **roles**, not
+literals: `"accent.base"`, `"text.muted"`. The client resolves those against
+the viewer's mode, so the same view is correct in dark mode without the
+server knowing. A literal `"#RRGGBB"` is allowed for a brand mark or a data
+series, and wrong for a surface.
 
-You cannot write a selector, because there is nothing to select against. If two
-places should look alike, they call the same function. That is the whole
-mechanism.
+You cannot write a selector, because there is nothing to select against. If
+two places should look alike, they call the same function.
 
 ## Where a handler runs
 
-The one genuinely new idea in the DSL is that `on_click:` takes either kind of
-handler and the difference is visible in the source.
+`"on": {"click": "increment"}` names a **server** event: a round trip, the
+handler runs, the view re-renders, the diff comes back. That is the whole
+model today.
 
-```soli
-on_click: local  { state.open = !state.open }   # no network traffic at all
-on_click: server("save")                        # a round trip
-on_click: local { state.saving = true }, then: server("save")
-```
-
-A `local { }` block is compiled to a bytecode chunk, published as a
-content-addressed asset, and run by the client in a verified, metered VM. It can
-read and write the component's own state, set text, style and props on nodes it
-owns, and emit an event. It cannot open a file, a socket, or a process; it has
-no clock finer than a coarse monotonic tick and no randomness unless the
-manifest asked for it.
-
-**The rule for choosing.** Local for hovering, focusing, typing, form
-validation, toggling, animating, and optimistic updates — everything whose only
-job is to make the interface feel immediate. Server for anything that touches
-data, navigation, or permissions.
-
-Authorisation is never local. A local handler's effect is advisory and is
-re-derived server-side, so the worst a tampered client achieves is lying to
-itself.
-
-## Metering
-
-A chunk runs with a fuel counter, an allocation budget, and a wall-clock
-deadline. Exceeding any of them kills the chunk and falls the node back to a
-server round trip. It is not a crash and it is not silent — the client reports
-it. Soli's own `src/interpreter/limits.rs` already works this way for
-server-side allocation; this is the same idea pointed at the client.
+Local handlers — a `local { }` block compiled to bytecode and run on the
+client for hover, typing, validation and optimistic updates — are specified
+in outline and not built. `Handler::Local` exists on the wire; the client
+currently treats it as inert. When it lands, the rule stays: **authorisation
+is never local**, and a local handler's effect is advisory until the server
+re-derives it.
 
 ## Lists
 
-Give repeated children a `key:` and re-sorting becomes moves rather than
-rebuilds — 201 bytes to reverse fifty rows instead of 4 619.
+Give repeated children a key and re-sorting becomes moves rather than
+rebuilds:
 
 ```soli
-for invoice in invoices
-  row(key: invoice.id) do
-    text(invoice.reference)
-    text(invoice.client.name)
-    text(invoice.total.to_s)
-  end
-end
+list({"height": 400}, 20, invoices.map(fn(inv) {
+  keyed(inv["id"], row({"gap": 2}, [
+    text(inv["reference"], {}),
+    text(inv["client"], {}),
+    text(inv["total"].to_s, {})
+  ]))
+}))
 ```
 
-A `list` node goes further: only the visible window is laid out at all, so a
-ten-thousand-row table costs about what a fifty-row one costs.
+A `list` with an item height is virtualised: the client lays out only the
+rows it can see, so ten thousand rows cost about what fifty do.
+
+## What the diff does
+
+Matched nodes keep their ids, so the client edits its arena in place. Keyed
+children are matched by key and reordered with `MoveChild`; positional
+children are matched by index. A node whose kind changed is replaced whole.
+The end-to-end test asserts that three clicks leave the tree at the same nine
+nodes with the same ids.

@@ -130,8 +130,9 @@
     <code>eui-text</code> shapes with two embedded faces and never reads a
     system font; <code>eui-render</code> draws every one of them as a rounded
     rectangle through one pipeline, and is tested by reading its pixels back;
-    <code>eui-client</code> runs the counter end to end over a real socket.
-    159 tests, 46 of them rejection cases.
+    <code>eui-client</code> runs the counter end to end over a real socket —
+    against a hand-written Rust server, and against <code>soli serve</code>
+    itself with the view written in Soli. 160 tests, 46 of them rejection cases.
   </p>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--spec">Specified</span>
@@ -140,8 +141,8 @@
     pages; their spec documents are still to write.
   </p>
   <p style="color:var(--ink-muted);">
-    The window is compiled and not yet run on glass; the Soli integration
-    and the local-handler VM have not started. Every
+    The window is compiled and not yet run on glass; the local-handler VM
+    has not started. Every
     number above comes from a test you can run;
     <a href="/docs/budgets">the budgets page</a> names each one.
     If you want the argument rather than the numbers,

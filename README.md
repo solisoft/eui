@@ -22,8 +22,9 @@ crates/
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
   eui-client driver, WSS transport, winit window                     [built]
 examples/
-  counter-server  the counter over a loopback socket, for the client to
-                  talk to before Soli speaks EUI
+  counter-server  the counter as a hand-written Rust server, on loopback
+  counter-app     the counter as a Soli app: `router_eui` + two functions
+  snapshot        render the counter off-screen, for machines with no display
 www/         the documentation site, itself a Soli app
 ```
 
@@ -34,7 +35,7 @@ list honest.
 ## Try it
 
 ```sh
-cargo test                                               # 159 tests; pixel tests need any GPU adapter
+cargo test                                               # 160 tests; pixel tests need any GPU adapter
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
 cd www && soli serve . --dev                             # the docs, on :5011
@@ -57,11 +58,21 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
 
 ## Relationship to Soli
 
-EUI is Soli's native interface layer. Views will be written in `.eui.sl` and
-served by the Soli runtime, reusing routing, models, and the LiveView session
-machinery.
+EUI is Soli's native interface layer. An EUI component is a LiveView
+component whose view returns a node tree as plain data instead of HTML:
 
-That integration enters `lang/` as a new `src/eui/` module behind a cargo
-feature that is **off by default**. No line of `src/live/`, `src/template/`,
-`src/serve/`, `src/vm/` or `src/interpreter/` changes, and with the feature off
-the published binary is unchanged.
+```soli
+router_eui("counter", "live#counter", "live#counter_view")
+```
+
+The integration lives in `lang/src/serve/eui/` behind the cargo feature `eui`,
+**off by default**; with it off, none of that code is compiled. To run the
+counter through Soli:
+
+```sh
+(cd ../lang && cargo build --features eui)
+../lang/target/debug/soli serve examples/counter-app --port 5011
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/counter
+# or, headless:
+EUI_SOLI_BIN=../lang/target/debug/soli cargo test -p eui-client --test soli_e2e
+```

@@ -1,0 +1,3 @@
+[package]
+name = "counter-app"
+main = "app.sl"
