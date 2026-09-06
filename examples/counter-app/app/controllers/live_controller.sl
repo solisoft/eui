@@ -238,3 +238,198 @@ def table_view(state)
     ]
   )
 end
+
+# ---------------------------------------------------------------- gallery
+# One page with every catalogue widget, driven by a handful of state keys, so
+# the whole catalogue is exercised by one mount and a few clicks.
+
+def gallery(event_data)
+  event = event_data["event"]
+  params = event_data["params"]
+  state = event_data["state"]
+  tab = state["tab"] ?? "Overview"
+  open = state["open"] ?? "a"
+  page = state["page"] ?? 1
+  seg = state["seg"] ?? "Day"
+  sheet_open = state["sheet"] ?? false
+  tree_open = state["tree_open"] ?? ["root"]
+
+  match event {
+    "tab" => {
+      "tab": params["props"]["tab"],
+      "open": open,
+      "page": page,
+      "seg": seg,
+      "sheet": sheet_open,
+      "tree_open": tree_open
+    },
+    "toggle" => {
+      "tab": tab,
+      "open": params["props"]["id"] == open ? "" : params["props"]["id"],
+      "page": page,
+      "seg": seg,
+      "sheet": sheet_open,
+      "tree_open": tree_open
+    },
+    "page" => {
+      "tab": tab,
+      "open": open,
+      "page": params["props"]["page"],
+      "seg": seg,
+      "sheet": sheet_open,
+      "tree_open": tree_open
+    },
+    "seg" => {
+      "tab": tab,
+      "open": open,
+      "page": page,
+      "seg": params["props"]["option"],
+      "sheet": sheet_open,
+      "tree_open": tree_open
+    },
+    "sheet" => {
+      "tab": tab,
+      "open": open,
+      "page": page,
+      "seg": seg,
+      "sheet": !sheet_open,
+      "tree_open": tree_open
+    },
+    "tree" => {
+      "tab": tab,
+      "open": open,
+      "page": page,
+      "seg": seg,
+      "sheet": sheet_open,
+      "tree_open": toggle_id(tree_open, params["props"]["id"])
+    },
+    _ => {
+      "tab": tab,
+      "open": open,
+      "page": page,
+      "seg": seg,
+      "sheet": sheet_open,
+      "tree_open": tree_open
+    },
+  }
+end
+
+def toggle_id(ids, id)
+  return ids.filter(fn(x) { x != id }) if ids.includes?(id)
+
+  ids.concat([id])
+end
+
+def gallery_view(state)
+  tab = state["tab"] ?? "Overview"
+  open = state["open"] ?? "a"
+  page = state["page"] ?? 1
+  seg = state["seg"] ?? "Day"
+  sheet_open = state["sheet"] ?? false
+  tree_open = state["tree_open"] ?? ["root"]
+  sections = [
+    {
+      "id": "a",
+      "title": "What is EUI?",
+      "body": "A protocol for interfaces without a document engine."
+    },
+    {
+      "id": "b",
+      "title": "Why no CSS?",
+      "body": "Styles are resolved on the server; the client looks them up."
+    },
+    {
+      "id": "c",
+      "title": "Is it secure?",
+      "body": "Deny by default, no code from the network, quotas everywhere."
+    }
+  ]
+  tree = [{
+    "id": "root",
+    "label": "app",
+    "children": [
+      {
+        "id": "ctl",
+        "label": "controllers",
+        "children": [{
+          "id": "live",
+          "label": "live_controller.sl",
+          "children": []
+        }]
+      },
+      {
+        "id": "views",
+        "label": "views",
+        "children": []
+      }
+    ]
+  }]
+  page_content = column(
+    {"gap": 5, "pad": 6},
+    [
+      navbar("EUI", ["Overview", "Inputs", "Data"], tab, "tab"),
+      tabs(["Overview", "Inputs", "Data"], tab, "tab"),
+      row(
+        {"gap": 3, "wrap": "wrap"},
+        [stat("Nodes", "14", "primitives"), stat("Roles", "28", "colours"), stat("Tests", "181", "and counting")]
+      ),
+      banner("This gallery is served by Soli and drawn by EUI.", "info", "Open sheet", "sheet"),
+      row(
+        {"gap": 2, "align": "center"},
+        [
+          progress(0.62),
+          muted("62 %"),
+          spinner(),
+          badge("beta", "warning"),
+          chip("keyed", "", {}),
+          chip("removable", "noop", {"id": 1})
+        ]
+      ),
+      row(
+        {"gap": 3, "align": "center"},
+        [
+          segmented(["Day", "Week", "Month"], seg, "seg"),
+          pagination(page, 9, "page"),
+          breadcrumb([{"label": "app", "path": "/"}, {
+            "label": "gallery",
+            "path": "/gallery"
+          }], "noop")
+        ]
+      ),
+      stepper(["Spec", "Client", "Soli", "Ship"], 2),
+      row(
+        {"gap": 4, "align": "start"},
+        [
+          column(
+            {"gap": 3, "grow": 1},
+            [
+              accordion(sections, open, "toggle"),
+              code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl")
+            ]
+          ),
+          column(
+            {"gap": 3, "width": 240},
+            [
+              card({"gap": 2}, [h2("Tree"), tree_view(tree, tree_open, "tree", 0)]),
+              menu(["Rename", "Duplicate", "Delete"], "noop"),
+              tooltip("A tooltip")
+            ]
+          )
+        ]
+      ),
+      empty_state(
+        "Nothing here yet",
+        "Widgets that need canvas paths — charts — wait for the renderer.",
+        "Noted",
+        "noop"
+      ),
+      form([field("Name", "", "noop"), field("Email", "", "noop")], "Save", "noop"),
+      skeleton(320, 12)
+    ]
+  )
+  layers = sheet_open ? [
+    page_content,
+    sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")])
+  ] : [page_content]
+  stack({"gap": 0}, layers)
+end

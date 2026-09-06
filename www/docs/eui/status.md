@@ -209,6 +209,18 @@ explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
 the end-to-end test fetches from the real server.
 
+**The catalogue, second half.** `eui_builders.sl` now composes forty-odd
+widgets from the primitives: buttons in four variants with local states,
+checkbox, switch, badge, chip, card, stat, tabs, segmented control,
+accordion, stepper, breadcrumb, pagination, progress, skeleton, spinner,
+toast, banner, empty state, dialog, sheet and drawer, popover, tooltip,
+menu, toolbar, navbar, sidebar, tree view, code block, field and form,
+table header and rows, avatar and image. A `gallery` component shows them
+all on one page; its end-to-end test mounts it through Soli, moves the
+segmented control, swaps accordion sections and opens and closes the sheet.
+Charts wait on `canvas` paths in the renderer; select, combobox, slider and
+the pickers wait on keyboard focus handling in the client.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:

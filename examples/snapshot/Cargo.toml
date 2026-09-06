@@ -13,6 +13,7 @@ eui-proto = { path = "../../crates/eui-proto", version = "0.1.0" }
 eui-client = { path = "../../crates/eui-client", version = "0.1.0" }
 eui-render = { path = "../../crates/eui-render", version = "0.1.0" }
 counter-server = { path = "../counter-server", version = "0.1.0" }
+eui-tree = { path = "../../crates/eui-tree", version = "0.1.0" }
 
 [lints]
 workspace = true

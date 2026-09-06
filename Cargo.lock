@@ -2041,6 +2041,7 @@ dependencies = [
  "eui-client",
  "eui-proto",
  "eui-render",
+ "eui-tree",
 ]
 
 [[package]]

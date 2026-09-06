@@ -26,7 +26,7 @@ examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   counter-app     counter, todo and a 10 000-row table as a Soli app, with
                   the widget catalogue in app/controllers/eui_builders.sl
-  snapshot        render the counter off-screen, for machines with no display
+  snapshot        render the counter, or any live Soli component, off-screen
 www/         the documentation site, itself a Soli app
 xtask/       `bench`: measures the budgets and fails when one is missed
 deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets

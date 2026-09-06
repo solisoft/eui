@@ -1,7 +1,10 @@
 # Widget catalogue
 
-> The primitives are specified; the catalogue is designed and **not yet built**.
-> The first stage ships about fifteen of these.
+> The primitives are specified (`spec/03`) and painted. About forty of the
+> widgets below are built as plain Soli functions in
+> `examples/counter-app/app/controllers/eui_builders.sl`, and a `gallery`
+> component shows them together. Charts, select/combobox, slider and the
+> pickers are still to come.
 
 There are two tiers, and the split is what lets the catalogue grow without ever
 shipping a new client.

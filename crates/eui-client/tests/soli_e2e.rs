@@ -349,3 +349,37 @@ fn probe_session_frames() {
     }
     eprintln!("PROBE still open after 3 s; server alive: {}", server.0.try_wait().ok().flatten().is_none());
 }
+
+#[test]
+fn the_gallery_mounts_and_its_widgets_respond() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    let all = texts(&d, root(&d));
+    for expected in ["Overview", "Nodes", "62 %", "Spec", "What is EUI?", "Rename", "A tooltip", "Nothing here yet", "1 / 9"] {
+        assert!(all.iter().any(|t| t == expected), "gallery shows {expected:?}");
+    }
+    let nodes_before = d.session().live_nodes();
+    assert!(nodes_before > 120, "{nodes_before} nodes");
+    let _ = d.paint(1000, 900);
+
+    // Segmented control: click "Week" (its prop names it) — the selection moves.
+    let week = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Week")).unwrap();
+    click(&mut d, &conn, week);
+    let seq = d.session().last_seq().unwrap();
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    // Accordion: open "b"; "a" closes. The body text of b appears.
+    let why = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Why no CSS?")).unwrap();
+    click(&mut d, &conn, why);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.starts_with("Styles are resolved")));
+    assert!(!texts(&d, root(&d)).iter().any(|t| t.starts_with("A protocol for interfaces")), "the other section closed");
+    // The sheet: opens as an overlay, closes again.
+    let open_sheet = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Open sheet")).unwrap();
+    click(&mut d, &conn, open_sheet);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A sheet"));
+    let close = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Close")).unwrap();
+    click(&mut d, &conn, close);
+    pump(&mut d, &conn, &wake, |d| !texts(d, root(d)).iter().any(|t| t == "A sheet"));
+    let _ = d.paint(1000, 900);
+}
