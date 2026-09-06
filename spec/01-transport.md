@@ -38,10 +38,42 @@ record (see [`02-wire-format.md`](02-wire-format.md) §7) carrying:
 - `entry` — session path, defaults to `/_eui/session`
 - `pin` — OPTIONAL SPKI pin set for the origin
 
-A client MUST verify the signature before acting on any other field. On first
-run it pins `publisher_key` for `app_id` (trust on first use). On later runs a
-different key MUST be rejected unless the manifest also carries a rotation
-record signed by the previously pinned key.
+The record's keys, in the order they MUST appear (02 §7 leaves the table to
+each document):
+
+| key | field | value |
+|---:|---|---|
+| 0 | `app_id` | `Str`, non-empty |
+| 1 | `name` | `Str` |
+| 2 | `version` | `Str` |
+| 3 | `protocol_min` | `Int` ≥ 1 |
+| 4 | `protocol_max` | `Int` ≥ `protocol_min` |
+| 5 | `publisher_key` | `Str`, 64 hex digits |
+| 6 | `capabilities` | `Int`, the bitset of the capability names below |
+| 7 | `theme` | `Str`, 64 hex digits, or `Null` |
+| 8 | `entry` | `Str`, an absolute path |
+| 9 | `rotation` | `List[Str previous key, Str signature]` or `Null` |
+| 10 | `signature` | `Str`, 128 hex digits; always last |
+
+Strings are at most 256 bytes. The signature is Ed25519 over the record
+encoded with fields 0–9 only (`field_count` 10), which a decoder can rebuild
+exactly because the order is fixed. Capability names and bits: `camera` 1,
+`microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
+16, `location` 32, `fs.pick` 64.
+
+A client MUST verify the signature before acting on any other field, and
+MUST refuse a server whose protocol range excludes its own version. On first
+run it pins `publisher_key` for `app_id` (trust on first use). On later runs
+a different key MUST be rejected unless `rotation` names the pinned key and
+carries that key's Ed25519 signature over the new `publisher_key`; the pin
+then moves. A manifest that fails any of this ends the connection before a
+session is opened. The one exception is the debug loopback of 08 §1: over
+`ws://` on `127.0.0.1` a client MAY proceed without a manifest, and MUST say
+so on its diagnostics.
+
+The client grants the intersection of `capabilities` with what the person
+allowed it — on the reference client, `--allow` on the command line — and
+reports it in `Hello.granted`; nothing is granted by being asked for.
 
 ### 2.2 Assets
 

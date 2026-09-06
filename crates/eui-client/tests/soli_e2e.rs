@@ -466,3 +466,22 @@ fn within(d: &Driver, title: &str, text: &str) -> eui_tree::NodeIx {
     let card = d.session().node(heading).unwrap().parent;
     d.session().preorder(card).find(|ix| d.session().text_of(*ix) == Some(text)).unwrap_or_else(|| panic!("no {text:?} under {title:?}"))
 }
+
+#[test]
+fn soli_serves_a_signed_manifest_the_client_pins() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    let (_server, port) = start_soli(&bin);
+    let origin = format!("http://127.0.0.1:{port}");
+    let pins = std::env::temp_dir().join(format!("eui-e2e-pins-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&pins);
+    let m = eui_client::manifest::check(&origin, &pins).expect("a signed manifest");
+    assert_eq!(m.app_id, "counter-app", "the application folder's name");
+    assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
+    assert_eq!(m.entry, "/_eui/session");
+    assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read"], "what config/routes.sl asked for");
+    // Pinned: the same server is accepted again; a stranger's key is not.
+    assert!(eui_client::manifest::check(&origin, &pins).is_ok());
+    let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
+    std::fs::write(&pin, [9u8; 32]).unwrap();
+    assert_eq!(eui_client::manifest::check(&origin, &pins).unwrap_err(), eui_client::manifest::ManifestError::KeyChanged);
+}

@@ -31,7 +31,19 @@ it **pins** the publisher key for that application id. A different key on a late
 run is refused unless the manifest also carries a rotation record signed by the
 previously pinned key.
 
-### Assets
+### The manifest, checked
+
+Before a session opens, the client fetches `/.well-known/eui`, verifies the
+publisher's Ed25519 signature, checks the protocol range, and pins the key
+under the application's `app_id` — trust on first use. A later manifest with
+a different key is refused unless it carries a rotation signed by the pinned
+key. Soli serves the manifest for any app with the `eui` feature, signing
+with a key it generates on first use into `config/eui_publisher.pkcs8`; an
+app asks for capabilities with `eui_capabilities("clipboard.read")` and the
+person grants them with `eui <url> --allow clipboard.read`. Only the debug
+loopback may connect without a manifest, and says so.
+
+## Assets
 
 An asset is named by the BLAKE3 hash of its content. The client recomputes the
 hash and discards a mismatch. Because the name *is* the content,

@@ -71,6 +71,7 @@
 pub mod error;
 pub mod frame;
 pub mod limits;
+pub mod manifest;
 pub mod node;
 pub mod op;
 pub mod reader;
@@ -79,6 +80,7 @@ pub mod writer;
 
 pub use error::{DecodeError, Result};
 pub use frame::{caps, Density, EventFrame, Frame, Hello, ThemeMode, Viewport, Welcome};
+pub use manifest::{Manifest, Rotation};
 pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
 pub use reader::Reader;

@@ -30,6 +30,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 blake3 = "1"
 png = "0.17"
+# Ed25519 for the manifest signature; already in the tree under rustls.
+ring = "0.17"
 # Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
 # assistive technology asks; `--no-default-features` builds without it.
 accesskit = { version = "0.25", optional = true }

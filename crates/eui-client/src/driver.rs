@@ -286,6 +286,13 @@ impl Driver {
         }
     }
 
+    /// Grant capabilities before the session opens — what the manifest asked
+    /// for, intersected with what the person allowed. Never more than
+    /// [`caps::ALL`]; never anything implicitly.
+    pub fn grant(&mut self, granted: u32) {
+        self.granted = granted & caps::ALL;
+    }
+
     /// The opening frame.
     pub fn hello(&self) -> Frame {
         Frame::Hello(Hello { version: PROTOCOL_VERSION, viewport: self.viewport(), granted: self.granted })

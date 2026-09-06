@@ -44,6 +44,8 @@ struct Gpu {
 /// The application.
 pub struct App {
     url: String,
+    /// Capabilities the person allows, if the manifest asks for them.
+    allowed: u32,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     driver: Driver,
@@ -58,9 +60,10 @@ pub struct App {
 
 impl App {
     /// Build for a session URL.
-    pub fn new(url: String, proxy: EventLoopProxy<Wake>) -> Self {
+    pub fn new(url: String, allowed: u32, proxy: EventLoopProxy<Wake>) -> Self {
         Self {
             url,
+            allowed,
             window: None,
             gpu: None,
             driver: Driver::new(960.0, 640.0, 1.0, 0),
@@ -294,6 +297,26 @@ impl ApplicationHandler<Wake> for App {
         self.gpu = Some(Gpu { surface, config, renderer });
         self.window = Some(window);
 
+        // Spec 01 §2.1: the manifest first. Its signature is verified and
+        // its key pinned before a byte of the session is trusted; only the
+        // debug loopback of 08 §1 may go on without one.
+        match crate::assets::origin_for(&self.url).map_err(|e| e.to_string()).and_then(|origin| {
+            let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
+            crate::manifest::check(&origin, &pins).map_err(|e| e.to_string())
+        }) {
+            Ok(m) => {
+                let granted = m.capabilities & self.allowed;
+                let refused = m.capabilities & !self.allowed;
+                eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
+                self.driver.grant(granted);
+            }
+            Err(e) if self.url.starts_with("ws://") => eprintln!("eui: {e}; continuing on the debug loopback without a manifest"),
+            Err(e) => {
+                eprintln!("eui: {e}; refusing to connect");
+                event_loop.exit();
+                return;
+            }
+        }
         let hello = self.driver.hello().encode();
         let proxy = self.proxy.clone();
         match transport::connect(&self.url, hello, move || {
@@ -434,9 +457,9 @@ fn named(n: NamedKey) -> String {
 }
 
 /// Run the client until the window closes.
-pub fn run(url: String) -> Result<(), String> {
+pub fn run(url: String, allowed: u32) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(url, proxy);
+    let mut app = App::new(url, allowed, proxy);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

@@ -4,3 +4,5 @@
 /crates/*/fuzz/target/
 /crates/*/fuzz/corpus/
 /crates/*/fuzz/artifacts/
+# A Soli app's publisher key, generated on first serve; never committed.
+**/config/eui_publisher.pkcs8

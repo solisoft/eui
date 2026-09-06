@@ -78,22 +78,28 @@ pub fn origin_for(session_url: &str) -> Result<String, AssetError> {
 /// Fetch and verify one asset. Blocking; runs its own small runtime, so call
 /// it from a worker thread.
 pub fn fetch(origin: &str, hash: &Hash) -> Result<Vec<u8>, AssetError> {
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
-    let bytes = rt.block_on(fetch_async(origin, hash))?;
+    let bytes = get(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream")?;
     if *blake3::hash(&bytes).as_bytes() != *hash {
         return Err(AssetError::HashMismatch);
     }
     Ok(bytes)
 }
 
-async fn fetch_async(origin: &str, hash: &Hash) -> Result<Vec<u8>, AssetError> {
+/// One strict HTTPS `GET` of `path` at `origin`: no cookie, no redirect, a
+/// `Content-Length` body no larger than an asset. Blocking. The manifest and
+/// every asset come through here and nothing else does.
+pub fn get(origin: &str, path: &str, accept: &str) -> Result<Vec<u8>, AssetError> {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
+    rt.block_on(get_async(origin, path, accept))
+}
+
+async fn get_async(origin: &str, path: &str, accept: &str) -> Result<Vec<u8>, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
         _ => (hostport, if scheme == "https" { 443 } else { 80 }),
     };
-    let path = format!("/_eui/asset/{}", hex(hash));
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: application/octet-stream\r\n\r\n");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\n\r\n");
 
     let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
     let mut raw = Vec::new();

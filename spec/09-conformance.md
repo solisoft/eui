@@ -26,6 +26,7 @@ Two profiles:
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
 | `reject.rs` | 47 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, reserved bits, oversized lists, depth |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
+| `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
 
 ## 3. Tree — `crates/eui-tree/tests`
 
@@ -60,6 +61,11 @@ with wrapping, `Enter` and `Space` as clicks, `Escape`, the ring for keyboard
 and server focus only, editing and commit, wheel and scroll offsets, local
 handlers with and without a following server event, resync on a bad batch,
 transitions on a style change.
+
+### 7.1 Manifest — `crates/eui-client/tests/manifest.rs`
+
+Signature, protocol range, trust on first use, refusal of a changed key,
+acceptance of a rotation the pinned key signed, and garbage.
 
 ## 8. Painting — `crates/eui-render/tests/render.rs`
 

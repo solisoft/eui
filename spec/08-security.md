@@ -28,6 +28,8 @@ grant.
 
 *Status: specified; the manifest and asset paths are not yet implemented.*
 
+*Enforced: `eui-client::manifest` — the signature is checked with the manifest's own key, the key pinned under the `app_id` in the pin store, a changed key refused without a rotation the pinned key signed; `lang/src/serve/eui/manifest.rs` signs with a key generated on first use and kept in `config/eui_publisher.pkcs8`.*
+
 ## 3. Capabilities
 
 - Deny by default. A capability the manifest never requested, or the user

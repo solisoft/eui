@@ -20,6 +20,7 @@
 #[cfg(feature = "a11y")]
 pub mod a11y;
 pub mod app;
+pub mod manifest;
 pub mod assets;
 pub mod driver;
 pub mod transport;

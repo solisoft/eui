@@ -219,6 +219,15 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**The manifest, signed and pinned.** `GET /.well-known/eui` is a record
+(spec 01 §2.1, keys fixed now) signed by the publisher's Ed25519 key. The
+client verifies it before opening a session, refuses a protocol it cannot
+speak, pins the key on first use and refuses a changed key without a
+rotation the old key signed. Soli signs with a key it generates into
+`config/eui_publisher.pkcs8`; `eui_capabilities(...)` in `routes.sl` says
+what to ask for and `eui <url> --allow ...` what the person grants. A
+capability prompt in the window is still to come.
+
 **Accessibility.** The client exposes its tree through AccessKit — AT-SPI
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
 click handlers are buttons named by their text, editable nodes are text
@@ -296,7 +305,6 @@ implements it and the vectors that pin it:
 
 ## Not started
 
-- Capability prompts and the manifest check in the client.
 - The multi-process sandbox, Android and iOS, `soli desktop build --eui`
   (stage 3).
 

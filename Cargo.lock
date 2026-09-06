@@ -896,6 +896,7 @@ dependencies = [
  "futures-util",
  "png",
  "pollster",
+ "ring",
  "rustls",
  "tokio",
  "tokio-rustls",

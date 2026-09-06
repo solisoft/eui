@@ -82,6 +82,27 @@ pub mod caps {
     pub const LOCATION: u32 = 1 << 5;
     /// Open a file the user picks.
     pub const FS_PICK: u32 = 1 << 6;
+
+    /// The names of 01 §2.1, in bit order.
+    pub const NAMES: [(&str, u32); 7] = [
+        ("camera", CAMERA),
+        ("microphone", MICROPHONE),
+        ("clipboard.read", CLIPBOARD_READ),
+        ("clipboard.write", CLIPBOARD_WRITE),
+        ("notifications", NOTIFICATIONS),
+        ("location", LOCATION),
+        ("fs.pick", FS_PICK),
+    ];
+
+    /// A capability by its name, `clipboard.read`.
+    pub fn from_name(name: &str) -> Option<u32> {
+        NAMES.iter().find(|(n, _)| *n == name).map(|(_, bit)| *bit)
+    }
+
+    /// The names of the bits set in `mask`.
+    pub fn names(mask: u32) -> Vec<&'static str> {
+        NAMES.iter().filter(|(_, bit)| mask & bit != 0).map(|(n, _)| *n).collect()
+    }
     /// Save to a file the user picks.
     pub const FS_SAVE: u32 = 1 << 7;
     /// Every bit this protocol version defines.
