@@ -38,6 +38,17 @@ handler decremented a counter, incremented a quantity, or marked a row selected,
 the server re-derives that from its own state on the next round trip. Nothing a
 client computed is trusted, and no authorisation decision is ever made locally.
 
+## Keyboard and focus
+
+The client owns focus. `Tab` and `Shift+Tab` walk the focusable nodes in
+document order — editable fields, and any node carrying a `click` handler —
+and wrap at the ends. A node focused from the keyboard, or by a server `Focus`
+op, wears a 2 px ring in `focus.ring` outside its border box; a node focused
+by a pointer click does not. `Enter` or `Space` on a focused button emits the
+`click` it stands for, at the node's centre, so a server never distinguishes a
+keyboard press from a pointer one. `Enter` in a field is `submit`; `Escape`
+drops focus. None of `Tab`, `Shift+Tab` or `Escape` is ever reported.
+
 ## What the client will not report
 
 By design, and stated so an application author does not go looking:

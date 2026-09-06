@@ -243,74 +243,87 @@ end
 # One page with every catalogue widget, driven by a handful of state keys, so
 # the whole catalogue is exercised by one mount and a few clicks.
 
+def gallery_defaults(state)
+  base = {
+    "tab": "Overview",
+    "open": "a",
+    "page": 1,
+    "seg": "Day",
+    "sheet": false,
+    "tree_open": ["root"],
+    "select_open": false,
+    "select_value": "Medium",
+    "slider": 40,
+    "cal_month": "2026-09",
+    "cal_date": "",
+    "dt_month": "2026-09",
+    "dt_date": "2026-09-06",
+    "dt_time": "09:30",
+    "range_month": "2026-09",
+    "range_start": "",
+    "range_end": ""
+  }
+  for key in base.keys()
+    base[key] = state[key] unless state[key].nil?
+  end
+  base
+end
+
+def set_key(state, key, value)
+  state[key] = value
+  state
+end
+
+def set_slider(state, params)
+  payload = params["payload"]
+  if params["kind"] == "click"
+    state["slider"] = int(payload[0] * 100 / 240)
+  elsif payload[0] == "ArrowRight"
+    state["slider"] = state["slider"] + 5
+  elsif payload[0] == "ArrowLeft"
+    state["slider"] = state["slider"] - 5
+  end
+  state["slider"] = 0 if state["slider"] < 0
+  state["slider"] = 100 if state["slider"] > 100
+  state
+end
+
+def pick_range(state, iso)
+  if state["range_start"].blank? || state["range_end"].present?
+    state["range_start"] = iso
+    state["range_end"] = ""
+  elsif iso < state["range_start"]
+    state["range_end"] = state["range_start"]
+    state["range_start"] = iso
+  else
+    state["range_end"] = iso
+  end
+  state
+end
+
 def gallery(event_data)
   event = event_data["event"]
   params = event_data["params"]
-  state = event_data["state"]
-  tab = state["tab"] ?? "Overview"
-  open = state["open"] ?? "a"
-  page = state["page"] ?? 1
-  seg = state["seg"] ?? "Day"
-  sheet_open = state["sheet"] ?? false
-  tree_open = state["tree_open"] ?? ["root"]
-
+  props = params["props"] ?? {}
+  state = gallery_defaults(event_data["state"] ?? {})
   match event {
-    "tab" => {
-      "tab": params["props"]["tab"],
-      "open": open,
-      "page": page,
-      "seg": seg,
-      "sheet": sheet_open,
-      "tree_open": tree_open
-    },
-    "toggle" => {
-      "tab": tab,
-      "open": params["props"]["id"] == open ? "" : params["props"]["id"],
-      "page": page,
-      "seg": seg,
-      "sheet": sheet_open,
-      "tree_open": tree_open
-    },
-    "page" => {
-      "tab": tab,
-      "open": open,
-      "page": params["props"]["page"],
-      "seg": seg,
-      "sheet": sheet_open,
-      "tree_open": tree_open
-    },
-    "seg" => {
-      "tab": tab,
-      "open": open,
-      "page": page,
-      "seg": params["props"]["option"],
-      "sheet": sheet_open,
-      "tree_open": tree_open
-    },
-    "sheet" => {
-      "tab": tab,
-      "open": open,
-      "page": page,
-      "seg": seg,
-      "sheet": !sheet_open,
-      "tree_open": tree_open
-    },
-    "tree" => {
-      "tab": tab,
-      "open": open,
-      "page": page,
-      "seg": seg,
-      "sheet": sheet_open,
-      "tree_open": toggle_id(tree_open, params["props"]["id"])
-    },
-    _ => {
-      "tab": tab,
-      "open": open,
-      "page": page,
-      "seg": seg,
-      "sheet": sheet_open,
-      "tree_open": tree_open
-    },
+    "tab" => set_key(state, "tab", props["tab"]),
+    "toggle" => set_key(state, "open", props["id"] == state["open"] ? "" : props["id"]),
+    "page" => set_key(state, "page", props["page"]),
+    "seg" => set_key(state, "seg", props["option"]),
+    "sheet" => set_key(state, "sheet", !state["sheet"]),
+    "tree" => set_key(state, "tree_open", toggle_id(state["tree_open"], props["id"])),
+    "select_toggle" => set_key(state, "select_open", !state["select_open"]),
+    "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
+    "slider" => set_slider(state, params),
+    "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
+    "cal_pick" => set_key(state, "cal_date", props["date"]),
+    "dt_nav" => set_key(state, "dt_month", month_shift(state["dt_month"], props["delta"])),
+    "dt_pick" => set_key(state, "dt_date", props["date"]),
+    "dt_time" => set_key(state, "dt_time", params["payload"]),
+    "range_nav" => set_key(state, "range_month", month_shift(state["range_month"], props["delta"])),
+    "range_pick" => pick_range(state, props["date"]),
+    _ => state,
   }
 end
 
@@ -320,13 +333,41 @@ def toggle_id(ids, id)
   ids.concat([id])
 end
 
-def gallery_view(state)
-  tab = state["tab"] ?? "Overview"
-  open = state["open"] ?? "a"
-  page = state["page"] ?? 1
-  seg = state["seg"] ?? "Day"
-  sheet_open = state["sheet"] ?? false
-  tree_open = state["tree_open"] ?? ["root"]
+def gallery_view(raw_state)
+  state = gallery_defaults(raw_state ?? {})
+  tab = state["tab"]
+  open = state["open"]
+  page = state["page"]
+  seg = state["seg"]
+  sheet_open = state["sheet"]
+  tree_open = state["tree_open"]
+  pickers = row(
+    {
+      "gap": 4,
+      "wrap": "wrap",
+      "align": "start"
+    },
+    [
+      labelled("Select", select([
+        "Small",
+        "Medium",
+        "Large"
+      ], state["select_value"], state["select_open"], "select_toggle", "select_pick")),
+      labelled(
+        "Slider",
+        column({"gap": 2}, [slider(state["slider"], 0, 100, "slider"), muted("Value " + str(state["slider"]))])
+      ),
+      labelled("Date", date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")),
+      labelled(
+        "Date and time",
+        datetime_picker(state["dt_month"], state["dt_date"], state["dt_time"], "dt_pick", "dt_nav", "dt_time")
+      ),
+      labelled(
+        "Range",
+        date_range_picker(state["range_month"], state["range_start"], state["range_end"], "range_pick", "range_nav")
+      )
+    ]
+  )
   sections = [
     {
       "id": "a",
@@ -397,6 +438,7 @@ def gallery_view(state)
         ]
       ),
       stepper(["Spec", "Client", "Soli", "Ship"], 2),
+      pickers,
       row(
         {"gap": 4, "align": "start"},
         [

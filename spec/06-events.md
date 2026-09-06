@@ -15,7 +15,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 
 | id | Kind | Payload | Coalesced |
 |---:|---|---|:-:|
-| `0x01` | `click` | `List[Float x, Float y]`, in the node's box | |
+| `0x01` | `click` | `List[Float x, Float y]`, local to the node the event names — the one holding the handler, not the leaf under the pointer | |
 | `0x02` | `double_click` | as `click` | |
 | `0x03` | `pointer_down` | `List[Float x, Float y, Int button]` | |
 | `0x04` | `pointer_up` | as `pointer_down` | |
@@ -63,6 +63,9 @@ Events `KeyboardEvent.key` value (`"Enter"`, `"a"`, `"ArrowLeft"`).
 - Keystrokes outside a focused editable node, other than to a node that
   explicitly holds a `key_down` handler and has focus. There is no global key
   capture.
+- `Tab`, `Shift+Tab` and `Escape`: they move or drop focus (spec 03 §3) and
+  are consumed by the client. `Enter` and `Space` on a focused activatable
+  node arrive as the `click` they stand for, at the node's centre.
 - Pointer position while the window is unfocused or the pointer is outside it.
 - Clipboard contents without the `clipboard.read` capability.
 - Anything about the machine beyond the `Viewport` frame.

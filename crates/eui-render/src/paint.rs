@@ -60,6 +60,8 @@ pub struct Scene<'a> {
     pub atlas: &'a mut Atlas,
     /// The image atlas, filled by the client as assets arrive.
     pub images: &'a ImageAtlas,
+    /// The node wearing the focus ring, when focus is keyboard-visible.
+    pub focus: Option<NodeIx>,
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -186,6 +188,19 @@ impl Painter<'_, '_> {
                 if l > 0.0 { self.push(edge([x, y, l, h])); }
                 if r > 0.0 { self.push(edge([x + w - r, y, r, h])); }
             }
+        }
+
+        // Spec 03 §3: a 2 px ring in `focus.ring`, outside the border box.
+        if self.scene.focus == Some(ix) {
+            let ring = 2.0 * scale;
+            let [x, y, w, h] = dev;
+            self.push(Quad {
+                rect: [x - ring, y - ring, w + 2.0 * ring, h + 2.0 * ring],
+                params: [radius + ring, ring, 0.0, 1.0],
+                fill: [0.0; 4],
+                stroke: linear(self.scene.theme.color(Role::FocusRing)),
+                uv: [0.0; 4],
+            });
         }
 
         // Foreground colour inherits down the tree; text.default is the floor.

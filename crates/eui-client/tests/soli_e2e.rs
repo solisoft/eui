@@ -382,4 +382,67 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     click(&mut d, &conn, close);
     pump(&mut d, &conn, &wake, |d| !texts(d, root(d)).iter().any(|t| t == "A sheet"));
     let _ = d.paint(1000, 900);
+
+    // Select: opens under its anchor, an option picks and closes it.
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    assert!(!has(&d, "Small"), "closed: options are not in the tree");
+    let target = within(&d, "Select", "Medium");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "Small"));
+    let target = within(&d, "Select", "Large");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| !has(d, "Small"));
+    assert!(has(&d, "Large") && !has(&d, "Medium"), "the anchor shows the pick");
+
+    // Slider: a click three quarters along the track sets 75; once focused
+    // from the keyboard, ArrowRight nudges by the server's step of 5.
+    let value = within(&d, "Slider", "Value 40");
+    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let _ = d.paint(1000, 900);
+    let r = d.layout().rect(track).unwrap();
+    d.input(Input::PointerMove(r.x + r.w * 0.75, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Value 75"));
+    for _ in 0..400 {
+        if d.focused() == Some(track) {
+            break;
+        }
+        for f in d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true }) {
+            conn.tx.send(f.encode()).unwrap();
+        }
+    }
+    assert_eq!(d.focused(), Some(track), "Tab reaches the slider: it has a click handler");
+    for f in d.input(Input::Key { key: "ArrowRight".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Value 80"));
+
+    // Date picker: pick the 15th, then turn the month.
+    let target = within(&d, "Date", "15");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-15"));
+    let target = within(&d, "Date", "›");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "October 2026"));
+    assert!(has(&d, "2026-09-15"), "the pick survives turning the month");
+
+    // Range: two clicks, the second earlier than the first — the server orders them.
+    let target = within(&d, "Range", "20");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-20 → …"));
+    let target = within(&d, "Range", "10");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-10 → 2026-09-20"));
+    let _ = d.paint(1000, 900);
+}
+
+/// The node showing `text` inside the titled card `title` — the card is the
+/// title's parent, so two calendars showing "15" never collide.
+fn within(d: &Driver, title: &str, text: &str) -> eui_tree::NodeIx {
+    let heading = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(title)).unwrap_or_else(|| panic!("no card titled {title:?}"));
+    let card = d.session().node(heading).unwrap().parent;
+    d.session().preorder(card).find(|ix| d.session().text_of(*ix) == Some(text)).unwrap_or_else(|| panic!("no {text:?} under {title:?}"))
 }

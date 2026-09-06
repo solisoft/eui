@@ -44,7 +44,7 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h) })
+    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None })
 }
 
 fn gpu() -> Option<Renderer> {

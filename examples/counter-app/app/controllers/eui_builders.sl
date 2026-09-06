@@ -908,3 +908,287 @@ def tree_view(nodes, open_ids, on_toggle, depth)
     column({"gap": 0}, [rowv].concat(kids))
   }))
 end
+
+# ---- Select ----------------------------------------------------------------
+
+# A closed select is its anchor; open, a dropdown lists the options below it.
+# The server owns `open`: the anchor toggles it, an option picks and closes.
+# The anchor has a click handler, so Tab reaches it and Enter opens it.
+def select(options, value, open, on_toggle, on_pick)
+  anchor = {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "align": "center",
+      "gap": 2,
+      "pad": [2, 3, 2, 3],
+      "min_width": 160,
+      "border": 1,
+      "border_color": "border.default",
+      "radius": 2,
+      "bg": "surface.raised",
+      "cursor": "pointer"
+    },
+    "on": {"click": on_toggle},
+    "c": [text(value, {"grow": 1}), text(
+      "▾",
+      {"fg": "text.muted", "size": 0}
+    )]
+  }
+  dropdown(anchor, options.map(fn(o) { select_option(o, o == value, on_pick) }), open)
+end
+
+def select_option(label, selected, on_pick)
+  {
+    "k": "box",
+    "s": {
+      "pad": [1, 3, 1, 3],
+      "radius": 1,
+      "min_width": 150,
+      "bg": selected ? "surface.sunken" : "none",
+      "cursor": "pointer"
+    },
+    "p": {"value": label},
+    "on": {"click": on_pick},
+    "c": [text(label, {"weight": selected ? "bold" : "regular"})]
+  }
+end
+
+# A popover that opens under its anchor rather than over it.
+def dropdown(anchor, content, open)
+  return anchor unless open
+
+  stack({"gap": 0}, [
+    anchor,
+    {
+      "k": "box",
+      "s": {
+        "position": "absolute",
+        "margin": [40, 0, 0, 0],
+        "pad": 1,
+        "radius": 2,
+        "bg": "surface.overlay",
+        "border": 1,
+        "border_color": "border.subtle",
+        "display": "column",
+        "z": 5
+      },
+      "c": content
+    }
+  ])
+end
+
+# ---- Slider ----------------------------------------------------------------
+
+# A 240 px track. A click sets the value from the pointer x; once the track
+# has focus (Tab reaches it through its click handler) the arrow keys nudge
+# it. The server owns the value: `on_set` receives `params["kind"]` — "click"
+# or "key_down" — and `params["payload"]`, the local point or the key name.
+def slider(value, min, max, on_set)
+  filled = (value - min) * 240 / (max - min)
+  lead = filled > 8 ? filled - 8 : 0
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "align": "center",
+      "width": 240,
+      "height": 24,
+      "cursor": "pointer"
+    },
+    "p": {"min": min, "max": max},
+    "on": {"click": on_set, "key_down": on_set},
+    "c": [
+      node("box", {
+        "width": lead,
+        "height": 4,
+        "bg": "accent.base",
+        "radius": 4
+      }, []),
+      node("box", {
+        "width": 16,
+        "height": 16,
+        "radius": 4,
+        "bg": "accent.base",
+        "border": 2,
+        "border_color": "surface.base"
+      }, []),
+      node("box", {
+        "grow": 1,
+        "height": 4,
+        "bg": "surface.sunken",
+        "radius": 4
+      }, [])
+    ]
+  }
+end
+
+# ---- Calendar engine -------------------------------------------------------
+
+# One engine, three pickers. `month` is "YYYY-MM"; days are ISO "YYYY-MM-DD"
+# strings, which compare correctly as strings.
+def month_label(month)
+  DateTime.parse(month + "-01").format("%B %Y")
+end
+
+def month_shift(month, delta)
+  first_day = DateTime.parse(month + "-01")
+  moved = delta > 0 ? first_day.end_of_month().add_days(1) : first_day.add_days(-1)
+  moved.format("%Y-%m")
+end
+
+def weekday_index(day)
+  {
+    "Monday": 0,
+    "Tuesday": 1,
+    "Wednesday": 2,
+    "Thursday": 3,
+    "Friday": 4,
+    "Saturday": 5,
+    "Sunday": 6
+  }[day.weekday()]
+end
+
+def two_digits(n)
+  n < 10 ? "0" + str(n) : str(n)
+end
+
+def icon_button(label, on_click, props)
+  {
+    "k": "box",
+    "s": {
+      "width": 28,
+      "height": 28,
+      "radius": 1,
+      "display": "row",
+      "justify": "center",
+      "align": "center",
+      "cursor": "pointer"
+    },
+    "p": props,
+    "on": {"click": on_click},
+    "c": [text(label, {"weight": "bold"})]
+  }
+end
+
+def day_cell(iso, label, selected, in_range, on_pick)
+  {
+    "k": "box",
+    "s": {
+      "width": 32,
+      "height": 32,
+      "radius": 1,
+      "display": "row",
+      "justify": "center",
+      "align": "center",
+      "bg": selected ? "accent.base" : (in_range ? "info.subtle" : "none"),
+      "cursor": "pointer"
+    },
+    "p": {"date": iso},
+    "on": {"click": on_pick},
+    "c": [text(
+      label,
+      {"fg": selected ? "accent.on" : "text.default", "size": 1}
+    )]
+  }
+end
+
+def day_blank
+  node("box", {"width": 32, "height": 32}, [])
+end
+
+def weekday_header
+  cells = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(fn(w) {
+    node("box", {
+      "width": 32,
+      "display": "row",
+      "justify": "center"
+    }, [muted(w)])
+  })
+  row({"gap": 0}, cells)
+end
+
+# The month grid: navigation, weekday header, seven columns of days.
+# `selected` is a list of ISO days; `range_start`/`range_end` shade between.
+def calendar(month, selected, range_start, range_end, on_pick, on_nav)
+  first_day = DateTime.parse(month + "-01")
+  blanks = range(0, weekday_index(first_day)).map(fn(i) { day_blank() })
+  cells = range(1, first_day.end_of_month().day() + 1).map(fn(d) {
+    iso = month + "-" + two_digits(d)
+    shaded = range_start.present? && range_end.present? && iso >= range_start && iso <= range_end
+    day_cell(iso, str(d), selected.includes?(iso), shaded, on_pick)
+  })
+  header = row(
+    {"align": "center", "gap": 1},
+    [
+      icon_button("‹", on_nav, {"delta": -1}),
+      text(
+        month_label(month),
+        {
+          "weight": "semibold",
+          "grow": 1,
+          "text_align": "center"
+        }
+      ),
+      icon_button("›", on_nav, {"delta": 1})
+    ]
+  )
+  grid = {
+    "k": "box",
+    "s": {
+      "display": "grid",
+      "gap": 0,
+      "width": 224
+    },
+    "p": {"columns": 7},
+    "c": blanks.concat(cells)
+  }
+  column(
+    {"gap": 1, "width": 224},
+    [header, weekday_header(), grid]
+  )
+end
+
+# ---- Pickers ---------------------------------------------------------------
+
+def date_picker(month, value, on_pick, on_nav)
+  column(
+    {"gap": 2},
+    [
+      calendar(month, value.present? ? [value] : [], "", "", on_pick, on_nav),
+      muted(value.present? ? value : "Pick a day")
+    ]
+  )
+end
+
+# A date and a time: the calendar plus an "HH:MM" field committed on change.
+def datetime_picker(month, date, time, on_pick, on_nav, on_time)
+  clock = row(
+    {"gap": 2, "align": "center"},
+    [muted("Time"), sized_input(time, on_time, 80)]
+  )
+  column({"gap": 2}, [
+    calendar(month, date.present? ? [date] : [], "", "", on_pick, on_nav),
+    clock,
+    muted(date + " " + time)
+  ])
+end
+
+def sized_input(value, on_change, width)
+  box = input(value, on_change)
+  box["s"]["width"] = width
+  box
+end
+
+# Two selections on one calendar: the first click starts, the second ends,
+# the third starts over. The server keeps the two ends ordered.
+def date_range_picker(month, start, finish, on_pick, on_nav)
+  ends = [start, finish].filter(fn(d) { d.present? })
+  caption = finish.present? ? start + " → " + finish : (start.present? ? start + " → …" : "Pick a start day")
+  column({"gap": 2}, [calendar(month, ends, start, finish, on_pick, on_nav), muted(caption)])
+end
+
+# A titled card, so a picker reads as one thing.
+def labelled(title, child)
+  card({"gap": 3}, [text(title, {"weight": "bold"}), child])
+end

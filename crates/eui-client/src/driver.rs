@@ -79,6 +79,8 @@ pub struct Driver {
     scale: f32,
     pointer: Pointer,
     focused: Option<NodeIx>,
+    /// Focus came from the keyboard or the server: draw the ring (spec 03 §3).
+    focus_visible: bool,
     edits: HashMap<u32, String>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
@@ -116,6 +118,7 @@ impl Driver {
             scale,
             pointer: Pointer::default(),
             focused: None,
+            focus_visible: false,
             edits: HashMap::new(),
             chunks: HashMap::new(),
             granted: granted & caps::ALL,
@@ -198,7 +201,14 @@ impl Driver {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
-                vec![Frame::Ack { seq: batch.seq }]
+                let mut out = vec![Frame::Ack { seq: batch.seq }];
+                // A `Focus` op focuses the way the keyboard does, ring included.
+                if batch.ops.iter().any(|o| matches!(o, eui_proto::Op::Focus { .. })) {
+                    if let Some(ix) = self.session.focused() {
+                        out.extend(self.set_focus(Some(ix), true));
+                    }
+                }
+                out
             }
             Err(e) => {
                 // Recoverable by design: discard, ask for a fresh tree, rebuild.
@@ -240,12 +250,7 @@ impl Driver {
             Input::Text(t) => self.text_input(&t),
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::Unfocused => {
-                let mut out = Vec::new();
-                if let Some(f) = self.focused.take() {
-                    out.extend(self.commit_edit(f));
-                    out.extend(self.emit(f, EventKind::Blur, Value::Null));
-                    self.redraw = true;
-                }
+                let out = self.set_focus(None, false);
                 self.pointer.pressed_on = None;
                 out
             }
@@ -406,9 +411,23 @@ impl Driver {
         Ok(emitted)
     }
 
-    fn local_point(&self, ix: NodeIx, x: f32, y: f32) -> Value {
+    /// Spec 06 §1: a pointer payload is local to the node the event is
+    /// reported for — the one holding the handler, not the leaf under the
+    /// pointer. A click on a slider's fill bar is measured from the slider.
+    fn local_point(&self, from: NodeIx, kind: EventKind, x: f32, y: f32) -> (f32, f32) {
+        let ix = self.target(from, kind).map_or(from, |t| t.0);
         let r = self.layout.rect(ix).unwrap_or_default();
-        Value::List(vec![Value::Float(f64::from(x - r.x)), Value::Float(f64::from(y - r.y))])
+        (x - r.x, y - r.y)
+    }
+
+    fn point_payload(&self, from: NodeIx, kind: EventKind, x: f32, y: f32) -> Value {
+        let (lx, ly) = self.local_point(from, kind, x, y);
+        Value::List(vec![Value::Float(f64::from(lx)), Value::Float(f64::from(ly))])
+    }
+
+    fn button_payload(&self, from: NodeIx, kind: EventKind, x: f32, y: f32, button: u8) -> Value {
+        let (lx, ly) = self.local_point(from, kind, x, y);
+        Value::List(vec![Value::Float(f64::from(lx)), Value::Float(f64::from(ly)), Value::Int(i64::from(button))])
     }
 
     fn pointer_move(&mut self, x: f32, y: f32) -> Vec<Frame> {
@@ -429,7 +448,7 @@ impl Driver {
             self.pointer.over = now;
         }
         if let Some(ix) = now {
-            let p = self.local_point(ix, x, y);
+            let p = self.point_payload(ix, EventKind::PointerMove, x, y);
             out.extend(self.emit(ix, EventKind::PointerMove, p));
         }
         out
@@ -440,23 +459,11 @@ impl Driver {
         let (x, y) = (self.pointer.x, self.pointer.y);
         let Some(ix) = self.layout.hit(&self.session, x, y) else { return Vec::new() };
         self.pointer.pressed_on = Some(ix);
-        let mut out = Vec::new();
-        // Focus moves to the nearest editable node on the path, or nowhere.
+        // Focus moves to the nearest editable node on the path, or nowhere;
+        // a pointer never shows the ring.
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
-        if editable != self.focused {
-            if let Some(old) = self.focused.take() {
-                out.extend(self.commit_edit(old));
-                out.extend(self.emit(old, EventKind::Blur, Value::Null));
-            }
-            if let Some(new) = editable {
-                self.focused = Some(new);
-                self.edits.entry(self.session.node(new).map(|n| n.id).unwrap_or(0)).or_insert_with(|| self.session.text_of(new).unwrap_or("").to_owned());
-                out.extend(self.emit(new, EventKind::Focus, Value::Null));
-            }
-            self.redraw = true;
-        }
-        let r = self.layout.rect(ix).unwrap_or_default();
-        let payload = Value::List(vec![Value::Float(f64::from(x - r.x)), Value::Float(f64::from(y - r.y)), Value::Int(i64::from(button))]);
+        let mut out = self.set_focus(editable, false);
+        let payload = self.button_payload(ix, EventKind::PointerDown, x, y, button);
         out.extend(self.emit(ix, EventKind::PointerDown, payload));
         out
     }
@@ -469,19 +476,81 @@ impl Driver {
             self.pointer.pressed_on = None;
             return out;
         };
-        let r = self.layout.rect(ix).unwrap_or_default();
-        let payload = Value::List(vec![Value::Float(f64::from(x - r.x)), Value::Float(f64::from(y - r.y)), Value::Int(i64::from(button))]);
+        let payload = self.button_payload(ix, EventKind::PointerUp, x, y, button);
         out.extend(self.emit(ix, EventKind::PointerUp, payload));
         // A click is a press and a release that resolve to the same handler.
         if let Some(pressed) = self.pointer.pressed_on.take() {
             let same = self.target(pressed, EventKind::Click).map(|t| t.0) == self.target(ix, EventKind::Click).map(|t| t.0);
             if same {
                 let kind = if button == 1 { EventKind::ContextMenu } else { EventKind::Click };
-                let p = self.local_point(ix, x, y);
+                let p = self.point_payload(ix, kind, x, y);
                 out.extend(self.emit(ix, kind, p));
             }
         }
         out
+    }
+
+    /// Move focus to `new`, blurring (and committing) the old node. `visible`
+    /// says whether the ring is drawn: keyboard and server yes, pointer no.
+    fn set_focus(&mut self, new: Option<NodeIx>, visible: bool) -> Vec<Frame> {
+        let mut out = Vec::new();
+        if new != self.focused {
+            if let Some(old) = self.focused.take() {
+                out.extend(self.commit_edit(old));
+                out.extend(self.emit(old, EventKind::Blur, Value::Null));
+            }
+            if let Some(n) = new {
+                self.focused = Some(n);
+                out.extend(self.emit(n, EventKind::Focus, Value::Null));
+            }
+        }
+        if self.focus_visible != (visible && new.is_some()) || new != self.focused {
+            self.redraw = true;
+        }
+        self.focus_visible = visible && new.is_some();
+        out
+    }
+
+    /// Spec 03 §3: editable nodes and nodes with their own `click` handler,
+    /// in document order, skipping what is not laid out.
+    fn focus_order(&self) -> Vec<NodeIx> {
+        let mut order = Vec::new();
+        let Some(root) = self.session.root() else { return order };
+        let mut stack = vec![root];
+        while let Some(ix) = stack.pop() {
+            let Some(node) = self.session.node(ix) else { continue };
+            let focusable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea) || node.handler(EventKind::Click).is_some();
+            if focusable && self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) {
+                order.push(ix);
+            }
+            stack.extend(self.session.children(ix).iter().rev());
+        }
+        order
+    }
+
+    /// `Tab` / `Shift+Tab`: the next or previous focusable node, wrapping.
+    fn move_focus(&mut self, backwards: bool) -> Vec<Frame> {
+        self.ensure_layout();
+        let order = self.focus_order();
+        if order.is_empty() {
+            return self.set_focus(None, false);
+        }
+        let at = self.focused.and_then(|f| order.iter().position(|&o| o == f));
+        let next = match (at, backwards) {
+            (None, false) => 0,
+            (None, true) => order.len().saturating_sub(1),
+            (Some(i), false) => (i.saturating_add(1)) % order.len(),
+            (Some(i), true) => i.checked_sub(1).unwrap_or(order.len().saturating_sub(1)),
+        };
+        let target = order.get(next).copied();
+        self.set_focus(target, true)
+    }
+
+    /// `Enter` / `Space` on a focused activatable node: a click at its centre.
+    fn activate(&mut self, f: NodeIx) -> Vec<Frame> {
+        let r = self.layout.rect(f).unwrap_or_default();
+        let p = Value::List(vec![Value::Float(f64::from(r.w / 2.0)), Value::Float(f64::from(r.h / 2.0))]);
+        self.emit(f, EventKind::Click, p)
     }
 
     fn ancestor_where(&self, from: NodeIx, pred: impl Fn(NodeKind) -> bool) -> Option<NodeIx> {
@@ -520,10 +589,23 @@ impl Driver {
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
+    fn is_editable(&self, ix: NodeIx) -> bool {
+        matches!(self.session.node(ix).map(|n| n.kind), Some(NodeKind::Input | NodeKind::TextArea))
+    }
+
+    /// The edit buffer of an editable node, seeded from its text on first use.
+    fn edit_buf(&mut self, f: NodeIx) -> Option<&mut String> {
+        if !self.is_editable(f) {
+            return None;
+        }
+        let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
+        let seed = self.session.text_of(f).unwrap_or("").to_owned();
+        Some(self.edits.entry(id).or_insert(seed))
+    }
+
     fn text_input(&mut self, t: &str) -> Vec<Frame> {
         let Some(f) = self.focused else { return Vec::new() };
-        let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
-        let buf = self.edits.entry(id).or_default();
+        let Some(buf) = self.edit_buf(f) else { return Vec::new() };
         buf.push_str(t);
         let value = buf.clone();
         self.session.set_text_local(f, value);
@@ -532,13 +614,20 @@ impl Driver {
     }
 
     fn key(&mut self, key: &str, modifiers: u32, down: bool) -> Vec<Frame> {
+        // Navigation keys belong to the client and are never reported.
+        if key == "Tab" {
+            return if down { self.move_focus(modifiers & 1 != 0) } else { Vec::new() };
+        }
         let Some(f) = self.focused else { return Vec::new() };
+        if key == "Escape" {
+            return if down { self.set_focus(None, false) } else { Vec::new() };
+        }
         let mut out = Vec::new();
         if down {
+            let editable = self.is_editable(f);
             match key {
-                "Backspace" => {
-                    let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
-                    if let Some(buf) = self.edits.get_mut(&id) {
+                "Backspace" if editable => {
+                    if let Some(buf) = self.edit_buf(f) {
                         buf.pop();
                         let value = buf.clone();
                         self.session.set_text_local(f, value);
@@ -549,6 +638,7 @@ impl Driver {
                     out.extend(self.commit_edit(f));
                     out.extend(self.emit(f, EventKind::Submit, Value::Null));
                 }
+                "Enter" | " " if !editable => out.extend(self.activate(f)),
                 _ => {}
             }
         }
@@ -581,6 +671,7 @@ impl Driver {
             images: &self.images,
             scale: self.scale,
             size: (device_w, device_h),
+            focus: if self.focus_visible { self.focused } else { None },
         });
         self.session.clear_all_dirty();
         list
@@ -596,7 +687,7 @@ impl Driver {
         self.pointer.over
     }
 
-    /// The focused editable node, if any.
+    /// The focused node, if any.
     pub fn focused(&self) -> Option<NodeIx> {
         self.focused
     }

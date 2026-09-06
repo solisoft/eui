@@ -71,8 +71,10 @@ fn a_click_on_the_button_reaches_the_buttons_handler_through_its_text() {
     assert_eq!(e.node, 3, "the button, not the text");
     assert_eq!(e.event, EventKind::Click);
     assert_eq!(e.name, ATOM_INC);
-    let Value::List(p) = &e.payload else { panic!() };
-    assert_eq!(p.len(), 2, "click carries a local point");
+    // The point is local to the button — the node the event names — not to
+    // the glyph under the pointer.
+    let button = d.layout().rect(d.session().lookup(3).unwrap()).unwrap();
+    assert_eq!(e.payload, Value::List(vec![Value::Float(f64::from(x - button.x)), Value::Float(f64::from(y - button.y))]));
 }
 
 #[test]
@@ -323,4 +325,115 @@ fn a_chunk_that_fails_verification_is_inert_and_sends_nothing() {
     d.input(Input::PointerMove(10.0, 10.0));
     d.input(Input::PointerDown(0));
     assert!(d.input(Input::PointerUp(0)).is_empty(), "an aborted local handler sends nothing");
+}
+
+/// A form: an input, a button, a second input — the shape spec 03 §3 is about.
+fn form_batch() -> Batch {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 3 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("a".into())), props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Change, Handler::Server(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 0, key: 0, text: None, props: (0, 0), handlers: (1, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Click, Handler::Server(2)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 4, style: 0, key: 0, text: Some(TextRef::Inline("Save".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 5, style: 0, key: 0, text: Some(TextRef::Inline("".into())), props: (0, 0), handlers: (2, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Focus, Handler::Server(3)));
+    Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "changed".into() },
+            Op::DefAtom { id: 2, value: "save".into() },
+            Op::DefAtom { id: 3, value: "focused".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], gap: 4, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }
+}
+
+fn events(out: &[Frame]) -> Vec<(EventKind, u32, u32)> {
+    out.iter().filter_map(|f| if let Frame::Event(e) = f { Some((e.event, e.node, e.name)) } else { None }).collect()
+}
+
+fn tab(d: &mut Driver, shift: bool) -> Vec<Frame> {
+    let mut out = d.input(Input::Key { key: "Tab".into(), modifiers: u32::from(shift), down: true });
+    out.extend(d.input(Input::Key { key: "Tab".into(), modifiers: u32::from(shift), down: false }));
+    out
+}
+
+#[test]
+fn tab_walks_editable_and_activatable_nodes_in_document_order_and_wraps() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    // Nothing focused: Tab lands on the first focusable, and is never reported.
+    assert!(tab(&mut d, false).is_empty());
+    assert_eq!(d.focused(), d.session().lookup(2));
+    assert!(tab(&mut d, false).is_empty(), "leaving an unedited field is not a change");
+    assert_eq!(d.focused(), d.session().lookup(3), "the button is activatable, the text inside it is not");
+    // The third node holds a focus handler: the server hears about it.
+    assert_eq!(events(&tab(&mut d, false)), vec![(EventKind::Focus, 5, 3)]);
+    assert_eq!(d.focused(), d.session().lookup(5));
+    // Wraps, both ways.
+    assert!(events(&tab(&mut d, false)).is_empty());
+    assert_eq!(d.focused(), d.session().lookup(2));
+    tab(&mut d, true);
+    assert_eq!(d.focused(), d.session().lookup(5));
+    // Escape blurs; nothing is reported for the key itself.
+    assert!(events(&d.input(Input::Key { key: "Escape".into(), modifiers: 0, down: true })).is_empty());
+    assert_eq!(d.focused(), None);
+}
+
+#[test]
+fn enter_and_space_click_the_focused_button_at_its_centre() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    tab(&mut d, false);
+    tab(&mut d, false);
+    assert_eq!(d.focused(), d.session().lookup(3));
+    let out = d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
+    let click = out.iter().find_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Click).then_some(e) } else { None }).expect("a click");
+    assert_eq!((click.node, click.name), (3, 2));
+    let r = d.layout().rect(d.session().lookup(3).unwrap()).unwrap();
+    assert_eq!(click.payload, Value::List(vec![Value::Float(f64::from(r.w / 2.0)), Value::Float(f64::from(r.h / 2.0))]));
+    // Space too; the key itself is reported only where a handler listens (none here).
+    let out = d.input(Input::Key { key: " ".into(), modifiers: 0, down: true });
+    assert_eq!(events(&out), vec![(EventKind::Click, 3, 2)]);
+    // Enter in a field is a submit, not a click.
+    tab(&mut d, false);
+    assert!(events(&d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true })).iter().all(|e| e.0 != EventKind::Click));
+}
+
+#[test]
+fn the_focus_ring_is_painted_for_keyboard_and_server_focus_only() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    let ring_around = |list: &eui_render::DrawList, r: eui_layout::Rect| {
+        list.quads.iter().any(|q| q.params[1] == 2.0 && q.rect == [r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0])
+    };
+    let (x, y) = centre(&mut d, 2);
+    let field = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
+    // Pointer focus: no ring.
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.focused(), d.session().lookup(2));
+    assert!(!ring_around(&d.paint(400, 300), field));
+    // Keyboard focus: ring on the button, none on the field.
+    tab(&mut d, false);
+    let button = d.layout().rect(d.session().lookup(3).unwrap()).unwrap();
+    let list = d.paint(400, 300);
+    assert!(ring_around(&list, button));
+    assert!(!ring_around(&list, field));
+    // The server may focus a node; that shows the ring as the keyboard would.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::Focus { node: 5 }] }));
+    assert_eq!(d.focused(), d.session().lookup(5));
+    let other = d.layout().rect(d.session().lookup(5).unwrap()).unwrap();
+    assert!(ring_around(&d.paint(400, 300), other));
+    // A pointer click elsewhere takes it away.
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert!(!ring_around(&d.paint(400, 300), other));
 }

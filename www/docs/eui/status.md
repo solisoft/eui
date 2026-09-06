@@ -218,8 +218,18 @@ menu, toolbar, navbar, sidebar, tree view, code block, field and form,
 table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
-Charts wait on `canvas` paths in the renderer; select, combobox, slider and
-the pickers wait on keyboard focus handling in the client.
+Charts wait on `canvas` paths in the renderer.
+
+**Keyboard focus, and the widgets that needed it.** The client walks `Tab`
+order itself — editable fields and anything with a `click` handler, in
+document order — draws the focus ring for keyboard and server focus only,
+turns `Enter` and `Space` on a focused button into the `click` they stand
+for, and drops focus on `Escape`. On top of that the catalogue gained
+`select` (a dropdown the server opens and closes), `slider` (click to set,
+arrows to nudge once focused), and one calendar engine behind `date_picker`,
+`datetime_picker` and `date_range_picker`. The gallery's end-to-end test
+picks an option, drags the slider by click and by keyboard, picks a day,
+turns a month and selects a range.
 
 ## Specified, not yet written
 
