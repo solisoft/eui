@@ -256,40 +256,46 @@ arrows to nudge once focused), and one calendar engine behind `date_picker`,
 picks an option, drags the slider by click and by keyboard, picks a day,
 turns a month and selects a range.
 
-## Specified, not yet written
+## What the specification covers
 
-Normative, in `spec/`, and stable enough to build against:
+Every document in `spec/` is normative now, and each names the code that
+implements it and the vectors that pin it:
 
-- **Wire format** (`spec/02`) — implemented by `eui-proto` and pinned by test
-  vectors.
-- **Theme** (`spec/05`) — implemented by `eui-theme`.
-- **Layout** (`spec/04`) — implemented by `eui-layout`; §9 lists what
-  version 1 leaves out.
-- **Events** (`spec/06`) — kinds, payloads, dispatch and emission rules;
-  implemented by `eui-client`.
-- **Primitives, painting, focus** (`spec/03`) and **security** (`spec/08`),
-  each requirement naming where it is enforced. The specification set is
-  complete except for the conformance vectors document (`spec/09`).
-- **Transport** (`spec/01`) — discovery, the signed manifest, content-addressed
-  assets, the session, framing.
-- **Budgets** (`spec/10`) — the wire numbers measured, the runtime numbers as
-  targets.
-
-## Designed, not yet specified
-
+- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 47 rejection
+  cases. The last of the style record's reserved bytes became `transition`.
+- **Primitives, painting, focus, canvas paths, transitions** (`03`) —
+  `eui-render` and `eui-client`.
+- **Layout** (`04`) — `eui-layout`, goldens against a fixed-pitch measurer;
+  §9 lists what version 1 leaves out.
+- **Theme** (`05`) — `eui-theme`, contrast enforced by construction.
+- **Events** (`06`) — `eui-client`, the driver tests.
+- **Bytecode** (`07`) — `eui-vm`, verifier and fuel; Soli compiles `local`
+  handlers to it.
+- **Security** (`08`) — each requirement naming where it is enforced.
+- **Conformance** (`09`) — `cargo run -p xtask -- conform`.
+- **Budgets** (`10`) — `cargo run --release -p xtask -- bench`.
+- **Transport** (`01`) — the session and content-addressed assets are
+  implemented; the signed manifest and key pinning are specified, not yet
+  checked by the client.
 
 ## Not started
 
-- `eui-vm` — the verifier and the metered interpreter.
+- Accessibility: exposing the tree to AT-SPI, UIA and AX, so a screen
+  reader sees buttons, fields and text rather than pixels.
+- Text selection and the clipboard capability.
 - Capability prompts and the manifest check in the client.
+- The multi-process sandbox, Android and iOS, `soli desktop build --eui`
+  (stage 3).
 
 ## Scope, stated plainly
 
 Writing a renderer means rewriting what a browser gives away for free: text
-shaping, input methods, accessibility, selection. That is the real cost of this
-project, and it is not hidden in a later milestone. The first stage delivers the
-protocol, the layout engine, a renderer, a working client, and about fifteen
-widgets. The full catalogue, real accessibility, and mobile come after.
+shaping, input methods, accessibility, selection. That is the real cost of
+this project, and it is not hidden in a later milestone. The first stage
+delivered the protocol, the layout engine, a renderer, a working client and
+about fifteen widgets; the second added the rest of the catalogue, keyboard
+focus, input methods, transitions, shadows and charts. Accessibility,
+selection and mobile come after.
 
 ## The Soli integration is additive
 
