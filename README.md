@@ -12,7 +12,7 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ## Layout
 
 ```
-spec/        01–08 normative, 10 measured; 09 (conformance vectors) still to write
+spec/        00–10, all normative; 09 says what conforming means, 10 has the numbers
 crates/
   eui-proto  encode and decode. No dependencies, no unsafe            [built]
   eui-tree   session tables, node arena, patch application           [built]
@@ -21,34 +21,41 @@ crates/
   eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
-  eui-client driver, WSS transport, assets over HTTPS, winit window  [built]
+  eui-client driver, WSS transport, manifest check, assets, winit,
+             keyboard focus, editing, IME, AccessKit, transitions        [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
-  counter-app     counter, todo and a 10 000-row table as a Soli app, with
-                  the widget catalogue in app/controllers/eui_builders.sl
+  counter-app     counter, todo, a 10 000-row table and a gallery as a Soli
+                  app; the catalogue (buttons to date pickers to charts) is
+                  app/controllers/eui_builders.sl
   snapshot        render the counter, or any live Soli component, off-screen
 www/         the documentation site, itself a Soli app
-xtask/       `bench`: measures the budgets and fails when one is missed
+xtask/       `bench` measures the budgets; `conform` runs every vector of spec/09
 deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
 ```
 
-Everything else named in `spec/README.md` — layout, text, theme, renderer, VM,
-client — is specified and not yet written. `www/docs/eui/status.md` keeps that
-list honest.
+`www/docs/eui/status.md` says, crate by crate, what is built and tested,
+what is specified, and what is not started — mobile, the sandbox,
+`soli desktop build --eui`.
 
 ## Try it
 
 ```sh
-cargo test                                               # 160 tests; pixel tests need any GPU adapter
+cargo test                                               # 210 tests; pixel tests need any GPU adapter
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
 cargo run --release -p xtask -- bench                    # the budgets in spec/10; exits 1 on a miss
+cargo run -p xtask -- conform                            # spec/09: tests, clippy -D warnings, the Soli suite with EUI_SOLI_BIN
 cargo deny check                                         # advisories and licences, exceptions in deny.toml
 cd www && soli serve . --dev                             # the docs, on :5011
 
 # The counter, end to end, in a window:
 cargo run -p counter-server                              # ws://127.0.0.1:5090
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
+
+# A Soli app (../lang built with --features eui), with a capability granted:
+../lang/target/debug/soli serve examples/counter-app --port 5011
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read
 ```
 
 ## Where the design is written down
