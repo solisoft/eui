@@ -246,3 +246,81 @@ fn insecure_urls_are_refused_outside_debug_loopback() {
     std::env::remove_var("EUI_ALLOW_INSECURE_LOOPBACK");
     assert!(check_url("ws://127.0.0.1:1/_eui/session").is_err());
 }
+
+
+#[test]
+fn a_local_handler_updates_the_tree_without_a_round_trip() {
+    use eui_vm::Asm;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    // Root carries the state; node 2 shows it; node 3 is a local button.
+    const COUNT: u32 = 1;
+    const INC: u32 = 2;
+    const VALUE_KEY: u32 = 3;
+    // set_text names the node by its key atom, not by a render's id.
+    let chunk = Asm::new(2).load(COUNT).push_int(1).op(0x10).op(0x06).store(COUNT).op(0x1A).set_text(VALUE_KEY).ret();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
+    tree.props.push((COUNT, Value::Int(41)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: VALUE_KEY, text: Some(TextRef::Inline("41".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: INC }));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 4, style: 0, key: 0, text: Some(TextRef::Inline("+".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: COUNT, value: "count".into() },
+            Op::DefAtom { id: INC, value: "increment".into() },
+            Op::DefAtom { id: VALUE_KEY, value: "value".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [4; 4], gap: 3, align_items: AlignItems::Start, ..Default::default() } },
+            Op::DefStyle { id: 2, record: StyleRecord { padding: [3; 4], bg: ColorRef::role(Role::AccentBase.id()), ..Default::default() } },
+            Op::DefChunkBytes { id: 1, bytes: chunk },
+            Op::Mount(tree),
+        ],
+    };
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    let out = d.input(Input::PointerUp(0));
+    // The tree changed locally, before any frame went out …
+    let value = d.session().lookup(2).unwrap();
+    assert_eq!(d.session().text_of(value), Some("42"));
+    assert_eq!(d.session().root_prop(COUNT), Some(&Value::Int(42)));
+    assert!(d.needs_redraw());
+    // … and exactly one server event follows, the LocalThenServer one.
+    assert_eq!(out.len(), 1);
+    let Frame::Event(e) = &out[0] else { panic!() };
+    assert_eq!((e.node, e.event, e.name), (3, EventKind::Click, INC));
+    // Twice more: the local copy keeps counting without the server.
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.session().text_of(value), Some("44"));
+    // The server's answer wins over the local copy.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 2, text: TextRef::Inline("100".into()) }] }));
+    assert_eq!(d.session().text_of(value), Some("100"));
+}
+
+#[test]
+fn a_chunk_that_fails_verification_is_inert_and_sends_nothing() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: 1 }));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "x".into() },
+            Op::DefChunkBytes { id: 1, bytes: b"EUIC\x01\x01\x10\x40".to_vec() }, // add on an empty stack
+            Op::Mount(tree),
+        ],
+    };
+    d.handle_frame(Frame::Batch(batch));
+    let _ = d.paint(400, 300);
+    d.input(Input::PointerMove(10.0, 10.0));
+    d.input(Input::PointerDown(0));
+    assert!(d.input(Input::PointerUp(0)).is_empty(), "an aborted local handler sends nothing");
+}

@@ -20,7 +20,7 @@ who did not write it.
 | [`04-layout.md`](04-layout.md) | **normative** | The layout algorithm; §9 lists what v1 omits |
 | [`05-theme.md`](05-theme.md) | **normative** | Roles, scales, modes, the resolution algorithm |
 | [`06-events.md`](06-events.md) | **normative** | Event kinds, payloads, dispatch and emission rules |
-| [`07-bytecode.md`](07-bytecode.md) | planned | Verified bytecode subset, host surface, metering |
+| [`07-bytecode.md`](07-bytecode.md) | **normative** | The local-handler chunk format, verifier and metering |
 | [`08-security.md`](08-security.md) | planned | Threat model and normative requirements |
 | [`09-conformance.md`](09-conformance.md) | planned | Test vectors and how to run them |
 | [`10-budgets.md`](10-budgets.md) | planned | Performance budgets, enforced in CI |

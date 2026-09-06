@@ -27,10 +27,15 @@ fn free_port() -> u16 {
 fn start_soli(bin: &str) -> (Server, u16) {
     let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/counter-app", env!("CARGO_MANIFEST_DIR")));
     let port = free_port();
+    // EUI_SOLI_LOG=path captures the server's stderr for a post-mortem.
+    let stderr = match std::env::var("EUI_SOLI_LOG") {
+        Ok(path) => Stdio::from(std::fs::File::create(path).expect("log file")),
+        Err(_) => Stdio::inherit(),
+    };
     let child = Command::new(bin)
         .args(["serve", &app, "--port", &port.to_string()])
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
+        .stderr(stderr)
         .spawn()
         .expect("spawn soli");
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -59,10 +64,19 @@ fn pump(driver: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receive
             match msg {
                 Incoming::Message(bytes) => {
                     let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
+                    if std::env::var("EUI_SOLI_TRACE").is_ok() {
+                        match &frame {
+                            Frame::Batch(b) => eprintln!("TRACE server -> batch seq={} ops={:?}", b.seq, b.ops.iter().map(|o| format!("{o:?}").chars().take(60).collect::<String>()).collect::<Vec<_>>()),
+                            other => eprintln!("TRACE server -> {other:?}"),
+                        }
+                    }
                     if let Frame::Error { code, message } = &frame {
                         panic!("soli sent error {code}: {message}");
                     }
                     for out in driver.handle_frame(frame) {
+                        if std::env::var("EUI_SOLI_TRACE").is_ok() {
+                            eprintln!("TRACE client -> {:?}", out);
+                        }
                         conn.tx.send(out.encode()).unwrap();
                     }
                 }
@@ -116,24 +130,30 @@ fn the_counter_runs_end_to_end_against_soli() {
     assert!(matches!(out.as_slice(), [Frame::Event(e)] if e.event == EventKind::Click), "{out:?}");
     conn.tx.send(out[0].encode()).unwrap();
 
-    pump(&mut driver, &conn, &wake_rx, |d| value(d).as_deref() == Some("1"));
+    // "+" is local-first: the text already reads "1" before any answer. What
+    // to wait for is the server's confirmation — one batch per click.
+    assert_eq!(value(&driver).as_deref(), Some("1"), "the local handler ran before the round trip");
+    pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() >= Some(2));
+    assert_eq!(value(&driver).as_deref(), Some("1"), "the server agrees");
     // The update was a diff, not a re-mount: same node ids, same count.
     assert_eq!(driver.session().live_nodes(), 9);
     assert_eq!(plus(&driver), Some(plus_ix));
 
+    // Twice more, then wait for both confirmations.
     for _ in 0..2 {
         driver.input(Input::PointerDown(0));
         for f in driver.input(Input::PointerUp(0)) {
             conn.tx.send(f.encode()).unwrap();
         }
     }
-    pump(&mut driver, &conn, &wake_rx, |d| value(d).as_deref() == Some("3"));
+    assert_eq!(value(&driver).as_deref(), Some("3"), "the local copy is ahead");
+    pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() >= Some(4));
+    assert_eq!(value(&driver).as_deref(), Some("3"), "the server caught up");
 
     // Resync: Soli re-sends the tree with its own state, and no definitions.
     conn.tx.send(Frame::Resync.encode()).unwrap();
-    let seq = driver.session().last_seq().unwrap();
-    pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() > Some(seq));
-    assert_eq!(value(&driver).as_deref(), Some("3"));
+    pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() >= Some(5));
+    assert_eq!(value(&driver).as_deref(), Some("3"), "the re-sent tree carries Soli's count");
     assert!(!driver.session().is_poisoned());
 }
 
@@ -247,4 +267,52 @@ fn ten_thousand_rows_mount_within_budget_and_sort_by_moves() {
     let list = d.session().children(root(&d))[2];
     assert_eq!(d.session().children(list).len(), 10_000);
     let _ = d.paint(800, 600);
+}
+
+/// Diagnostic: dump every frame a component's session sends until it closes,
+/// and say whether the server is still alive afterwards. Run by hand:
+/// `EUI_SOLI_PROBE=counter cargo test -p eui-client --test soli_e2e probe -- --nocapture`
+#[test]
+fn probe_session_frames() {
+    let (Ok(bin), Ok(component)) = (std::env::var("EUI_SOLI_BIN"), std::env::var("EUI_SOLI_PROBE")) else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (mut server, port) = start_soli(&bin);
+    let url = format!("ws://127.0.0.1:{port}/_eui/session/{component}");
+    let driver = Driver::new(420.0, 260.0, 1.0, 0);
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let conn = connect(&url, driver.hello().encode(), move || {
+        let _ = wake_tx.send(());
+    })
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let _ = wake_rx.recv_timeout(Duration::from_millis(100));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(b) => match Frame::decode(&b) {
+                    Ok(Frame::Batch(batch)) => {
+                        eprintln!("PROBE batch seq={} ops={} bytes={}", batch.seq, batch.ops.len(), b.len());
+                        for op in &batch.ops {
+                            let name = format!("{op:?}");
+                            eprintln!("PROBE   {}", &name[..name.len().min(100)]);
+                        }
+                        // Behave like the client: acknowledge it.
+                        let ack = Frame::Ack { seq: batch.seq }.encode();
+                        eprintln!("PROBE sending Ack {:02x?}", ack);
+                        match conn.tx.send(ack) {
+                            Ok(()) => eprintln!("PROBE ack queued"),
+                            Err(_) => eprintln!("PROBE ack: transport already gone"),
+                        }
+                    }
+                    Ok(f) => eprintln!("PROBE frame {:?}", f),
+                    Err(e) => eprintln!("PROBE undecodable ({e}): {} bytes, head {:02x?}", b.len(), &b[..b.len().min(24)]),
+                },
+                Incoming::Closed(e) => {
+                    eprintln!("PROBE closed: {e}; server alive: {}", server.0.try_wait().ok().flatten().is_none());
+                    return;
+                }
+            }
+        }
+    }
+    eprintln!("PROBE still open after 3 s; server alive: {}", server.0.try_wait().ok().flatten().is_none());
 }

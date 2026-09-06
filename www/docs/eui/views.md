@@ -71,15 +71,28 @@ two places should look alike, they call the same function.
 ## Where a handler runs
 
 `"on": {"click": "increment"}` names a **server** event: a round trip, the
-handler runs, the view re-renders, the diff comes back. That is the whole
-model today.
+handler runs, the view re-renders, the diff comes back.
 
-Local handlers — a `local { }` block compiled to bytecode and run on the
-client for hover, typing, validation and optimistic updates — are specified
-in outline and not built. `Handler::Local` exists on the wire; the client
-currently treats it as inert. When it lands, the rule stays: **authorisation
-is never local**, and a local handler's effect is advisory until the server
-re-derives it.
+A handler can also run **locally first**. The counter's `+` does:
+
+```soli
+local_button("+", [
+  ["load", "count"], ["push", 1], ["add"], ["dup"], ["store", "count"],
+  ["to_str"], ["set_text", "value"]
+], "increment")
+```
+
+That list is assembled by the server into a chunk of the bytecode in
+`spec/07`, delivered once per session, verified by the client before its
+first run, and executed with a fuel budget: it reads the root node's props
+(`with_state({"count": count}, ...)` puts them there), increments, rewrites
+the node keyed `"value"`, and only *then* sends `increment` to the server —
+whose next batch confirms or corrects. No wait for the answer, no drift the
+server does not resolve.
+
+The rule stays: a local handler's effect is advisory, and **authorisation is
+never local**. A `local { … }` source syntax over this is not built yet; the
+assembly list is the interface today.
 
 ## Lists
 

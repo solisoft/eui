@@ -174,6 +174,27 @@ with its reason in `deny.toml`. Four `cargo fuzz` targets exist — frame
 decoding, session apply, theme documents, layout — and want a nightly
 toolchain to run; the in-tree hostile-input tests run on every `cargo test`.
 
+**`eui-vm` — local handlers.** The only code a client runs that it did not
+ship with, per `spec/07-bytecode.md`, now normative.
+
+- A chunk is a tiny stack machine: integers, booleans, strings, the root
+  node's props as local state, `set_text` and `set_prop` on nodes, `emit` to
+  queue a server event. No I/O, no clock, no allocation beyond its operand
+  stack. The `Host` trait has six methods and nothing else is reachable.
+- The verifier decodes every instruction, checks that every jump lands on an
+  instruction boundary, and proves the stack depth along every path before a
+  chunk runs once. A run has 4 096 units of fuel; a type error or an
+  exhausted budget aborts it and nothing is sent.
+- Chunks arrive inline in the session (`DefChunkBytes`, ≤ 64 KiB), so no
+  asset endpoint and no HTTP client were needed for this step.
+- On the Soli side a local handler is written as an assembly list in the
+  view and targets nodes by key; the counter's `+` now increments its local
+  copy, rewrites the value, and *then* tells the server, which confirms or
+  corrects on the next batch. The `local { }` source syntax is not built.
+- 7 VM tests; the driver runs a local handler with no round trip and stays
+  silent when a chunk fails verification; the Soli end-to-end counter uses
+  one.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -196,7 +217,6 @@ Described on these pages in enough detail to argue with, but their normative
 spec documents (`spec/03` to `spec/09`) are **not written yet**. Until they
 are, the doc page is the design and there is nothing more precise to appeal to.
 
-- **Bytecode** — the verified subset, the host surface, the metering.
 - **Security** — the threat model. Its memory-safety half is built; the rest is
   design.
 - **Widgets** — the fourteen primitives are in the wire format; the catalogue
@@ -206,8 +226,8 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 - `eui-vm` — the verifier and the metered interpreter.
 - Capability prompts and the manifest check in the client.
-- `eui-vm`, the verifier and the metered interpreter: a `Handler::Local`
-  currently does nothing, and says so in the code.
+- The `local { }` syntax in Soli views; chunk delivery by content hash and
+  the asset endpoint.
 
 ## Scope, stated plainly
 

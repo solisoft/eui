@@ -480,6 +480,7 @@ dependencies = [
  "eui-text",
  "eui-theme",
  "eui-tree",
+ "eui-vm",
  "futures-util",
  "pollster",
  "tokio",
@@ -535,6 +536,13 @@ dependencies = [
 
 [[package]]
 name = "eui-tree"
+version = "0.1.0"
+dependencies = [
+ "eui-proto",
+]
+
+[[package]]
+name = "eui-vm"
 version = "0.1.0"
 dependencies = [
  "eui-proto",

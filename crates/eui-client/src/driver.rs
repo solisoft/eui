@@ -11,7 +11,7 @@ use eui_proto::{
 use eui_render::{paint, Atlas, DrawList, Scene};
 use eui_text::TextEngine;
 use eui_theme::{Resolved, Theme, Viewer};
-use eui_tree::{NodeIx, Session};
+use eui_tree::{Chunk, NodeIx, Session};
 
 /// What the window feeds the driver.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +76,8 @@ pub struct Driver {
     pointer: Pointer,
     focused: Option<NodeIx>,
     edits: HashMap<u32, String>,
+    /// Verified chunks by id; verification happens once per chunk.
+    chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     granted: u32,
     welcomed: bool,
     layout_valid: bool,
@@ -109,6 +111,7 @@ impl Driver {
             pointer: Pointer::default(),
             focused: None,
             edits: HashMap::new(),
+            chunks: HashMap::new(),
             granted: granted & caps::ALL,
             welcomed: false,
             layout_valid: false,
@@ -263,17 +266,85 @@ impl Driver {
         None
     }
 
-    /// Emit `kind` for the nearest handler at or above `from`, per spec 06 §2.
+    /// Emit `kind` for the nearest handler at or above `from`, per spec 06 §2
+    /// and spec 07 §6: a local chunk runs first and may queue events; a
+    /// `LocalThenServer` then sends its named event; an aborted chunk sends
+    /// nothing.
     fn emit(&mut self, from: NodeIx, kind: EventKind, payload: Value) -> Vec<Frame> {
         let Some((target, handler)) = self.target(from, kind) else { return Vec::new() };
-        let name = match handler {
-            Handler::Server(name) | Handler::LocalThenServer { name, .. } => name,
-            // A local handler runs in the VM, which is not built yet: for now
-            // it produces no traffic and no effect, and says so once.
-            Handler::Local(_) => return Vec::new(),
-        };
         let node = self.session.node(target).map(|n| n.id).unwrap_or(0);
-        vec![Frame::Event(EventFrame { node, event: kind, name, payload })]
+        let mut out = Vec::new();
+        let name = match handler {
+            Handler::Server(name) => Some(name),
+            Handler::Local(chunk) => {
+                match self.run_local(chunk) {
+                    Ok(queued) => {
+                        let state = self.root_state();
+                        out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
+                    }
+                    Err(e) => eprintln!("eui: local handler {chunk}: {e}"),
+                }
+                None
+            }
+            Handler::LocalThenServer { chunk, name } => match self.run_local(chunk) {
+                Ok(queued) => {
+                    let state = self.root_state();
+                    out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
+                    Some(name)
+                }
+                Err(e) => {
+                    eprintln!("eui: local handler {chunk}: {e}; sending nothing");
+                    None
+                }
+            },
+        };
+        if let Some(name) = name {
+            out.push(Frame::Event(EventFrame { node, event: kind, name, payload }));
+        }
+        out
+    }
+
+    /// The root props as an event payload: the local state, for the server
+    /// to compare against its own.
+    fn root_state(&self) -> Value {
+        let Some(root) = self.session.root() else { return Value::Null };
+        let Some(n) = self.session.node(root) else { return Value::Null };
+        Value::List(n.props.iter().flat_map(|(a, v)| [Value::Atom(*a), v.clone()]).collect())
+    }
+
+    /// Verify (once) and run a chunk against the session. Returns the atoms
+    /// the chunk asked to emit, in order.
+    fn run_local(&mut self, chunk_id: u32) -> Result<Vec<u32>, String> {
+        let verified = match self.chunks.get(&chunk_id) {
+            Some(Some(c)) => c.clone(),
+            Some(None) => return Err("chunk failed verification earlier".into()),
+            None => {
+                let result = match self.session.chunk(chunk_id) {
+                    Some(Chunk::Bytes(bytes)) => eui_vm::Chunk::verify(bytes).map_err(|e| e.to_string()),
+                    Some(Chunk::Hash(_)) => Err("chunk by hash: asset fetching is not implemented".into()),
+                    None => Err("undefined chunk".into()),
+                };
+                match result {
+                    Ok(c) => {
+                        self.chunks.insert(chunk_id, Some(c.clone()));
+                        c
+                    }
+                    Err(e) => {
+                        self.chunks.insert(chunk_id, None);
+                        return Err(e);
+                    }
+                }
+            }
+        };
+        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false };
+        let result = eui_vm::run(&verified, &mut host);
+        let touched = host.touched;
+        let emitted = host.emitted;
+        if touched {
+            self.invalidate();
+        }
+        result.map_err(|e| e.to_string())?;
+        Ok(emitted)
     }
 
     fn local_point(&self, ix: NodeIx, x: f32, y: f32) -> Value {
@@ -468,5 +539,58 @@ impl Driver {
     /// The focused editable node, if any.
     pub fn focused(&self) -> Option<NodeIx> {
         self.focused
+    }
+}
+
+
+/// The chunk's window onto the session: root props as state, text and props
+/// on nodes by key atom, and an event queue. Nothing else is reachable.
+struct SessionHost<'a> {
+    session: &'a mut Session,
+    emitted: Vec<u32>,
+    touched: bool,
+}
+
+fn to_wire(v: eui_vm::Value) -> Value {
+    match v {
+        eui_vm::Value::Null => Value::Null,
+        eui_vm::Value::Bool(b) => Value::Bool(b),
+        eui_vm::Value::Int(n) => Value::Int(n),
+        eui_vm::Value::Str(s) => Value::Str(s),
+    }
+}
+
+fn from_wire(v: &Value) -> eui_vm::Value {
+    match v {
+        Value::Bool(b) => eui_vm::Value::Bool(*b),
+        Value::Int(n) => eui_vm::Value::Int(*n),
+        Value::Str(s) => eui_vm::Value::Str(s.clone()),
+        Value::Float(f) => eui_vm::Value::Int(*f as i64),
+        _ => eui_vm::Value::Null,
+    }
+}
+
+impl eui_vm::Host for SessionHost<'_> {
+    fn atom(&self, id: u32) -> Option<&str> {
+        self.session.atom(id)
+    }
+    fn load(&self, atom: u32) -> eui_vm::Value {
+        self.session.root_prop(atom).map_or(eui_vm::Value::Null, from_wire)
+    }
+    fn store(&mut self, atom: u32, value: eui_vm::Value) -> bool {
+        self.session.set_root_prop_local(atom, to_wire(value))
+    }
+    fn set_text(&mut self, key: u32, text: String) -> bool {
+        let Some(ix) = self.session.lookup_key(key) else { return false };
+        self.touched = true;
+        self.session.set_text_local(ix, text)
+    }
+    fn set_prop(&mut self, key: u32, atom: u32, value: eui_vm::Value) -> bool {
+        let Some(ix) = self.session.lookup_key(key) else { return false };
+        self.touched = true;
+        self.session.set_prop_local(ix, atom, to_wire(value))
+    }
+    fn emit(&mut self, atom: u32) {
+        self.emitted.push(atom);
     }
 }

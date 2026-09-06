@@ -76,6 +76,7 @@ fn every_op() {
         Op::DefStyle { id: 1, record: StyleRecord::default() },
         Op::DefColor { id: 1, rgba: 0xFF5722FF },
         Op::DefChunk { id: 1, hash: [3; 32] },
+        Op::DefChunkBytes { id: 2, bytes: b"EUIC\x01\x02\x40".to_vec() },
         Op::Mount(tree.clone()),
         Op::Replace { node: 1, subtree: tree.clone() },
         Op::SetStyle { node: 1, style: 4 },

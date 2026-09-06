@@ -6,7 +6,7 @@
 //! fuzzed against raw bytes with no setup.
 
 use crate::error::{DecodeError, Result};
-use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_OPS_PER_BATCH};
+use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_OPS_PER_BATCH};
 use crate::node::{EventKind, Handler, Subtree, TextRef, Value};
 use crate::reader::Reader;
 use crate::style::StyleRecord;
@@ -42,6 +42,13 @@ pub enum Op {
         id: u32,
         /// BLAKE3 of the chunk asset.
         hash: [u8; HASH_BYTES],
+    },
+    /// Deliver a bytecode chunk inline (`spec/07-bytecode.md` §2).
+    DefChunkBytes {
+        /// Chunk id, non-zero.
+        id: u32,
+        /// The chunk, at most [`MAX_CHUNK_BYTES`].
+        bytes: Vec<u8>,
     },
     /// Replace the whole document and clear every session table.
     Mount(Subtree),
@@ -157,6 +164,10 @@ impl Op {
                 let id = nonzero(r.varint32()?, "chunk id")?;
                 Ok(Self::DefChunk { id, hash: r.array::<HASH_BYTES>()? })
             }
+            0x14 => Ok(Self::DefChunkBytes {
+                id: nonzero(r.varint32()?, "chunk id")?,
+                bytes: r.bytes(MAX_CHUNK_BYTES, "chunk bytes")?.to_vec(),
+            }),
             0x20 => Ok(Self::Mount(Subtree::decode(r)?)),
             0x21 => Ok(Self::Replace {
                 node: nonzero(r.varint32()?, "node id")?,
@@ -226,6 +237,9 @@ impl Op {
             }
             Self::DefChunk { id, hash } => {
                 w.u8(0x13).varint32(*id).raw(hash);
+            }
+            Self::DefChunkBytes { id, bytes } => {
+                w.u8(0x14).varint32(*id).bytes(bytes);
             }
             Self::Mount(subtree) => {
                 w.u8(0x20);

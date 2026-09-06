@@ -12,7 +12,7 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ## Layout
 
 ```
-spec/        02 wire, 04 layout, 05 theme, 06 events normative; 10 measured
+spec/        02 wire, 04 layout, 05 theme, 06 events, 07 bytecode normative; 10 measured
 crates/
   eui-proto  encode and decode. No dependencies, no unsafe            [built]
   eui-tree   session tables, node arena, patch application           [built]
@@ -20,6 +20,7 @@ crates/
   eui-layout flow, stack, grid, scroll, virtualised list             [built]
   eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
+  eui-vm     local-handler bytecode: verifier and metered interpreter [built]
   eui-client driver, WSS transport, winit window                     [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback

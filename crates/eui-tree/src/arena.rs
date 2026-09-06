@@ -90,6 +90,10 @@ pub(crate) struct Arena {
     nodes: Vec<Node>,
     free: Vec<NodeIx>,
     by_id: HashMap<u32, NodeIx>,
+    /// Key atom -> first node carrying it, in placement order. Keys are
+    /// unique among siblings by contract and usually unique per component;
+    /// a local handler names a node by key, so the first match wins.
+    by_key: HashMap<u32, NodeIx>,
     live: u32,
 }
 
@@ -104,6 +108,10 @@ impl Arena {
 
     pub(crate) fn lookup(&self, id: u32) -> Option<NodeIx> {
         self.by_id.get(&id).copied()
+    }
+
+    pub(crate) fn lookup_key(&self, key: u32) -> Option<NodeIx> {
+        self.by_key.get(&key).copied()
     }
 
     pub(crate) fn get(&self, ix: NodeIx) -> Option<&Node> {
@@ -131,6 +139,7 @@ impl Arena {
             return Err(ApplyError::DuplicateNode(node.id));
         }
         let id = node.id;
+        let key = node.key;
         let ix = match self.free.pop() {
             Some(ix) => {
                 let slot = self.nodes.get_mut(ix.usize()).ok_or(ApplyError::Internal)?;
@@ -144,6 +153,9 @@ impl Arena {
             }
         };
         self.by_id.insert(id, ix);
+        if key != 0 {
+            self.by_key.entry(key).or_insert(ix);
+        }
         self.live = self.live.saturating_add(1);
         Ok(ix)
     }
@@ -161,6 +173,9 @@ impl Arena {
             }
             stack.append(&mut node.children);
             self.by_id.remove(&node.id);
+            if node.key != 0 && self.by_key.get(&node.key) == Some(&cur) {
+                self.by_key.remove(&node.key);
+            }
             node.id = 0;
             node.text = None;
             node.props = Vec::new();

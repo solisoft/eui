@@ -16,7 +16,7 @@ end
 # The view: state in, node tree out. Plain data; the server does the rest.
 def counter_view(state)
   count = state["count"] ?? 0
-  column(
+  with_state({"count": count}, column(
     {
       "pad": 6,
       "gap": 4,
@@ -28,17 +28,28 @@ def counter_view(state)
         "Counter",
         {"size": 4, "weight": "semibold"}
       ),
-      text(
+      keyed("value", text(
         count.to_s,
         {"size": 7, "weight": "bold"}
-      ),
-      row({"gap": 2}, [button("−", "decrement"), button("+", "increment")]),
+      )),
+      row({"gap": 2}, [
+        button("−", "decrement"),
+        local_button("+", [
+          ["load", "count"],
+          ["push", 1],
+          ["add"],
+          ["dup"],
+          ["store", "count"],
+          ["to_str"],
+          ["set_text", "value"]
+        ], "increment")
+      ]),
       text(
-        "Every click is a round trip; the value comes back from Soli.",
+        "− is a round trip; + updates locally, then tells Soli.",
         {"fg": "text.muted", "size": 1}
       )
     ]
-  )
+  ))
 end
 
 # ------------------------------------------------------------------- todo
@@ -117,11 +128,13 @@ def todo(event_data)
 end
 
 def add_item(items, draft, next_id)
-  return {
-    "items": items,
-    "draft": draft,
-    "next_id": next_id
-  } if draft.blank?
+  if draft.blank?
+    return {
+      "items": items,
+      "draft": draft,
+      "next_id": next_id
+    }
+  end
 
   {
     "items": items.concat([{

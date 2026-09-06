@@ -1,0 +1,15 @@
+[package]
+name = "eui-vm"
+description = "EUI local-handler bytecode: verifier and fuel-metered interpreter, per spec/07-bytecode.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# No dependencies: this executes bytes a server sent.
+[dependencies]
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+
+[lints]
+workspace = true

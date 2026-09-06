@@ -190,6 +190,14 @@ fn zero_node_ids_are_rejected() {
 }
 
 #[test]
+fn oversized_chunk_is_rejected() {
+    let mut w = Writer::new();
+    w.u8(0x14).varint32(1).varint((MAX_CHUNK_BYTES + 1) as u64);
+    assert_eq!(op_err(w.as_slice()), E::LimitExceeded("chunk bytes"));
+    assert_eq!(op_err(&[0x14, 0x00]), E::IllegalValue("chunk id"));
+}
+
+#[test]
 fn oversized_atom_value_is_rejected() {
     let mut w = Writer::new();
     w.u8(0x10).varint32(1).varint((MAX_ATOM_BYTES + 1) as u64);

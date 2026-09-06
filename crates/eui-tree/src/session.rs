@@ -16,6 +16,15 @@ use crate::error::{ApplyError, Result, Table};
 use crate::limits::Limits;
 use crate::tables::DefineOnce;
 
+/// A bytecode chunk as the session holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Chunk {
+    /// Named by content hash; the bytes come from the asset endpoint.
+    Hash([u8; proto::HASH_BYTES]),
+    /// Delivered inline.
+    Bytes(Vec<u8>),
+}
+
 /// Session state: tables, tree, focus, and poison.
 #[derive(Debug)]
 pub struct Session {
@@ -25,7 +34,7 @@ pub struct Session {
     atom_bytes: usize,
     styles: DefineOnce<StyleRecord>,
     colors: DefineOnce<u32>,
-    chunks: DefineOnce<[u8; proto::HASH_BYTES]>,
+    chunks: DefineOnce<Chunk>,
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
@@ -84,6 +93,12 @@ impl Session {
         self.arena.lookup(id)
     }
 
+    /// The first live node whose key is the atom `key`. This is how a local
+    /// handler names its target without depending on one render's ids.
+    pub fn lookup_key(&self, key: u32) -> Option<NodeIx> {
+        self.arena.lookup_key(key)
+    }
+
     /// The children of `ix`, in order.
     pub fn children(&self, ix: NodeIx) -> &[NodeIx] {
         self.arena.get(ix).map(|n| n.children.as_slice()).unwrap_or(&[])
@@ -132,9 +147,50 @@ impl Session {
         self.colors.get(id).copied()
     }
 
-    /// A chunk's content hash.
-    pub fn chunk(&self, id: u32) -> Option<&[u8; proto::HASH_BYTES]> {
+    /// A chunk, by hash or inline.
+    pub fn chunk(&self, id: u32) -> Option<&Chunk> {
         self.chunks.get(id)
+    }
+
+    /// The props of the root node: a component's local state
+    /// (`spec/07-bytecode.md` §1).
+    pub fn root_prop(&self, atom: u32) -> Option<&Value> {
+        let root = self.root()?;
+        self.arena.get(root)?.prop(atom)
+    }
+
+    /// Set a root prop from a local handler. Returns `false` with no tree.
+    pub fn set_root_prop_local(&mut self, atom: u32, value: Value) -> bool {
+        let Some(root) = self.root() else { return false };
+        let Some(n) = self.arena.get_mut(root) else { return false };
+        match n.props.iter_mut().find(|(a, _)| *a == atom) {
+            Some(slot) => slot.1 = value,
+            None => {
+                if n.props.len() >= proto::MAX_PROPS as usize {
+                    return false;
+                }
+                n.props.push((atom, value));
+            }
+        }
+        true
+    }
+
+    /// Set any node's prop from a local handler; `false` for an unknown node.
+    pub fn set_prop_local(&mut self, ix: NodeIx, atom: u32, value: Value) -> bool {
+        let Some(n) = self.arena.get_mut(ix) else { return false };
+        if n.kind.is_inert() {
+            return false;
+        }
+        match n.props.iter_mut().find(|(a, _)| *a == atom) {
+            Some(slot) => slot.1 = value,
+            None => {
+                if n.props.len() >= proto::MAX_PROPS as usize {
+                    return false;
+                }
+                n.props.push((atom, value));
+            }
+        }
+        self.arena.mark_dirty(ix).is_ok()
     }
 
     /// The focused node.
@@ -199,11 +255,12 @@ impl Session {
         }
     }
 
-    /// Replace an editable node's text from local input, ahead of the server.
-    /// The next server `SetText` wins; this is the optimistic half of typing.
+    /// Replace a node's text from local input or a local handler, ahead of
+    /// the server. The next server `SetText` wins; this is the optimistic
+    /// half of typing and of a local increment.
     pub fn set_text_local(&mut self, ix: NodeIx, text: String) -> bool {
         match self.arena.get_mut(ix) {
-            Some(n) if matches!(n.kind, NodeKind::Input | NodeKind::TextArea) => {
+            Some(n) if !n.kind.is_inert() => {
                 n.text = Some(TextRef::Inline(text));
                 self.arena.mark_dirty(ix).is_ok()
             }
@@ -280,7 +337,8 @@ impl Session {
                 self.styles.define(*id, *record)
             }
             Op::DefColor { id, rgba } => self.colors.define(*id, *rgba),
-            Op::DefChunk { id, hash } => self.chunks.define(*id, *hash),
+            Op::DefChunk { id, hash } => self.chunks.define(*id, Chunk::Hash(*hash)),
+            Op::DefChunkBytes { id, bytes } => self.chunks.define(*id, Chunk::Bytes(bytes.clone())),
             Op::Mount(subtree) => self.mount(subtree),
             _ => {
                 if self.poisoned {
@@ -431,6 +489,7 @@ impl Session {
             | Op::DefStyle { .. }
             | Op::DefColor { .. }
             | Op::DefChunk { .. }
+            | Op::DefChunkBytes { .. }
             | Op::Mount(_) => Err(ApplyError::Internal),
         }
     }

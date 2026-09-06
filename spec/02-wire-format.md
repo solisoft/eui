@@ -181,7 +181,7 @@ no props and no handlers.
 
 | bit | Meaning |
 |---:|---|
-| `0x01` | a `key` follows — identity for list reconciliation |
+| `0x01` | a `key` follows — an atom id: identity for reconciliation, and the name a local handler uses for the node |
 | `0x02` | a `TextRef` follows |
 | `0x04` | a `PropList` follows |
 | `0x08` | a handler list follows |
@@ -245,7 +245,8 @@ Op    := opcode:u8  payload
 | `0x10` | `DefAtom` | `id:varint value:str` |
 | `0x11` | `DefStyle` | `id:varint record:64×u8` |
 | `0x12` | `DefColor` | `id:varint rgba:u32` |
-| `0x13` | `DefChunk` | `id:varint hash:32×u8` |
+| `0x13` | `DefChunk` | `id:varint hash:32×u8` — fetched as an asset |
+| `0x14` | `DefChunkBytes` | `id:varint bytes:bytes` — inline, ≤ 64 KiB ([`07-bytecode.md`](07-bytecode.md)) |
 | `0x20` | `Mount` | `root:Node` — replaces the whole tree; tables persist |
 | `0x21` | `Replace` | `node:varint subtree:Node` |
 | `0x22` | `SetStyle` | `node:varint style:varint` |

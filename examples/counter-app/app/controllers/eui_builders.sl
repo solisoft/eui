@@ -397,3 +397,17 @@ def table_row(key, values, widths)
     cells
   ))
 end
+
+# A button whose click runs a local chunk first, then a server event.
+# `program` is the assembly list of spec/07; node targets are keys.
+def local_button(label, program, after)
+  b = button(label, after)
+  b["on"] = {"click": {"local": program, "then": after}}
+  b
+end
+
+# The root node's props are the component's local state.
+def with_state(state, root)
+  root["p"] = state
+  root
+end

@@ -37,6 +37,9 @@ pub const MAX_VALUE_DEPTH: u32 = 4;
 /// Most elements in a `Value::List`.
 pub const MAX_VALUE_LIST: u32 = 1024;
 
+/// Largest inline bytecode chunk, in bytes.
+pub const MAX_CHUNK_BYTES: usize = 64 * 1024;
+
 /// Size of a `StyleRecord` on the wire, in bytes.
 pub const STYLE_RECORD_BYTES: usize = 64;
 /// Size of a BLAKE3 asset hash, in bytes.
