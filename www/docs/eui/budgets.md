@@ -54,6 +54,12 @@ Not yet measurable: the client does not exist. These are what
 | The same table, scrolling | 60 fps, under 2 ms CPU per frame |
 | Client binary, stripped, two variable fonts included | under 12 MB |
 
+Measured on 2026-09-06: **12.13 MB** with the default features, **9.81 MB**
+without accessibility (`--no-default-features`). The default build misses the
+budget by one per cent; the 2.3 MB is AccessKit and the AT-SPI bus client on
+Linux, and it stays in — an accessible client is the one that ships. That is
+where the next size work goes.
+
 Zero wakeups is architectural, not a setting: `winit` runs in
 `ControlFlow::Wait` and the client redraws only when something asked it to.
 There is no render loop in the code to leave running by accident.

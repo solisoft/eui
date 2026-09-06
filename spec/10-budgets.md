@@ -19,6 +19,14 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, scroll | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
 
+Measured on 2026-09-06, `cargo build --release -p eui-client`, x86-64 Linux,
+LTO, stripped: **12.13 MB** with the default features and **9.81 MB** with
+`--no-default-features`. The difference is the accessibility stack —
+AccessKit and, on Linux, the AT-SPI bus client it needs (`zbus`). The
+default build misses the budget by one per cent, and the budget stays: an
+accessible client is the one that ships, and the 2.3 MB is where the next
+size work goes (the bus client brings its own async runtime beside tokio).
+
 The zero-wakeup line is an architectural consequence, not a tuning parameter:
 `winit` runs in `ControlFlow::Wait` and the client redraws only when a frame, an
 input event, or a window event asked it to. There is no render loop in the code
