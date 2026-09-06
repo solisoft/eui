@@ -1,0 +1,18 @@
+[package]
+name = "snapshot"
+description = "Render the counter off-screen through the real pipeline and dump raw RGBA frames."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+eui-proto = { path = "../../crates/eui-proto" }
+eui-client = { path = "../../crates/eui-client" }
+eui-render = { path = "../../crates/eui-render" }
+counter-server = { path = "../counter-server" }
+
+[lints]
+workspace = true

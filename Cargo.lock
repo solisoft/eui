@@ -1918,6 +1918,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "snapshot"
+version = "0.1.0"
+dependencies = [
+ "counter-server",
+ "eui-client",
+ "eui-proto",
+ "eui-render",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

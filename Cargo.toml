@@ -9,6 +9,7 @@ members = [
     "crates/eui-render",
     "crates/eui-client",
     "examples/counter-server",
+    "examples/snapshot",
 ]
 # Added as each lands (see spec/README.md "Ordre d'implémentation"):
 #   crates/eui-vm, eui-client, eui-conform, xtask
