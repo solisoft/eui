@@ -27,6 +27,8 @@ examples/
                   the widget catalogue in app/controllers/eui_builders.sl
   snapshot        render the counter off-screen, for machines with no display
 www/         the documentation site, itself a Soli app
+xtask/       `bench`: measures the budgets and fails when one is missed
+deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
 ```
 
 Everything else named in `spec/README.md` — layout, text, theme, renderer, VM,
@@ -39,6 +41,8 @@ list honest.
 cargo test                                               # 160 tests; pixel tests need any GPU adapter
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
+cargo run --release -p xtask -- bench                    # the budgets in spec/10; exits 1 on a miss
+cargo deny check                                         # advisories and licences, exceptions in deny.toml
 cd www && soli serve . --dev                             # the docs, on :5011
 
 # The counter, end to end, in a window:

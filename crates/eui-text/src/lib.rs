@@ -102,9 +102,12 @@ pub struct Stats {
     pub evictions: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Cache key. The text is represented by a 64-bit hash so a lookup allocates
+/// nothing; the entry keeps the full text and a hit compares it, so a
+/// collision costs a miss rather than a wrong glyph run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ShapeKey {
-    text: String,
+    text_hash: u64,
     family: u8,
     weight: u8,
     size: u32,
@@ -117,7 +120,7 @@ struct ShapeKey {
 pub struct TextEngine {
     fonts: FontSystem,
     swash: SwashCache,
-    cache: HashMap<ShapeKey, Arc<Shaped>>,
+    cache: HashMap<ShapeKey, (String, Arc<Shaped>)>,
     order: VecDeque<ShapeKey>,
     stats: Stats,
 }
@@ -173,7 +176,7 @@ impl TextEngine {
     /// Shape a run, from cache when possible.
     pub fn shape(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> Arc<Shaped> {
         let key = ShapeKey {
-            text: text.to_owned(),
+            text_hash: text_hash(text),
             family: font.family.to_u8(),
             weight: font.weight.to_u8(),
             size: font.size.to_bits(),
@@ -181,9 +184,11 @@ impl TextEngine {
             max_width: max_width.map(f32::to_bits),
             clamp: line_clamp,
         };
-        if let Some(hit) = self.cache.get(&key) {
-            self.stats.hits = self.stats.hits.saturating_add(1);
-            return Arc::clone(hit);
+        if let Some((cached_text, hit)) = self.cache.get(&key) {
+            if cached_text == text {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+                return Arc::clone(hit);
+            }
         }
         self.stats.misses = self.stats.misses.saturating_add(1);
         let shaped = Arc::new(self.shape_uncached(text, font, max_width, line_clamp));
@@ -193,8 +198,8 @@ impl TextEngine {
                 self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
         }
-        self.order.push_back(key.clone());
-        self.cache.insert(key, Arc::clone(&shaped));
+        self.order.push_back(key);
+        self.cache.insert(key, (text.to_owned(), Arc::clone(&shaped)));
         shaped
     }
 
@@ -272,6 +277,17 @@ impl TextEngine {
             data: image.data.clone(),
         })
     }
+}
+
+/// FNV-1a over the bytes: stable across runs and platforms, and cheap. The
+/// cache is per process, so a cryptographic hash would buy nothing here.
+fn text_hash(text: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 impl TextMeasurer for TextEngine {

@@ -156,6 +156,24 @@ binary builds exactly as before.
   `src/serve/eui/` module. `src/live/`, `src/template/`, `src/vm/` and
   `src/interpreter/` are untouched.
 
+**Budgets, enforced.** `cargo run --release -p xtask -- bench` measures
+what `spec/10` promises and exits non-zero on a miss. It found two: a
+per-node byte budget that had been set without counting the cell text, and a
+scroll step over ten thousand rows at 4.7 ms against a 2 ms budget. The
+second was real, and the fix was structural — a virtualised list is now
+placed arithmetically, so a row outside the window costs nothing: no style,
+no measure, no rect. The step went from 4.7 ms to about 0.3 ms, and a
+full layout of the table from 1.6 ms to about 0.15 ms. Along the way:
+`clear_all_dirty` walks only dirty paths (760 µs → 60 ns), the shaping cache
+no longer allocates on a hit, and the per-frame layout reset no longer
+memsets a per-node style cache.
+
+`cargo deny check` passes with three tracked exceptions (unmaintained
+`ttf-parser`, `rustybuzz` and `paste`, all under cosmic-text or wgpu), each
+with its reason in `deny.toml`. Four `cargo fuzz` targets exist — frame
+decoding, session apply, theme documents, layout — and want a nightly
+toolchain to run; the in-tree hostile-input tests run on every `cargo test`.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:

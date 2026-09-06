@@ -8,11 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-eui-proto = { path = "../eui-proto" }
-eui-tree = { path = "../eui-tree" }
-eui-theme = { path = "../eui-theme" }
-eui-layout = { path = "../eui-layout" }
-eui-text = { path = "../eui-text" }
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+eui-tree = { path = "../eui-tree", version = "0.1.0" }
+eui-theme = { path = "../eui-theme", version = "0.1.0" }
+eui-layout = { path = "../eui-layout", version = "0.1.0" }
+eui-text = { path = "../eui-text", version = "0.1.0" }
 # The GPU boundary. `unsafe` lives inside wgpu, behind its safe API; this
 # crate itself stays forbid(unsafe_code).
 wgpu = "23"

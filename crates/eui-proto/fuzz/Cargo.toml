@@ -1,0 +1,39 @@
+[package]
+name = "eui-proto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+eui-proto = { path = ".." }
+eui-tree = { path = "../../eui-tree" }
+eui-theme = { path = "../../eui-theme" }
+eui-layout = { path = "../../eui-layout" }
+
+[[bin]]
+name = "frame_decode"
+path = "fuzz_targets/frame_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "session_apply"
+path = "fuzz_targets/session_apply.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "theme_decode"
+path = "fuzz_targets/theme_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "layout"
+path = "fuzz_targets/layout.rs"
+test = false
+doc = false

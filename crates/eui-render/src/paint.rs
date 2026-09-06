@@ -132,8 +132,16 @@ impl Painter<'_, '_> {
 
     fn node(&mut self, ix: NodeIx) {
         let Some(rect) = self.scene.layout.rect(ix) else { return };
-        let Some(node) = self.scene.session.node(ix) else { return };
-        let style = Style::resolve(&self.scene.session.style_of(ix), self.scene.theme);
+        // Cull before resolving a style or touching text: a virtualised list
+        // has thousands of rows with rects and no business being painted.
+        // Only a scroll container may hold visible content outside its own
+        // box's intersection with the clip, and it clips itself.
+        if !self.visible(self.device(rect)) {
+            return;
+        }
+        let session: &Session = self.scene.session;
+        let Some(node) = session.node(ix) else { return };
+        let style = Style::resolve(&session.style_of(ix), self.scene.theme);
         if style.display == Display::None {
             return;
         }
@@ -185,12 +193,16 @@ impl Painter<'_, '_> {
                 self.list.clips.push(inner);
                 self.set_clip(self.list.clips.len() as u32 - 1);
             }
-            let mut children: Vec<NodeIx> = node.children.clone();
             if style.display == Display::Stack {
-                children.sort_by_key(|c| self.scene.session.style_of(*c).z);
-            }
-            for c in children {
-                self.node(c);
+                let mut children: Vec<NodeIx> = node.children.clone();
+                children.sort_by_key(|c| session.style_of(*c).z);
+                for c in children {
+                    self.node(c);
+                }
+            } else {
+                for &c in &node.children {
+                    self.node(c);
+                }
             }
             if clips {
                 self.set_clip(saved);

@@ -223,12 +223,20 @@ impl Session {
         }
     }
 
-    /// Clear every dirty bit. O(live nodes).
+    /// Clear every dirty bit. Walks only the dirty paths: a node with no
+    /// bit set has no dirty descendant (`mark_dirty` marks every ancestor),
+    /// so a scroll step over ten thousand rows clears a handful of nodes.
     pub fn clear_all_dirty(&mut self) {
         let Some(root) = self.root() else { return };
-        let all: Vec<NodeIx> = self.preorder(root).collect();
-        for ix in all {
-            self.clear_dirty(ix);
+        let mut stack = vec![root];
+        while let Some(ix) = stack.pop() {
+            let Some(n) = self.arena.get_mut(ix) else { continue };
+            if n.dirty == 0 {
+                continue;
+            }
+            n.dirty = 0;
+            let children = n.children.clone();
+            stack.extend(children.into_iter().filter(|c| self.arena.get(*c).is_some_and(|n| n.dirty != 0)));
         }
     }
 

@@ -1,0 +1,22 @@
+[package]
+name = "xtask"
+description = "Repository tasks: `bench` measures the budgets in spec/10 and fails when one is exceeded."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+eui-proto = { path = "../crates/eui-proto", version = "0.1.0" }
+eui-tree = { path = "../crates/eui-tree", version = "0.1.0" }
+eui-theme = { path = "../crates/eui-theme", version = "0.1.0" }
+eui-layout = { path = "../crates/eui-layout", version = "0.1.0" }
+eui-text = { path = "../crates/eui-text", version = "0.1.0" }
+eui-render = { path = "../crates/eui-render", version = "0.1.0" }
+eui-client = { path = "../crates/eui-client", version = "0.1.0" }
+counter-server = { path = "../examples/counter-server", version = "0.1.0" }
+
+[lints]
+workspace = true

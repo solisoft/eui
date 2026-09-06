@@ -8,9 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-eui-proto = { path = "../eui-proto" }
-eui-tree = { path = "../eui-tree" }
-eui-theme = { path = "../eui-theme" }
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+eui-tree = { path = "../eui-tree", version = "0.1.0" }
+eui-theme = { path = "../eui-theme", version = "0.1.0" }
 
 [lints]
 workspace = true

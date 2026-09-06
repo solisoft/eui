@@ -1,3 +1,6 @@
 /target/
 *.log
 .DS_Store
+/crates/*/fuzz/target/
+/crates/*/fuzz/corpus/
+/crates/*/fuzz/artifacts/

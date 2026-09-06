@@ -51,15 +51,34 @@ struct Placement {
 /// `(node, width constraint, height constraint)`.
 type MemoKey = (u32, (u8, u32), (u8, u32));
 
+/// Per-frame work counters, for the budget harness.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    /// `measure` calls that missed the memo and did work.
+    pub measures: u32,
+    /// `measure` calls served from the memo.
+    pub memo_hits: u32,
+    /// Times a virtualised list was placed.
+    pub list_placements: u32,
+    /// Rows of virtualised lists that were actually measured.
+    pub rows_measured: u32,
+    /// Rows assigned by arithmetic and never visited.
+    pub rows_virtual: u32,
+}
+
 /// Per-frame results, indexed by [`NodeIx::raw`].
 #[derive(Debug, Default)]
 pub struct Layout {
+    stats: Stats,
     rect: Vec<Rect>,
     baseline: Vec<f32>,
     content: Vec<Size>,
     present: Vec<bool>,
     virtual_: Vec<bool>,
-    styles: Vec<Option<Style>>,
+    /// Resolved records by style id: a 10 000-row table has four distinct
+    /// styles, so resolving per node was 10 000 resolves for four answers —
+    /// and a per-node cache was seven megabytes of memset per frame.
+    by_style_id: HashMap<u32, Style>,
     memo: HashMap<MemoKey, Metrics>,
     columns_atom: Option<u32>,
     item_height_atom: Option<u32>,
@@ -87,19 +106,21 @@ impl Layout {
     /// yields an empty layout.
     pub fn compute(&mut self, f: &mut Env<'_>, viewport: Size) {
         let n = f.session.arena_len();
-        self.rect.clear();
-        self.rect.resize(n, Rect::default());
-        self.baseline.clear();
-        self.baseline.resize(n, 0.0);
-        self.content.clear();
-        self.content.resize(n, Size::default());
+        // Rects, baselines and content sizes are only ever read behind
+        // `present`, so they need sizing, not clearing. The two bitmaps are
+        // what a frame resets: fifty thousand bytes each, not megabytes.
+        if self.rect.len() < n {
+            self.rect.resize(n, Rect::default());
+            self.baseline.resize(n, 0.0);
+            self.content.resize(n, Size::default());
+        }
         self.present.clear();
         self.present.resize(n, false);
         self.virtual_.clear();
         self.virtual_.resize(n, false);
-        self.styles.clear();
-        self.styles.resize(n, None);
+        self.by_style_id.clear();
         self.memo.clear();
+        self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
         self.item_height_atom = f.session.atom_id("item_height");
         self.viewport = viewport;
@@ -107,6 +128,11 @@ impl Layout {
         let Some(root) = f.session.root() else { return };
         let m = self.measure(f, root, Constraint::Exact(viewport.w), Constraint::Exact(viewport.h));
         self.arrange(f, root, 0.0, 0.0, m.w, m.h);
+    }
+
+    /// Work done by the last `compute`.
+    pub fn stats(&self) -> Stats {
+        self.stats
     }
 
     /// The node's absolute border box, if it was laid out this frame.
@@ -161,22 +187,21 @@ impl Layout {
         if rect.contains(x, y) && clip.contains(x, y) { Some(ix) } else { None }
     }
 
-    /// The style cached this frame. A node that was not laid out has none;
-    /// resolving it on the fly against a guessed theme would be wrong, so it
-    /// reports absent.
-    fn style_of(&self, _s: &Session, ix: NodeIx) -> Option<Style> {
-        self.styles.get(ix.raw() as usize).copied().flatten()
+    /// The style resolved this frame for the node's style id; absent for a
+    /// style id that no laid-out node used, which hit-testing treats as
+    /// "not a stack" rather than guessing.
+    fn style_of(&self, s: &Session, ix: NodeIx) -> Option<Style> {
+        let style_id = s.node(ix)?.style;
+        self.by_style_id.get(&style_id).copied()
     }
 
     fn style(&mut self, f: &Env<'_>, ix: NodeIx) -> Style {
-        let i = ix.raw() as usize;
-        if let Some(Some(st)) = self.styles.get(i) {
+        let style_id = f.session.node(ix).map_or(0, |n| n.style);
+        if let Some(st) = self.by_style_id.get(&style_id) {
             return *st;
         }
         let st = Style::resolve(&f.session.style_of(ix), f.theme);
-        if let Some(slot) = self.styles.get_mut(i) {
-            *slot = Some(st);
-        }
+        self.by_style_id.insert(style_id, st);
         st
     }
 
@@ -193,8 +218,10 @@ impl Layout {
     fn measure(&mut self, f: &mut Env<'_>, ix: NodeIx, cw: Constraint, ch: Constraint) -> Metrics {
         let key = (ix.raw(), cw.key(), ch.key());
         if let Some(m) = self.memo.get(&key) {
+            self.stats.memo_hits = self.stats.memo_hits.saturating_add(1);
             return *m;
         }
+        self.stats.measures = self.stats.measures.saturating_add(1);
         let m = self.measure_uncached(f, ix, cw, ch);
         self.memo.insert(key, m);
         m
@@ -244,7 +271,7 @@ impl Layout {
             NodeKind::Spacer => (Size::default(), None),
             NodeKind::Divider => (Size::new(1.0, 1.0), None),
             NodeKind::Scroll | NodeKind::List => {
-                let p = self.place_scroll(f, ix, st, inner_w, inner_h);
+                let p = self.place_scroll(f, ix, st, inner_w, inner_h, true);
                 let baseline = p.baseline;
                 let content = p.content;
                 if let Some(slot) = self.content.get_mut(ix.raw() as usize) {
@@ -299,7 +326,7 @@ impl Layout {
         let inner_h = Constraint::Exact((h - st.inset_v()).max(0.0));
 
         let placement = match kind {
-            NodeKind::Scroll | NodeKind::List => self.place_scroll(f, ix, st, inner_w, inner_h),
+            NodeKind::Scroll | NodeKind::List => self.place_scroll(f, ix, st, inner_w, inner_h, false),
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea | NodeKind::Image | NodeKind::Icon | NodeKind::Spacer | NodeKind::Divider => {
                 Placement::default()
             }
@@ -359,7 +386,9 @@ impl Layout {
 
     /// §7: a column with indefinite height (and width when `scroll_both`),
     /// virtualised when the node is a `list` carrying `item_height`.
-    fn place_scroll(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, inner_h: Constraint) -> Placement {
+    /// `measure_only` skips materialising off-screen rows: a measure pass
+    /// wants the content size, and only `arrange` places children.
+    fn place_scroll(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, inner_h: Constraint, measure_only: bool) -> Placement {
         let col = Style { display: Display::Column, wrap: Wrap::NoWrap, ..st };
         let content_w = if st.scroll_both { Constraint::Unbounded } else { inner_w };
         let is_list = f.session.node(ix).map(|n| n.kind) == Some(NodeKind::List);
@@ -372,7 +401,50 @@ impl Layout {
         } else {
             None
         };
-        self.place_flow(f, ix, col, content_w, Constraint::Unbounded, virt)
+        match virt {
+            Some(v) => self.place_virtual_list(f, ix, col, content_w, v, measure_only),
+            None => self.place_flow(f, ix, col, content_w, Constraint::Unbounded, None),
+        }
+    }
+
+    /// §7, the virtualised case, done arithmetically: row `i` sits at
+    /// `i × (item height + gap)`, so a row outside the window costs nothing
+    /// at all — it is not measured, not placed, and has no rect this frame.
+    /// It cannot be hit or painted anyway; the content size, which is what
+    /// scrollbars need, comes from the count. Running the general flow over
+    /// ten thousand such rows was milliseconds of work for numbers this
+    /// arithmetic produces for free. `measure_only` is the measure pass,
+    /// which wants the content size and places nothing.
+    fn place_virtual_list(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, (item_h, start, end): (f32, f32, f32), measure_only: bool) -> Placement {
+        self.stats.list_placements = self.stats.list_placements.saturating_add(1);
+        let children: &[NodeIx] = f.session.children(ix);
+        let n = children.len();
+        let pitch = item_h + st.gap;
+        let width = inner_w.bound().unwrap_or(0.0);
+        let first = if pitch > 0.0 { (start / pitch).floor().max(0.0) as usize } else { 0 };
+        let last = if pitch > 0.0 { ((end / pitch).ceil().max(0.0) as usize).min(n.saturating_sub(1)) } else { n.saturating_sub(1) };
+        let content_h = if n == 0 { 0.0 } else { n as f32 * pitch - st.gap };
+        let window = if n == 0 { 0 } else { last.saturating_sub(first).saturating_add(1) };
+        self.stats.rows_virtual = self.stats.rows_virtual.saturating_add(n.saturating_sub(window) as u32);
+        if measure_only || n == 0 {
+            return Placement { children: Vec::new(), content: Size::new(width, content_h), baseline: None };
+        }
+        let mut placed = Vec::with_capacity(window);
+        let mut first_baseline = None;
+        for (i, &c) in children.iter().enumerate().take(last.saturating_add(1)).skip(first) {
+            self.stats.rows_measured = self.stats.rows_measured.saturating_add(1);
+            let y = i as f32 * pitch;
+            let cst = self.style(f, c);
+            if cst.display == Display::None {
+                continue;
+            }
+            let m = self.measure(f, c, Constraint::Exact((width - cst.margin.horizontal()).max(0.0)), Constraint::Unbounded);
+            if first_baseline.is_none() {
+                first_baseline = Some(y + cst.margin.t + m.baseline);
+            }
+            placed.push(Placed { ix: c, x: cst.margin.l, y: y + cst.margin.t, w: m.w, h: m.h, virtual_: false });
+        }
+        Placement { children: placed, content: Size::new(width, content_h), baseline: first_baseline }
     }
 
     /// §4. `virt` is `(item height, window start, window end)` for a
@@ -709,7 +781,7 @@ impl Layout {
             placed.push(Placed { ix: c, x, y, w: m.w, h: m.h, virtual_: false });
         }
         // Paint order is ascending z; `place` returns children in that order.
-        let z_of: HashMap<u32, u8> = placed.iter().map(|p| (p.ix.raw(), self.styles.get(p.ix.raw() as usize).copied().flatten().map_or(0, |s| s.z))).collect();
+        let z_of: HashMap<u32, u8> = placed.iter().map(|p| (p.ix.raw(), self.style_of(f.session, p.ix).map_or(0, |s| s.z))).collect();
         placed.sort_by_key(|p| z_of.get(&p.ix.raw()).copied().unwrap_or(0));
         Placement { children: placed, content: extent, baseline: first_baseline }
     }

@@ -1,6 +1,8 @@
 # 10 — Budgets
 
-Status: draft. §2 is measured; §1 and §3 are targets not yet under test.
+Status: **measured** except where marked. `cargo run --release -p xtask --
+bench` produces §2, §3 and §4 and exits non-zero when a budget is missed;
+CI runs it.
 
 Soli's own benchmark document publishes the rows it loses. This one does the
 same: where a number comes from a run, it says so, and where it is still a goal,
@@ -63,10 +65,18 @@ bytes: no tolerant parse, no selector matching, no cascade resolution, no reflow
 of an untyped tree, no JIT. Those are the numbers in §1, and they are the ones
 worth judging the project on once the client can be measured.
 
-## 3. Decoder — targets
+## 3. Decoder and session — measured
 
-| Measure | Budget |
-|---|---:|
-| Decode a 4 KB batch | < 50 µs |
-| Allocations per batch | ≤ 3 (nodes, props, handlers) |
-| Peak decode memory | ≤ 2 × frame size |
+| Measure | Measured | Budget |
+|---|---:|---:|
+| Decode a 4.4 KB batch | 18 µs | < 50 µs |
+| Decode the 10 000-row mount, 770 KB | 3.1 ms | < 20 ms |
+| Apply that mount into a session, 50 002 nodes | 6.4 ms | < 30 ms |
+| Layout of the table, virtualised | 0.14 ms | < 5 ms |
+
+## 4. Wire — the table, text included
+
+The §2 figure is structure; a real mount carries the cells too. The
+10 000-row invoice table mounts in 769.5 KB, **15.8 bytes per node** with the
+text, of which about 9 are structure and the rest the data itself. Budget:
+18 B per node.

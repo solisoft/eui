@@ -12,12 +12,12 @@ name = "eui"
 path = "src/main.rs"
 
 [dependencies]
-eui-proto = { path = "../eui-proto" }
-eui-tree = { path = "../eui-tree" }
-eui-theme = { path = "../eui-theme" }
-eui-layout = { path = "../eui-layout" }
-eui-text = { path = "../eui-text" }
-eui-render = { path = "../eui-render" }
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+eui-tree = { path = "../eui-tree", version = "0.1.0" }
+eui-theme = { path = "../eui-theme", version = "0.1.0" }
+eui-layout = { path = "../eui-layout", version = "0.1.0" }
+eui-text = { path = "../eui-text", version = "0.1.0" }
+eui-render = { path = "../eui-render", version = "0.1.0" }
 winit = "0.30"
 wgpu = "23"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
@@ -26,7 +26,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 pollster = "0.4"
 
 [dev-dependencies]
-counter-server = { path = "../../examples/counter-server" }
+counter-server = { path = "../../examples/counter-server", version = "0.1.0" }
 
 [lints]
 workspace = true

@@ -9,10 +9,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-eui-proto = { path = "../../crates/eui-proto" }
-eui-client = { path = "../../crates/eui-client" }
-eui-render = { path = "../../crates/eui-render" }
-counter-server = { path = "../counter-server" }
+eui-proto = { path = "../../crates/eui-proto", version = "0.1.0" }
+eui-client = { path = "../../crates/eui-client", version = "0.1.0" }
+eui-render = { path = "../../crates/eui-render", version = "0.1.0" }
+counter-server = { path = "../counter-server", version = "0.1.0" }
 
 [lints]
 workspace = true

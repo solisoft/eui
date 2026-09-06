@@ -360,10 +360,13 @@ fn a_virtualised_list_does_not_measure_what_it_cannot_see() {
     // Content height: ~16 measured rows at 22 px, the rest estimated at 20 px.
     let h = l.content_size(s.lookup(list).unwrap()).unwrap().h;
     assert!((20_000.0..=20_100.0).contains(&h), "content height {h}");
-    // Every row has a rect, on-screen or not, so scrollbars and hit-testing work.
-    let far = r(&l, &s, rows[500]);
-    assert!(far.y > 5_000.0, "row 500 sits at {far:?}");
-    assert_eq!(far.h, 20.0);
+    // A row outside the window is not laid out at all: no rect, nothing to
+    // hit or paint. Scrollbars come from the content size, not from rects.
+    assert!(l.rect(s.lookup(rows[500]).unwrap()).is_none(), "row 500 has no rect");
+    // Hypothetical size, cross size, then arrange: three placements, and only
+    // the last materialises rows.
+    assert_eq!(l.stats().list_placements, 3);
+    assert!(l.stats().rows_measured < 40, "{} rows measured", l.stats().rows_measured);
     // The visible rows were really measured: a text row is 22 px, not the estimate.
     assert_eq!(r(&l, &s, rows[0]).h, 22.0);
 }
