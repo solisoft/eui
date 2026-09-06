@@ -74,7 +74,10 @@ exhaust itself. *Enforced: `eui-proto::limits`, `eui-tree::Limits`, `eui-vm`.*
   a node that holds focus and a `key_down` handler. There is no global key
   capture. *Enforced: `Driver::key`.*
 - Clipboard reads require `clipboard.read`; pointer position is reported
-  only inside the window.
+  only inside the window. A person's own `Ctrl+V` into a field is not an
+  application read: the window inserts the text and the application sees
+  it as typing, exactly what a browser does. *Enforced: the driver has no
+  clipboard access at all; the window reads it only on that key.*
 
 ## 8. Privacy
 

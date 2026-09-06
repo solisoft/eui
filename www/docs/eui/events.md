@@ -50,7 +50,10 @@ keyboard press from a pointer one. `Enter` in a field is `submit`; `Escape`
 drops focus. None of `Tab`, `Shift+Tab` or `Escape` is ever reported. An
 input method's composition is shown in the field as it is built and reported
 only once committed, as one `text_input`; the candidate window is anchored
-to the field.
+to the field. The caret, the selection and the clipboard are the client's
+too: click and drag, arrows (by word with Ctrl, extending with Shift), Home
+and End, Ctrl+A/C/X/V — a paste is the person's own act and arrives as
+typing. The application only ever sees `text_input` and `change`.
 
 ## What the client will not report
 

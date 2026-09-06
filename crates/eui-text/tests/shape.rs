@@ -143,3 +143,23 @@ fn layout_runs_on_real_glyphs() {
     let st = engine.stats();
     assert!(st.hits > 0, "{st:?}");
 }
+
+#[test]
+fn glyphs_carry_their_bytes_so_a_caret_can_be_placed() {
+    let mut t = TextEngine::new();
+    let shaped = t.shape("ab cd", base(), None, 0);
+    let starts: Vec<usize> = shaped.glyphs.iter().map(|g| g.start).collect();
+    assert_eq!(starts, vec![0, 1, 2, 3, 4]);
+    assert_eq!(shaped.caret(0).0, 0.0);
+    assert_eq!(shaped.caret(2).0, shaped.glyphs[2].x);
+    let end = shaped.caret(5);
+    assert!((end.0 - shaped.metrics.width).abs() < 0.01, "{end:?} vs {}", shaped.metrics.width);
+    assert_eq!(shaped.byte_at(-5.0, 0.0), 0);
+    assert_eq!(shaped.byte_at(shaped.metrics.width + 10.0, 0.0), 5);
+    let g3 = shaped.glyphs[3];
+    assert_eq!(shaped.byte_at(g3.x + g3.w * 0.2, 0.0), 3);
+    assert_eq!(shaped.byte_at(g3.x + g3.w * 0.8, 0.0), 4);
+    // Multi-byte text: offsets are bytes, ends are char boundaries.
+    let shaped = t.shape("é!", base(), None, 0);
+    assert_eq!(shaped.glyphs.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>(), vec![(0, 2), (2, 3)]);
+}

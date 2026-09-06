@@ -44,7 +44,7 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[] })
+    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[], editing: None })
 }
 
 fn gpu() -> Option<Renderer> {
@@ -409,7 +409,31 @@ fn overrides_replace_a_nodes_colours_for_the_frame() {
     let ix = fx.session.lookup(2).unwrap();
     let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5 };
     let overrides = [(ix, mid)];
-    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides });
+    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides, editing: None });
     assert_eq!(list.quads[0].fill, [0.5, 0.25, 0.125, 1.0]);
     assert_eq!(list.quads[0].params[3], 0.5);
+}
+
+#[test]
+fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let field = StyleRecord { width: Dim::Px(60), padding: [2; 4], ..Default::default() };
+    let mut nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Input, 2, 2, 0)];
+    nodes[1].text = Some(TextRef::Inline("hello".into()));
+    let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
+    let ix = fx.session.lookup(2).unwrap();
+    let editing = Some(Editing { node: ix, start: 1, end: 3, caret: 3, scroll_x: 4.0 });
+    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing });
+    let boxes: Vec<&Quad> = list.quads.iter().filter(|q| q.params[2] == 0.0).collect();
+    assert_eq!(boxes.len(), 2, "one selection rect, one caret: {list:#?}");
+    let mut accent = linear(fx.theme.color(Role::AccentBase));
+    accent[3] *= 0.3;
+    assert_eq!(boxes[0].fill, accent);
+    assert_eq!(boxes[1].rect[2], 1.0, "the caret is one device px wide");
+    assert!(boxes[1].rect[0] > boxes[0].rect[0], "the caret sits at the selection's end");
+    // The field opened its own scissor run, and its glyphs shifted left by the scroll.
+    assert_eq!(list.clips.len(), 2);
+    let glyph_x = list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).unwrap().rect[0];
+    let r = fx.layout.rect(ix).unwrap();
+    assert!(glyph_x < r.x + 4.0 + 4.0, "{glyph_x} vs {}", r.x);
 }

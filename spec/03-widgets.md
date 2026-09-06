@@ -105,6 +105,19 @@ no shader, no tessellator and no allocation beyond its quads.
   `Shift+Tab` move focus; the client, not the server, owns that order.
 - A node with a `click` handler is activatable: it takes focus on `Tab` and
   `Enter` or `Space` emits `click` at its centre.
+- In an editable node the client owns the caret and the selection. A click
+  places the caret at the nearest glyph edge and a drag selects;
+  `ArrowLeft`/`ArrowRight` move by character, by word with `Ctrl` (`⌘` on
+  macOS), extending the selection with `Shift`; `Home`/`End` reach the line's
+  ends, the text's with `Ctrl`; `Backspace`/`Delete` remove the selection or
+  one character; `Ctrl+A` selects all; `Ctrl+C`/`Ctrl+X` put the selection
+  on the system clipboard; `Ctrl+V` inserts it; `Enter` in a `textarea`
+  inserts a line. Typing, a paste and a committed composition all replace
+  the selection, and each reaches the application as one `text_input`. The
+  caret is drawn in the text colour one device pixel wide, the selection in
+  `accent.base` at 30 % opacity, and a field scrolls its text to keep the
+  caret in view. A paste is the person's act on their own clipboard;
+  `clipboard.read` (08 §7) governs reads the application would initiate.
 
 ## 4. The catalogue contract
 

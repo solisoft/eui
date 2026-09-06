@@ -550,3 +550,89 @@ fn the_accessibility_tree_names_buttons_fields_and_labels_and_follows_focus() {
     let out = d.activate_node(ix);
     assert_eq!(events(&out), vec![(EventKind::Click, 3, 2)]);
 }
+
+fn key(d: &mut Driver, k: &str, modifiers: u32) -> Vec<Frame> {
+    d.input(Input::Key { key: k.into(), modifiers, down: true })
+}
+
+fn field_text(d: &Driver) -> String {
+    d.session().text_of(d.session().lookup(2).unwrap()).unwrap_or("").to_owned()
+}
+
+#[test]
+fn the_caret_selection_and_clipboard_belong_to_the_client() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    tab(&mut d, false); // the field, value "a", caret at the end
+    d.input(Input::Text("bc".into()));
+    assert_eq!(field_text(&d), "abc");
+    key(&mut d, "ArrowLeft", 0);
+    key(&mut d, "ArrowLeft", 0);
+    d.input(Input::Text("X".into()));
+    assert_eq!(field_text(&d), "aXbc", "typing inserts at the caret");
+    key(&mut d, "Home", 0);
+    key(&mut d, "Delete", 0);
+    assert_eq!(field_text(&d), "Xbc");
+    key(&mut d, "End", 0);
+    key(&mut d, "Backspace", 0);
+    assert_eq!(field_text(&d), "Xb");
+    // Shift+Arrow selects; Ctrl+C copies it; typing replaces it.
+    key(&mut d, "ArrowLeft", 1);
+    key(&mut d, "ArrowLeft", 1);
+    assert!(key(&mut d, "c", 2).iter().all(|f| !matches!(f, Frame::Event(_))), "copying is local");
+    assert_eq!(d.take_clipboard(), Some("Xb".into()));
+    assert_eq!(d.take_clipboard(), None, "taken once");
+    d.input(Input::Text("Y".into()));
+    assert_eq!(field_text(&d), "Y");
+    // Ctrl+A, Ctrl+X: everything to the clipboard, the field empty.
+    key(&mut d, "a", 2);
+    key(&mut d, "x", 2);
+    assert_eq!(d.take_clipboard(), Some("Y".into()));
+    assert_eq!(field_text(&d), "");
+    // Paste is an insertion like any other; word motion; replacing a word.
+    d.input(Input::Paste("hello world".into()));
+    assert_eq!(field_text(&d), "hello world");
+    key(&mut d, "ArrowLeft", 2); // ⌘ or Ctrl: by word
+    key(&mut d, "ArrowRight", 1 | 2);
+    d.input(Input::Paste("there".into()));
+    assert_eq!(field_text(&d), "hello there");
+    // An IME composition is shown at the caret, not at the end.
+    key(&mut d, "Home", 0);
+    key(&mut d, "ArrowRight", 0);
+    d.input(Input::ImePreedit("か".into()));
+    assert_eq!(field_text(&d), "hかello there");
+    d.input(Input::ImeCommit("感".into()));
+    assert_eq!(field_text(&d), "h感ello there");
+    // Leaving the field reports the value once.
+    let out = d.input(Input::Unfocused);
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Change && e.payload == Value::Str("h感ello there".into()))));
+}
+
+#[test]
+fn a_click_places_the_caret_and_a_drag_selects() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    tab(&mut d, false);
+    d.input(Input::Text("hello".into()));
+    assert_eq!(field_text(&d), "ahello");
+    let _ = d.paint(400, 300);
+    let r = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
+    // A click at the very left puts the caret before everything.
+    d.input(Input::PointerMove(r.x + 0.5, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    d.input(Input::Text("Z".into()));
+    assert_eq!(field_text(&d), "Zahello");
+    // Press at the left, drag far right: everything selected; typing replaces it.
+    d.input(Input::PointerMove(r.x + 0.5, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerMove(r.x + r.w + 50.0, r.y + r.h / 2.0));
+    d.input(Input::PointerUp(0));
+    d.input(Input::Text("!".into()));
+    assert_eq!(field_text(&d), "!");
+    // The painter is told where the caret is.
+    let list = d.paint(400, 300);
+    assert!(list.quads.iter().any(|q| q.params[2] == 0.0 && q.rect[2] == 1.0), "a one-px caret is drawn");
+}

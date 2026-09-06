@@ -35,9 +35,13 @@ png = "0.17"
 accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
 
+# The system clipboard, for the person's own copy, cut and paste.
+arboard = { version = "3", optional = true, default-features = false, features = ["wayland-data-control"] }
+
 [features]
-default = ["a11y"]
+default = ["a11y", "clipboard"]
 a11y = ["dep:accesskit", "dep:accesskit_winit"]
+clipboard = ["dep:arboard"]
 
 [dev-dependencies]
 eui-render = { path = "../eui-render", version = "0.1.0" }

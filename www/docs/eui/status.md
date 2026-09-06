@@ -225,7 +225,15 @@ click handlers are buttons named by their text, editable nodes are text
 fields, text is a label, the rest are groups. The tree is built only when
 an assistive technology asks and refreshed after a paint while one listens;
 its focus and click actions become the same inputs Tab and Enter produce.
-`--no-default-features` builds without it. Text selection is still to come.
+`--no-default-features` builds without it.
+
+**Editing.** Fields have a caret and a selection: click and drag, arrows
+by character and by word, Home and End, Backspace and Delete, select all,
+copy, cut and paste through the system clipboard (the `clipboard` feature,
+on by default). Glyphs now carry their byte range, so the caret sits on a
+real cluster edge and a click lands on the nearest one; a field scrolls
+its text to keep the caret in view. A paste is the person's act and reaches
+the application as typing; the driver itself never touches the clipboard.
 
 **Input methods.** The window allows an IME exactly while a field has
 focus and anchors the candidate window to it; a composition in progress is
@@ -288,7 +296,6 @@ implements it and the vectors that pin it:
 
 ## Not started
 
-- Text selection and the clipboard capability.
 - Capability prompts and the manifest check in the client.
 - The multi-process sandbox, Android and iOS, `soli desktop build --eui`
   (stage 3).
@@ -301,7 +308,7 @@ this project, and it is not hidden in a later milestone. The first stage
 delivered the protocol, the layout engine, a renderer, a working client and
 about fifteen widgets; the second added the rest of the catalogue, keyboard
 focus, input methods, transitions, shadows and charts. Accessibility,
-selection and mobile come after.
+mobile and the sandbox come after.
 
 ## The Soli integration is additive
 

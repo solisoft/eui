@@ -17,6 +17,23 @@ pub const TEXTURED: u32 = 1;
 /// Flag bit: sample the image atlas for colour and alpha.
 pub const TEXTURED_RGBA: u32 = 2;
 
+/// The caret and selection of the focused editable node, as byte offsets
+/// into the text the node shows, plus how far the text is scrolled left to
+/// keep the caret in view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Editing {
+    /// The field.
+    pub node: NodeIx,
+    /// Selection start, `<= end`; equal to `end` when nothing is selected.
+    pub start: usize,
+    /// Selection end.
+    pub end: usize,
+    /// Where the caret is drawn.
+    pub caret: usize,
+    /// Logical px the text is shifted left.
+    pub scroll_x: f32,
+}
+
 /// A node's resolved paint colours, linear RGBA; `None` draws nothing.
 /// What a transition interpolates.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -82,6 +99,8 @@ pub struct Scene<'a> {
     /// Nodes mid-transition (03 §5) with the colours to paint this frame,
     /// in place of their record's.
     pub overrides: &'a [(NodeIx, Colors)],
+    /// The field being edited: its caret and selection (03 §3).
+    pub editing: Option<Editing>,
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -305,8 +324,44 @@ impl Painter<'_, '_> {
         let max_w = (rect.w - style.inset_h()).max(0.0);
         let shaped = self.scene.text.shape(text, style.font, Some(max_w), style.line_clamp);
         let scale = self.scene.scale;
-        let origin_x = rect.x + style.border.l + style.padding.l;
+        let editing = self.scene.editing.filter(|e| e.node == ix);
+        // An edited field clips to its box and scrolls its text to the caret.
+        let saved = self.clip;
+        if editing.is_some() {
+            let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
+            self.list.clips.push(intersect(parent, self.device(rect)));
+            self.set_clip(self.list.clips.len() as u32 - 1);
+        }
+        let origin_x = rect.x + style.border.l + style.padding.l - editing.map_or(0.0, |e| e.scroll_x);
         let origin_y = rect.y + style.border.t + style.padding.t;
+        let (above, below) = (style.font.size * 0.9, style.font.size * 0.25);
+        if let Some(e) = editing {
+            // Spec 03 §3: the selection in accent.base at 30 %, one rect per
+            // line; then the caret in the text colour, one device px wide.
+            if e.start < e.end {
+                let mut accent = linear(self.scene.theme.color(Role::AccentBase));
+                accent[3] *= 0.3;
+                let mut lines: Vec<(f32, f32, f32)> = Vec::new(); // baseline, min x, max x
+                for g in shaped.glyphs.iter().filter(|g| g.start >= e.start && g.start < e.end) {
+                    match lines.iter_mut().find(|l| l.0 == g.y) {
+                        Some(l) => {
+                            l.1 = l.1.min(g.x);
+                            l.2 = l.2.max(g.x + g.w);
+                        }
+                        None => lines.push((g.y, g.x, g.x + g.w)),
+                    }
+                }
+                for (y, x0, x1) in lines {
+                    let r = self.device(Rect::new(origin_x + x0, origin_y + y - above, x1 - x0, above + below));
+                    self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                }
+            }
+            let (cx, cy) = shaped.caret(e.caret);
+            let x = ((origin_x + cx) * scale).round();
+            let y0 = ((origin_y + cy - above) * scale).round();
+            let y1 = ((origin_y + cy + below) * scale).round();
+            self.push(Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+        }
         let atlas_size = self.scene.atlas.size() as f32;
         for g in &shaped.glyphs {
             let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else { continue };
@@ -319,8 +374,11 @@ impl Painter<'_, '_> {
                 fill: fg,
                 stroke: [0.0; 4],
                 uv: [rx / atlas_size, ry / atlas_size, (rx + rw) / atlas_size, (ry + rh) / atlas_size],
-            extra: [0.0; 4],
+                extra: [0.0; 4],
             });
+        }
+        if editing.is_some() {
+            self.set_clip(saved);
         }
     }
 }

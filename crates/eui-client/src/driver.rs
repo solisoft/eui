@@ -9,7 +9,7 @@ use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{colors_of, Colors, paint, Atlas, DrawList, ImageAtlas, Scene};
+use eui_render::{colors_of, paint, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -35,6 +35,10 @@ pub enum Input {
     /// An input method committed `text`: the composition ends and the text
     /// is inserted as if typed.
     ImeCommit(String),
+    /// The person pasted `text` into the focused field (the window read the
+    /// clipboard on their `Ctrl+V`): inserted at the caret, replacing the
+    /// selection, reported as one `text_input`.
+    Paste(String),
     /// A named key, with modifiers, pressed or released.
     Key {
         /// W3C `KeyboardEvent.key` name.
@@ -71,12 +75,95 @@ struct Pointer {
     pressed_on: Option<NodeIx>,
 }
 
-/// A field's local edit: the value the server last saw (`seed`) and the
-/// value typed since. `change` fires only when they differ.
+/// A field's local edit: the value the server last saw (`seed`), the value
+/// typed since, and the caret and selection anchor as byte offsets into it.
+/// `change` fires only when seed and value differ.
 #[derive(Debug, Clone)]
 struct Edit {
     seed: String,
     value: String,
+    caret: usize,
+    anchor: usize,
+    /// Logical px the field's text is scrolled left to keep the caret in view.
+    scroll_x: f32,
+}
+
+impl Edit {
+    fn selection(&self) -> std::ops::Range<usize> {
+        self.caret.min(self.anchor)..self.caret.max(self.anchor)
+    }
+
+    /// Replace the selection (or insert at the caret) with `text`.
+    fn insert(&mut self, text: &str) {
+        let r = self.selection();
+        self.value.replace_range(r.clone(), text);
+        self.caret = r.start.saturating_add(text.len());
+        self.anchor = self.caret;
+    }
+
+    /// Delete the selection, or one char before (`forward == false`) or
+    /// after the caret.
+    fn delete(&mut self, forward: bool) {
+        let r = self.selection();
+        let r = if !r.is_empty() {
+            r
+        } else if forward {
+            self.caret..next_char(&self.value, self.caret)
+        } else {
+            prev_char(&self.value, self.caret)..self.caret
+        };
+        self.value.replace_range(r.clone(), "");
+        self.caret = r.start;
+        self.anchor = self.caret;
+    }
+
+    fn place(&mut self, at: usize, extend: bool) {
+        self.caret = at.min(self.value.len());
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+}
+
+fn prev_char(s: &str, at: usize) -> usize {
+    s[..at.min(s.len())].char_indices().next_back().map_or(0, |(i, _)| i)
+}
+
+fn next_char(s: &str, at: usize) -> usize {
+    let at = at.min(s.len());
+    s[at..].chars().next().map_or(at, |c| at.saturating_add(c.len_utf8()))
+}
+
+/// The start of the word before `at`: back over spaces, then over the word.
+fn word_left(s: &str, at: usize) -> usize {
+    let mut i = at.min(s.len());
+    while i > 0 && s[..i].ends_with(char::is_whitespace) {
+        i = prev_char(s, i);
+    }
+    while i > 0 && !s[..i].ends_with(char::is_whitespace) {
+        i = prev_char(s, i);
+    }
+    i
+}
+
+/// The end of the word after `at`: over the word, then over the spaces.
+fn word_right(s: &str, at: usize) -> usize {
+    let mut i = at.min(s.len());
+    while i < s.len() && !s[i..].starts_with(char::is_whitespace) {
+        i = next_char(s, i);
+    }
+    while i < s.len() && s[i..].starts_with(char::is_whitespace) {
+        i = next_char(s, i);
+    }
+    i
+}
+
+/// The start and end of the line holding `at`.
+fn line_bounds(s: &str, at: usize) -> (usize, usize) {
+    let at = at.min(s.len());
+    let start = s[..at].rfind('\n').map_or(0, |i| i + 1);
+    let end = s[at..].find('\n').map_or(s.len(), |i| at + i);
+    (start, end)
 }
 
 /// One running transition: the colours it left, the colours it reaches,
@@ -145,6 +232,8 @@ pub struct Driver {
     edits: HashMap<u32, Edit>,
     /// The composition an input method is building in the focused field.
     preedit: String,
+    /// Text the person copied or cut, for the window to hand the clipboard.
+    clipboard: Option<String>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     granted: u32,
@@ -187,6 +276,7 @@ impl Driver {
             next_due: None,
             edits: HashMap::new(),
             preedit: String::new(),
+            clipboard: None,
             chunks: HashMap::new(),
             granted: granted & caps::ALL,
             welcomed: false,
@@ -398,6 +488,7 @@ impl Driver {
                 self.preedit(String::new());
                 self.text_input(&t)
             }
+            Input::Paste(t) => self.text_input(&t),
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::Unfocused => {
                 let out = self.set_focus(None, false);
@@ -584,6 +675,17 @@ impl Driver {
         self.ensure_layout();
         self.pointer.x = x;
         self.pointer.y = y;
+        // Dragging inside the focused field extends the selection.
+        if let (Some(e), Some(pressed)) = (self.focused.filter(|f| self.is_editable(*f)), self.pointer.pressed_on) {
+            if self.ancestor_where(pressed, |k| matches!(k, NodeKind::Input | NodeKind::TextArea)) == Some(e) {
+                if let Some(at) = self.byte_at_pointer(e, x, y) {
+                    if let Some(edit) = self.edit_mut(e) {
+                        edit.place(at, true);
+                    }
+                    self.show_edit(e);
+                }
+            }
+        }
         let now = self.layout.hit(&self.session, x, y);
         let mut out = Vec::new();
         if now != self.pointer.over {
@@ -613,6 +715,14 @@ impl Driver {
         // a pointer never shows the ring.
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
         let mut out = self.set_focus(editable, false);
+        if let Some(e) = editable {
+            if let Some(at) = self.byte_at_pointer(e, x, y) {
+                if let Some(edit) = self.edit_mut(e) {
+                    edit.place(at, false);
+                }
+                self.show_edit(e);
+            }
+        }
         let payload = self.button_payload(ix, EventKind::PointerDown, x, y, button);
         out.extend(self.emit(ix, EventKind::PointerDown, payload));
         out
@@ -745,22 +855,72 @@ impl Driver {
         matches!(self.session.node(ix).map(|n| n.kind), Some(NodeKind::Input | NodeKind::TextArea))
     }
 
-    /// The edit buffer of an editable node, seeded from its text on first use.
-    fn edit_buf(&mut self, f: NodeIx) -> Option<&mut String> {
+    /// The edit of an editable node, seeded from its text on first use with
+    /// the caret at the end.
+    fn edit_mut(&mut self, f: NodeIx) -> Option<&mut Edit> {
         if !self.is_editable(f) {
             return None;
         }
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
         let seed = self.session.text_of(f).unwrap_or("").to_owned();
-        Some(&mut self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed }).value)
+        let len = seed.len();
+        Some(self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed, caret: len, anchor: len, scroll_x: 0.0 }))
     }
 
     fn text_input(&mut self, t: &str) -> Vec<Frame> {
         let Some(f) = self.focused else { return Vec::new() };
-        let Some(buf) = self.edit_buf(f) else { return Vec::new() };
-        buf.push_str(t);
+        let Some(edit) = self.edit_mut(f) else { return Vec::new() };
+        edit.insert(t);
         self.show_edit(f);
         self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
+    }
+
+    /// The byte offset in `e`'s value under the pointer, from the shaped text.
+    fn byte_at_pointer(&mut self, e: NodeIx, x: f32, y: f32) -> Option<usize> {
+        if !self.preedit.is_empty() {
+            return None;
+        }
+        let rect = self.layout.rect(e)?;
+        let style = eui_layout::Style::resolve(&self.session.style_of(e), &self.resolved);
+        let text = self.session.text_of(e).unwrap_or("").to_owned();
+        let scroll_x = self.edits.get(&self.session.node(e)?.id).map_or(0.0, |ed| ed.scroll_x);
+        let shaped = self.text.shape(&text, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
+        let lx = x - (rect.x + style.border.l + style.padding.l) + scroll_x;
+        let ly = y - (rect.y + style.border.t + style.padding.t);
+        Some(shaped.byte_at(lx, ly).min(text.len()))
+    }
+
+    /// Text the person copied or cut since the last call, for the clipboard.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.clipboard.take()
+    }
+
+    /// What the painter needs to draw the focused field's caret and
+    /// selection, with the scroll that keeps the caret in view — updated
+    /// here, once per paint.
+    fn editing(&mut self) -> Option<Editing> {
+        let f = self.focused.filter(|f| self.is_editable(*f))?;
+        let rect = self.layout.rect(f)?;
+        let style = eui_layout::Style::resolve(&self.session.style_of(f), &self.resolved);
+        let text = self.session.text_of(f).unwrap_or("").to_owned();
+        let shaped = self.text.shape(&text, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
+        let pre = self.preedit.len();
+        let id = self.session.node(f)?.id;
+        let edit = self.edits.get_mut(&id)?;
+        let shown = |o: usize| if o > edit.caret { o.saturating_add(pre) } else { o };
+        let caret = edit.caret.saturating_add(pre);
+        let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let cx = shaped.caret(caret).0;
+        if cx - edit.scroll_x > inner_w {
+            edit.scroll_x = cx - inner_w;
+        } else if cx < edit.scroll_x {
+            edit.scroll_x = cx;
+        }
+        if shaped.metrics.width <= inner_w {
+            edit.scroll_x = 0.0;
+        }
+        let r = edit.selection();
+        Some(Editing { node: f, start: shown(r.start), end: shown(r.end), caret, scroll_x: edit.scroll_x })
     }
 
     /// Spec 06 §3: a composition is local. The field shows its buffer plus
@@ -768,16 +928,16 @@ impl Driver {
     fn preedit(&mut self, t: String) {
         let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else { return };
         self.preedit = t;
-        let _ = self.edit_buf(f);
+        let _ = self.edit_mut(f);
         self.show_edit(f);
     }
 
-    /// Put the field's buffer, with any composition, into the tree.
+    /// Put the field's value, with any composition at the caret, into the tree.
     fn show_edit(&mut self, f: NodeIx) {
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
         let Some(edit) = self.edits.get(&id) else { return };
         let mut value = edit.value.clone();
-        value.push_str(&self.preedit);
+        value.insert_str(edit.caret.min(value.len()), &self.preedit);
         self.session.set_text_local(f, value);
         self.invalidate();
     }
@@ -802,12 +962,7 @@ impl Driver {
         if down {
             let editable = self.is_editable(f);
             match key {
-                "Backspace" if editable => {
-                    if let Some(buf) = self.edit_buf(f) {
-                        buf.pop();
-                        self.show_edit(f);
-                    }
-                }
+                _ if editable && self.edit_key(f, key, modifiers) => {}
                 "Enter" if self.session.node(f).map(|n| n.kind) == Some(NodeKind::Input) => {
                     out.extend(self.commit_edit(f));
                     out.extend(self.emit(f, EventKind::Submit, Value::Null));
@@ -819,6 +974,61 @@ impl Driver {
         let kind = if down { EventKind::KeyDown } else { EventKind::KeyUp };
         out.extend(self.emit(f, kind, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))])));
         out
+    }
+
+    /// Spec 03 §3: the caret, the selection and the clipboard belong to the
+    /// client. True when the key was an editing key and has been applied.
+    fn edit_key(&mut self, f: NodeIx, key: &str, modifiers: u32) -> bool {
+        let (shift, ctrl) = (modifiers & 1 != 0, modifiers & (2 | 8) != 0);
+        let multiline = self.session.node(f).map(|n| n.kind) == Some(NodeKind::TextArea);
+        let Some(edit) = self.edit_mut(f) else { return false };
+        let mut copied = None;
+        match key {
+            "Backspace" => edit.delete(false),
+            "Delete" => edit.delete(true),
+            "ArrowLeft" => {
+                let r = edit.selection();
+                let at = if ctrl { word_left(&edit.value, edit.caret) } else if !shift && !r.is_empty() { r.start } else { prev_char(&edit.value, edit.caret) };
+                edit.place(at, shift);
+            }
+            "ArrowRight" => {
+                let r = edit.selection();
+                let at = if ctrl { word_right(&edit.value, edit.caret) } else if !shift && !r.is_empty() { r.end } else { next_char(&edit.value, edit.caret) };
+                edit.place(at, shift);
+            }
+            "Home" => {
+                let at = if ctrl { 0 } else { line_bounds(&edit.value, edit.caret).0 };
+                edit.place(at, shift);
+            }
+            "End" => {
+                let at = if ctrl { edit.value.len() } else { line_bounds(&edit.value, edit.caret).1 };
+                edit.place(at, shift);
+            }
+            "a" | "A" if ctrl => {
+                edit.anchor = 0;
+                edit.caret = edit.value.len();
+            }
+            "c" | "C" if ctrl => {
+                let r = edit.selection();
+                if !r.is_empty() {
+                    copied = Some(edit.value[r].to_owned());
+                }
+            }
+            "x" | "X" if ctrl => {
+                let r = edit.selection();
+                if !r.is_empty() {
+                    copied = Some(edit.value[r].to_owned());
+                    edit.delete(false);
+                }
+            }
+            "Enter" if multiline => edit.insert("\n"),
+            _ => return false,
+        }
+        if copied.is_some() {
+            self.clipboard = copied;
+        }
+        self.show_edit(f);
+        true
     }
 
     /// `change`, if the field's value differs from what the server has.
@@ -843,6 +1053,7 @@ impl Driver {
         self.redraw = false;
         let now = self.now;
         let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
+        let editing = self.editing();
         let list = paint(&mut Scene {
             session: &self.session,
             layout: &self.layout,
@@ -854,6 +1065,7 @@ impl Driver {
             size: (device_w, device_h),
             focus: if self.focus_visible { self.focused } else { None },
             overrides: &overrides,
+            editing,
         });
         self.session.clear_all_dirty();
         // A finished transition painted its final colours this frame.

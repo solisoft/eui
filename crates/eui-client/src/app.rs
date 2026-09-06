@@ -52,6 +52,8 @@ pub struct App {
     proxy: EventLoopProxy<Wake>,
     #[cfg(feature = "a11y")]
     access: Option<accesskit_winit::Adapter>,
+    #[cfg(feature = "clipboard")]
+    clip: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -67,6 +69,8 @@ impl App {
             proxy,
             #[cfg(feature = "a11y")]
             access: None,
+            #[cfg(feature = "clipboard")]
+            clip: None,
         }
     }
 
@@ -127,9 +131,23 @@ impl App {
         }
     }
 
+    #[cfg(feature = "clipboard")]
+    fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clip.is_none() {
+            self.clip = arboard::Clipboard::new().ok();
+        }
+        self.clip.as_mut()
+    }
+
     fn input(&mut self, i: Input) {
         let out = self.driver.input(i);
         self.send(out);
+        #[cfg(feature = "clipboard")]
+        if let Some(text) = self.driver.take_clipboard() {
+            if let Some(c) = self.clipboard() {
+                let _ = c.set_text(text);
+            }
+        }
         if let Some(w) = &self.window {
             // An input method is welcome exactly while a field has focus,
             // and its candidate window sits under that field.
@@ -352,6 +370,14 @@ impl ApplicationHandler<Wake> for App {
                         if !matches!(event.logical_key, Key::Named(_)) {
                             self.input(Input::Text(text.to_string()));
                         }
+                    }
+                }
+                // Ctrl+V / ⌘V: the person's own clipboard into the field they
+                // are editing. The window reads it; the driver never can.
+                #[cfg(feature = "clipboard")]
+                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") && self.driver.ime_area().is_some() {
+                    if let Some(text) = self.clipboard().and_then(|c| c.get_text().ok()) {
+                        self.input(Input::Paste(text));
                     }
                 }
                 self.input(Input::Key { key: name, modifiers: self.modifiers, down });

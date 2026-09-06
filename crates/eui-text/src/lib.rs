@@ -55,6 +55,41 @@ pub struct Glyph {
     /// Opaque key for [`TextEngine::rasterize`]. Two glyphs with equal keys
     /// share a bitmap at a given scale.
     pub key: GlyphKey,
+    /// The byte range of the source text this glyph draws — a cluster, so
+    /// `end` is always a char boundary. What a caret is placed against.
+    pub start: usize,
+    /// See `start`.
+    pub end: usize,
+}
+
+impl Shaped {
+    /// Where a caret placed before byte `at` sits: `(x, baseline)` from the
+    /// run's origin. Past the last glyph, the end of the last line.
+    pub fn caret(&self, at: usize) -> (f32, f32) {
+        if let Some(g) = self.glyphs.iter().find(|g| g.start >= at) {
+            return (g.x, g.y);
+        }
+        match self.glyphs.last() {
+            Some(g) => (g.x + g.w, g.y),
+            None => (0.0, self.metrics.baseline),
+        }
+    }
+
+    /// The byte offset nearest a point from the run's origin: the line whose
+    /// baseline is closest, then the glyph edge closest along it.
+    pub fn byte_at(&self, x: f32, y: f32) -> usize {
+        let Some(line) = self.glyphs.iter().map(|g| g.y).min_by(|a, b| (a - y).abs().partial_cmp(&(b - y).abs()).unwrap_or(std::cmp::Ordering::Equal)) else {
+            return 0;
+        };
+        let mut end = 0;
+        for g in self.glyphs.iter().filter(|g| g.y == line) {
+            if x < g.x + g.w / 2.0 {
+                return g.start;
+            }
+            end = g.end;
+        }
+        end
+    }
 }
 
 /// Identifies a glyph in a face at a size; scale is applied at rasterisation.
@@ -245,6 +280,8 @@ impl TextEngine {
                     w: g.w,
                     size: g.font_size,
                     key: GlyphKey { font: g.font_id, glyph: g.glyph_id, size_bits: g.font_size.to_bits() },
+                    start: g.start,
+                    end: g.end,
                 });
             }
         }
