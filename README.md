@@ -18,6 +18,7 @@ crates/
   eui-tree   session tables, node arena, patch application           [built]
   eui-theme  roles and scales to pixels; contrast by construction     [built]
   eui-layout flow, stack, grid, scroll, virtualised list             [built]
+  eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
 www/         the documentation site, itself a Soli app
 ```
 
@@ -28,7 +29,7 @@ list honest.
 ## Try it
 
 ```sh
-cargo test                                               # 126 tests
+cargo test                                               # 134 tests
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
 cd www && soli serve . --dev                             # the docs, on :5011

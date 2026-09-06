@@ -64,6 +64,23 @@ now normative.
   goldens pin exact pixels.
 - 18 golden tests.
 
+**`eui-text` — shaping and rasterisation.** Over `cosmic-text`, the one
+third-party dependency on the CPU side of the client: shaping is the part of
+text that must not be reinvented.
+
+- Two faces embedded, Titillium Web and JetBrains Mono, both OFL. The font
+  database is built by hand from those three files and **never touches the
+  system's fonts** — a test asserts the count is exactly three. The first
+  version of this code used the convenience constructor and loaded 779
+  faces; the same text would have shaped differently on every machine, and
+  the installed font list would have been visible to a server.
+- A bounded shaping cache keyed by `(text, font, width, clamp)`; layout
+  measures a run under several constraints per frame and shapes it once.
+- Glyph rasterisation at a device scale behind an opaque key, for the
+  renderer's atlas.
+- Line clamping truncates; it does not yet append an ellipsis.
+- 8 tests, one of which lays out real glyphs through `eui-layout`.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -94,8 +111,6 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 ## Not started
 
-- `eui-text` — shaping and the glyph atlas, behind the trait `eui-layout`
-  already calls.
 - `eui-render` — the wgpu renderer.
 - `eui-vm` — the verifier and the metered interpreter.
 - `eui-client` — the window, the session, the capability prompts.

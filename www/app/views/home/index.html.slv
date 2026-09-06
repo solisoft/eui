@@ -126,8 +126,9 @@
     every reference before placing anything, and enforces the quotas;
     <code>eui-theme</code> resolves roles to colours with contrast met by
     construction; <code>eui-layout</code> places every node with one
-    specified algorithm and a list that never measures what it cannot see.
-    126 tests, 46 of them rejection cases.
+    specified algorithm and a list that never measures what it cannot see;
+    <code>eui-text</code> shapes with two embedded faces and never reads a
+    system font. 134 tests, 46 of them rejection cases.
   </p>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--spec">Specified</span>
@@ -136,8 +137,7 @@
     their spec documents are still to write.
   </p>
   <p style="color:var(--ink-muted);">
-    Text shaping, the renderer, the client, and the Soli integration have not
-    started. Every
+    The renderer, the client, and the Soli integration have not started. Every
     number above comes from a test you can run;
     <a href="/docs/budgets">the budgets page</a> names each one.
     If you want the argument rather than the numbers,
