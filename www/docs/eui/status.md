@@ -219,6 +219,14 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**Accessibility.** The client exposes its tree through AccessKit — AT-SPI
+on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
+click handlers are buttons named by their text, editable nodes are text
+fields, text is a label, the rest are groups. The tree is built only when
+an assistive technology asks and refreshed after a paint while one listens;
+its focus and click actions become the same inputs Tab and Enter produce.
+`--no-default-features` builds without it. Text selection is still to come.
+
 **Input methods.** The window allows an IME exactly while a field has
 focus and anchors the candidate window to it; a composition in progress is
 shown in the field and reported nowhere; the commit arrives as one
@@ -280,8 +288,6 @@ implements it and the vectors that pin it:
 
 ## Not started
 
-- Accessibility: exposing the tree to AT-SPI, UIA and AX, so a screen
-  reader sees buttons, fields and text rather than pixels.
 - Text selection and the clipboard capability.
 - Capability prompts and the manifest check in the client.
 - The multi-process sandbox, Android and iOS, `soli desktop build --eui`

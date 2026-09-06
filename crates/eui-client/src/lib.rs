@@ -17,6 +17,8 @@
 // eui-render's lib.rs for why this is the right scope for the lint.
 #![allow(clippy::arithmetic_side_effects)]
 
+#[cfg(feature = "a11y")]
+pub mod a11y;
 pub mod app;
 pub mod assets;
 pub mod driver;

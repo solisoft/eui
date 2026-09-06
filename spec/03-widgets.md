@@ -128,3 +128,23 @@ dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 grid, list item, chart, stat, code block, markdown), feedback (toast,
 banner, progress, spinner, skeleton, empty state, avatar, badge, chip).
+
+## 6. The accessibility tree
+
+A client SHOULD expose its tree to the platform's assistive technology —
+AT-SPI, UIA, AX — with this mapping, and MUST NOT tell the server whether
+one is listening:
+
+| Node | Exposed as |
+|---|---|
+| any node with a `click` handler | a button, named by every text inside it, a leaf |
+| `input` / `textarea` | a text field whose value is the node's text |
+| `text` | a label |
+| `image` / `icon` | an image |
+| `scroll` / `list` | a scrolling container; virtualised rows are absent, as they are from layout |
+| anything else | a group |
+
+Bounds are the layout rectangles. Focus is §3's. An assistive technology's
+*focus* action focuses as `Tab` would, and its *click* action presses as
+`Enter` would: nothing it can do exceeds what a keyboard user can do, so
+the server needs no new validation and learns nothing new.

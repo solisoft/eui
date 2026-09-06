@@ -30,6 +30,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 blake3 = "1"
 png = "0.17"
+# Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
+# assistive technology asks; `--no-default-features` builds without it.
+accesskit = { version = "0.25", optional = true }
+accesskit_winit = { version = "0.34", optional = true }
+
+[features]
+default = ["a11y"]
+a11y = ["dep:accesskit", "dep:accesskit_winit"]
 
 [dev-dependencies]
 eui-render = { path = "../eui-render", version = "0.1.0" }

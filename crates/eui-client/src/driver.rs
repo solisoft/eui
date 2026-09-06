@@ -341,6 +341,28 @@ impl Driver {
         !self.anims.is_empty()
     }
 
+    /// The display scale, device px per logical px.
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// Focus `ix` as the keyboard would — ring shown — for an assistive
+    /// technology's Focus action.
+    pub fn focus_node(&mut self, ix: NodeIx) -> Vec<Frame> {
+        self.ensure_layout();
+        if self.focus_order().contains(&ix) { self.set_focus(Some(ix), true) } else { Vec::new() }
+    }
+
+    /// Focus and press `ix`, as Tab then Enter would — an assistive
+    /// technology's Click action. Nothing a keyboard could not do.
+    pub fn activate_node(&mut self, ix: NodeIx) -> Vec<Frame> {
+        let mut out = self.focus_node(ix);
+        if self.focused == Some(ix) && !self.is_editable(ix) {
+            out.extend(self.activate(ix));
+        }
+        out
+    }
+
     /// A role's colour under the viewer's current theme, `0xRRGGBBAA`.
     pub fn theme_color(&self, role: eui_theme::Role) -> u32 {
         self.resolved.color(role)

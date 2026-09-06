@@ -17,9 +17,23 @@ use winit::window::{Window, WindowId};
 use crate::driver::{Driver, Input};
 use crate::transport::{self, Connection, Incoming};
 
-/// Woken by the transport thread when a message is waiting.
+/// Why the loop woke: the transport has a message, or an assistive
+/// technology wants the tree or asked for an action.
 #[derive(Debug)]
-pub struct Wake;
+pub enum Wake {
+    /// A message is waiting on the connection.
+    Transport,
+    /// AccessKit has something for the window.
+    #[cfg(feature = "a11y")]
+    Access(accesskit_winit::Event),
+}
+
+#[cfg(feature = "a11y")]
+impl From<accesskit_winit::Event> for Wake {
+    fn from(e: accesskit_winit::Event) -> Self {
+        Wake::Access(e)
+    }
+}
 
 struct Gpu {
     surface: wgpu::Surface<'static>,
@@ -36,12 +50,24 @@ pub struct App {
     conn: Option<Connection>,
     modifiers: u32,
     proxy: EventLoopProxy<Wake>,
+    #[cfg(feature = "a11y")]
+    access: Option<accesskit_winit::Adapter>,
 }
 
 impl App {
     /// Build for a session URL.
     pub fn new(url: String, proxy: EventLoopProxy<Wake>) -> Self {
-        Self { url, window: None, gpu: None, driver: Driver::new(960.0, 640.0, 1.0, 0), conn: None, modifiers: 0, proxy }
+        Self {
+            url,
+            window: None,
+            gpu: None,
+            driver: Driver::new(960.0, 640.0, 1.0, 0),
+            conn: None,
+            modifiers: 0,
+            proxy,
+            #[cfg(feature = "a11y")]
+            access: None,
+        }
     }
 
     fn send(&mut self, frames: Vec<Frame>) {
@@ -142,6 +168,43 @@ impl App {
         let (atlas, images) = self.driver.atlases_mut();
         gpu.renderer.render(&view, (w, h), &list, atlas, images);
         frame.present();
+        // A screen reader that is listening gets the tree as painted; one
+        // that is not costs nothing here.
+        #[cfg(feature = "a11y")]
+        if let Some(a) = &mut self.access {
+            let driver = &self.driver;
+            a.update_if_active(|| driver.accessibility_tree());
+        }
+    }
+
+    /// An assistive technology's request, turned into what a keyboard user
+    /// could do: focus, or focus and press.
+    #[cfg(feature = "a11y")]
+    fn access_event(&mut self, event: accesskit_winit::Event) {
+        use accesskit_winit::WindowEvent as A;
+        match event.window_event {
+            A::InitialTreeRequested => {
+                if let Some(a) = &mut self.access {
+                    let driver = &self.driver;
+                    a.update_if_active(|| driver.accessibility_tree());
+                }
+            }
+            A::ActionRequested(req) => {
+                let Some(ix) = self.driver.node_for_accessibility(req.target_node) else { return };
+                let out = match req.action {
+                    accesskit::Action::Click => self.driver.activate_node(ix),
+                    accesskit::Action::Focus => self.driver.focus_node(ix),
+                    _ => Vec::new(),
+                };
+                self.send(out);
+                if self.driver.needs_redraw() {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            A::AccessibilityDeactivated => {}
+        }
     }
 }
 
@@ -160,6 +223,13 @@ impl ApplicationHandler<Wake> for App {
                 return;
             }
         };
+
+        // Assistive technologies register before the window shows; the tree
+        // itself is built only if one asks.
+        #[cfg(feature = "a11y")]
+        {
+            self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
+        }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..Default::default() });
         let surface = match instance.create_surface(Arc::clone(&window)) {
@@ -209,18 +279,26 @@ impl ApplicationHandler<Wake> for App {
         let hello = self.driver.hello().encode();
         let proxy = self.proxy.clone();
         match transport::connect(&self.url, hello, move || {
-            let _ = proxy.send_event(Wake);
+            let _ = proxy.send_event(Wake::Transport);
         }) {
             Ok(c) => self.conn = Some(c),
             Err(e) => eprintln!("eui: {e}"),
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: Wake) {
-        self.pump();
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Wake) {
+        match event {
+            Wake::Transport => self.pump(),
+            #[cfg(feature = "a11y")]
+            Wake::Access(e) => self.access_event(e),
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(feature = "a11y")]
+        if let (Some(a), Some(w)) = (&mut self.access, &self.window) {
+            a.process_event(w, &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.redraw(),
