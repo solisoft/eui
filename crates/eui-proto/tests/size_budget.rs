@@ -203,9 +203,10 @@ fn a_single_cell_update_is_tiny() {
 
 #[test]
 fn re_sorting_a_keyed_table_moves_rather_than_rebuilds() {
-    // Reversing 50 keyed rows: 49 moves, no subtree ever re-sent.
+    // Reversing 50 keyed rows: 49 moves — always the last row to position i —
+    // and no subtree ever re-sent.
     let ops = (0..49u32)
-        .map(|i| Op::MoveChild { parent: 1, from: 49 - i, to: i })
+        .map(|i| Op::MoveChild { parent: 1, from: 49, to: i })
         .collect();
     let frame = Frame::Batch(Batch { seq: 3, ops }).encode();
 

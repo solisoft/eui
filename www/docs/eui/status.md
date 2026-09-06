@@ -20,6 +20,19 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
   cannot panic by construction, not merely by inspection.
 
+**`eui-tree` — session state.** The four define-once tables, the node arena
+with a free list, and `apply` for every op in the wire format.
+
+- Every reference — style, atom, colour, chunk, node id — is checked against
+  the tables *before* anything is placed, so an invalid node deep in a subtree
+  leaves nothing behind.
+- Node, depth and atom-byte quotas are checked before the memory they bound is
+  allocated. Subtree removal is an iterative walk, never a recursive drop.
+- A failed op poisons the session until the next successful `Mount` — the
+  transport's own recovery — so no per-batch snapshot is needed.
+- 27 tests, including a random op stream that must keep the arena's live
+  count equal to a fresh walk of the tree after every step.
+
 ## Specified, not yet written
 
 Normative, in `spec/`, and stable enough to build against:
@@ -49,7 +62,6 @@ are, the doc page is the design and there is nothing more precise to appeal to.
 
 ## Not started
 
-- `eui-tree` — session tables and patch application.
 - `eui-layout`, `eui-text`, `eui-theme` — the parts that can be tested without a
   GPU, and where the CPU budgets are won or lost.
 - `eui-render` — the wgpu renderer.

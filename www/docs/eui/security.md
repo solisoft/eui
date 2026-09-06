@@ -51,6 +51,9 @@ speculative compiler to confuse, because there is no compiler.
   panic by construction, not merely by inspection.
 - 46 rejection cases, plus bulk tests that push 40 000 random and
   bit-flipped buffers through every entry point and require that none panic.
+- `eui-tree` applies the same discipline one layer up: a batch whose ops are
+  well-formed but incoherent — an undefined atom, a duplicate node id, a
+  child index past the end — is refused before anything is placed.
   `cargo fuzz` targets on the frame decoder, tree decoder, chunk verifier and
   layout engine follow.
 

@@ -120,9 +120,11 @@
   <h2 style="font-size:1.5rem;letter-spacing:-0.015em;margin:0 0 0.75rem;">Where this stands</h2>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--built">Built</span>
-    The wire format. <code>eui-proto</code> encodes and decodes every construct
-    on this page: no dependencies, no <code>unsafe</code>, 64 tests of which 46
-    are rejection cases.
+    The wire format and the session state. <code>eui-proto</code> encodes and
+    decodes every construct on this page with no dependencies and no
+    <code>unsafe</code>; <code>eui-tree</code> applies the patches, checks
+    every reference before placing anything, and enforces the quotas. 91 tests,
+    46 of them rejection cases.
   </p>
   <p style="color:var(--ink-muted);">
     <span class="stamp stamp--spec">Specified</span>
@@ -131,7 +133,8 @@
     documents are still to write.
   </p>
   <p style="color:var(--ink-muted);">
-    The renderer, the client, and the Soli integration have not started. Every
+    Layout, text, the renderer, the client, and the Soli integration have not
+    started. Every
     number above comes from a test you can run;
     <a href="/docs/budgets">the budgets page</a> names each one.
     If you want the argument rather than the numbers,

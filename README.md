@@ -14,8 +14,8 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ```
 spec/        the specification — 02 (wire format) and 10 (budgets) are current
 crates/
-  eui-proto  encode and decode. No dependencies, no unsafe, 64 tests    [built]
-  eui-tree   session tables and patch application                    [skeleton]
+  eui-proto  encode and decode. No dependencies, no unsafe            [built]
+  eui-tree   session tables, node arena, patch application           [built]
 www/         the documentation site, itself a Soli app
 ```
 
@@ -26,7 +26,7 @@ list honest.
 ## Try it
 
 ```sh
-cargo test -p eui-proto                                  # 64 tests
+cargo test                                               # 91 tests
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent
 cd www && soli serve . --dev                             # the docs, on :5011
