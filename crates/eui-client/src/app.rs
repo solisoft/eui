@@ -41,9 +41,35 @@ struct Gpu {
     renderer: eui_render::Renderer,
 }
 
+/// How to open an application: what the `eui` binary parses from its
+/// command line, and what an embedding host fills in itself.
+#[derive(Debug, Clone)]
+pub struct Launch {
+    /// The session URL, `wss://host/_eui/session/app`.
+    pub url: String,
+    /// Capabilities the person allows, if the manifest asks for them.
+    pub allowed: u32,
+    /// The window title.
+    pub title: String,
+    /// A `name=value` cookie to present on every request — a desktop host's
+    /// loopback gate. `None` for a network session.
+    pub cookie: Option<String>,
+    /// The host embeds the server in this process: `ws://` on loopback is
+    /// trusted (08 §1), and a missing manifest is tolerated.
+    pub host_loopback: bool,
+}
+
+impl Launch {
+    /// A network session, as the `eui` binary opens it.
+    pub fn new(url: String, allowed: u32) -> Self {
+        Self { url, allowed, title: "EUI".into(), cookie: None, host_loopback: false }
+    }
+}
+
 /// The application.
 pub struct App {
     url: String,
+    title: String,
     /// Capabilities the person allows, if the manifest asks for them.
     allowed: u32,
     window: Option<Arc<Window>>,
@@ -60,10 +86,15 @@ pub struct App {
 
 impl App {
     /// Build for a session URL.
-    pub fn new(url: String, allowed: u32, proxy: EventLoopProxy<Wake>) -> Self {
+    pub fn new(launch: Launch, proxy: EventLoopProxy<Wake>) -> Self {
+        if launch.host_loopback {
+            transport::allow_host_loopback();
+        }
+        transport::set_session_cookie(launch.cookie);
         Self {
-            url,
-            allowed,
+            url: launch.url,
+            title: launch.title,
+            allowed: launch.allowed,
             window: None,
             gpu: None,
             driver: Driver::new(960.0, 640.0, 1.0, 0),
@@ -235,7 +266,7 @@ impl ApplicationHandler<Wake> for App {
             return;
         }
         event_loop.set_control_flow(ControlFlow::Wait);
-        let attrs = Window::default_attributes().with_title("EUI").with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        let attrs = Window::default_attributes().with_title(self.title.clone()).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -458,8 +489,14 @@ fn named(n: NamedKey) -> String {
 
 /// Run the client until the window closes.
 pub fn run(url: String, allowed: u32) -> Result<(), String> {
+    launch(Launch::new(url, allowed))
+}
+
+/// Open a window on the session `launch` describes and run until it closes.
+/// Must be called on the main thread.
+pub fn launch(launch: Launch) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(url, allowed, proxy);
+    let mut app = App::new(launch, proxy);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

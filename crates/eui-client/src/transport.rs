@@ -81,6 +81,32 @@ impl Connection {
     }
 }
 
+/// Set by an embedding host — a desktop artifact whose server and client
+/// are one process — to allow `ws://` on loopback in a release build.
+static HOST_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A cookie an embedding host asks the client to present on every request,
+/// so the host's loopback gate lets the session through.
+static SESSION_COOKIE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Spec 08 §1: `ws://` on loopback is acceptable when the client and the
+/// server are the same trusted process. Only a host that embeds this crate
+/// can say so; the `eui` binary never does.
+pub fn allow_host_loopback() {
+    HOST_LOOPBACK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The cookie to present, `name=value`, if a host set one.
+pub fn set_session_cookie(cookie: Option<String>) {
+    if let Ok(mut c) = SESSION_COOKIE.lock() {
+        *c = cookie;
+    }
+}
+
+/// See [`set_session_cookie`].
+pub fn session_cookie() -> Option<String> {
+    SESSION_COOKIE.lock().ok().and_then(|c| c.clone())
+}
+
 /// Enforce `spec/01-transport.md` §1: TLS only. A release build refuses
 /// `ws://` unconditionally; a debug build allows it for loopback when
 /// `EUI_ALLOW_INSECURE_LOOPBACK=1`, which is how the examples run.
@@ -89,7 +115,7 @@ pub fn check_url(url: &str) -> Result<(), TransportError> {
         return Ok(());
     }
     let loopback = url.starts_with("ws://127.0.0.1") || url.starts_with("ws://localhost") || url.starts_with("ws://[::1]");
-    let allowed = cfg!(debug_assertions) && loopback && std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1");
+    let allowed = loopback && (HOST_LOOPBACK.load(std::sync::atomic::Ordering::SeqCst) || (cfg!(debug_assertions) && std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1")));
     if allowed {
         Ok(())
     } else {
@@ -110,6 +136,7 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
     let notify_for_thread = std::sync::Arc::clone(&notify);
     let notify = notify_for_thread.clone();
     let notify_thread = move || notify_for_thread();
+    let ws_origin = origin.clone();
 
     thread::Builder::new()
         .name("eui-transport".into())
@@ -124,7 +151,28 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
                 }
             };
             rt.block_on(async move {
-                let (ws, _) = match tokio_tungstenite::connect_async(&url).await {
+                use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+                let request = match url.as_str().into_client_request() {
+                    Ok(mut r) => {
+                        // A host's cookie rides with an Origin that names the
+                        // host itself: a cookie-bearing upgrade without one
+                        // is what a cross-site pivot looks like, and the
+                        // server refuses it (Soli SEC-046).
+                        if let Some(cookie) = session_cookie().and_then(|c| c.parse().ok()) {
+                            r.headers_mut().insert("Cookie", cookie);
+                            if let Ok(o) = ws_origin.parse() {
+                                r.headers_mut().insert("Origin", o);
+                            }
+                        }
+                        r
+                    }
+                    Err(e) => {
+                        let _ = in_tx.send(Incoming::Closed(TransportError::Connect(e.to_string())));
+                        notify();
+                        return;
+                    }
+                };
+                let (ws, _) = match tokio_tungstenite::connect_async(request).await {
                     Ok(ok) => ok,
                     Err(e) => {
                         let _ = in_tx.send(Incoming::Closed(TransportError::Connect(e.to_string())));

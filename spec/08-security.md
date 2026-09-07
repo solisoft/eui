@@ -18,6 +18,12 @@ grant.
   frame carries the protocol version, the viewport, and the granted
   capability bits — nothing else. *Enforced: `Driver::hello`.*
 
+The loopback exception has one other legitimate user: a host that embeds the
+client and the server in one process — a desktop artifact — where the
+socket never leaves the machine and the host arms its own gate. The client
+library exposes this as an explicit call; the `eui` binary has no flag for
+it.
+
 ## 2. Provenance and integrity
 
 - The manifest is signed with Ed25519; the client pins the publisher key on

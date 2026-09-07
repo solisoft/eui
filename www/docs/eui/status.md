@@ -219,6 +219,17 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**One artefact, no browser.** `soli desktop build --eui <component>` — with
+a soli built with `--features eui-desktop`, which links the client crates
+into the runtime — produces the usual desktop executable, but at launch the
+server runs on a thread and the embedded client opens the component in its
+own window. The loopback gate is armed with a session only that client
+holds, presented as a cookie on every request; the publisher key is
+generated per install and never bundled. The window was written here
+without a display: it is the same `App` the `eui` binary runs, under test
+headlessly, and the desktop path runs headless with
+`SOLI_DESKTOP_NO_WINDOW=1`.
+
 **The manifest, signed and pinned.** `GET /.well-known/eui` is a record
 (spec 01 §2.1, keys fixed now) signed by the publisher's Ed25519 key. The
 client verifies it before opening a session, refuses a protocol it cannot
@@ -305,8 +316,7 @@ implements it and the vectors that pin it:
 
 ## Not started
 
-- The multi-process sandbox, Android and iOS, `soli desktop build --eui`
-  (stage 3).
+- The multi-process sandbox, Android and iOS (stage 3).
 
 ## Scope, stated plainly
 

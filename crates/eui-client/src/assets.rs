@@ -99,7 +99,8 @@ async fn get_async(origin: &str, path: &str, accept: &str) -> Result<Vec<u8>, As
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
         _ => (hostport, if scheme == "https" { 443 } else { 80 }),
     };
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\n\r\n");
+    let cookie = crate::transport::session_cookie().map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\n{cookie}\r\n");
 
     let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
     let mut raw = Vec::new();

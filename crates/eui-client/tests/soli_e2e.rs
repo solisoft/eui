@@ -485,3 +485,86 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     std::fs::write(&pin, [9u8; 32]).unwrap();
     assert_eq!(eui_client::manifest::check(&origin, &pins).unwrap_err(), eui_client::manifest::ManifestError::KeyChanged);
 }
+
+/// A desktop artifact built with `soli desktop build --eui gallery`, run
+/// headless: its loopback gate admits the embedded client's cookie and
+/// nothing else. Needs EUI_DESKTOP_ARTIFACT (the executable) and
+/// SOLI_BUNDLE_KEY (the key it was built with).
+#[test]
+fn a_desktop_artifact_serves_its_component_behind_a_cookie_gate() {
+    let Ok(artifact) = std::env::var("EUI_DESKTOP_ARTIFACT") else { return };
+    let port = free_port();
+    let home = std::env::temp_dir().join(format!("eui-desktop-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let mut child = std::process::Command::new(&artifact)
+        .args(["--port", &port.to_string()])
+        .env("SOLI_DESKTOP_NO_WINDOW", "1")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XDG_STATE_HOME", home.join("state"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("the artifact starts");
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut url, mut cookie) = (None, None);
+    while (url.is_none() || cookie.is_none()) && Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                let t = line.trim();
+                if t.starts_with("ws://") {
+                    url = Some(t.to_string());
+                } else if t.starts_with("soli_desktop=") {
+                    cookie = Some(t.to_string());
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => break,
+        }
+    }
+    let result = std::panic::catch_unwind(|| {
+        let url = url.expect("the artifact printed its session URL");
+        let cookie = cookie.expect("the artifact printed its cookie");
+        assert!(url.ends_with("/_eui/session/gallery"), "{url}");
+        // Without the cookie the gate refuses the upgrade.
+        std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+        eui_client::transport::set_session_cookie(None);
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        let mut d = Driver::new(1000.0, 900.0, 1.0, 0);
+        let conn = eui_client::transport::connect(&url, d.hello().encode(), move || {
+            let _ = wake_tx.send(());
+        })
+        .unwrap();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pump(&mut d, &conn, &wake_rx, |d| d.session().root().is_some());
+        }));
+        assert!(refused.is_err(), "the gate let a cookie-less client in");
+        // With it, the gallery mounts.
+        eui_client::transport::set_session_cookie(Some(cookie));
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        let mut d = Driver::new(1000.0, 900.0, 1.0, 0);
+        let conn = eui_client::transport::connect(&url, d.hello().encode(), move || {
+            let _ = wake_tx.send(());
+        })
+        .unwrap();
+        pump(&mut d, &conn, &wake_rx, |d| d.session().root().is_some());
+        assert!(texts(&d, root(&d)).iter().any(|t| t == "Nodes"));
+        eui_client::transport::set_session_cookie(None);
+    });
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&home);
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
