@@ -296,7 +296,7 @@ truncate, when one is exceeded.
 | `MAX_OPS_PER_BATCH` | 65 535 |
 | `MAX_INLINE_STR` | 4 KiB |
 | `MAX_VALUE_DEPTH` | 4 |
-| `MAX_VALUE_LIST` | 1 024 elements |
+| `MAX_VALUE_LIST` | 1 000 000 elements (a windowed list's `heights`, 04 §7.1; bounded in bytes by the frame) |
 
 `MAX_ATOM_TOTAL_BYTES`, and the rule that an id is defined once and referenced
 only after, are session state and belong to the tree layer, not the decoder.

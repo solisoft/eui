@@ -62,6 +62,21 @@ def list(style, item_height, children)
   }
 end
 
+# A windowed list (spec 04 §7.1): `count` rows of which only `children`
+# are present, each carrying its `row`; `heights` gives every row's height
+# so the scroll extent is exact. `on_window` receives `[first, last]`
+# when the rows in view change.
+def list_window(style, item_height, count, heights, children, on_window)
+  style["display"] = "column"
+  {
+    "k": "list",
+    "s": style,
+    "c": children,
+    "p": {"item_height": item_height, "count": count, "heights": heights},
+    "on": {"window": on_window}
+  }
+end
+
 def input(value, on_change)
   {
     "k": "input",

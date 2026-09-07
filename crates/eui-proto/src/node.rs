@@ -136,6 +136,8 @@ pub enum EventKind {
     Drop = 0x14,
     /// A press was held past the platform's long-press interval.
     LongPress = 0x15,
+    /// A windowed `list` needs another range of rows (spec 04 §7.1).
+    Window = 0x16,
 }
 
 impl EventKind {
@@ -163,6 +165,7 @@ impl EventKind {
             0x13 => Ok(Self::DragOver),
             0x14 => Ok(Self::Drop),
             0x15 => Ok(Self::LongPress),
+            0x16 => Ok(Self::Window),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

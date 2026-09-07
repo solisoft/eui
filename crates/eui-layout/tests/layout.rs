@@ -572,3 +572,44 @@ fn text_wraps_to_the_available_width_and_clamps() {
     assert_rect(&l, &s, long, 0.0, 0.0, 100.0, 66.0);
     assert_rect(&l, &s, one, 0.0, 66.0, 100.0, 22.0);
 }
+
+// ------------------------------------------------------- windowed lists
+
+/// §7.1: a list of 1 000 rows the tree does not hold, heights 20 except
+/// every third row at 50, holding only rows 4, 5 and 998.
+#[test]
+fn a_windowed_list_places_its_rows_by_index_and_sizes_the_rest_from_heights() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let ls = b.style(StyleRecord { height: px(100), ..col() });
+    let t = b.style(StyleRecord { height: px(10), ..st() });
+    b.push(NodeKind::Box, c, 1);
+    let list = b.push(NodeKind::List, ls, 3);
+    b.prop("item_height", Value::Int(20));
+    b.prop("count", Value::Int(1000));
+    b.prop("heights", Value::List((0..1000).map(|i| Value::Int(if i % 3 == 0 { 50 } else { 20 })).collect()));
+    let mut ids = Vec::new();
+    for row in [4i64, 5, 998] {
+        ids.push(b.push(NodeKind::Box, t, 0));
+        b.prop("row", Value::Int(row));
+    }
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 100.0);
+    let list = s.lookup(list).unwrap();
+    // Tops: 0, 50, 70, 90, 140, 160, 180, 230, …; 334 tall rows and 666 short: 30 020.
+    let tops = l.row_tops(list).unwrap();
+    assert_eq!(&tops[..6], &[0.0, 50.0, 70.0, 90.0, 140.0, 160.0]);
+    assert_eq!(tops.len(), 1001);
+    assert_eq!(l.content_size(list).unwrap().h, 30_020.0);
+    // Rows 4 and 5 are in the window and placed at their tops; 998 is not.
+    assert_eq!(r(&l, &s, ids[0]).y, 140.0);
+    assert_eq!(r(&l, &s, ids[1]).y, 160.0);
+    assert!(l.rect(s.lookup(ids[2]).unwrap()).is_none());
+    assert_eq!(l.windowed_lists(), &[list]);
+    // The window at the top: rows within one viewport of margin.
+    assert_eq!(l.row_window(list, 0.0), Some((0, 6)));
+    // Scrolled to 15 000 px: the rows around it.
+    let (a, z) = l.row_window(list, 15_000.0).unwrap();
+    assert!(tops[a as usize] <= 14_900.0 && tops[(a + 1) as usize] > 14_900.0, "first {a}");
+    assert!(tops[z as usize] < 15_200.0 && tops[(z + 1) as usize] >= 15_200.0, "last {z}");
+}

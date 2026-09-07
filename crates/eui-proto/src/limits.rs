@@ -34,8 +34,10 @@ pub const MAX_OPS_PER_BATCH: u32 = 65_535;
 pub const MAX_INLINE_STR: usize = 4 * 1024;
 /// Deepest nesting of `Value::List`.
 pub const MAX_VALUE_DEPTH: u32 = 4;
-/// Most elements in a `Value::List`.
-pub const MAX_VALUE_LIST: u32 = 1024;
+/// Most elements in a `Value::List`: a windowed list (04 §7.1) sends one
+/// integer per row, and a feed has many rows. Bounded in bytes by
+/// [`MAX_FRAME_BYTES`] regardless.
+pub const MAX_VALUE_LIST: u32 = 1_000_000;
 
 /// Largest inline bytecode chunk, in bytes.
 pub const MAX_CHUNK_BYTES: usize = 64 * 1024;

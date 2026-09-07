@@ -308,6 +308,9 @@ pub struct Driver {
     layout_valid: bool,
     redraw: bool,
     closed: Option<Close>,
+    /// Spec 04 §7.1: the row range last reported by each windowed list,
+    /// by node id, so a range is reported once.
+    windows: HashMap<u32, (u32, u32)>,
     /// The viewer's desktop palette by role, on top of the theme (05 §5),
     /// and the mode it is for: in the other mode the theme's own colours
     /// show, so a light/dark switch still switches something.
@@ -363,6 +366,7 @@ impl Driver {
             closed: None,
             desktop_colors: Vec::new(),
             desktop_mode: None,
+            windows: HashMap::new(),
         }
     }
 
@@ -1526,6 +1530,12 @@ impl Driver {
             self.pending.extend(settled);
         }
         self.ensure_layout();
+        // Spec 04 §7.1: a windowed list whose visible rows changed asks for
+        // them — once the view has landed, not per frame of a glide.
+        if self.scroll_anim.is_none() {
+            let asked = self.window_events();
+            self.pending.extend(asked);
+        }
         let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
         self.redraw = false;
         let now = self.now;
@@ -1559,6 +1569,31 @@ impl Driver {
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
         list
+    }
+
+    /// Spec 04 §7.1: for every windowed list laid out this frame, the rows
+    /// in view plus a viewport of margin; emitted as `window` when the
+    /// range differs from the one last reported for that node.
+    fn window_events(&mut self) -> Vec<Frame> {
+        let lists = self.layout.windowed_lists().to_vec();
+        if lists.is_empty() && self.windows.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut seen = Vec::with_capacity(lists.len());
+        for ix in lists {
+            let Some(node) = self.session.node(ix) else { continue };
+            let (id, sy) = (node.id, node.scroll.1 as f32);
+            let Some(range) = self.layout.row_window(ix, sy) else { continue };
+            seen.push(id);
+            if self.windows.get(&id) == Some(&range) {
+                continue;
+            }
+            self.windows.insert(id, range);
+            out.extend(self.emit(ix, EventKind::Window, Value::List(vec![Value::Int(i64::from(range.0)), Value::Int(i64::from(range.1))])));
+        }
+        self.windows.retain(|id, _| seen.contains(id));
+        out
     }
 
     /// Frames a paint produced — a scroll that landed reports its offset —

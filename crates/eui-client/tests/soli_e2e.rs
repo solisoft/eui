@@ -624,7 +624,29 @@ fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     assert_eq!(d.session().node(spin).unwrap().style, hidden, "reverted on the first batch");
     assert_eq!(d.session().text_of(label), Some("Load 5 000 more"));
-    pump(&mut d, &conn, &wake, |d| d.session().live_nodes() > 90_000);
+    // The feed is windowed (04 §7.1): five thousand more posts arrive as
+    // five thousand row heights and a badge, not as cards — the tree stays
+    // one window's worth. The scroll extent is the whole feed's, though.
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("5010 posts")));
+    assert!(d.session().live_nodes() < 3000, "{} nodes for a windowed feed", d.session().live_nodes());
     let list = d.paint(700, 900);
     assert!(!list.wants_frame, "nothing spins once the answer landed");
+    let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
+    let content = d.layout().content_size(feed).unwrap();
+    assert!(content.h > 5000.0 * 128.0, "the extent is the whole feed: {}", content.h);
+    // To the end: the landing asks for the last rows, and they come.
+    d.input(Input::Key { key: "End".into(), modifiers: 0, down: true });
+    d.input(Input::Key { key: "End".into(), modifiers: 0, down: false });
+    let mut clock = Instant::now();
+    for _ in 0..5 {
+        clock += Duration::from_millis(400);
+        d.tick(clock);
+        let _ = d.paint(700, 900);
+    }
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let row = d.session().atom_id("row").unwrap();
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(5009))));
+    assert!(d.session().live_nodes() < 3000, "{} nodes after the last window", d.session().live_nodes());
 }

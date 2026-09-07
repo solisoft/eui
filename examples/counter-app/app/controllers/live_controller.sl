@@ -589,25 +589,48 @@ def feed_card_height(post)
   post["image"].nil? ? 128 : 316
 end
 
+# The feed is windowed (spec 04 §7.1): the client says which rows are in
+# view, the server builds those cards and no other. Forty thousand posts
+# cost the client forty thousand row heights and the server one window.
 def feed(event_data)
   event = event_data["event"]
   params = event_data["params"]
   state = event_data["state"] ?? {}
   liked = state["liked"] ?? []
   count = state["count"] ?? 10
+  window = state["window"] ?? [0, 0]
   match event {
-    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count},
+    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count, "window": window},
     "more" => {
       "liked": liked,
-      "count": count + 5000
+      "count": count + 5000,
+      "window": window
     },
-    _ => {"liked": liked, "count": count},
+    "window" => {"liked": liked, "count": count, "window": params["payload"]},
+    _ => {"liked": liked, "count": count, "window": window},
   }
 end
 
-# Cards are pure functions of (id, liked): built once, kept. The view is
-# still a function of state; this only spares the interpreter the work of
-# rebuilding ten thousand identical hashes on every event.
+# The height of row `i`, without building the post: what the client needs
+# for every row, so the scroll extent and the row tops are exact.
+def feed_height(i)
+  i % 3 == 0 ? 316 : 128
+end
+
+FEED_HEIGHTS = {}
+
+def feed_heights(count)
+  cached = FEED_HEIGHTS[count]
+  return cached unless cached.nil?
+
+  heights = range(0, count).map(fn(i) { feed_height(i) })
+  FEED_HEIGHTS[count] = heights
+  heights
+end
+
+# Cards are pure functions of (id, liked): built once, kept while they are
+# near the window. The view is still a function of state; this only spares
+# the interpreter the work of rebuilding identical hashes on every event.
 FEED_CARDS = {}
 
 def feed_card(i, liked)
@@ -617,14 +640,34 @@ def feed_card(i, liked)
 
   post = feed_post(i)
   built = keyed(i, post_card(post, liked, feed_card_height(post)))
+  built["p"] = {"row": i}
   FEED_CARDS[key] = built
   built
+end
+
+# Cards far from the window are let go: the cache holds a few windows,
+# not the feed.
+def feed_prune(first, last)
+  return if FEED_CARDS.size() < 400
+
+  keep = {}
+  for key in FEED_CARDS.keys()
+    i = int(key.split(":")[0])
+    if i >= first - 100 && i <= last + 100
+      keep[key] = FEED_CARDS[key]
+    end
+  end
+  FEED_CARDS = keep
 end
 
 def feed_view(state)
   liked = state["liked"] ?? []
   count = state["count"] ?? 10
-  cards = range(0, count).map(fn(i) { feed_card(i, liked.includes?(i)) })
+  window = state["window"] ?? [0, 0]
+  first = window[0]
+  last = window[1] < count ? window[1] : count - 1
+  feed_prune(first, last)
+  cards = last < first ? [] : range(first, last + 1).map(fn(i) { feed_card(i, liked.includes?(i)) })
   header = row(
     {
       "gap": 3,
@@ -650,7 +693,7 @@ def feed_view(state)
         "grow": 1,
         "bg": "surface.raised"
       },
-      [header, list({"grow": 1}, 128, cards)]
+      [header, list_window({"grow": 1}, 128, count, feed_heights(count), cards, "window")]
     )]
   )
 end

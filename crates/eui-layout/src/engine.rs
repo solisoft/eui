@@ -93,7 +93,12 @@ pub struct Layout {
     generation: u32,
     columns_atom: Option<u32>,
     item_height_atom: Option<u32>,
+    count_atom: Option<u32>,
+    heights_atom: Option<u32>,
+    row_atom: Option<u32>,
     viewport: Size,
+    /// Windowed lists (§7.1) laid out this frame.
+    windowed: Vec<NodeIx>,
     /// Each virtualised list's row tops in content coordinates, as placed
     /// this frame (one more entry than rows: the content's end). What a
     /// keyboard needs to land on the next row.
@@ -146,6 +151,10 @@ impl Layout {
         self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
         self.item_height_atom = f.session.atom_id("item_height");
+        self.count_atom = f.session.atom_id("count");
+        self.heights_atom = f.session.atom_id("heights");
+        self.row_atom = f.session.atom_id("row");
+        self.windowed.clear();
         self.viewport = viewport;
 
         let Some(root) = f.session.root() else { return };
@@ -193,6 +202,24 @@ impl Layout {
     pub fn row_tops(&self, list: NodeIx) -> Option<&[f32]> {
         self.rect(list)?;
         self.row_tops.get(&list).map(Vec::as_slice)
+    }
+
+    /// The windowed lists (§7.1) laid out this frame.
+    pub fn windowed_lists(&self) -> &[NodeIx] {
+        &self.windowed
+    }
+
+    /// §7.1: the rows of `list` that intersect the viewport plus one
+    /// viewport of margin on each side at scroll offset `scroll_y`, as
+    /// inclusive indices; `None` for an empty list or one not laid out.
+    pub fn row_window(&self, list: NodeIx, scroll_y: f32) -> Option<(u32, u32)> {
+        let tops = self.row_tops(list)?;
+        let n = tops.len().checked_sub(1).filter(|n| *n > 0)?;
+        let view_h = self.rect(list)?.h;
+        let (start, end) = (scroll_y - view_h, scroll_y + 2.0 * view_h);
+        let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
+        let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
+        Some((first as u32, last as u32))
     }
 
     /// A `scroll` or `list` node's content extent, for clamping offsets.
@@ -463,19 +490,33 @@ impl Layout {
     fn place_virtual_list(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, (item_h, start, end): (f32, f32, f32), measure_only: bool) -> Placement {
         self.stats.list_placements = self.stats.list_placements.saturating_add(1);
         let children: &[NodeIx] = f.session.children(ix);
-        let n = children.len();
         let width = inner_w.bound().unwrap_or(0.0);
+        // §7.1: a list with a `count` has rows the tree does not hold; its
+        // children name their row. Otherwise every child is a row.
+        let count = self.int_prop(f, ix, self.count_atom).filter(|c| *c >= 0).map(|c| c as usize);
+        let n = count.unwrap_or(children.len());
         // §7: a row's height is the list's `item_height` unless the row
-        // carries its own. Rows are walked once for their tops — an add per
-        // row, no measure — so a feed of cards of two heights still costs
-        // nothing off screen.
+        // carries its own — or, windowed, the `heights` entry for it. Rows
+        // are walked once for their tops — an add per row, no measure — so
+        // a feed of cards of two heights still costs nothing off screen.
         let atom = self.item_height_atom;
         let mut tops: Vec<f32> = Vec::with_capacity(n.saturating_add(1));
         let mut y = 0.0f32;
-        for &c in children {
-            tops.push(y);
-            let h = self.int_prop(f, c, atom).filter(|h| *h > 0).map_or(item_h, |h| h as f32);
-            y += h + st.gap;
+        if count.is_some() {
+            let heights: Vec<f32> = match self.heights_atom.and_then(|a| f.session.node(ix)?.prop(a)) {
+                Some(Value::List(items)) => items.iter().map(|v| if let Value::Int(h) = v { if *h > 0 { *h as f32 } else { item_h } } else { item_h }).collect(),
+                _ => Vec::new(),
+            };
+            for i in 0..n {
+                tops.push(y);
+                y += heights.get(i).copied().unwrap_or(item_h) + st.gap;
+            }
+        } else {
+            for &c in children {
+                tops.push(y);
+                let h = self.int_prop(f, c, atom).filter(|h| *h > 0).map_or(item_h, |h| h as f32);
+                y += h + st.gap;
+            }
         }
         tops.push(y);
         let content_h = if n == 0 { 0.0 } else { (y - st.gap).max(0.0) };
@@ -487,9 +528,19 @@ impl Layout {
             return Placement { children: Vec::new(), content: Size::new(width, content_h), baseline: None };
         }
         self.row_tops.insert(ix, tops.clone());
+        if count.is_some() {
+            self.windowed.push(ix);
+        }
+        // Which child sits in which row: its `row` prop when windowed, its
+        // position otherwise. Only rows in the window are placed.
+        let rows: Vec<(usize, NodeIx)> = if count.is_some() {
+            children.iter().filter_map(|&c| self.int_prop(f, c, self.row_atom).filter(|r| *r >= 0).map(|r| (r as usize, c))).filter(|(r, _)| *r >= first && *r <= last && *r < n).collect()
+        } else {
+            children.iter().enumerate().take(last.saturating_add(1)).skip(first).map(|(i, &c)| (i, c)).collect()
+        };
         let mut placed = Vec::with_capacity(window);
         let mut first_baseline = None;
-        for (i, &c) in children.iter().enumerate().take(last.saturating_add(1)).skip(first) {
+        for (i, c) in rows {
             self.stats.rows_measured = self.stats.rows_measured.saturating_add(1);
             let y = tops.get(i).copied().unwrap_or(0.0);
             let cst = self.style(f, c);

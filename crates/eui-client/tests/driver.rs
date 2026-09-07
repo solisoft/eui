@@ -1093,3 +1093,62 @@ fn the_desktops_palette_overrides_roles_in_its_own_mode() {
     d.input(Input::Mode(ThemeMode::Light));
     assert_eq!(d.theme_color(Role::AccentBase), theme_default);
 }
+
+/// Spec 04 §7.1: a windowed list asks for the rows in view, once per
+/// range, once the view has landed.
+#[test]
+fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const ATOM_COUNT: u32 = 20;
+    const ATOM_ROW: u32 = 21;
+    const ATOM_WINDOW: u32 = 22;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::List, id: 2, style: 11, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 1 });
+    tree.props.push((ATOM_ITEM_H, Value::Int(20)));
+    tree.props.push((ATOM_COUNT, Value::Int(100)));
+    tree.handlers.push((EventKind::Window, Handler::Server(ATOM_WINDOW)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10, style: 0, key: 0, text: Some(TextRef::Inline("row 0".into())), props: (2, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((ATOM_ROW, Value::Int(0)));
+    let ops = vec![
+        Op::DefAtom { id: ATOM_COUNT, value: "count".into() },
+        Op::DefAtom { id: ATOM_ROW, value: "row".into() },
+        Op::DefAtom { id: ATOM_WINDOW, value: "window".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    let t0 = Instant::now();
+    d.tick(t0);
+    // The first paint asks for the rows within a viewport of margin: 0..=9.
+    let _ = d.paint(400, 300);
+    let asked = d.take_pending();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let Frame::Event(e) = &asked[0] else { panic!() };
+    assert_eq!((e.node, e.event, e.name), (2, EventKind::Window, ATOM_WINDOW));
+    assert_eq!(e.payload, Value::List(vec![Value::Int(0), Value::Int(9)]));
+    // The same range again: nothing.
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().is_empty());
+    // The extent is the whole list, so it scrolls far: 1 000 px down lands
+    // on rows around 40..=59.
+    let list = d.session().lookup(2).unwrap();
+    d.input(Input::PointerMove(50.0, 50.0));
+    d.input(Input::Wheel(0.0, 1000.0));
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 1000));
+    let _ = d.paint(400, 300);
+    let asked = d.take_pending();
+    let windows: Vec<&Value> = asked.iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Window).then_some(&e.payload) } else { None }).collect();
+    assert_eq!(windows, vec![&Value::List(vec![Value::Int(45), Value::Int(59)])]);
+    // A glide asks nothing until it lands.
+    d.input(Input::Key { key: "PageDown".into(), modifiers: 0, down: true });
+    d.tick(t0 + Duration::from_millis(50));
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)));
+    d.tick(t0 + Duration::from_secs(2));
+    let _ = d.paint(400, 300);
+    let asked = d.take_pending();
+    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window && e.payload == Value::List(vec![Value::Int(50), Value::Int(64)]))), "{asked:?}");
+}

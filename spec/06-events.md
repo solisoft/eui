@@ -36,6 +36,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x13` | `drag_over` | as `pointer_move` | per frame |
 | `0x14` | `drop` | as `pointer_up` | |
 | `0x15` | `long_press` | as `click` | |
+| `0x16` | `window` | `List[Int first, Int last]`, the rows a windowed `list` needs (spec 04 §7.1), inclusive | when the range changes, once a scroll has landed |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,

@@ -179,6 +179,25 @@ the rows in view.
 This is the only place the algorithm is allowed to use an estimate, and it is
 what makes a ten-thousand-row table cost what a fifty-row one costs.
 
+### 7.1 Windowed lists
+
+A `list` carrying a `count` prop (integer, the number of rows) has rows the
+tree does not hold. Row `i` is `heights[i]` px tall when the list carries a
+`heights` prop (a list of integers, one per row; a missing entry is
+`item_height`), else `item_height`. A child of such a list carries a `row`
+prop naming the row it is; a child without one is not laid out. Rows with
+no child are laid out as empty boxes of their height — the scroll extent,
+the scrollbar and the row tops are exactly those of the full list — and
+paint nothing, so the list's own background shows through.
+
+When the range of rows that intersects the viewport plus one viewport of
+margin on each side changes — after a scroll lands, a mount, a resize, a
+change of `count` — the list emits `window` (spec 06) with `[first, last]`,
+inclusive row indices, if it holds a handler of that kind. A server that
+answers with those rows as children, and lets the others go, holds one
+window of a feed in memory, not the feed: forty thousand posts cost the
+client forty thousand integers and the server a few dozen cards.
+
 ## 8. Invalidation
 
 A conforming client MAY relayout from the root on every change; it SHOULD
