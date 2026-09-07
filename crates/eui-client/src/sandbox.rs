@@ -130,9 +130,17 @@ const ALLOWED: &[libc::c_long] = &[
 
 #[cfg(target_os = "linux")]
 fn seccomp() -> Result<String, String> {
-    use seccompiler::{apply_filter_all_threads, BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch};
+    use seccompiler::{apply_filter_all_threads, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
+    /// `PR_SET_VMA`, the one `prctl` an allocator makes.
+    const PR_SET_VMA: u64 = 0x53564d41;
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| format!("seccomp: {e:?}"))?;
-    let rules: std::collections::BTreeMap<i64, Vec<SeccompRule>> = ALLOWED.iter().map(|n| (i64::from(*n), Vec::new())).collect();
+    let mut rules: std::collections::BTreeMap<i64, Vec<SeccompRule>> = ALLOWED.iter().map(|n| (i64::from(*n), Vec::new())).collect();
+    // mimalloc (a Soli-built host's allocator) names the memory it maps,
+    // `prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, …)`, so the mapping shows
+    // in /proc; that one prctl and no other. It is the only conditional
+    // rule: everything else is allowed whole or not at all.
+    let set_vma = SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Eq, PR_SET_VMA).map_err(|e| format!("seccomp: {e}"))?;
+    rules.insert(i64::from(libc::SYS_prctl), vec![SeccompRule::new(vec![set_vma]).map_err(|e| format!("seccomp: {e}"))?]);
     // `EUI_SECCOMP_LOG=1` while developing: a stray system call is logged
     // by the kernel (`dmesg`, `type=1326 … syscall=N`) and refused with
     // ENOSYS instead of killing the worker, so the allowlist can be fixed.
@@ -141,5 +149,5 @@ fn seccomp() -> Result<String, String> {
     let program: BpfProgram = filter.try_into().map_err(|e| format!("seccomp: {e}"))?;
     // Every thread, the warmed font-loader pool included.
     apply_filter_all_threads(&program).map_err(|e| format!("seccomp: {e}"))?;
-    Ok(format!("seccomp: {} system calls allowed, any other kills the worker", ALLOWED.len()))
+    Ok(format!("seccomp: {} system calls allowed (and prctl only to name a mapping), any other kills the worker", ALLOWED.len()))
 }

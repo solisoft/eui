@@ -624,7 +624,7 @@ fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     assert_eq!(d.session().node(spin).unwrap().style, hidden, "reverted on the first batch");
     assert_eq!(d.session().text_of(label), Some("Load 5 000 more"));
-    pump(&mut d, &conn, &wake, |d| d.session().live_nodes() > 190_000);
+    pump(&mut d, &conn, &wake, |d| d.session().live_nodes() > 90_000);
     let list = d.paint(700, 900);
     assert!(!list.wants_frame, "nothing spins once the answer landed");
 }

@@ -594,7 +594,7 @@ def feed(event_data)
   params = event_data["params"]
   state = event_data["state"] ?? {}
   liked = state["liked"] ?? []
-  count = state["count"] ?? 5000
+  count = state["count"] ?? 10
   match event {
     "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count},
     "more" => {
@@ -623,7 +623,7 @@ end
 
 def feed_view(state)
   liked = state["liked"] ?? []
-  count = state["count"] ?? 5000
+  count = state["count"] ?? 10
   cards = range(0, count).map(fn(i) { feed_card(i, liked.includes?(i)) })
   header = row(
     {

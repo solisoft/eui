@@ -271,7 +271,7 @@ contract, documented with `router_eui`: a keyed node hash returned
 unchanged is assumed unchanged.
 
 **A feed, for the performance check.** `examples/counter-app`'s `feed`
-component: five thousand posts (`Load 5 000 more` adds five thousand), a
+component: ten posts to start with (`Load 5 000 more` adds five thousand), a
 third with a picture, in a virtualised list whose rows now carry their own
 `item_height` — two card heights, one addition per row per layout, only the
 visible cards measured. 96 000 nodes; a scrolled frame is half a
