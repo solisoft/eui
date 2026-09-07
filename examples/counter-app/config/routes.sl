@@ -8,6 +8,7 @@ router_eui("todo", "live#todo", "live#todo_view")
 router_eui("table", "live#table", "live#table_view")
 router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("feed", "live#feed", "live#feed_view")
+router_eui("music", "music#music", "music#music_view")
 
 get("/health", "home#health")
 

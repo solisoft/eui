@@ -25,6 +25,8 @@ pub enum Wake {
     Transport,
     /// The desktop's theme changed.
     Theme,
+    /// The host asked the window to close (a signal, say).
+    Exit,
     /// AccessKit has something for the window.
     #[cfg(feature = "a11y")]
     Access(accesskit_winit::Event),
@@ -462,6 +464,7 @@ impl ApplicationHandler<Wake> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Wake) {
         match event {
             Wake::Transport => self.pump(),
+            Wake::Exit => _event_loop.exit(),
             Wake::Theme => {
                 crate::driver::trace(|| "desktop theme wake".into());
                 self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -608,6 +611,24 @@ fn named(n: NamedKey) -> String {
     .to_owned()
 }
 
+/// Set while a window's event loop runs.
+static WINDOW_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set by [`request_exit`]; the loop closes when it sees it.
+static EXIT_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True while a window is up: a host with a signal handler should then
+/// [`request_exit`] and let its main thread return, rather than exit the
+/// process under a live GPU device.
+pub fn window_is_open() -> bool {
+    WINDOW_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Ask the window to close and [`launch`] to return. Only an atomic store,
+/// so it is safe from a signal handler; the loop notices within 100 ms.
+pub fn request_exit() {
+    EXIT_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Run the client until the window closes.
 pub fn run(url: String, allowed: u32) -> Result<(), String> {
     launch(Launch::new(url, allowed))
@@ -618,6 +639,26 @@ pub fn run(url: String, allowed: u32) -> Result<(), String> {
 pub fn launch(launch: Launch) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(launch, proxy);
-    event_loop.run_app(&mut app).map_err(|e| e.to_string())
+    let mut app = App::new(launch, proxy.clone());
+    // A signal handler can only store a flag; this thread turns the flag
+    // into a wake, and stops when the loop is gone.
+    WINDOW_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+    EXIT_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    std::thread::Builder::new()
+        .name("eui-exit-watch".into())
+        .spawn(move || {
+            while WINDOW_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+                if EXIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = proxy.send_event(Wake::Exit);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+        .ok();
+    let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
+    WINDOW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+    // The worker and the GPU go here, on this thread, before anyone exits.
+    drop(app);
+    result
 }

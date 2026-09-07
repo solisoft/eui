@@ -650,3 +650,32 @@ fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
     pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(5009))));
     assert!(d.session().live_nodes() < 3000, "{} nodes after the last window", d.session().live_nodes());
 }
+
+#[test]
+fn the_music_player_opens_an_album_and_plays_a_track() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "music", 1100.0, 760.0);
+    let _ = d.paint(1100, 760);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "Your Library") && all.iter().any(|t| t == "Good afternoon") && all.iter().any(|t| t == "Made For You"), "{all:?}");
+    // Open the first album of "Made for you": its cover card names it.
+    let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Northern Rooms")).unwrap();
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, card);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1100, 760);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "Album") && all.iter().any(|t| t.contains("8 songs")), "{all:?}");
+    // Play the third track: the now-playing bar shows it and the pause glyph.
+    let third = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("3")).unwrap();
+    let seq = d.session().last_seq().unwrap();
+    let track_row = d.session().node(third).unwrap().parent;
+    click(&mut d, &conn, track_row);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1100, 760);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "▮▮"), "playing: {all:?}");
+    assert!(all.iter().filter(|t| t.as_str() == "▶").count() >= 1, "the current track wears the play glyph: {all:?}");
+}
