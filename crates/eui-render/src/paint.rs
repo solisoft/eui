@@ -417,7 +417,12 @@ impl Painter<'_, '_> {
             self.set_clip(self.list.clips.len() as u32 - 1);
         }
         let origin_x = rect.x + style.border.l + style.padding.l - editing.map_or(0.0, |e| e.scroll_x);
-        let origin_y = rect.y + style.border.t + style.padding.t;
+        // A single-line field taller than its line — a control at the
+        // theme's control height, say — centres its text; every other
+        // node's text starts at the top of its content box.
+        let inner_h = (rect.h - style.inset_v()).max(0.0);
+        let centred = self.scene.session.node(ix).is_some_and(|n| n.kind == NodeKind::Input) && inner_h > shaped.metrics.height;
+        let origin_y = rect.y + style.border.t + style.padding.t + if centred { ((inner_h - shaped.metrics.height) / 2.0).round() } else { 0.0 };
         let (above, below) = (style.font.size * 0.9, style.font.size * 0.25);
         if let Some(e) = editing {
             // Spec 03 §3: the selection in accent.base at 30 %, one rect per

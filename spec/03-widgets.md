@@ -134,6 +134,9 @@ no shader, no tessellator and no allocation beyond its quads.
   `cursor` style when one names a shape, else a text beam over an editable
   node, else a hand over anything with a `click` handler, else the arrow —
   and the arrow on a scrollbar.
+- An `input` taller than its line — stretched by a row, or given a
+  control height — centres its line vertically, caret and selection with
+  it; a `textarea` starts at the top.
 - In an editable node the client owns the caret and the selection. A click
   places the caret at the nearest glyph edge and a drag selects;
   `ArrowLeft`/`ArrowRight` move by character, by word with `Ctrl` (`⌘` on

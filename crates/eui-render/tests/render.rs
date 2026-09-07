@@ -474,3 +474,27 @@ fn a_windowed_list_paints_placeholders_for_the_rows_it_does_not_have() {
     assert!(!placeholders.iter().any(|q| (q.rect[1] - 24.0).abs() < 1.0), "row 1 is real, not a placeholder");
     assert!(list.quads.iter().any(|q| q.fill == linear(fx.theme.color(Role::AccentBase))), "the present row painted itself");
 }
+
+/// Spec 03 §3: a single-line field taller than its line centres its text
+/// and caret; a field of exactly one line does not move them.
+#[test]
+fn a_tall_field_centres_its_text_and_caret() {
+    let caret_y = |height: u16| {
+        let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+        let field = StyleRecord { width: Dim::Px(120), height: Dim::Px(height), ..Default::default() };
+        let mut nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Input, 2, 2, 0)];
+        nodes[1].text = Some(TextRef::Inline("hello".into()));
+        let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
+        let ix = fx.session.lookup(2).unwrap();
+        let editing = Some(Editing { node: ix, start: 0, end: 0, caret: 5, scroll_x: 0.0 });
+        let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing, now: 0.0, scrollbar_hot: None });
+        let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).expect("caret");
+        let glyph = list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).expect("glyph");
+        (caret.rect[1], glyph.rect[1])
+    };
+    // The default text line is 22 px: a 22 px field has nothing to centre.
+    let (c22, g22) = caret_y(22);
+    let (c44, g44) = caret_y(44);
+    assert_eq!(c44 - c22, 11.0, "the caret moved down by half the spare height");
+    assert_eq!(g44 - g22, 11.0, "and so did the text");
+}
