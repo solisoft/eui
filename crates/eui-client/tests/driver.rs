@@ -636,3 +636,84 @@ fn a_click_places_the_caret_and_a_drag_selects() {
     let list = d.paint(400, 300);
     assert!(list.quads.iter().any(|q| q.params[2] == 0.0 && q.rect[2] == 1.0), "a one-px caret is drawn");
 }
+
+#[test]
+fn a_click_lands_the_caret_on_the_glyph_under_the_pointer() {
+    for scale in [1.0f32, 1.5, 2.0] {
+        let mut d = Driver::new(400.0, 300.0, scale, 0);
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+        d.handle_frame(Frame::Batch(form_batch()));
+        tab(&mut d, false);
+        key(&mut d, "a", 2);
+        d.input(Input::Text("hello world".into()));
+        assert_eq!(field_text(&d), "hello world");
+        d.input(Input::Unfocused);
+        let _ = d.paint(400, 300);
+        let field = d.session().lookup(2).unwrap();
+        let r = d.layout().rect(field).unwrap();
+        // Where the painter would draw the glyphs: the same shaping the
+        // driver uses, from the content box.
+        let mut engine = eui_text::TextEngine::new();
+        let style = eui_layout::Style::resolve(&d.session().style_of(field), &eui_theme::Theme::default().resolve(eui_theme::Viewer::default()));
+        let shaped = engine.shape("hello world", style.font, Some(r.w - style.inset_h()), 0);
+        let w = shaped.glyphs[6];
+        let x = r.x + style.border.l + style.padding.l + w.x + w.w * 0.3;
+        let y = r.y + r.h / 2.0;
+        d.input(Input::PointerMove(x, y));
+        d.input(Input::PointerDown(0));
+        d.input(Input::PointerUp(0));
+        d.input(Input::Text("|".into()));
+        assert_eq!(field_text(&d), "hello |world", "scale {scale}");
+        // The caret painted is exactly where the next glyph starts.
+        let list = d.paint((400.0 * scale) as u32, (300.0 * scale) as u32);
+        let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == scale.max(1.0).round()).expect("caret");
+        let shaped = engine.shape("hello |world", style.font, Some(r.w - style.inset_h()), 0);
+        let expect = ((r.x + style.border.l + style.padding.l + shaped.glyphs[7].x) * scale).round();
+        assert!((caret.rect[0] - expect).abs() <= 1.0, "scale {scale}: caret at {} expected {expect}", caret.rect[0]);
+    }
+}
+
+#[test]
+fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    // A scroll box of 100 px holding ten 22 px rows, with a scroll handler.
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 10 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(ATOM_INC)));
+    for i in 0..10 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let scroll = d.session().lookup(2).unwrap();
+    d.input(Input::PointerMove(50.0, 50.0));
+    // One notch: nothing moves yet, a frame is due, nothing is reported.
+    assert!(d.input(Input::WheelStep(0.0, 1.0)).is_empty());
+    assert!(d.animating());
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
+    // Mid-way: the offset is somewhere between 0 and 48.
+    d.tick(t0 + Duration::from_millis(60));
+    let _ = d.paint(400, 300);
+    let (_, y) = d.session().node(scroll).unwrap().scroll;
+    assert!(y > 0 && y < 48, "{y}");
+    assert!(d.take_pending().is_empty(), "not landed yet");
+    // A second notch mid-flight retargets to 96 from where the view is.
+    d.input(Input::WheelStep(0.0, 1.0));
+    d.tick(t0 + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 96));
+    assert!(!d.animating());
+    let landed = d.take_pending();
+    assert_eq!(landed.len(), 1, "one scroll event when it lands: {landed:?}");
+    assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(96)])));
+    assert_eq!(d.next_frame_at(), None);
+}

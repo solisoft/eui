@@ -358,7 +358,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
     // The page is a scroll container now: grow the window so every widget
     // the test clicks is inside the viewport instead of scrolled away.
-    for f in d.input(Input::Resized(1000.0, 1700.0, 1.0)) {
+    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
     let all = texts(&d, root(&d));
@@ -456,8 +456,31 @@ fn the_gallery_mounts_and_its_widgets_respond() {
             other => panic!("{other:?}"),
         }
     }
-    let list = d.paint(1000, 1700);
+    let list = d.paint(1000, 2600);
     assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
+
+    // A field keeps what was typed across server round trips the app does
+    // not care about, and a later click lands the caret in that text.
+    let name_label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Name")).unwrap();
+    let field = d.session().children(d.session().node(name_label).unwrap().parent)[1];
+    click(&mut d, &conn, field);
+    for f in d.input(Input::Text("azd".into())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let month = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Month")).unwrap();
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, month);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    assert_eq!(d.session().text_of(field), Some("azd"), "the server's re-render did not wipe the field");
+    let _ = d.paint(1000, 2600);
+    let r = d.layout().rect(field).unwrap();
+    d.input(Input::PointerMove(r.x + r.w - 2.0, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    d.input(Input::Text("!".into()));
+    assert_eq!(d.session().text_of(field), Some("azd!"), "the click put the caret at the end of the kept text");
 }
 
 /// The node showing `text` inside the titled card `title` — the card is the

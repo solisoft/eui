@@ -25,8 +25,11 @@ pub enum Input {
     PointerDown(u8),
     /// A button came up.
     PointerUp(u8),
-    /// Wheel or trackpad, logical px.
+    /// Trackpad or a wheel already reported in pixels: applied at once.
     Wheel(f32, f32),
+    /// Wheel notches, in lines: the driver turns each into a short eased
+    /// scroll so a notched wheel reads as smoothly as a trackpad.
+    WheelStep(f32, f32),
     /// Committed text.
     Text(String),
     /// An input method's composition in progress: shown in the focused
@@ -197,6 +200,41 @@ impl Anim {
     }
 }
 
+/// `EUI_TRACE=1`: a line on stderr for the events a screen shows and a
+/// test cannot — focus, caret placement, scrolls.
+pub fn trace(line: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("EUI_TRACE").as_deref() == Ok("1")) {
+        eprintln!("eui: {}", line());
+    }
+}
+
+/// A scroll offset easing from `from` to `to`, per wheel notch (03 §5's
+/// `motion.base`); a notch arriving mid-way retargets from where the view is.
+#[derive(Debug, Clone, Copy)]
+struct ScrollAnim {
+    node: NodeIx,
+    from: (f32, f32),
+    to: (f32, f32),
+    start: Instant,
+    duration: Duration,
+}
+
+impl ScrollAnim {
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.duration
+    }
+
+    fn at(&self, now: Instant) -> (f32, f32) {
+        if self.done(now) {
+            return self.to;
+        }
+        let t = now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32().max(1e-3);
+        let k = eui_theme::scale::ease(t);
+        (self.from.0 + (self.to.0 - self.from.0) * k, self.from.1 + (self.to.1 - self.from.1) * k)
+    }
+}
+
 /// Blend two optional colours; an absent side fades through transparent.
 fn mix(a: Option<[f32; 4]>, b: Option<[f32; 4]>, k: f32) -> Option<[f32; 4]> {
     match (a, b) {
@@ -227,6 +265,10 @@ pub struct Driver {
     /// Running transitions (spec 03 §5), the clock they run on, and when the
     /// next frame is due — the only reason the window ever wakes itself.
     anims: Vec<(NodeIx, Anim)>,
+    /// A wheel notch in flight: the offset it left, the one it reaches.
+    scroll_anim: Option<ScrollAnim>,
+    /// Frames produced outside an input: see [`Driver::take_pending`].
+    pending: Vec<Frame>,
     now: Instant,
     next_due: Option<Instant>,
     edits: HashMap<u32, Edit>,
@@ -272,6 +314,8 @@ impl Driver {
             focused: None,
             focus_visible: false,
             anims: Vec::new(),
+            scroll_anim: None,
+            pending: Vec::new(),
             now: Instant::now(),
             next_due: None,
             edits: HashMap::new(),
@@ -435,7 +479,26 @@ impl Driver {
 
     /// True while any transition runs.
     pub fn animating(&self) -> bool {
-        !self.anims.is_empty()
+        !self.anims.is_empty() || self.scroll_anim.is_some()
+    }
+
+    /// Move a scroll animation to `now`: the offset it dictates goes into
+    /// the tree before layout. Returns the frames to send once it lands.
+    fn advance_scroll(&mut self) -> Vec<Frame> {
+        let Some(a) = self.scroll_anim else { return Vec::new() };
+        if self.session.node(a.node).is_none() {
+            self.scroll_anim = None;
+            return Vec::new();
+        }
+        let (x, y) = a.at(self.now);
+        self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
+        self.layout_valid = false;
+        if a.done(self.now) {
+            self.scroll_anim = None;
+            let (nx, ny) = (a.to.0.round() as i64, a.to.1.round() as i64);
+            return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]));
+        }
+        Vec::new()
     }
 
     /// The display scale, device px per logical px.
@@ -486,6 +549,7 @@ impl Driver {
             Input::PointerDown(button) => self.pointer_down(button),
             Input::PointerUp(button) => self.pointer_up(button),
             Input::Wheel(dx, dy) => self.wheel(dx, dy),
+            Input::WheelStep(lines_x, lines_y) => self.wheel_step(lines_x, lines_y),
             Input::Text(t) => self.text_input(&t),
             Input::ImePreedit(t) => {
                 self.preedit(t);
@@ -723,7 +787,9 @@ impl Driver {
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
         let mut out = self.set_focus(editable, false);
         if let Some(e) = editable {
-            if let Some(at) = self.byte_at_pointer(e, x, y) {
+            let at = self.byte_at_pointer(e, x, y);
+            trace(|| format!("click in field {:?} at ({x:.1},{y:.1}) rect={:?} text={:?} preedit={:?} -> byte {at:?}", self.session.node(e).map(|n| n.id), self.layout.rect(e), self.session.text_of(e), self.preedit));
+            if let Some(at) = at {
                 if let Some(edit) = self.edit_mut(e) {
                     edit.place(at, false);
                 }
@@ -834,7 +900,35 @@ impl Driver {
         None
     }
 
+    /// A notched wheel: 48 logical px per line, eased over `motion.base`.
+    /// Notches accumulate onto the running target, so a fast spin covers
+    /// ground without waiting for each step to land.
+    fn wheel_step(&mut self, lines_x: f32, lines_y: f32) -> Vec<Frame> {
+        self.ensure_layout();
+        let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
+        let Some(scroller) = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List)) else { return Vec::new() };
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let view = self.layout.rect(scroller).unwrap_or_default();
+        let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
+        let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
+        let here = ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y));
+        let (from, base) = match self.scroll_anim.filter(|a| a.node == scroller) {
+            Some(a) => (a.at(self.now), a.to),
+            None => (here, here),
+        };
+        let to = ((base.0 + lines_x * 48.0).clamp(0.0, max_x), (base.1 + lines_y * 48.0).clamp(0.0, max_y));
+        if to == from {
+            return Vec::new();
+        }
+        let ms = self.resolved.motion.get(1).copied().unwrap_or(180);
+        self.scroll_anim = Some(ScrollAnim { node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        self.next_due = Some(self.now);
+        self.redraw = true;
+        Vec::new()
+    }
+
     fn wheel(&mut self, dx: f32, dy: f32) -> Vec<Frame> {
+        self.scroll_anim = None;
         self.ensure_layout();
         let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
         let Some(scroller) = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List)) else { return Vec::new() };
@@ -1056,11 +1150,16 @@ impl Driver {
     /// `w × h` device-pixel target. Clears the redraw flag.
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
         self.note_style_changes();
+        // A scroll in flight moves the view before layout; what it emits when
+        // it lands is picked up by the next input or frame turn.
+        let landed = self.advance_scroll();
+        self.pending.extend(landed);
         self.ensure_layout();
         self.redraw = false;
         let now = self.now;
         let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
         let editing = self.editing();
+        trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
         let list = paint(&mut Scene {
             session: &self.session,
             layout: &self.layout,
@@ -1077,8 +1176,14 @@ impl Driver {
         self.session.clear_all_dirty();
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
-        self.next_due = if self.anims.is_empty() { None } else { Some(now + Duration::from_millis(16)) };
+        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() { None } else { Some(now + Duration::from_millis(16)) };
         list
+    }
+
+    /// Frames a paint produced — a scroll that landed reports its offset —
+    /// for the window to send after drawing.
+    pub fn take_pending(&mut self) -> Vec<Frame> {
+        std::mem::take(&mut self.pending)
     }
 
     /// The atlases, for the renderer's upload.

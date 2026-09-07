@@ -220,6 +220,9 @@ impl App {
         let (atlas, images) = self.driver.atlases_mut();
         gpu.renderer.render(&view, (w, h), &list, atlas, images);
         frame.present();
+        // A scroll that landed during this paint reports its offset now.
+        let landed = self.driver.take_pending();
+        self.send(landed);
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
         #[cfg(feature = "a11y")]
@@ -410,11 +413,13 @@ impl ApplicationHandler<Wake> for App {
                 self.input(if state == ElementState::Pressed { Input::PointerDown(b) } else { Input::PointerUp(b) });
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => (-x * 40.0, -y * 40.0),
-                    MouseScrollDelta::PixelDelta(p) => (-p.x as f32, -p.y as f32),
-                };
-                self.input(Input::Wheel(dx, dy));
+                match delta {
+                    MouseScrollDelta::LineDelta(x, y) => self.input(Input::WheelStep(-x, -y)),
+                    MouseScrollDelta::PixelDelta(p) => {
+                        let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32);
+                        self.input(Input::Wheel(-p.x as f32 / scale, -p.y as f32 / scale));
+                    }
+                }
             }
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
