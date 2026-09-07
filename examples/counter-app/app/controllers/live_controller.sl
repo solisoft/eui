@@ -634,7 +634,7 @@ def feed_view(state)
       "border": [0, 0, 1, 0],
       "border_color": "border.subtle"
     },
-    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), theme_toggle(), loading_button("Load 5 000 more", "more", "more")]
+    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), loading_button("Load 5 000 more", "more", "more")]
   )
   column(
     {

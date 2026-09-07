@@ -627,19 +627,4 @@ fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
     pump(&mut d, &conn, &wake, |d| d.session().live_nodes() > 190_000);
     let list = d.paint(700, 900);
     assert!(!list.wants_frame, "nothing spins once the answer landed");
-    // The header's theme switch is a local handler: the palette flips on
-    // the client, no event leaves, and the server learns the mode as a
-    // viewport at the next paint.
-    let light = d.theme_color(eui_theme::Role::SurfaceBase);
-    let switch = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("☀/☾")).unwrap();
-    let _ = d.paint(700, 900);
-    let r = d.layout().rect(switch).unwrap();
-    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
-    assert_eq!(d.cursor(), eui_proto::Cursor::Pointer, "a hand over the switch");
-    d.input(Input::PointerDown(0));
-    assert!(d.input(Input::PointerUp(0)).is_empty(), "no event for a local switch");
-    assert_ne!(d.theme_color(eui_theme::Role::SurfaceBase), light, "the palette flipped");
-    let _ = d.paint(700, 900);
-    let out = d.take_pending();
-    assert!(out.iter().any(|f| matches!(f, Frame::Viewport(v) if v.mode == eui_proto::ThemeMode::Dark)), "{out:?}");
 }

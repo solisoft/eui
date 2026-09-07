@@ -393,8 +393,9 @@ wheel notch and chaining onto a scroll in flight. The pointer takes the
 shape of what it is over: a `cursor` style, a beam on a field, a hand on
 anything clickable. And a local handler can switch the viewer's palette —
 `theme.toggle()`, `theme.mode = "dark"`, bytecode `set_mode` — so an app
-can carry its own light/dark switch at no round trip; the feed's header
-has one.
+can carry its own light/dark switch at no round trip (`theme_toggle()` in
+the example builders; the feed does not show it, since the client follows
+the desktop's theme).
 
 **The process boundary (08 §10).** Everything that reads bytes a server
 chose — frame decoding, the tree, layout, text shaping, PNG decoding, the

@@ -1152,13 +1152,19 @@ impl Driver {
         let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
         let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
         let here = ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y));
-        let from = self.scroll_anim.filter(|a| a.node == scroller).map_or(here, |a| a.at(self.now));
+        let in_flight = self.scroll_anim.filter(|a| a.node == scroller);
+        let from = in_flight.map_or(here, |a| a.at(self.now));
         let to = (from.0, target_y.clamp(0.0, max_y));
         if (to.1 - from.1).abs() < 0.5 {
             return Vec::new();
         }
-        let ms = self.resolved.motion.get(2).copied().unwrap_or(320);
-        self.scroll_anim = Some(ScrollAnim { smooth: true, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        // From rest, the view departs and arrives gently over motion.slow.
+        // A press that lands while the view is already moving — a key held
+        // down — must not start it over from rest each time: it keeps the
+        // momentum, easing out to the new row over motion.base like a wheel
+        // notch, so a burst of presses reads as one continuous glide.
+        let (smooth, ms) = if in_flight.is_some() { (false, self.resolved.motion.get(1).copied().unwrap_or(180)) } else { (true, self.resolved.motion.get(2).copied().unwrap_or(320)) };
+        self.scroll_anim = Some(ScrollAnim { smooth, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
         self.next_due = Some(self.now);
         self.redraw = true;
         Vec::new()

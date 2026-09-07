@@ -329,8 +329,8 @@ end
 # and the client puts the button back the moment that answer arrives.
 # A light/dark switch: the viewer's choice, made on the client by a local
 # handler (`theme.toggle()`), so it costs no round trip and the server
-# learns of it only as the next viewport. The glyph is the same on both
-# sides: it names the switch, not the state.
+# learns of it only as the next viewport. Not shown in the feed: a client
+# that follows the desktop's theme has no use for it.
 def theme_toggle()
   {
     "k": "box",

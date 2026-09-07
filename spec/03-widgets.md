@@ -124,8 +124,10 @@ no shader, no tessellator and no allocation beyond its quads.
   `ArrowDown`/`ArrowUp` land the scroller on its next/previous row — a
   `list`'s rows, or the scroller's children; a plain 40 px step where there
   are none — `PageDown`/`PageUp` move one viewport, `Home`/`End` the whole
-  way, each eased over `motion.base` like a wheel notch and chaining onto a
-  scroll in flight. The scroller is the one under the pointer, else the
+  way. From rest the view eases in and out over `motion.slow`; a press
+  that arrives while it is moving keeps the momentum and eases out to the
+  new target over `motion.base`, like a wheel notch, so a held key is one
+  glide rather than a series of departures. The scroller is the one under the pointer, else the
   focused node's, else the first in document order. Nothing is reported but
   the `scroll` the landing produces.
 - The pointer takes the shape of what it is over: the nearest ancestor's
