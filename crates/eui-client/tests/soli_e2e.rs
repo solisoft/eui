@@ -448,7 +448,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     // as a rotated quad.
     let paths = d.session().atom_id("paths").expect("the paths atom");
     let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
-    assert_eq!(canvases.len(), 4);
+    assert_eq!(canvases.len(), 5, "four charts and the spinner");
     for c in &canvases {
         match d.session().node(*c).unwrap().prop(paths) {
             Some(eui_proto::Value::List(p)) => {
@@ -593,4 +593,36 @@ fn a_desktop_artifact_serves_its_component_behind_a_cookie_gate() {
     if let Err(e) = result {
         std::panic::resume_unwind(e);
     }
+}
+
+#[test]
+fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "feed", 700.0, 900.0);
+    let _ = d.paint(700, 900);
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Load 5 000 more")).unwrap();
+    let button = d.session().node(label).unwrap().parent;
+    let spin = d.session().children(button)[0];
+    let hidden = d.session().node(spin).unwrap().style;
+    assert_eq!(d.session().style_of(spin).display, eui_proto::Display::None, "the spinner starts hidden");
+    // Press: the spinner shows and the label changes before any byte comes back.
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, button);
+    assert_eq!(d.session().text_of(label), Some("Loading…"));
+    let showing = d.session().node(spin).unwrap().style;
+    assert_ne!(showing, hidden);
+    assert_eq!(d.session().style_of(spin).animation, 1, "the spinner spins");
+    let list = d.paint(700, 900);
+    assert!(list.wants_frame, "a spinning node keeps frames coming");
+    assert!(d.next_frame_at().is_some());
+    // The server's answer streams in; the provisional changes are gone and
+    // the cards are there.
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    assert_eq!(d.session().node(spin).unwrap().style, hidden, "reverted on the first batch");
+    assert_eq!(d.session().text_of(label), Some("Load 5 000 more"));
+    pump(&mut d, &conn, &wake, |d| d.session().live_nodes() > 190_000);
+    let list = d.paint(700, 900);
+    assert!(!list.wants_frame, "nothing spins once the answer landed");
 }

@@ -123,7 +123,8 @@ fn default_style_record_bytes() {
         0x00,                   // z
         0x00,                   // cursor: default
         0x00,                   // transition: none
-        0x00, 0x00, 0x00,       // reserved
+        0x00,                   // animation: none
+        0x00, 0x00,             // reserved
     ];
     assert_eq!(b.as_slice(), expected.as_slice());
 }

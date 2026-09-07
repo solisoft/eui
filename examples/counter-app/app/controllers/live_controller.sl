@@ -616,9 +616,9 @@ def feed_card(i, liked)
   return cached unless cached.nil?
 
   post = feed_post(i)
-  card = keyed(i, post_card(post, liked, feed_card_height(post)))
-  FEED_CARDS[key] = card
-  card
+  built = keyed(i, post_card(post, liked, feed_card_height(post)))
+  FEED_CARDS[key] = built
+  built
 end
 
 def feed_view(state)
@@ -634,7 +634,7 @@ def feed_view(state)
       "border": [0, 0, 1, 0],
       "border_color": "border.subtle"
     },
-    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), secondary_button("Load 5 000 more", "more")]
+    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), loading_button("Load 5 000 more", "more", "more")]
   )
   column(
     {

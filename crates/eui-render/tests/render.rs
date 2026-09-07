@@ -44,7 +44,7 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[], editing: None })
+    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[], editing: None, now: 0.0, scrollbar_hot: None })
 }
 
 fn gpu() -> Option<Renderer> {
@@ -413,7 +413,7 @@ fn overrides_replace_a_nodes_colours_for_the_frame() {
     let ix = fx.session.lookup(2).unwrap();
     let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5 };
     let overrides = [(ix, mid)];
-    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides, editing: None });
+    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides, editing: None, now: 0.0, scrollbar_hot: None });
     assert_eq!(list.quads[0].fill, [0.5, 0.25, 0.125, 1.0]);
     assert_eq!(list.quads[0].params[3], 0.5);
 }
@@ -427,7 +427,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
     let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
     let ix = fx.session.lookup(2).unwrap();
     let editing = Some(Editing { node: ix, start: 1, end: 3, caret: 3, scroll_x: 4.0 });
-    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing });
+    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing, now: 0.0, scrollbar_hot: None });
     let boxes: Vec<&Quad> = list.quads.iter().filter(|q| q.params[2] == 0.0).collect();
     assert_eq!(boxes.len(), 2, "one selection rect, one caret: {list:#?}");
     let mut accent = linear(fx.theme.color(Role::AccentBase));

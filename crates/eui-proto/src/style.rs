@@ -369,6 +369,9 @@ pub struct StyleRecord {
     /// `0` none, else a `motion` scale index + 1: colours and opacity
     /// animate into this record when a node's style changes to it.
     pub transition: u8,
+    /// `0` none, `1` spin: the node's painting turns about its centre, one
+    /// revolution every 1.2 s, for as long as it is on screen (03 §5).
+    pub animation: u8,
 }
 
 impl Default for StyleRecord {
@@ -412,6 +415,7 @@ impl Default for StyleRecord {
             z: 0,
             cursor: Cursor::Default,
             transition: 0,
+            animation: 0,
         }
     }
 }
@@ -458,9 +462,13 @@ impl StyleRecord {
             z: f.u8()?,
             cursor: Cursor::from_u8(f.u8()?)?,
             transition: f.u8()?,
+            animation: f.u8()?,
         };
         if out.transition > 3 {
             return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
+        }
+        if out.animation > 1 {
+            return Err(DecodeError::IllegalValue("animation is 0 or 1 (spin)"));
         }
 
         if out.text_decoration & !0b11 != 0 {
@@ -469,7 +477,7 @@ impl StyleRecord {
         // The reserved tail is where a future field will go. Accepting garbage
         // there today would make that future field unusable, because some
         // deployed server would already be putting something else in it.
-        if f.array::<3>()? != [0; 3] {
+        if f.array::<2>()? != [0; 2] {
             return Err(DecodeError::IllegalValue("reserved bytes must be zero"));
         }
         f.finish()?;
@@ -517,7 +525,8 @@ impl StyleRecord {
             .u8(self.z)
             .u8(self.cursor.to_u8())
             .u8(self.transition)
-            .raw(&[0; 3]);
+            .u8(self.animation)
+            .raw(&[0; 2]);
     }
 }
 

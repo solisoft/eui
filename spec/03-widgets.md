@@ -51,6 +51,8 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    children. The strip is the client's: pressing the thumb drags it,
    pressing the track pages by the view's height, and neither reaches the
    application except as the `scroll` event the resulting offset produces.
+   While the pointer is on the strip, or the thumb is being dragged, the
+   thumb fills the strip in `text.default` at 70 %.
 
 Rectangles are snapped to device pixels before painting; glyph positions are
 snapped horizontally to whole device pixels and vertically to the line's
@@ -75,6 +77,13 @@ and a node that is mounted or replaced appears at once. The server is never
 told; a transition is the client's rendering of a state change it already
 knows about, and a client MAY skip it (reduced motion) without any
 difference on the wire.
+
+A record's `animation` byte (02 §3, offset 61) is `0` or `1`, **spin**: a
+node wearing it turns about its own centre, one revolution every 1.2 s,
+for as long as it is on screen, and everything painted for it — its box,
+its text, its canvas paths — turns with it. It is what a spinner is made
+of: a `canvas` arc that spins. The client wakes for frames only while a
+spinning node is painted; a client MAY hold it still (reduced motion).
 
 ### 1.1 `canvas` paths
 

@@ -830,3 +830,79 @@ fn a_refused_resync_ends_the_session_instead_of_looping() {
     // And a later bad batch resyncs again: the guard is per resync, not per session.
     assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetText { node: 99, text: TextRef::Atom(1) }] })), vec![Frame::Resync]);
 }
+
+#[test]
+fn a_local_then_server_chunks_effects_are_provisional_until_the_answer() {
+    use eui_vm::Asm;
+    const COUNT: u32 = 1;
+    const INC: u32 = 2;
+    const VALUE_KEY: u32 = 3;
+    // The counter's local handler: count += 1, value.text = str(count).
+    let chunk = Asm::new(2).load(COUNT).push_int(1).op(0x10).op(0x06).store(COUNT).op(0x1A).set_text(VALUE_KEY).ret();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
+    tree.props.push((COUNT, Value::Int(41)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: VALUE_KEY, text: Some(TextRef::Inline("41".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: INC }));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: COUNT, value: "count".into() },
+            Op::DefAtom { id: INC, value: "increment".into() },
+            Op::DefAtom { id: VALUE_KEY, value: "value".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(40), height: Dim::Px(20), ..Default::default() } },
+            Op::DefChunkBytes { id: 1, bytes: chunk },
+            Op::Mount(tree),
+        ],
+    };
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+    let (x, y) = centre(&mut d, 3);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    let value = d.session().lookup(2).unwrap();
+    assert_eq!(d.session().text_of(value), Some("42"), "shown at once");
+    // A server batch that says nothing about the value: the provisional
+    // change is undone — the client agrees with the server.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetStyle { node: 3, style: 2 }] }));
+    assert_eq!(d.session().text_of(value), Some("41"), "reverted");
+    assert_eq!(d.session().root_prop(COUNT), Some(&Value::Int(41)));
+    // A batch that confirms it: the old value goes back first, the op lands
+    // on top, no flicker between.
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.session().text_of(value), Some("42"));
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetText { node: 2, text: TextRef::Inline("42".into()) }, Op::SetProp { node: 1, prop: COUNT, value: Value::Int(42) }] }));
+    assert_eq!(d.session().text_of(value), Some("42"));
+    assert_eq!(d.session().root_prop(COUNT), Some(&Value::Int(42)));
+}
+
+#[test]
+fn a_spinning_node_turns_its_quads_and_keeps_frames_coming() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let spin = StyleRecord { width: Dim::Px(20), height: Dim::Px(20), bg: ColorRef::role(Role::AccentBase.id()), animation: 1, ..Default::default() };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: spin },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let t0 = Instant::now();
+    d.tick(t0 + Duration::from_millis(300));
+    let list = d.paint(400, 300);
+    assert!(list.wants_frame);
+    assert!(d.next_frame_at().is_some(), "frames keep coming while it spins");
+    let q = list.quads.iter().find(|q| q.params[2] == 0.0).unwrap();
+    assert!(q.extra[0] != 0.0, "turned: {q:?}");
+    // Its centre stayed put: the box turns about itself.
+    let r = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
+    assert!((q.rect[0] + q.rect[2] / 2.0 - (r.x + r.w / 2.0)).abs() < 0.01);
+}

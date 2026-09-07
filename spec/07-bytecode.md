@@ -107,3 +107,14 @@ chunk can wait on.
 event named `name` exactly as `Handler::Server` would, with the same payload.
 Any `emit` inside the chunk queues an additional event. All events are sent
 after the chunk finishes, in order, and none is sent if the chunk aborted.
+
+The effects of a `LocalThenServer` chunk — every `set_text`, `set_prop` and
+`set_style` it performs — are **provisional**: the client shows them at
+once and puts the previous values back the moment the next server batch
+arrives, before applying it. The batch's own ops then land on the tree
+the server actually has, so a server that confirms the change sends it
+and a server that ignores it sends nothing, and the client agrees with
+the server either way without a flicker. A `Local` chunk's effects are
+not provisional: hover and pressed states are restored by their own
+events.
+

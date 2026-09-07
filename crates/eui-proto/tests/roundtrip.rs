@@ -165,6 +165,7 @@ fn full_style_record_survives() {
         z: 9,
         cursor: Cursor::NotAllowed,
         transition: 2,
+        animation: 1,
     };
     let mut w = Writer::new();
     record.encode(&mut w);

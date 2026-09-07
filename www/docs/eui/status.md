@@ -219,6 +219,19 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**A spinner that spins, and a button that shows it is working.** The
+style record's next byte is `animation`: `spin` turns everything painted
+for a node about its centre, one turn per 1.2 s, and the window wakes for
+frames only while such a node is on screen; the catalogue's `spinner` is a
+three-quarter arc on a canvas that spins. The feed's `Load 5 000 more` is a
+`loading_button`: a local handler reveals the spinner and changes the label
+the instant it is pressed — and the effects of a local-then-server handler
+are **provisional** now (spec 07 §6): the client puts the old values back
+the moment the server's answer arrives, before applying it, so a server that
+confirms sends the change and one that does not sends nothing, and the
+client agrees either way. The scrollbar's thumb fills its strip under the
+pointer and while dragged.
+
 **Memory, measured on the feed** (release client, the machine's 1.5×
 window of 1230 × 1390): 131 MB resident, 104 MB proportional, at rest with
 five thousand cards on the tree; the empty counter costs 85 MB resident,

@@ -296,14 +296,67 @@ def tabs(names, active, on_select)
   )
 end
 
+# A spinner: a three-quarter arc on a canvas that the client spins.
 def spinner
-  {"k": "box", "s": {
-    "width": 18,
-    "height": 18,
-    "radius": 4,
-    "border": 2,
-    "border_color": "accent.base"
-  }}
+  spinner_sized(18)
+end
+
+def spinner_sized(size)
+  half = size / 2
+  {
+    "k": "canvas",
+    "s": {
+      "width": size,
+      "height": size,
+      "animation": "spin",
+      "shrink": 0
+    },
+    "p": {"paths": [ [
+      4,
+      "accent.base",
+      2,
+      half,
+      half,
+      half - 2,
+      0,
+      4.71
+    ]]}
+  }
+end
+
+# A button that shows it is working the instant it is pressed: a local
+# handler reveals the spinner and changes the label, the server answers,
+# and the client puts the button back the moment that answer arrives.
+def loading_button(label, on_click, key)
+  spin = spinner_sized(14)
+  spin["s"]["display"] = "none"
+  spin["key"] = key + "_spin"
+  caption = text(label, {"weight": "semibold"})
+  caption["key"] = key + "_label"
+  showing = spinner_sized(14)["s"]
+  showing["display"] = "row"
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "gap": 2,
+      "align": "center",
+      "justify": "center",
+      "pad": [2, 4, 2, 4],
+      "min_width": 44,
+      "bg": "surface.sunken",
+      "fg": "text.default",
+      "radius": 2,
+      "cursor": "pointer",
+      "transition": "fast"
+    },
+    "on": {"click": {
+      "local": key + "_spin.style = @showing; " + key + "_label.text = \"Loading…\"",
+      "styles": {"showing": showing},
+      "then": on_click
+    }},
+    "c": [spin, caption]
+  }
 end
 
 def toast(message, tone)

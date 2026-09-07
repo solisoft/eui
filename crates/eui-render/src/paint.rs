@@ -78,6 +78,9 @@ pub struct DrawList {
     pub clips: Vec<[u32; 4]>,
     /// The clear colour, linear RGBA.
     pub clear: [f32; 4],
+    /// Something on screen animates by itself (a `spin`): the next frame
+    /// is due at once rather than when an input arrives.
+    pub wants_frame: bool,
 }
 
 /// Inputs to one paint.
@@ -101,6 +104,11 @@ pub struct Scene<'a> {
     pub overrides: &'a [(NodeIx, Colors)],
     /// The field being edited: its caret and selection (03 §3).
     pub editing: Option<Editing>,
+    /// Seconds on the client's clock, for `spin` (03 §5).
+    pub now: f32,
+    /// The scroller whose scrollbar the pointer is on or dragging: its
+    /// thumb paints wider and darker.
+    pub scrollbar_hot: Option<NodeIx>,
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -171,6 +179,29 @@ impl Painter<'_, '_> {
 
     fn node(&mut self, ix: NodeIx) {
         let Some(rect) = self.scene.layout.rect(ix) else { return };
+        let spinning = self.scene.session.style_of(ix).animation == 1;
+        let first = self.list.quads.len();
+        self.node_inner(ix, rect);
+        if spinning {
+            // Spec 03 §5 `spin`: everything painted for the node turns about
+            // its centre, one revolution per 1.2 s; the vertex stage rotates
+            // each quad about its own centre, so each centre is moved too.
+            let dev = self.device(rect);
+            let (cx, cy) = (dev[0] + dev[2] / 2.0, dev[1] + dev[3] / 2.0);
+            let angle = (self.scene.now % 1.2) / 1.2 * std::f32::consts::TAU;
+            let (sa, ca) = angle.sin_cos();
+            for q in self.list.quads.iter_mut().skip(first) {
+                let (qx, qy) = (q.rect[0] + q.rect[2] / 2.0 - cx, q.rect[1] + q.rect[3] / 2.0 - cy);
+                let (rx, ry) = (qx * ca - qy * sa, qx * sa + qy * ca);
+                q.rect[0] = cx + rx - q.rect[2] / 2.0;
+                q.rect[1] = cy + ry - q.rect[3] / 2.0;
+                q.extra[0] += angle;
+            }
+            self.list.wants_frame = true;
+        }
+    }
+
+    fn node_inner(&mut self, ix: NodeIx, rect: Rect) {
         // Cull before resolving a style or touching text: a virtualised list
         // has thousands of rows with rects and no business being painted.
         // Only a scroll container may hold visible content outside its own
@@ -324,13 +355,17 @@ impl Painter<'_, '_> {
     /// its right edge — as long as view ÷ content, never under 24 px —
     /// painted after its children so it sits on top of them.
     fn scrollbar(&mut self, ix: NodeIx, rect: Rect, opacity: f32) {
-        let Some(t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else { return };
-        let scale = self.scene.scale;
-        let mut color = linear(self.scene.theme.color(Role::TextMuted));
-        color[3] *= 0.45;
+        let Some(mut t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else { return };
+        let hot = self.scene.scrollbar_hot == Some(ix);
+        let mut color = linear(self.scene.theme.color(if hot { Role::TextDefault } else { Role::TextMuted }));
+        color[3] *= if hot { 0.7 } else { 0.45 };
+        if hot {
+            // Under the pointer the thumb fills its strip.
+            t.x -= 1.0;
+            t.w += 2.0;
+        }
         let q = self.device(t);
         self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
-        let _ = scale;
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
-    caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
+    caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
 
@@ -81,6 +81,8 @@ struct Pointer {
     dragging_thumb: Option<(NodeIx, f32)>,
     /// The pointer moved while a frame was owed; hover is settled at paint.
     hover_pending: bool,
+    /// The scroller whose scrollbar strip the pointer rests on.
+    over_scrollbar: Option<NodeIx>,
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -274,6 +276,8 @@ pub struct Driver {
     anims: Vec<(NodeIx, Anim)>,
     /// A wheel notch in flight: the offset it left, the one it reaches.
     scroll_anim: Option<ScrollAnim>,
+    /// When the driver was made: `spin` phases count from here.
+    epoch: Instant,
     /// Frames produced outside an input: see [`Driver::take_pending`].
     pending: Vec<Frame>,
     /// Sub-pixel wheel motion not yet applied: a trackpad reports fractions
@@ -288,6 +292,8 @@ pub struct Driver {
     clipboard: Option<String>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
+    /// Effects of local-then-server handlers awaiting the server's answer.
+    provisional: Vec<Undo>,
     granted: u32,
     welcomed: bool,
     /// A `Resync` went out and its answer has not arrived: if that answer is
@@ -328,6 +334,7 @@ impl Driver {
             focus_visible: false,
             anims: Vec::new(),
             scroll_anim: None,
+            epoch: Instant::now(),
             pending: Vec::new(),
             wheel_rest: (0.0, 0.0),
             now: Instant::now(),
@@ -336,6 +343,7 @@ impl Driver {
             preedit: String::new(),
             clipboard: None,
             chunks: HashMap::new(),
+            provisional: Vec::new(),
             granted: granted & caps::ALL,
             welcomed: false,
             resyncing: false,
@@ -416,6 +424,7 @@ impl Driver {
     }
 
     fn apply(&mut self, batch: &Batch) -> Vec<Frame> {
+        self.revert_provisional();
         match self.session.apply(batch) {
             Ok(()) => {
                 self.resyncing = false;
@@ -674,7 +683,7 @@ impl Driver {
         let name = match handler {
             Handler::Server(name) => Some(name),
             Handler::Local(chunk) => {
-                match self.run_local(chunk) {
+                match self.run_local(chunk, false) {
                     Ok(queued) => {
                         let state = self.root_state();
                         out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
@@ -683,7 +692,7 @@ impl Driver {
                 }
                 None
             }
-            Handler::LocalThenServer { chunk, name } => match self.run_local(chunk) {
+            Handler::LocalThenServer { chunk, name } => match self.run_local(chunk, true) {
                 Ok(queued) => {
                     let state = self.root_state();
                     out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
@@ -711,7 +720,7 @@ impl Driver {
 
     /// Verify (once) and run a chunk against the session. Returns the atoms
     /// the chunk asked to emit, in order.
-    fn run_local(&mut self, chunk_id: u32) -> Result<Vec<u32>, String> {
+    fn run_local(&mut self, chunk_id: u32, provisional: bool) -> Result<Vec<u32>, String> {
         let verified = match self.chunks.get(&chunk_id) {
             Some(Some(c)) => c.clone(),
             Some(None) => return Err("chunk failed verification earlier".into()),
@@ -743,15 +752,45 @@ impl Driver {
                 }
             }
         };
-        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false };
+        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, undo: provisional.then(Vec::new) };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
         let emitted = host.emitted;
+        if let Some(undo) = host.undo {
+            self.provisional.extend(undo);
+        }
         if touched {
             self.invalidate();
         }
         result.map_err(|e| e.to_string())?;
         Ok(emitted)
+    }
+
+    /// Spec 07 §6: a server batch supersedes every provisional change made
+    /// since the last one. Put the old values back, newest first, before
+    /// the batch applies — its ops are relative to the tree the server has.
+    fn revert_provisional(&mut self) {
+        let changes = std::mem::take(&mut self.provisional);
+        if changes.is_empty() {
+            return;
+        }
+        for change in changes.into_iter().rev() {
+            match change {
+                Undo::Style(ix, style) => {
+                    self.session.set_style_local(ix, style);
+                }
+                Undo::Text(ix, text) => {
+                    self.session.set_text_local(ix, text.map_or(String::new(), |t| match t {
+                        TextRef::Inline(s) => s,
+                        TextRef::Atom(a) => self.session.atom(a).unwrap_or("").to_owned(),
+                    }));
+                }
+                Undo::Prop(ix, atom, old) => {
+                    self.session.set_prop_local(ix, atom, old.unwrap_or(Value::Null));
+                }
+            }
+        }
+        self.invalidate();
     }
 
     /// Spec 06 §1: a pointer payload is local to the node the event is
@@ -806,6 +845,11 @@ impl Driver {
     fn hover(&mut self, x: f32, y: f32) -> Vec<Frame> {
         self.pointer.hover_pending = false;
         let now = self.layout.hit(&self.session, x, y);
+        let strip = now.and_then(|hit| self.scroller_strip_at(hit, x));
+        if strip != self.pointer.over_scrollbar {
+            self.pointer.over_scrollbar = strip;
+            self.redraw = true;
+        }
         let mut out = Vec::new();
         if now != self.pointer.over {
             if let Some(old) = self.pointer.over {
@@ -1317,7 +1361,12 @@ impl Driver {
             focus: if self.focus_visible { self.focused } else { None },
             overrides: &overrides,
             editing,
+            now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
+            scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
         });
+        if list.wants_frame && self.next_due.is_none() {
+            self.next_due = Some(now + Duration::from_millis(16));
+        }
         self.session.clear_all_dirty();
         trace(|| {
             let st = self.layout.stats();
@@ -1325,7 +1374,7 @@ impl Driver {
         });
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
-        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() { None } else { Some(now + Duration::from_millis(16)) };
+        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
         list
     }
 
@@ -1358,6 +1407,17 @@ struct SessionHost<'a> {
     session: &'a mut Session,
     emitted: Vec<u32>,
     touched: bool,
+    /// What to put back if the server's answer does not confirm it: the
+    /// effects of a `LocalThenServer` chunk are provisional (07 §6).
+    undo: Option<Vec<Undo>>,
+}
+
+/// One provisional change, with the value it replaced.
+#[derive(Debug, Clone)]
+enum Undo {
+    Style(NodeIx, u32),
+    Text(NodeIx, Option<TextRef>),
+    Prop(NodeIx, u32, Option<Value>),
 }
 
 fn to_wire(v: eui_vm::Value) -> Value {
@@ -1387,21 +1447,34 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.root_prop(atom).map_or(eui_vm::Value::Null, from_wire)
     }
     fn store(&mut self, atom: u32, value: eui_vm::Value) -> bool {
+        if let (Some(undo), Some(root)) = (&mut self.undo, self.session.root()) {
+            undo.push(Undo::Prop(root, atom, self.session.root_prop(atom).cloned()));
+        }
         self.session.set_root_prop_local(atom, to_wire(value))
     }
     fn set_text(&mut self, key: u32, text: String) -> bool {
         let Some(ix) = self.session.lookup_key(key) else { return false };
         self.touched = true;
+        if let Some(undo) = &mut self.undo {
+            undo.push(Undo::Text(ix, self.session.node(ix).and_then(|n| n.text.clone())));
+        }
         self.session.set_text_local(ix, text)
     }
     fn set_prop(&mut self, key: u32, atom: u32, value: eui_vm::Value) -> bool {
         let Some(ix) = self.session.lookup_key(key) else { return false };
         self.touched = true;
+        if let Some(undo) = &mut self.undo {
+            let old = self.session.node(ix).and_then(|n| n.props.iter().find(|(a, _)| *a == atom).map(|(_, v)| v.clone()));
+            undo.push(Undo::Prop(ix, atom, old));
+        }
         self.session.set_prop_local(ix, atom, to_wire(value))
     }
     fn set_style(&mut self, key: u32, style: u32) -> bool {
         let Some(ix) = self.session.lookup_key(key) else { return false };
         self.touched = true;
+        if let Some(undo) = &mut self.undo {
+            undo.push(Undo::Style(ix, self.session.node(ix).map_or(0, |n| n.style)));
+        }
         self.session.set_style_local(ix, style)
     }
     fn emit(&mut self, atom: u32) {

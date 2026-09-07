@@ -404,10 +404,15 @@ fn a_transition_past_the_motion_scale_is_rejected() {
 }
 
 #[test]
+fn an_unknown_animation_is_rejected() {
+    assert_eq!(style_with(61, &[2]), E::IllegalValue("animation is 0 or 1 (spin)"));
+}
+
+#[test]
 fn non_zero_reserved_bytes_are_rejected() {
-    for i in 0..3 {
+    for i in 0..2 {
         let mut raw = style_bytes();
-        raw[61 + i] = 1;
+        raw[62 + i] = 1;
         assert_eq!(
             StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(),
             E::IllegalValue("reserved bytes must be zero"),
