@@ -269,6 +269,9 @@ pub struct Driver {
     scroll_anim: Option<ScrollAnim>,
     /// Frames produced outside an input: see [`Driver::take_pending`].
     pending: Vec<Frame>,
+    /// Sub-pixel wheel motion not yet applied: a trackpad reports fractions
+    /// of a pixel per event, and truncating each one would swallow them all.
+    wheel_rest: (f32, f32),
     now: Instant,
     next_due: Option<Instant>,
     edits: HashMap<u32, Edit>,
@@ -316,6 +319,7 @@ impl Driver {
             anims: Vec::new(),
             scroll_anim: None,
             pending: Vec::new(),
+            wheel_rest: (0.0, 0.0),
             now: Instant::now(),
             next_due: None,
             edits: HashMap::new(),
@@ -932,6 +936,13 @@ impl Driver {
         self.ensure_layout();
         let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
         let Some(scroller) = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List)) else { return Vec::new() };
+        // Whole pixels move the view; the fraction waits for the next event.
+        let (ax, ay) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
+        // Ten events of 0.7 px are 7 px, not 6.999: snap before truncating.
+        let whole = |v: f32| if (v - v.round()).abs() < 1e-3 { v.round() } else { v.trunc() };
+        let (dx, dy) = (whole(ax), whole(ay));
+        self.wheel_rest = (ax - dx, ay - dy);
+        trace(|| format!("wheel {dx},{dy} (rest {:.2},{:.2})", self.wheel_rest.0, self.wheel_rest.1));
         let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
         let content = self.layout.content_size(scroller).unwrap_or_default();
         let view = self.layout.rect(scroller).unwrap_or_default();

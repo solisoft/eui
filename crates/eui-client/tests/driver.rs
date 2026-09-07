@@ -717,3 +717,27 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(96)])));
     assert_eq!(d.next_frame_at(), None);
 }
+
+#[test]
+fn trackpad_fractions_add_up_instead_of_being_swallowed() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 10 });
+    for i in 0..10 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+    let scroll = d.session().lookup(2).unwrap();
+    d.input(Input::PointerMove(50.0, 50.0));
+    for _ in 0..10 {
+        d.input(Input::Wheel(0.0, 0.7));
+    }
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 7), "ten events of 0.7 px scroll 7 px");
+}
