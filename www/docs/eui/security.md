@@ -85,9 +85,16 @@ cannot invent an event on a node it never received, nor a value outside the
 declared domain. A local handler's effect is advisory and is re-derived
 server-side before anything is trusted.
 
-## Still to come
+## Process isolation
 
-Process isolation — decoding and the VM in a child sandboxed with seccomp and
-Landlock on Linux, `sandbox_init` on macOS, AppContainer on Windows — is stage
-three. Until then the decoder's own discipline is the boundary, which is why so
-much of the work above went into it.
+The decoder, the tree, layout, text shaping, PNG decoding and the VM run
+in a worker process; the window keeps the display, the GPU, TLS, the pin
+store, the clipboard and the accessibility adapter, and never decodes a
+frame. On Linux the worker confines itself before its first byte: Landlock
+denies every file and socket, a seccomp allowlist of the system calls its
+loop needs kills on any other, and the process is not dumpable, so a kill
+leaves no core of the session on disk. A dead worker ends the session
+with a reason and the window stands. macOS (`sandbox_init`) and Windows
+(AppContainer) are not done: the worker is its own process there, a crash
+is contained, a compromised worker is not confined, and the window says
+so. `EUI_SANDBOX=0` runs the driver in the window process for debugging.

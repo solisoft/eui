@@ -68,6 +68,9 @@ pub enum Close {
     Version(u32),
     /// A frame arrived that the protocol does not allow in this direction.
     Protocol(&'static str),
+    /// The transport handed over something that was not a frame, or went
+    /// away; the window's reason.
+    Transport(String),
 }
 
 #[derive(Debug, Default)]
@@ -394,6 +397,20 @@ impl Driver {
     /// Why the session ended, if it did.
     pub fn closed(&self) -> Option<&Close> {
         self.closed.as_ref()
+    }
+
+    /// End the session from outside: the transport spoke nonsense or went
+    /// away. Nothing is sent; the window reports `why`.
+    pub fn close(&mut self, why: String) {
+        if self.closed.is_none() {
+            self.closed = Some(Close::Transport(why));
+        }
+    }
+
+    /// Frames waiting for the window to send, to add to. What
+    /// [`Self::take_pending`] hands over.
+    pub fn pending_mut(&mut self) -> &mut Vec<Frame> {
+        &mut self.pending
     }
 
     // -------------------------------------------------------------- frames

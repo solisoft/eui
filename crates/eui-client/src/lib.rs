@@ -23,8 +23,11 @@ pub mod app;
 pub mod manifest;
 pub mod assets;
 pub mod driver;
+pub mod sandbox;
 pub mod transport;
+pub mod worker;
 
 pub use assets::{AssetError, AssetStore, Image};
 pub use driver::{Close, Driver, Input};
+pub use worker::Backend;
 pub use transport::{check_url, connect, Connection, Incoming, TransportError};

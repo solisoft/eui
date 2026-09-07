@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use eui_proto::Frame;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
@@ -14,8 +13,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::driver::{Driver, Input};
+use crate::driver::Input;
 use crate::transport::{self, Connection, Incoming};
+use crate::worker::Backend;
 
 /// Why the loop woke: the transport has a message, or an assistive
 /// technology wants the tree or asked for an action.
@@ -74,7 +74,8 @@ pub struct App {
     allowed: u32,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
-    driver: Driver,
+    /// The driver: in a worker process when one could be started.
+    backend: Backend,
     conn: Option<Connection>,
     modifiers: u32,
     proxy: EventLoopProxy<Wake>,
@@ -99,7 +100,7 @@ impl App {
             allowed: launch.allowed,
             window: None,
             gpu: None,
-            driver: Driver::new(960.0, 640.0, 1.0, 0),
+            backend: Backend::local(crate::driver::Driver::new(960.0, 640.0, 1.0, 0)),
             conn: None,
             modifiers: 0,
             proxy,
@@ -111,10 +112,10 @@ impl App {
         }
     }
 
-    fn send(&mut self, frames: Vec<Frame>) {
+    fn send(&mut self, frames: Vec<Vec<u8>>) {
         let Some(conn) = &self.conn else { return };
         for f in frames {
-            if conn.tx.send(f.encode()).is_err() {
+            if conn.tx.send(f).is_err() {
                 eprintln!("eui: connection gone");
                 self.conn = None;
                 return;
@@ -128,27 +129,23 @@ impl App {
         if let Some(conn) = &self.conn {
             while let Ok(msg) = conn.rx.try_recv() {
                 match msg {
-                    Incoming::Message(bytes) => match Frame::decode(&bytes) {
-                        Ok(f) => frames.push(f),
-                        Err(e) => {
-                            closed = Some(format!("bad frame: {e}"));
-                            break;
-                        }
-                    },
+                    // Decoded by the driver, wherever it runs: the window
+                    // never reads a frame.
+                    Incoming::Message(bytes) => frames.push(bytes),
                     Incoming::Closed(e) => {
                         closed = Some(e.to_string());
                         break;
                     }
-                    Incoming::Asset(hash, Ok(bytes)) => self.driver.asset_ready(hash, bytes),
-                    Incoming::Asset(hash, Err(why)) => self.driver.asset_failed(hash, why),
+                    Incoming::Asset(hash, Ok(bytes)) => self.backend.asset_ready(hash, bytes),
+                    Incoming::Asset(hash, Err(why)) => self.backend.asset_failed(hash, why),
                 }
             }
         }
         for f in frames {
-            let out = self.driver.handle_frame(f);
+            let out = self.backend.frame(f);
             self.send(out);
         }
-        for hash in self.driver.pending_assets() {
+        for hash in self.backend.pending_assets() {
             if let Some(conn) = &self.conn {
                 conn.request_asset(hash);
             }
@@ -157,11 +154,11 @@ impl App {
             eprintln!("eui: session ended: {why}");
             self.conn = None;
         }
-        if let Some(c) = self.driver.closed() {
-            eprintln!("eui: closing: {c:?}");
+        if let Some(c) = self.backend.closed() {
+            eprintln!("eui: closing: {c}");
             self.conn = None;
         }
-        if self.driver.needs_redraw() {
+        if self.backend.needs_redraw() {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -177,10 +174,10 @@ impl App {
     }
 
     fn input(&mut self, i: Input) {
-        let out = self.driver.input(i);
+        let out = self.backend.input(i);
         self.send(out);
         #[cfg(feature = "clipboard")]
-        if let Some(text) = self.driver.take_clipboard() {
+        if let Some(text) = self.backend.take_clipboard() {
             if let Some(c) = self.clipboard() {
                 let _ = c.set_text(text);
             }
@@ -190,7 +187,7 @@ impl App {
             // and its candidate window sits under that field. Told only on
             // a change: every toggle is a protocol round trip with the
             // input method, and inputs arrive hundreds of times a second.
-            let area = self.driver.ime_area().map(|r| [r.x, r.y, r.w, r.h]);
+            let area = self.backend.ime_area();
             if area != self.ime_area {
                 match area {
                     Some([x, y, wd, h]) => {
@@ -203,7 +200,7 @@ impl App {
                 }
                 self.ime_area = area;
             }
-            if self.driver.needs_redraw() {
+            if self.backend.needs_redraw() {
                 w.request_redraw();
             }
         }
@@ -216,7 +213,7 @@ impl App {
             return;
         }
         let t0 = std::time::Instant::now();
-        let list = self.driver.paint(w, h);
+        let (list, landed) = self.backend.paint(w, h);
         let painted = t0.elapsed();
         let frame = match gpu.surface.get_current_texture() {
             Ok(f) => f,
@@ -230,19 +227,18 @@ impl App {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        let (atlas, images) = self.driver.atlases_mut();
+        let (atlas, images) = self.backend.atlases_mut();
         gpu.renderer.render(&view, (w, h), &list, atlas, images);
         frame.present();
         crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
         // A scroll that landed during this paint reports its offset now.
-        let landed = self.driver.take_pending();
         self.send(landed);
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
         #[cfg(feature = "a11y")]
         if let Some(a) = &mut self.access {
-            let driver = &self.driver;
-            a.update_if_active(|| driver.accessibility_tree());
+            let backend = &mut self.backend;
+            a.update_if_active(|| crate::a11y::to_update(&backend.access_tree()));
         }
     }
 
@@ -254,19 +250,18 @@ impl App {
         match event.window_event {
             A::InitialTreeRequested => {
                 if let Some(a) = &mut self.access {
-                    let driver = &self.driver;
-                    a.update_if_active(|| driver.accessibility_tree());
+                    let backend = &mut self.backend;
+                    a.update_if_active(|| crate::a11y::to_update(&backend.access_tree()));
                 }
             }
             A::ActionRequested(req) => {
-                let Some(ix) = self.driver.node_for_accessibility(req.target_node) else { return };
                 let out = match req.action {
-                    accesskit::Action::Click => self.driver.activate_node(ix),
-                    accesskit::Action::Focus => self.driver.focus_node(ix),
+                    accesskit::Action::Click => self.backend.access_action(req.target_node.0, true),
+                    accesskit::Action::Focus => self.backend.access_action(req.target_node.0, false),
                     _ => Vec::new(),
                 };
                 self.send(out);
-                if self.driver.needs_redraw() {
+                if self.backend.needs_redraw() {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -349,7 +344,12 @@ impl ApplicationHandler<Wake> for App {
         };
         surface.configure(renderer.device(), &config);
         let scale = window.scale_factor() as f32;
-        self.driver = Driver::new(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
+        // The driver — decoding, layout, the VM — in its own confined
+        // process where the platform allows (08 §10); this process keeps
+        // the window, the GPU and the network.
+        let (backend, how) = Backend::open(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
+        eprintln!("eui: {how}");
+        self.backend = backend;
         self.gpu = Some(Gpu { surface, config, renderer });
         self.window = Some(window);
 
@@ -364,7 +364,7 @@ impl ApplicationHandler<Wake> for App {
                 let granted = m.capabilities & self.allowed;
                 let refused = m.capabilities & !self.allowed;
                 eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
-                self.driver.grant(granted);
+                self.backend.grant(granted);
             }
             Err(e) if self.url.starts_with("ws://") => eprintln!("eui: {e}; continuing on the debug loopback without a manifest"),
             Err(e) => {
@@ -373,7 +373,7 @@ impl ApplicationHandler<Wake> for App {
                 return;
             }
         }
-        let hello = self.driver.hello().encode();
+        let hello = self.backend.hello();
         let proxy = self.proxy.clone();
         match transport::connect(&self.url, hello, move || {
             let _ = proxy.send_event(Wake::Transport);
@@ -457,7 +457,7 @@ impl ApplicationHandler<Wake> for App {
                 // Ctrl+V / ⌘V: the person's own clipboard into the field they
                 // are editing. The window reads it; the driver never can.
                 #[cfg(feature = "clipboard")]
-                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") && self.driver.ime_area().is_some() {
+                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") && self.backend.ime_area().is_some() {
                     if let Some(text) = self.clipboard().and_then(|c| c.get_text().ok()) {
                         self.input(Input::Paste(text));
                     }
@@ -479,16 +479,16 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        crate::driver::trace(|| format!("about_to_wait: due={:?}", self.driver.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
+        crate::driver::trace(|| format!("about_to_wait: due={:?}", self.backend.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
         // A running transition is the only thing that ever wakes the loop by
         // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
         // transport speaks.
-        if self.driver.tick(std::time::Instant::now()) {
+        if self.backend.tick(std::time::Instant::now()) {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
         }
-        event_loop.set_control_flow(match self.driver.next_frame_at() {
+        event_loop.set_control_flow(match self.backend.next_frame_at() {
             Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
         });

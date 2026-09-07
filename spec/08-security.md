@@ -101,8 +101,45 @@ node exists, it carries a handler of that kind naming that atom, the payload
 has the declared shape. A local handler's effect is advisory until the server
 re-derives it. *Enforced: `lang/src/serve/eui/session.rs::validate`.*
 
-## 10. Not yet
+## 10. Process isolation
 
-Process isolation — decoding and the VM in a child under seccomp and
-Landlock on Linux, `sandbox_init` on macOS, AppContainer on Windows — is
-stage three. Until then the decoder's own discipline is the boundary.
+Everything that reads bytes a server chose — the frame decoder, the tree,
+layout, text shaping, the PNG decoder, the bytecode VM — runs in a
+**worker** process. The **window** process keeps what needs the platform:
+the display, the GPU driver, TLS, the pin store, the clipboard, the
+accessibility adapter. Two pipes carry a private request/reply protocol
+between them: the window forwards raw frames and inputs; the worker
+answers with outbound frames and, on request, a draw list and the atlas
+bitmaps behind it. The window never decodes a frame. A worker that dies —
+a panic, a runaway allocation, a sandbox kill — ends the session with a
+reason; the window stays standing.
+
+On Linux the worker confines itself before it reads its first byte, with
+two mechanisms each sufficient on its own:
+
+- **Landlock** handles every filesystem and TCP right the running kernel
+  knows, with no rule granting any: a deny-all, best effort on older
+  kernels.
+- **seccomp** allows the system calls the worker loop needs — its pipes,
+  memory, clocks, signals, exit — and **kills** the process on any other.
+  A worker that reaches for `openat` or `socket` is not tolerated and
+  asked again; it is gone.
+
+The worker is also marked not dumpable: a kill leaves no core — the core
+would be the session, every text on screen, written to disk — and no other
+process of the user can attach a debugger to it. What initialises itself
+lazily (the text engine's font loader starts a thread pool and asks for the
+core count) is warmed before the door closes, and the confinement is
+applied to every thread.
+
+`EUI_SANDBOX=0` runs the driver in the window process, for debugging; the
+window prints which of the two it did and what the sandbox enforced. macOS
+(`sandbox_init`) and Windows (AppContainer) are not done: there the worker
+is still its own process — a crash is contained — but a compromised worker
+is not confined, and the window says so.
+
+*Enforced: `eui-client/src/sandbox.rs` (Landlock, seccomp, dumpable),
+`eui-client/src/worker.rs` (the boundary and the wire). Tested:
+`eui-client/tests/worker.rs` — the counter end to end through a confined
+worker, a hostile frame, a dead worker, and self-tests that a file read, a
+TCP connect and an exec are refused.*

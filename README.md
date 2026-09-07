@@ -35,8 +35,8 @@ deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
 ```
 
 `www/docs/eui/status.md` says, crate by crate, what is built and tested,
-what is specified, and what is not started — mobile, the sandbox,
-`soli desktop build --eui`.
+what is specified, and what is not started — mobile, and the worker
+sandbox on macOS and Windows.
 
 ## Try it
 

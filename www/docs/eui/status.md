@@ -367,6 +367,27 @@ arrows to nudge once focused), and one calendar engine behind `date_picker`,
 picks an option, drags the slider by click and by keyboard, picks a day,
 turns a month and selects a range.
 
+**The process boundary (08 §10).** Everything that reads bytes a server
+chose — frame decoding, the tree, layout, text shaping, PNG decoding, the
+VM: the whole `Driver` — now runs in a worker process; the window keeps
+winit, wgpu, TLS, the pin store, the clipboard and the accessibility
+adapter, and never decodes a frame. Two pipes carry a private
+request/reply wire: raw frames and inputs go in, outbound frames come back
+with the driver's state (redraw owed, IME area, clipboard, next frame
+due), and a paint reply carries the draw list plus each atlas bitmap when
+it changed. On Linux the worker locks itself down before its first byte:
+Landlock deny-all on files and sockets, a seccomp allowlist of 35 system
+calls that kills on anything else, and not dumpable, so a kill leaves no
+core of the session on disk. The self-tests show a file read, a TCP
+connect and an exec each end the worker with `SIGSYS`; the counter runs
+end to end through a confined worker and paints the same quads as an
+in-process driver. A dead worker ends the session with a reason and the
+window stands. What the sandbox cost: one round trip per input and per
+frame over a pipe, microseconds; a frame's draw list at a few hundred
+kilobytes. What it does not do yet: macOS and Windows confinement, and
+the atlases cross whole when they change (a megabyte of glyphs, sixteen of
+images) rather than by dirty rectangle.
+
 ## What the specification covers
 
 Every document in `spec/` is normative now, and each names the code that
@@ -391,7 +412,10 @@ implements it and the vectors that pin it:
 
 ## Not started
 
-- The multi-process sandbox, Android and iOS (stage 3).
+- Android and iOS (stage 3).
+- The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
+  the worker is its own process there, so a crash is contained, but it is
+  not confined.
 
 ## Scope, stated plainly
 
@@ -400,8 +424,8 @@ shaping, input methods, accessibility, selection. That is the real cost of
 this project, and it is not hidden in a later milestone. The first stage
 delivered the protocol, the layout engine, a renderer, a working client and
 about fifteen widgets; the second added the rest of the catalogue, keyboard
-focus, input methods, transitions, shadows and charts. Accessibility,
-mobile and the sandbox come after.
+focus, input methods, transitions, shadows and charts; the third put the
+decoder in a confined process. Mobile comes after.
 
 ## The Soli integration is additive
 

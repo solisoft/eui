@@ -45,6 +45,20 @@ impl Atlas {
         Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: true }
     }
 
+    /// Replace the whole bitmap: a window process taking over what a
+    /// worker rasterised (`eui-client`'s process boundary). Refused, and
+    /// nothing changes, unless `pixels` is exactly `size × size` coverage
+    /// bytes.
+    pub fn set_pixels(&mut self, size: u32, pixels: Vec<u8>) -> bool {
+        if size == 0 || pixels.len() != (size as usize).saturating_mul(size as usize) {
+            return false;
+        }
+        self.size = size;
+        self.pixels = pixels;
+        self.dirty = true;
+        true
+    }
+
     /// Edge length in texels.
     pub fn size(&self) -> u32 {
         self.size
@@ -168,6 +182,17 @@ impl ImageAtlas {
     /// An empty atlas.
     pub fn new() -> Self {
         Self { size: Self::SIZE, pixels: vec![0; (Self::SIZE * Self::SIZE * 4) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: true }
+    }
+
+    /// Replace the whole bitmap with `SIZE × SIZE` RGBA texels; refused,
+    /// and nothing changes, at any other length.
+    pub fn set_pixels(&mut self, pixels: Vec<u8>) -> bool {
+        if pixels.len() != (Self::SIZE as usize).saturating_mul(Self::SIZE as usize).saturating_mul(4) {
+            return false;
+        }
+        self.pixels = pixels;
+        self.dirty = true;
+        true
     }
 
     /// Edge length in texels.

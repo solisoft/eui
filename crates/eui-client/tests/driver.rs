@@ -524,29 +524,29 @@ fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
 #[cfg(feature = "a11y")]
 #[test]
 fn the_accessibility_tree_names_buttons_fields_and_labels_and_follows_focus() {
-    use accesskit::{Action, NodeId, Role};
+    use eui_client::a11y::AccessRole as Role;
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
     d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
     d.handle_frame(Frame::Batch(form_batch()));
     let _ = d.paint(400, 300);
-    let tree = d.accessibility_tree();
-    let by_role = |r: Role| tree.nodes.iter().filter(|(_, n)| n.role() == r).count();
+    let tree = d.access_snapshot();
+    let by_role = |r: Role| tree.nodes.iter().filter(|n| n.role == r).count();
     assert_eq!(by_role(Role::Window), 1);
     assert_eq!(by_role(Role::TextInput), 2);
     assert_eq!(by_role(Role::Button), 1, "the box with the click handler");
     assert_eq!(by_role(Role::Label), 0, "the button's text is its name, not a child");
-    let button = tree.nodes.iter().find(|(_, n)| n.role() == Role::Button).unwrap();
-    assert_eq!(button.1.label(), Some("Save"));
-    assert!(button.1.supports_action(Action::Click));
-    let field = tree.nodes.iter().find(|(_, n)| n.role() == Role::TextInput).unwrap();
-    assert_eq!(field.1.value(), Some("a"));
-    assert_eq!(tree.focus, NodeId(0), "nothing focused: the window");
+    let button = tree.nodes.iter().find(|n| n.role == Role::Button).unwrap();
+    assert_eq!(button.label, "Save");
+    assert!(button.click);
+    let field = tree.nodes.iter().find(|n| n.role == Role::TextInput).unwrap();
+    assert_eq!(field.value, "a");
+    assert_eq!(tree.focus, 0, "nothing focused: the window");
     // Focus follows Tab, and an assistive technology's click is a keyboard press.
     tab(&mut d, false);
     tab(&mut d, false);
-    let focused = d.accessibility_tree().focus;
+    let focused = d.access_snapshot().focus;
     assert_eq!(d.node_for_accessibility(focused), d.session().lookup(3));
-    let ix = d.node_for_accessibility(button.0).unwrap();
+    let ix = d.node_for_accessibility(button.id).unwrap();
     let out = d.activate_node(ix);
     assert_eq!(events(&out), vec![(EventKind::Click, 3, 2)]);
 }

@@ -4,6 +4,10 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Spawned by a window as its worker: take that role and nothing else.
+    if let Some(code) = eui_client::worker::entry(&args) {
+        std::process::exit(code);
+    }
     let mut url = None;
     let mut allowed = 0u32;
     let mut it = args.iter();
