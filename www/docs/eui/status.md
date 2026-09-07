@@ -252,8 +252,23 @@ view exceeds what a client accepts. A big update also streams now: the
 server sends slices of a thousand ops and the client paints between them.
 Measured at the server, the seconds of "Load 5 000 more" are Soli itself:
 building ten thousand cards in the interpreter (cached now, per card),
-converting the tree to JSON and diffing it — about two seconds in a release
-build, ten in a debug one; the client applies a thousand cards in 30 ms.
+converting the tree and diffing it; the client applies a thousand cards in
+30 ms.
+
+**Why a like cost half a second.** Three things in the Soli side of a
+render were proportional to the whole tree, not to what changed: the view's
+value was serialised to JSON before conversion, the previous tree was
+cloned before the diff, and the keyed diff searched the sibling list for
+every child — quadratic in five thousand cards. Now the value is converted
+directly, the previous tree is diffed in place, keys go through a map, and
+a keyed child whose view value is *the same hash object* as last render
+(the feed keeps its cards in a cache) is kept behind an `Arc` — neither
+walked nor compared, its subtree size cached so even counting the tree
+costs only the fresh part. A like on 5 000 cards: convert-and-diff 520 ms
+→ 21 ms in a debug build, 2.2 s → 44 ms on 10 000; the round trip is now
+mostly the view (130 ms debug, about a tenth of that in release). The
+contract, documented with `router_eui`: a keyed node hash returned
+unchanged is assumed unchanged.
 
 **A feed, for the performance check.** `examples/counter-app`'s `feed`
 component: five thousand posts (`Load 5 000 more` adds five thousand), a
