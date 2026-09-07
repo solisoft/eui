@@ -1138,6 +1138,14 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     d.input(Input::PointerMove(50.0, 50.0));
     d.input(Input::Wheel(0.0, 1000.0));
     assert_eq!(d.session().node(list).unwrap().scroll, (0, 1000));
+    // Not while the view is still moving: a wheel a frame is a drag.
+    d.tick(Instant::now());
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "nothing asked mid-scroll");
+    assert!(d.next_frame_at().is_some(), "but a frame is due to ask once it settles");
+    // Once still for a moment, the rows around 45..=59.
+    std::thread::sleep(Duration::from_millis(130));
+    d.tick(Instant::now());
     let _ = d.paint(400, 300);
     let asked = d.take_pending();
     let windows: Vec<&Value> = asked.iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Window).then_some(&e.payload) } else { None }).collect();
@@ -1148,6 +1156,9 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     let _ = d.paint(400, 300);
     assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)));
     d.tick(t0 + Duration::from_secs(2));
+    let _ = d.paint(400, 300);
+    std::thread::sleep(Duration::from_millis(130));
+    d.tick(Instant::now() + Duration::from_secs(2));
     let _ = d.paint(400, 300);
     let asked = d.take_pending();
     assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window && e.payload == Value::List(vec![Value::Int(50), Value::Int(64)]))), "{asked:?}");

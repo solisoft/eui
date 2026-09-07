@@ -1,8 +1,8 @@
 # Soundly: a music player in the shape of the one everybody knows — a black
 # shell, a rounded library panel, a home of covers, an album page with a
 # tinted header and a track table, a now-playing bar. No network and no
-# catalogue behind it: the library is generated and the covers are the
-# feed's pictures. It exists to show the catalogue doing a real layout,
+# catalogue behind it: the library is generated; the covers are photos
+# from Lorem Picsum (Unsplash licence), made square at 400 px. It exists to show the catalogue doing a real layout,
 # every hover a local handler and every click a server round trip that
 # patches a few nodes. The colours are literal on purpose: this app is
 # always dark, like its model, and spec 05 §6 allows a brand its colours.
@@ -19,9 +19,10 @@ MUSIC_GENRE_COLOURS = ["#006450", "#8400e7", "#1e3264", "#e8115b", "#148a08", "#
 def music_genres
   range(0, MUSIC_GENRE_NAMES.length()).map(fn(i) { [MUSIC_GENRE_NAMES[i], MUSIC_GENRE_COLOURS[i]] })
 end
-# A dark tint per cover, for an album page's header: what the real client
-# derives from the picture, chosen here by hand for the eight covers.
-MUSIC_TINTS = ["#1f3a5f", "#1f4d34", "#6b3a12", "#4a2a63", "#2e3b4d", "#6b1f3f", "#1a4a4d", "#5a4a12"]
+# A dark tint per cover for an album page's header — what the real client
+# derives from the picture; here the average colour of each cover, darkened,
+# computed once when the covers were made (ImageMagick, see the README).
+MUSIC_TINTS = ["#263134", "#35161E", "#3A3E3A", "#43332F", "#2C3841", "#3A3E3A", "#515256", "#4F6741", "#4D5D78", "#383C41", "#192C2E", "#6F6566", "#4C4C4C", "#432C29", "#2B3A3B", "#131012", "#1C3965", "#20292A", "#504F47", "#443A1B", "#9F795B", "#5A561A", "#3F4144", "#4B4A42"]
 
 BLACK = "#000000"
 PANEL = "#121212"
@@ -48,8 +49,8 @@ def music_album(a)
     "title": MUSIC_TITLES[a % MUSIC_TITLES.length()],
     "artist": MUSIC_ARTISTS[(a * 5) % MUSIC_ARTISTS.length()],
     "year": 2008 + ((a * 7) % 17),
-    "cover": "public/images/feed/" + str(a % 8) + ".png",
-    "tint": MUSIC_TINTS[a % 8],
+    "cover": "public/images/covers/" + str(a) + ".png",
+    "tint": MUSIC_TINTS[a],
     "tracks": tracks
   }
 end

@@ -763,6 +763,20 @@ fn status_of(d: &mut Driver) -> Status {
     }
 }
 
+/// Leave SIGINT, SIGTERM and SIGHUP to the window process: a worker that
+/// died on a terminal's Ctrl+C would take the session with it while the
+/// window was still shutting down in order.
+#[cfg(unix)]
+fn ignore_terminal_signals() {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM, signal_hook::consts::SIGHUP] {
+        let _ = signal_hook::flag::register(sig, std::sync::Arc::clone(&flag));
+    }
+}
+
+#[cfg(not(unix))]
+fn ignore_terminal_signals() {}
+
 /// Build and drop a driver so that everything that initialises itself
 /// lazily has done so before the sandbox closes — the text engine's font
 /// loader starts a thread pool, and asks the system for its core count.
@@ -778,6 +792,9 @@ pub fn entry(args: &[String]) -> Option<i32> {
     let first = args.first().map(String::as_str)?;
     match first {
         WORKER_ARG => {
+            // A terminal's Ctrl+C reaches the whole process group; the
+            // worker leaves when its window does, not before.
+            ignore_terminal_signals();
             warm_up();
             let sandbox = crate::sandbox::lock_down();
             let stdin = std::io::stdin();

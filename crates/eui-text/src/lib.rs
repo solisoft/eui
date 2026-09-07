@@ -288,6 +288,17 @@ impl TextEngine {
                 });
             }
         }
+        // An empty text lays out an empty line whose baseline is the
+        // fallback font's, not the face's the first glyph will use; a caret
+        // in an empty field must sit where that glyph's would, so the
+        // baseline is the one a real glyph gets in the same font.
+        if glyphs.is_empty() {
+            let mut probe = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
+            probe.set_size(&mut self.fonts, max_width.filter(|w| w.is_finite() && *w >= 0.0).map(|w| w + 0.05), None);
+            probe.set_text(&mut self.fonts, "x", attrs, Shaping::Advanced);
+            probe.shape_until_scroll(&mut self.fonts, false);
+            baseline = probe.layout_runs().next().map(|run| run.line_y - run.line_top);
+        }
         let lines = lines.max(1);
         Shaped {
             metrics: TextMetrics {

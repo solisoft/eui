@@ -221,6 +221,10 @@ pub fn trace(line: impl FnOnce() -> String) {
     }
 }
 
+/// How long a scroll must have been still before a windowed list asks
+/// for the rows now in view (04 §7.1).
+const WINDOW_SETTLE: Duration = Duration::from_millis(120);
+
 /// A scroll offset easing from `from` to `to`, per wheel notch (03 §5's
 /// `motion.base`); a notch arriving mid-way retargets from where the view is.
 #[derive(Debug, Clone, Copy)]
@@ -311,6 +315,9 @@ pub struct Driver {
     /// Spec 04 §7.1: the row range last reported by each windowed list,
     /// by node id, so a range is reported once.
     windows: HashMap<u32, (u32, u32)>,
+    /// When a scroll offset last changed: a windowed list asks for rows
+    /// once the view has been still for a moment, not per frame of a drag.
+    scroll_touched: Option<Instant>,
     /// The viewer's desktop palette by role, on top of the theme (05 §5),
     /// and the mode it is for: in the other mode the theme's own colours
     /// show, so a light/dark switch still switches something.
@@ -367,6 +374,7 @@ impl Driver {
             desktop_colors: Vec::new(),
             desktop_mode: None,
             windows: HashMap::new(),
+            scroll_touched: None,
         }
     }
 
@@ -559,6 +567,7 @@ impl Driver {
         let (x, y) = a.at(self.now);
         self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
         self.layout_valid = false;
+        self.scroll_touched = Some(self.now);
         if a.done(self.now) {
             self.scroll_anim = None;
             let (nx, ny) = (a.to.0.round() as i64, a.to.1.round() as i64);
@@ -1105,6 +1114,7 @@ impl Driver {
         }
         self.session.set_scroll(scroller, nx, ny);
         self.invalidate();
+        self.scroll_touched = Some(Instant::now());
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
@@ -1306,6 +1316,7 @@ impl Driver {
             return Vec::new();
         }
         self.session.set_scroll(scroller, nx, ny);
+        self.scroll_touched = Some(Instant::now());
         self.invalidate();
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
@@ -1530,11 +1541,19 @@ impl Driver {
             self.pending.extend(settled);
         }
         self.ensure_layout();
+        let now = self.now;
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
-        // them — once the view has landed, not per frame of a glide.
-        if self.scroll_anim.is_none() {
+        // them — once the view has been still for a moment, not per frame
+        // of a glide or a drag: a request a frame is a server render a
+        // frame, and rows that will be scrolled past before they arrive.
+        let settled = self.scroll_anim.is_none() && self.scroll_touched.is_none_or(|t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
+        let mut settle_due = None;
+        if settled {
             let asked = self.window_events();
             self.pending.extend(asked);
+        } else if self.scroll_anim.is_none() && !self.layout.windowed_lists().is_empty() {
+            // Come back when it has.
+            settle_due = Some(self.scroll_touched.map_or(now, |t| t + WINDOW_SETTLE));
         }
         let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
         self.redraw = false;
@@ -1568,6 +1587,9 @@ impl Driver {
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
+        if let Some(due) = settle_due {
+            self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+        }
         list
     }
 

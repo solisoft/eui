@@ -173,3 +173,17 @@ fn symbols_come_from_the_fallback_face() {
         assert!(w > a * 0.4, "{c} has a glyph: width {w}");
     }
 }
+
+/// A caret in an empty field sits where the first glyph's would: the
+/// empty text carries the baseline of a real line in that font.
+#[test]
+fn an_empty_text_has_the_baseline_of_a_real_line() {
+    let mut engine = TextEngine::new();
+    let font = base();
+    let empty = engine.shape("", font, Some(200.0), 0);
+    let some = engine.shape("a", font, Some(200.0), 0);
+    assert!(empty.glyphs.is_empty());
+    assert_eq!(empty.caret(0), (0.0, empty.metrics.baseline));
+    assert!((empty.metrics.baseline - some.metrics.baseline).abs() < 0.01, "empty {} vs text {}", empty.metrics.baseline, some.metrics.baseline);
+    assert!((empty.metrics.baseline - some.glyphs[0].y).abs() < 0.01);
+}
