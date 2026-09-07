@@ -369,6 +369,20 @@ arrows to nudge once focused), and one calendar engine behind `date_picker`,
 picks an option, drags the slider by click and by keyboard, picks a day,
 turns a month and selects a range.
 
+**Soundly, a sample in a familiar shape.** `examples/counter-app`'s
+`music` component is a music player laid out like the one everybody
+knows: a black shell, a rounded library panel, a home of covers whose
+green play button appears under the pointer (a local handler swaps two
+styles, no round trip), album and artist pages with tinted headers and
+track tables, playlists, liked songs, a queue, genre tiles, a profile,
+settings with switches, a now-playing bar whose icons are drawn on
+canvases, navigation history behind the chevrons — and three layouts by
+viewport width, since the client's viewport now reaches the handler with
+`connect` and as a `viewport` event on change. Every page was rendered
+off-screen while it was written; an end-to-end test opens an album and
+plays a track. The colours are literal on purpose (05 §6): the app is
+always dark, like its model.
+
 **Windowed lists (04 §7.1).** A `list` with a `count` has rows the tree
 does not hold: the client lays out `count` rows from a `heights` prop
 (one integer per row, `item_height` where absent), places the children it
