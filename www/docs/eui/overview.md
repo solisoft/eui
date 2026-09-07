@@ -89,6 +89,16 @@ Each refusal is why the client stays small enough to audit.
 - **A fingerprinting surface.** No user-agent, no font enumeration, no canvas
   readback, no device identifier.
 
+## Three ways to open an application
+
+- `eui <wss://host/_eui/session/app> [--allow cap,cap]` — the standalone
+  client, twelve megabytes, no browser.
+- `soli eui <url>` — the same window from a Soli built with
+  `--features eui-desktop`.
+- `soli desktop build --eui <component>` — one executable that carries the
+  app, its database and the window; the server runs on a thread behind a
+  loopback gate only the embedded client can pass.
+
 ## Reading order
 
 Start with [the wire format](/docs/wire-format) if you want the mechanism, or
