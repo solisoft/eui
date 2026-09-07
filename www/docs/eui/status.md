@@ -302,8 +302,10 @@ headlessly, and the desktop path runs headless with
 artifact would fall from 80 MB to about 15. Measured, the `counter-app`
 artifact is 96 MB (80 with a runtime built without Soli's default
 features); the window costs 12 MB and the rest is the Soli runtime and
-its database. Getting to 15 MB means a runtime built for an offline app,
-which is open work.
+its database. `soli desktop build --no-db` (or `--db-url` for a database
+elsewhere) drops the database from the artifact and from the launch: the
+feed as a desktop app is 76 MB and starts no database process. Getting to
+15 MB means a runtime built for an offline app, which is open work.
 
 **The manifest, signed and pinned.** `GET /.well-known/eui` is a record
 (spec 01 §2.1, keys fixed now) signed by the publisher's Ed25519 key. The
