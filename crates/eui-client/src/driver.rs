@@ -1930,10 +1930,10 @@ impl Driver {
         !self.mixer.is_empty()
     }
 
-    /// Spec 03 §7: `time_update` for the playing sources whose node asks
-    /// for it, at most four a second.
+    /// Spec 03 §7 and §8: `time_update` for the sounds and pictures whose
+    /// node asks for it, at most four a second — a progress bar's input.
     fn time_updates(&mut self) -> Vec<Frame> {
-        if self.mixer.is_empty() {
+        if self.mixer.is_empty() && self.players.is_empty() {
             return Vec::new();
         }
         let now = self.now;
@@ -1949,13 +1949,30 @@ impl Driver {
                 .filter(|id| self.mixer.playing(*id))
                 .collect()
         });
-        if playing.is_empty() {
+        // The same for pictures: the node asks, the client answers.
+        let moving: Vec<(u32, u64, u64)> = self.session.root().map_or_else(Vec::new, |root| {
+            self.session
+                .preorder(root)
+                .filter_map(|ix| self.session.node(ix))
+                .filter(|n| n.kind == NodeKind::Video && n.handler(EventKind::TimeUpdate).is_some())
+                .filter_map(|n| {
+                    let (hash, player) = self.players.get(&n.id)?;
+                    let movie = self.movies.get(hash)?.as_ref()?;
+                    player.playing.then(|| (n.id, player.position_ms(), movie.duration_ms()))
+                })
+                .collect()
+        });
+        if playing.is_empty() && moving.is_empty() {
             return Vec::new();
         }
         self.audio_reported = Some(now);
         let mut out = Vec::new();
         for id in playing {
             let (Some(ix), Some(at), Some(len)) = (self.session.lookup(id), self.mixer.position_ms(id), self.mixer.duration_ms(id)) else { continue };
+            out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
+        }
+        for (id, at, len) in moving {
+            let Some(ix) = self.session.lookup(id) else { continue };
             out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
         }
         out

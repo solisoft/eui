@@ -230,7 +230,10 @@ exactly what it is at any instant.
 | `position` | int ms | Where to play from. Seeks **when the value changes**, as `audio`'s does |
 
 `ended` goes back when a picture reaches its end, to a node that holds a
-handler for it; a looping picture has no end. The client owns the clock,
+handler for it; a looping picture has no end. `time_update`,
+`[position_ms, duration_ms]`, goes back while it plays, under the same
+rate limit as a sound's — it is what a progress bar is drawn from, and a
+picture with no such handler reports nothing at all. The client owns the clock,
 schedules exactly the moment the next frame is due — not a poll — and
 uploads a frame only when the frame on screen must change. A paused
 picture wakes nothing.

@@ -1492,7 +1492,49 @@ end
 # sound with a button to start it. The sound node exists only while that
 # card is the one playing — the client holds a few sources, not a feed of
 # them.
-def post_media(post, playing)
+# A bar showing where a picture or a sound is, clickable to seek. The
+# width is fixed so the click's x maps straight onto the position.
+def media_scrubber(width, at, duration, on_seek, props)
+  filled = duration > 0 ? int(width * at / duration) : 0
+  filled = width if filled > width
+  {
+    "k": "box",
+    "s": {"display": "row", "align": "center", "width": width, "height": 6, "radius": 4, "bg": "surface.sunken", "cursor": "pointer"},
+    "p": props,
+    "on": {"click": on_seek},
+    "c": [{"k": "box", "s": {"width": filled, "height": 6, "radius": 4, "bg": "accent.base"}}]
+  }
+end
+
+def media_clock(ms)
+  seconds = ms / 1000
+  str(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") + str(seconds % 60)
+end
+
+# A play/pause button of the size these cards use.
+def media_button(on, event, props)
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "align": "center",
+      "justify": "center",
+      "width": 28,
+      "height": 28,
+      "radius": 4,
+      "bg": on ? "accent.base" : "surface.sunken",
+      "fg": on ? "accent.on" : "text.default",
+      "cursor": "pointer",
+      "shrink": 0
+    },
+    "p": props,
+    "on": {"click": event},
+    "c": [text(on ? "▮▮" : "▶", {"size": 1})]
+  }
+end
+
+def post_media(post, play)
+  playing = play["sound"] ?? false
   kind = post["media"]
   return [{
     "k": "image",
@@ -1500,12 +1542,29 @@ def post_media(post, playing)
     "s": {"width": "100%", "max_width": 480, "height": 180, "radius": 2}
   }] if kind == "image"
 
-  return [video(
-    "public/video/pulse.gif",
-    {"playing": true, "loop": true},
-    {"width": 160, "height": 160, "radius": 2},
-    nil
-  )] if kind == "video"
+  if kind == "video"
+    on = play["video"] ?? false
+    at = play["at"] ?? 0
+    duration = play["duration"] ?? 0
+    props = {"id": post["id"]}
+    return [
+      # Full width, like a video on a timeline anywhere else.
+      video(
+        "public/video/pulse.gif",
+        {"playing": on, "loop": false, "position": play["seek"] ?? 0},
+        {"width": "100%", "max_width": 480, "height": 180, "radius": 2},
+        {"time_update": "video_time", "ended": "video_ended"}
+      ),
+      row(
+        {"gap": 3, "align": "center", "width": "100%", "max_width": 480},
+        [
+          media_button(on, "video_play", props),
+          media_scrubber(300, at, duration > 0 ? duration : 1440, "video_seek", props.merge({"w": 300})),
+          muted(media_clock(at) + " / " + media_clock(duration > 0 ? duration : 1440))
+        ]
+      )
+    ]
+  end
 
   if kind == "audio"
     controls = row(
@@ -1538,7 +1597,7 @@ def post_media(post, playing)
   []
 end
 
-def post_card(post, liked, playing, height)
+def post_card(post, liked, play, height)
   header = row(
     {
       "gap": 2,
@@ -1561,7 +1620,7 @@ def post_card(post, liked, playing, height)
     ]
   )
   body = text(post["text"], {"clamp": 2})
-  picture = post_media(post, playing)
+  picture = post_media(post, play)
   actions = row(
     {"gap": 4, "align": "center"},
     [

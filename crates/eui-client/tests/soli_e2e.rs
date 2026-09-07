@@ -903,20 +903,18 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
-    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
-    let _ = d.paint(1000, 900);
-    let find = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)).expect("a video node");
-    let video = find(&d);
-    let src = d.session().atom_id("src").unwrap();
-    assert!(matches!(d.session().node(video).and_then(|n| n.prop(src)), Some(eui_proto::Value::Asset(_))), "the src is a hash");
-    // Fetch the picture, as the window does.
-    for hash in d.pending_assets() {
-        conn.request_asset(hash);
-    }
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !d.video_playing() {
-        assert!(Instant::now() < deadline, "the picture never arrived");
-        let _ = wake.recv_timeout(Duration::from_millis(20));
+    let (mut d, conn, _wake) = open(port, "gallery", 1000.0, 900.0);
+    let mut clock = Instant::now();
+    let mut turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
+        *clock += Duration::from_millis(ms);
+        d.tick(*clock);
+        let _ = d.paint(1000, 900);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        for hash in d.pending_assets() {
+            conn.request_asset(hash);
+        }
         while let Ok(msg) = conn.rx.try_recv() {
             match msg {
                 Incoming::Message(bytes) => {
@@ -926,43 +924,49 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
                 }
                 Incoming::Closed(e) => panic!("{e}"),
                 Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
-                Incoming::Asset(hash, Err(why)) => panic!("asset: {why}"),
+                Incoming::Asset(_, Err(why)) => panic!("asset: {why}"),
             }
         }
-        d.tick(Instant::now());
-        let _ = d.paint(1000, 900);
+    };
+    let node = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)).expect("a video node");
+    let src = d.session().atom_id("src").unwrap();
+    assert!(matches!(d.session().node(node(&d)).and_then(|n| n.prop(src)), Some(eui_proto::Value::Asset(_))), "the src is a hash");
+    // Fetch and decode it. It shows its first frame and plays nothing.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let id = d.session().node(node(&d)).unwrap().id;
+    while d.video_position_ms(id).is_none() {
+        assert!(Instant::now() < deadline, "the picture never arrived");
+        turn(&mut d, &conn, &mut clock, 100);
     }
-    // It draws: a textured quad, at the size the style asked for.
-    let t0 = Instant::now();
-    d.tick(t0);
+    assert!(!d.video_playing(), "no autoplay");
+    let rect = d.layout().rect(node(&d)).expect("laid out");
+    assert!((rect.w - 320.0).abs() < 0.5 && (rect.h - 180.0).abs() < 0.5, "sized by its style: {rect:?}");
     let list = d.paint(1000, 900);
-    let rect = d.layout().rect(find(&d)).expect("laid out");
-    assert!((rect.w - 120.0).abs() < 0.5 && (rect.h - 120.0).abs() < 0.5, "{rect:?}");
-    let textured = |l: &eui_render::DrawList| l.quads.iter().filter(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA).count();
-    assert!(textured(&list) >= 1, "the frame is drawn");
-    // A frame is due soon, and only as soon as it is due.
-    let due = d.next_frame_at().expect("the next frame is scheduled");
-    assert!(due <= t0 + Duration::from_millis(100), "within a frame's delay, not a poll");
-    // The clock moves the picture on, and the window is asked to draw.
-    d.tick(t0 + Duration::from_millis(200));
-    let _ = d.paint(1000, 900);
-    assert!(d.next_frame_at().is_some(), "still going, still scheduled");
-    // Pause: the server says so, and the clock stops moving it.
-    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Pause")).unwrap();
-    let button = d.session().node(label).unwrap().parent;
-    let seq = d.session().last_seq().unwrap();
-    click(&mut d, &conn, button);
-    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
-    let node = d.session().node(find(&d)).unwrap().id;
-    d.tick(t0 + Duration::from_millis(400));
-    let _ = d.paint(1000, 900);
-    assert!(!d.video_playing(), "paused");
-    let held = d.video_position_ms(node).expect("a position");
-    // Two seconds of clock later it has not moved: the picture is held,
-    // not merely hidden.
-    d.tick(t0 + Duration::from_millis(2_400));
-    let _ = d.paint(1000, 900);
-    assert_eq!(d.video_position_ms(node), Some(held), "a paused picture does not advance");
+    assert!(list.quads.iter().any(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA), "its first frame is drawn");
+    // Press play: it advances on the client's clock and asks to be woken
+    // exactly when the next frame is due.
+    let play = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("▶")).map(|ix| d.session().node(ix).unwrap().parent).expect("a play button");
+    click(&mut d, &conn, play);
+    while !d.video_playing() {
+        assert!(Instant::now() < deadline, "it never started");
+        turn(&mut d, &conn, &mut clock, 100);
+    }
+    let due = d.next_frame_at().expect("scheduled");
+    assert!(due <= clock + Duration::from_millis(100), "within a frame's delay, not a poll");
+    turn(&mut d, &conn, &mut clock, 300);
+    let moved = d.video_position_ms(id).expect("a position");
+    assert!(moved > 100, "it advanced: {moved}");
+    // Pause: it holds where it is, and the clock the server drew followed.
+    let pause = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("▮▮")).map(|ix| d.session().node(ix).unwrap().parent).expect("a pause button");
+    click(&mut d, &conn, pause);
+    while d.video_playing() {
+        assert!(Instant::now() < deadline, "it never stopped");
+        turn(&mut d, &conn, &mut clock, 100);
+    }
+    let id = d.session().node(node(&d)).unwrap().id;
+    let held = d.video_position_ms(id).expect("a position");
+    turn(&mut d, &conn, &mut clock, 1_000);
+    assert_eq!(d.video_position_ms(id), Some(held), "a paused picture does not advance");
 }
 
 /// Every card carries its own number, and the numbers of the cards on
@@ -1017,4 +1021,93 @@ fn feed_cards_are_numbered_and_carry_their_media() {
     let _ = d.paint(700, 2_400);
     let audio: Vec<eui_tree::NodeIx> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).collect();
     assert_eq!(audio.len(), 1, "one sound, on the card that asked");
+}
+
+/// A video in the feed waits to be asked, then plays with controls: a
+/// button, a bar that follows it, and a clock the server draws from the
+/// client's own `time_update`.
+#[test]
+fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, _wake) = open(port, "feed", 700.0, 1_400.0);
+    let mut clock = Instant::now();
+    let mut turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
+        *clock += Duration::from_millis(ms);
+        d.tick(*clock);
+        let _ = d.paint(700, 1_400);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        for hash in d.pending_assets() {
+            conn.request_asset(hash);
+        }
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(_, Err(why)) => panic!("asset: {why}"),
+            }
+        }
+    };
+    // Card #1 carries the picture. Wait for it to arrive and decode.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !d.session().preorder(root(&d)).any(|ix| d.session().node(ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)) {
+        assert!(Instant::now() < deadline, "no video card");
+        turn(&mut d, &conn, &mut clock, 100);
+    }
+    let node = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)).unwrap();
+    let id = d.session().node(node(&d)).unwrap().id;
+    // Wait for its bytes and its decode: the player exists then.
+    while d.video_position_ms(id).is_none() {
+        assert!(Instant::now() < deadline, "the picture never decoded");
+        turn(&mut d, &conn, &mut clock, 100);
+    }
+    // It does not play by itself, and it is as wide as the card allows.
+    assert!(!d.video_playing(), "no autoplay");
+    assert_eq!(d.video_position_ms(id), Some(0), "on its first frame");
+    let rect = d.layout().rect(node(&d)).expect("laid out");
+    assert!(rect.w > 300.0, "full width, not a thumbnail: {rect:?}");
+    assert!((rect.h - 180.0).abs() < 0.5, "{rect:?}");
+    // The controls are there: a clock at zero over the picture's length.
+    assert!(d.session().preorder(root(&d)).any(|ix| d.session().text_of(ix).is_some_and(|t| t.starts_with("0:00 / 0:0"))), "a clock");
+    // Press play: it starts, and says where it is four times a second.
+    let button = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("▶")).map(|ix| d.session().node(ix).unwrap().parent).expect("a play button");
+    click(&mut d, &conn, button);
+    // The answer arrives, and a paint is what applies it.
+    while !d.video_playing() {
+        assert!(Instant::now() < deadline, "it never started");
+        turn(&mut d, &conn, &mut clock, 100);
+    }
+    for _ in 0..4 {
+        turn(&mut d, &conn, &mut clock, 300);
+    }
+    assert!(d.video_position_ms(id).is_some_and(|ms| ms > 300), "it advanced: {:?}", d.video_position_ms(id));
+    // The server draws the clock from what the client reported, so it
+    // follows within a round trip.
+    let clocks = |d: &Driver| -> Vec<String> {
+        d.session().preorder(root(d)).filter_map(|ix| d.session().text_of(ix)).filter(|t| t.contains(" / ")).map(str::to_owned).collect()
+    };
+    while clocks(&d).iter().all(|t| t.starts_with("0:00 /")) {
+        assert!(Instant::now() < deadline, "the clock never moved: {:?}", clocks(&d));
+        turn(&mut d, &conn, &mut clock, 200);
+    }
+    // Pause, if it is still running: it then holds where it is.
+    if let Some(pause) = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("▮▮")).map(|ix| d.session().node(ix).unwrap().parent) {
+        click(&mut d, &conn, pause);
+        while d.video_playing() {
+            assert!(Instant::now() < deadline, "it never stopped");
+            turn(&mut d, &conn, &mut clock, 100);
+        }
+    }
+    let id = d.session().node(node(&d)).unwrap().id;
+    let held = d.video_position_ms(id).expect("a position");
+    turn(&mut d, &conn, &mut clock, 1_000);
+    assert_eq!(d.video_position_ms(id), Some(held), "paused stays put");
 }

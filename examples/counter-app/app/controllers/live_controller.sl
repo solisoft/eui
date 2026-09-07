@@ -266,21 +266,22 @@ end
 # The gallery's moving picture: a loop the client decodes and plays. The
 # node says what it should be doing; the client owns the clock.
 def gallery_video(state)
-  playing = state["video"] ?? true
+  playing = state["video"] ?? false
   column(
     {"gap": 2},
     [
       video(
         "public/video/pulse.gif",
-        {"playing": playing, "loop": true},
-        {"width": 120, "height": 120, "radius": 3},
-        nil
+        {"playing": playing, "loop": false, "position": state["video_seek"] ?? 0},
+        {"width": 320, "height": 180, "radius": 3},
+        {"time_update": "video_time", "ended": "video_done"}
       ),
       row(
         {"gap": 3, "align": "center"},
         [
-          button(playing ? "Pause" : "Play", "video"),
-          muted("24 frames, decoded in the worker")
+          media_button(playing, "video", {}),
+          media_scrubber(200, state["video_at"] ?? 0, 1440, "video_scrub", {"w": 200}),
+          muted(media_clock(state["video_at"] ?? 0) + " / 0:01")
         ]
       )
     ]
@@ -307,7 +308,9 @@ def gallery_defaults(state)
     "range_start": "",
     "range_end": "",
     "sound": false,
-    "video": true
+    "video": false,
+    "video_at": 0,
+    "video_seek": 0
   }
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -363,7 +366,10 @@ def gallery(event_data)
     "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
     "slider" => set_slider(state, params),
     "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
-    "video" => set_key(state, "video", !(state["video"] ?? true)),
+    "video" => set_key(set_key(state, "video", !(state["video"] ?? false)), "video_at", state["video"] ?? false ? state["video_at"] : 0),
+    "video_time" => set_key(state, "video_at", params["payload"][0]),
+    "video_done" => set_key(set_key(state, "video", false), "video_at", 1440),
+    "video_scrub" => set_key(set_key(state, "video_seek", int(params["payload"][0] * 1440 / 200)), "video_at", int(params["payload"][0] * 1440 / 200)),
     "sound_ended" => set_key(state, "sound", false),
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),
@@ -650,7 +656,7 @@ end
 # Four heights: text only, a sound, a picture, a moving picture.
 def feed_height_of(media)
   return 316 if media == "image"
-  return 316 if media == "video"
+  return 356 if media == "video"
   return 184 if media == "audio"
 
   128
@@ -671,18 +677,23 @@ def feed(event_data)
   count = state["count"] ?? 10
   window = state["window"] ?? [0, 0]
   sound = state["sound"] ?? -1
+  moving = state["moving"] ?? -1
+  at = state["at"] ?? 0
+  duration = state["duration"] ?? 0
+  seek = state["seek"] ?? 0
+  keep = {"liked": liked, "count": count, "window": window, "sound": sound, "moving": moving, "at": at, "duration": duration, "seek": seek}
   match event {
-    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count, "window": window, "sound": sound},
-    "more" => {
-      "liked": liked,
-      "count": count + 5000,
-      "window": window,
-      "sound": sound
-    },
-    "window" => {"liked": liked, "count": count, "window": params["payload"], "sound": sound},
-    "play" => {"liked": liked, "count": count, "window": window, "sound": sound == params["props"]["id"] ? -1 : params["props"]["id"]},
-    "sound_ended" => {"liked": liked, "count": count, "window": window, "sound": -1},
-    _ => {"liked": liked, "count": count, "window": window, "sound": sound},
+    "like" => keep.merge({"liked": toggle_id(liked, params["props"]["id"])}),
+    "more" => keep.merge({"count": count + 5000}),
+    "window" => keep.merge({"window": params["payload"]}),
+    "play" => keep.merge({"sound": sound == params["props"]["id"] ? -1 : params["props"]["id"]}),
+    "sound_ended" => keep.merge({"sound": -1}),
+    # A picture plays only when asked, and only one at a time.
+    "video_play" => keep.merge({"moving": moving == params["props"]["id"] ? -1 : params["props"]["id"], "at": 0, "seek": 0}),
+    "video_time" => keep.merge({"at": params["payload"][0], "duration": params["payload"][1]}),
+    "video_ended" => keep.merge({"moving": -1, "at": duration}),
+    "video_seek" => video_seek(keep, params),
+    _ => keep,
   }
 end
 
@@ -708,14 +719,33 @@ end
 # the interpreter the work of rebuilding identical hashes on every event.
 FEED_CARDS = {}
 
-def feed_card(i, liked, playing)
-  key = str(i) + (liked ? ":liked" : "") + (playing ? ":playing" : "")
+# A click on the bar: its x over its width, times the length. The bar
+# says how wide it is, so the two never disagree.
+def video_seek(keep, params)
+  width = params["props"]["w"] ?? 300
+  duration = keep["duration"] ?? 0
+  ms = duration > 0 ? int(params["payload"][0] * duration / width) : 0
+  keep.merge({"seek": ms, "at": ms})
+end
+
+def feed_build(i, liked, play)
+  post = feed_post(i)
+  built = keyed(i, post_card(post, liked, play, feed_card_height(post)))
+  built["p"] = {"row": i}
+  built
+end
+
+# A card that is playing something changes four times a second; caching
+# it would fill the cache with one entry per position. The others are
+# pure functions of (id, liked) and are kept.
+def feed_card(i, liked, play)
+  return feed_build(i, liked, play) if (play["sound"] ?? false) || (play["video"] ?? false)
+
+  key = str(i) + (liked ? ":liked" : "")
   cached = FEED_CARDS[key]
   return cached unless cached.nil?
 
-  post = feed_post(i)
-  built = keyed(i, post_card(post, liked, playing, feed_card_height(post)))
-  built["p"] = {"row": i}
+  built = feed_build(i, liked, play)
   FEED_CARDS[key] = built
   built
 end
@@ -743,7 +773,19 @@ def feed_view(state)
   last = window[1] < count ? window[1] : count - 1
   feed_prune(first, last)
   sound = state["sound"] ?? -1
-  cards = last < first ? [] : range(first, last + 1).map(fn(i) { feed_card(i, liked.includes?(i), i == sound) })
+  moving = state["moving"] ?? -1
+  at = state["at"] ?? 0
+  duration = state["duration"] ?? 0
+  seek = state["seek"] ?? 0
+  cards = last < first ? [] : range(first, last + 1).map(fn(i) {
+    feed_card(i, liked.includes?(i), {
+      "sound": i == sound,
+      "video": i == moving,
+      "at": i == moving ? at : 0,
+      "duration": i == moving ? duration : 0,
+      "seek": i == moving ? seek : 0
+    })
+  })
   header = row(
     {
       "gap": 3,
