@@ -219,6 +219,16 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**Memory, measured on the feed** (release client, the machine's 1.5×
+window of 1230 × 1390): 131 MB resident, 104 MB proportional, at rest with
+five thousand cards on the tree; the empty counter costs 85 MB resident,
+32 MB proportional — Mesa, LLVM and the Vulkan driver are most of it, and
+shared. The client's own data: 33 MB for the 96 000 nodes of five thousand
+cards (about 345 bytes a node: 136 in the arena, the rest in the vectors
+and strings each node owns), 5 MB more after the first paint, 3 MB after
+scrolling through all of it, 35 MB more for the next five thousand. The
+node is where the next frugality work goes.
+
 **What fifteen thousand cards taught.** Loading the feed past 250 000
 nodes made the client refuse the batch, ask for a fresh tree, refuse that
 too, and show nothing. Three things changed: the node limit is a million
