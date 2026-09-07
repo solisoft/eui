@@ -383,6 +383,19 @@ off-screen while it was written; an end-to-end test opens an album and
 plays a track. The colours are literal on purpose (05 §6): the app is
 always dark, like its model.
 
+**What the window weighs, by mapping.** Measured on the standalone
+client with the feed open, release, PSS (what the process really costs,
+shared pages divided among their sharers): 63 MB. Of it, 32 MB is
+`libLLVM` — loaded by this machine's AMD Vulkan driver (Mesa's RADV
+links it), touched through its relocations, ours only in the sense that
+we opened a GPU device; 8 MB is the binary's own text, 10 MB heap and
+6 MB anonymous are the client (atlases, session, transport), 5 MB the
+Vulkan driver itself. The GL backend used to be initialised alongside
+Vulkan and brought Mesa's gallium and a second LLVM mapping; the window
+now asks wgpu for the primary backends only. The worker beside it is
+17 MB. RSS reads higher (97 MB) because it counts every shared page
+whole.
+
 **Windowed lists (04 §7.1).** A `list` with a `count` has rows the tree
 does not hold: the client lays out `count` rows from a `heights` prop
 (one integer per row, `item_height` where absent), places the children it

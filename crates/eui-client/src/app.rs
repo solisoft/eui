@@ -367,7 +367,10 @@ impl ApplicationHandler<Wake> for App {
             self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
         }
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..Default::default() });
+        // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
+        // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
+        // measured), for a backend the primary ones make unneeded.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
         let surface = match instance.create_surface(Arc::clone(&window)) {
             Ok(s) => s,
             Err(e) => {
