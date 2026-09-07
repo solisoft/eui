@@ -31,11 +31,14 @@ use cosmic_text::{
 use eui_layout::{FontSpec, TextMeasurer, TextMetrics};
 use eui_proto::{FontFamily, FontWeight};
 
-const TITILLIUM_REGULAR: &[u8] = include_bytes!("../fonts/TitilliumWeb-Regular.ttf");
-const TITILLIUM_BOLD: &[u8] = include_bytes!("../fonts/TitilliumWeb-Bold.ttf");
+const INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
+const INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../fonts/JetBrainsMono-Regular.ttf");
+/// Hearts, arrows, stars: what an interface reaches for that a text face
+/// does not carry. Loaded last, so it only ever fills a gap.
+const NOTO_SYMBOLS: &[u8] = include_bytes!("../fonts/NotoSansSymbols-Regular.ttf");
 
-const SANS_FAMILY: &str = "Titillium Web";
+const SANS_FAMILY: &str = "Inter";
 const MONO_FAMILY: &str = "JetBrains Mono";
 
 /// How many shaped runs to keep before evicting the oldest.
@@ -183,7 +186,7 @@ impl TextEngine {
     /// fallback, and fallback must not depend on where the client runs.
     pub fn new() -> Self {
         let mut db = fontdb::Database::new();
-        for bytes in [TITILLIUM_REGULAR, TITILLIUM_BOLD, JETBRAINS_MONO] {
+        for bytes in [INTER_REGULAR, INTER_BOLD, JETBRAINS_MONO, NOTO_SYMBOLS] {
             db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
         }
         let fonts = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);

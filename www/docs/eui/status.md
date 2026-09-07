@@ -68,7 +68,7 @@ now normative.
 third-party dependency on the CPU side of the client: shaping is the part of
 text that must not be reinvented.
 
-- Two faces embedded, Titillium Web and JetBrains Mono, both OFL. The font
+- Four faces embedded — Inter regular and bold, JetBrains Mono, Noto Sans Symbols for the hearts and arrows a text face lacks — all OFL. The font
   database is built by hand from those three files and **never touches the
   system's fonts** — a test asserts the count is exactly three. The first
   version of this code used the convenience constructor and loaded 779
@@ -218,6 +218,19 @@ menu, toolbar, navbar, sidebar, tree view, code block, field and form,
 table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
+
+**What fifteen thousand cards taught.** Loading the feed past 250 000
+nodes made the client refuse the batch, ask for a fresh tree, refuse that
+too, and show nothing. Three things changed: the node limit is a million
+(136 bytes a node in the arena — a hostile server can cost a desktop about
+140 MB, not more), a refused *resync* now ends the session with an `Error`
+naming the reason instead of looping, and Soli says on its console when a
+view exceeds what a client accepts. A big update also streams now: the
+server sends slices of a thousand ops and the client paints between them.
+Measured at the server, the seconds of "Load 5 000 more" are Soli itself:
+building ten thousand cards in the interpreter (cached now, per card),
+converting the tree to JSON and diffing it — about two seconds in a release
+build, ten in a debug one; the client applies a thousand cards in 30 ms.
 
 **A feed, for the performance check.** `examples/counter-app`'s `feed`
 component: five thousand posts (`Load 5 000 more` adds five thousand), a

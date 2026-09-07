@@ -290,6 +290,9 @@ pub struct Driver {
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     granted: u32,
     welcomed: bool,
+    /// A `Resync` went out and its answer has not arrived: if that answer is
+    /// refused too, the session ends rather than looping.
+    resyncing: bool,
     layout_valid: bool,
     redraw: bool,
     closed: Option<Close>,
@@ -335,6 +338,7 @@ impl Driver {
             chunks: HashMap::new(),
             granted: granted & caps::ALL,
             welcomed: false,
+            resyncing: false,
             layout_valid: false,
             redraw: true,
             closed: None,
@@ -414,6 +418,7 @@ impl Driver {
     fn apply(&mut self, batch: &Batch) -> Vec<Frame> {
         match self.session.apply(batch) {
             Ok(()) => {
+                self.resyncing = false;
                 self.invalidate();
                 self.note_style_changes();
                 // Focus and edits follow the tree.
@@ -430,11 +435,21 @@ impl Driver {
                 }
                 out
             }
+            Err(e) if self.resyncing => {
+                // The fresh tree is refused too: nothing the server sends
+                // again will pass, so say why and stop instead of asking
+                // forever. A tree past the client's limits is the usual cause.
+                let message = format!("the resynced tree was refused: {e}");
+                eprintln!("eui: {message}; closing");
+                self.closed = Some(Close::Protocol("resync refused"));
+                vec![Frame::Error { code: 102, message }]
+            }
             Err(e) => {
                 // Recoverable by design: discard, ask for a fresh tree, rebuild.
                 // Not an `Error` frame — that would end the session on both
                 // sides, which is the opposite of what a resync is for.
                 eprintln!("eui: batch {} rejected ({e}); resyncing", batch.seq);
+                self.resyncing = true;
                 self.invalidate();
                 vec![Frame::Resync]
             }
@@ -618,6 +633,9 @@ impl Driver {
         if let Some(img) = self.assets.image(&hash) {
             self.images.insert(hash, img.width, img.height, &img.rgba);
         }
+        // An image's intrinsic size just changed under nodes nothing marked
+        // dirty: the memoised measures cannot be trusted.
+        self.layout.invalidate_all();
         self.invalidate();
     }
 

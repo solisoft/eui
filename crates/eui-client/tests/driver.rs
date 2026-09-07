@@ -811,3 +811,22 @@ fn pointer_moves_while_a_frame_is_owed_do_not_lay_out_and_hover_settles_at_paint
     let _ = d.paint(400, 300);
     assert_eq!(d.hovered(), d.session().lookup(1));
 }
+
+#[test]
+fn a_refused_resync_ends_the_session_instead_of_looping() {
+    let mut d = welcomed();
+    // A bad batch: resync. The fresh tree is bad too: an Error, and closed.
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 99, text: TextRef::Atom(1) }] })), vec![Frame::Resync]);
+    let out = d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetText { node: 99, text: TextRef::Atom(1) }] }));
+    assert!(matches!(&out[..], [Frame::Error { code: 102, .. }]), "{out:?}");
+    assert!(d.closed().is_some());
+    // Whereas a good fresh tree after one refusal is simply accepted.
+    let mut d = welcomed();
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 99, text: TextRef::Atom(1) }] }));
+    let mut fresh = counter_batch();
+    fresh.seq = 3;
+    fresh.ops.retain(|op| !matches!(op, Op::DefAtom { .. } | Op::DefStyle { .. }));
+    assert_eq!(d.handle_frame(Frame::Batch(fresh)), vec![Frame::Ack { seq: 3 }]);
+    // And a later bad batch resyncs again: the guard is per resync, not per session.
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetText { node: 99, text: TextRef::Atom(1) }] })), vec![Frame::Resync]);
+}

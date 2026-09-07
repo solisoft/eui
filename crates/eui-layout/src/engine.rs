@@ -70,6 +70,8 @@ pub struct Stats {
     pub rows_measured: u32,
     /// Rows assigned by arithmetic and never visited.
     pub rows_virtual: u32,
+    /// Memoised measures kept after the frame: what the next one can reuse.
+    pub memo_size: u32,
 }
 
 /// Per-frame results, indexed by [`NodeIx::raw`].
@@ -85,7 +87,10 @@ pub struct Layout {
     /// styles, so resolving per node was 10 000 resolves for four answers —
     /// and a per-node cache was seven megabytes of memset per frame.
     by_style_id: HashMap<u32, Style>,
-    memo: HashMap<MemoKey, Metrics>,
+    memo: HashMap<MemoKey, (Metrics, u32)>,
+    /// The frame being computed; memo entries not read or written in it
+    /// are dropped at its end, so the memo never outgrows one frame's work.
+    generation: u32,
     columns_atom: Option<u32>,
     item_height_atom: Option<u32>,
     viewport: Size,
@@ -131,6 +136,7 @@ impl Layout {
         // by a new node carries a different id. A scroll dirties only the
         // scroller and its ancestors, so a scrolled frame re-measures the
         // rows entering the window and nothing else.
+        self.generation = self.generation.wrapping_add(1);
         self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty == 0));
         self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
@@ -140,6 +146,11 @@ impl Layout {
         let Some(root) = f.session.root() else { return };
         let m = self.measure(f, root, Constraint::Exact(viewport.w), Constraint::Exact(viewport.h));
         self.arrange(f, root, 0.0, 0.0, m.w, m.h);
+        // Rows scrolled out of a list are not dirty, so they would stay
+        // memoised forever; a frame that did not touch them lets them go.
+        let generation = self.generation;
+        self.memo.retain(|_, (_, seen)| *seen == generation);
+        self.stats.memo_size = self.memo.len() as u32;
     }
 
     /// Forget every memoised measure: the viewport, theme or scale changed,
@@ -236,13 +247,15 @@ impl Layout {
     fn measure(&mut self, f: &mut Env<'_>, ix: NodeIx, cw: Constraint, ch: Constraint) -> Metrics {
         let id = f.session.node(ix).map_or(0, |n| n.id);
         let key = (ix.raw(), id, cw.key(), ch.key());
-        if let Some(m) = self.memo.get(&key) {
+        let generation = self.generation;
+        if let Some((m, seen)) = self.memo.get_mut(&key) {
+            *seen = generation;
             self.stats.memo_hits = self.stats.memo_hits.saturating_add(1);
             return *m;
         }
         self.stats.measures = self.stats.measures.saturating_add(1);
         let m = self.measure_uncached(f, ix, cw, ch);
-        self.memo.insert(key, m);
+        self.memo.insert(key, (m, generation));
         m
     }
 

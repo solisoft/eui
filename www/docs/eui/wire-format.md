@@ -124,7 +124,7 @@ hostile server can be annoying; it cannot make the client exhaust itself.
 |---|---|
 | Frame | 8 MiB |
 | Tree depth | 256 |
-| Nodes | 250 000 |
+| Nodes | 1 000 000 |
 | Atoms | 65 535, 64 KiB each, 8 MiB total |
 | Styles | 65 535 |
 | Children per node | 65 535 |

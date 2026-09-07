@@ -1401,8 +1401,8 @@ def post_card(post, liked, height)
     {"gap": 4, "align": "center"},
     [
       post_action("↩", post["replies"], "noop", {"id": post["id"]}, false),
-      post_action("→", post["reposts"], "noop", {"id": post["id"]}, false),
-      post_action("◆", post["likes"] + (liked ? 1 : 0), "like", {"id": post["id"]}, liked)
+      post_action("⟳", post["reposts"], "noop", {"id": post["id"]}, false),
+      post_action("♥", post["likes"] + (liked ? 1 : 0), "like", {"id": post["id"]}, liked)
     ]
   )
   {

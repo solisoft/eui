@@ -9,7 +9,7 @@ pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 /// Deepest node nesting accepted.
 pub const MAX_TREE_DEPTH: u32 = 256;
 /// Most nodes a session may hold.
-pub const MAX_NODES: u32 = 250_000;
+pub const MAX_NODES: u32 = 1_000_000;
 /// Highest atom id.
 pub const MAX_ATOMS: u32 = 65_535;
 /// Largest single atom value, in bytes.

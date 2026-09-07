@@ -15,7 +15,7 @@ fn base() -> FontSpec {
 #[test]
 fn embedded_faces_are_loaded_and_nothing_else() {
     let e = TextEngine::new();
-    assert_eq!(e.face_count(), 3, "Titillium regular, Titillium bold, JetBrains Mono");
+    assert_eq!(e.face_count(), 4, "Inter regular, Inter bold, JetBrains Mono, Noto Sans Symbols");
 }
 
 #[test]
@@ -162,4 +162,14 @@ fn glyphs_carry_their_bytes_so_a_caret_can_be_placed() {
     // Multi-byte text: offsets are bytes, ends are char boundaries.
     let shaped = t.shape("é!", base(), None, 0);
     assert_eq!(shaped.glyphs.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>(), vec![(0, 2), (2, 3)]);
+}
+
+#[test]
+fn symbols_come_from_the_fallback_face() {
+    let mut t = TextEngine::new();
+    let a = t.shape("a", base(), None, 0).metrics.width;
+    for c in ["♥", "★", "✓", "→", "⟳", "↻"] {
+        let w = t.shape(c, base(), None, 0).metrics.width;
+        assert!(w > a * 0.4, "{c} has a glyph: width {w}");
+    }
 }

@@ -282,7 +282,7 @@ truncate, when one is exceeded.
 |---|---:|
 | `MAX_FRAME_BYTES` | 8 MiB |
 | `MAX_TREE_DEPTH` | 256 |
-| `MAX_NODES` | 250 000 |
+| `MAX_NODES` | 1 000 000 |
 | `MAX_ATOMS` | 65 535 |
 | `MAX_ATOM_BYTES` | 64 KiB each |
 | `MAX_ATOM_TOTAL_BYTES` | 8 MiB per session |
