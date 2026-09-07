@@ -679,3 +679,132 @@ fn the_music_player_opens_an_album_and_plays_a_track() {
     assert!(all.iter().any(|t| t == "▮▮"), "playing: {all:?}");
     assert!(all.iter().filter(|t| t.as_str() == "▶").count() >= 1, "the current track wears the play glyph: {all:?}");
 }
+
+/// A wheel scroll into rows the client does not have: placeholders first,
+/// then the window is asked for once the scroll has settled, and the
+/// cards arrive and are laid out where the placeholders were.
+#[test]
+fn a_wheel_scroll_into_unloaded_rows_asks_for_them_and_gets_cards() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "feed", 700.0, 900.0);
+    let _ = d.paint(700, 900);
+    let button = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Load 5 000 more")).unwrap();
+    let button_box = d.session().node(button).unwrap().parent;
+    click(&mut d, &conn, button_box);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("5010 posts")));
+    let mut clock = Instant::now();
+    d.tick(clock);
+    let _ = d.paint(700, 900);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // Wheel 30 000 px down, pixel deltas as a trackpad sends them.
+    d.input(Input::PointerMove(350.0, 450.0));
+    for _ in 0..30 {
+        d.input(Input::Wheel(0.0, 1000.0));
+    }
+    let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
+    let sy = d.session().node(feed).unwrap().scroll.1;
+    assert!(sy > 20_000, "scrolled to {sy}");
+    // Right away: nothing asked, placeholders painted.
+    d.tick(clock);
+    let list = d.paint(700, 900);
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "not while moving");
+    let sunken = eui_render::linear(d.theme_color(eui_theme::Role::SurfaceSunken));
+    assert!(list.quads.iter().any(|q| q.fill == sunken && q.rect[3] > 50.0), "placeholders where the cards will be");
+    // Settled: the window is asked for, the cards come, and they are laid out.
+    clock += Duration::from_millis(200);
+    d.tick(clock);
+    let _ = d.paint(700, 900);
+    let asked = d.take_pending();
+    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "{asked:?}");
+    for f in asked {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let row = d.session().atom_id("row").unwrap();
+    let (first, last) = d.layout().row_window(feed, sy as f32).unwrap();
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(i64::from(first + 5)))));
+    let _ = d.paint(700, 900);
+    let placed = d.layout().placed_rows(feed).unwrap().to_vec();
+    assert!(placed.len() > 10 && placed.iter().all(|r| *r >= first && *r <= last), "rows placed: {placed:?} for window {first}..={last}");
+    let card = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(i64::from(first + 5)))).unwrap();
+    assert!(d.layout().rect(card).is_some(), "the card has a rect");
+}
+
+/// The Magic Mouse path: notched wheel steps, a real clock, no manual
+/// ticking — as the window loop drives it.
+#[test]
+fn a_notched_wheel_scroll_gets_its_cards_on_the_real_clock() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "feed", 700.0, 900.0);
+    let _ = d.paint(700, 900);
+    let button = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Load 5 000 more")).unwrap();
+    let button_box = d.session().node(button).unwrap().parent;
+    click(&mut d, &conn, button_box);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("5010 posts")));
+    // Drive it exactly as the window does: tick, paint, send, pump.
+    let mut turn = |d: &mut Driver, conn: &eui_client::Connection| {
+        d.tick(Instant::now());
+        let _ = d.paint(700, 900);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        while let Ok(msg) = conn.rx.try_recv() {
+            if let Incoming::Message(bytes) = msg {
+                let frame = Frame::decode(&bytes).unwrap();
+                if let Frame::Error { code, message } = &frame {
+                    panic!("soli error {code}: {message}");
+                }
+                for out in d.handle_frame(frame) {
+                    conn.tx.send(out.encode()).unwrap();
+                }
+            }
+        }
+    };
+    turn(&mut d, &conn);
+    d.input(Input::PointerMove(350.0, 450.0));
+    // Twenty notches, a frame apart, as a wheel spun fast.
+    for _ in 0..20 {
+        d.input(Input::WheelStep(0.0, 3.0));
+        std::thread::sleep(Duration::from_millis(16));
+        turn(&mut d, &conn);
+    }
+    // Let it land and settle, then keep turning as the loop would.
+    let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let row = d.session().atom_id("row").unwrap();
+    loop {
+        std::thread::sleep(Duration::from_millis(16));
+        turn(&mut d, &conn);
+        let sy = d.session().node(feed).unwrap().scroll.1 as f32;
+        let placed = d.layout().placed_rows(feed).map(<[u32]>::to_vec).unwrap_or_default();
+        let window = d.layout().row_window(feed, sy);
+        if let Some((first, last)) = window {
+            // The layout places a narrower band than the window asked for
+            // (one viewport of margin above, two below); a row a little
+            // past the top of the view is in it.
+            let want = first + (last - first) / 2;
+            if placed.contains(&want) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "row {want} never came: scroll {sy}, window {first}..={last}, placed {placed:?}");
+        }
+    }
+    // Every row on screen has a card: no placeholder is left behind once
+    // the answer landed.
+    let sy = d.session().node(feed).unwrap().scroll.1 as f32;
+    let tops = d.layout().row_tops(feed).unwrap().to_vec();
+    let view = d.layout().rect(feed).unwrap();
+    let placed = d.layout().placed_rows(feed).unwrap().to_vec();
+    let on_screen: Vec<u32> = (0..tops.len() - 1).filter(|i| tops[*i] + 316.0 > sy && tops[*i] < sy + view.h).map(|i| i as u32).collect();
+    assert!(!on_screen.is_empty());
+    for r in &on_screen {
+        assert!(placed.contains(r), "row {r} is on screen with no card: placed {placed:?}");
+        let card = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(i64::from(*r)))).unwrap();
+        assert!(d.layout().rect(card).is_some(), "row {r}'s card is laid out");
+    }
+}
