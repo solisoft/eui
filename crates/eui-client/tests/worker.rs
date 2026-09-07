@@ -74,7 +74,7 @@ fn the_counter_runs_through_a_worker_process() {
     let url = start_server();
     let (mut backend, how) = Backend::open_with(eui_binary(), 320.0, 240.0, 1.0, 0);
     eprintln!("{how}");
-    assert!(matches!(backend, Backend::Remote(_)), "a worker started: {how}");
+    assert!(matches!(backend, Backend::Remote { .. }), "a worker started: {how}");
     #[cfg(target_os = "linux")]
     assert!(how.contains("landlock") && how.contains("seccomp"), "confined on Linux: {how}");
     let (conn, wake) = open(&mut backend, &url);
@@ -136,7 +136,7 @@ fn the_counter_runs_through_a_worker_process() {
 #[test]
 fn a_hostile_frame_ends_the_session_and_the_window_stands() {
     let (mut backend, _) = Backend::open_with(eui_binary(), 100.0, 100.0, 1.0, 0);
-    assert!(matches!(backend, Backend::Remote(_)));
+    assert!(matches!(backend, Backend::Remote { .. }));
     let _ = backend.hello();
     assert!(backend.closed().is_none());
     // Garbage where a frame should be: the driver refuses it, the session
@@ -152,12 +152,12 @@ fn a_hostile_frame_ends_the_session_and_the_window_stands() {
 #[test]
 fn a_dead_worker_is_reported_not_fatal() {
     let (mut backend, _) = Backend::open_with(eui_binary(), 100.0, 100.0, 1.0, 0);
-    let Backend::Remote(worker) = &mut backend else { panic!("a worker") };
-    // Take the worker down from outside, as a crash would.
-    drop(std::mem::replace(worker, {
-        let (Backend::Remote(w), _) = Backend::open_with(eui_binary(), 1.0, 1.0, 1.0, 0) else { panic!() };
-        w
-    }));
+    let Backend::Remote { worker, .. } = &mut backend else { panic!("a worker") };
+    // Take the worker down from outside, as a crash would: the pipe closes
+    // when the last handle to it goes.
+    if let Ok(mut w) = worker.lock() {
+        w.kill_for_test();
+    }
     let _ = backend.hello();
     let (list, _) = backend.paint(100, 100);
     assert!(list.quads.is_empty());

@@ -3,9 +3,11 @@
 //! asked. Pure enough to be tested without a display or a network.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
+use eui_audio::Control;
 use eui_proto::{Cursor, 
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
@@ -318,6 +320,18 @@ pub struct Driver {
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
+    /// Spec 03 §7: the sounds this session is playing, and the decoded
+    /// bytes behind them. The mixer lives here — in the worker — because
+    /// decoding runs on bytes a server chose; the window owns the device.
+    mixer: eui_audio::Mixer,
+    sounds: HashMap<Hash, Option<Arc<eui_audio::Sound>>>,
+    /// The `position` prop each audio node last carried: a seek happens
+    /// when the value changes, not on every render.
+    audio_at: HashMap<u32, i64>,
+    /// The tree changed, so the audio nodes must be looked at again.
+    audio_dirty: bool,
+    /// When `time_update` was last sent, for the rate limit of 03 §7.
+    audio_reported: Option<Instant>,
     /// The viewer's desktop palette by role, on top of the theme (05 §5),
     /// and the mode it is for: in the other mode the theme's own colours
     /// show, so a light/dark switch still switches something.
@@ -375,6 +389,11 @@ impl Driver {
             desktop_mode: None,
             windows: HashMap::new(),
             scroll_touched: None,
+            mixer: eui_audio::Mixer::new(48_000),
+            sounds: HashMap::new(),
+            audio_at: HashMap::new(),
+            audio_dirty: false,
+            audio_reported: None,
         }
     }
 
@@ -467,6 +486,7 @@ impl Driver {
         match self.session.apply(batch) {
             Ok(()) => {
                 self.resyncing = false;
+                self.audio_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
                 // Focus and edits follow the tree.
@@ -659,7 +679,7 @@ impl Driver {
                 .session
                 .preorder(root)
                 .filter_map(|ix| self.session.node(ix))
-                .filter(|n| n.kind == NodeKind::Image)
+                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio))
                 .flat_map(|n| n.props.iter().filter_map(|(_, v)| if let Value::Asset(h) = v { Some(*h) } else { None }))
                 .collect();
             for h in wanted {
@@ -673,6 +693,8 @@ impl Driver {
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.assets.deliver(hash, bytes);
+        // It may be a sound a node is waiting for.
+        self.audio_dirty = true;
         if let Some(img) = self.assets.image(&hash) {
             self.images.insert(hash, img.width, img.height, &img.rgba);
         }
@@ -795,6 +817,7 @@ impl Driver {
             self.provisional.extend(undo);
         }
         if touched {
+            self.audio_dirty = true;
             self.invalidate();
         }
         // The viewer's choice, made through the application's own control:
@@ -1542,6 +1565,10 @@ impl Driver {
         }
         self.ensure_layout();
         let now = self.now;
+        // Spec 03 §7: the tree says what should be playing.
+        self.sync_audio();
+        let ticks = self.time_updates();
+        self.pending.extend(ticks);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
         // them — once the view has been still for a moment, not per frame
         // of a glide or a drag: a request a frame is a server render a
@@ -1591,6 +1618,150 @@ impl Driver {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         list
+    }
+
+    /// Spec 03 §7: look at the tree's `audio` nodes — what they name,
+    /// what they should be doing — and make the mixer agree. Cheap when
+    /// nothing changed: the walk happens only after a batch or a local
+    /// handler touched the tree.
+    fn sync_audio(&mut self) {
+        if !self.audio_dirty {
+            return;
+        }
+        self.audio_dirty = false;
+        let Some(root) = self.session.root() else {
+            self.mixer.retain(&[]);
+            self.audio_at.clear();
+            return;
+        };
+        let atom = |name: &str| self.session.atom_id(name);
+        let (a_src, a_playing, a_volume, a_loop, a_position) = (atom("src"), atom("playing"), atom("volume"), atom("loop"), atom("position"));
+        let mut live: Vec<u32> = Vec::new();
+        let mut work: Vec<(u32, Hash, Control, Option<i64>)> = Vec::new();
+        for ix in self.session.preorder(root) {
+            let Some(node) = self.session.node(ix) else { continue };
+            if node.kind != NodeKind::Audio {
+                continue;
+            }
+            let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
+            let Some(Value::Asset(hash)) = prop(a_src) else { continue };
+            let control = Control {
+                playing: matches!(prop(a_playing), Some(Value::Bool(true))),
+                volume: match prop(a_volume) {
+                    Some(Value::Int(v)) => (*v as f32 / 100.0).clamp(0.0, 1.0),
+                    Some(Value::Float(v)) => (*v as f32).clamp(0.0, 1.0),
+                    _ => 1.0,
+                },
+                looping: matches!(prop(a_loop), Some(Value::Bool(true))),
+            };
+            let position = match prop(a_position) {
+                Some(Value::Int(ms)) => Some(*ms),
+                _ => None,
+            };
+            live.push(node.id);
+            work.push((node.id, *hash, control, position));
+        }
+        self.mixer.retain(&live);
+        self.audio_at.retain(|id, _| live.contains(id));
+        for (id, hash, control, position) in work {
+            if !self.mixer.has(id) {
+                match self.sound(&hash) {
+                    Some(sound) => {
+                        if !self.mixer.load(id, sound) {
+                            trace(|| format!("audio: node {id} refused, {} sources already", self.mixer.len()));
+                            continue;
+                        }
+                    }
+                    // Not fetched yet, or it failed: the node stays silent.
+                    None => continue,
+                }
+            }
+            self.mixer.control(id, control);
+            if let Some(ms) = position {
+                if self.audio_at.get(&id) != Some(&ms) {
+                    self.audio_at.insert(id, ms);
+                    self.mixer.seek(id, ms.max(0) as u64);
+                }
+            }
+        }
+    }
+
+    /// The decoded sound for a hash, decoding it the first time. A sound
+    /// that will not decode is remembered as such, so a tree that keeps
+    /// naming it does not re-decode it every frame.
+    fn sound(&mut self, hash: &Hash) -> Option<Arc<eui_audio::Sound>> {
+        if let Some(known) = self.sounds.get(hash) {
+            return known.clone();
+        }
+        let bytes = self.assets.raw(hash)?;
+        let decoded = match eui_audio::decode(&bytes, None) {
+            Ok(sound) => {
+                trace(|| format!("audio: {} decoded, {} ms, {} kB", crate::assets::hex(hash), sound.duration_ms(), sound.bytes() / 1024));
+                Some(Arc::new(sound))
+            }
+            Err(e) => {
+                eprintln!("eui: audio {}: {e}", crate::assets::hex(hash));
+                None
+            }
+        };
+        self.sounds.insert(*hash, decoded.clone());
+        // Bytes the decoder produced count against the session, like an
+        // image's: a sound that will not decode costs nothing but its file.
+        decoded
+    }
+
+    /// Mix the sounds that are playing into `out`, `channels` samples a
+    /// frame at `rate` frames a second. Called by the window's audio
+    /// thread — the only part of the driver another thread reaches — and
+    /// returns the frames a source's end produced, to send.
+    pub fn fill_audio(&mut self, out: &mut [f32], channels: u16, rate: u32) -> Vec<Frame> {
+        if self.mixer.rate() != rate {
+            self.mixer.set_rate(rate);
+        }
+        let ended = self.mixer.fill(out, channels);
+        let mut frames = Vec::new();
+        for id in ended {
+            let Some(ix) = self.session.lookup(id) else { continue };
+            frames.extend(self.emit(ix, EventKind::Ended, Value::Null));
+        }
+        frames
+    }
+
+    /// True while any sound is playing: the window keeps its device open
+    /// and its buffer fed only then.
+    pub fn audio_playing(&self) -> bool {
+        !self.mixer.is_empty()
+    }
+
+    /// Spec 03 §7: `time_update` for the playing sources whose node asks
+    /// for it, at most four a second.
+    fn time_updates(&mut self) -> Vec<Frame> {
+        if self.mixer.is_empty() {
+            return Vec::new();
+        }
+        let now = self.now;
+        if self.audio_reported.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(250)) {
+            return Vec::new();
+        }
+        let playing: Vec<u32> = self.session.root().map_or_else(Vec::new, |root| {
+            self.session
+                .preorder(root)
+                .filter_map(|ix| self.session.node(ix))
+                .filter(|n| n.kind == NodeKind::Audio && n.handler(EventKind::TimeUpdate).is_some())
+                .map(|n| n.id)
+                .filter(|id| self.mixer.playing(*id))
+                .collect()
+        });
+        if playing.is_empty() {
+            return Vec::new();
+        }
+        self.audio_reported = Some(now);
+        let mut out = Vec::new();
+        for id in playing {
+            let (Some(ix), Some(at), Some(len)) = (self.session.lookup(id), self.mixer.position_ms(id), self.mixer.duration_ms(id)) else { continue };
+            out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
+        }
+        out
     }
 
     /// Spec 04 §7.1: for every windowed list laid out this frame, the rows

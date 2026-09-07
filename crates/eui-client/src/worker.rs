@@ -20,6 +20,7 @@
 //! to this crate and unversioned: both ends are always the same binary.
 
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -185,6 +186,16 @@ pub enum Request {
     /// The viewer's desktop palette (05 §5): its mode if it has one, and
     /// colours by role id. Empty means none: the theme's own colours.
     DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
+    /// Spec 03 §7: mix `frames` frames of `channels` samples at `rate`.
+    /// The window's audio thread asks; nothing else does.
+    Audio {
+        /// Frames wanted.
+        frames: u32,
+        /// Samples per frame, 1 or 2.
+        channels: u8,
+        /// Frames a second the device runs at.
+        rate: u32,
+    },
 }
 
 impl Request {
@@ -234,6 +245,12 @@ impl Request {
                 w.u64(*id);
                 w.bool(*click);
             }
+            Request::Audio { frames, channels, rate } => {
+                w.u8(13);
+                w.u32(*frames);
+                w.u8(*channels);
+                w.u32(*rate);
+            }
             Request::DesktopTheme(mode, colors) => {
                 w.u8(12);
                 w.u8(mode.map_or(255, |m| m as u8));
@@ -274,6 +291,7 @@ impl Request {
                 }
                 Request::DesktopTheme(mode, colors)
             }
+            13 => Request::Audio { frames: r.u32()?, channels: r.u8()?, rate: r.u32()? },
             _ => return Err("unknown request"),
         };
         r.done()?;
@@ -380,6 +398,8 @@ pub struct Status {
     /// The pointer's shape over what it is on, as [`eui_proto::Cursor`]'s
     /// wire byte.
     pub cursor: u8,
+    /// A sound is loaded: the window keeps its audio device open (03 §7).
+    pub audio: bool,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -408,6 +428,8 @@ pub enum Payload {
     Tick(bool),
     /// `AccessTree`.
     Access(AccessSnapshot),
+    /// `Audio`: interleaved `f32` frames, `channels` per frame.
+    Pcm(Vec<f32>),
 }
 
 /// One reply.
@@ -445,6 +467,7 @@ impl Reply {
             None => w.bool(false),
         }
         w.u8(s.cursor);
+        w.bool(s.audio);
         match &self.payload {
             Payload::None => w.u8(0),
             Payload::Sandbox(r) => {
@@ -502,6 +525,13 @@ impl Reply {
                 w.u8(6);
                 put_access(&mut w, snap);
             }
+            Payload::Pcm(samples) => {
+                w.u8(7);
+                w.u32(u32::try_from(samples.len()).unwrap_or(u32::MAX));
+                for s in samples {
+                    w.f32(*s);
+                }
+            }
         }
         w.0
     }
@@ -519,7 +549,8 @@ impl Reply {
         let clipboard = r.opt_str()?;
         let next_due_ms = if r.bool()? { Some(r.u32()?) } else { None };
         let cursor = r.u8()?;
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor };
+        let audio = r.bool()?;
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -540,6 +571,14 @@ impl Reply {
             }
             5 => Payload::Tick(r.bool()?),
             6 => Payload::Access(get_access(&mut r)?),
+            7 => {
+                let n = r.u32()? as usize;
+                let mut samples = Vec::with_capacity(n.min(1 << 20));
+                for _ in 0..n {
+                    samples.push(r.f32()?);
+                }
+                Payload::Pcm(samples)
+            }
             _ => return Err("unknown payload"),
         };
         r.done()?;
@@ -733,6 +772,14 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         }
                         Payload::None
                     }
+                    Request::Audio { frames, channels, rate } => {
+                        let channels = u16::from(channels).clamp(1, 2);
+                        let n = (frames as usize).saturating_mul(usize::from(channels)).min(1 << 20);
+                        let mut pcm = vec![0.0f32; n];
+                        let out = d.fill_audio(&mut pcm, channels, rate);
+                        d.pending_mut().extend(out);
+                        Payload::Pcm(pcm)
+                    }
                     Request::DesktopTheme(mode, colors) => {
                         let colors = colors.into_iter().filter_map(|(id, c)| eui_theme::Role::from_id(id).ok().map(|r| (r, c))).collect();
                         let out = d.set_desktop_theme(mode, colors);
@@ -760,6 +807,7 @@ fn status_of(d: &mut Driver) -> Status {
         clipboard: d.take_clipboard(),
         next_due_ms: d.next_frame_at().map(|at| u32::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)),
         cursor: d.cursor().to_u8(),
+        audio: d.audio_playing(),
     }
 }
 
@@ -857,8 +905,6 @@ pub struct Worker {
     /// When the last reply's `next_due_ms` was taken, to turn it back into
     /// an instant.
     due: Option<Instant>,
-    atlas: Atlas,
-    images: ImageAtlas,
     dead: Option<String>,
 }
 
@@ -882,7 +928,7 @@ impl Worker {
         let mut child = cmd.spawn().map_err(|e| format!("cannot start the worker {}: {e}", program.display()))?;
         let input = child.stdin.take().ok_or("worker has no stdin")?;
         let output = child.stdout.take().ok_or("worker has no stdout")?;
-        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, atlas: Atlas::new(), images: ImageAtlas::new(), dead: None };
+        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
             Some(Payload::Sandbox(s)) => Ok((worker, s)),
@@ -932,6 +978,14 @@ impl Worker {
     pub fn status(&self) -> &Status {
         &self.status
     }
+
+    /// Kill the worker, for the test that checks a dead one is reported
+    /// rather than fatal.
+    #[doc(hidden)]
+    pub fn kill_for_test(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl Drop for Worker {
@@ -943,12 +997,76 @@ impl Drop for Worker {
 }
 
 /// Where the window's driver runs.
-#[derive(Debug)]
+///
+/// Both variants keep the driver behind a lock, because two threads reach
+/// it: the window's loop, and the audio thread that keeps the device fed
+/// (03 §7). The audio side holds the lock for the microseconds a mix
+/// takes; a paint holds it for a frame.
+#[derive(Debug, Clone)]
 pub enum Backend {
     /// In this process.
-    Local(Driver),
-    /// In a worker process.
-    Remote(Worker),
+    Local(Arc<Mutex<Driver>>),
+    /// In a worker process, with the atlases it last sent.
+    Remote {
+        /// The worker.
+        worker: Arc<Mutex<Worker>>,
+        /// The glyph atlas, as the worker last painted it.
+        atlas: Arc<Mutex<Atlas>>,
+        /// The image atlas.
+        images: Arc<Mutex<ImageAtlas>>,
+    },
+}
+
+/// What the window's audio thread holds: a way to ask for frames, and
+/// nothing else. `Send`, unlike anything that draws.
+#[derive(Debug, Clone)]
+pub enum AudioTap {
+    /// The driver in this process.
+    Local(Arc<Mutex<Driver>>),
+    /// The driver in the worker.
+    Remote(Arc<Mutex<Worker>>),
+}
+
+impl AudioTap {
+    /// Mix into `out`, `channels` samples a frame at `rate`. Returns the
+    /// encoded frames the mix produced — a sound's `ended` — to send.
+    /// Silence, and nothing to send, when the driver cannot be reached.
+    pub fn fill(&self, out: &mut [f32], channels: u16, rate: u32) -> Vec<Vec<u8>> {
+        match self {
+            AudioTap::Local(d) => match d.lock() {
+                Ok(mut d) => d.fill_audio(out, channels, rate).iter().map(Frame::encode).collect(),
+                Err(_) => {
+                    silence(out);
+                    Vec::new()
+                }
+            },
+            AudioTap::Remote(w) => {
+                let channels = channels.clamp(1, 2);
+                let frames = u32::try_from(out.len() / usize::from(channels)).unwrap_or(0);
+                let request = Request::Audio { frames, channels: channels as u8, rate };
+                let reply = match w.lock() {
+                    Ok(mut w) => w.call(&request),
+                    Err(_) => None,
+                };
+                match reply {
+                    Some(Reply { status, payload: Payload::Pcm(pcm) }) if pcm.len() == out.len() => {
+                        out.copy_from_slice(&pcm);
+                        status.outbound
+                    }
+                    _ => {
+                        silence(out);
+                        Vec::new()
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn silence(out: &mut [f32]) {
+    for s in out.iter_mut() {
+        *s = 0.0;
+    }
 }
 
 impl Backend {
@@ -957,11 +1075,11 @@ impl Backend {
     /// enforced. `EUI_SANDBOX=0` asks for this process outright.
     pub fn open(w: f32, h: f32, scale: f32, granted: u32) -> (Self, String) {
         if std::env::var("EUI_SANDBOX").is_ok_and(|v| v == "0") {
-            return (Backend::Local(Driver::new(w, h, scale, granted)), "driver in this process (EUI_SANDBOX=0)".into());
+            return (Backend::local(Driver::new(w, h, scale, granted)), "driver in this process (EUI_SANDBOX=0)".into());
         }
         let program = match std::env::current_exe() {
             Ok(p) => p,
-            Err(e) => return (Backend::Local(Driver::new(w, h, scale, granted)), format!("driver in this process: cannot find this binary ({e})")),
+            Err(e) => return (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: cannot find this binary ({e})")),
         };
         Self::open_with(program, w, h, scale, granted)
     }
@@ -975,96 +1093,116 @@ impl Backend {
                     Ok(s) => format!("driver in worker {pid}: {s}"),
                     Err(e) => format!("driver in worker {pid}, unconfined: {e}"),
                 };
-                (Backend::Remote(worker), how)
+                let backend = Backend::Remote {
+                    worker: Arc::new(Mutex::new(worker)),
+                    atlas: Arc::new(Mutex::new(Atlas::new())),
+                    images: Arc::new(Mutex::new(ImageAtlas::new())),
+                };
+                (backend, how)
             }
-            Err(e) => (Backend::Local(Driver::new(w, h, scale, granted)), format!("driver in this process: {e}")),
+            Err(e) => (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: {e}")),
         }
     }
 
     /// Wrap a driver of this process.
     pub fn local(driver: Driver) -> Self {
-        Backend::Local(driver)
+        Backend::Local(Arc::new(Mutex::new(driver)))
     }
 
-    fn remote_status(&self) -> Option<&Status> {
+    /// Run `f` against the driver when it is in this process.
+    fn with_local<T>(&self, f: impl FnOnce(&mut Driver) -> T) -> Option<T> {
         match self {
-            Backend::Remote(w) => Some(w.status()),
+            Backend::Local(d) => d.lock().ok().map(|mut d| f(&mut d)),
+            Backend::Remote { .. } => None,
+        }
+    }
+
+    /// Run `f` against the worker when the driver is in one.
+    fn with_worker<T>(&self, f: impl FnOnce(&mut Worker) -> T) -> Option<T> {
+        match self {
+            Backend::Remote { worker, .. } => worker.lock().ok().map(|mut w| f(&mut w)),
             Backend::Local(_) => None,
+        }
+    }
+
+    /// What the window's audio thread holds.
+    pub fn audio_tap(&self) -> AudioTap {
+        match self {
+            Backend::Local(d) => AudioTap::Local(Arc::clone(d)),
+            Backend::Remote { worker, .. } => AudioTap::Remote(Arc::clone(worker)),
         }
     }
 
     /// Change the grant before the session opens.
     pub fn grant(&mut self, granted: u32) {
-        match self {
-            Backend::Local(d) => d.grant(granted),
-            Backend::Remote(w) => {
-                w.call(&Request::Grant(granted));
-            }
-        }
+        self.with_local(|d| d.grant(granted));
+        self.with_worker(|w| {
+            w.call(&Request::Grant(granted));
+        });
     }
 
     /// The opening frame, encoded.
     pub fn hello(&mut self) -> Vec<u8> {
-        match self {
-            Backend::Local(d) => d.hello().encode(),
-            Backend::Remote(w) => match w.call(&Request::Hello).map(|r| r.payload) {
-                Some(Payload::Hello(b)) => b,
-                _ => Vec::new(),
-            },
+        if let Some(b) = self.with_local(|d| d.hello().encode()) {
+            return b;
+        }
+        match self.with_worker(|w| w.call(&Request::Hello).map(|r| r.payload)) {
+            Some(Some(Payload::Hello(b))) => b,
+            _ => Vec::new(),
         }
     }
 
     /// A frame from the server, as received. Returns encoded frames to send
     /// back.
     pub fn frame(&mut self, bytes: Vec<u8>) -> Vec<Vec<u8>> {
-        match self {
-            Backend::Local(d) => match Frame::decode(&bytes) {
-                Ok(f) => d.handle_frame(f).iter().map(Frame::encode).collect(),
-                Err(e) => {
-                    d.close(format!("bad frame: {e}"));
-                    Vec::new()
-                }
-            },
-            Backend::Remote(w) => w.call(&Request::Frame(bytes)).map(|r| r.status.outbound).unwrap_or_default(),
+        if let Some(out) = self.with_local(|d| match Frame::decode(&bytes) {
+            Ok(f) => d.handle_frame(f).iter().map(Frame::encode).collect(),
+            Err(e) => {
+                d.close(format!("bad frame: {e}"));
+                Vec::new()
+            }
+        }) {
+            return out;
         }
+        self.with_worker(|w| w.call(&Request::Frame(bytes)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
     /// Something the viewer did. Returns encoded frames to send.
     pub fn input(&mut self, input: Input) -> Vec<Vec<u8>> {
-        match self {
-            Backend::Local(d) => d.input(input).iter().map(Frame::encode).collect(),
-            Backend::Remote(w) => w.call(&Request::Input(input)).map(|r| r.status.outbound).unwrap_or_default(),
+        if let Some(out) = self.with_local(|d| d.input(input.clone()).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
         }
+        self.with_worker(|w| w.call(&Request::Input(input)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
     /// Verified bytes for a hash.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
-        match self {
-            Backend::Local(d) => d.asset_ready(hash, bytes),
-            Backend::Remote(w) => {
-                w.call(&Request::AssetReady(hash, bytes));
-            }
+        if self.with_local(|d| d.asset_ready(hash, bytes.clone())).is_some() {
+            return;
         }
+        self.with_worker(|w| {
+            w.call(&Request::AssetReady(hash, bytes));
+        });
     }
 
     /// A hash that could not be fetched.
     pub fn asset_failed(&mut self, hash: Hash, why: String) {
-        match self {
-            Backend::Local(d) => d.asset_failed(hash, why),
-            Backend::Remote(w) => {
-                w.call(&Request::AssetFailed(hash, why));
-            }
+        if self.with_local(|d| d.asset_failed(hash, why.clone())).is_some() {
+            return;
         }
+        self.with_worker(|w| {
+            w.call(&Request::AssetFailed(hash, why));
+        });
     }
 
     /// Hashes the tree needs and nobody fetched yet.
     pub fn pending_assets(&mut self) -> Vec<Hash> {
-        match self {
-            Backend::Local(d) => d.pending_assets(),
-            Backend::Remote(w) => match w.call(&Request::PendingAssets).map(|r| r.payload) {
-                Some(Payload::Assets(hs)) => hs,
-                _ => Vec::new(),
-            },
+        if let Some(h) = self.with_local(|d| d.pending_assets()) {
+            return h;
+        }
+        match self.with_worker(|w| w.call(&Request::PendingAssets).map(|r| r.payload)) {
+            Some(Some(Payload::Assets(hs))) => hs,
+            _ => Vec::new(),
         }
     }
 
@@ -1072,152 +1210,163 @@ impl Backend {
     /// draw list and the encoded frames a scroll landing during the paint
     /// emitted, to send after drawing.
     pub fn paint(&mut self, w: u32, h: u32) -> (DrawList, Vec<Vec<u8>>) {
-        match self {
-            Backend::Local(d) => {
-                let list = d.paint(w, h);
-                (list, d.take_pending().iter().map(Frame::encode).collect())
-            }
-            Backend::Remote(worker) => match worker.call(&Request::Paint(w, h)) {
-                Some(Reply { status, payload: Payload::Paint { list, glyphs, images } }) => {
-                    if let Some((size, y0, y1, px)) = glyphs {
-                        if !worker.atlas.set_rows(size, y0, y1, &px) {
-                            eprintln!("eui: the worker sent glyph atlas rows of the wrong size");
-                        }
+        if let Some(out) = self.with_local(|d| {
+            let list = d.paint(w, h);
+            (list, d.take_pending().iter().map(Frame::encode).collect::<Vec<_>>())
+        }) {
+            return out;
+        }
+        let Backend::Remote { worker, atlas, images } = self else { return (DrawList::default(), Vec::new()) };
+        let request = Request::Paint(w, h);
+        let reply = match worker.lock() {
+            Ok(mut worker) => worker.call(&request),
+            Err(_) => None,
+        };
+        match reply {
+            Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rows } }) => {
+                // Only the rows that changed cross the pipe.
+                if let (Some((size, y0, y1, px)), Ok(mut a)) = (glyphs, atlas.lock()) {
+                    if !a.set_rows(size, y0, y1, &px) {
+                        eprintln!("eui: the worker sent glyph atlas rows of the wrong size");
                     }
-                    if let Some((y0, y1, px)) = images {
-                        if !worker.images.set_rows(y0, y1, &px) {
-                            eprintln!("eui: the worker sent image atlas rows of the wrong size");
-                        }
-                    }
-                    (list, status.outbound)
                 }
-                _ => (DrawList::default(), Vec::new()),
-            },
+                if let (Some((y0, y1, px)), Ok(mut i)) = (image_rows, images.lock()) {
+                    if !i.set_rows(y0, y1, &px) {
+                        eprintln!("eui: the worker sent image atlas rows of the wrong size");
+                    }
+                }
+                (list, status.outbound)
+            }
+            _ => (DrawList::default(), Vec::new()),
         }
     }
 
     /// The atlases the last draw list refers to, for the renderer's upload.
-    pub fn atlases_mut(&mut self) -> (&mut Atlas, &mut ImageAtlas) {
+    pub fn with_atlases<T>(&mut self, f: impl FnOnce(&mut Atlas, &mut ImageAtlas) -> T) -> Option<T> {
         match self {
-            Backend::Local(d) => d.atlases_mut(),
-            Backend::Remote(w) => (&mut w.atlas, &mut w.images),
+            Backend::Local(d) => d.lock().ok().map(|mut d| {
+                let (a, i) = d.atlases_mut();
+                f(a, i)
+            }),
+            Backend::Remote { atlas, images, .. } => {
+                let (Ok(mut a), Ok(mut i)) = (atlas.lock(), images.lock()) else { return None };
+                Some(f(&mut a, &mut i))
+            }
         }
     }
 
     /// Advance the clock; true when a transition frame is due.
     pub fn tick(&mut self, now: Instant) -> bool {
-        match self {
-            Backend::Local(d) => d.tick(now),
-            Backend::Remote(w) => {
-                // Nothing can be due before the worker said something would
-                // be: skip the round trip at rest.
-                if w.status.next_due_ms.is_none() {
-                    return false;
-                }
-                matches!(w.call(&Request::Tick).map(|r| r.payload), Some(Payload::Tick(true)))
-            }
+        if let Some(due) = self.with_local(|d| d.tick(now)) {
+            return due;
         }
+        self.with_worker(|w| {
+            // Nothing can be due before the worker said something would be:
+            // skip the round trip at rest.
+            if w.status.next_due_ms.is_none() {
+                return false;
+            }
+            matches!(w.call(&Request::Tick).map(|r| r.payload), Some(Payload::Tick(true)))
+        })
+        .unwrap_or(false)
     }
 
     /// When the next transition frame is due, `None` at rest.
     pub fn next_frame_at(&self) -> Option<Instant> {
-        match self {
-            Backend::Local(d) => d.next_frame_at(),
-            Backend::Remote(w) => {
-                let ms = w.status.next_due_ms?;
-                Some(w.due.unwrap_or_else(Instant::now) + Duration::from_millis(u64::from(ms)))
-            }
+        if let Some(at) = self.with_local(|d| d.next_frame_at()) {
+            return at;
         }
+        self.with_worker(|w| {
+            let ms = w.status.next_due_ms?;
+            Some(w.due.unwrap_or_else(Instant::now) + Duration::from_millis(u64::from(ms)))
+        })
+        .flatten()
     }
 
     /// A frame should be drawn.
     pub fn needs_redraw(&self) -> bool {
-        match self {
-            Backend::Local(d) => d.needs_redraw(),
-            Backend::Remote(w) => w.status.needs_redraw,
-        }
+        self.with_local(|d| d.needs_redraw()).or_else(|| self.with_worker(|w| w.status.needs_redraw)).unwrap_or(false)
     }
 
     /// Why the session ended, if it did.
     pub fn closed(&self) -> Option<String> {
-        match self {
-            Backend::Local(d) => d.closed().map(|c| format!("{c:?}")),
-            Backend::Remote(w) => w.status.closed.clone(),
-        }
+        self.with_local(|d| d.closed().map(|c| format!("{c:?}")))
+            .or_else(|| self.with_worker(|w| w.status.closed.clone()))
+            .flatten()
     }
 
     /// Where an input method's candidate window goes: `x, y, w, h` in
     /// logical px, if a field has focus.
     pub fn ime_area(&self) -> Option<[f32; 4]> {
-        match self {
-            Backend::Local(d) => d.ime_area().map(|r| [r.x, r.y, r.w, r.h]),
-            Backend::Remote(w) => w.status.ime,
-        }
+        self.with_local(|d| d.ime_area().map(|r| [r.x, r.y, r.w, r.h]))
+            .or_else(|| self.with_worker(|w| w.status.ime))
+            .flatten()
     }
 
     /// The pointer's shape over what it is on.
     pub fn cursor(&self) -> eui_proto::Cursor {
-        match self {
-            Backend::Local(d) => d.cursor(),
-            Backend::Remote(w) => eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default),
-        }
+        self.with_local(|d| d.cursor())
+            .or_else(|| self.with_worker(|w| eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default)))
+            .unwrap_or(eui_proto::Cursor::Default)
     }
 
     /// Text the viewer copied since the last call.
     pub fn take_clipboard(&mut self) -> Option<String> {
-        match self {
-            Backend::Local(d) => d.take_clipboard(),
-            Backend::Remote(w) => w.status.clipboard.take(),
-        }
+        self.with_local(|d| d.take_clipboard()).or_else(|| self.with_worker(|w| w.status.clipboard.take())).flatten()
     }
 
     /// The viewer's desktop palette (05 §5), or none. Returns encoded
     /// frames to send: the viewport, when the palette's mode differs.
     pub fn desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Vec<u8>> {
-        match self {
-            Backend::Local(d) => d.set_desktop_theme(mode, colors).iter().map(Frame::encode).collect(),
-            Backend::Remote(w) => {
-                let wire = colors.iter().map(|(r, c)| (r.id(), *c)).collect();
-                w.call(&Request::DesktopTheme(mode, wire)).map(|r| r.status.outbound).unwrap_or_default()
-            }
+        let wire: Vec<(u16, u32)> = colors.iter().map(|(r, c)| (r.id(), *c)).collect();
+        if let Some(out) = self.with_local(|d| d.set_desktop_theme(mode, colors).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
         }
+        self.with_worker(|w| w.call(&Request::DesktopTheme(mode, wire)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
     /// The accessibility tree as painted.
     pub fn access_tree(&mut self) -> AccessSnapshot {
-        match self {
-            Backend::Local(d) => d.access_snapshot(),
-            Backend::Remote(w) => match w.call(&Request::AccessTree).map(|r| r.payload) {
-                Some(Payload::Access(s)) => s,
-                _ => AccessSnapshot { nodes: Vec::new(), focus: 0, scale: 1.0 },
-            },
+        if let Some(s) = self.with_local(|d| d.access_snapshot()) {
+            return s;
+        }
+        match self.with_worker(|w| w.call(&Request::AccessTree).map(|r| r.payload)) {
+            Some(Some(Payload::Access(s))) => s,
+            _ => AccessSnapshot { nodes: Vec::new(), focus: 0, scale: 1.0 },
         }
     }
 
     /// An assistive technology's action on a node: `click`, or focus.
     /// Returns encoded frames to send.
     pub fn access_action(&mut self, id: u64, click: bool) -> Vec<Vec<u8>> {
-        match self {
-            Backend::Local(d) => {
-                let Some(ix) = d.node_for_accessibility(id) else { return Vec::new() };
-                let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
-                out.iter().map(Frame::encode).collect()
-            }
-            Backend::Remote(w) => w.call(&Request::AccessAction(id, click)).map(|r| r.status.outbound).unwrap_or_default(),
+        if let Some(out) = self.with_local(|d| {
+            let Some(ix) = d.node_for_accessibility(id) else { return Vec::new() };
+            let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
+            out.iter().map(Frame::encode).collect::<Vec<_>>()
+        }) {
+            return out;
         }
+        self.with_worker(|w| w.call(&Request::AccessAction(id, click)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
-    /// The driver, when it is in this process.
-    pub fn driver(&self) -> Option<&Driver> {
+    /// True while any sound is loaded: the window opens its audio device
+    /// only then, and closes it when nothing is left.
+    pub fn audio_playing(&self) -> bool {
+        self.with_local(|d| d.audio_playing()).or_else(|| self.with_worker(|w| w.status.audio)).unwrap_or(false)
+    }
+
+    /// Run `f` against the driver when it is in this process — tests, and
+    /// the window's own diagnostics.
+    pub fn driver<T>(&self, f: impl FnOnce(&Driver) -> T) -> Option<T> {
         match self {
-            Backend::Local(d) => Some(d),
-            Backend::Remote(_) => None,
+            Backend::Local(d) => d.lock().ok().map(|d| f(&d)),
+            Backend::Remote { .. } => None,
         }
     }
 
     /// What the last reply said, when the driver is in a worker.
-    pub fn worker_status(&self) -> Option<&Status> {
-        self.remote_status()
+    pub fn worker_status(&self) -> Option<Status> {
+        self.with_worker(|w| w.status.clone())
     }
 }
 
@@ -1245,6 +1394,7 @@ mod tests {
             Request::AccessAction(42, true),
             Request::DesktopTheme(Some(ThemeMode::Dark), vec![(1, 0x101a26ff), (9, 0xf7a96aff)]),
             Request::DesktopTheme(None, Vec::new()),
+            Request::Audio { frames: 512, channels: 2, rate: 48_000 },
         ];
         for r in all {
             assert_eq!(Request::decode(&r.encode()), Ok(r));
@@ -1253,7 +1403,7 @@ mod tests {
 
     #[test]
     fn replies_round_trip() {
-        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1 };
+        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1, audio: true };
         let list = DrawList { quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4] }], runs: vec![(0, 0, 1)], clips: vec![[0, 0, 10, 10]], clear: [0.5; 4], wants_frame: true };
         let snap = AccessSnapshot { nodes: vec![AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] }, AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] }], focus: 1, scale: 2.0 };
         let all = vec![
@@ -1265,6 +1415,7 @@ mod tests {
             Payload::Paint { list, glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8192])) },
             Payload::Tick(true),
             Payload::Access(snap),
+            Payload::Pcm(vec![0.0, 0.25, -0.5, 1.0]),
         ];
         for payload in all {
             let reply = Reply { status: status.clone(), payload };

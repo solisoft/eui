@@ -223,7 +223,7 @@ fn oversized_batch_is_rejected() {
 #[test]
 fn unknown_node_kinds_are_rejected() {
     assert_eq!(subtree_err(&leaf(0x00)), E::UnknownTag("node kind"));
-    assert_eq!(subtree_err(&leaf(0x0F)), E::UnknownTag("node kind"));
+    assert_eq!(subtree_err(&leaf(0x10)), E::UnknownTag("node kind"));
     assert_eq!(subtree_err(&leaf(0xFF)), E::UnknownTag("node kind"));
 }
 

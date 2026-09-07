@@ -26,6 +26,7 @@ shipping a new client, and that price is deliberate.
 | `overlay` | A layer above the normal flow, painted after its siblings | yes | — | — |
 | `slot` | A named insertion point; lays out as a `column` | yes | — | — |
 | `sizer` | An invisible box that only imposes constraints | yes | — | — |
+| `audio` | A sound, referenced by BLAKE3 hash in the `src` prop. Draws nothing | — | — | — |
 
 An inert kind MUST carry no text, props or handlers; a leaf kind MUST have
 no children. Both are decoder errors ([`02-wire-format.md`](02-wire-format.md)
@@ -173,6 +174,45 @@ dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 grid, list item, chart, stat, code block, markdown), feedback (toast,
 banner, progress, spinner, skeleton, empty state, avatar, badge, chip).
+
+## 7. Sound
+
+An `audio` node is a sound the application put in the tree. It lays out as
+a zero-sized leaf and paints nothing: what it does is play. Its props say
+what, and what it should be doing.
+
+| Prop | Value | Meaning |
+|---|---|---|
+| `src` | asset | The sound's BLAKE3 hash, fetched like an image's bytes |
+| `playing` | bool | Play, or hold where it is. Absent is `false` |
+| `volume` | int `0..=100` | The application's own gain. Absent is `100` |
+| `loop` | bool | Start again at the end instead of stopping |
+| `position` | int ms | Where to play from. The client seeks **when this value changes**, not on every render, so a server that re-sends the same number does not stutter the sound |
+
+Decoding runs where every decoder runs — the sandboxed worker of
+[`08-security.md`](08-security.md) §10 — and the mixed frames are handed
+to the window process, which owns the audio device as it owns the GPU. A
+sound that fails to decode is dropped with a message on the client's
+console; the node stays, silent.
+
+Two events go back, and only to a node that holds a handler for them:
+
+- `ended` when a sound reaches its end. Not sent for a looping source,
+  which has no end.
+- `time_update`, `[position_ms, duration_ms]`, while a sound plays. The
+  client decides how often and MUST NOT send more than ten a second; four
+  is what the reference client sends. It is a progress bar's input, not a
+  clock: a server that needs the exact position asks for it at the moment
+  it matters.
+
+A client MUST bound what a session may play: the reference client holds at
+most eight sources at once and refuses a ninth, and counts decoded audio
+against the session's asset quota. Playing a sound needs **no capability**:
+it is output, like drawing. The microphone is another matter and is a
+capability already ([`01-transport.md`](01-transport.md) §2.1).
+
+The viewer's own volume is above all of this and the application cannot
+read it, set it, or tell that it is muted.
 
 ## 6. The accessibility tree
 

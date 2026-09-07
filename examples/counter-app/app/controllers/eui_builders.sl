@@ -77,6 +77,21 @@ def list_window(style, item_height, count, heights, children, on_window)
   }
 end
 
+# A sound (EUI spec 03 §7). It draws nothing; it plays. `src` is a file in
+# the application, hashed and served like a picture. `props` may carry
+# "playing", "volume" (0..100), "loop" and "position" (ms — the client
+# seeks when the number changes), and `on` may carry "ended" and
+# "time_update" handlers.
+def audio(src, props, on)
+  # `sound`, not `node`: a bare assignment to a builder's name rebinds it.
+  sound = {
+    "k": "audio",
+    "p": props.merge({"src": src})
+  }
+  sound["on"] = on unless on.nil?
+  sound
+end
+
 def input(value, on_change)
   {
     "k": "input",

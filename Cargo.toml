@@ -6,6 +6,7 @@ members = [
     "crates/eui-theme",
     "crates/eui-layout",
     "crates/eui-text",
+    "crates/eui-audio",
     "crates/eui-render",
     "crates/eui-vm",
     "crates/eui-client",

@@ -22,6 +22,7 @@ pub mod a11y;
 pub mod app;
 pub mod manifest;
 pub mod assets;
+pub mod audio;
 pub mod desktop_theme;
 pub mod driver;
 pub mod sandbox;

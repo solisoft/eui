@@ -50,6 +50,8 @@ pub enum NodeKind {
     Slot = 0x0D,
     /// An invisible box that only imposes constraints.
     Sizer = 0x0E,
+    /// A sound, referenced by content hash. Draws nothing. Leaf.
+    Audio = 0x0F,
 }
 
 impl NodeKind {
@@ -70,6 +72,7 @@ impl NodeKind {
             0x0C => Ok(Self::Overlay),
             0x0D => Ok(Self::Slot),
             0x0E => Ok(Self::Sizer),
+            0x0F => Ok(Self::Audio),
             _ => Err(DecodeError::UnknownTag("node kind")),
         }
     }
@@ -81,7 +84,7 @@ impl NodeKind {
 
     /// True for kinds that MUST NOT have children.
     pub const fn is_leaf(self) -> bool {
-        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider)
+        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider | Self::Audio)
     }
 
     /// True for kinds that carry no text, props, or handlers.
@@ -138,6 +141,10 @@ pub enum EventKind {
     LongPress = 0x15,
     /// A windowed `list` needs another range of rows (spec 04 §7.1).
     Window = 0x16,
+    /// A sound reached its end (spec 03 §7).
+    Ended = 0x17,
+    /// A playing sound moved. Coalesced, and rate-limited by the client.
+    TimeUpdate = 0x18,
 }
 
 impl EventKind {
@@ -166,6 +173,8 @@ impl EventKind {
             0x14 => Ok(Self::Drop),
             0x15 => Ok(Self::LongPress),
             0x16 => Ok(Self::Window),
+            0x17 => Ok(Self::Ended),
+            0x18 => Ok(Self::TimeUpdate),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

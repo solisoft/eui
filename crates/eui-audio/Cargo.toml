@@ -1,0 +1,17 @@
+[package]
+name = "eui-audio"
+description = "EUI audio: decoding a content-addressed sound to PCM, and mixing what is playing. No device, no thread, no unsafe."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+# Decoding runs on bytes a server chose, so it runs where the decoder
+# runs: in the sandboxed worker. Pure Rust, no system codec, no network.
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis"] }
+
+[lints]
+workspace = true

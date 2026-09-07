@@ -101,6 +101,17 @@ node exists, it carries a handler of that kind naming that atom, the payload
 has the declared shape. A local handler's effect is advisory until the server
 re-derives it. *Enforced: `lang/src/serve/eui/session.rs::validate`.*
 
+## 9.1 Sound
+
+Playing a sound needs no capability: it is output, like drawing, and a
+window that can draw can already annoy. What it does need is a bound, and
+the client imposes it — at most eight sources at once, decoded bytes
+counted against the session's asset quota, and the viewer's own volume
+above everything, unreadable by the application. Decoding runs in the
+worker with every other decoder; the audio device belongs to the window
+process. Recording is not output and is not this: the microphone is a
+declared capability (01 §2.1) and is not implemented.
+
 ## 10. Process isolation
 
 Everything that reads bytes a server chose — the frame decoder, the tree,

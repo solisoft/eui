@@ -19,6 +19,7 @@ eui-layout = { path = "../eui-layout", version = "0.1.0" }
 eui-text = { path = "../eui-text", version = "0.1.0" }
 eui-render = { path = "../eui-render", version = "0.1.0" }
 eui-vm = { path = "../eui-vm", version = "0.1.0" }
+eui-audio = { path = "../eui-audio", version = "0.1.0" }
 winit = "0.30"
 wgpu = "23"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
@@ -40,6 +41,9 @@ accesskit_winit = { version = "0.34", optional = true }
 # The system clipboard, for the person's own copy, cut and paste.
 arboard = { version = "3", optional = true, default-features = false, features = ["wayland-data-control"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+cpal = "0.15"
+# The audio device belongs to the window, like the GPU: the worker cannot
+# open one, and must not (08 §10).
 
 [features]
 default = ["a11y", "clipboard"]

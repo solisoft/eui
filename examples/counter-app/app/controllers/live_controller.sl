@@ -243,6 +243,26 @@ end
 # One page with every catalogue widget, driven by a handful of state keys, so
 # the whole catalogue is exercised by one mount and a few clicks.
 
+# The gallery's sound: one chime, played by a button. The node carries
+# what it should be doing; the client owns the clock and says when it
+# ended (EUI spec 03 §7).
+def gallery_sound(state)
+  playing = state["sound"] ?? false
+  column(
+    {"gap": 2},
+    [
+      audio("public/sounds/chime.wav", {"playing": playing, "volume": 80}, {"ended": "sound_ended"}),
+      row(
+        {"gap": 3, "align": "center"},
+        [
+          button(playing ? "Stop" : "Play a chime", "sound"),
+          muted(playing ? "playing…" : "1.6 s, decoded and mixed by the client")
+        ]
+      )
+    ]
+  )
+end
+
 def gallery_defaults(state)
   base = {
     "tab": "Overview",
@@ -261,7 +281,8 @@ def gallery_defaults(state)
     "dt_time": "09:30",
     "range_month": "2026-09",
     "range_start": "",
-    "range_end": ""
+    "range_end": "",
+    "sound": false
   }
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -316,6 +337,8 @@ def gallery(event_data)
     "select_toggle" => set_key(state, "select_open", !state["select_open"]),
     "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
     "slider" => set_slider(state, params),
+    "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
+    "sound_ended" => set_key(state, "sound", false),
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),
     "dt_nav" => set_key(state, "dt_month", month_shift(state["dt_month"], props["delta"])),
@@ -357,6 +380,7 @@ def gallery_view(raw_state)
         "Slider",
         column({"gap": 2}, [slider(state["slider"], 0, 100, "slider"), muted("Value " + str(state["slider"]))])
       ),
+      labelled("Sound", gallery_sound(state)),
       labelled("Date", date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")),
       labelled(
         "Date and time",

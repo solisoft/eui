@@ -1163,3 +1163,138 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     let asked = d.take_pending();
     assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window && e.payload == Value::List(vec![Value::Int(45), Value::Int(69)]))), "{asked:?}");
 }
+
+/// A RIFF/WAVE file of 16-bit mono samples, so the test needs no fixture.
+fn wav_bytes(samples: &[i16], rate: u32) -> Vec<u8> {
+    let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36u32 + data.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    out
+}
+
+/// Spec 03 §7: an `audio` node names a sound, says what it should be
+/// doing, and hears back when it ends.
+#[test]
+fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_VOLUME: u32 = 32;
+    const A_POSITION: u32 = 33;
+    const A_ENDED: u32 = 34;
+    let hash: [u8; 32] = [7; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 3), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(false)));
+    tree.props.push((A_VOLUME, Value::Int(100)));
+    tree.handlers.push((EventKind::Ended, Handler::Server(A_ENDED)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_VOLUME, value: "volume".into() },
+        Op::DefAtom { id: A_POSITION, value: "position".into() },
+        Op::DefAtom { id: A_ENDED, value: "ended".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    // The sound is an asset like any other: the client asks for it.
+    assert!(d.pending_assets().contains(&hash), "the hash is wanted");
+    // Until it arrives, and while `playing` is false, the mix is silence.
+    let mut out = [1.0f32; 64];
+    assert!(d.fill_audio(&mut out, 1, 8_000).is_empty());
+    assert!(out.iter().all(|s| *s == 0.0), "silence, and the buffer is overwritten");
+    // A tone of a hundredth of a second at 8 kHz: eighty frames.
+    d.asset_ready(hash, wav_bytes(&[8_000i16; 80], 8_000));
+    let _ = d.paint(400, 300);
+    assert!(d.audio_playing(), "the sound is loaded");
+    // Still not playing: the node says so.
+    d.fill_audio(&mut out, 1, 8_000);
+    assert!(out.iter().all(|s| *s == 0.0), "loaded is not playing");
+    // The server says play: the tone comes out, at its own level.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetProp { node: 2, prop: A_PLAYING, value: Value::Bool(true) }] }));
+    let _ = d.paint(400, 300);
+    assert!(d.fill_audio(&mut out, 1, 8_000).is_empty());
+    assert!(out.iter().all(|s| (*s - 0.244).abs() < 0.01), "the tone: {:?}", &out[..4]);
+    // Half volume halves it. Sixteen frames of the sound are left, so
+    // this buffer is half tone, half silence — and it is the fill that
+    // runs out, so the node's handler hears `ended` here.
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetProp { node: 2, prop: A_VOLUME, value: Value::Int(50) }] }));
+    let _ = d.paint(400, 300);
+    let ended = d.fill_audio(&mut out, 1, 8_000);
+    assert!(out[..16].iter().all(|s| (*s - 0.122).abs() < 0.01), "half: {:?}", &out[..4]);
+    assert!(out[16..].iter().all(|s| *s == 0.0), "silence past the end");
+    assert_eq!(ended.len(), 1, "{ended:?}");
+    let Frame::Event(e) = &ended[0] else { panic!("{ended:?}") };
+    assert_eq!((e.node, e.event, e.name), (2, EventKind::Ended, A_ENDED));
+    assert!(d.fill_audio(&mut out, 1, 8_000).is_empty(), "and only once");
+    // A new `position` seeks; the same one again does not.
+    d.handle_frame(Frame::Batch(Batch { seq: 5, ops: vec![Op::SetProp { node: 2, prop: A_POSITION, value: Value::Int(5) }] }));
+    let _ = d.paint(400, 300);
+    d.fill_audio(&mut out, 1, 8_000);
+    assert!(out.iter().take(20).any(|s| *s > 0.1), "playing again from 5 ms: {:?}", &out[..4]);
+    // The tree owns the sound: drop the node and the mixer forgets it.
+    d.handle_frame(Frame::Batch(Batch { seq: 6, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }] }));
+    let _ = d.paint(400, 300);
+    assert!(!d.audio_playing(), "no node, no sound");
+    d.fill_audio(&mut out, 1, 8_000);
+    assert!(out.iter().all(|s| *s == 0.0));
+}
+
+/// Spec 03 §7: `time_update` goes only to a node that asks for it, and at
+/// most four a second.
+#[test]
+fn time_update_is_rate_limited_and_only_for_nodes_that_ask() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_TIME: u32 = 35;
+    let hash: [u8; 32] = [9; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::TimeUpdate, Handler::Server(A_TIME)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_TIME, value: "time".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    // Two seconds of sound, so it is still playing throughout.
+    d.asset_ready(hash, wav_bytes(&[4_000i16; 16_000], 8_000));
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let first = d.take_pending();
+    assert!(first.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::TimeUpdate)), "{first:?}");
+    // Again at once: nothing, the limit holds.
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().is_empty(), "four a second, not one a frame");
+    // A quarter of a second later, one more, carrying position and length.
+    d.tick(t0 + Duration::from_millis(260));
+    let _ = d.paint(400, 300);
+    let next = d.take_pending();
+    let Some(Frame::Event(e)) = next.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::TimeUpdate)) else { panic!("{next:?}") };
+    let Value::List(payload) = &e.payload else { panic!("{:?}", e.payload) };
+    assert_eq!(payload.len(), 2);
+    assert_eq!(payload[1], Value::Int(2000), "the sound is two seconds long");
+}

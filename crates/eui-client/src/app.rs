@@ -4,6 +4,7 @@
 //! viewer did something, or the OS asked — and at no other time. That is
 //! the whole of the zero-wakeup idle budget.
 
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -25,6 +26,8 @@ pub enum Wake {
     Transport,
     /// The desktop's theme changed.
     Theme,
+    /// The audio thread has frames to send (a sound ended).
+    Audio,
     /// The host asked the window to close (a signal, say).
     Exit,
     /// AccessKit has something for the window.
@@ -97,6 +100,10 @@ pub struct App {
     desktop_theme: Option<crate::desktop_theme::DesktopTheme>,
     /// A theme wake is queued and not yet handled.
     theme_pending: Arc<std::sync::atomic::AtomicBool>,
+    /// The audio device, open only while something is loaded (03 §7).
+    audio: Option<crate::audio::Output>,
+    /// Frames the audio thread produced, for this loop to send.
+    audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
 }
 
 impl App {
@@ -125,6 +132,8 @@ impl App {
             theme_watch: None,
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            audio: None,
+            audio_rx: None,
         }
     }
 
@@ -268,6 +277,46 @@ impl App {
         self.sync_cursor();
     }
 
+    /// Spec 03 §7: the device is open exactly while the session has a
+    /// sound loaded — nothing playing, nothing running, no wakeups.
+    fn sync_audio(&mut self) {
+        let wanted = self.backend.audio_playing();
+        match (wanted, self.audio.is_some()) {
+            (true, false) => {
+                let (tx, rx) = mpsc::channel();
+                let proxy = self.proxy.clone();
+                match crate::audio::Output::start(self.backend.audio_tap(), tx, move || {
+                    let _ = proxy.send_event(Wake::Audio);
+                }) {
+                    Ok(out) => {
+                        eprintln!("eui: audio out {} Hz, {} channel(s)", out.rate(), out.channels());
+                        self.audio = Some(out);
+                        self.audio_rx = Some(rx);
+                    }
+                    Err(e) => eprintln!("eui: no audio output: {e}"),
+                }
+            }
+            (false, true) => {
+                self.audio = None;
+                self.audio_rx = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// What the audio thread produced since the last look: a sound's end.
+    fn drain_audio(&mut self) {
+        let mut frames = Vec::new();
+        if let Some(rx) = &self.audio_rx {
+            while let Ok(f) = rx.try_recv() {
+                frames.push(f);
+            }
+        }
+        if !frames.is_empty() {
+            self.send(frames);
+        }
+    }
+
     fn redraw(&mut self) {
         let Some(gpu) = &mut self.gpu else { return };
         let (w, h) = (gpu.config.width, gpu.config.height);
@@ -289,14 +338,15 @@ impl App {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        let (atlas, images) = self.backend.atlases_mut();
-        gpu.renderer.render(&view, (w, h), &list, atlas, images);
+        self.backend.with_atlases(|atlas, images| gpu.renderer.render(&view, (w, h), &list, atlas, images));
         frame.present();
         crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
         // A scroll that landed during this paint reports its offset now.
         self.send(landed);
         // Hover settles at paint; so does what the pointer is over.
         self.sync_cursor();
+        // A batch may have added a sound, or taken the last one away.
+        self.sync_audio();
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
         #[cfg(feature = "a11y")]
@@ -468,6 +518,7 @@ impl ApplicationHandler<Wake> for App {
         match event {
             Wake::Transport => self.pump(),
             Wake::Exit => _event_loop.exit(),
+            Wake::Audio => self.drain_audio(),
             Wake::Theme => {
                 crate::driver::trace(|| "desktop theme wake".into());
                 self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);

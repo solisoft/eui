@@ -88,3 +88,15 @@ The §2 figure is structure; a real mount carries the cells too. The
 10 000-row invoice table mounts in 769.5 KB, **15.8 bytes per node** with the
 text, of which about 9 are structure and the rest the data itself. Budget:
 18 B per node.
+
+## Sound
+
+| Measure | Budget |
+|---|---|
+| Sources playing at once | 8, a ninth refused |
+| Frames buffered ahead of the device | 200 ms |
+| CPU with nothing loaded | 0 — the device is closed |
+
+Mixing is a multiply and an add per sample per source, with one linear
+interpolation for the rate; the cost is in the decode, which happens once
+per sound.

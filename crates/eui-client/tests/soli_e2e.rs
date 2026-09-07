@@ -652,32 +652,42 @@ fn the_feeds_loading_button_spins_locally_and_settles_with_the_answer() {
 }
 
 #[test]
-fn the_music_player_opens_an_album_and_plays_a_track() {
+fn the_player_searches_opens_a_record_and_plays_a_track() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "music", 1100.0, 760.0);
     let _ = d.paint(1100, 760);
     let all = texts(&d, root(&d));
-    assert!(all.iter().any(|t| t == "Your Library") && all.iter().any(|t| t == "Good afternoon") && all.iter().any(|t| t == "Made For You"), "{all:?}");
-    // Open the first album of "Made for you": its cover card names it.
-    let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Northern Rooms")).unwrap();
+    assert!(all.iter().any(|t| t == "Find something to play") && all.iter().any(|t| t == "Nothing playing"), "{all:?}");
+    // A suggestion runs a search: the rail fills and the pane lays the find out.
+    let tile = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Nova Reyes")).unwrap();
     let seq = d.session().last_seq().unwrap();
-    click(&mut d, &conn, card);
+    let tile_box = d.session().node(tile).unwrap().parent;
+    click(&mut d, &conn, tile_box);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let _ = d.paint(1100, 760);
     let all = texts(&d, root(&d));
-    assert!(all.iter().any(|t| t == "Album") && all.iter().any(|t| t.contains("8 songs")), "{all:?}");
-    // Play the third track: the now-playing bar shows it and the pause glyph.
-    let third = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("3")).unwrap();
+    assert!(all.iter().any(|t| t == "RECORDS") && all.iter().any(|t| t.contains("for \u{201c}Nova Reyes\u{201d}")), "{all:?}");
+    // Open the first record the rail found.
+    let row = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Night Drive")).unwrap();
     let seq = d.session().last_seq().unwrap();
-    let track_row = d.session().node(third).unwrap().parent;
+    let row_box = d.session().node(row).unwrap().parent;
+    click(&mut d, &conn, row_box);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1100, 760);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "RECORD") && all.iter().any(|t| t.contains(" tracks \u{b7} ")), "{all:?}");
+    // Play the third track: the bar takes its name, and the disc spins.
+    let third = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("3")).unwrap();
+    let track_row = d.session().node(d.session().node(third).unwrap().parent).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
     click(&mut d, &conn, track_row);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let _ = d.paint(1100, 760);
     let all = texts(&d, root(&d));
-    assert!(all.iter().any(|t| t == "▮▮"), "playing: {all:?}");
-    assert!(all.iter().filter(|t| t.as_str() == "▶").count() >= 1, "the current track wears the play glyph: {all:?}");
+    assert!(!all.iter().any(|t| t == "Nothing playing"), "the bar took the track: {all:?}");
+    assert!(all.iter().any(|t| t.contains("keeping time here")), "and says it keeps its own time: {all:?}");
 }
 
 /// A wheel scroll into rows the client does not have: placeholders first,
@@ -807,4 +817,81 @@ fn a_notched_wheel_scroll_gets_its_cards_on_the_real_clock() {
         let card = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(i64::from(*r)))).unwrap();
         assert!(d.layout().rect(card).is_some(), "row {r}'s card is laid out");
     }
+}
+
+/// Spec 03 §7: the gallery's chime — an `audio` node whose sound is an
+/// asset Soli hashed, played by a button, ending on its own.
+#[test]
+fn the_gallerys_chime_is_fetched_played_and_reports_its_end() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    let _ = d.paint(1000, 900);
+    // The node is in the tree, silent, and its sound is an asset the
+    // client fetched from the session's origin.
+    let find_audio = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).expect("an audio node");
+    let audio = find_audio(&d);
+    let src = d.session().atom_id("src").unwrap();
+    let playing = d.session().atom_id("playing").unwrap();
+    let is_playing = move |d: &Driver| d.session().node(find_audio(d)).and_then(|n| n.prop(playing)).cloned();
+    assert!(matches!(d.session().node(audio).and_then(|n| n.prop(src)), Some(eui_proto::Value::Asset(_))), "the src is a hash");
+    assert_eq!(d.session().node(audio).and_then(|n| n.prop(playing)), Some(&eui_proto::Value::Bool(false)));
+    // The sound is fetched like a picture: the client names the hash, the
+    // window asks the session's origin for it.
+    for hash in d.pending_assets() {
+        conn.request_asset(hash);
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !d.audio_playing() {
+        assert!(Instant::now() < deadline, "the chime never arrived");
+        let _ = wake.recv_timeout(Duration::from_millis(20));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
+            }
+        }
+        let _ = d.paint(1000, 900);
+    }
+    let mut out = [1.0f32; 256];
+    assert!(d.fill_audio(&mut out, 1, 22_050).is_empty());
+    assert!(out.iter().all(|s| *s == 0.0), "loaded, not playing");
+    // Press play: the server says so, and the chime comes out.
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Play a chime")).unwrap();
+    let button = d.session().node(label).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    let _ = d.paint(1000, 900);
+    let r = d.layout().rect(button).expect("the button is laid out");
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    let sent = d.input(Input::PointerUp(0));
+    for f in sent {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 900);
+    assert_eq!(is_playing(&d), Some(eui_proto::Value::Bool(true)), "the server said play");
+    d.fill_audio(&mut out, 1, 22_050);
+    assert!(out.iter().any(|s| s.abs() > 0.05), "the chime: {:?}", &out[..4]);
+    // Play it out — 1.6 s at 22 050 — and the end goes back to the server,
+    // which stops the button.
+    let mut ended = Vec::new();
+    let mut buf = vec![0.0f32; 22_050];
+    for _ in 0..3 {
+        ended.extend(d.fill_audio(&mut buf, 1, 22_050));
+    }
+    assert_eq!(ended.len(), 1, "one end, once: {ended:?}");
+    for f in ended {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("Play a chime")));
+    let _ = d.paint(1000, 900);
+    assert_eq!(is_playing(&d), Some(eui_proto::Value::Bool(false)), "the server heard it end");
 }
