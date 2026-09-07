@@ -343,12 +343,47 @@ impl Painter<'_, '_> {
                     self.node(c);
                 }
             }
+            if node.kind == NodeKind::List {
+                self.placeholders(ix, rect, &style, opacity);
+            }
             if clips {
                 self.set_clip(saved);
                 self.scrollbar(ix, rect, opacity);
             }
         }
         self.inherited_fg.pop();
+    }
+
+    /// Spec 04 §7.1: a windowed list's rows in view that have no child yet
+    /// — asked for, on their way — are drawn as placeholders, a rounded
+    /// block in `surface.sunken` inset by `space.2`, so a fast scroll shows
+    /// where the rows are rather than nothing.
+    fn placeholders(&mut self, ix: NodeIx, rect: Rect, style: &Style, opacity: f32) {
+        let layout = self.scene.layout;
+        let (Some(tops), Some(placed)) = (layout.row_tops(ix), layout.placed_rows(ix)) else { return };
+        let Some(node) = self.scene.session.node(ix) else { return };
+        let sy = node.scroll.1 as f32;
+        let (x0, y0) = (rect.x + style.border.l + style.padding.l, rect.y + style.border.t + style.padding.t);
+        let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let view_h = rect.h;
+        let inset = self.scene.theme.space.get(2).copied().unwrap_or(8.0);
+        let radius = self.scene.theme.radius.get(2).copied().unwrap_or(6.0);
+        let fill = linear(self.scene.theme.color(Role::SurfaceSunken));
+        let n = tops.len().saturating_sub(1);
+        let first = tops.partition_point(|t| *t <= sy).saturating_sub(1);
+        for row in first..n {
+            let top = tops.get(row).copied().unwrap_or(0.0);
+            if top - sy > view_h {
+                break;
+            }
+            if placed.binary_search(&(row as u32)).is_ok() {
+                continue;
+            }
+            let h = tops.get(row + 1).copied().unwrap_or(top) - top;
+            let r = Rect::new(x0 + inset, y0 + top - sy + inset / 2.0, (inner_w - 2.0 * inset).max(0.0), (h - inset).max(0.0));
+            let q = self.device(r);
+            self.push(Quad { rect: q, params: [radius * self.scene.scale, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+        }
     }
 
     /// Spec 03 §2: a scroller whose content overflows wears a thumb along

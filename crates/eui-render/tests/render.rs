@@ -441,3 +441,36 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
     let r = fx.layout.rect(ix).unwrap();
     assert!(glyph_x < r.x + 4.0 + 4.0, "{glyph_x} vs {}", r.x);
 }
+
+/// Spec 04 §7.1: a windowed list's rows in view without a child are drawn
+/// as placeholders in `surface.sunken`; rows with a child, and rows out
+/// of view, are not.
+#[test]
+fn a_windowed_list_paints_placeholders_for_the_rows_it_does_not_have() {
+    // Atoms 1..3: item_height, count, row. A 100 px list of 40 rows of
+    // 20 px, holding row 1 only.
+    let mut list = node(NodeKind::List, 2, 2, 1);
+    list.props = (0, 2);
+    let mut present = node(NodeKind::Box, 3, 3, 0);
+    present.props = (2, 1);
+    let mut fx = fixture(
+        vec![
+            StyleRecord { display: Display::Column, ..Default::default() },
+            StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() },
+            StyleRecord { height: Dim::Px(10), bg: ColorRef::role(Role::AccentBase.id()), ..Default::default() },
+        ],
+        vec![node(NodeKind::Box, 1, 1, 1), list, present],
+        vec![(1, Value::Int(20)), (2, Value::Int(40)), (3, Value::Int(1))],
+        &["item_height", "count", "row"],
+        300.0,
+        200.0,
+    );
+    let list = draw(&mut fx, 300, 200, 1.0);
+    let sunken = linear(fx.theme.color(Role::SurfaceSunken));
+    let placeholders: Vec<&Quad> = list.quads.iter().filter(|q| q.fill == sunken && q.rect[3] > 5.0).collect();
+    // Five rows fit in 100 px; row 1 has a child, the other four are placeholders.
+    assert_eq!(placeholders.len(), 4, "{placeholders:?}");
+    assert!(placeholders.iter().all(|q| q.rect[1] >= 0.0 && q.rect[1] < 100.0), "in view only");
+    assert!(!placeholders.iter().any(|q| (q.rect[1] - 24.0).abs() < 1.0), "row 1 is real, not a placeholder");
+    assert!(list.quads.iter().any(|q| q.fill == linear(fx.theme.color(Role::AccentBase))), "the present row painted itself");
+}

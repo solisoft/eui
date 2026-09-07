@@ -606,10 +606,11 @@ fn a_windowed_list_places_its_rows_by_index_and_sizes_the_rest_from_heights() {
     assert_eq!(r(&l, &s, ids[1]).y, 160.0);
     assert!(l.rect(s.lookup(ids[2]).unwrap()).is_none());
     assert_eq!(l.windowed_lists(), &[list]);
-    // The window at the top: rows within one viewport of margin.
-    assert_eq!(l.row_window(list, 0.0), Some((0, 6)));
+    assert_eq!(l.placed_rows(list), Some(&[4u32, 5][..]), "the rows that had a child, in the window");
+    // The window at the top: rows within two viewports of margin.
+    assert_eq!(l.row_window(list, 0.0), Some((0, 9)));
     // Scrolled to 15 000 px: the rows around it.
     let (a, z) = l.row_window(list, 15_000.0).unwrap();
-    assert!(tops[a as usize] <= 14_900.0 && tops[(a + 1) as usize] > 14_900.0, "first {a}");
-    assert!(tops[z as usize] < 15_200.0 && tops[(z + 1) as usize] >= 15_200.0, "last {z}");
+    assert!(tops[a as usize] <= 14_800.0 && tops[(a + 1) as usize] > 14_800.0, "first {a}");
+    assert!(tops[z as usize] < 15_300.0 && tops[(z + 1) as usize] >= 15_300.0, "last {z}");
 }

@@ -391,7 +391,11 @@ has by their `row`, paints nothing for the rest, and asks — `window
 view plus a viewport of margin. The feed does this now: five thousand
 more posts arrive as five thousand integers and a badge, the server holds
 one window of cards (and prunes its card cache to a few windows), and the
-tree stays at a few hundred nodes whatever the count. Forty thousand
+tree stays at a few hundred nodes whatever the count. The client asks
+for two viewports of margin, once the scroll has been still for 120 ms
+(a request a frame was a server render a frame), and paints the rows it
+does not have yet as placeholders, so a fast scroll shows where the cards
+are rather than a blank. Forty thousand
 posts had cost 1.4 GB across the two processes — 30 KB a card on the Soli
 side, mostly the interpreter's hashes, 6.5 KB on the client; they now
 cost the client 160 KB of heights and the server a window.

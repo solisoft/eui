@@ -188,10 +188,14 @@ tree does not hold. Row `i` is `heights[i]` px tall when the list carries a
 prop naming the row it is; a child without one is not laid out. Rows with
 no child are laid out as empty boxes of their height — the scroll extent,
 the scrollbar and the row tops are exactly those of the full list — and
-paint nothing, so the list's own background shows through.
+those in view are painted as placeholders: a block in `surface.sunken`,
+inset by `space.2` and rounded `md`, so a scroll that outruns the server
+shows where the rows are rather than nothing.
 
-When the range of rows that intersects the viewport plus one viewport of
-margin on each side changes — after a scroll lands, a mount, a resize, a
+When the range of rows that intersects the viewport plus two viewports of
+margin on each side changes, and the scroll has been still for a moment
+(the reference client waits 120 ms — a request a frame would be a server
+render a frame), — after a scroll lands, a mount, a resize, a
 change of `count` — the list emits `window` (spec 06) with `[first, last]`,
 inclusive row indices, if it holds a handler of that kind. A server that
 answers with those rows as children, and lets the others go, holds one

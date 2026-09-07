@@ -99,6 +99,9 @@ pub struct Layout {
     viewport: Size,
     /// Windowed lists (§7.1) laid out this frame.
     windowed: Vec<NodeIx>,
+    /// For each windowed list, the rows that had a child this frame, in
+    /// order: the painter draws a placeholder for every other row in view.
+    placed_rows: HashMap<NodeIx, Vec<u32>>,
     /// Each virtualised list's row tops in content coordinates, as placed
     /// this frame (one more entry than rows: the content's end). What a
     /// keyboard needs to land on the next row.
@@ -140,6 +143,7 @@ impl Layout {
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
         self.row_tops.clear();
+        self.placed_rows.clear();
         // Measures survive across frames for nodes nothing touched: the
         // session's dirty bits say which subtrees changed (a node's own
         // change sets SELF, its ancestors' DESCENDANT), and an index reused
@@ -209,14 +213,21 @@ impl Layout {
         &self.windowed
     }
 
-    /// §7.1: the rows of `list` that intersect the viewport plus one
-    /// viewport of margin on each side at scroll offset `scroll_y`, as
+    /// §7.1: the rows of a windowed list that had a child this frame, in
+    /// order; `None` for a list that is not windowed.
+    pub fn placed_rows(&self, list: NodeIx) -> Option<&[u32]> {
+        self.placed_rows.get(&list).map(Vec::as_slice)
+    }
+
+    /// §7.1: the rows of `list` that intersect the viewport plus two
+    /// viewports of margin on each side at scroll offset `scroll_y`, as
     /// inclusive indices; `None` for an empty list or one not laid out.
+    /// Two viewports: a wheel's worth of runway before a placeholder shows.
     pub fn row_window(&self, list: NodeIx, scroll_y: f32) -> Option<(u32, u32)> {
         let tops = self.row_tops(list)?;
         let n = tops.len().checked_sub(1).filter(|n| *n > 0)?;
         let view_h = self.rect(list)?.h;
-        let (start, end) = (scroll_y - view_h, scroll_y + 2.0 * view_h);
+        let (start, end) = (scroll_y - 2.0 * view_h, scroll_y + 3.0 * view_h);
         let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
         let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
         Some((first as u32, last as u32))
@@ -534,7 +545,10 @@ impl Layout {
         // Which child sits in which row: its `row` prop when windowed, its
         // position otherwise. Only rows in the window are placed.
         let rows: Vec<(usize, NodeIx)> = if count.is_some() {
-            children.iter().filter_map(|&c| self.int_prop(f, c, self.row_atom).filter(|r| *r >= 0).map(|r| (r as usize, c))).filter(|(r, _)| *r >= first && *r <= last && *r < n).collect()
+            let mut rows: Vec<(usize, NodeIx)> = children.iter().filter_map(|&c| self.int_prop(f, c, self.row_atom).filter(|r| *r >= 0).map(|r| (r as usize, c))).filter(|(r, _)| *r >= first && *r <= last && *r < n).collect();
+            rows.sort_by_key(|(r, _)| *r);
+            self.placed_rows.insert(ix, rows.iter().map(|(r, _)| *r as u32).collect());
+            rows
         } else {
             children.iter().enumerate().take(last.saturating_add(1)).skip(first).map(|(i, &c)| (i, c)).collect()
         };

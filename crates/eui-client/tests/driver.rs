@@ -1122,18 +1122,18 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
     let t0 = Instant::now();
     d.tick(t0);
-    // The first paint asks for the rows within a viewport of margin: 0..=9.
+    // The first paint asks for the rows within two viewports of margin: 0..=14.
     let _ = d.paint(400, 300);
     let asked = d.take_pending();
     assert_eq!(asked.len(), 1, "{asked:?}");
     let Frame::Event(e) = &asked[0] else { panic!() };
     assert_eq!((e.node, e.event, e.name), (2, EventKind::Window, ATOM_WINDOW));
-    assert_eq!(e.payload, Value::List(vec![Value::Int(0), Value::Int(9)]));
+    assert_eq!(e.payload, Value::List(vec![Value::Int(0), Value::Int(14)]));
     // The same range again: nothing.
     let _ = d.paint(400, 300);
     assert!(d.take_pending().is_empty());
     // The extent is the whole list, so it scrolls far: 1 000 px down lands
-    // on rows around 40..=59.
+    // on rows around 40..=64.
     let list = d.session().lookup(2).unwrap();
     d.input(Input::PointerMove(50.0, 50.0));
     d.input(Input::Wheel(0.0, 1000.0));
@@ -1149,7 +1149,7 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     let _ = d.paint(400, 300);
     let asked = d.take_pending();
     let windows: Vec<&Value> = asked.iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Window).then_some(&e.payload) } else { None }).collect();
-    assert_eq!(windows, vec![&Value::List(vec![Value::Int(45), Value::Int(59)])]);
+    assert_eq!(windows, vec![&Value::List(vec![Value::Int(40), Value::Int(64)])]);
     // A glide asks nothing until it lands.
     d.input(Input::Key { key: "PageDown".into(), modifiers: 0, down: true });
     d.tick(t0 + Duration::from_millis(50));
@@ -1161,5 +1161,5 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     d.tick(Instant::now() + Duration::from_secs(2));
     let _ = d.paint(400, 300);
     let asked = d.take_pending();
-    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window && e.payload == Value::List(vec![Value::Int(50), Value::Int(64)]))), "{asked:?}");
+    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window && e.payload == Value::List(vec![Value::Int(45), Value::Int(69)]))), "{asked:?}");
 }
