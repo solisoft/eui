@@ -108,14 +108,22 @@ pub fn session_cookie() -> Option<String> {
 }
 
 /// Enforce `spec/01-transport.md` §1: TLS only. A release build refuses
-/// `ws://` unconditionally; a debug build allows it for loopback when
-/// `EUI_ALLOW_INSECURE_LOOPBACK=1`, which is how the examples run.
+/// `ws://` unconditionally, except on loopback when
+/// `EUI_ALLOW_INSECURE_LOOPBACK=1` is set — how the examples run, and how a
+/// developer uses the release client against a local Soli — or when an
+/// embedding host trusts its own process.
 pub fn check_url(url: &str) -> Result<(), TransportError> {
     if url.starts_with("wss://") {
         return Ok(());
     }
     let loopback = url.starts_with("ws://127.0.0.1") || url.starts_with("ws://localhost") || url.starts_with("ws://[::1]");
-    let allowed = loopback && (HOST_LOOPBACK.load(std::sync::atomic::Ordering::SeqCst) || (cfg!(debug_assertions) && std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1")));
+    // Loopback only, and only when asked by name: a developer running a
+    // local Soli should get to use the fast build of the client too.
+    let asked = std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1");
+    let allowed = loopback && (HOST_LOOPBACK.load(std::sync::atomic::Ordering::SeqCst) || asked);
+    if allowed && asked && !cfg!(debug_assertions) {
+        eprintln!("eui: EUI_ALLOW_INSECURE_LOOPBACK=1 — plain ws:// on loopback, nothing is encrypted");
+    }
     if allowed {
         Ok(())
     } else {

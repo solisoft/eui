@@ -790,3 +790,24 @@ fn the_scrollbar_thumb_drags_and_its_track_pages() {
     d.input(Input::PointerUp(0));
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
 }
+
+#[test]
+fn pointer_moves_while_a_frame_is_owed_do_not_lay_out_and_hover_settles_at_paint() {
+    let mut d = welcomed();
+    let _ = d.paint(400, 300);
+    let (x, y) = centre(&mut d, 4);
+    // Hovering the button on a valid layout: enter reaches the local handler
+    // path at once (no handler here: no frames, but `hovered()` moves).
+    d.input(Input::PointerMove(x, y));
+    assert_eq!(d.hovered(), d.session().lookup(4));
+    // Invalidate the layout the way a scroll does, then move: no layout, no
+    // hover change yet.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 2, text: TextRef::Inline("7".into()) }] }));
+    let measures_before = d.layout().stats().measures;
+    d.input(Input::PointerMove(5.0, 5.0));
+    assert_eq!(d.layout().stats().measures, measures_before, "a move did not lay out");
+    assert_eq!(d.hovered(), d.session().lookup(4), "hover waits for the frame");
+    // The paint lays out and settles hover on the root.
+    let _ = d.paint(400, 300);
+    assert_eq!(d.hovered(), d.session().lookup(1));
+}

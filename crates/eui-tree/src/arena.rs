@@ -32,6 +32,12 @@ impl NodeIx {
         self.0
     }
 
+    /// The index back from [`NodeIx::raw`]; only meaningful with a session
+    /// that handed the raw value out.
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
     fn usize(self) -> usize {
         self.0 as usize
     }

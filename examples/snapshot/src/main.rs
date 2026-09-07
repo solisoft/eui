@@ -123,7 +123,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {
-                let scroller = driver.session().preorder(root).find(|ix| driver.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Scroll));
+                let scroller = driver.session().preorder(root).find(|ix| matches!(driver.session().node(*ix).map(|n| n.kind), Some(eui_proto::NodeKind::Scroll | eui_proto::NodeKind::List)));
                 if let Some(sc) = scroller {
                     let r = driver.layout().rect(sc).unwrap_or_default();
                     driver.input(Input::PointerMove(r.x + 10.0, r.y + 10.0));

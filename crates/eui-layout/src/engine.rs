@@ -54,7 +54,8 @@ struct Placement {
 }
 
 /// `(node, width constraint, height constraint)`.
-type MemoKey = (u32, (u8, u32), (u8, u32));
+/// `(node index, node id, width constraint, height constraint)`.
+type MemoKey = (u32, u32, (u8, u32), (u8, u32));
 
 /// Per-frame work counters, for the budget harness.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -124,7 +125,13 @@ impl Layout {
         self.virtual_.clear();
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
-        self.memo.clear();
+        // Measures survive across frames for nodes nothing touched: the
+        // session's dirty bits say which subtrees changed (a node's own
+        // change sets SELF, its ancestors' DESCENDANT), and an index reused
+        // by a new node carries a different id. A scroll dirties only the
+        // scroller and its ancestors, so a scrolled frame re-measures the
+        // rows entering the window and nothing else.
+        self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty == 0));
         self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
         self.item_height_atom = f.session.atom_id("item_height");
@@ -133,6 +140,12 @@ impl Layout {
         let Some(root) = f.session.root() else { return };
         let m = self.measure(f, root, Constraint::Exact(viewport.w), Constraint::Exact(viewport.h));
         self.arrange(f, root, 0.0, 0.0, m.w, m.h);
+    }
+
+    /// Forget every memoised measure: the viewport, theme or scale changed,
+    /// so nothing measured before applies.
+    pub fn invalidate_all(&mut self) {
+        self.memo.clear();
     }
 
     /// Work done by the last `compute`.
@@ -221,7 +234,8 @@ impl Layout {
     // ------------------------------------------------------------- measure
 
     fn measure(&mut self, f: &mut Env<'_>, ix: NodeIx, cw: Constraint, ch: Constraint) -> Metrics {
-        let key = (ix.raw(), cw.key(), ch.key());
+        let id = f.session.node(ix).map_or(0, |n| n.id);
+        let key = (ix.raw(), id, cw.key(), ch.key());
         if let Some(m) = self.memo.get(&key) {
             self.stats.memo_hits = self.stats.memo_hits.saturating_add(1);
             return *m;

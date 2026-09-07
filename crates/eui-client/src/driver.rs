@@ -79,6 +79,8 @@ struct Pointer {
     /// A scrollbar thumb being dragged: the scroller and where in the thumb
     /// the pointer took hold.
     dragging_thumb: Option<(NodeIx, f32)>,
+    /// The pointer moved while a frame was owed; hover is settled at paint.
+    hover_pending: bool,
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -545,12 +547,14 @@ impl Driver {
             Input::Resized(w, h, scale) => {
                 self.size = Size::new(w, h);
                 self.scale = scale;
+                self.layout.invalidate_all();
                 self.invalidate();
                 vec![Frame::Viewport(self.viewport())]
             }
             Input::Mode(mode) => {
                 self.viewer.mode = mode;
                 self.resolved = self.theme.resolve(self.viewer);
+                self.layout.invalidate_all();
                 self.invalidate();
                 vec![Frame::Viewport(self.viewport())]
             }
@@ -752,13 +756,14 @@ impl Driver {
     }
 
     fn pointer_move(&mut self, x: f32, y: f32) -> Vec<Frame> {
-        self.ensure_layout();
         self.pointer.x = x;
         self.pointer.y = y;
+        // A thumb drag needs no layout: the scroller's box does not move.
         if let Some((scroller, grip)) = self.pointer.dragging_thumb {
             return self.drag_thumb(scroller, grip, y);
         }
-        // Dragging inside the focused field extends the selection.
+        // Dragging inside the focused field extends the selection; the
+        // field's box does not move while its text is edited.
         if let (Some(e), Some(pressed)) = (self.focused.filter(|f| self.is_editable(*f)), self.pointer.pressed_on) {
             if self.ancestor_where(pressed, |k| matches!(k, NodeKind::Input | NodeKind::TextArea)) == Some(e) {
                 if let Some(at) = self.byte_at_pointer(e, x, y) {
@@ -769,6 +774,19 @@ impl Driver {
                 }
             }
         }
+        // Pointer events arrive faster than frames. When a frame is already
+        // owed — a scroll just invalidated the layout — hover waits for it
+        // rather than forcing a layout per event; the paint settles it.
+        if !self.layout_valid {
+            self.pointer.hover_pending = true;
+            return Vec::new();
+        }
+        self.hover(x, y)
+    }
+
+    /// Enter, leave and move for the node under `(x, y)`, on a valid layout.
+    fn hover(&mut self, x: f32, y: f32) -> Vec<Frame> {
+        self.pointer.hover_pending = false;
         let now = self.layout.hit(&self.session, x, y);
         let mut out = Vec::new();
         if now != self.pointer.over {
@@ -931,6 +949,21 @@ impl Driver {
         None
     }
 
+    /// The scroller under the pointer. On a valid layout, by hit test; while
+    /// a frame is owed, the one under the last settled hover — scrolling
+    /// does not change which scroller the pointer is in.
+    fn scroller_under_pointer(&mut self) -> Option<NodeIx> {
+        let settled = self.pointer.over.filter(|o| self.session.node(*o).is_some());
+        let hit = match settled {
+            Some(o) if !self.layout_valid => o,
+            _ => {
+                self.ensure_layout();
+                self.layout.hit(&self.session, self.pointer.x, self.pointer.y)?
+            }
+        };
+        self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List))
+    }
+
     /// The scroller whose scrollbar strip the pointer is in, if the hit node
     /// is inside a scroller that overflows and `x` lies in its right strip.
     fn scroller_strip_at(&self, hit: NodeIx, x: f32) -> Option<NodeIx> {
@@ -977,9 +1010,7 @@ impl Driver {
     /// Notches accumulate onto the running target, so a fast spin covers
     /// ground without waiting for each step to land.
     fn wheel_step(&mut self, lines_x: f32, lines_y: f32) -> Vec<Frame> {
-        self.ensure_layout();
-        let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
-        let Some(scroller) = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List)) else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer() else { return Vec::new() };
         let content = self.layout.content_size(scroller).unwrap_or_default();
         let view = self.layout.rect(scroller).unwrap_or_default();
         let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
@@ -1008,9 +1039,7 @@ impl Driver {
             return Vec::new();
         }
         self.scroll_anim = None;
-        self.ensure_layout();
-        let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
-        let Some(scroller) = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List)) else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer() else { return Vec::new() };
         // Whole pixels move the view; the fraction waits for the next event.
         let (ax, ay) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
         // Ten events of 0.7 px are 7 px, not 6.999: snap before truncating.
@@ -1240,7 +1269,15 @@ impl Driver {
         // it lands is picked up by the next input or frame turn.
         let landed = self.advance_scroll();
         self.pending.extend(landed);
+        let t_layout = Instant::now();
+        let relaid = !self.layout_valid;
         self.ensure_layout();
+        let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
+        if self.pointer.hover_pending {
+            let (x, y) = (self.pointer.x, self.pointer.y);
+            let settled = self.hover(x, y);
+            self.pending.extend(settled);
+        }
         self.redraw = false;
         let now = self.now;
         let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
@@ -1260,6 +1297,10 @@ impl Driver {
             editing,
         });
         self.session.clear_all_dirty();
+        trace(|| {
+            let st = self.layout.stats();
+            format!("paint: layout {layout_ms:.1} ms (relaid {relaid}, {} measures, {} memo hits, {} rows measured), paint {:.1} ms, text cache misses {}", st.measures, st.memo_hits, st.rows_measured, t_layout.elapsed().as_secs_f64() * 1e3 - layout_ms, self.text.stats().misses)
+        });
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() { None } else { Some(now + Duration::from_millis(16)) };
