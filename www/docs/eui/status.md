@@ -219,6 +219,15 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**Seen on glass.** On 2026-09-07 the gallery opened in a real window for
+the first time — Hyprland on Wayland, an AMD GPU at 1.5× — and every widget
+answered: segmented control, select, slider, pickers, accordion, typing
+into fields, scrolling. Two things only a screen could show: the renderer
+asked wgpu for downlevel limits, whose 2048 px texture cap a high-DPI
+window exceeds on its first frame (now the adapter's own limits); and a
+page taller than the window needs to say so — the gallery's page is a
+`scroll` now, the way a browser's viewport would be.
+
 **One artefact, no browser.** `soli desktop build --eui <component>` — with
 a soli built with `--features eui-desktop`, which links the client crates
 into the runtime — produces the usual desktop executable, but at launch the

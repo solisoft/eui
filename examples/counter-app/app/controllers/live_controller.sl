@@ -511,9 +511,12 @@ def gallery_view(raw_state)
       skeleton(320, 12)
     ]
   )
+  # The page scrolls as a whole, like a browser's viewport would; the sheet
+  # is a layer above it.
+  page = scroll({}, [page_content])
   layers = sheet_open ? [
-    page_content,
+    page,
     sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")])
-  ] : [page_content]
+  ] : [page]
   stack({"gap": 0}, layers)
 end

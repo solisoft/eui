@@ -83,7 +83,10 @@ impl Renderer {
             &wgpu::DeviceDescriptor {
                 label: Some("eui"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                // Downlevel limits cap textures at 2048 px, which a
+                // high-DPI window exceeds on its first frame. Ask for the
+                // ordinary defaults, trimmed to what the adapter has.
+                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
             },
             None,

@@ -356,6 +356,11 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    // The page is a scroll container now: grow the window so every widget
+    // the test clicks is inside the viewport instead of scrolled away.
+    for f in d.input(Input::Resized(1000.0, 1700.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
     let all = texts(&d, root(&d));
     for expected in ["Overview", "Nodes", "62 %", "Spec", "What is EUI?", "Rename", "A tooltip", "Nothing here yet", "1 / 9"] {
         assert!(all.iter().any(|t| t == expected), "gallery shows {expected:?}");
@@ -451,11 +456,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
             other => panic!("{other:?}"),
         }
     }
-    // The charts sit below the first 900 px: grow the window to paint them.
-    for f in d.input(Input::Resized(1000.0, 1600.0, 1.0)) {
-        conn.tx.send(f.encode()).unwrap();
-    }
-    let list = d.paint(1000, 1600);
+    let list = d.paint(1000, 1700);
     assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
 }
 

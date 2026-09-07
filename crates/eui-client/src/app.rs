@@ -267,6 +267,14 @@ impl ApplicationHandler<Wake> for App {
         }
         event_loop.set_control_flow(ControlFlow::Wait);
         let attrs = Window::default_attributes().with_title(self.title.clone()).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        // The Wayland app id, so a compositor can match rules and a taskbar
+        // an icon; on X11 the same two strings are the WM_CLASS.
+        #[cfg(target_os = "linux")]
+        let attrs = {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            use winit::platform::x11::WindowAttributesExtX11;
+            WindowAttributesExtWayland::with_name(attrs, "eui", "eui").pipe(|a| WindowAttributesExtX11::with_name(a, "eui", "eui"))
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -465,6 +473,13 @@ impl ApplicationHandler<Wake> for App {
         });
     }
 }
+
+trait Pipe: Sized {
+    fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
+        f(self)
+    }
+}
+impl<T> Pipe for T {}
 
 fn named(n: NamedKey) -> String {
     match n {
