@@ -15,6 +15,7 @@ struct Mem {
     emitted: Vec<u32>,
     styles: HashMap<u32, u32>,
     refuse_nodes: bool,
+    mode: Option<String>,
 }
 
 impl Host for Mem {
@@ -45,6 +46,13 @@ impl Host for Mem {
     }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
+    }
+    fn set_mode(&mut self, mode: &str) -> bool {
+        if !matches!(mode, "light" | "dark" | "high_contrast" | "toggle") {
+            return false;
+        }
+        self.mode = Some(mode.to_owned());
+        true
     }
 }
 
@@ -201,4 +209,18 @@ fn arbitrary_bytes_never_panic_in_the_verifier() {
             let _ = run(&chunk, &mut m);
         }
     }
+}
+
+#[test]
+fn set_mode_takes_a_string_and_the_host_decides() {
+    let chunk = Chunk::verify(&Asm::new(1).push_str(1).set_mode().ret()).unwrap();
+    let mut host = Mem::default();
+    host.atoms.insert(1, "toggle".into());
+    run(&chunk, &mut host).unwrap();
+    assert_eq!(host.mode.as_deref(), Some("toggle"));
+    // An unknown mode is refused by the host, which stops the run.
+    host.atoms.insert(1, "sepia".into());
+    assert!(run(&chunk, &mut host).is_err());
+    // It pops: nothing on the stack is a verification error.
+    assert!(Chunk::verify(&Asm::new(1).set_mode().ret()).is_err());
 }

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
-use eui_proto::{
+use eui_proto::{Cursor, 
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
@@ -225,6 +225,9 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// `motion.base`); a notch arriving mid-way retargets from where the view is.
 #[derive(Debug, Clone, Copy)]
 struct ScrollAnim {
+    /// Ease in and out (a key press: the view departs as gently as it
+    /// arrives) rather than out only (a wheel notch, already in motion).
+    smooth: bool,
     node: NodeIx,
     from: (f32, f32),
     to: (f32, f32),
@@ -242,7 +245,7 @@ impl ScrollAnim {
             return self.to;
         }
         let t = now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32().max(1e-3);
-        let k = eui_theme::scale::ease(t);
+        let k = if self.smooth { eui_theme::scale::ease_in_out(t) } else { eui_theme::scale::ease(t) };
         (self.from.0 + (self.to.0 - self.from.0) * k, self.from.1 + (self.to.1 - self.from.1) * k)
     }
 }
@@ -305,6 +308,11 @@ pub struct Driver {
     layout_valid: bool,
     redraw: bool,
     closed: Option<Close>,
+    /// The viewer's desktop palette by role, on top of the theme (05 §5),
+    /// and the mode it is for: in the other mode the theme's own colours
+    /// show, so a light/dark switch still switches something.
+    desktop_colors: Vec<(eui_theme::Role, u32)>,
+    desktop_mode: Option<ThemeMode>,
 }
 
 impl std::fmt::Debug for Driver {
@@ -353,6 +361,8 @@ impl Driver {
             layout_valid: false,
             redraw: true,
             closed: None,
+            desktop_colors: Vec::new(),
+            desktop_mode: None,
         }
     }
 
@@ -592,13 +602,7 @@ impl Driver {
                 self.invalidate();
                 vec![Frame::Viewport(self.viewport())]
             }
-            Input::Mode(mode) => {
-                self.viewer.mode = mode;
-                self.resolved = self.theme.resolve(self.viewer);
-                self.layout.invalidate_all();
-                self.invalidate();
-                vec![Frame::Viewport(self.viewport())]
-            }
+            Input::Mode(mode) => self.set_mode(mode),
             Input::PointerMove(x, y) => self.pointer_move(x, y),
             Input::PointerDown(button) => self.pointer_down(button),
             Input::PointerUp(button) => self.pointer_up(button),
@@ -769,15 +773,31 @@ impl Driver {
                 }
             }
         };
-        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, undo: provisional.then(Vec::new) };
+        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, undo: provisional.then(Vec::new), mode: None };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
         let emitted = host.emitted;
+        let mode = host.mode;
         if let Some(undo) = host.undo {
             self.provisional.extend(undo);
         }
         if touched {
             self.invalidate();
+        }
+        // The viewer's choice, made through the application's own control:
+        // never provisional, never undone by a batch.
+        if let Some(request) = mode {
+            let mode = match request.as_str() {
+                "light" => Some(ThemeMode::Light),
+                "dark" => Some(ThemeMode::Dark),
+                "high_contrast" => Some(ThemeMode::HighContrast),
+                "toggle" => Some(if self.viewer.mode == ThemeMode::Dark { ThemeMode::Light } else { ThemeMode::Dark }),
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                let out = self.set_mode(mode);
+                self.pending.extend(out);
+            }
         }
         result.map_err(|e| e.to_string())?;
         Ok(emitted)
@@ -1084,6 +1104,140 @@ impl Driver {
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
+    /// Spec 03 §3: `ArrowUp`/`ArrowDown` land on the previous/next row of a
+    /// list (a 40 px step where there are no rows), `PageUp`/`PageDown` move
+    /// a viewport, `Home`/`End` the whole way — on the scroller under the
+    /// pointer, else the focused node's, else the page's first. `None` when
+    /// there is nothing to scroll.
+    fn scroll_key(&mut self, key: &str) -> Option<Vec<Frame>> {
+        let is_scroller = |k: NodeKind| matches!(k, NodeKind::Scroll | NodeKind::List);
+        let scroller = self
+            .scroller_under_pointer()
+            .or_else(|| self.focused.and_then(|f| self.ancestor_where(f, is_scroller)))
+            .or_else(|| {
+                let root = self.session.root()?;
+                self.session.preorder(root).find(|ix| self.session.node(*ix).is_some_and(|n| is_scroller(n.kind)))
+            })?;
+        self.ensure_layout();
+        let view = self.layout.rect(scroller)?;
+        let content = self.layout.content_size(scroller)?;
+        let max_y = (content.h - view.h).max(0.0);
+        let here = (self.session.node(scroller).map_or(0, |n| n.scroll.1) as f32).clamp(0.0, max_y);
+        // Presses chain onto a scroll in flight, as wheel notches do.
+        let base = self.scroll_anim.filter(|a| a.node == scroller).map_or(here, |a| a.to.1);
+        // Rows to land on: a virtualised list's own, else the scroller's
+        // laid-out children.
+        let tops: Vec<f32> = match self.layout.row_tops(scroller) {
+            Some(t) => t.to_vec(),
+            None => self.session.children(scroller).iter().filter_map(|c| self.layout.rect(*c)).map(|r| r.y - view.y + here).collect(),
+        };
+        let target = match key {
+            "ArrowDown" => tops.iter().copied().find(|t| *t > base + 0.5).unwrap_or(base + 40.0),
+            "ArrowUp" => tops.iter().rev().copied().find(|t| *t < base - 0.5).unwrap_or(base - 40.0),
+            "PageDown" => base + view.h,
+            "PageUp" => base - view.h,
+            "Home" => 0.0,
+            "End" => max_y,
+            _ => return None,
+        };
+        Some(self.ease_to(scroller, target.clamp(0.0, max_y)))
+    }
+
+    /// Ease `scroller` to a vertical offset over `motion.slow`, in and out,
+    /// from wherever a scroll in flight has got to: a key press reads as
+    /// the view settling on the row, not snapping to it.
+    fn ease_to(&mut self, scroller: NodeIx, target_y: f32) -> Vec<Frame> {
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let view = self.layout.rect(scroller).unwrap_or_default();
+        let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
+        let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
+        let here = ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y));
+        let from = self.scroll_anim.filter(|a| a.node == scroller).map_or(here, |a| a.at(self.now));
+        let to = (from.0, target_y.clamp(0.0, max_y));
+        if (to.1 - from.1).abs() < 0.5 {
+            return Vec::new();
+        }
+        let ms = self.resolved.motion.get(2).copied().unwrap_or(320);
+        self.scroll_anim = Some(ScrollAnim { smooth: true, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        self.next_due = Some(self.now);
+        self.redraw = true;
+        Vec::new()
+    }
+
+    /// The pointer's shape over what it is on: the nearest ancestor's
+    /// `cursor` style if any names one, else a text beam over an editable
+    /// node, else a hand over anything with a `click` handler, else the
+    /// arrow — and always the arrow on a scrollbar.
+    pub fn cursor(&self) -> Cursor {
+        if self.pointer.dragging_thumb.is_some() || self.pointer.over_scrollbar.is_some() {
+            return Cursor::Default;
+        }
+        let Some(over) = self.pointer.over else { return Cursor::Default };
+        let mut cur = Some(over);
+        let mut first = true;
+        while let Some(ix) = cur {
+            let Some(node) = self.session.node(ix) else { break };
+            let styled = self.session.style_of(ix).cursor;
+            if styled != Cursor::Default {
+                return styled;
+            }
+            if first && self.is_editable(ix) {
+                return Cursor::Text;
+            }
+            if node.handler(EventKind::Click).is_some() {
+                return Cursor::Pointer;
+            }
+            first = false;
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        Cursor::Default
+    }
+
+    /// The viewer's palette mode changed — from the window, or from a local
+    /// handler's `theme` statement: styles re-resolve, everything relays
+    /// out, and the server learns the new viewport.
+    fn set_mode(&mut self, mode: ThemeMode) -> Vec<Frame> {
+        if self.viewer.mode == mode {
+            return Vec::new();
+        }
+        self.viewer.mode = mode;
+        self.resolve_theme();
+        self.layout.invalidate_all();
+        self.invalidate();
+        vec![Frame::Viewport(self.viewport())]
+    }
+
+    /// Spec 05 §5: the viewer's desktop palette, followed. `mode` is the
+    /// palette's own light/dark, which the viewer takes; `colors` its values
+    /// by role, applied in that mode — the other mode is the theme's own,
+    /// so the application's light/dark switch still does something. Both
+    /// empty means the desktop has none and the theme's colours return.
+    pub fn set_desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Frame> {
+        let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.is_none_or(|m| m == self.viewer.mode);
+        if same {
+            return Vec::new();
+        }
+        self.desktop_colors = colors;
+        self.desktop_mode = mode;
+        let mode_changed = mode.is_some_and(|m| m != self.viewer.mode);
+        if let Some(m) = mode {
+            self.viewer.mode = m;
+        }
+        self.resolve_theme();
+        self.layout.invalidate_all();
+        self.invalidate();
+        if mode_changed { vec![Frame::Viewport(self.viewport())] } else { Vec::new() }
+    }
+
+    /// Resolve the theme for the viewer, the desktop's colours on top when
+    /// the viewer is in the desktop's mode.
+    fn resolve_theme(&mut self) {
+        self.resolved = self.theme.resolve(self.viewer);
+        if self.desktop_mode == Some(self.viewer.mode) {
+            self.resolved.apply_overrides(&self.desktop_colors);
+        }
+    }
+
     /// A notched wheel: 100 logical px per notch — what browsers scroll per
     /// click of a wheel — eased over `motion.base`.
     /// Notches accumulate onto the running target, so a fast spin covers
@@ -1105,7 +1259,7 @@ impl Driver {
             return Vec::new();
         }
         let ms = self.resolved.motion.get(1).copied().unwrap_or(180);
-        self.scroll_anim = Some(ScrollAnim { node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
         self.next_due = Some(self.now);
         self.redraw = true;
         Vec::new()
@@ -1248,6 +1402,12 @@ impl Driver {
         // Navigation keys belong to the client and are never reported.
         if key == "Tab" {
             return if down { self.move_focus(modifiers & 1 != 0) } else { Vec::new() };
+        }
+        // Spec 03 §3: the scrolling keys, unless a field has them.
+        if down && modifiers & 0b1110 == 0 && matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End") && !self.focused.is_some_and(|f| self.is_editable(f)) {
+            if let Some(out) = self.scroll_key(key) {
+                return out;
+            }
         }
         let Some(f) = self.focused else { return Vec::new() };
         if key == "Escape" {
@@ -1427,6 +1587,8 @@ struct SessionHost<'a> {
     /// What to put back if the server's answer does not confirm it: the
     /// effects of a `LocalThenServer` chunk are provisional (07 §6).
     undo: Option<Vec<Undo>>,
+    /// A `set_mode` the chunk asked for, applied by the driver after the run.
+    mode: Option<String>,
 }
 
 /// One provisional change, with the value it replaced.
@@ -1496,6 +1658,13 @@ impl eui_vm::Host for SessionHost<'_> {
     }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
+    }
+    fn set_mode(&mut self, mode: &str) -> bool {
+        if !matches!(mode, "light" | "dark" | "high_contrast" | "toggle") {
+            return false;
+        }
+        self.mode = Some(mode.to_owned());
+        true
     }
 }
 

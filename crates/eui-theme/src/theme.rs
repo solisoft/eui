@@ -377,3 +377,16 @@ fn on_color(base: Oklch) -> Oklch {
     let black = Oklch::new(0.0, 0.0, 0.0);
     if contrast_oklch(white, base) >= contrast_oklch(black, base) { white } else { black }
 }
+
+impl Resolved {
+    /// Replace roles with the viewer's own colours — a desktop palette the
+    /// client follows (05 §5). Unknown roles are ignored; a role given twice
+    /// takes the last value.
+    pub fn apply_overrides(&mut self, overrides: &[(Role, u32)]) {
+        for (role, rgba) in overrides {
+            if let Some(slot) = self.colors.get_mut(usize::from(role.id())) {
+                *slot = *rgba;
+            }
+        }
+    }
+}

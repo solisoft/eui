@@ -906,3 +906,190 @@ fn a_spinning_node_turns_its_quads_and_keeps_frames_coming() {
     let r = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
     assert!((q.rect[0] + q.rect[2] / 2.0 - (r.x + r.w / 2.0)).abs() < 0.01);
 }
+
+/// A 100 px list of ten rows of two heights (22 and 40, alternating) with
+/// `item_height` 22, so row tops are not multiples of anything simple.
+fn list_of_rows(d: &mut Driver) -> eui_tree::NodeIx {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::List, id: 2, style: 11, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 10 });
+    tree.props.push((ATOM_ITEM_H, Value::Int(22)));
+    for i in 0..10u32 {
+        let tall = i % 2 == 1;
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (tall as u32 * (tree.props.len() as u32), tall as u32), handlers: (0, 0), child_count: 0 });
+        if tall {
+            tree.props.push((ATOM_ITEM_H, Value::Int(40)));
+        }
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    let _ = d.paint(400, 300);
+    d.session().lookup(2).unwrap()
+}
+
+fn press(d: &mut Driver, k: &str) -> Vec<Frame> {
+    let out = d.input(Input::Key { key: k.into(), modifiers: 0, down: true });
+    d.input(Input::Key { key: k.into(), modifiers: 0, down: false });
+    out
+}
+
+/// Let a scroll in flight land: the clock moves two seconds each call.
+fn settle(d: &mut Driver, clock: &mut std::time::Instant) {
+    *clock += std::time::Duration::from_secs(2);
+    d.tick(*clock);
+    let _ = d.paint(400, 300);
+}
+
+#[test]
+fn arrows_land_on_rows_and_page_keys_move_a_viewport() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let list = list_of_rows(&mut d);
+    let t0 = Instant::now();
+    let mut clock = t0;
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    // Row tops: 0, 22, 62, 84, 124, 146, 186, 208, 248, 270; content 310.
+    assert_eq!(d.layout().row_tops(list).map(|t| t[..4].to_vec()), Some(vec![0.0, 22.0, 62.0, 84.0]));
+    // Nothing focused, pointer anywhere: ArrowDown eases to the next row,
+    // in and out over motion.slow, and nothing is reported until it lands.
+    assert!(press(&mut d, "ArrowDown").is_empty());
+    assert!(d.animating());
+    d.tick(t0 + Duration::from_millis(100));
+    let _ = d.paint(400, 300);
+    let (_, mid) = d.session().node(list).unwrap().scroll;
+    assert!(mid > 0 && mid < 22, "mid-way at {mid}");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 22));
+    assert!(!d.animating());
+    // Presses chain: two more land on row 3 (top 84), not 22 + 2 steps of anything.
+    press(&mut d, "ArrowDown");
+    press(&mut d, "ArrowDown");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 84));
+    // ArrowUp: the previous row.
+    press(&mut d, "ArrowUp");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 62));
+    // PageDown: one viewport (100 px), clamped at the end (310 - 100).
+    press(&mut d, "PageDown");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 162));
+    press(&mut d, "PageDown");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 210));
+    press(&mut d, "Home");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 0));
+    press(&mut d, "End");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 210));
+    // Only the landings were reported, one scroll event each.
+    let landed = d.take_pending();
+    assert!(landed.iter().all(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Scroll)), "{landed:?}");
+    // A modifier makes it someone else's key.
+    let out = d.input(Input::Key { key: "ArrowDown".into(), modifiers: 2, down: true });
+    assert!(out.is_empty() && !d.animating());
+}
+
+#[test]
+fn the_cursor_follows_what_the_pointer_is_over() {
+    let mut d = welcomed();
+    assert_eq!(d.cursor(), Cursor::Default);
+    // Over the button's text: the click handler above it means a hand.
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Pointer);
+    // Over the value text: nothing clickable up the tree, the arrow.
+    let (x, y) = centre(&mut d, 2);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Default);
+    // A `cursor` style wins over the handler's hand.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: StyleRecord { cursor: Cursor::Grab, padding: [3; 4], ..Default::default() } }, Op::SetStyle { node: 3, style: 3 }] }));
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Grab);
+    // An editable node is a beam.
+    let mut f = Driver::new(400.0, 300.0, 1.0, 0);
+    f.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    f.handle_frame(Frame::Batch(form_batch()));
+    let (x, y) = centre(&mut f, 2);
+    f.input(Input::PointerMove(x, y));
+    let _ = f.paint(400, 300);
+    assert_eq!(f.cursor(), Cursor::Text);
+}
+
+#[test]
+fn a_local_handler_can_switch_the_viewers_palette() {
+    use eui_vm::Asm;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    const TOGGLE: u32 = 1;
+    let chunk = Asm::new(1).push_str(TOGGLE).set_mode().ret();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Click, Handler::Local(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 4, style: 0, key: 0, text: Some(TextRef::Inline("☀/☾".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: TOGGLE, value: "toggle".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [4; 4], ..Default::default() } },
+            Op::DefStyle { id: 2, record: StyleRecord { padding: [3; 4], bg: ColorRef::role(Role::SurfaceSunken.id()), ..Default::default() } },
+            Op::DefChunkBytes { id: 1, bytes: chunk },
+            Op::Mount(tree),
+        ],
+    };
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+    let light = d.theme_color(Role::SurfaceBase);
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    assert!(d.input(Input::PointerUp(0)).is_empty(), "a local handler: no event");
+    // The palette is dark now, and the server learns the viewport at the
+    // next paint's pending frames — not as a provisional change.
+    assert_ne!(d.theme_color(Role::SurfaceBase), light);
+    let _ = d.paint(400, 300);
+    let pending = d.take_pending();
+    assert!(matches!(pending.as_slice(), [Frame::Viewport(v)] if v.mode == ThemeMode::Dark), "{pending:?}");
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![] }));
+    assert_ne!(d.theme_color(Role::SurfaceBase), light, "a batch does not undo the viewer's choice");
+    // Toggle back.
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.theme_color(Role::SurfaceBase), light);
+}
+
+#[test]
+fn the_desktops_palette_overrides_roles_in_its_own_mode() {
+    let mut d = welcomed();
+    let theme_default = d.theme_color(Role::AccentBase);
+    let out = d.set_desktop_theme(Some(ThemeMode::Dark), vec![(Role::AccentBase, 0xf7a96aff), (Role::SurfaceBase, 0x101a26ff)]);
+    assert!(matches!(out.as_slice(), [Frame::Viewport(v)] if v.mode == ThemeMode::Dark));
+    assert_eq!(d.theme_color(Role::AccentBase), 0xf7a96aff);
+    assert_eq!(d.theme_color(Role::SurfaceBase), 0x101a26ff);
+    // The button paints in the desktop's accent.
+    let list = d.paint(400, 300);
+    let accent = eui_render::linear(0xf7a96aff);
+    assert!(list.quads.iter().any(|q| (q.fill[0] - accent[0]).abs() < 1e-3 && (q.fill[1] - accent[1]).abs() < 1e-3), "painted in the desktop accent");
+    // The same palette again is a no-op. A switch to the other mode shows
+    // the theme's own colours for it — the desktop published none — and
+    // a switch back follows the desktop again.
+    assert!(d.set_desktop_theme(Some(ThemeMode::Dark), vec![(Role::AccentBase, 0xf7a96aff), (Role::SurfaceBase, 0x101a26ff)]).is_empty());
+    d.input(Input::Mode(ThemeMode::Light));
+    assert_eq!(d.theme_color(Role::AccentBase), theme_default);
+    d.input(Input::Mode(ThemeMode::Dark));
+    assert_eq!(d.theme_color(Role::AccentBase), 0xf7a96aff);
+    // None: the theme's own colours return, in whatever mode the viewer is.
+    d.set_desktop_theme(None, Vec::new());
+    d.input(Input::Mode(ThemeMode::Light));
+    assert_eq!(d.theme_color(Role::AccentBase), theme_default);
+}

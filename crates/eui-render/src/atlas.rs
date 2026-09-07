@@ -29,7 +29,10 @@ pub struct Atlas {
     shelves: Vec<(u32, u32, u32)>, // (y, height, next x)
     next_y: u32,
     map: HashMap<(GlyphKey, u32), Option<Region>>,
-    dirty: bool,
+    /// Rows `y0..y1` written since the last upload, `None` when clean. A
+    /// shelf packer only ever touches a band, and a band is what crosses
+    /// to the GPU — or to another process.
+    dirty: Option<(u32, u32)>,
 }
 
 impl Atlas {
@@ -42,21 +45,49 @@ impl Atlas {
     }
 
     fn with_size(size: u32) -> Self {
-        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: true }
+        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Some((0, size)) }
     }
 
-    /// Replace the whole bitmap: a window process taking over what a
-    /// worker rasterised (`eui-client`'s process boundary). Refused, and
-    /// nothing changes, unless `pixels` is exactly `size × size` coverage
-    /// bytes.
-    pub fn set_pixels(&mut self, size: u32, pixels: Vec<u8>) -> bool {
-        if size == 0 || pixels.len() != (size as usize).saturating_mul(size as usize) {
+    /// Take rows `y0..y1` of a `size × size` coverage bitmap: a window
+    /// process receiving what a worker rasterised (`eui-client`'s process
+    /// boundary). A new `size` starts a blank bitmap first. Refused, and
+    /// nothing changes, unless `rows` is exactly those rows.
+    pub fn set_rows(&mut self, size: u32, y0: u32, y1: u32, rows: &[u8]) -> bool {
+        if size == 0 || y1 > size || y0 >= y1 || rows.len() != ((y1 - y0) as usize).saturating_mul(size as usize) {
             return false;
         }
-        self.size = size;
-        self.pixels = pixels;
-        self.dirty = true;
+        if size != self.size {
+            self.size = size;
+            self.pixels = vec![0; (size as usize).saturating_mul(size as usize)];
+            self.map.clear();
+            self.shelves.clear();
+            self.next_y = 0;
+            self.dirty = Some((0, size));
+        }
+        let start = (y0 as usize).saturating_mul(size as usize);
+        if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
+            dst.copy_from_slice(rows);
+        }
+        self.touch(y0, y1);
         true
+    }
+
+    /// Rows written since the last upload, `y0..y1`; `None` when clean.
+    pub fn dirty_rows(&self) -> Option<(u32, u32)> {
+        self.dirty
+    }
+
+    /// The bytes of rows `y0..y1`.
+    pub fn rows(&self, y0: u32, y1: u32) -> &[u8] {
+        let (a, b) = ((y0 as usize).saturating_mul(self.size as usize), (y1 as usize).saturating_mul(self.size as usize));
+        self.pixels.get(a..b).unwrap_or(&[])
+    }
+
+    fn touch(&mut self, y0: u32, y1: u32) {
+        self.dirty = Some(match self.dirty {
+            Some((a, b)) => (a.min(y0), b.max(y1)),
+            None => (y0, y1),
+        });
     }
 
     /// Edge length in texels.
@@ -71,12 +102,12 @@ impl Atlas {
 
     /// True when the texture must be re-uploaded; cleared by [`Self::mark_clean`].
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.is_some()
     }
 
     /// Acknowledge an upload.
     pub fn mark_clean(&mut self) {
-        self.dirty = false;
+        self.dirty = None;
     }
 
     /// Glyphs currently packed.
@@ -140,7 +171,7 @@ impl Atlas {
             };
             d.copy_from_slice(s);
         }
-        self.dirty = true;
+        self.touch(y, y.saturating_add(h).min(self.size));
         Some(Region { x: x + 1, y: y + 1, w: img.width, h: img.height, left: img.left, top: img.top })
     }
 
@@ -172,7 +203,8 @@ pub struct ImageAtlas {
     shelves: Vec<(u32, u32, u32)>,
     next_y: u32,
     map: HashMap<[u8; 32], Option<Region>>,
-    dirty: bool,
+    /// Rows written since the last upload, `None` when clean.
+    dirty: Option<(u32, u32)>,
 }
 
 impl ImageAtlas {
@@ -181,18 +213,39 @@ impl ImageAtlas {
 
     /// An empty atlas.
     pub fn new() -> Self {
-        Self { size: Self::SIZE, pixels: vec![0; (Self::SIZE * Self::SIZE * 4) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: true }
+        Self { size: Self::SIZE, pixels: vec![0; (Self::SIZE * Self::SIZE * 4) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Some((0, Self::SIZE)) }
     }
 
-    /// Replace the whole bitmap with `SIZE × SIZE` RGBA texels; refused,
-    /// and nothing changes, at any other length.
-    pub fn set_pixels(&mut self, pixels: Vec<u8>) -> bool {
-        if pixels.len() != (Self::SIZE as usize).saturating_mul(Self::SIZE as usize).saturating_mul(4) {
+    /// Take rows `y0..y1` of RGBA texels; refused, and nothing changes,
+    /// unless `rows` is exactly those rows.
+    pub fn set_rows(&mut self, y0: u32, y1: u32, rows: &[u8]) -> bool {
+        if y1 > self.size || y0 >= y1 || rows.len() != ((y1 - y0) as usize).saturating_mul(self.size as usize).saturating_mul(4) {
             return false;
         }
-        self.pixels = pixels;
-        self.dirty = true;
+        let start = (y0 as usize).saturating_mul(self.size as usize).saturating_mul(4);
+        if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
+            dst.copy_from_slice(rows);
+        }
+        self.touch(y0, y1);
         true
+    }
+
+    /// Rows written since the last upload, `y0..y1`; `None` when clean.
+    pub fn dirty_rows(&self) -> Option<(u32, u32)> {
+        self.dirty
+    }
+
+    /// The bytes of rows `y0..y1`.
+    pub fn rows(&self, y0: u32, y1: u32) -> &[u8] {
+        let (a, b) = ((y0 as usize).saturating_mul(self.size as usize).saturating_mul(4), (y1 as usize).saturating_mul(self.size as usize).saturating_mul(4));
+        self.pixels.get(a..b).unwrap_or(&[])
+    }
+
+    fn touch(&mut self, y0: u32, y1: u32) {
+        self.dirty = Some(match self.dirty {
+            Some((a, b)) => (a.min(y0), b.max(y1)),
+            None => (y0, y1),
+        });
     }
 
     /// Edge length in texels.
@@ -207,17 +260,17 @@ impl ImageAtlas {
 
     /// True when the texture must be re-uploaded.
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.is_some()
     }
 
     /// Acknowledge an upload.
     pub fn mark_clean(&mut self) {
-        self.dirty = false;
+        self.dirty = None;
     }
 
     /// Force a re-upload (the texture was recreated).
     pub fn mark_dirty_all(&mut self) {
-        self.dirty = true;
+        self.dirty = Some((0, self.size));
     }
 
     /// Where an image lives, if it was packed.
@@ -272,7 +325,7 @@ impl ImageAtlas {
             };
             d.copy_from_slice(s);
         }
-        self.dirty = true;
+        self.touch(y, y.saturating_add(h).min(self.size));
         Some(Region { x: x + 1, y: y + 1, w: width, h: height, left: 0, top: 0 })
     }
 }

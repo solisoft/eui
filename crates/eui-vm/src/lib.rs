@@ -118,6 +118,9 @@ pub enum Instr {
     /// Point the node with this key at a style table id, locally.
     SetStyle(u32, u32),
     Emit(u32),
+    /// Set the viewer's palette mode from the string on the stack:
+    /// `light`, `dark`, `high_contrast` or `toggle` (light ⇄ dark).
+    SetMode,
     Return,
 }
 
@@ -126,7 +129,7 @@ impl Instr {
     const fn effect(self) -> (u8, u8) {
         match self {
             Self::PushInt(_) | Self::PushStr(_) | Self::PushBool(_) | Self::Load(_) => (0, 1),
-            Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) => (1, 0),
+            Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) | Self::SetMode => (1, 0),
             Self::SetStyle(..) => (0, 0),
             Self::Dup => (1, 2),
             Self::Add | Self::Sub | Self::Mul | Self::Eq | Self::Lt | Self::Gt | Self::And | Self::Or | Self::Concat => (2, 1),
@@ -207,6 +210,7 @@ impl Chunk {
                     Instr::SetProp(node, atom)
                 }
                 0x32 => Instr::Emit(r.varint32().map_err(trunc)?),
+                0x34 => Instr::SetMode,
                 0x33 => {
                     let key = r.varint32().map_err(trunc)?;
                     let style = r.varint32().map_err(trunc)?;
@@ -299,6 +303,9 @@ pub trait Host {
     fn set_style(&mut self, node: u32, style: u32) -> bool;
     /// Queue a server event named by `atom`.
     fn emit(&mut self, atom: u32);
+    /// Set the viewer's palette mode: `light`, `dark`, `high_contrast`, or
+    /// `toggle` between light and dark. False for any other string.
+    fn set_mode(&mut self, mode: &str) -> bool;
 }
 
 /// Run a verified chunk against a host with the default fuel.
@@ -428,6 +435,12 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
                 }
             }
             Instr::Emit(atom) => host.emit(atom),
+            Instr::SetMode => {
+                let s = string(pop(&mut stack)?, "set_mode with a non-string")?;
+                if !host.set_mode(&s) {
+                    return Err(VmError::Host("set_mode refused"));
+                }
+            }
             Instr::Return => return Ok(()),
         }
     }
@@ -517,6 +530,11 @@ impl Asm {
     pub fn emit(mut self, atom: u32) -> Self {
         self.code.push(0x32);
         self.varint(atom);
+        self
+    }
+    /// `set_mode`.
+    pub fn set_mode(mut self) -> Self {
+        self.code.push(0x34);
         self
     }
     /// `return`, and the finished bytes.

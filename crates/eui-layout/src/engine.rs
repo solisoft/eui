@@ -94,6 +94,10 @@ pub struct Layout {
     columns_atom: Option<u32>,
     item_height_atom: Option<u32>,
     viewport: Size,
+    /// Each virtualised list's row tops in content coordinates, as placed
+    /// this frame (one more entry than rows: the content's end). What a
+    /// keyboard needs to land on the next row.
+    row_tops: HashMap<NodeIx, Vec<f32>>,
 }
 
 /// What the engine needs from outside for one frame. (Not `Frame`: that is
@@ -130,6 +134,7 @@ impl Layout {
         self.virtual_.clear();
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
+        self.row_tops.clear();
         // Measures survive across frames for nodes nothing touched: the
         // session's dirty bits say which subtrees changed (a node's own
         // change sets SELF, its ancestors' DESCENDANT), and an index reused
@@ -180,6 +185,14 @@ impl Layout {
     /// First baseline from the node's top, if laid out.
     pub fn baseline(&self, ix: NodeIx) -> Option<f32> {
         self.rect(ix).and_then(|_| self.baseline.get(ix.raw() as usize).copied())
+    }
+
+    /// A virtualised list's row tops in content coordinates, as placed this
+    /// frame, with the content's end as one more entry; `None` for anything
+    /// else. Spec 03 §3: what `ArrowUp`/`ArrowDown` land on.
+    pub fn row_tops(&self, list: NodeIx) -> Option<&[f32]> {
+        self.rect(list)?;
+        self.row_tops.get(&list).map(Vec::as_slice)
     }
 
     /// A `scroll` or `list` node's content extent, for clamping offsets.
@@ -473,6 +486,7 @@ impl Layout {
         if measure_only || n == 0 {
             return Placement { children: Vec::new(), content: Size::new(width, content_h), baseline: None };
         }
+        self.row_tops.insert(ix, tops.clone());
         let mut placed = Vec::with_capacity(window);
         let mut first_baseline = None;
         for (i, &c) in children.iter().enumerate().take(last.saturating_add(1)).skip(first) {

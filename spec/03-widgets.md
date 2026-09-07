@@ -120,6 +120,18 @@ no shader, no tessellator and no allocation beyond its quads.
   `Shift+Tab` move focus; the client, not the server, owns that order.
 - A node with a `click` handler is activatable: it takes focus on `Tab` and
   `Enter` or `Space` emits `click` at its centre.
+- The scrolling keys belong to the client while no editable node has focus:
+  `ArrowDown`/`ArrowUp` land the scroller on its next/previous row — a
+  `list`'s rows, or the scroller's children; a plain 40 px step where there
+  are none — `PageDown`/`PageUp` move one viewport, `Home`/`End` the whole
+  way, each eased over `motion.base` like a wheel notch and chaining onto a
+  scroll in flight. The scroller is the one under the pointer, else the
+  focused node's, else the first in document order. Nothing is reported but
+  the `scroll` the landing produces.
+- The pointer takes the shape of what it is over: the nearest ancestor's
+  `cursor` style when one names a shape, else a text beam over an editable
+  node, else a hand over anything with a `click` handler, else the arrow —
+  and the arrow on a scrollbar.
 - In an editable node the client owns the caret and the selection. A click
   places the caret at the nearest glyph edge and a drag selects;
   `ArrowLeft`/`ArrowRight` move by character, by word with `Ctrl` (`⌘` on

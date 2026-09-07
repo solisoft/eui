@@ -23,6 +23,8 @@ use crate::worker::Backend;
 pub enum Wake {
     /// A message is waiting on the connection.
     Transport,
+    /// The desktop's theme changed.
+    Theme,
     /// AccessKit has something for the window.
     #[cfg(feature = "a11y")]
     Access(accesskit_winit::Event),
@@ -85,6 +87,14 @@ pub struct App {
     clip: Option<arboard::Clipboard>,
     /// The field the input method was last pointed at, if any.
     ime_area: Option<[f32; 4]>,
+    /// The pointer shape last handed to the window.
+    cursor: eui_proto::Cursor,
+    /// The desktop theme watcher, alive as long as the window.
+    theme_watch: Option<Box<dyn std::any::Any + Send>>,
+    /// The desktop palette last applied.
+    desktop_theme: Option<crate::desktop_theme::DesktopTheme>,
+    /// A theme wake is queued and not yet handled.
+    theme_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl App {
@@ -109,6 +119,55 @@ impl App {
             #[cfg(feature = "clipboard")]
             clip: None,
             ime_area: None,
+            cursor: eui_proto::Cursor::Default,
+            theme_watch: None,
+            desktop_theme: None,
+            theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Follow the desktop's palette (05 §5): read it, hand it to the driver
+    /// if it changed, and say so once.
+    fn follow_desktop_theme(&mut self) {
+        let now = crate::desktop_theme::current();
+        if now == self.desktop_theme {
+            return;
+        }
+        match &now {
+            Some(t) => eprintln!("eui: following the {} ({})", t.source, if t.mode == eui_proto::ThemeMode::Dark { "dark" } else { "light" }),
+            None => eprintln!("eui: no desktop theme to follow"),
+        }
+        let (mode, colors) = now.as_ref().map_or((None, Vec::new()), |t| (Some(t.mode), t.colors.clone()));
+        self.desktop_theme = now;
+        let out = self.backend.desktop_theme(mode, colors);
+        self.send(out);
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// The pointer takes the shape of what it is over — a hand on a button,
+    /// a beam on a field — told to the window only on a change.
+    fn sync_cursor(&mut self) {
+        let want = self.backend.cursor();
+        if want == self.cursor {
+            return;
+        }
+        self.cursor = want;
+        if let Some(w) = &self.window {
+            use eui_proto::Cursor as C;
+            use winit::window::CursorIcon as I;
+            w.set_cursor(match want {
+                C::Default => I::Default,
+                C::Pointer => I::Pointer,
+                C::Text => I::Text,
+                C::Grab => I::Grab,
+                C::Grabbing => I::Grabbing,
+                C::ResizeH => I::EwResize,
+                C::ResizeV => I::NsResize,
+                C::Wait => I::Wait,
+                C::NotAllowed => I::NotAllowed,
+            });
         }
     }
 
@@ -204,6 +263,7 @@ impl App {
                 w.request_redraw();
             }
         }
+        self.sync_cursor();
     }
 
     fn redraw(&mut self) {
@@ -233,6 +293,8 @@ impl App {
         crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
         // A scroll that landed during this paint reports its offset now.
         self.send(landed);
+        // Hover settles at paint; so does what the pointer is over.
+        self.sync_cursor();
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
         #[cfg(feature = "a11y")]
@@ -350,6 +412,20 @@ impl ApplicationHandler<Wake> for App {
         let (backend, how) = Backend::open(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
         eprintln!("eui: {how}");
         self.backend = backend;
+        // The desktop's own colours, before the first frame; and again
+        // whenever the desktop changes them.
+        if !crate::desktop_theme::disabled() {
+            self.follow_desktop_theme();
+            // One wake per burst of changes: a switch touches several files
+            // and the window re-reads the theme once, when it gets to it.
+            let proxy = self.proxy.clone();
+            let pending = Arc::clone(&self.theme_pending);
+            self.theme_watch = crate::desktop_theme::watch(move || {
+                if !pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let _ = proxy.send_event(Wake::Theme);
+                }
+            });
+        }
         self.gpu = Some(Gpu { surface, config, renderer });
         self.window = Some(window);
 
@@ -386,6 +462,11 @@ impl ApplicationHandler<Wake> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Wake) {
         match event {
             Wake::Transport => self.pump(),
+            Wake::Theme => {
+                crate::driver::trace(|| "desktop theme wake".into());
+                self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
+                self.follow_desktop_theme();
+            }
             #[cfg(feature = "a11y")]
             Wake::Access(e) => self.access_event(e),
         }
@@ -488,9 +569,13 @@ impl ApplicationHandler<Wake> for App {
                 w.request_redraw();
             }
         }
+        // A frame already due has its redraw requested above; waiting on
+        // an instant in the past would spin until the compositor delivers
+        // it — and a hidden window's it may never come.
+        let now = std::time::Instant::now();
         event_loop.set_control_flow(match self.backend.next_frame_at() {
-            Some(at) => ControlFlow::WaitUntil(at),
-            None => ControlFlow::Wait,
+            Some(at) if at > now => ControlFlow::WaitUntil(at),
+            _ => ControlFlow::Wait,
         });
     }
 }

@@ -182,6 +182,9 @@ pub enum Request {
     /// An assistive technology's action on a node: `true` click, `false`
     /// focus.
     AccessAction(u64, bool),
+    /// The viewer's desktop palette (05 §5): its mode if it has one, and
+    /// colours by role id. Empty means none: the theme's own colours.
+    DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
 }
 
 impl Request {
@@ -231,6 +234,15 @@ impl Request {
                 w.u64(*id);
                 w.bool(*click);
             }
+            Request::DesktopTheme(mode, colors) => {
+                w.u8(12);
+                w.u8(mode.map_or(255, |m| m as u8));
+                w.u32(u32::try_from(colors.len()).unwrap_or(u32::MAX));
+                for (role, rgba) in colors {
+                    w.u32(u32::from(*role));
+                    w.u32(*rgba);
+                }
+            }
         }
         w.0
     }
@@ -250,6 +262,18 @@ impl Request {
             9 => Request::Tick,
             10 => Request::AccessTree,
             11 => Request::AccessAction(r.u64()?, r.bool()?),
+            12 => {
+                let mode = match r.u8()? {
+                    255 => None,
+                    m => Some(ThemeMode::from_u8(m).map_err(|_| "theme mode")?),
+                };
+                let n = r.u32()? as usize;
+                let mut colors = Vec::with_capacity(n.min(64));
+                for _ in 0..n {
+                    colors.push((u16::try_from(r.u32()?).map_err(|_| "role")?, r.u32()?));
+                }
+                Request::DesktopTheme(mode, colors)
+            }
             _ => return Err("unknown request"),
         };
         r.done()?;
@@ -353,6 +377,9 @@ pub struct Status {
     pub clipboard: Option<String>,
     /// Milliseconds until the next transition frame, if one is due.
     pub next_due_ms: Option<u32>,
+    /// The pointer's shape over what it is on, as [`eui_proto::Cursor`]'s
+    /// wire byte.
+    pub cursor: u8,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -366,15 +393,16 @@ pub enum Payload {
     Hello(Vec<u8>),
     /// `PendingAssets`.
     Assets(Vec<Hash>),
-    /// `Paint`: the draw list, and each atlas bitmap when it changed since
-    /// the last paint (the glyph atlas with its edge length: it grows).
+    /// `Paint`: the draw list, and the rows of each atlas that changed
+    /// since the last paint — `(edge length, y0, y1, bytes)` for the glyph
+    /// atlas, which grows, `(y0, y1, bytes)` for the image atlas.
     Paint {
         /// The frame.
         list: DrawList,
-        /// Coverage bitmap, `size × size`.
-        glyphs: Option<(u32, Vec<u8>)>,
-        /// RGBA bitmap, [`ImageAtlas::SIZE`] squared.
-        images: Option<Vec<u8>>,
+        /// Coverage rows.
+        glyphs: Option<(u32, u32, u32, Vec<u8>)>,
+        /// RGBA rows.
+        images: Option<(u32, u32, Vec<u8>)>,
     },
     /// `Tick`: a transition frame is due.
     Tick(bool),
@@ -416,6 +444,7 @@ impl Reply {
             }
             None => w.bool(false),
         }
+        w.u8(s.cursor);
         match &self.payload {
             Payload::None => w.u8(0),
             Payload::Sandbox(r) => {
@@ -446,16 +475,20 @@ impl Reply {
                 w.u8(4);
                 put_list(&mut w, list);
                 match glyphs {
-                    Some((size, px)) => {
+                    Some((size, y0, y1, px)) => {
                         w.bool(true);
                         w.u32(*size);
+                        w.u32(*y0);
+                        w.u32(*y1);
                         w.bytes(px);
                     }
                     None => w.bool(false),
                 }
                 match images {
-                    Some(px) => {
+                    Some((y0, y1, px)) => {
                         w.bool(true);
+                        w.u32(*y0);
+                        w.u32(*y1);
                         w.bytes(px);
                     }
                     None => w.bool(false),
@@ -485,7 +518,8 @@ impl Reply {
         let ime = if r.bool()? { Some(r.f4()?) } else { None };
         let clipboard = r.opt_str()?;
         let next_due_ms = if r.bool()? { Some(r.u32()?) } else { None };
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms };
+        let cursor = r.u8()?;
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -500,13 +534,8 @@ impl Reply {
             }
             4 => {
                 let list = get_list(&mut r)?;
-                let glyphs = if r.bool()? {
-                    let size = r.u32()?;
-                    Some((size, r.bytes()?.to_vec()))
-                } else {
-                    None
-                };
-                let images = if r.bool()? { Some(r.bytes()?.to_vec()) } else { None };
+                let glyphs = if r.bool()? { Some((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
+                let images = if r.bool()? { Some((r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
                 Payload::Paint { list, glyphs, images }
             }
             5 => Payload::Tick(r.bool()?),
@@ -685,13 +714,13 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                     Request::Paint(w, h) => {
                         let list = d.paint(w, h);
                         let (atlas, images) = d.atlases_mut();
-                        let glyphs = atlas.is_dirty().then(|| {
+                        let glyphs = atlas.dirty_rows().map(|(y0, y1)| {
                             atlas.mark_clean();
-                            (atlas.size(), atlas.pixels().to_vec())
+                            (atlas.size(), y0, y1, atlas.rows(y0, y1).to_vec())
                         });
-                        let images = images.is_dirty().then(|| {
+                        let images = images.dirty_rows().map(|(y0, y1)| {
                             images.mark_clean();
-                            images.pixels().to_vec()
+                            (y0, y1, images.rows(y0, y1).to_vec())
                         });
                         Payload::Paint { list, glyphs, images }
                     }
@@ -702,6 +731,12 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                             let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
                             d.pending_mut().extend(out);
                         }
+                        Payload::None
+                    }
+                    Request::DesktopTheme(mode, colors) => {
+                        let colors = colors.into_iter().filter_map(|(id, c)| eui_theme::Role::from_id(id).ok().map(|r| (r, c))).collect();
+                        let out = d.set_desktop_theme(mode, colors);
+                        d.pending_mut().extend(out);
                         Payload::None
                     }
                 };
@@ -724,6 +759,7 @@ fn status_of(d: &mut Driver) -> Status {
         ime: d.ime_area().map(|r| [r.x, r.y, r.w, r.h]),
         clipboard: d.take_clipboard(),
         next_due_ms: d.next_frame_at().map(|at| u32::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)),
+        cursor: d.cursor().to_u8(),
     }
 }
 
@@ -821,7 +857,7 @@ impl Worker {
     pub fn spawn(program: PathBuf, w: f32, h: f32, scale: f32, granted: u32) -> Result<(Self, Result<String, String>), String> {
         let mut cmd = Command::new(&program);
         cmd.arg(WORKER_ARG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).env_clear();
-        for var in ["EUI_TRACE", "RUST_BACKTRACE"] {
+        for var in ["EUI_TRACE", "EUI_SECCOMP_LOG", "RUST_BACKTRACE"] {
             if let Ok(v) = std::env::var(var) {
                 cmd.env(var, v);
             }
@@ -851,9 +887,19 @@ impl Worker {
                 Some(reply)
             }
             Err(e) => {
-                let why = match self.child.try_wait() {
-                    Ok(Some(st)) => format!("the worker exited: {st}"),
-                    _ => format!("the worker stopped answering: {e}"),
+                // A dead worker is usually a killed one; give the kernel a
+                // moment to say so, since the signal is the whole story.
+                let mut status = None;
+                for _ in 0..20 {
+                    if let Ok(Some(st)) = self.child.try_wait() {
+                        status = Some(st);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let why = match status {
+                    Some(st) => format!("the worker exited: {st}"),
+                    None => format!("the worker stopped answering: {e}"),
                 };
                 eprintln!("eui: {why}");
                 self.status.closed = Some(why.clone());
@@ -1016,14 +1062,14 @@ impl Backend {
             }
             Backend::Remote(worker) => match worker.call(&Request::Paint(w, h)) {
                 Some(Reply { status, payload: Payload::Paint { list, glyphs, images } }) => {
-                    if let Some((size, px)) = glyphs {
-                        if !worker.atlas.set_pixels(size, px) {
-                            eprintln!("eui: the worker sent a glyph atlas of the wrong size");
+                    if let Some((size, y0, y1, px)) = glyphs {
+                        if !worker.atlas.set_rows(size, y0, y1, &px) {
+                            eprintln!("eui: the worker sent glyph atlas rows of the wrong size");
                         }
                     }
-                    if let Some(px) = images {
-                        if !worker.images.set_pixels(px) {
-                            eprintln!("eui: the worker sent an image atlas of the wrong size");
+                    if let Some((y0, y1, px)) = images {
+                        if !worker.images.set_rows(y0, y1, &px) {
+                            eprintln!("eui: the worker sent image atlas rows of the wrong size");
                         }
                     }
                     (list, status.outbound)
@@ -1092,11 +1138,31 @@ impl Backend {
         }
     }
 
+    /// The pointer's shape over what it is on.
+    pub fn cursor(&self) -> eui_proto::Cursor {
+        match self {
+            Backend::Local(d) => d.cursor(),
+            Backend::Remote(w) => eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default),
+        }
+    }
+
     /// Text the viewer copied since the last call.
     pub fn take_clipboard(&mut self) -> Option<String> {
         match self {
             Backend::Local(d) => d.take_clipboard(),
             Backend::Remote(w) => w.status.clipboard.take(),
+        }
+    }
+
+    /// The viewer's desktop palette (05 §5), or none. Returns encoded
+    /// frames to send: the viewport, when the palette's mode differs.
+    pub fn desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Vec<u8>> {
+        match self {
+            Backend::Local(d) => d.set_desktop_theme(mode, colors).iter().map(Frame::encode).collect(),
+            Backend::Remote(w) => {
+                let wire = colors.iter().map(|(r, c)| (r.id(), *c)).collect();
+                w.call(&Request::DesktopTheme(mode, wire)).map(|r| r.status.outbound).unwrap_or_default()
+            }
         }
     }
 
@@ -1160,6 +1226,8 @@ mod tests {
             Request::Tick,
             Request::AccessTree,
             Request::AccessAction(42, true),
+            Request::DesktopTheme(Some(ThemeMode::Dark), vec![(1, 0x101a26ff), (9, 0xf7a96aff)]),
+            Request::DesktopTheme(None, Vec::new()),
         ];
         for r in all {
             assert_eq!(Request::decode(&r.encode()), Ok(r));
@@ -1168,7 +1236,7 @@ mod tests {
 
     #[test]
     fn replies_round_trip() {
-        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16) };
+        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1 };
         let list = DrawList { quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4] }], runs: vec![(0, 0, 1)], clips: vec![[0, 0, 10, 10]], clear: [0.5; 4], wants_frame: true };
         let snap = AccessSnapshot { nodes: vec![AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] }, AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] }], focus: 1, scale: 2.0 };
         let all = vec![
@@ -1177,7 +1245,7 @@ mod tests {
             Payload::Sandbox(Err("no".into())),
             Payload::Hello(vec![1, 2]),
             Payload::Assets(vec![[1; 32], [2; 32]]),
-            Payload::Paint { list, glyphs: Some((2, vec![0, 1, 2, 3])), images: None },
+            Payload::Paint { list, glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8192])) },
             Payload::Tick(true),
             Payload::Access(snap),
         ];

@@ -39,6 +39,7 @@ accesskit_winit = { version = "0.34", optional = true }
 
 # The system clipboard, for the person's own copy, cut and paste.
 arboard = { version = "3", optional = true, default-features = false, features = ["wayland-data-control"] }
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 
 [features]
 default = ["a11y", "clipboard"]

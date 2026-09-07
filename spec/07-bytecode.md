@@ -12,7 +12,8 @@ the protocol.
 ## 1. What a chunk may do
 
 Read and write the component's **local state** — the props of the mounted
-root node — set a node's text or a prop, and emit a server event. Nodes are
+root node — set a node's text or a prop, switch the viewer's palette mode,
+and emit a server event. Nodes are
 named by **key**, the atom carried in the node's `key` field, so a chunk is
 independent of any one render's ids and is interned once per session. Nothing
 else. There is no I/O, no clock, no randomness, no allocation beyond the
@@ -71,6 +72,7 @@ its operands. All varints are as in [`02-wire-format.md`](02-wire-format.md).
 | `0x31` | `set_prop` | `key:varint atom:varint` | `any →` | that node's prop, locally |
 | `0x33` | `set_style` | `key:varint style:varint` | | point that node at a style table id, locally |
 | `0x32` | `emit` | `atom:varint` | | queue a server event named by the atom, payload = the root props |
+| `0x34` | `set_mode` | | `str →` | the viewer's palette mode: `light`, `dark`, `high_contrast`, or `toggle` (light ⇄ dark); any other string stops the run. The viewer's choice made through the app's own control — never provisional, and the server learns it as the next `Viewport` |
 | `0x40` | `return` | | | stop |
 
 Type errors at run time — `add` on a string, `set_text` with an int — abort

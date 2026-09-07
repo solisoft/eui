@@ -123,6 +123,9 @@ const ALLOWED: &[libc::c_long] = &[
     libc::SYS_set_robust_list,
     libc::SYS_prlimit64,
     libc::SYS_getrlimit,
+    // mimalloc (the allocator of a Soli-built host) asks which NUMA node
+    // it is on when it maps a segment.
+    libc::SYS_getcpu,
 ];
 
 #[cfg(target_os = "linux")]

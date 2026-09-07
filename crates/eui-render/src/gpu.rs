@@ -274,23 +274,23 @@ impl Renderer {
             self.atlas_size = atlas.size();
             images.mark_dirty_all();
         }
-        if images.is_dirty() {
+        // Only the rows that changed cross to the GPU: a few glyph rows
+        // per frame of new text, not a megabyte.
+        if let Some((y0, y1)) = images.dirty_rows() {
             self.queue.write_texture(
-                wgpu::ImageCopyTexture { texture: &self.img_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                images.pixels(),
-                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(images.size()) },
-                wgpu::Extent3d { width: images.size(), height: images.size(), depth_or_array_layers: 1 },
+                wgpu::ImageCopyTexture { texture: &self.img_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+                images.rows(y0, y1),
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(y1 - y0) },
+                wgpu::Extent3d { width: images.size(), height: y1 - y0, depth_or_array_layers: 1 },
             );
             images.mark_clean();
         }
-        if !atlas.is_dirty() {
-            return;
-        }
+        let Some((y0, y1)) = atlas.dirty_rows() else { return };
         self.queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &self.atlas_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            atlas.pixels(),
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(atlas.size()) },
-            wgpu::Extent3d { width: atlas.size(), height: atlas.size(), depth_or_array_layers: 1 },
+            wgpu::ImageCopyTexture { texture: &self.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+            atlas.rows(y0, y1),
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(y1 - y0) },
+            wgpu::Extent3d { width: atlas.size(), height: y1 - y0, depth_or_array_layers: 1 },
         );
         atlas.mark_clean();
     }

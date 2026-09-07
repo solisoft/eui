@@ -327,6 +327,30 @@ end
 # A button that shows it is working the instant it is pressed: a local
 # handler reveals the spinner and changes the label, the server answers,
 # and the client puts the button back the moment that answer arrives.
+# A light/dark switch: the viewer's choice, made on the client by a local
+# handler (`theme.toggle()`), so it costs no round trip and the server
+# learns of it only as the next viewport. The glyph is the same on both
+# sides: it names the switch, not the state.
+def theme_toggle()
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "align": "center",
+      "justify": "center",
+      "pad": [2, 3, 2, 3],
+      "min_width": 36,
+      "bg": "surface.sunken",
+      "fg": "text.default",
+      "radius": 2,
+      "cursor": "pointer",
+      "transition": "fast"
+    },
+    "on": {"click": {"local": "theme.toggle()"}},
+    "c": [text("☀/☾", {"weight": "semibold"})]
+  }
+end
+
 def loading_button(label, on_click, key)
   spin = spinner_sized(14)
   spin["s"]["display"] = "none"

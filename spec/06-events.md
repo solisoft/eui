@@ -67,7 +67,9 @@ Events `KeyboardEvent.key` value (`"Enter"`, `"a"`, `"ArrowLeft"`).
   in the focused field and reports nothing; the committed text arrives as
   one `text_input`, and a composition abandoned by a blur leaves no trace.
 - `Tab`, `Shift+Tab` and `Escape`: they move or drop focus (spec 03 §3) and
-  are consumed by the client. `Enter` and `Space` on a focused activatable
+  are consumed by the client. So are the scrolling keys — the arrows, page
+  keys, `Home` and `End` — outside an editable node: they scroll, and only
+  the resulting `scroll` is reported. `Enter` and `Space` on a focused activatable
   node arrive as the `click` they stand for, at the node's centre.
 - Pointer position while the window is unfocused or the pointer is outside it.
 - Clipboard contents without the `clipboard.read` capability.

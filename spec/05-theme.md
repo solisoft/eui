@@ -180,6 +180,19 @@ beyond the coarse fields in the `Viewport` frame.
 - **Font scale** multiplies every `text` size and line height, rounded to the
   nearest whole pixel. It does not touch `space`: an enlarged font on an
   unchanged grid is the behaviour a reader who enlarged the font asked for.
+- **The desktop's palette.** A client MAY replace the resolved colour of
+  any role with one the viewer's desktop publishes — its background,
+  foreground, accent and status colours — and take the palette's own
+  light or dark as the mode. The overrides sit on top of the theme in the
+  palette's own mode — a viewer who switches to the other mode gets the
+  theme's own colours for it, and the desktop's again on returning, so an
+  application's light/dark switch still switches something — and are
+  applied after §4's resolution, so a
+  theme's contrast guarantees do not extend to them: the desktop chose
+  the colours, and the desktop answers for them. The server sees nothing
+  of this but the mode. The reference client follows Omarchy on Linux
+  (`~/.local/state/omarchy/current/theme/colors.toml`), live; the mapping
+  is in `eui-client/src/desktop_theme.rs`.
 
 ## 6. Literal colours
 

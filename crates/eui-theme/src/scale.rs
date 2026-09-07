@@ -33,6 +33,13 @@ pub const RADIUS_FULL: f32 = 9999.0;
 /// Number of `radius` entries.
 pub const RADIUS_LEN: usize = 5;
 
+/// A symmetric ease, in and out — `cubic-bezier(0.45, 0, 0.55, 1)` — for a
+/// motion that starts from rest and ends at rest, like a keyboard scroll.
+pub fn ease_in_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+}
+
 /// The motion easing curve of 05 §4, `cubic-bezier(0.2, 0, 0, 1)`, as
 /// progress `0..=1` → eased `0..=1`. Solved for the parameter by Newton's
 /// method: five steps are plenty for a monotone curve.

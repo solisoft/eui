@@ -367,6 +367,33 @@ arrows to nudge once focused), and one calendar engine behind `date_picker`,
 picks an option, drags the slider by click and by keyboard, picks a day,
 turns a month and selects a range.
 
+**The desktop's palette, followed (05 §5).** The theme is resolved on the
+client from roles, so a desktop that publishes its colours can be followed
+exactly. Omarchy is the first: the window reads the current theme's
+`colors.toml` (`~/.local/state/omarchy/current/theme`), maps background,
+foreground, accent, the surfaces and the four status colours onto the
+roles — hover and active accents derived in OKLCH, `on` colours by
+contrast — and hands them to the driver as overrides on top of the
+application's theme, the palette's own light or dark as the mode — in
+that mode only: the app's own light/dark switch takes the viewer to the
+theme's colours for the other mode, and back to the desktop's. The
+directory is watched with inotify, so switching the theme from Omarchy's
+menu recolours every open EUI window at once, no wakeups otherwise. The
+server never sees a colour; it sees the mode, as the next viewport.
+`EUI_DESKTOP_THEME=0` leaves the application's theme alone. macOS and
+Windows accent colours are not read yet.
+
+**Keys, cursor, theme switch (03 §3, 07).** `ArrowDown`/`ArrowUp` land a
+list on its next/previous row — the layout keeps each virtualised list's
+row tops, so the feed's cards of two heights snap exactly — `PageDown`/
+`PageUp` move a viewport, `Home`/`End` the whole way, all eased like a
+wheel notch and chaining onto a scroll in flight. The pointer takes the
+shape of what it is over: a `cursor` style, a beam on a field, a hand on
+anything clickable. And a local handler can switch the viewer's palette —
+`theme.toggle()`, `theme.mode = "dark"`, bytecode `set_mode` — so an app
+can carry its own light/dark switch at no round trip; the feed's header
+has one.
+
 **The process boundary (08 §10).** Everything that reads bytes a server
 chose — frame decoding, the tree, layout, text shaping, PNG decoding, the
 VM: the whole `Driver` — now runs in a worker process; the window keeps
