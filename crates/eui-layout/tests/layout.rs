@@ -83,6 +83,10 @@ fn lay(s: &Session, w: f32, h: f32) -> (Layout, Monospace) {
     (l, m)
 }
 
+fn r_(l: &Layout, s: &Session, id: u32) -> Rect {
+    r(l, s, id)
+}
+
 fn r(l: &Layout, s: &Session, id: u32) -> Rect {
     l.rect(s.lookup(id).unwrap()).unwrap_or_else(|| panic!("node {id} was not laid out"))
 }
@@ -332,6 +336,30 @@ fn an_overflowing_column_does_not_squash_text_below_its_content_size() {
 }
 
 #[test]
+fn a_paragraph_wraps_before_it_squeezes_its_sibling() {
+    // A 40 px badge (shrink 0, as every avatar is) beside a long text in a
+    // 300 px row: the text's automatic minimum is its longest word, not its
+    // one-line width, so the text wraps inside the 260 px left to it.
+    let mut b = B::default();
+    let r = b.style(StyleRecord { display: Display::Row, gap: 0, align_items: AlignItems::Start, ..st() });
+    let badge = b.style(StyleRecord { width: px(40), height: px(40), shrink: 0, ..st() });
+    let grow = b.style(StyleRecord { display: Display::Column, grow: 1, ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, r, 2);
+    let bd = b.push(NodeKind::Box, badge, 1);
+    b.text(t, "A");
+    let col = b.push(NodeKind::Box, grow, 1);
+    let txt = b.text(t, "twenty two words wrap around inside this narrow column of text");
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 200.0);
+    assert_rect(&l, &s, bd, 0.0, 0.0, 40.0, 40.0);
+    let c = r_(&l, &s, col);
+    assert_eq!((c.x, c.w), (40.0, 260.0));
+    let tr = r_(&l, &s, txt);
+    assert!(tr.h > 22.0, "the text wrapped: {tr:?}");
+}
+
+#[test]
 fn a_stack_stretches_auto_sized_children_on_both_axes() {
     // A page column layered under a sheet fills the window, not its content
     // width; an absolute layer keeps its own size.
@@ -427,6 +455,49 @@ fn a_virtualised_list_does_not_measure_what_it_cannot_see() {
 }
 
 // ----------------------------------------------------------------- misc
+
+#[test]
+fn a_percent_width_is_capped_by_max_width_and_then_aligned() {
+    // A picture at `width: 100%`, `max_width: 480` in a 600 px column is 480
+    // wide; centred when the column says so.
+    let mut b = B::default();
+    let centre = b.style(StyleRecord { display: Display::Column, align_items: AlignItems::Center, ..st() });
+    let pic = b.style(StyleRecord { width: Dim::Percent(10_000), max_width: px(480), height: px(50), ..st() });
+    b.push(NodeKind::Box, centre, 1);
+    let p = b.push(NodeKind::Box, pic, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 600.0, 200.0);
+    assert_rect(&l, &s, p, 60.0, 0.0, 480.0, 50.0);
+}
+
+#[test]
+fn a_virtualised_list_honours_a_rows_own_height() {
+    // Ten rows of 20 px, every third one 60 px tall by its own prop.
+    let mut b = B::default();
+    let c = b.style(col());
+    let ls = b.style(StyleRecord { display: Display::Column, height: Dim::Px(100), ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let list = b.push(NodeKind::List, ls, 10);
+    b.prop("item_height", Value::Int(20));
+    let mut rows = Vec::new();
+    for i in 0..10 {
+        rows.push(b.text(t, &format!("row {i}")));
+        if i % 3 == 0 {
+            b.prop("item_height", Value::Int(60));
+        }
+    }
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 400.0);
+    // Tops: 0, 60, 80, 100, 160, 180, 200, 260, 280, 300; content 360.
+    assert_rect(&l, &s, rows[0], 0.0, 0.0, 300.0, 22.0);
+    assert_rect(&l, &s, rows[1], 0.0, 60.0, 300.0, 22.0);
+    assert_rect(&l, &s, rows[3], 0.0, 100.0, 300.0, 22.0);
+    assert_eq!(l.content_size(s.lookup(list).unwrap()), Some(Size::new(300.0, 360.0)));
+    // Rows past one viewport of margin are not laid out: row 9 at 300 is beyond 200.
+    assert!(l.rect(s.lookup(rows[9]).unwrap()).is_none());
+    assert!(l.rect(s.lookup(rows[4]).unwrap()).is_some());
+}
 
 #[test]
 fn display_none_is_absent_and_absolute_children_leave_the_flow() {

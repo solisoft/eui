@@ -103,9 +103,13 @@ fn scroll_containers_open_a_scissor_run_and_cull_what_is_outside() {
     let list = draw(&mut fx, 200, 400, 1.0);
     assert_eq!(list.clips.len(), 2);
     assert_eq!(list.clips[1], [0, 0, 200, 50]);
-    // Only the rows overlapping the 50 px viewport survive: rows at y 0, 20, 40.
-    assert_eq!(list.quads.len(), 3, "{list:#?}");
-    assert!(list.runs.iter().all(|r| r.0 == 1));
+    // Only the rows overlapping the 50 px viewport survive: rows at y 0, 20,
+    // 40 — plus the scrollbar thumb, painted last, outside the scissor run.
+    assert_eq!(list.quads.len(), 4, "{list:#?}");
+    let thumb = list.quads.last().unwrap();
+    assert_eq!(thumb.rect[2], SCROLLBAR_WIDTH - 2.0);
+    assert_eq!(thumb.rect[3], 24.0, "200 px of content in 50 px: the 24 px minimum");
+    assert!(list.runs.iter().take(list.runs.len() - 1).all(|r| r.0 == 1));
 }
 
 #[test]

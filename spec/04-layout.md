@@ -98,8 +98,10 @@ If `free < 0`, each child with `shrink > 0` loses
 `−free × (shrink × hypothetical) / Σ (shrink × hypothetical)`.
 
 Then clamp each child by its `min`/`max`. A child whose main-axis `min` is
-`auto` has an **automatic minimum** equal to its content main size (its size
-measured under a loosened main constraint), unless it is a `scroll` or `list`
+`auto` has an **automatic minimum**: along a row, its min-content width —
+its size measured as if the available width were zero, so a paragraph's
+longest word; down a column, its content height at the width on offer —
+each capped by the child's specified size, unless it is a `scroll` or `list`
 node or its `overflow` is `scroll`: such children shrink to zero. This is the
 CSS `min-width: auto` rule — a column that overflows its box overflows, it does
 not squash its children's text onto each other. A child whose clamp changed its size
@@ -169,7 +171,11 @@ axis), then clips to its own border box. Its scroll offset is clamped to
 A `list` node is a `scroll` whose children are laid out at their content size
 in a column, with one addition: when the list carries an `item_height` prop
 (integer px), a child outside the visible range plus one viewport of margin on
-either side is **not measured** — it is assigned `item_height` and skipped.
+either side is **not measured** — it is assigned `item_height` and skipped. A
+child carrying its own `item_height` prop takes that height instead, so a
+feed of cards of a few known heights virtualises like a table: the client
+sums the heights once per layout, one addition per row, and measures only
+the rows in view.
 This is the only place the algorithm is allowed to use an estimate, and it is
 what makes a ten-thousand-row table cost what a fifty-row one costs.
 

@@ -424,11 +424,23 @@ impl Layout {
         self.stats.list_placements = self.stats.list_placements.saturating_add(1);
         let children: &[NodeIx] = f.session.children(ix);
         let n = children.len();
-        let pitch = item_h + st.gap;
         let width = inner_w.bound().unwrap_or(0.0);
-        let first = if pitch > 0.0 { (start / pitch).floor().max(0.0) as usize } else { 0 };
-        let last = if pitch > 0.0 { ((end / pitch).ceil().max(0.0) as usize).min(n.saturating_sub(1)) } else { n.saturating_sub(1) };
-        let content_h = if n == 0 { 0.0 } else { n as f32 * pitch - st.gap };
+        // §7: a row's height is the list's `item_height` unless the row
+        // carries its own. Rows are walked once for their tops — an add per
+        // row, no measure — so a feed of cards of two heights still costs
+        // nothing off screen.
+        let atom = self.item_height_atom;
+        let mut tops: Vec<f32> = Vec::with_capacity(n.saturating_add(1));
+        let mut y = 0.0f32;
+        for &c in children {
+            tops.push(y);
+            let h = self.int_prop(f, c, atom).filter(|h| *h > 0).map_or(item_h, |h| h as f32);
+            y += h + st.gap;
+        }
+        tops.push(y);
+        let content_h = if n == 0 { 0.0 } else { (y - st.gap).max(0.0) };
+        let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
+        let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
         let window = if n == 0 { 0 } else { last.saturating_sub(first).saturating_add(1) };
         self.stats.rows_virtual = self.stats.rows_virtual.saturating_add(n.saturating_sub(window) as u32);
         if measure_only || n == 0 {
@@ -438,7 +450,7 @@ impl Layout {
         let mut first_baseline = None;
         for (i, &c) in children.iter().enumerate().take(last.saturating_add(1)).skip(first) {
             self.stats.rows_measured = self.stats.rows_measured.saturating_add(1);
-            let y = i as f32 * pitch;
+            let y = tops.get(i).copied().unwrap_or(0.0);
             let cst = self.style(f, c);
             if cst.display == Display::None {
                 continue;
@@ -515,8 +527,13 @@ impl Layout {
             let scrolls = matches!(f.session.node(c).map(|n| n.kind), Some(NodeKind::Scroll | NodeKind::List)) || cst.scroll_both;
             let auto_min = if !virtual_ && cst.shrink > 0.0 && !scrolls && min_dim.resolve(main_c).is_none() {
                 // min(content size, specified size), as CSS does: a box given
-                // `width: 200` with nothing inside still shrinks.
-                let m = self.measure_axes(f, c, row, main_c.loosen().shrink(m_before + m_after), cross_c.loosen());
+                // `width: 200` with nothing inside still shrinks. Along a row
+                // the content size is the *min-content* width — the longest
+                // word, measured as if the width were zero — so a paragraph
+                // wraps before it squeezes its siblings; down a column it is
+                // the height at the width on offer.
+                let main_for_min = if row { Constraint::AtMost(0.0) } else { main_c.loosen().shrink(m_before + m_after) };
+                let m = self.measure_axes(f, c, row, main_for_min, cross_c.loosen());
                 Some(if row { m.content_w.min(m.w) } else { m.content_h.min(m.h) })
             } else {
                 None
@@ -648,6 +665,9 @@ impl Layout {
                 let (cross, baseline) = if virtual_ {
                     (cross_c.bound().unwrap_or(0.0) - it.c_before - it.c_after, 0.0)
                 } else if let Some(v) = cross_dim.resolve(cross_c) {
+                    // A specified cross size still obeys the node's own
+                    // min/max: `width: 100%` with `max_width: 480` is 480.
+                    let v = if row { cst.clamp_h(v, cross_c) } else { cst.clamp_w(v, cross_c) };
                     let m = self.measure_axes(f, cix, row, Constraint::Exact(main), Constraint::Exact(v));
                     (v, m.baseline)
                 } else {

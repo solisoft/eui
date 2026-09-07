@@ -1310,3 +1310,125 @@ def chart_donut(parts, w, h)
   end
   canvas(w, h, arcs)
 end
+
+# ---- Feed ------------------------------------------------------------------
+
+# A text whose content repeats across many nodes: interned as an atom, so
+# the wire carries it once per session.
+def text_interned(content, style)
+  interned = text(content, style)
+  interned["intern"] = true
+  interned
+end
+
+# An initial in a coloured disc, in place of a fetched avatar.
+def initial_avatar(letter, tone, size)
+  {
+    "k": "box",
+    "s": {
+      "width": size,
+      "height": size,
+      "radius": 4,
+      "bg": tone,
+      "display": "row",
+      "justify": "center",
+      "align": "center"
+    },
+    "c": [text_interned(
+      letter,
+      {
+        "fg": "accent.on",
+        "weight": "bold",
+        "size": 3
+      }
+    )]
+  }
+end
+
+# One action under a post: a glyph and a count, clickable, carrying the
+# post id so one handler serves every post.
+def post_action(glyph, count, on_click, props, active)
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "gap": 1,
+      "align": "center",
+      "pad": [1, 2, 1, 2],
+      "radius": 2,
+      "cursor": "pointer",
+      "fg": active ? "accent.base" : "text.muted"
+    },
+    "p": props,
+    "on": {"click": on_click},
+    "c": [text_interned(glyph, {"size": 1}), text(str(count), {"size": 1})]
+  }
+end
+
+# A post card of fixed height, so a feed of thousands can be virtualised:
+# the client lays out only the cards it can see.
+def post_card(post, liked, height)
+  header = row(
+    {
+      "gap": 2,
+      "align": "center",
+      "wrap": "wrap"
+    },
+    [
+      text_interned(post["name"], {"weight": "semibold"}),
+      text_interned(
+        post["handle"],
+        {"fg": "text.muted", "size": 1}
+      ),
+      text_interned(
+        "· " + post["when"],
+        {"fg": "text.muted", "size": 1}
+      )
+    ]
+  )
+  body = text(post["text"], {"clamp": 2})
+  picture = post["image"].nil? ? [] : [{
+    "k": "image",
+    "p": {"src": post["image"]},
+    "s": {
+      "width": "100%",
+      "max_width": 480,
+      "height": 180,
+      "radius": 2
+    }
+  }]
+  actions = row(
+    {"gap": 4, "align": "center"},
+    [
+      post_action("↩", post["replies"], "noop", {"id": post["id"]}, false),
+      post_action("→", post["reposts"], "noop", {"id": post["id"]}, false),
+      post_action("◆", post["likes"] + (liked ? 1 : 0), "like", {"id": post["id"]}, liked)
+    ]
+  )
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "gap": 3,
+      "pad": [3, 4, 3, 4],
+      "height": height,
+      "overflow": "clip",
+      "border": [0, 0, 1, 0],
+      "border_color": "border.subtle",
+      "align": "start"
+    },
+    "p": {"item_height": height},
+    "c": [
+      initial_avatar(post["initial"], post["tone"], 40),
+      column(
+        {
+          "gap": 1,
+          "grow": 1,
+          "shrink": 1,
+          "min_width": 0
+        },
+        [header, body].concat(picture).concat([actions])
+      )
+    ]
+  }
+end

@@ -44,7 +44,13 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    `fg`; `divider` paints a 1 px line in `bg` or `border.default`.
 4. Children paint in order; `stack` children in ascending `z`; `overlay`
    after every non-overlay sibling of the same parent.
-5. `scroll` and `list` clip their children to their border box.
+5. `scroll` and `list` clip their children to their border box, and one
+   whose content is taller than its box wears a vertical scrollbar along
+   its right edge: a thumb in `text.muted` at 45 % opacity, as long as
+   view ÷ content of the track and never under 24 px, painted after the
+   children. The strip is the client's: pressing the thumb drags it,
+   pressing the track pages by the view's height, and neither reaches the
+   application except as the `scroll` event the resulting offset produces.
 
 Rectangles are snapped to device pixels before painting; glyph positions are
 snapped horizontally to whole device pixels and vertically to the line's

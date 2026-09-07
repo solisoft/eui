@@ -314,9 +314,23 @@ impl Painter<'_, '_> {
             }
             if clips {
                 self.set_clip(saved);
+                self.scrollbar(ix, rect, opacity);
             }
         }
         self.inherited_fg.pop();
+    }
+
+    /// Spec 03 §2: a scroller whose content overflows wears a thumb along
+    /// its right edge — as long as view ÷ content, never under 24 px —
+    /// painted after its children so it sits on top of them.
+    fn scrollbar(&mut self, ix: NodeIx, rect: Rect, opacity: f32) {
+        let Some(t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else { return };
+        let scale = self.scene.scale;
+        let mut color = linear(self.scene.theme.color(Role::TextMuted));
+        color[3] *= 0.45;
+        let q = self.device(t);
+        self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+        let _ = scale;
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
@@ -521,6 +535,24 @@ pub fn colors_of(session: &Session, theme: &Resolved, record: &eui_proto::StyleR
         border: resolve_color(session, theme, record.border_color),
         opacity: f32::from(record.opacity) / 255.0,
     }
+}
+
+/// Width of the strip a scrollbar occupies, logical px.
+pub const SCROLLBAR_WIDTH: f32 = 8.0;
+
+/// The thumb of `ix`'s vertical scrollbar in window coordinates, or `None`
+/// when the content fits. Shared with the driver, which drags it.
+pub fn scrollbar_thumb(session: &Session, layout: &Layout, ix: NodeIx, rect: Rect) -> Option<Rect> {
+    let content = layout.content_size(ix)?;
+    if content.h <= rect.h + 0.5 || rect.h <= 0.0 {
+        return None;
+    }
+    let offset = session.node(ix)?.scroll.1 as f32;
+    let max = (content.h - rect.h).max(1.0);
+    let track = rect.h - 4.0;
+    let len = (track * rect.h / content.h).max(24.0).min(track);
+    let y = rect.y + 2.0 + (track - len) * (offset.clamp(0.0, max) / max);
+    Some(Rect::new(rect.x + rect.w - SCROLLBAR_WIDTH + 1.0, y, SCROLLBAR_WIDTH - 2.0, len))
 }
 
 fn intersect(a: [u32; 4], b: [f32; 4]) -> [u32; 4] {

@@ -520,3 +520,124 @@ def gallery_view(raw_state)
   ] : [page]
   stack({"gap": 0}, layers)
 end
+
+# ---------------------------------------------------------------- feed
+# A social feed of thousands of fixed-height cards in a virtualised list —
+# the performance check: the client lays out and paints only what it shows,
+# and a like is one round trip that patches one card.
+
+FEED_NAMES = [
+  "Ada",
+  "Grace",
+  "Linus",
+  "Margaret",
+  "Dennis",
+  "Barbara",
+  "Ken",
+  "Radia",
+  "Bjarne",
+  "Frances",
+  "Guido",
+  "Hedy",
+  "Alan",
+  "Sophie",
+  "Tim",
+  "Anita",
+  "Yukihiro",
+  "Leslie",
+  "Rob",
+  "Katherine"
+]
+FEED_TEXTS = [
+  "Shipped the virtualised list today: ten thousand rows, one layout pass, nothing off screen touched.",
+  "A protocol without a document engine is a client that does less. That is the whole idea.",
+  "Hot take: the byte budget is the design review. If the frame is bigger, the design got worse.",
+  "Rewrote the layout engine's shrink step. CSS had it right about min-size: auto. Who knew.",
+  "Every widget in the catalogue is a plain function returning a hash. No classes, no native code.",
+  "Dark mode with zero bytes on the wire: the roles resolve on the client, the server never learns.",
+  "The counter's click is 25 bytes. The answer is 9. I keep checking, it keeps being true.",
+  "Fonts embedded, no system enumeration, no fingerprint. Privacy is a testable claim now.",
+  "Charts drawn by the same rounded-rectangle shader as everything else. A segment is a capsule.",
+  "Keyboard focus walks document order and wraps. Enter and Space are clicks. Escape drops it.",
+  "Signed manifest, pinned on first use, rotation only with the old key's blessing.",
+  "One artefact, no browser: the server on a thread, the window on the main one, a cookie between them.",
+  "Measured, not promised: 96 MB. The runtime is the weight, not the window.",
+  "The gallery opened on glass for the first time and found two bugs in ten minutes. Screens are tests.",
+  "A wheel notch is 100 px eased over 180 ms, and a Magic Mouse sends zeros in between. Now known."
+]
+FEED_TONES = ["accent.base", "info.base", "success.base", "warning.base", "danger.base"]
+
+def feed_post(i)
+  name = FEED_NAMES[(i * 7) % FEED_NAMES.length()]
+  {
+    "id": i,
+    "name": name,
+    "handle": "@" + name.downcase() + str(i % 97),
+    "initial": name[0],
+    "tone": FEED_TONES[(i * 13) % FEED_TONES.length()],
+    "when": str(1 + (i * 31) % 23) + (i % 2 == 0 ? "h" : "m"),
+    "text": FEED_TEXTS[(i * 11) % FEED_TEXTS.length()],
+    "replies": (i * 17) % 41,
+    "reposts": (i * 29) % 113,
+    "likes": (i * 43) % 977,
+    "image": i % 3 == 0 ? "public/images/feed/" + str((i * 7) % 8) + ".png" : nil
+  }
+end
+
+# Cards come in two heights: text only, or with a picture.
+def feed_card_height(post)
+  post["image"].nil? ? 128 : 316
+end
+
+def feed(event_data)
+  event = event_data["event"]
+  params = event_data["params"]
+  state = event_data["state"] ?? {}
+  liked = state["liked"] ?? []
+  count = state["count"] ?? 5000
+  match event {
+    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count},
+    "more" => {
+      "liked": liked,
+      "count": count + 5000
+    },
+    _ => {"liked": liked, "count": count},
+  }
+end
+
+def feed_view(state)
+  liked = state["liked"] ?? []
+  count = state["count"] ?? 5000
+  cards = range(0, count).map(fn(i) {
+    post = feed_post(i)
+    keyed(i, post_card(post, liked.includes?(i), feed_card_height(post)))
+  })
+  header = row(
+    {
+      "gap": 3,
+      "align": "center",
+      "pad": [3, 4, 3, 4],
+      "bg": "surface.raised",
+      "border": [0, 0, 1, 0],
+      "border_color": "border.subtle"
+    },
+    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), secondary_button("Load 5 000 more", "more")]
+  )
+  column(
+    {
+      "gap": 0,
+      "align": "center",
+      "bg": "surface.base"
+    },
+    [column(
+      {
+        "gap": 0,
+        "width": "100%",
+        "max_width": 680,
+        "grow": 1,
+        "bg": "surface.raised"
+      },
+      [header, list({"grow": 1}, 128, cards)]
+    )]
+  )
+end

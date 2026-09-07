@@ -744,3 +744,49 @@ fn trackpad_fractions_add_up_instead_of_being_swallowed() {
     }
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 7), "ten events of 0.7 px scroll 7 px");
 }
+
+#[test]
+fn the_scrollbar_thumb_drags_and_its_track_pages() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 20 });
+    for i in 0..20 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    let list = d.paint(400, 300);
+    let scroll = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(scroll).unwrap();
+    // The thumb is painted at the right edge, 100/440 of the track, min 24 px.
+    let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).expect("content overflows");
+    assert!(thumb.x >= r.x + r.w - eui_render::SCROLLBAR_WIDTH);
+    assert_eq!(thumb.h, 24.0);
+    assert!(list.quads.iter().any(|q| q.rect[0] == thumb.x && q.rect[3] == thumb.h), "the thumb is drawn");
+    // A press on the track below the thumb pages down by the view height.
+    d.input(Input::PointerMove(thumb.x + 2.0, r.y + r.h - 5.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 100));
+    // Grab the thumb and drag it to the bottom of the track: the end.
+    let _ = d.paint(400, 300);
+    let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).unwrap();
+    d.input(Input::PointerMove(thumb.x + 2.0, thumb.y + 5.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerMove(thumb.x + 2.0, r.y + r.h + 50.0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 340), "content 440 − view 100");
+    // Dragging back to the top.
+    let _ = d.paint(400, 300);
+    let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).unwrap();
+    d.input(Input::PointerMove(thumb.x + 2.0, thumb.y + 5.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerMove(thumb.x + 2.0, r.y - 50.0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
+}

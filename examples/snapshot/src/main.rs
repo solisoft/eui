@@ -7,7 +7,6 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
-use std::time::Instant;
 
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, ThemeMode, Welcome};

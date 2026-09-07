@@ -219,6 +219,16 @@ table header and rows, avatar and image. A `gallery` component shows them
 all on one page; its end-to-end test mounts it through Soli, moves the
 segmented control, swaps accordion sections and opens and closes the sheet.
 
+**A feed, for the performance check.** `examples/counter-app`'s `feed`
+component: five thousand posts (`Load 5 000 more` adds five thousand), a
+third with a picture, in a virtualised list whose rows now carry their own
+`item_height` — two card heights, one addition per row per layout, only the
+visible cards measured. 96 000 nodes; a scrolled frame is half a
+millisecond of layout and paint in a debug build. Scrollers overflowing
+their box wear a real scrollbar now: a thumb to drag, a track that pages.
+Along a row, a paragraph's automatic minimum is its longest word, so it
+wraps before it squeezes an avatar; a `width: 100%` obeys its `max_width`.
+
 **Seen on glass.** On 2026-09-07 the gallery opened in a real window for
 the first time — Hyprland on Wayland, an AMD GPU at 1.5× — and every widget
 answered: segmented control, select, slider, pickers, accordion, typing

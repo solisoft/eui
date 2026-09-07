@@ -9,7 +9,7 @@ use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{colors_of, paint, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene};
+use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -76,6 +76,9 @@ struct Pointer {
     y: f32,
     over: Option<NodeIx>,
     pressed_on: Option<NodeIx>,
+    /// A scrollbar thumb being dragged: the scroller and where in the thumb
+    /// the pointer took hold.
+    dragging_thumb: Option<(NodeIx, f32)>,
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -752,6 +755,9 @@ impl Driver {
         self.ensure_layout();
         self.pointer.x = x;
         self.pointer.y = y;
+        if let Some((scroller, grip)) = self.pointer.dragging_thumb {
+            return self.drag_thumb(scroller, grip, y);
+        }
         // Dragging inside the focused field extends the selection.
         if let (Some(e), Some(pressed)) = (self.focused.filter(|f| self.is_editable(*f)), self.pointer.pressed_on) {
             if self.ancestor_where(pressed, |k| matches!(k, NodeKind::Input | NodeKind::TextArea)) == Some(e) {
@@ -787,6 +793,22 @@ impl Driver {
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
         let Some(ix) = self.layout.hit(&self.session, x, y) else { return Vec::new() };
+        // Spec 03 §2: the scrollbar strip belongs to the client. A press on
+        // the thumb takes hold of it; a press on the track pages.
+        if button == 0 {
+            if let Some(scroller) = self.scroller_strip_at(ix, x) {
+                let rect = self.layout.rect(scroller).unwrap_or_default();
+                if let Some(thumb) = scrollbar_thumb(&self.session, &self.layout, scroller, rect) {
+                    if y >= thumb.y && y <= thumb.y + thumb.h {
+                        self.pointer.dragging_thumb = Some((scroller, y - thumb.y));
+                    } else {
+                        let page = if y < thumb.y { -rect.h } else { rect.h };
+                        return self.scroll_by(scroller, 0.0, page);
+                    }
+                    return Vec::new();
+                }
+            }
+        }
         self.pointer.pressed_on = Some(ix);
         // Focus moves to the nearest editable node on the path, or nowhere;
         // a pointer never shows the ring.
@@ -808,6 +830,9 @@ impl Driver {
     }
 
     fn pointer_up(&mut self, button: u8) -> Vec<Frame> {
+        if button == 0 && self.pointer.dragging_thumb.take().is_some() {
+            return Vec::new();
+        }
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
         let mut out = Vec::new();
@@ -904,6 +929,47 @@ impl Driver {
             cur = if node.parent.is_some() { Some(node.parent) } else { None };
         }
         None
+    }
+
+    /// The scroller whose scrollbar strip the pointer is in, if the hit node
+    /// is inside a scroller that overflows and `x` lies in its right strip.
+    fn scroller_strip_at(&self, hit: NodeIx, x: f32) -> Option<NodeIx> {
+        let scroller = self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List))?;
+        let rect = self.layout.rect(scroller)?;
+        let content = self.layout.content_size(scroller)?;
+        (content.h > rect.h + 0.5 && x >= rect.x + rect.w - SCROLLBAR_WIDTH).then_some(scroller)
+    }
+
+    /// Move the thumb so the pointer keeps its grip on it.
+    fn drag_thumb(&mut self, scroller: NodeIx, grip: f32, y: f32) -> Vec<Frame> {
+        let rect = self.layout.rect(scroller).unwrap_or_default();
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let track = (rect.h - 4.0).max(1.0);
+        let len = (track * rect.h / content.h.max(1.0)).max(24.0).min(track);
+        let travel = (track - len).max(1.0);
+        let max = (content.h - rect.h).max(0.0);
+        let target = ((y - grip - rect.y - 2.0) / travel * max).clamp(0.0, max);
+        let sy = self.session.node(scroller).map_or(0, |n| n.scroll.1);
+        self.scroll_by(scroller, 0.0, target - sy as f32)
+    }
+
+    /// Scroll `scroller` by a delta at once, clamped; reports the offset.
+    fn scroll_by(&mut self, scroller: NodeIx, dx: f32, dy: f32) -> Vec<Frame> {
+        self.scroll_anim = None;
+        let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let view = self.layout.rect(scroller).unwrap_or_default();
+        let max_x = (content.w - view.w).max(0.0) as i64;
+        let max_y = (content.h - view.h).max(0.0) as i64;
+        let (sx, sy) = (sx.clamp(0, max_x), sy.clamp(0, max_y));
+        let nx = (sx + dx.round() as i64).clamp(0, max_x);
+        let ny = (sy + dy.round() as i64).clamp(0, max_y);
+        if (nx, ny) == (sx, sy) {
+            return Vec::new();
+        }
+        self.session.set_scroll(scroller, nx, ny);
+        self.invalidate();
+        self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
     /// A notched wheel: 100 logical px per notch — what browsers scroll per
