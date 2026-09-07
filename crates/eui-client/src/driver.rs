@@ -320,11 +320,33 @@ pub struct Driver {
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
+    /// Spec 03 §8: the moving pictures in the tree, and where each node
+    /// is in its own. Decoding runs here, in the worker; the frame the
+    /// clock makes due is written into the image atlas, so the painter
+    /// draws a video exactly as it draws a picture.
+    movies: HashMap<Hash, Option<Arc<eui_video::Movie>>>,
+    players: HashMap<u32, (Hash, eui_video::Player)>,
+    /// A frame is in the atlas for these hashes, so the next one is an
+    /// overwrite rather than a fresh packing.
+    framed: HashMap<Hash, usize>,
+    /// Frame sizes, so the layout can measure a video before a frame is
+    /// ever uploaded.
+    video_sizes: HashMap<Hash, (f32, f32)>,
+    /// The tree changed, so the video nodes must be looked at again.
+    video_dirty: bool,
+    /// When the players were last advanced.
+    video_clock: Option<Instant>,
+    /// When the next video frame is due. Applied at the end of the paint,
+    /// after the transition scheduling, which overwrites `next_due`.
+    video_due: Option<Instant>,
     /// Spec 03 §7: the sounds this session is playing, and the decoded
     /// bytes behind them. The mixer lives here — in the worker — because
     /// decoding runs on bytes a server chose; the window owns the device.
     mixer: eui_audio::Mixer,
     sounds: HashMap<Hash, Option<Arc<eui_audio::Sound>>>,
+    /// The `position` prop each video node last carried, for the same
+    /// reason as the audio one.
+    video_at: HashMap<u32, i64>,
     /// The `position` prop each audio node last carried: a seek happens
     /// when the value changes, not on every render.
     audio_at: HashMap<u32, i64>,
@@ -389,9 +411,17 @@ impl Driver {
             desktop_mode: None,
             windows: HashMap::new(),
             scroll_touched: None,
+            movies: HashMap::new(),
+            players: HashMap::new(),
+            framed: HashMap::new(),
+            video_sizes: HashMap::new(),
+            video_dirty: false,
+            video_clock: None,
+            video_due: None,
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
             audio_at: HashMap::new(),
+            video_at: HashMap::new(),
             audio_dirty: false,
             audio_reported: None,
         }
@@ -487,6 +517,7 @@ impl Driver {
             Ok(()) => {
                 self.resyncing = false;
                 self.audio_dirty = true;
+                self.video_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
                 // Focus and edits follow the tree.
@@ -662,7 +693,7 @@ impl Driver {
 
     fn ensure_layout(&mut self) {
         if !self.layout_valid {
-            let mut measurer = Measurer { text: &mut self.text, assets: &self.assets };
+            let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes };
             self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
             self.layout_valid = true;
         }
@@ -679,7 +710,7 @@ impl Driver {
                 .session
                 .preorder(root)
                 .filter_map(|ix| self.session.node(ix))
-                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio))
+                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video))
                 .flat_map(|n| n.props.iter().filter_map(|(_, v)| if let Value::Asset(h) = v { Some(*h) } else { None }))
                 .collect();
             for h in wanted {
@@ -693,8 +724,9 @@ impl Driver {
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.assets.deliver(hash, bytes);
-        // It may be a sound a node is waiting for.
+        // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
+        self.video_dirty = true;
         if let Some(img) = self.assets.image(&hash) {
             self.images.insert(hash, img.width, img.height, &img.rgba);
         }
@@ -818,6 +850,7 @@ impl Driver {
         }
         if touched {
             self.audio_dirty = true;
+            self.video_dirty = true;
             self.invalidate();
         }
         // The viewer's choice, made through the application's own control:
@@ -1548,6 +1581,13 @@ impl Driver {
     /// `w × h` device-pixel target. Clears the redraw flag.
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
         self.note_style_changes();
+        // Spec 03 §7 and §8: the tree says what should be playing, and a
+        // picture that just decoded has a size the layout must know before
+        // it measures anything.
+        self.sync_audio();
+        self.sync_video();
+        let moved = self.advance_videos();
+        self.pending.extend(moved);
         // A scroll in flight moves the view before layout; what it emits when
         // it lands is picked up by the next input or frame turn.
         let landed = self.advance_scroll();
@@ -1565,8 +1605,6 @@ impl Driver {
         }
         self.ensure_layout();
         let now = self.now;
-        // Spec 03 §7: the tree says what should be playing.
-        self.sync_audio();
         let ticks = self.time_updates();
         self.pending.extend(ticks);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
@@ -1614,10 +1652,161 @@ impl Driver {
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
-        if let Some(due) = settle_due {
-            self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+        for due in [settle_due, self.video_due] {
+            if let Some(due) = due {
+                self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+            }
         }
         list
+    }
+
+    /// Spec 03 §8: look at the tree's `video` nodes and make the players
+    /// agree with what they say. Walks the tree only after something
+    /// changed it, like [`Self::sync_audio`].
+    fn sync_video(&mut self) {
+        if !self.video_dirty {
+            return;
+        }
+        self.video_dirty = false;
+        let Some(root) = self.session.root() else {
+            self.players.clear();
+            return;
+        };
+        let atom = |name: &str| self.session.atom_id(name);
+        let (a_src, a_playing, a_loop, a_position) = (atom("src"), atom("playing"), atom("loop"), atom("position"));
+        let mut live: Vec<u32> = Vec::new();
+        let mut work: Vec<(u32, Hash, bool, bool, Option<i64>)> = Vec::new();
+        for ix in self.session.preorder(root) {
+            let Some(node) = self.session.node(ix) else { continue };
+            if node.kind != NodeKind::Video {
+                continue;
+            }
+            let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
+            let Some(Value::Asset(hash)) = prop(a_src) else { continue };
+            live.push(node.id);
+            work.push((
+                node.id,
+                *hash,
+                matches!(prop(a_playing), Some(Value::Bool(true))),
+                matches!(prop(a_loop), Some(Value::Bool(true))),
+                match prop(a_position) {
+                    Some(Value::Int(ms)) => Some(*ms),
+                    _ => None,
+                },
+            ));
+        }
+        self.players.retain(|id, _| live.contains(id));
+        for (id, hash, playing, looping, position) in work {
+            let Some(movie) = self.movie(&hash) else { continue };
+            let entry = self.players.entry(id).or_insert_with(|| (hash, eui_video::Player::new()));
+            // A node pointed at another picture starts that one over.
+            if entry.0 != hash {
+                *entry = (hash, eui_video::Player::new());
+            }
+            entry.1.playing = playing;
+            entry.1.looping = looping;
+            if let Some(ms) = position {
+                let seen = self.video_at.get(&id).copied();
+                if seen != Some(ms) {
+                    self.video_at.insert(id, ms);
+                    entry.1.seek(&movie, ms.max(0) as u64);
+                }
+            }
+        }
+        self.video_at.retain(|id, _| self.players.contains_key(id));
+    }
+
+    /// The decoded picture for a hash, decoding it the first time and
+    /// remembering a failure so a tree that keeps naming it does not
+    /// re-decode it every frame.
+    fn movie(&mut self, hash: &Hash) -> Option<Arc<eui_video::Movie>> {
+        if let Some(known) = self.movies.get(hash) {
+            return known.clone();
+        }
+        let bytes = self.assets.raw(hash)?;
+        let decoded = match eui_video::decode(&bytes, None) {
+            Ok(movie) => {
+                trace(|| format!("video: {} decoded, {}×{}, {} frames, {} ms, {} kB", crate::assets::hex(hash), movie.width(), movie.height(), movie.frames().len(), movie.duration_ms(), movie.bytes() / 1024));
+                self.video_sizes.insert(*hash, (movie.width() as f32, movie.height() as f32));
+                Some(Arc::new(movie))
+            }
+            Err(e) => {
+                eprintln!("eui: video {}: {e}", crate::assets::hex(hash));
+                None
+            }
+        };
+        self.movies.insert(*hash, decoded.clone());
+        // A picture that just arrived changes what the layout measures.
+        self.layout.invalidate_all();
+        self.invalidate();
+        decoded
+    }
+
+    /// Spec 03 §8: move every player to `now`, put the frame each one
+    /// makes due into the atlas, and say when the next frame is. Returns
+    /// the frames a picture's end produced.
+    fn advance_videos(&mut self) -> Vec<Frame> {
+        if self.players.is_empty() {
+            self.video_clock = None;
+            return Vec::new();
+        }
+        let now = self.now;
+        let elapsed = self.video_clock.map_or(0, |t| now.saturating_duration_since(t).as_millis().min(u128::from(u64::MAX)) as u64);
+        self.video_clock = Some(now);
+        let mut out = Vec::new();
+        let mut soonest: Option<u64> = None;
+        let ids: Vec<u32> = self.players.keys().copied().collect();
+        for id in ids {
+            let Some((hash, player)) = self.players.get_mut(&id) else { continue };
+            let (hash, mut player) = (*hash, player.clone());
+            let Some(movie) = self.movies.get(&hash).cloned().flatten() else { continue };
+            let changed = player.advance(&movie, elapsed);
+            let ended = player.take_ended();
+            let index = player.index();
+            if let Some(next) = player.next_frame_in_ms(&movie) {
+                soonest = Some(soonest.map_or(next, |s: u64| s.min(next)));
+            }
+            if let Some(slot) = self.players.get_mut(&id) {
+                slot.1 = player;
+            }
+            // The first frame of a picture is packed; the ones after it
+            // overwrite the same region, so a video costs one region.
+            let fresh = self.framed.get(&hash) != Some(&index);
+            if changed || fresh {
+                if let Some(frame) = movie.frames().get(index) {
+                    let packed = self.images.get(&hash).is_some();
+                    let ok = if packed {
+                        self.images.update(&hash, &frame.rgba)
+                    } else {
+                        self.images.insert(hash, movie.width(), movie.height(), &frame.rgba).is_some()
+                    };
+                    if ok {
+                        self.framed.insert(hash, index);
+                        self.redraw = true;
+                    }
+                }
+            }
+            if ended {
+                if let Some(ix) = self.session.lookup(id) {
+                    out.extend(self.emit(ix, EventKind::Ended, Value::Null));
+                }
+            }
+        }
+        // Sleep exactly until the next frame is due, and not a moment less.
+        self.video_due = soonest.map(|ms| now + Duration::from_millis(ms.max(1)));
+        out
+    }
+
+    /// Where a video node's picture is, in milliseconds from its start.
+    /// The client owns this clock; the server sees it only through
+    /// `time_update`.
+    pub fn video_position_ms(&self, node: u32) -> Option<u64> {
+        self.players.get(&node).map(|(_, p)| p.position_ms())
+    }
+
+    /// True while any picture is loaded.
+    pub fn video_playing(&self) -> bool {
+        self.players.values().any(|(_, p)| p.playing)
     }
 
     /// Spec 03 §7: look at the tree's `audio` nodes — what they name,
@@ -1909,6 +2098,7 @@ impl eui_vm::Host for SessionHost<'_> {
 struct Measurer<'a> {
     text: &'a mut TextEngine,
     assets: &'a AssetStore,
+    videos: &'a HashMap<Hash, (f32, f32)>,
 }
 
 impl TextMeasurer for Measurer<'_> {
@@ -1916,6 +2106,10 @@ impl TextMeasurer for Measurer<'_> {
         self.text.measure(text, font, max_width, line_clamp)
     }
     fn asset_size(&mut self, hash: &[u8; 32]) -> Option<(f32, f32)> {
-        self.assets.image(hash).map(|i| (i.width as f32, i.height as f32))
+        self.assets
+            .image(hash)
+            .map(|i| (i.width as f32, i.height as f32))
+            // A video is measured by its frame, which no image store holds.
+            .or_else(|| self.videos.get(hash).copied())
     }
 }

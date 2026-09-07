@@ -1298,3 +1298,94 @@ fn time_update_is_rate_limited_and_only_for_nodes_that_ask() {
     assert_eq!(payload.len(), 2);
     assert_eq!(payload[1], Value::Int(2000), "the sound is two seconds long");
 }
+
+/// A two-frame GIF, written by the test.
+fn gif_bytes(w: u16, h: u16, colours: &[[u8; 4]], delay: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut encoder = gif::Encoder::new(&mut out, w, h, &[]).unwrap();
+        encoder.set_repeat(gif::Repeat::Infinite).unwrap();
+        for colour in colours {
+            let mut rgba: Vec<u8> = colour.iter().copied().cycle().take((w as usize) * (h as usize) * 4).collect();
+            let mut frame = gif::Frame::from_rgba_speed(w, h, &mut rgba, 10);
+            frame.delay = delay;
+            encoder.write_frame(&frame).unwrap();
+        }
+    }
+    out
+}
+
+/// Spec 03 §8: a `video` node sizes itself by its frames, advances on the
+/// client's clock, schedules exactly the next frame, and stops when told.
+#[test]
+fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const A_SRC: u32 = 40;
+    const A_PLAYING: u32 = 41;
+    const A_LOOP: u32 = 42;
+    const A_ENDED: u32 = 43;
+    let hash: [u8; 32] = [3; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Video, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::Ended, Handler::Server(A_ENDED)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_LOOP, value: "loop".into() },
+        Op::DefAtom { id: A_ENDED, value: "ended".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    assert!(d.pending_assets().contains(&hash), "the picture is wanted");
+    // Before it arrives the node has no size and nothing plays.
+    let _ = d.paint(400, 300);
+    assert!(!d.video_playing());
+    // Two frames of 8 × 6, a tenth of a second each.
+    d.asset_ready(hash, gif_bytes(8, 6, &[[200, 30, 30, 255], [30, 30, 200, 255]], 10));
+    let t0 = Instant::now();
+    d.tick(t0);
+    let list = d.paint(400, 300);
+    // It measures itself by its frames …
+    let node = d.session().lookup(2).unwrap();
+    let rect = d.layout().rect(node).expect("laid out");
+    assert_eq!((rect.w, rect.h), (8.0, 6.0), "the picture's own size");
+    // … draws a textured quad …
+    assert!(list.quads.iter().any(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA), "the frame is drawn");
+    assert!(d.video_playing());
+    // … and asks to be woken exactly when the next frame is due.
+    let due = d.next_frame_at().expect("scheduled");
+    assert!(due <= t0 + Duration::from_millis(101) && due > t0, "within the frame's own delay");
+    assert_eq!(d.video_position_ms(2), Some(0));
+    // The clock moves it on.
+    d.tick(t0 + Duration::from_millis(120));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.video_position_ms(2), Some(120));
+    // Past the end without looping: it stops, and the node's handler hears.
+    d.tick(t0 + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    let out = d.take_pending();
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Ended && e.node == 2)), "{out:?}");
+    assert!(!d.video_playing(), "it stopped at the end");
+    assert_eq!(d.video_position_ms(2), Some(200), "on the last frame");
+    // Looping keeps it going and never ends.
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 3,
+        ops: vec![Op::SetProp { node: 2, prop: A_LOOP, value: Value::Bool(true) }, Op::SetProp { node: 2, prop: A_PLAYING, value: Value::Bool(true) }],
+    }));
+    d.tick(t0 + Duration::from_millis(500));
+    let _ = d.paint(400, 300);
+    d.tick(t0 + Duration::from_millis(1_100));
+    let _ = d.paint(400, 300);
+    assert!(d.video_playing(), "looping");
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Ended)), "a loop has no end");
+    // The tree owns the picture: drop the node and the player goes.
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }] }));
+    let _ = d.paint(400, 300);
+    assert!(!d.video_playing());
+    assert_eq!(d.video_position_ms(2), None);
+}

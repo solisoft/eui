@@ -343,7 +343,7 @@ impl Layout {
                 }
                 (size, Some(tm.baseline))
             }
-            NodeKind::Image | NodeKind::Icon => {
+            NodeKind::Image | NodeKind::Icon | NodeKind::Video => {
                 let hash = node.props.iter().find_map(|(_, v)| match v {
                     Value::Asset(h) => Some(*h),
                     _ => None,
@@ -410,7 +410,7 @@ impl Layout {
 
         let placement = match kind {
             NodeKind::Scroll | NodeKind::List => self.place_scroll(f, ix, st, inner_w, inner_h, false),
-            NodeKind::Text | NodeKind::Input | NodeKind::TextArea | NodeKind::Image | NodeKind::Icon | NodeKind::Spacer | NodeKind::Divider => {
+            NodeKind::Text | NodeKind::Input | NodeKind::TextArea | NodeKind::Image | NodeKind::Icon | NodeKind::Video | NodeKind::Spacer | NodeKind::Divider => {
                 Placement::default()
             }
             _ => self.place(f, ix, st, inner_w, inner_h),

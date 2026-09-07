@@ -27,6 +27,7 @@ shipping a new client, and that price is deliberate.
 | `slot` | A named insertion point; lays out as a `column` | yes | — | — |
 | `sizer` | An invisible box that only imposes constraints | yes | — | — |
 | `audio` | A sound, referenced by BLAKE3 hash in the `src` prop. Draws nothing | — | — | — |
+| `video` | A moving picture, referenced by BLAKE3 hash in the `src` prop | — | — | — |
 
 An inert kind MUST carry no text, props or handlers; a leaf kind MUST have
 no children. Both are decoder errors ([`02-wire-format.md`](02-wire-format.md)
@@ -213,6 +214,39 @@ capability already ([`01-transport.md`](01-transport.md) §2.1).
 
 The viewer's own volume is above all of this and the application cannot
 read it, set it, or tell that it is muted.
+
+## 8. Moving pictures
+
+A `video` node is a moving picture the application put in the tree. It
+sizes itself to its frames unless a style says otherwise and paints the
+frame the clock makes due — to a painter it is a picture, because that is
+exactly what it is at any instant.
+
+| Prop | Value | Meaning |
+|---|---|---|
+| `src` | asset | The picture's BLAKE3 hash, fetched like an image's bytes |
+| `playing` | bool | Play, or hold on the frame it is on. Absent is `false` |
+| `loop` | bool | Start again at the end instead of stopping |
+| `position` | int ms | Where to play from. Seeks **when the value changes**, as `audio`'s does |
+
+`ended` goes back when a picture reaches its end, to a node that holds a
+handler for it; a looping picture has no end. The client owns the clock,
+schedules exactly the moment the next frame is due — not a poll — and
+uploads a frame only when the frame on screen must change. A paused
+picture wakes nothing.
+
+The formats are **GIF** and **animated WebP**, and the reason is the whole
+argument of this project: both decode in pure Rust, both are patent-free,
+and the decoder is the most attacked surface a browser has. H.264 needs a
+patent licence; AV1 needs a large library, in C or in Rust, and a client
+that promises a 12 MB binary does not link one casually. The node kind
+says nothing about the codec, so a client that one day carries a real one
+plays the same tree.
+
+Decoding runs in the sandboxed worker (08 §10) like every other decoder,
+and the frames are bounded: 1920 × 1080 pixels a frame, 3 600 frames, 96
+MB of decoded frames, and a frame that claims to last no time at all is
+given 20 ms, because a picture must not be able to spin the client.
 
 ## 6. The accessibility tree
 

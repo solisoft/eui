@@ -20,6 +20,7 @@ eui-text = { path = "../eui-text", version = "0.1.0" }
 eui-render = { path = "../eui-render", version = "0.1.0" }
 eui-vm = { path = "../eui-vm", version = "0.1.0" }
 eui-audio = { path = "../eui-audio", version = "0.1.0" }
+eui-video = { path = "../eui-video", version = "0.1.0" }
 winit = "0.30"
 wgpu = "23"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
@@ -54,6 +55,7 @@ clipboard = ["dep:arboard"]
 eui-render = { path = "../eui-render", version = "0.1.0" }
 eui-theme = { path = "../eui-theme", version = "0.1.0" }
 counter-server = { path = "../../examples/counter-server", version = "0.1.0" }
+gif = "0.13"
 
 [lints]
 workspace = true

@@ -289,6 +289,27 @@ impl ImageAtlas {
         region
     }
 
+    /// Rewrite the pixels of a hash already packed, same size — a video's
+    /// next frame. `false` when the hash is unknown or the bytes are the
+    /// wrong length; nothing changes then.
+    pub fn update(&mut self, hash: &[u8; 32], rgba: &[u8]) -> bool {
+        let Some(Some(region)) = self.map.get(hash).copied() else { return false };
+        let row_bytes = (region.w as usize).saturating_mul(4);
+        if rgba.len() != row_bytes.saturating_mul(region.h as usize) {
+            return false;
+        }
+        for row in 0..region.h {
+            let src = (row as usize).saturating_mul(row_bytes);
+            let dst = (((region.y + row) * self.size + region.x) * 4) as usize;
+            let (Some(s), Some(d)) = (rgba.get(src..src + row_bytes), self.pixels.get_mut(dst..dst + row_bytes)) else {
+                return false;
+            };
+            d.copy_from_slice(s);
+        }
+        self.touch(region.y, region.y.saturating_add(region.h).min(self.size));
+        true
+    }
+
     fn pack(&mut self, width: u32, height: u32, rgba: &[u8]) -> Option<Region> {
         if rgba.len() != (width as usize).checked_mul(height as usize)?.checked_mul(4)? {
             return None;

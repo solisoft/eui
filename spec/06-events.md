@@ -37,7 +37,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x14` | `drop` | as `pointer_up` | |
 | `0x15` | `long_press` | as `click` | |
 | `0x16` | `window` | `List[Int first, Int last]`, the rows a windowed `list` needs (spec 04 §7.1), inclusive | when the range changes, once a scroll has landed |
-| `0x17` | `ended` | `Null`, a sound reached its end (spec 03 §7) | |
+| `0x17` | `ended` | `Null`, a sound or a picture reached its end (spec 03 §7, §8) | |
 | `0x18` | `time_update` | `List[Int position_ms, Int duration_ms]` | at most 10/s |
 
 Coordinates are logical pixels relative to the node's border box. `button` is

@@ -170,13 +170,15 @@ been removed.
 | `0x0D` | `slot` |
 | `0x0E` | `sizer` |
 | `0x0F` | `audio` |
+| `0x10` | `video` |
 
 This set is closed. Adding a kind is a protocol version bump, because it means
 shipping a new client. Everything users would call a widget — button, dialog,
 table, date picker — is composed from these on the server; see
 [`03-widgets.md`](03-widgets.md).
 
-Kinds `0x02` `text`, `0x04` `icon` and `0x0F` `audio` MUST have no children. Kind `0x0A`
+Kinds `0x02` `text`, `0x04` `icon`, `0x0F` `audio` and `0x10` `video` MUST
+have no children. Kind `0x0A`
 `spacer` and `0x0B` `divider` are *inert*: they MUST have no children, no text,
 no props and no handlers.
 

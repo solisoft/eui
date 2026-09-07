@@ -292,7 +292,10 @@ impl Painter<'_, '_> {
 
         let virtual_ = self.scene.layout.is_virtual(ix);
         match node.kind {
-            NodeKind::Image => {
+            // A video's current frame lives in the image atlas under the
+            // picture's own hash, rewritten as it plays: to the painter it
+            // is a picture.
+            NodeKind::Image | NodeKind::Video => {
                 let hash = node.props.iter().find_map(|(_, v)| match v {
                     Value::Asset(h) => Some(*h),
                     _ => None,

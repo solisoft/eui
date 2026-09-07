@@ -263,6 +263,30 @@ def gallery_sound(state)
   )
 end
 
+# The gallery's moving picture: a loop the client decodes and plays. The
+# node says what it should be doing; the client owns the clock.
+def gallery_video(state)
+  playing = state["video"] ?? true
+  column(
+    {"gap": 2},
+    [
+      video(
+        "public/video/pulse.gif",
+        {"playing": playing, "loop": true},
+        {"width": 120, "height": 120, "radius": 3},
+        nil
+      ),
+      row(
+        {"gap": 3, "align": "center"},
+        [
+          button(playing ? "Pause" : "Play", "video"),
+          muted("24 frames, decoded in the worker")
+        ]
+      )
+    ]
+  )
+end
+
 def gallery_defaults(state)
   base = {
     "tab": "Overview",
@@ -282,7 +306,8 @@ def gallery_defaults(state)
     "range_month": "2026-09",
     "range_start": "",
     "range_end": "",
-    "sound": false
+    "sound": false,
+    "video": true
   }
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -338,6 +363,7 @@ def gallery(event_data)
     "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
     "slider" => set_slider(state, params),
     "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
+    "video" => set_key(state, "video", !(state["video"] ?? true)),
     "sound_ended" => set_key(state, "sound", false),
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),
@@ -381,6 +407,7 @@ def gallery_view(raw_state)
         column({"gap": 2}, [slider(state["slider"], 0, 100, "slider"), muted("Value " + str(state["slider"]))])
       ),
       labelled("Sound", gallery_sound(state)),
+      labelled("Video", gallery_video(state)),
       labelled("Date", date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")),
       labelled(
         "Date and time",

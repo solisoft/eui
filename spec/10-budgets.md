@@ -100,3 +100,13 @@ text, of which about 9 are structure and the rest the data itself. Budget:
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once
 per sound.
+
+## Moving pictures
+
+| Measure | Budget |
+|---|---|
+| Pixels a frame | 1920 × 1080 |
+| Frames a picture | 3 600 |
+| Decoded frames a picture | 96 MB |
+| Uploads per frame shown | 1, and none while the frame does not change |
+| CPU while paused | 0 — nothing is scheduled |

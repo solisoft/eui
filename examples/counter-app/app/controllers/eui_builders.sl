@@ -92,6 +92,20 @@ def audio(src, props, on)
   sound
 end
 
+# A moving picture (EUI spec 03 §8). It sizes itself to its frames unless
+# a style says otherwise. `props` may carry "playing", "loop" and
+# "position" (ms), and `on` may carry "ended". GIF and animated WebP: the
+# client decodes them in Rust, in its sandboxed worker.
+def video(src, props, style, on)
+  picture = {
+    "k": "video",
+    "s": style ?? {},
+    "p": props.merge({"src": src})
+  }
+  picture["on"] = on unless on.nil?
+  picture
+end
+
 def input(value, on_change)
   {
     "k": "input",

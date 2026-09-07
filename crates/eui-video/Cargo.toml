@@ -1,0 +1,21 @@
+[package]
+name = "eui-video"
+description = "EUI video: decoding a moving picture to frames, and knowing which frame is due. No device, no thread, no unsafe."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Both pure Rust, both patent-free, both small. A codec that needs a C
+# library or a patent licence is not something this client links: the
+# decoder runs on bytes a server chose, in the sandboxed worker.
+gif = { version = "0.13", default-features = false, features = ["std", "color_quant"] }
+image-webp = "0.2"
+
+[dev-dependencies]
+gif = { version = "0.13", default-features = false, features = ["std", "color_quant"] }
+
+[lints]
+workspace = true

@@ -400,6 +400,8 @@ pub struct Status {
     pub cursor: u8,
     /// A sound is loaded: the window keeps its audio device open (03 §7).
     pub audio: bool,
+    /// A picture is playing (03 §8).
+    pub video: bool,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -468,6 +470,7 @@ impl Reply {
         }
         w.u8(s.cursor);
         w.bool(s.audio);
+        w.bool(s.video);
         match &self.payload {
             Payload::None => w.u8(0),
             Payload::Sandbox(r) => {
@@ -550,7 +553,8 @@ impl Reply {
         let next_due_ms = if r.bool()? { Some(r.u32()?) } else { None };
         let cursor = r.u8()?;
         let audio = r.bool()?;
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio };
+        let video = r.bool()?;
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio, video };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -808,6 +812,7 @@ fn status_of(d: &mut Driver) -> Status {
         next_due_ms: d.next_frame_at().map(|at| u32::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)),
         cursor: d.cursor().to_u8(),
         audio: d.audio_playing(),
+        video: d.video_playing(),
     }
 }
 
@@ -1349,6 +1354,11 @@ impl Backend {
         self.with_worker(|w| w.call(&Request::AccessAction(id, click)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
+    /// True while a picture is playing (03 §8).
+    pub fn video_playing(&self) -> bool {
+        self.with_local(|d| d.video_playing()).or_else(|| self.with_worker(|w| w.status.video)).unwrap_or(false)
+    }
+
     /// True while any sound is loaded: the window opens its audio device
     /// only then, and closes it when nothing is left.
     pub fn audio_playing(&self) -> bool {
@@ -1403,7 +1413,7 @@ mod tests {
 
     #[test]
     fn replies_round_trip() {
-        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1, audio: true };
+        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1, audio: true, video: false };
         let list = DrawList { quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4] }], runs: vec![(0, 0, 1)], clips: vec![[0, 0, 10, 10]], clear: [0.5; 4], wants_frame: true };
         let snap = AccessSnapshot { nodes: vec![AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] }, AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] }], focus: 1, scale: 2.0 };
         let all = vec![

@@ -101,7 +101,7 @@ node exists, it carries a handler of that kind naming that atom, the payload
 has the declared shape. A local handler's effect is advisory until the server
 re-derives it. *Enforced: `lang/src/serve/eui/session.rs::validate`.*
 
-## 9.1 Sound
+## 9.1 Sound and moving pictures
 
 Playing a sound needs no capability: it is output, like drawing, and a
 window that can draw can already annoy. What it does need is a bound, and
@@ -111,6 +111,11 @@ above everything, unreadable by the application. Decoding runs in the
 worker with every other decoder; the audio device belongs to the window
 process. Recording is not output and is not this: the microphone is a
 declared capability (01 §2.1) and is not implemented.
+
+A moving picture is bounded the same way and decoded in the same place.
+Its formats are chosen for the same reason: GIF and animated WebP decode
+in pure Rust with no C library, no assembly and no patent licence, which
+is worth more here than the compression a real codec would buy.
 
 ## 10. Process isolation
 
