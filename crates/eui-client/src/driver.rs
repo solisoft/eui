@@ -1755,7 +1755,13 @@ impl Driver {
         self.video_clock = Some(now);
         let mut out = Vec::new();
         let mut soonest: Option<u64> = None;
-        let ids: Vec<u32> = self.players.keys().copied().collect();
+        let mut ids: Vec<u32> = self.players.keys().copied().collect();
+        ids.sort_unstable();
+        // Several nodes may name the same picture — a feed of cards with
+        // one animation on them. They share the decoded frames and the
+        // atlas region, so the first of them decides which frame is up;
+        // otherwise they would overwrite each other's frame every paint.
+        let mut uploaded: Vec<Hash> = Vec::new();
         for id in ids {
             let Some((hash, player)) = self.players.get_mut(&id) else { continue };
             let (hash, mut player) = (*hash, player.clone());
@@ -1771,8 +1777,10 @@ impl Driver {
             }
             // The first frame of a picture is packed; the ones after it
             // overwrite the same region, so a video costs one region.
+            let first_for_picture = !uploaded.contains(&hash);
+            uploaded.push(hash);
             let fresh = self.framed.get(&hash) != Some(&index);
-            if changed || fresh {
+            if first_for_picture && (changed || fresh) {
                 if let Some(frame) = movie.frames().get(index) {
                     let packed = self.images.get(&hash).is_some();
                     let ok = if packed {

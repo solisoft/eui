@@ -1488,7 +1488,57 @@ end
 
 # A post card of fixed height, so a feed of thousands can be virtualised:
 # the client lays out only the cards it can see.
-def post_card(post, liked, height)
+# What a card carries under its text: a picture, a moving picture, or a
+# sound with a button to start it. The sound node exists only while that
+# card is the one playing — the client holds a few sources, not a feed of
+# them.
+def post_media(post, playing)
+  kind = post["media"]
+  return [{
+    "k": "image",
+    "p": {"src": post["image"]},
+    "s": {"width": "100%", "max_width": 480, "height": 180, "radius": 2}
+  }] if kind == "image"
+
+  return [video(
+    "public/video/pulse.gif",
+    {"playing": true, "loop": true},
+    {"width": 160, "height": 160, "radius": 2},
+    nil
+  )] if kind == "video"
+
+  if kind == "audio"
+    controls = row(
+      {"gap": 3, "align": "center"},
+      [
+        {
+          "k": "box",
+          "s": {
+            "display": "row",
+            "gap": 2,
+            "align": "center",
+            "pad": [2, 3, 2, 3],
+            "radius": 4,
+            "bg": playing ? "accent.base" : "surface.sunken",
+            "fg": playing ? "accent.on" : "text.default",
+            "cursor": "pointer"
+          },
+          "p": {"id": post["id"]},
+          "on": {"click": "play"},
+          "c": [text(playing ? "▮▮  Playing" : "▶  Play the chime", {"size": 1, "weight": "semibold"})]
+        },
+        muted("1.6 s")
+      ]
+    )
+    parts = [controls]
+    parts = parts.concat([audio("public/sounds/chime.wav", {"playing": true, "volume": 80}, {"ended": "sound_ended"})]) if playing
+    return parts
+  end
+
+  []
+end
+
+def post_card(post, liked, playing, height)
   header = row(
     {
       "gap": 2,
@@ -1496,6 +1546,9 @@ def post_card(post, liked, height)
       "wrap": "wrap"
     },
     [
+      # The card's number, so a scroll through a hundred thousand of them
+      # can be checked by eye: nothing skipped, nothing repeated.
+      text("#" + str(post["n"]), {"fg": "text.muted", "size": 1, "font": "mono"}),
       text_interned(post["name"], {"weight": "semibold"}),
       text_interned(
         post["handle"],
@@ -1508,16 +1561,7 @@ def post_card(post, liked, height)
     ]
   )
   body = text(post["text"], {"clamp": 2})
-  picture = post["image"].nil? ? [] : [{
-    "k": "image",
-    "p": {"src": post["image"]},
-    "s": {
-      "width": "100%",
-      "max_width": 480,
-      "height": 180,
-      "radius": 2
-    }
-  }]
+  picture = post_media(post, playing)
   actions = row(
     {"gap": 4, "align": "center"},
     [

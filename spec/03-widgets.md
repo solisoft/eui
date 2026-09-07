@@ -243,7 +243,11 @@ that promises a 12 MB binary does not link one casually. The node kind
 says nothing about the codec, so a client that one day carries a real one
 plays the same tree.
 
-Decoding runs in the sandboxed worker (08 §10) like every other decoder,
+Several nodes may name the same picture — a feed of cards carrying one
+animation. They share the decoded frames and the frame on screen; a
+client is not required to give each node its own position, and the
+reference client gives the first node in tree order the say. Decoding
+runs in the sandboxed worker (08 §10) like every other decoder,
 and the frames are bounded: 1920 × 1080 pixels a frame, 3 600 frames, 96
 MB of decoded frames, and a frame that claims to last no time at all is
 given 20 ms, because a picture must not be able to spin the client.

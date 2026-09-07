@@ -618,6 +618,16 @@ FEED_TEXTS = [
 ]
 FEED_TONES = ["accent.base", "info.base", "success.base", "warning.base", "danger.base"]
 
+# A card's media, decided by its number alone so the row heights cost an
+# arithmetic each and no card has to be built to know them.
+def feed_media(i)
+  return "video" if i % 11 == 0
+  return "audio" if i % 7 == 0
+  return "image" if i % 3 == 0
+
+  ""
+end
+
 def feed_post(i)
   name = FEED_NAMES[(i * 7) % FEED_NAMES.length()]
   {
@@ -631,13 +641,23 @@ def feed_post(i)
     "replies": (i * 17) % 41,
     "reposts": (i * 29) % 113,
     "likes": (i * 43) % 977,
-    "image": i % 3 == 0 ? "public/images/feed/" + str((i * 7) % 8) + ".png" : nil
+    "n": i + 1,
+    "media": feed_media(i),
+    "image": feed_media(i) == "image" ? "public/images/feed/" + str((i * 7) % 8) + ".png" : nil
   }
 end
 
-# Cards come in two heights: text only, or with a picture.
+# Four heights: text only, a sound, a picture, a moving picture.
+def feed_height_of(media)
+  return 316 if media == "image"
+  return 316 if media == "video"
+  return 184 if media == "audio"
+
+  128
+end
+
 def feed_card_height(post)
-  post["image"].nil? ? 128 : 316
+  feed_height_of(post["media"])
 end
 
 # The feed is windowed (spec 04 §7.1): the client says which rows are in
@@ -650,22 +670,26 @@ def feed(event_data)
   liked = state["liked"] ?? []
   count = state["count"] ?? 10
   window = state["window"] ?? [0, 0]
+  sound = state["sound"] ?? -1
   match event {
-    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count, "window": window},
+    "like" => {"liked": toggle_id(liked, params["props"]["id"]), "count": count, "window": window, "sound": sound},
     "more" => {
       "liked": liked,
       "count": count + 5000,
-      "window": window
+      "window": window,
+      "sound": sound
     },
-    "window" => {"liked": liked, "count": count, "window": params["payload"]},
-    _ => {"liked": liked, "count": count, "window": window},
+    "window" => {"liked": liked, "count": count, "window": params["payload"], "sound": sound},
+    "play" => {"liked": liked, "count": count, "window": window, "sound": sound == params["props"]["id"] ? -1 : params["props"]["id"]},
+    "sound_ended" => {"liked": liked, "count": count, "window": window, "sound": -1},
+    _ => {"liked": liked, "count": count, "window": window, "sound": sound},
   }
 end
 
 # The height of row `i`, without building the post: what the client needs
 # for every row, so the scroll extent and the row tops are exact.
 def feed_height(i)
-  i % 3 == 0 ? 316 : 128
+  feed_height_of(feed_media(i))
 end
 
 FEED_HEIGHTS = {}
@@ -684,13 +708,13 @@ end
 # the interpreter the work of rebuilding identical hashes on every event.
 FEED_CARDS = {}
 
-def feed_card(i, liked)
-  key = str(i) + (liked ? ":liked" : "")
+def feed_card(i, liked, playing)
+  key = str(i) + (liked ? ":liked" : "") + (playing ? ":playing" : "")
   cached = FEED_CARDS[key]
   return cached unless cached.nil?
 
   post = feed_post(i)
-  built = keyed(i, post_card(post, liked, feed_card_height(post)))
+  built = keyed(i, post_card(post, liked, playing, feed_card_height(post)))
   built["p"] = {"row": i}
   FEED_CARDS[key] = built
   built
@@ -718,7 +742,8 @@ def feed_view(state)
   first = window[0]
   last = window[1] < count ? window[1] : count - 1
   feed_prune(first, last)
-  cards = last < first ? [] : range(first, last + 1).map(fn(i) { feed_card(i, liked.includes?(i)) })
+  sound = state["sound"] ?? -1
+  cards = last < first ? [] : range(first, last + 1).map(fn(i) { feed_card(i, liked.includes?(i), i == sound) })
   header = row(
     {
       "gap": 3,

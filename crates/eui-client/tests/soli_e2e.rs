@@ -964,3 +964,57 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     let _ = d.paint(1000, 900);
     assert_eq!(d.video_position_ms(node), Some(held), "a paused picture does not advance");
 }
+
+/// Every card carries its own number, and the numbers of the cards on
+/// screen are exactly the rows the list placed — so a scroll through a
+/// hundred thousand of them can be checked by eye and by test.
+#[test]
+fn feed_cards_are_numbered_and_carry_their_media() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "feed", 700.0, 2_400.0);
+    let mut clock = Instant::now();
+    let mut settle = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant| {
+        for _ in 0..4 {
+            *clock += Duration::from_millis(200);
+            d.tick(*clock);
+            let _ = d.paint(700, 2_400);
+            for f in d.take_pending() {
+                conn.tx.send(f.encode()).unwrap();
+            }
+        }
+    };
+    settle(&mut d, &conn, &mut clock);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("#3")));
+    settle(&mut d, &conn, &mut clock);
+    // The numbers on screen: #1, #2, #3 … in order, one per row placed.
+    let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
+    let numbers: Vec<u32> = d
+        .session()
+        .preorder(root(&d))
+        .filter_map(|ix| d.session().text_of(ix))
+        .filter_map(|t| t.strip_prefix('#').and_then(|n| n.parse::<u32>().ok()))
+        .collect();
+    assert!(numbers.len() >= 5, "{numbers:?}");
+    assert_eq!(numbers, (1..=numbers.len() as u32).collect::<Vec<_>>(), "consecutive, none missing, none twice");
+    let rows = d.layout().placed_rows(feed).unwrap();
+    assert_eq!(numbers.len(), rows.len(), "one number per row placed");
+    assert_eq!(numbers.first().map(|n| n - 1), rows.first().copied(), "#N is row N-1");
+    // Card #1 (row 0) carries the moving picture, #4 (row 3) a picture,
+    // #8 (row 7) the sound: one of each is on screen.
+    let kinds: Vec<eui_proto::NodeKind> = d.session().preorder(root(&d)).filter_map(|ix| d.session().node(ix)).map(|n| n.kind).collect();
+    assert!(kinds.contains(&eui_proto::NodeKind::Video), "a moving picture");
+    assert!(kinds.contains(&eui_proto::NodeKind::Image), "a picture");
+    assert!(d.session().preorder(root(&d)).any(|ix| d.session().text_of(ix) == Some("▶  Play the chime")), "a sound to start");
+    // Pressing it puts an audio node in that card, and only there.
+    assert!(!kinds.contains(&eui_proto::NodeKind::Audio), "no sound loaded until asked");
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("▶  Play the chime")).unwrap();
+    let button = d.session().node(label).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, button);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(700, 2_400);
+    let audio: Vec<eui_tree::NodeIx> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).collect();
+    assert_eq!(audio.len(), 1, "one sound, on the card that asked");
+}
