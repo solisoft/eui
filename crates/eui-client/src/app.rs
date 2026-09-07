@@ -82,6 +82,8 @@ pub struct App {
     access: Option<accesskit_winit::Adapter>,
     #[cfg(feature = "clipboard")]
     clip: Option<arboard::Clipboard>,
+    /// The field the input method was last pointed at, if any.
+    ime_area: Option<[f32; 4]>,
 }
 
 impl App {
@@ -105,6 +107,7 @@ impl App {
             access: None,
             #[cfg(feature = "clipboard")]
             clip: None,
+            ime_area: None,
         }
     }
 
@@ -184,13 +187,21 @@ impl App {
         }
         if let Some(w) = &self.window {
             // An input method is welcome exactly while a field has focus,
-            // and its candidate window sits under that field.
-            match self.driver.ime_area() {
-                Some(r) => {
-                    w.set_ime_allowed(true);
-                    w.set_ime_cursor_area(LogicalPosition::new(r.x, r.y), LogicalSize::new(r.w, r.h));
+            // and its candidate window sits under that field. Told only on
+            // a change: every toggle is a protocol round trip with the
+            // input method, and inputs arrive hundreds of times a second.
+            let area = self.driver.ime_area().map(|r| [r.x, r.y, r.w, r.h]);
+            if area != self.ime_area {
+                match area {
+                    Some([x, y, wd, h]) => {
+                        if self.ime_area.is_none() {
+                            w.set_ime_allowed(true);
+                        }
+                        w.set_ime_cursor_area(LogicalPosition::new(x, y), LogicalSize::new(wd, h));
+                    }
+                    None => w.set_ime_allowed(false),
                 }
-                None => w.set_ime_allowed(false),
+                self.ime_area = area;
             }
             if self.driver.needs_redraw() {
                 w.request_redraw();
@@ -204,7 +215,9 @@ impl App {
         if w == 0 || h == 0 {
             return;
         }
+        let t0 = std::time::Instant::now();
         let list = self.driver.paint(w, h);
+        let painted = t0.elapsed();
         let frame = match gpu.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -220,6 +233,7 @@ impl App {
         let (atlas, images) = self.driver.atlases_mut();
         gpu.renderer.render(&view, (w, h), &list, atlas, images);
         frame.present();
+        crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
         // A scroll that landed during this paint reports its offset now.
         let landed = self.driver.take_pending();
         self.send(landed);
@@ -413,6 +427,7 @@ impl ApplicationHandler<Wake> for App {
                 self.input(if state == ElementState::Pressed { Input::PointerDown(b) } else { Input::PointerUp(b) });
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                crate::driver::trace(|| format!("raw wheel {delta:?}"));
                 match delta {
                     MouseScrollDelta::LineDelta(x, y) => self.input(Input::WheelStep(-x, -y)),
                     MouseScrollDelta::PixelDelta(p) => {
@@ -464,6 +479,7 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        crate::driver::trace(|| format!("about_to_wait: due={:?}", self.driver.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
         // A running transition is the only thing that ever wakes the loop by
         // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
         // transport speaks.

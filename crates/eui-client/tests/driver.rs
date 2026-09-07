@@ -700,21 +700,24 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     assert!(d.input(Input::WheelStep(0.0, 1.0)).is_empty());
     assert!(d.animating());
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
-    // Mid-way: the offset is somewhere between 0 and 48.
+    // Mid-way: the offset is somewhere between 0 and 100.
     d.tick(t0 + Duration::from_millis(60));
     let _ = d.paint(400, 300);
     let (_, y) = d.session().node(scroll).unwrap().scroll;
-    assert!(y > 0 && y < 48, "{y}");
+    assert!(y > 0 && y < 100, "{y}");
     assert!(d.take_pending().is_empty(), "not landed yet");
-    // A second notch mid-flight retargets to 96 from where the view is.
+    // Zero-valued pixel events between notches (a Magic Mouse) change nothing.
+    assert!(d.input(Input::Wheel(0.0, 0.0)).is_empty());
+    assert!(d.animating(), "a zero delta does not cancel the motion");
+    // A second notch mid-flight retargets to 120 (the end) from where the view is.
     d.input(Input::WheelStep(0.0, 1.0));
     d.tick(t0 + Duration::from_millis(400));
     let _ = d.paint(400, 300);
-    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 96));
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 120));
     assert!(!d.animating());
     let landed = d.take_pending();
     assert_eq!(landed.len(), 1, "one scroll event when it lands: {landed:?}");
-    assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(96)])));
+    assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(120)])));
     assert_eq!(d.next_frame_at(), None);
 }
 

@@ -7,6 +7,8 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
+use std::time::Instant;
+
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, ThemeMode, Welcome};
 use eui_render::Renderer;
@@ -119,6 +121,26 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
         renderer.render_offscreen(&target, &list, atlas, images);
+        // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
+        if std::env::var_os("SNAPSHOT_TIMING").is_some() {
+            if let Some(root) = driver.session().root() {
+                let scroller = driver.session().preorder(root).find(|ix| driver.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Scroll));
+                if let Some(sc) = scroller {
+                    let r = driver.layout().rect(sc).unwrap_or_default();
+                    driver.input(Input::PointerMove(r.x + 10.0, r.y + 10.0));
+                }
+                for i in 0..5 {
+                    let t = Instant::now();
+                    let _ = driver.input(Input::Wheel(0.0, 20.0));
+                    let list = driver.paint(dw, dh);
+                    let painted = t.elapsed();
+                    let (atlas, images) = driver.atlases_mut();
+                    renderer.render_offscreen(&target, &list, atlas, images);
+                    let _ = renderer.read_back(&target);
+                    println!("frame {i}: layout+paint {:.2} ms, render+readback {:.2} ms, {} quads", painted.as_secs_f64() * 1e3, (t.elapsed() - painted).as_secs_f64() * 1e3, list.quads.len());
+                }
+            }
+        }
         let px = renderer.read_back(&target).expect("read back");
         let file = format!("{name}-{mode_name}");
         std::fs::write(format!("{out}/{file}.rgba"), &px).unwrap();

@@ -204,8 +204,10 @@ impl Anim {
 /// test cannot — focus, caret placement, scrolls.
 pub fn trace(line: impl FnOnce() -> String) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var("EUI_TRACE").as_deref() == Ok("1")) {
-        eprintln!("eui: {}", line());
+        let t = START.get_or_init(Instant::now).elapsed().as_secs_f64();
+        eprintln!("eui {t:9.3}: {}", line());
     }
 }
 
@@ -904,7 +906,8 @@ impl Driver {
         None
     }
 
-    /// A notched wheel: 48 logical px per line, eased over `motion.base`.
+    /// A notched wheel: 100 logical px per notch — what browsers scroll per
+    /// click of a wheel — eased over `motion.base`.
     /// Notches accumulate onto the running target, so a fast spin covers
     /// ground without waiting for each step to land.
     fn wheel_step(&mut self, lines_x: f32, lines_y: f32) -> Vec<Frame> {
@@ -920,7 +923,8 @@ impl Driver {
             Some(a) => (a.at(self.now), a.to),
             None => (here, here),
         };
-        let to = ((base.0 + lines_x * 48.0).clamp(0.0, max_x), (base.1 + lines_y * 48.0).clamp(0.0, max_y));
+        let to = ((base.0 + lines_x * 100.0).clamp(0.0, max_x), (base.1 + lines_y * 100.0).clamp(0.0, max_y));
+        trace(|| format!("wheel step {lines_x},{lines_y}: {from:?} -> {to:?} (max {max_x},{max_y})"));
         if to == from {
             return Vec::new();
         }
@@ -932,6 +936,11 @@ impl Driver {
     }
 
     fn wheel(&mut self, dx: f32, dy: f32) -> Vec<Frame> {
+        // A Magic Mouse on Wayland interleaves each notch with a stream of
+        // zero-valued pixel events; they must not cancel the notch's motion.
+        if dx == 0.0 && dy == 0.0 {
+            return Vec::new();
+        }
         self.scroll_anim = None;
         self.ensure_layout();
         let Some(hit) = self.layout.hit(&self.session, self.pointer.x, self.pointer.y) else { return Vec::new() };
