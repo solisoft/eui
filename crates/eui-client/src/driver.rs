@@ -1271,13 +1271,17 @@ impl Driver {
         self.pending.extend(landed);
         let t_layout = Instant::now();
         let relaid = !self.layout_valid;
-        self.ensure_layout();
-        let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
+        // A hover left for this frame is settled on a fresh layout first;
+        // what its local handlers restyle is laid out again below — cheap,
+        // since only the restyled nodes lost their memoised measures.
         if self.pointer.hover_pending {
+            self.ensure_layout();
             let (x, y) = (self.pointer.x, self.pointer.y);
             let settled = self.hover(x, y);
             self.pending.extend(settled);
         }
+        self.ensure_layout();
+        let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
         self.redraw = false;
         let now = self.now;
         let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();

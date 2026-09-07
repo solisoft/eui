@@ -156,8 +156,10 @@ fn the_counter_runs_end_to_end_against_soli() {
             conn.tx.send(f.encode()).unwrap();
         }
     }
-    // Leaving the button restores its base style, locally.
+    // Leaving the button restores its base style, locally — settled by the
+    // frame that follows the move, as a window paints one.
     driver.input(Input::PointerMove(1.0, 1.0));
+    let _ = driver.paint(800, 600);
     assert_eq!(driver.session().node(plus_ix).unwrap().style, base_style, "pointer_leave: base style");
     assert_eq!(value(&driver).as_deref(), Some("3"), "the local copy is ahead");
     pump(&mut driver, &conn, &wake_rx, |d| d.session().last_seq() >= Some(4));

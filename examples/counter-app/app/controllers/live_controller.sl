@@ -605,13 +605,26 @@ def feed(event_data)
   }
 end
 
+# Cards are pure functions of (id, liked): built once, kept. The view is
+# still a function of state; this only spares the interpreter the work of
+# rebuilding ten thousand identical hashes on every event.
+FEED_CARDS = {}
+
+def feed_card(i, liked)
+  key = str(i) + (liked ? ":liked" : "")
+  cached = FEED_CARDS[key]
+  return cached unless cached.nil?
+
+  post = feed_post(i)
+  card = keyed(i, post_card(post, liked, feed_card_height(post)))
+  FEED_CARDS[key] = card
+  card
+end
+
 def feed_view(state)
   liked = state["liked"] ?? []
   count = state["count"] ?? 5000
-  cards = range(0, count).map(fn(i) {
-    post = feed_post(i)
-    keyed(i, post_card(post, liked.includes?(i), feed_card_height(post)))
-  })
+  cards = range(0, count).map(fn(i) { feed_card(i, liked.includes?(i)) })
   header = row(
     {
       "gap": 3,
