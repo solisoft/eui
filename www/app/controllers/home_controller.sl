@@ -1,12 +1,9 @@
-# Home controller — handles the root routes
+# Home controller - handles the root routes
 
 class HomeController < Controller
   # GET /
   def index
-    render(
-      "home/index",
-      {"title": "A user interface in 150 bytes", "layout": "layouts/eui"}
-    )
+    render("home/index", {"title": "EUI — an interface is not a document"})
   end
 
   # GET /health

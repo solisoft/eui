@@ -2,4 +2,5 @@
 name = "www"
 version = "0.1.0"
 main = "app.sl"
-# soli_version = "2.0.5"   # uncomment to require a minimum soli version to run this project
+# soli_version = "2.0.7"    # minimum soli version required to run this project
+# soli_version = "=2.0.7"   # or pin exactly: soli fetches and runs this version here

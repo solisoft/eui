@@ -1,0 +1,865 @@
+/* EUI — the public site.
+ *
+ * Hand-written: no framework, no build step, no npm. The page is an
+ * engineering drawing of a protocol, so it is built out of rules,
+ * dimension lines and measured type, and everything on it is a number
+ * that exists in the repository.
+ */
+
+:root {
+    color-scheme: light dark;
+
+    --paper: #f4f6f3;
+    --paper-sunk: #eceff0;
+    --ink: #12171b;
+    --ink-soft: #4b565e;
+    --rule: #c3ccd1;
+    --rule-faint: #dde3e5;
+    --blue: #1f35d6;
+    --amber: #a96a00;
+    --rose: #b32a55;
+    --green: #2f6b3a;
+
+    --measure: 34rem;
+    --rail: 8.5rem;
+    --step: clamp(3.5rem, 7vw, 6.5rem);
+
+    --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --paper: #0e1216;
+        --paper-sunk: #141a20;
+        --ink: #e6eaec;
+        --ink-soft: #93a1ab;
+        --rule: #27333c;
+        --rule-faint: #1b232a;
+        --blue: #8b9bff;
+        --amber: #e0a33a;
+        --rose: #ff819e;
+        --green: #7fc08d;
+    }
+}
+
+:root[data-theme="dark"] {
+    --paper: #0e1216;
+    --paper-sunk: #141a20;
+    --ink: #e6eaec;
+    --ink-soft: #93a1ab;
+    --rule: #27333c;
+    --rule-faint: #1b232a;
+    --blue: #8b9bff;
+    --amber: #e0a33a;
+    --rose: #ff819e;
+    --green: #7fc08d;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+img {
+    max-width: 100%;
+}
+
+a {
+    color: inherit;
+    text-decoration-color: var(--rule);
+    text-underline-offset: 0.2em;
+}
+
+a:hover {
+    text-decoration-color: var(--blue);
+}
+
+:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 3px;
+}
+
+/* ---------------------------------------------------------------- shell */
+
+.sheet {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.5rem 6rem;
+    position: relative;
+}
+
+/* The drawing's spine: one hairline the whole page hangs from. */
+.sheet::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 6rem;
+    left: calc(1.5rem + var(--rail) - 1.5rem);
+    width: 1px;
+    background: var(--rule-faint);
+}
+
+@media (max-width: 60rem) {
+    .sheet::before {
+        display: none;
+    }
+}
+
+.top {
+    display: flex;
+    align-items: baseline;
+    gap: 1.25rem;
+    padding: 1.75rem 0 1.25rem;
+    border-bottom: 1px solid var(--rule);
+    flex-wrap: wrap;
+}
+
+.wordmark {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 0.95rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+
+.wordmark b {
+    color: var(--blue);
+    font-weight: 500;
+}
+
+.top nav {
+    margin-left: auto;
+    display: flex;
+    gap: 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+}
+
+.top nav a {
+    text-decoration: none;
+    color: var(--ink-soft);
+}
+
+.top nav a:hover {
+    color: var(--ink);
+}
+
+.tagline {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    letter-spacing: 0.04em;
+}
+
+/* --------------------------------------------------------------- section */
+
+section {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    gap: 0 2.5rem;
+    padding-top: var(--step);
+}
+
+@media (max-width: 60rem) {
+    section {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+}
+
+.mark {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    padding-top: 0.6rem;
+    position: relative;
+}
+
+.mark span {
+    display: block;
+    color: var(--blue);
+}
+
+.mark::after {
+    content: "";
+    position: absolute;
+    top: 1.1rem;
+    right: -2.5rem;
+    width: 2.5rem;
+    height: 1px;
+    background: var(--rule);
+}
+
+@media (max-width: 60rem) {
+    .mark {
+        padding: 0 0 0.75rem;
+    }
+
+    .mark::after {
+        display: none;
+    }
+}
+
+h1,
+h2,
+h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0;
+}
+
+h1 {
+    font-size: clamp(2.75rem, 6.5vw, 4.75rem);
+    line-height: 1.02;
+}
+
+h2 {
+    font-size: clamp(1.9rem, 3.6vw, 2.75rem);
+    line-height: 1.1;
+    margin-bottom: 1rem;
+}
+
+h3 {
+    font-size: 1.3rem;
+    line-height: 1.25;
+    margin-bottom: 0.35rem;
+}
+
+p {
+    max-width: var(--measure);
+    margin: 0 0 1.1rem;
+}
+
+.lede {
+    font-size: 1.2rem;
+    line-height: 1.5;
+    max-width: 38rem;
+}
+
+.soft {
+    color: var(--ink-soft);
+}
+
+strong {
+    font-weight: 600;
+}
+
+code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    color: var(--blue);
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.hero {
+    padding-top: 3.5rem;
+}
+
+.hero h1 em {
+    font-style: normal;
+    color: var(--blue);
+}
+
+.hero .lede {
+    margin-top: 1.5rem;
+}
+
+.actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 2rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+}
+
+.actions a {
+    text-decoration: none;
+    padding: 0.55rem 1.1rem;
+    border: 1px solid var(--rule);
+    color: var(--ink);
+}
+
+.actions a:first-child {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+}
+
+.actions a:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+}
+
+.actions a:first-child:hover {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+}
+
+/* ------------------------------------------------------------ the bytes */
+
+.frame {
+    margin-top: 3.5rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.25rem;
+}
+
+.frame-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 1rem;
+}
+
+.bytes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    font-family: var(--mono);
+    font-size: clamp(0.85rem, 1.9vw, 1.15rem);
+    line-height: 1.2;
+}
+
+.field {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.15rem 0.3rem 0.35rem;
+    border-bottom: 2px solid currentColor;
+    cursor: default;
+    animation: settle 0.5s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.field .hex {
+    letter-spacing: 0.06em;
+    color: var(--ink);
+}
+
+.field .name {
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.field.on {
+    background: var(--paper-sunk);
+}
+
+.f-frame {
+    color: var(--blue);
+}
+
+.f-len {
+    color: var(--ink-soft);
+}
+
+.f-op {
+    color: var(--green);
+}
+
+.f-num {
+    color: var(--amber);
+}
+
+.f-text {
+    color: var(--rose);
+}
+
+@keyframes settle {
+    from {
+        opacity: 0;
+        transform: translateY(0.4rem);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .field {
+        animation: none;
+    }
+}
+
+.reads {
+    margin-top: 1.75rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 1.25rem 2rem;
+    border-top: 1px solid var(--rule-faint);
+    padding-top: 1.25rem;
+}
+
+.read {
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.read b {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.15rem;
+}
+
+.read.on b {
+    color: var(--blue);
+}
+
+/* --------------------------------------------------------- the cell drawn */
+
+.result {
+    margin-top: 2.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+}
+
+.leader {
+    flex: 1 1 6rem;
+    height: 1px;
+    background: repeating-linear-gradient(90deg, var(--rule) 0 6px, transparent 6px 12px);
+    min-width: 3rem;
+}
+
+.cell {
+    border: 1px solid var(--rule);
+    background: var(--paper-sunk);
+    padding: 0.7rem 1.1rem;
+    display: flex;
+    gap: 2.5rem;
+    align-items: baseline;
+}
+
+.cell .label {
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+.cell .value {
+    font-size: 1.15rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------ dimensions */
+
+.dims {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 1.5rem;
+    max-width: 44rem;
+}
+
+.dim {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, 1fr);
+    gap: 0 1.25rem;
+    align-items: baseline;
+}
+
+.dim dt {
+    font-family: var(--mono);
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--blue);
+    position: relative;
+    padding-left: 0.85rem;
+}
+
+/* A dimension tick, as on a drawing. */
+.dim dt::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.15em;
+    bottom: 0.15em;
+    width: 1px;
+    background: var(--blue);
+}
+
+.dim dd {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.dim dd small {
+    display: block;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    font-family: var(--mono);
+}
+
+@media (max-width: 34rem) {
+    .dim {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.15rem;
+    }
+}
+
+/* ----------------------------------------------------------------- scale */
+
+.scale {
+    margin-top: 2rem;
+    max-width: 44rem;
+}
+
+.bar {
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr) 5rem;
+    gap: 0 1rem;
+    align-items: center;
+    margin-bottom: 0.7rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+}
+
+.bar .track {
+    height: 1.5rem;
+    border-left: 1px solid var(--rule);
+    /* A span is inline: the fill needs a box before a width means anything. */
+    display: block;
+}
+
+.bar .fill {
+    display: block;
+    height: 100%;
+    background: var(--blue);
+}
+
+.bar.html .fill {
+    background: var(--rule);
+}
+
+.bar .amount {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
+    color: var(--ink-soft);
+}
+
+.bar.eui .amount {
+    color: var(--ink);
+}
+
+.note {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    border-top: 1px solid var(--rule-faint);
+    padding-top: 0.75rem;
+    margin-top: 1.25rem;
+    max-width: 44rem;
+}
+
+/* ----------------------------------------------------------------- flow */
+
+.flow {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1px;
+    background: var(--rule-faint);
+    border: 1px solid var(--rule-faint);
+    margin-top: 1.5rem;
+    max-width: 48rem;
+}
+
+.stage {
+    background: var(--paper);
+    padding: 1.1rem 1.15rem 1.35rem;
+}
+
+.stage b {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--blue);
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.stage p {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------- refusals */
+
+.refusals {
+    list-style: none;
+    margin: 1.5rem 0 0;
+    padding: 0;
+    max-width: 44rem;
+}
+
+.refusals li {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+    gap: 0 0.75rem;
+    padding: 0.7rem 0;
+    border-top: 1px solid var(--rule-faint);
+    font-size: 0.95rem;
+}
+
+.refusals li::before {
+    content: "×";
+    font-family: var(--mono);
+    color: var(--rose);
+    line-height: 1.6;
+}
+
+.refusals cite {
+    font-family: var(--mono);
+    font-style: normal;
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    letter-spacing: 0.04em;
+}
+
+/* ------------------------------------------------------------------ table */
+
+.ledger {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1.5rem;
+    font-size: 0.92rem;
+    max-width: 48rem;
+}
+
+.ledger th,
+.ledger td {
+    text-align: left;
+    padding: 0.6rem 1rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule-faint);
+    vertical-align: baseline;
+}
+
+.ledger th {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 500;
+    border-bottom-color: var(--rule);
+}
+
+.ledger td:last-child {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--ink-soft);
+}
+
+.ledger .yes {
+    color: var(--green);
+}
+
+.ledger .no {
+    color: var(--rose);
+}
+
+/* -------------------------------------------------------------- authoring */
+
+.pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: 1px;
+    background: var(--rule-faint);
+    border: 1px solid var(--rule-faint);
+    margin-top: 1.5rem;
+    max-width: 52rem;
+}
+
+@media (max-width: 52rem) {
+    .pair {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.pane {
+    background: var(--paper);
+    padding: 1rem 1.15rem 1.25rem;
+    min-width: 0;
+}
+
+.pane > b {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    display: block;
+    margin-bottom: 0.85rem;
+}
+
+pre {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.75;
+    overflow-x: auto;
+    color: var(--ink);
+    tab-size: 2;
+}
+
+pre + pre {
+    margin-top: 1.1rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--rule-faint);
+}
+
+pre .c {
+    color: var(--ink-soft);
+}
+
+pre .k {
+    color: var(--blue);
+}
+
+pre .s {
+    color: var(--rose);
+}
+
+pre .n {
+    color: var(--amber);
+}
+
+/* What the client draws from that code, drawn here in HTML so the page can
+   show it without shipping a client. The roles are EUI's own. */
+.draw {
+    border: 1px solid var(--rule);
+    background: var(--paper-sunk);
+    padding: 1.4rem 1.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.9rem;
+}
+
+.draw .t {
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.draw .v {
+    font-size: 2.6rem;
+    line-height: 1;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.draw .btns {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.draw .btn {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    padding: 0.35rem 0.9rem;
+    border-radius: 3px;
+    background: var(--blue);
+    color: #fff;
+    border: 1px solid var(--blue);
+}
+
+.draw .btn.ghost {
+    background: transparent;
+    color: var(--blue);
+}
+
+.draw small {
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+    max-width: 22rem;
+    line-height: 1.5;
+}
+
+.legend {
+    display: flex;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+}
+
+.legend span::before {
+    content: "";
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    margin-right: 0.4rem;
+    background: currentColor;
+}
+
+.legend .l-server {
+    color: var(--blue);
+}
+
+.legend .l-local {
+    color: var(--amber);
+}
+
+/* ---------------------------------------------------------------- footer */
+
+footer {
+    margin-top: var(--step);
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    gap: 1.5rem 2.5rem;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+}
+
+footer a {
+    text-decoration: none;
+}
+
+footer a:hover {
+    color: var(--blue);
+}

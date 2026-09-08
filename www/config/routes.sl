@@ -1,9 +1,10 @@
-# EUI documentation site.
+# Routes configuration
+# Define your application routes here
 
+# Home page
 get("/", "home#index")
+
+# Health check endpoint
 get("/health", "home#health")
 
-# Documentation. `:page` is looked up in a whitelist inside the controller —
-# it is never joined onto a filesystem path, so there is no traversal to guard.
-get("/docs", "docs#index")
-get("/docs/:page", "docs#show")
+print("Routes loaded!")

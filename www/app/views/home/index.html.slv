@@ -1,156 +1,330 @@
-<section>
-  <h1 style="font-size:clamp(2rem,5vw,3.25rem);line-height:1.08;letter-spacing:-0.03em;margin:0 0 0.6em;max-width:16ch;">
-    A user interface, in 150 bytes.
-  </h1>
+<main class="sheet">
+    <header class="top">
+        <span class="wordmark" title="EUI/1 — version 1 of the protocol, the name the specification uses for itself"><b>EUI</b>/1</span>
+        <span class="tagline">version 1 of the protocol · applications without a browser</span>
+        <nav>
+            <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui">Docs</a>
+            <a href="https://github.com/solisoft/eui/tree/main/spec">Spec</a>
+            <a href="https://github.com/solisoft/eui">Source</a>
+        </nav>
+    </header>
 
-  <p style="max-width:62ch;font-size:1.125rem;color:var(--ink-muted);margin:0 0 2.5rem;">
-    EUI delivers application interfaces over HTTPS without HTML, CSS, or JavaScript.
-    The server does not send a document to be interpreted; it sends an interface
-    tree that is already resolved. Below are the actual bytes for a column
-    containing the word <em>Hi</em>, and the thing they draw.
-  </p>
+    <section class="hero">
+        <div class="mark">Thesis<span>§00</span></div>
+        <div>
+            <h1>An interface is not a document. Stop sending one.</h1>
+            <p class="lede">
+                EUI serves applications over HTTPS with no HTML, no CSS, no JavaScript
+                and no JIT. The server sends an interface tree that is already
+                resolved; a native Rust client applies it as binary patches and draws
+                it on the GPU. Below is a real update, byte for byte.
+            </p>
 
-  <div class="split">
-    <div class="dump">
-      <table>
-        <tbody>
-          <tr>
-            <td class="off">0000</td>
-            <td class="hex"><span class="op">10</span> 01 02 48 69</td>
-            <td class="note"><b>DefAtom</b> interns atom 1 as “Hi”</td>
-          </tr>
-          <tr>
-            <td class="off">0005</td>
-            <td class="hex"><span class="op">11</span> 01 <span class="elide">64 bytes</span></td>
-            <td class="note"><b>DefStyle</b> 1, a column with padding 4 on the base surface</td>
-          </tr>
-          <tr>
-            <td class="off">0047</td>
-            <td class="hex"><span class="op">11</span> 02 <span class="elide">64 bytes</span></td>
-            <td class="note"><b>DefStyle</b> 2, one step up the text scale, muted foreground</td>
-          </tr>
-          <tr>
-            <td class="off">0089</td>
-            <td class="hex"><span class="op">20</span></td>
-            <td class="note"><b>Mount</b> replaces the document</td>
-          </tr>
-          <tr>
-            <td class="off">008A</td>
-            <td class="hex">01 00 01 01 01</td>
-            <td class="note">box, id 1, style 1, one child</td>
-          </tr>
-          <tr>
-            <td class="off">008F</td>
-            <td class="hex">02 02 02 02 00 01 00</td>
-            <td class="note">text, id 2, style 2, holding atom 1</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="render">
-      <div class="render__box">Hi</div>
-    </div>
-  </div>
+            <div class="actions">
+                <a href="https://github.com/solisoft/eui/tree/main/spec">Read the specification</a>
+                <a href="https://github.com/solisoft/eui">Source and tests</a>
+            </div>
 
-  <p class="caption">
-    <span>128 of those bytes are the two style records.</span>
-    <span>They are sent once, however many nodes come to use them.</span>
-  </p>
-</section>
+            <figure class="frame">
+                <div class="frame-head">
+                    <span>Frame · Batch · one op</span>
+                    <span>22 bytes on the wire</span>
+                </div>
 
-<section class="facts">
-  <div class="fact">
-    <div class="fact__n">4 619 B</div>
-    <div class="fact__what">A 50-row table, sent in full</div>
-    <div class="fact__vs">14 362 B as HTML. The structure around the text is 5.3× smaller.</div>
-  </div>
-  <div class="fact">
-    <div class="fact__n">22 B</div>
-    <div class="fact__what">One cell changes</div>
-    <div class="fact__vs">Reordering fifty keyed rows costs 201 B, because rows move rather than rebuild.</div>
-  </div>
-  <div class="fact">
-    <div class="fact__n">0</div>
-    <div class="fact__what">Wakeups while idle</div>
-    <div class="fact__vs">Not a setting. There is no render loop in the client to leave running.</div>
-  </div>
-</section>
+                <div class="bytes" id="bytes">
+                    <span class="field f-frame" data-read="r-frame" style="animation-delay:0ms">
+                        <span class="hex">03</span><span class="name">frame: batch</span>
+                    </span>
+                    <span class="field f-len" data-read="r-len" style="animation-delay:40ms">
+                        <span class="hex">14</span><span class="name">length 20</span>
+                    </span>
+                    <span class="field f-num" data-read="r-seq" style="animation-delay:80ms">
+                        <span class="hex">02</span><span class="name">seq 2</span>
+                    </span>
+                    <span class="field f-len" data-read="r-count" style="animation-delay:120ms">
+                        <span class="hex">01</span><span class="name">1 op</span>
+                    </span>
+                    <span class="field f-op" data-read="r-op" style="animation-delay:160ms">
+                        <span class="hex">23</span><span class="name">set_text</span>
+                    </span>
+                    <span class="field f-num" data-read="r-node" style="animation-delay:200ms">
+                        <span class="hex">8d 01</span><span class="name">node 141</span>
+                    </span>
+                    <span class="field f-op" data-read="r-kind" style="animation-delay:240ms">
+                        <span class="hex">01</span><span class="name">inline text</span>
+                    </span>
+                    <span class="field f-len" data-read="r-bytes" style="animation-delay:280ms">
+                        <span class="hex">0d</span><span class="name">13 bytes</span>
+                    </span>
+                    <span class="field f-text" data-read="r-text" style="animation-delay:320ms">
+                        <span class="hex">31 20 39 38 34 2c 20 34 32 20 e2 82 ac</span><span class="name">“1 984, 42 €”</span>
+                    </span>
+                </div>
 
-<section>
-  <h2 style="font-size:1.5rem;letter-spacing:-0.015em;margin:0 0 0.3em;">What EUI refuses</h2>
-  <p style="max-width:62ch;color:var(--ink-muted);margin:0 0 1.5rem;">
-    These are not gaps waiting to be filled. Each one is why the client stays small
-    enough to audit, and fast enough to be worth the trouble.
-  </p>
+                <div class="result">
+                    <span class="leader"></span>
+                    <span class="cell">
+                        <span class="label">Invoice&nbsp;total</span>
+                        <span class="value">1&nbsp;984,42&nbsp;€</span>
+                    </span>
+                </div>
 
-  <div class="refuse">
-    <dl>
-      <dt>An open element vocabulary</dt>
-      <dd>Fourteen primitive kinds, and the set is closed. Buttons, dialogs and
-          tables are composed on the server, which is how the catalogue grows
-          without shipping a new client.</dd>
+                <div class="reads">
+                    <p class="read" id="r-op"><b>The verb</b>Twenty-three is <code>set_text</code>. There are sixteen ops in the whole protocol, and a client that meets a seventeenth refuses the frame.</p>
+                    <p class="read" id="r-node"><b>The address</b>Node 141 already exists on the client. Nothing is re-sent around it: no row, no table, no page.</p>
+                    <p class="read" id="r-text"><b>The payload</b>Thirteen bytes of UTF-8 — the number a person actually reads. Nine bytes carried it.</p>
+                </div>
+            </figure>
+        </div>
+    </section>
 
-      <dt>The cascade</dt>
-      <dd>No selectors, no specificity, no inheritance to resolve. A style is 64
-          fixed bytes of already-computed values, so styling a node costs one
-          array lookup.</dd>
+    <section>
+        <div class="mark">Wire<span>§02</span></div>
+        <div>
+            <h2>The same table, measured twice</h2>
+            <p>
+                Fifty rows, four columns, keyed, six shared style records — an invoice
+                table. Against it, the same table as HTML carrying the classes such a
+                table really carries, unindented: the favourable case for HTML.
+            </p>
 
-      <dt>Code from the network</dt>
-      <dd>No native code, no JIT, no <code>eval</code>. A local handler is
-          bytecode that passes a verifier and runs on a fuel budget, or it does
-          not run.</dd>
+            <div class="scale">
+                <div class="bar eui">
+                    <span>EUI</span>
+                    <span class="track"><span class="fill" style="width:32.2%"></span></span>
+                    <span class="amount">4 619 B</span>
+                </div>
+                <div class="bar html">
+                    <span>HTML</span>
+                    <span class="track"><span class="fill" style="width:100%"></span></span>
+                    <span class="amount">14 362 B</span>
+                </div>
+            </div>
 
-      <dt>Ambient authority</dt>
-      <dd>A capability the manifest never requested has no code path in the
-          client. The check is not at the call site; the call site is absent.</dd>
+            <p class="note">
+                Both sides carry the same 2 337 bytes of text, which neither can
+                compress away, so the honest headline is the structure: 2 282 bytes
+                against 12 025, or <strong>5.3×</strong>. The regression budget is set
+                at 4×, below what was measured, so drift does not trip it and a real
+                regression does. Source: <code>crates/eui-proto/tests/size_budget.rs</code>.
+            </p>
+        </div>
+    </section>
 
-      <dt>Error recovery</dt>
-      <dd>A malformed frame ends the session. Tolerance is how a parser becomes
-          attack surface.</dd>
+    <section>
+        <div class="mark">Budgets<span>§10</span></div>
+        <div>
+            <h2>Numbers that come from a run</h2>
+            <p>
+                A budget nobody measured is a slogan. These are measured, and the ones
+                that are still targets say so.
+            </p>
 
-      <dt>A fingerprint</dt>
-      <dd>No user-agent string, no font enumeration, no canvas readback, no
-          device identifier. The client tells a server its viewport and nothing
-          else about the person using it.</dd>
-    </dl>
-  </div>
-</section>
+            <dl class="dims">
+                <div class="dim">
+                    <dt>22 B</dt>
+                    <dd>a one-cell update, against a 40-byte budget<small>measured</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>201 B</dt>
+                    <dd>reversing fifty keyed rows — forty-nine moves, no subtree re-sent<small>measured</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>0 %</dt>
+                    <dd>CPU at rest, and zero wakeups: the loop waits, it does not poll<small>architecture, not a setting</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>80 ms</dt>
+                    <dd>launch to first pixel<small>target</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>12 MB</dt>
+                    <dd>the stripped client, two variable fonts included<small>target — 12.13 MB today, and the miss is published</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
 
-<section style="margin-top:4rem;max-width:62ch;">
-  <h2 style="font-size:1.5rem;letter-spacing:-0.015em;margin:0 0 0.75rem;">Where this stands</h2>
-  <p style="color:var(--ink-muted);">
-    <span class="stamp stamp--built">Built</span>
-    The wire format and the session state. <code>eui-proto</code> encodes and
-    decodes every construct on this page with no dependencies and no
-    <code>unsafe</code>; <code>eui-tree</code> applies the patches, checks
-    every reference before placing anything, and enforces the quotas;
-    <code>eui-theme</code> resolves roles to colours with contrast met by
-    construction; <code>eui-layout</code> places every node with one
-    specified algorithm and a list that never measures what it cannot see;
-    <code>eui-text</code> shapes with two embedded faces and never reads a
-    system font; <code>eui-render</code> draws every one of them as a rounded
-    rectangle through one pipeline, and is tested by reading its pixels back;
-    <code>eui-client</code> runs the counter end to end over a real socket —
-    against a hand-written Rust server, and against <code>soli serve</code>
-    itself with the view written in Soli. 160 tests, 46 of them rejection cases.
-  </p>
-  <p style="color:var(--ink-muted);">
-    <span class="stamp stamp--spec">Specified</span>
-    The transport, the layout, the theme, the events, the bytecode, and the
-    budgets, normatively. The security model is designed on these pages; its
-    spec document is still to write.
-  </p>
-  <p style="color:var(--ink-muted);">
-    The window is compiled and not yet run on glass. Every
-    number above comes from a test you can run;
-    <a href="/docs/budgets">the budgets page</a> names each one.
-    If you want the argument rather than the numbers,
-    <a href="/docs/overview">start with the overview</a>.
-  </p>
-</section>
+    <section>
+        <div class="mark">Session<span>§01</span></div>
+        <div>
+            <h2>Three processes, and what each may do</h2>
 
-<p class="colophon">
-  This site makes no third-party request. Two self-hosted Titillium Web faces,
-  124 KB; the monospace is whatever your system already has, because a hex digit
-  does not need a downloaded typeface.
-</p>
+            <div class="flow">
+                <div class="stage">
+                    <b>Server</b>
+                    <p>Your application. It renders a tree of nodes, diffs it against the tree this session last received, and sends the patches. Written in Soli, or in anything that speaks the format.</p>
+                </div>
+                <div class="stage">
+                    <b>Window</b>
+                    <p>Owns the display, the GPU, TLS and the clipboard. It never decodes a frame. When it is asked to close, it closes.</p>
+                </div>
+                <div class="stage">
+                    <b>Worker</b>
+                    <p>Everything that reads bytes a server chose: frames, layout, text, pictures, sound, bytecode. Confined by Landlock and seccomp — 36 system calls, and any other one kills it.</p>
+                </div>
+            </div>
+
+            <p class="note">
+                The client fetches assets by BLAKE3 hash, verifies them, and pins the
+                publisher's Ed25519 key on first visit. A capability the manifest does
+                not ask for has no code path at all.
+            </p>
+        </div>
+    </section>
+
+    <section>
+        <div class="mark">Soli<span>§06</span></div>
+        <div>
+            <h2>What an application looks like</h2>
+            <p>
+                A component is two functions and a route. The handler takes an event
+                and the state and returns the next state; the view takes the state and
+                returns a tree, as plain data. Soli interns the atoms and the styles
+                once per session, diffs the tree against the one this client already
+                has, and sends the patches. This is the counter from
+                <code>examples/counter-app</code>, quoted whole.
+            </p>
+
+            <div class="pair">
+                <div class="pane">
+                    <b>live_controller.sl</b>
+<pre><span class="c"># The handler: an event and a state in, the next state out.</span>
+<span class="k">def</span> counter(event_data)
+  event = event_data[<span class="s">"event"</span>]
+  count = event_data[<span class="s">"state"</span>][<span class="s">"count"</span>] ?? <span class="n">0</span>
+
+  <span class="k">if</span> event == <span class="s">"increment"</span>
+    {<span class="s">"count"</span>: count + <span class="n">1</span>}
+  <span class="k">elsif</span> event == <span class="s">"decrement"</span>
+    {<span class="s">"count"</span>: count - <span class="n">1</span>}
+  <span class="k">else</span>
+    {<span class="s">"count"</span>: count}
+  <span class="k">end</span>
+<span class="k">end</span></pre>
+<pre><span class="c"># The view: state in, node tree out. Plain data.</span>
+<span class="k">def</span> counter_view(state)
+  count = state[<span class="s">"count"</span>] ?? <span class="n">0</span>
+  with_state({<span class="s">"count"</span>: count}, column(
+    {<span class="s">"pad"</span>: <span class="n">6</span>, <span class="s">"gap"</span>: <span class="n">4</span>, <span class="s">"bg"</span>: <span class="s">"surface.base"</span>},
+    [
+      text(<span class="s">"Counter"</span>, {<span class="s">"size"</span>: <span class="n">4</span>, <span class="s">"weight"</span>: <span class="s">"semibold"</span>}),
+      keyed(<span class="s">"value"</span>, text(count.to_s, {<span class="s">"size"</span>: <span class="n">7</span>})),
+      row({<span class="s">"gap"</span>: <span class="n">2</span>}, [
+        button(<span class="s">"−"</span>, <span class="s">"decrement"</span>),
+        local_button(<span class="s">"+"</span>,
+          <span class="s">"state.count += 1; value.text = str(state.count)"</span>,
+          <span class="s">"increment"</span>)
+      ])
+    ]
+  ))
+<span class="k">end</span></pre>
+<pre><span class="c"># config/routes.sl</span>
+router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</span>, <span class="s">"live#counter_view"</span>)</pre>
+                </div>
+
+                <div class="pane">
+                    <b>what the client draws</b>
+                    <div class="draw">
+                        <span class="t">Counter</span>
+                        <span class="v">42</span>
+                        <span class="btns">
+                            <span class="btn ghost">−</span>
+                            <span class="btn">+</span>
+                        </span>
+                        <small>No stylesheet reached the client: <code>surface.base</code> and the type scale are roles it resolves itself, so the viewer's dark mode and font size are theirs, not the application's.</small>
+                    </div>
+
+                    <div class="legend">
+                        <span class="l-server">− asks the server</span>
+                        <span class="l-local">+ answers locally</span>
+                    </div>
+                </div>
+            </div>
+
+            <p class="note">
+                <code>local_button</code> carries a statement compiled to bytecode,
+                verified by the client before it first runs and metered by fuel: the
+                <strong>+</strong> repaints in the frame you pressed it, then tells the
+                server, which confirms or corrects. Nothing a local handler does is
+                trusted — authorisation is never local.
+            </p>
+        </div>
+    </section>
+
+    <section>
+        <div class="mark">Refusals<span>§08</span></div>
+        <div>
+            <h2>What it will not do</h2>
+            <p>
+                Most of the safety here is subtraction. These are not defaults to be
+                turned off; the client has no way to do them.
+            </p>
+
+            <ul class="refusals">
+                <li><span>Run downloaded native code, or JIT anything. Local handlers are verified bytecode on a whitelisted opcode set, metered by fuel.<br><cite>spec 07 — bytecode</cite></span></li>
+                <li><span>Resolve a cascade. Styles arrive already computed, as fixed 64-byte records; the client does one array lookup.<br><cite>spec 02 — wire format</cite></span></li>
+                <li><span>Read the clipboard, the camera or the filesystem without a capability the person granted.<br><cite>spec 01 — transport</cite></span></li>
+                <li><span>Report a keystroke outside a focused field, enumerate fonts, or read back a canvas. The fingerprint surface is close to nothing.<br><cite>spec 08 — security</cite></span></li>
+                <li><span>Fall back to plain HTTP. TLS 1.3, or no session.<br><cite>spec 01 — transport</cite></span></li>
+            </ul>
+        </div>
+    </section>
+
+    <section>
+        <div class="mark">Standing<span>§09</span></div>
+        <div>
+            <h2>Where it actually is</h2>
+            <p>
+                The protocol, the client and the Soli integration exist and are tested.
+                Mobile does not. The full account, crate by crate, is on the status page.
+            </p>
+
+            <table class="ledger">
+                <thead>
+                    <tr><th>Piece</th><th>State</th><th>Evidence</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>64 tests</td></tr>
+                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>golden pixels</td></tr>
+                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>39 tests</td></tr>
+                    <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>26 tests</td></tr>
+                    <tr><td>Sandbox: Landlock, seccomp, no core dump</td><td class="yes">Built</td><td>Linux only</td></tr>
+                    <tr><td>Sandbox on macOS and Windows</td><td class="no">Not started</td><td>—</td></tr>
+                    <tr><td>Android, iOS</td><td class="no">Not started</td><td>—</td></tr>
+                </tbody>
+            </table>
+
+            <p class="note">
+                A desktop artifact is 76 MB today against a 15 MB promise, and the
+                reason is the runtime it embeds, not the window. That number is on the
+                status page with the rest of the losses.
+            </p>
+        </div>
+    </section>
+
+    <footer>
+        <span>EUI/1 · a protocol, a client, a specification</span>
+        <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui/status.md">Status, in full</a>
+        <a href="https://github.com/solisoft/eui">Source</a>
+        <a href="https://soli-lang.com">Soli</a>
+    </footer>
+</main>
+
+<script>
+    // Hovering a field lights the paragraph that explains it, and the
+    // other way round. Nothing else on this page needs script.
+    (function () {
+        var fields = document.querySelectorAll('.field[data-read]');
+        fields.forEach(function (field) {
+            var read = document.getElementById(field.dataset.read);
+            if (!read) return;
+            var on = function () { field.classList.add('on'); read.classList.add('on'); };
+            var off = function () { field.classList.remove('on'); read.classList.remove('on'); };
+            field.addEventListener('mouseenter', on);
+            field.addEventListener('mouseleave', off);
+            read.addEventListener('mouseenter', on);
+            read.addEventListener('mouseleave', off);
+        });
+    })();
+</script>

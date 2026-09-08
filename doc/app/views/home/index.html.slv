@@ -1,0 +1,156 @@
+<section>
+  <h1 style="font-size:clamp(2rem,5vw,3.25rem);line-height:1.08;letter-spacing:-0.03em;margin:0 0 0.6em;max-width:16ch;">
+    A user interface, in 150 bytes.
+  </h1>
+
+  <p style="max-width:62ch;font-size:1.125rem;color:var(--ink-muted);margin:0 0 2.5rem;">
+    EUI delivers application interfaces over HTTPS without HTML, CSS, or JavaScript.
+    The server does not send a document to be interpreted; it sends an interface
+    tree that is already resolved. Below are the actual bytes for a column
+    containing the word <em>Hi</em>, and the thing they draw.
+  </p>
+
+  <div class="split">
+    <div class="dump">
+      <table>
+        <tbody>
+          <tr>
+            <td class="off">0000</td>
+            <td class="hex"><span class="op">10</span> 01 02 48 69</td>
+            <td class="note"><b>DefAtom</b> interns atom 1 as “Hi”</td>
+          </tr>
+          <tr>
+            <td class="off">0005</td>
+            <td class="hex"><span class="op">11</span> 01 <span class="elide">64 bytes</span></td>
+            <td class="note"><b>DefStyle</b> 1, a column with padding 4 on the base surface</td>
+          </tr>
+          <tr>
+            <td class="off">0047</td>
+            <td class="hex"><span class="op">11</span> 02 <span class="elide">64 bytes</span></td>
+            <td class="note"><b>DefStyle</b> 2, one step up the text scale, muted foreground</td>
+          </tr>
+          <tr>
+            <td class="off">0089</td>
+            <td class="hex"><span class="op">20</span></td>
+            <td class="note"><b>Mount</b> replaces the document</td>
+          </tr>
+          <tr>
+            <td class="off">008A</td>
+            <td class="hex">01 00 01 01 01</td>
+            <td class="note">box, id 1, style 1, one child</td>
+          </tr>
+          <tr>
+            <td class="off">008F</td>
+            <td class="hex">02 02 02 02 00 01 00</td>
+            <td class="note">text, id 2, style 2, holding atom 1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="render">
+      <div class="render__box">Hi</div>
+    </div>
+  </div>
+
+  <p class="caption">
+    <span>128 of those bytes are the two style records.</span>
+    <span>They are sent once, however many nodes come to use them.</span>
+  </p>
+</section>
+
+<section class="facts">
+  <div class="fact">
+    <div class="fact__n">4 619 B</div>
+    <div class="fact__what">A 50-row table, sent in full</div>
+    <div class="fact__vs">14 362 B as HTML. The structure around the text is 5.3× smaller.</div>
+  </div>
+  <div class="fact">
+    <div class="fact__n">22 B</div>
+    <div class="fact__what">One cell changes</div>
+    <div class="fact__vs">Reordering fifty keyed rows costs 201 B, because rows move rather than rebuild.</div>
+  </div>
+  <div class="fact">
+    <div class="fact__n">0</div>
+    <div class="fact__what">Wakeups while idle</div>
+    <div class="fact__vs">Not a setting. There is no render loop in the client to leave running.</div>
+  </div>
+</section>
+
+<section>
+  <h2 style="font-size:1.5rem;letter-spacing:-0.015em;margin:0 0 0.3em;">What EUI refuses</h2>
+  <p style="max-width:62ch;color:var(--ink-muted);margin:0 0 1.5rem;">
+    These are not gaps waiting to be filled. Each one is why the client stays small
+    enough to audit, and fast enough to be worth the trouble.
+  </p>
+
+  <div class="refuse">
+    <dl>
+      <dt>An open element vocabulary</dt>
+      <dd>Fourteen primitive kinds, and the set is closed. Buttons, dialogs and
+          tables are composed on the server, which is how the catalogue grows
+          without shipping a new client.</dd>
+
+      <dt>The cascade</dt>
+      <dd>No selectors, no specificity, no inheritance to resolve. A style is 64
+          fixed bytes of already-computed values, so styling a node costs one
+          array lookup.</dd>
+
+      <dt>Code from the network</dt>
+      <dd>No native code, no JIT, no <code>eval</code>. A local handler is
+          bytecode that passes a verifier and runs on a fuel budget, or it does
+          not run.</dd>
+
+      <dt>Ambient authority</dt>
+      <dd>A capability the manifest never requested has no code path in the
+          client. The check is not at the call site; the call site is absent.</dd>
+
+      <dt>Error recovery</dt>
+      <dd>A malformed frame ends the session. Tolerance is how a parser becomes
+          attack surface.</dd>
+
+      <dt>A fingerprint</dt>
+      <dd>No user-agent string, no font enumeration, no canvas readback, no
+          device identifier. The client tells a server its viewport and nothing
+          else about the person using it.</dd>
+    </dl>
+  </div>
+</section>
+
+<section style="margin-top:4rem;max-width:62ch;">
+  <h2 style="font-size:1.5rem;letter-spacing:-0.015em;margin:0 0 0.75rem;">Where this stands</h2>
+  <p style="color:var(--ink-muted);">
+    <span class="stamp stamp--built">Built</span>
+    The wire format and the session state. <code>eui-proto</code> encodes and
+    decodes every construct on this page with no dependencies and no
+    <code>unsafe</code>; <code>eui-tree</code> applies the patches, checks
+    every reference before placing anything, and enforces the quotas;
+    <code>eui-theme</code> resolves roles to colours with contrast met by
+    construction; <code>eui-layout</code> places every node with one
+    specified algorithm and a list that never measures what it cannot see;
+    <code>eui-text</code> shapes with two embedded faces and never reads a
+    system font; <code>eui-render</code> draws every one of them as a rounded
+    rectangle through one pipeline, and is tested by reading its pixels back;
+    <code>eui-client</code> runs the counter end to end over a real socket —
+    against a hand-written Rust server, and against <code>soli serve</code>
+    itself with the view written in Soli. 160 tests, 46 of them rejection cases.
+  </p>
+  <p style="color:var(--ink-muted);">
+    <span class="stamp stamp--spec">Specified</span>
+    The transport, the layout, the theme, the events, the bytecode, and the
+    budgets, normatively. The security model is designed on these pages; its
+    spec document is still to write.
+  </p>
+  <p style="color:var(--ink-muted);">
+    The window is compiled and not yet run on glass. Every
+    number above comes from a test you can run;
+    <a href="/docs/budgets">the budgets page</a> names each one.
+    If you want the argument rather than the numbers,
+    <a href="/docs/overview">start with the overview</a>.
+  </p>
+</section>
+
+<p class="colophon">
+  This site makes no third-party request. Two self-hosted Titillium Web faces,
+  124 KB; the monospace is whatever your system already has, because a hex digit
+  does not need a downloaded typeface.
+</p>

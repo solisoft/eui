@@ -552,6 +552,26 @@ def needle_sample_artist(id)
   }
 end
 
+# What came out this fortnight, as records with their own sleeves. The
+# welcome page asks for it once, when the window opens: `tag:new` is
+# search's own way of saying new release, and it is the way that still
+# answers — `/browse/new-releases` returns 403 to an application
+# registered after November 2024. A market is required or the answer is
+# whatever the token's country happens to be.
+#
+# It costs one call and, the first time, eight pictures fetched and
+# re-encoded into `public/covers`; after that the files are there. An
+# unconfigured sample catalogue has no pictures at all, so it says so and
+# the welcome draws its sleeves instead.
+def needle_fresh
+  return [] unless needle_configured()
+
+  data = needle_api("/search?type=album&limit=8&market=" + needle_market() + "&q=" + url_encode("tag:new"))
+  return [] if data.nil?;
+
+  ((data["albums"] ?? {})["items"] ?? []).map(fn(a) { needle_album_stub(a) })
+end
+
 # ----------------------------------------------- one catalogue, two backs
 
 def needle_search(q)
@@ -878,10 +898,23 @@ def needle_defaults(state)
   # and the client acts only when the number changes (03 §7), so it must
   # not be recomputed from the position — that would stutter the sound.
   state["seek"] = state["seek"] ?? 0
+  # What the welcome page shows: real records, fetched once when the
+  # window opens (`needle_fresh`), empty when there is no catalogue to
+  # ask.
+  state["fresh"] = state["fresh"] ?? []
   state["devices"] = state["devices"] ?? []
   state["device"] = state["device"] ?? ""
   state["device_name"] = state["device_name"] ?? ""
   state["here"] = state["here"] ?? false
+  state
+end
+
+# The window opened: take its size, and ask once for the records the
+# welcome page shows. One call and, the first time, eight pictures; the
+# view itself never reaches the network.
+def needle_open(state, viewport)
+  state["viewport"] = viewport ?? state["viewport"]
+  state["fresh"] = needle_fresh()
   state
 end
 
@@ -1146,7 +1179,7 @@ def music(event_data)
   props = params["props"] ?? {}
   state = needle_defaults(event_data["state"] ?? {})
   match event {
-    "connect" => needle_set(state, "viewport", params["viewport"] ?? state["viewport"]),
+    "connect" => needle_open(state, params["viewport"]),
     "viewport" => needle_set(state, "viewport", params["viewport"]),
     "typed" => needle_set(state, "typed", params["payload"]),
     "find" => needle_find(state),
@@ -1871,6 +1904,7 @@ end
 
 def needle_welcome(state)
   local_count = needle_local_files().length()
+  fresh = state["fresh"] ?? []
   names = needle_configured() ? [
     "Radiohead",
     "Nina Simone",
@@ -1903,7 +1937,7 @@ def needle_welcome(state)
             }
           ),
           text(
-            "Type a name and press Enter. Every sleeve is drawn from the record's own name — no picture is fetched — and the ground behind it comes from your own theme.",
+            fresh.length() > 0 ? "Type a name and press Enter, or open one of these — they came out this fortnight. Their sleeves are the catalogue's own, fetched once by the server and served to the window as ordinary pictures." : "Type a name and press Enter. Every sleeve is drawn from the record's own name — no picture is fetched — and the ground behind it comes from your own theme.",
             {
               "size": 2,
               "fg": "text.muted",
@@ -1915,10 +1949,17 @@ def needle_welcome(state)
       column(
         {"gap": 3, "align": "center"},
         [
-          needle_caption(local_count > 0 ? "Try one, or your own" : "Try one"),
+          needle_caption(fresh.length() > 0 ? (local_count > 0 ? "Out this fortnight, or your own" : "Out this fortnight") : (local_count > 0 ? "Try one, or your own" : "Try one")),
           row(
-            {"gap": 2, "wrap": "wrap"},
-            names.map(fn(n) { needle_suggestion(n) }).concat(local_count > 0 ? [needle_machine_tile(local_count)] : [])
+            {
+              "gap": 2,
+              "wrap": "wrap",
+              "justify": "center",
+              "max_width": 840
+            },
+            (fresh.length() > 0 ? fresh.map(fn(a) { needle_record_tile(a) }) : names.map(fn(n) {
+              needle_suggestion(n)
+            })).concat(local_count > 0 ? [needle_machine_tile(local_count)] : [])
           )
         ]
       )

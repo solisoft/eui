@@ -1,119 +1,34 @@
-# www
+# eui/www — the public site
 
-A Soli MVC application.
+One page, server-rendered by Soli, describing what EUI is. It is deliberately
+plain machinery: **no framework, no build step, no npm, and no JavaScript
+beyond fifteen lines that light up a paragraph when you hover a byte.**
 
-## Getting Started
+- `app/views/home/index.html.slv` — the page.
+- `app/views/layouts/application.html.slv` — head, fonts, stylesheet.
+- `public/css/site.css` — hand-written, with the design tokens at the top.
 
-### Development Server
+The documentation site is the sibling app in `../doc`.
 
-Start the development server with hot reload:
+## The rule this page follows
 
-```bash
-soli serve . --dev
+Every number on it comes from a measurement in this repository, and the page
+says which. The twenty-two bytes in the hero are the real encoding of
+
+```rust
+Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 141, text: TextRef::Inline("1 984, 42 €".into()) }] })
 ```
 
-Your app will be available at [http://localhost:5011](http://localhost:5011)
+taken from `crates/eui-proto/tests/size_budget.rs`; the field labels are the
+wire format of `spec/02-wire-format.md`, byte for byte. If a number changes,
+change it here too — a marketing page that drifts from its own test suite is
+worse than no page.
 
-### Production Server
+## Running it
 
-Start the production server:
-
-```bash
-soli serve . --port 5011
+```sh
+soli serve . --dev          # http://localhost:5011
 ```
 
-Or run as a daemon:
-
-```bash
-soli serve . -d
-```
-
-## Project Structure
-
-```
-www/
-├── app/
-│   ├── assets/
-│   │   └── css/
-│   │       └── application.css  # Source CSS with Tailwind directives
-│   ├── controllers/     # Request handlers
-│   ├── models/          # Data models
-│   └── views/           # HTML templates
-│       ├── home/        # Home page views
-│       └── layouts/     # Layout templates
-├── config/
-│   └── routes.sl      # Route definitions
-├── db/
-│   ├── migrations/      # Database migrations
-│   ├── seeds/           # Additional seed files (soli db:seed generate)
-│   └── seeds.sl         # Database seeds (soli db:seed)
-├── public/              # Static assets (compiled output)
-│   ├── css/
-│   │   └── application.css  # Compiled CSS (generated)
-│   ├── js/
-│   └── images/
-├── tests/               # Test files
-└── soli.toml            # Project manifest
-```
-
-## CSS
-
-Tailwind is compiled by `soli` itself — there is no `package.json` and no
-`node_modules`. `soli serve . --dev` rebuilds `public/css/application.css`
-from `app/assets/css/application.css` on every change, using a standalone
-Tailwind binary cached in `~/.soli/bin/`. Tailwind's configuration is
-CSS-first (`@theme` in `application.css`), so there is no `tailwind.config.js`
-either.
-
-## Database Migrations
-
-Generate a new migration:
-
-```bash
-soli db:migrate generate create_users
-```
-
-Run pending migrations:
-
-```bash
-soli db:migrate up
-```
-
-Rollback last migration:
-
-```bash
-soli db:migrate down
-```
-
-Check migration status:
-
-```bash
-soli db:migrate status
-```
-
-## Database Seeds
-
-Populate the database with sample or initial data. Edit `db/seeds.sl` (and add ordered
-files under `db/seeds/`), then run:
-
-```bash
-soli db:seed
-```
-
-Seeds are not tracked and re-run every time, so keep them idempotent (guard inserts with
-`first_by` / `find_by`). Generate an additional ordered seed file:
-
-```bash
-soli db:seed generate demo_users
-```
-
-## Documentation
-
-- [Soli MVC Documentation](https://soli.solisoft.net/docs)
-- [Soli Language Reference](https://soli.solisoft.net/docs/soli-language)
-- [Authorization & Policies](https://soli.solisoft.test/docs/security/authorization)
-- [Tailwind CSS](https://tailwindcss.com/docs)
-
-## License
-
-MIT
+The nav points at GitHub while the documentation host is not deployed; repoint
+those four links when it is.

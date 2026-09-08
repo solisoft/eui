@@ -29,12 +29,13 @@ examples/
                   app; the catalogue (buttons to date pickers to charts) is
                   app/controllers/eui_builders.sl
   snapshot        render the counter, or any live Soli component, off-screen
-www/         the documentation site, itself a Soli app
+doc/         the documentation site, itself a Soli app
+www/         the public site, itself a Soli app
 xtask/       `bench` measures the budgets; `conform` runs every vector of spec/09
 deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
 ```
 
-`www/docs/eui/status.md` says, crate by crate, what is built and tested,
+`doc/docs/eui/status.md` says, crate by crate, what is built and tested,
 what is specified, and what is not started — mobile, and the worker
 sandbox on macOS and Windows.
 
@@ -47,7 +48,7 @@ cargo clippy --all-targets                               # must be silent
 cargo run --release -p xtask -- bench                    # the budgets in spec/10; exits 1 on a miss
 cargo run -p xtask -- conform                            # spec/09: tests, clippy -D warnings, the Soli suite with EUI_SOLI_BIN
 cargo deny check                                         # advisories and licences, exceptions in deny.toml
-cd www && soli serve . --dev                             # the docs, on :5011
+cd doc && soli serve . --dev                             # the docs, on :5011
 
 # The counter, end to end, in a window:
 cargo run -p counter-server                              # ws://127.0.0.1:5090

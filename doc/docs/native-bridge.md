@@ -1,0 +1,253 @@
+# Native Bridge
+
+Reach the shell your app is being viewed in.
+
+While the app is **open**, server-side Soli code raises a real OS notification with no push service,
+no certificates and no keys. For an app that is **closed**, see
+[APNs](#reaching-a-closed-app-apns) further down — which needs all three, and a paid Apple
+Developer account.
+
+A Soli app packaged with [`soli desktop build`](/docs/development-tools/desktop), or wrapped in a
+WebView on a phone, renders inside an embedded web view — and **neither `WKWebView` nor Android's
+`WebView` implements the Push API or the Notifications API**. Both platforms reserve those for the
+browser proper. So an app that ships web push reaches browsers and installed PWAs, and silently
+reaches nothing at all inside its own native shell.
+
+The native bridge is the missing channel: server-side Soli code addressing the client that is
+currently looking at the page.
+
+```soli
+Native.notify("user:42", {
+  "title": "New ping",
+  "body":  "Ana replied to your comment",
+  "url":   "/pings/3"
+})
+```
+
+In a shell that raises a real OS notification. In a browser it raises a Web Notification. Where
+neither is available it does nothing.
+
+## Per feature
+
+| Page | |
+|---|---|
+| [Native clients](/docs/native/clients) | `soli generate client` — iOS / Android / Linux / Windows WebView shells. |
+| [Device registration](/docs/native/devices) | `soli generate devices` — token store, `registerDevice`, `deliver_to_user`. |
+| [Notifications](/docs/native/notifications) | `Push.deliver` — bridge if open, VAPID / APNs / FCM if closed. |
+| [Deep Links](/docs/native/deep-links) | `AppLinks` + `soli generate app_links` + shell URL handlers. |
+| [Camera & Microphone](/docs/native/camera) | `getUserMedia`, once the shell stops denying it silently. |
+| [Barcode & QR](/docs/native/scanning) | `camera_preview` scan loop; WebKit loads optional jsQR. |
+| [Geolocation](/docs/native/geolocation) | `Geo.*` plus the permission each shell needs. |
+| [Device capabilities](/docs/native/device) | Share, badge, biometrics, NFC, print, haptics. |
+| [Offline mobile](/docs/native/offline) | `soli generate offline` — outbox + sync (not local SolidB). |
+| [Platform limits](/docs/native/platform-limits) | Background location, IAP, widgets — honest stubs. |
+| [Apple Push (APNs)](/docs/native/push-apple) | `Apns.send` when the app is closed. |
+| [Android Push (FCM)](/docs/native/push-android) | `Fcm.send` when the app is closed (Doze). |
+| [Desktop](/docs/development-tools/desktop) | Local executable + private SolidB (different product shape). |
+
+## What reaches whom
+
+The bridge covers the app-is-open case, and nothing else. That is a deliberate boundary rather than
+a shortcoming — it is what lets it work with no push service, no certificates and no keys — but you
+need the whole picture to choose transports:
+
+| Client | App open | App closed |
+|---|---|---|
+| Browser | bridge (or Web Notification) | web push (VAPID) |
+| Installed PWA | bridge | web push (VAPID) |
+| macOS / iOS shell | **bridge** | [APNs](/docs/native/push-apple) |
+| Android shell | **bridge** | [FCM](/docs/native/push-android) (sender in Soli; token needs Firebase SDK / `soli generate client android --fcm`) |
+
+The bridge is the only thing that reaches the two shell rows on the left, because an embedded web
+view has neither the Push API nor the Notifications API. Everything on the right needs a push
+service, because a closed app is not executing and something else has to be listening.
+
+`notify` returns how many clients it reached, which makes the two compose without a branch on
+platform:
+
+```soli
+reached = Native.notify("user:#{str(user_id)}", payload)
+if reached == 0
+  Apns.send(device_token, payload, apns_options)   # or WebPush, for a browser
+end
+```
+
+One case where the right-hand column is simply empty: a desktop app carrying its **own** database
+has nothing writing to it while closed, so there is nothing to announce. There the bridge is not a
+partial answer — it is the whole one.
+
+## Turning it on
+
+One helper in your layout names the channel this page listens to:
+
+```erb
+<% user_id = session_get("user_id") %>
+<%- native_channel("user:#{str(user_id)}") rescue "" unless user_id.nil? %>
+```
+
+That emits a `<meta name="soli-native">` tag whose presence is what switches the bridge on. A page
+that never calls it downloads no script and opens no connection.
+
+The channel travels as a **signed token**, not as plain text. Subscribing is a `GET` the browser
+makes, so an unsigned `?channel=user:42` would let anyone listen to anyone. The token is keyed by
+HKDF-SHA256 from `SOLI_SESSION_SECRET` (32+ characters, the same secret sealed cookies use, with its
+own domain-separating label), carries a 12-hour expiry, and is verified before any subscription is
+accepted. Rotating the secret invalidates outstanding tokens, exactly as it does sealed cookies.
+
+## API
+
+### Server
+
+| Call | Returns | |
+|---|---|---|
+| `Native.notify(channel, payload)` | `Int` | Clients reached. `0` means nobody has the app open. |
+| `Native.subscribers(channel)` | `Int` | Live listeners, without sending anything. |
+| `Native.channel_token(channel)` | `String` | A raw token, for a client that is not a rendered page. |
+| `native_channel(channel)` | `String` | The meta tag, for a view. The usual way in. |
+
+Payload keys the shells understand: `title`, `body`, `url` (opened on click), `tag` (a stable id, so
+an update replaces its predecessor rather than stacking), `icon`, `badge` (closed-app push).
+
+### Client (`window.soli.nativeBridge`)
+
+Available when a shell injects the host object (or as a thin web fallback for some APIs).
+
+| Call | |
+|---|---|
+| `supports(name)` / `capabilities` | Feature-detect without sniffing UAs |
+| `vibrate` / `share` / `badge` / `keepAwake` / `authenticate` / `readTag` / `print` | Device APIs — see [Device](/docs/native/device) |
+| `registerDevice({ platform, token?, subscription? })` | `POST /devices` with session + optional CSRF meta — see [Devices](/docs/native/devices) |
+| `startBackgroundLocation` / `purchase` | Reject unless the shell lists the capability — see [Platform limits](/docs/native/platform-limits) |
+
+Channel names are yours to choose — `user:42`, `room:7`, `deploy:prod`. They may not contain `.`,
+`|` or control characters, and are namespaced internally so they can never collide with, or be
+reached through, an app's own `sse_broadcast` topics.
+
+## Capabilities
+
+A shell declares what it can do, and the page can branch on it without sniffing user agents:
+
+```js
+window.soli.nativeBridge
+// { available: true, platform: "android",
+//   capabilities: ["notify", "geolocation", "vibrate", "share", "keep_awake",
+//                  "print", "clipboard", "camera", "nfc", "biometric"] }
+```
+
+> The two **Notifications** rows are unified by [`Push.deliver`](/docs/native/notifications#pushdeliver-the-one-call-to-reach-a-user)
+> — one server-side call that reaches a user over the bridge if the app is open and over Web Push /
+> APNs / FCM if it is closed, chosen by platform. The rows below are the transports it routes
+> between; you rarely call them directly.
+
+Two rules explain the shape of the rest of this table:
+
+1. **Prefer the web API when the host already has one.** `getUserMedia` needs no bridge call — it
+   needs the shell to stop denying it, which is permission wiring rather than an API.
+2. **Only embedded web views need a bridge at all.** On Windows and Linux a `soli desktop build`
+   artifact opens the user's *real browser* (chrome-less, but Chrome), so every web API is already
+   there — notifications, push, camera, geolocation. There is nothing to bridge until you replace
+   that browser with a native window.
+
+| Capability | Browser / PWA | Windows | Linux | macOS shell | iOS | Android shell |
+|---|---|---|---|---|---|---|
+| [Notifications, app open](/docs/native/notifications) | ✅ | ✅ browser | ✅ browser | ✅ shipped | ✅ shipped | ✅ shipped |
+| Notifications, app closed | ✅ web push | ✅ web push | ✅ web push | ✅ APNs | ✅ APNs | ✅ FCM sender* |
+| [Camera / microphone](/docs/native/camera) | ✅ | ✅ browser | ✅ browser | ✅ shipped | ✅ shipped | ✅ shipped |
+| [Barcode / QR scan](/docs/native/scanning) | ✅ native | ✅ native | ✅ native | ✅ decoder needed | ✅ decoder needed | ✅ native |
+| File upload / capture | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ shipped |
+| Clipboard | ✅ | ✅ | ✅ | ✅ | ✅ shipped | ✅ |
+| [Geolocation](/docs/native/geolocation) | ✅ | ✅ browser | ✅ browser | ✅ shipped | ✅ shipped | ✅ shipped |
+| Vibration / haptics | ✅ Android | ✗ | ✗ | ✅ trackpad only | ✅ haptics | ✅ shipped |
+| [Deep links into the app](/docs/native/deep-links) | — | ✅ protocol / `soli desktop` open | ✅ protocol / desktop open | ✅ scheme | ✅ scheme | ✅ shipped |
+| NFC | Chrome Android only | ✗ | ✗ | ✗ no hardware | ✅ Core NFC | ✅ shipped |
+| Biometric unlock | ✅ WebAuthn | ✅ browser | ✅ browser | ✅ Touch ID | ✅ Face/Touch ID | ✅ shipped |
+| Badge count | ✅ Badging API | ✅ browser | ✅ browser | ✅ dock tile | ✅ shipped | ✅ via notification |
+| Share sheet | ✅ Web Share | ✅ browser | ✅ generated shell | ✅ shipped | ✅ shipped | ✅ shipped |
+| Keep screen awake | ✅ Wake Lock | ✅ browser | ✅ browser | ✅ shipped | ✅ shipped | ✅ shipped |
+| Printing | ✅ | ✅ | ✅ | ✅ | ✅ shipped | ✅ shipped |
+
+✅ shipped · 🔜 planned · ✗ not possible on the platform · "browser" = provided by the browser the
+artifact opens, not by a shell
+
+**The iOS column is the native shell** (`clients/ios`), a UIKit + WKWebView app onto the remote
+deployment, like the Android one. It carries the full bridge — and because iOS has an arbitrary icon
+badge and Core NFC, it reaches two things the macOS shell cannot. Where you would rather not ship a
+native app, the iOS **PWA** is unusually strong on its own: home-screen web apps get push (16.4+),
+camera and geolocation with no app at all.
+
+¹ The **sender** ships; the Android app still needs the Firebase SDK to obtain a device token, which
+means a Gradle build (see [What it costs](#what-it-costs-1)).
+
+### Where the shells stand
+
+| Host | Window today | Native shell |
+|---|---|---|
+| **Windows** | the user's browser, chrome-less | none — would be **WebView2** |
+| **Linux** | the user's browser, chrome-less | none — would be **WebKitGTK** |
+| **macOS** | native, frameless | ✅ AppKit + `WKWebView` |
+| **Android** | native | ✅ `WebView` |
+| **iOS** | — | ✅ UIKit + `WKWebView` |
+
+A Windows or Linux shell is a real option, not a missing feature: it buys a native frameless window
+and an icon, and costs you the web APIs the browser was providing for free. Both embed a web view
+that suppresses notifications by default — WebView2 raises `NotificationReceived` for the host to
+handle, WebKitGTK emits `show-notification` — so both would implement the same bridge contract the
+macOS and Android shells do, and both would need their own permission wiring for camera.
+
+**"macOS shell" means AppKit.** The **iOS shell** is separate UIKit + `WKWebView`
+(`soli generate client ios`). WebKit message handlers, notifications, and capture
+permission wiring are shared in spirit; the window layer is not. APNs is
+platform-neutral: the same `Apns.send` reaches macOS and iOS once a device
+registers. Generate shells with [`soli generate client`](/docs/native/clients).
+
+Rows marked 🔜 are not implemented yet. A capability only appears in a shell's `capabilities` list
+once it actually works there, so feature-detection stays honest:
+
+```js
+if (window.soli.nativeBridge.capabilities.includes("camera")) {
+  // safe to offer the in-app scanner
+}
+```
+
+## Writing a shell
+
+A shell injects an object the client script looks for. WebKit can define it at document start:
+
+```swift
+window.soli = window.soli || {};
+window.soli.native = {
+  platform: "macos",
+  capabilities: ["notify"],
+  notify: function (json) { window.webkit.messageHandlers.soliNative.postMessage(json); }
+};
+```
+
+Android binds a Java object by name instead, which the script also accepts — `addJavascriptInterface`
+is how the platform injects, and evaluating a wrapper script early enough to dress it up races page
+load:
+
+```java
+webView.addJavascriptInterface(new SoliNativeBridge(), "soliNativeHost");
+```
+
+Either way `notify` receives one JSON string. Working examples of both live in the Bonfire clients
+(`clients/macos`, `clients/android`).
+
+Pages can branch on what the host supports without sniffing user agents:
+
+```js
+window.soli.nativeBridge   // { available: true, platform: "android", capabilities: ["notify"] }
+```
+
+## Connection behaviour
+
+The client subscribes over SSE and reconnects with exponential backoff, up to 30 seconds. It drops
+the connection while the tab is hidden — an idle backgrounded stream costs the server a task for
+nothing — and reconnects when it comes back. Thousands of idle subscribers cost async tasks, not
+worker threads.
+
+## Requirements
+
+- `SOLI_SESSION_SECRET`, 32+ characters. Without it `native_channel` raises rather than emitting an
+  unsigned tag.
+- Nothing else. No push service, no keys, no certificates.
