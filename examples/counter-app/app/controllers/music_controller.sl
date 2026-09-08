@@ -2033,7 +2033,8 @@ def needle_welcome(state)
       column(
         {
           "gap": 2,
-          "width": 560,
+          "width": "100%",
+          "max_width": 560,
           "align": "center"
         },
         [
@@ -2275,52 +2276,61 @@ def needle_transport(state, layout)
   )
 end
 
+# The line under the transport. On a narrow window it is the width of the
+# window rather than a fixed 200 px, so the filled part is a percentage
+# and not a pixel count — the same bar, told in the unit that stretches.
 def needle_seekbar(state, layout)
   now = state["now"]
   duration = now["seconds"] ?? 0
   position = state["position"] < duration ? state["position"] : duration
+  wide = layout["single"]
   width = layout["tight"] ? 200 : 360
+  share = duration == 0 ? 0 : int(100 * position / duration)
   filled = duration == 0 ? 0 : int(width * position / duration)
+  # Stretched, the track takes what the row has left over after the two
+  # clocks — grow, not a width, or it takes the row's whole width and
+  # pushes the second clock off the end. Fixed, it is the width it always
+  # was.
+  track = {
+    "display": "row",
+    "align": "center",
+    "height": 6,
+    "radius": 4,
+    "bg": "surface.sunken",
+    "cursor": "pointer"
+  }
+  track = wide ? track.merge({"grow": 1, "shrink": 1}) : track.merge({
+    "width": width,
+    "shrink": 0
+  })
   bar = {
     "k": "box",
     "key": "bar:seek",
-    "s": {
-      "display": "row",
-      "align": "center",
-      "width": width,
-      "height": 6,
-      "radius": 4,
-      "bg": "surface.sunken",
-      "cursor": "pointer",
-      "shrink": 0
-    },
+    "s": track,
     "on": {"click": "seek"},
     "c": [{"k": "box", "s": {
-      "width": filled,
+      "width": wide ? str(share) + "%" : filled,
       "height": 6,
       "radius": 4,
       "bg": "accent.base",
       "transition": "fast"
     }}]
   }
-  row(
-    {
-      "gap": 2,
-      "align": "center",
-      "shrink": 0
-    },
-    [
-      text(
-        needle_clock(position),
-        {"size": 0, "fg": "text.muted"}
-      ),
-      bar,
-      text(
-        needle_clock(duration),
-        {"size": 0, "fg": "text.muted"}
-      )
-    ]
-  )
+  frame = {
+    "gap": 2,
+    "align": "center",
+    "shrink": 0
+  }
+  # No width: the column above stretches it, and a percentage would be a
+  # percentage of the padded box — which is what pushed the second clock
+  # off the end.
+  frame = frame.merge({"shrink": 1}) if wide
+  clock = {
+    "size": 0,
+    "fg": "text.muted",
+    "shrink": 0
+  }
+  row(frame, [text(needle_clock(position), clock), bar, text(needle_clock(duration), clock)])
 end
 
 # Where the sound comes out. The list is Spotify's answer for this
@@ -2450,17 +2460,27 @@ def needle_bar(state, layout)
   # once a second — it is the only clock a remote player has. A local
   # sound needs none: its own `time_update` is the clock, and asking for
   # both would poll Spotify for a position the mixer already knows.
-  bar = row(
-    {
-      "gap": 4,
-      "align": "center",
-      "pad": [2, 3, 2, 3],
-      "bg": "surface.raised",
-      "radius": 3,
-      "shrink": 0
-    },
-    [left, middle, right].concat(sound)
-  )
+  # A narrow window puts the line under everything else instead of
+  # squeezing three regions into one row: the title had been clipped
+  # mid-word and the device chip down to its first letter. Same parts,
+  # stacked — what is playing and the controls above, the line across the
+  # whole width below.
+  shell = {
+    "gap": layout["single"] ? 2 : 4,
+    "align": "center",
+    "pad": [2, 3, 2, 3],
+    "bg": "surface.raised",
+    "radius": 3,
+    "shrink": 0
+  }
+  bar = row(shell, [left, middle, right].concat(sound))
+  if layout["single"]
+    top = row(
+      {"gap": 3, "align": "center"},
+      [left, needle_transport(state, layout), right]
+    )
+    bar = column(shell.merge({"align": "stretch"}), [top, needle_seekbar(state, layout)].concat(sound))
+  end
   if state["mode"] == "remote" && state["playing"]
     bar["p"] = (bar["p"] ?? {}).merge({"wake": 1000})
     bar["on"] = (bar["on"] ?? {}).merge({"wake": "poll"})

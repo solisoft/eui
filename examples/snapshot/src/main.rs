@@ -116,6 +116,75 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 }
             }
         }
+        // SNAPSHOT_CLICK="Some label;Another" — click each in turn before
+        // rendering, so a pane that is two clicks in can be looked at.
+        // The label is matched on a node's text; the click goes to the
+        // nearest ancestor that has a handler for it, the way an event does.
+        if let Ok(labels) = std::env::var("SNAPSHOT_CLICK") {
+            for label in labels.split(';').map(str::trim).filter(|l| !l.is_empty()) {
+                let _ = driver.paint(dw, dh);
+                let Some(root) = driver.session().root() else { break };
+                let Some(mut ix) = driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(label)) else {
+                    eprintln!("snapshot: nothing reads {label:?}");
+                    continue;
+                };
+                while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
+                    let Some(up) = driver.session().node(ix).map(|n| n.parent) else { break };
+                    if up == ix {
+                        break;
+                    }
+                    ix = up;
+                }
+                let Some(r) = driver.layout().rect(ix) else { continue };
+                driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+                driver.input(Input::PointerDown(0));
+                for f in driver.input(Input::PointerUp(0)) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                // The answer, and whatever pictures it names.
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let mut outstanding: usize = 0;
+                let mut answered = false;
+                loop {
+                    if Instant::now() > deadline {
+                        eprintln!("snapshot: no answer to {label:?}");
+                        break;
+                    }
+                    let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        match msg {
+                            Incoming::Message(b) => {
+                                answered = true;
+                                let frame = Frame::decode(&b).expect("frame");
+                                for f in driver.handle_frame(frame) {
+                                    conn.tx.send(f.encode()).unwrap();
+                                }
+                            }
+                            Incoming::Asset(hash, Ok(bytes)) => {
+                                driver.asset_ready(hash, bytes);
+                                outstanding = outstanding.saturating_sub(1);
+                            }
+                            Incoming::Asset(hash, Err(e)) => {
+                                driver.asset_failed(hash, e);
+                                outstanding = outstanding.saturating_sub(1);
+                            }
+                            Incoming::Closed(e) => panic!("closed: {e}"),
+                        }
+                    }
+                    let _ = driver.paint(dw, dh);
+                    for hash in driver.pending_assets() {
+                        conn.request_asset(hash);
+                        outstanding += 1;
+                    }
+                    if answered && outstanding == 0 {
+                        let _ = wake_rx.recv_timeout(Duration::from_millis(150));
+                        if conn.rx.try_recv().is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
