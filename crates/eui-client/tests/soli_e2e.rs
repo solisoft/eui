@@ -415,7 +415,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     // Slider: a click three quarters along the track sets 75; once focused
     // from the keyboard, ArrowRight nudges by the server's step of 5.
     let value = within(&d, "Slider", "Value 40");
-    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let track = slider_track(&d, value);
     let _ = d.paint(1000, 900);
     let r = d.layout().rect(track).unwrap();
     d.input(Input::PointerMove(r.x + r.w * 0.75, r.y + r.h / 2.0));
@@ -440,7 +440,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
 
     // Drag: press, move along the track, the value follows.
     let value = within(&d, "Slider", "Value 80");
-    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let track = slider_track(&d, value);
     let _ = d.paint(1000, 900);
     let r = d.layout().rect(track).unwrap();
     d.input(Input::PointerMove(r.x + r.w * 0.8, r.y + r.h / 2.0));
@@ -451,7 +451,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let label = texts(&d, root(&d)).into_iter().find(|t| t.starts_with("Value ")).expect("slider value");
     let value = within(&d, "Slider", &label);
-    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let track = slider_track(&d, value);
     let _ = d.paint(1000, 900);
     let r = d.layout().rect(track).unwrap();
     d.input(Input::PointerMove(r.x + r.w * 0.2, r.y + r.h / 2.0));
@@ -546,6 +546,17 @@ fn the_gallery_mounts_and_its_widgets_respond() {
 
 /// The node showing `text` inside the titled card `title` — the card is the
 /// title's parent, so two calendars showing "15" never collide.
+/// The slider's row, found from its value label: it is the sibling just
+/// above it. The column carries a heading too, so the track is not simply
+/// the first child.
+fn slider_track(d: &Driver, value: eui_tree::NodeIx) -> eui_tree::NodeIx {
+    let parent = d.session().node(value).unwrap().parent;
+    let kids = d.session().children(parent).to_vec();
+    let at = kids.iter().position(|c| *c == value).expect("a label is one of its parent's children");
+    assert!(at > 0, "the value label follows the track it belongs to");
+    kids[at - 1]
+}
+
 fn within(d: &Driver, title: &str, text: &str) -> eui_tree::NodeIx {
     let heading = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(title)).unwrap_or_else(|| panic!("no card titled {title:?}"));
     let card = d.session().node(heading).unwrap().parent;
