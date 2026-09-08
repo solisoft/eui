@@ -474,16 +474,64 @@ impl Painter<'_, '_> {
             let y1 = ((origin_y + cy + below) * scale).round();
             self.push(Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
         }
+        // Parse the optional "spans" prop for per-glyph color (syntax highlighting).
+        // Format: flat list of triples [start_byte, len_byte, color, ...]
+        let spans = self.scene.session
+            .atom_id("spans")
+            .and_then(|spans_atom| self.scene.session.node(ix).and_then(|n| n.prop(spans_atom)))
+            .and_then(|prop| match prop { Value::List(list) => Some(list), _ => None });
+
+        // Parse spans into (start_byte, end_byte, ColorRef) for fast lookup.
+        // Assumes spans are sorted ascending by start_byte and non-overlapping.
+        let span_triples: Vec<(usize, usize, ColorRef)> = if let Some(spans_list) = spans {
+            let mut triples = Vec::new();
+            if spans_list.len() % 3 == 0 {
+                for chunk in spans_list.chunks(3) {
+                    if let (Some(Value::Int(start)), Some(Value::Int(len)), Some(Value::Color(color))) =
+                        (chunk.get(0), chunk.get(1), chunk.get(2)) {
+                        if *start >= 0 && *len >= 0 {
+                            let start_byte = *start as usize;
+                            let end_byte = start_byte.saturating_add(*len as usize);
+                            triples.push((start_byte, end_byte, *color));
+                        }
+                    }
+                }
+            }
+            triples
+        } else {
+            Vec::new()
+        };
+
         let atlas_size = self.scene.atlas.size() as f32;
+        let mut span_ix = 0usize;
         for g in &shaped.glyphs {
             let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else { continue };
+
+            // Two-pointer walk: find the span that contains this glyph.
+            // Advance span_ix until its end_byte > glyph.start.
+            while span_ix < span_triples.len() && span_triples[span_ix].1 <= g.start {
+                span_ix += 1;
+            }
+
+            // Check if current glyph falls within the current span.
+            let glyph_color = if span_ix < span_triples.len() &&
+                g.start >= span_triples[span_ix].0 &&
+                g.start < span_triples[span_ix].1 {
+                // Resolve the span's color; fall back to fg if unresolvable.
+                resolve_color(self.scene.session, self.scene.theme, span_triples[span_ix].2)
+                    .unwrap_or(fg)
+            } else {
+                // Glyph is outside all spans; use the node's foreground color.
+                fg
+            };
+
             let gx = ((origin_x + g.x) * scale).round() + region.left as f32;
             let gy = ((origin_y + g.y) * scale).round() - region.top as f32;
             let (rx, ry, rw, rh) = (region.x as f32, region.y as f32, region.w as f32, region.h as f32);
             self.push(Quad {
                 rect: [gx, gy, rw, rh],
                 params: [0.0, 0.0, TEXTURED as f32, opacity],
-                fill: fg,
+                fill: glyph_color,
                 stroke: [0.0; 4],
                 uv: [rx / atlas_size, ry / atlas_size, (rx + rw) / atlas_size, (ry + rh) / atlas_size],
                 extra: [0.0; 4],
@@ -669,4 +717,77 @@ fn intersect(a: [u32; 4], b: [f32; 4]) -> [u32; 4] {
 pub fn linear(rgba: u32) -> [f32; 4] {
     let l = eui_theme::Linear::from_rgba(rgba);
     [l.r as f32, l.g as f32, l.b as f32, (rgba & 0xFF) as f32 / 255.0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_span_glyph_two_pointer_walk() {
+        // Simulate the two-pointer walk logic used in the glyph loop.
+        // Spans: [(0, 5, color0), (10, 15, color1), (20, 25, color2)]
+        // Glyphs: [0, 3, 7, 12, 22] (byte offsets)
+        // Expected: [color0, color0, no_span, color1, color2]
+
+        let span_triples = vec![
+            (0usize, 5usize, ColorRef::NONE),     // bytes 0-4
+            (10usize, 15usize, ColorRef::NONE),   // bytes 10-14
+            (20usize, 25usize, ColorRef::NONE),   // bytes 20-24
+        ];
+
+        let glyph_offsets = vec![0, 3, 7, 12, 22];
+        let mut results = Vec::new();
+
+        let mut span_ix = 0usize;
+        for &glyph_start in &glyph_offsets {
+            // Advance span_ix until its end_byte > glyph.start
+            while span_ix < span_triples.len() && span_triples[span_ix].1 <= glyph_start {
+                span_ix += 1;
+            }
+
+            // Check if glyph falls within current span
+            let in_span = span_ix < span_triples.len() &&
+                glyph_start >= span_triples[span_ix].0 &&
+                glyph_start < span_triples[span_ix].1;
+            results.push(in_span);
+        }
+
+        // Expected: [true, true, false, true, true]
+        assert_eq!(results, vec![true, true, false, true, true],
+            "Glyph offsets {:?} should match spans accordingly", glyph_offsets);
+    }
+
+    #[test]
+    fn test_span_parsing_from_values() {
+        // Simulate parsing a spans Value::List into (start, len, ColorRef) triples.
+        use eui_proto::Value;
+
+        let spans_list = vec![
+            Value::Int(0),
+            Value::Int(5),
+            Value::Color(ColorRef::role(1)),
+            Value::Int(10),
+            Value::Int(5),
+            Value::Color(ColorRef::role(2)),
+        ];
+
+        let mut triples = Vec::new();
+        if spans_list.len() % 3 == 0 {
+            for chunk in spans_list.chunks(3) {
+                if let (Some(Value::Int(start)), Some(Value::Int(len)), Some(Value::Color(color))) =
+                    (chunk.get(0), chunk.get(1), chunk.get(2)) {
+                    if *start >= 0 && *len >= 0 {
+                        let start_byte = *start as usize;
+                        let end_byte = start_byte.saturating_add(*len as usize);
+                        triples.push((start_byte, end_byte, *color));
+                    }
+                }
+            }
+        }
+
+        assert_eq!(triples.len(), 2);
+        assert_eq!(triples[0], (0, 5, ColorRef::role(1)));
+        assert_eq!(triples[1], (10, 15, ColorRef::role(2)));
+    }
 }

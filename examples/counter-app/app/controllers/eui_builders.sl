@@ -1368,6 +1368,83 @@ def code_block(code)
   }
 end
 
+# A read-only code viewer with line numbers and scrolling.
+# Displays code in a monospace font with a pinned gutter (line numbers stay
+# visible while scrolling horizontally). Gutter/code lines stay pixel-aligned
+# because both use the same font_size, which determines line-height.
+# `opts` may include {"language": "...", "line_numbers": true/false, "spans": [...]}.
+# `spans` is an optional array of [start_byte, len_byte, color] triples for syntax highlighting.
+def code_viewer(code, opts)
+  opts = opts ?? {}
+  show_numbers = opts["line_numbers"] ?? true
+
+  # Split code by newlines to get line count; build gutter numbers.
+  lines = code.split("\n")
+  line_count = lines.length()
+  digit_width = line_count.to_s.length()
+
+  # Build line number strings: "   1", "   2", etc., right-aligned.
+  # Include trailing newline to match code's line structure.
+  numbers_text = range(0, line_count).map(fn(i) {
+    (i + 1).to_s.rjust(digit_width)
+  }).join("\n")
+
+  # Code styling: monospace, compact size.
+  code_style = {"font": "mono", "size": 1}
+  gutter_style = {"font": "mono", "size": 1, "text_align": "end", "fg": "text.muted", "pad": [0, 1, 0, 1]}
+
+  # Wrap code text if large (>2KB) to use interning.
+  code_text_node = if code.length() > 2000
+    text_interned(code, code_style)
+  else
+    text(code, code_style)
+  end
+
+  # Apply syntax highlighting spans if provided.
+  if opts["spans"]
+    code_text_node["p"] = code_text_node["p"] ?? {}
+    code_text_node["p"]["spans"] = opts["spans"]
+  end
+
+  gutter_box = {
+    "k": "box",
+    "s": {
+      "display": "column",
+      "width": (digit_width * 8) + 8,  # ~8px per digit + padding
+      "bg": "surface.raised",
+      "overflow": "clip",
+      "shrink": 0
+    },
+    "c": [text(numbers_text, gutter_style)]
+  }
+
+  # Inner scroll holds the code; overflow: "scroll" gives unbounded width
+  # so the code Text node doesn't wrap.
+  code_scroll = {
+    "k": "scroll",
+    "s": {
+      "display": "column",
+      "overflow": "scroll",
+      "grow": 1
+    },
+    "c": [code_text_node]
+  }
+
+  # Content row: gutter + code, both inside.
+  content_row = row(
+    {"gap": 0, "align": "start"},
+    show_numbers ? [gutter_box, code_scroll] : [code_scroll]
+  )
+
+  # Outer scroll allows vertical scrolling of the entire viewer.
+  outer_scroll = scroll(
+    {"radius": 2, "bg": "surface.sunken", "pad": 1, "grow": 1},
+    [content_row]
+  )
+
+  outer_scroll
+end
+
 def tree_view(nodes, open_ids, on_toggle, depth)
   column({"gap": 0}, nodes.map(fn(n) {
     is_open = open_ids.includes?(n["id"])
