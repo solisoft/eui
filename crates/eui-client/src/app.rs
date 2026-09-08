@@ -604,6 +604,7 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::Ime(Ime::Preedit(text, _)) => self.input(Input::ImePreedit(text)),
             WindowEvent::Ime(Ime::Commit(text)) => self.input(Input::ImeCommit(text)),
+            WindowEvent::CursorLeft { .. } => self.input(Input::PointerOut),
             WindowEvent::Focused(false) => self.input(Input::Unfocused),
             WindowEvent::ThemeChanged(t) => {
                 let mode = match t {
@@ -626,13 +627,21 @@ impl ApplicationHandler<Wake> for App {
                 w.request_redraw();
             }
         }
-        // A frame already due has its redraw requested above; waiting on
-        // an instant in the past would spin until the compositor delivers
-        // it — and a hidden window's it may never come.
+        // A frame already due does not park the loop. It used to: `Wait`
+        // sleeps until the OS or the transport speaks, and when the driver
+        // said a frame was due *now* while `tick` had not yet agreed — the
+        // two read their own clocks, and in the sandboxed configuration the
+        // worker's answer is a round trip behind — nothing was scheduled
+        // and nothing asked for a redraw. The loop then slept until the
+        // next pointer event, which is why an animation ran only while the
+        // mouse moved and stopped the moment it was still. Come back in a
+        // millisecond instead: it costs a wake-up while a frame is pending
+        // and nothing at all at rest, where `next_frame_at` is `None`.
         let now = std::time::Instant::now();
         event_loop.set_control_flow(match self.backend.next_frame_at() {
             Some(at) if at > now => ControlFlow::WaitUntil(at),
-            _ => ControlFlow::Wait,
+            Some(_) => ControlFlow::WaitUntil(now + std::time::Duration::from_millis(1)),
+            None => ControlFlow::Wait,
         });
     }
 }

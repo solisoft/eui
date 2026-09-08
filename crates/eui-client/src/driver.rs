@@ -23,6 +23,10 @@ use eui_tree::{Chunk, NodeIx, Session};
 pub enum Input {
     /// Pointer moved to logical `(x, y)`.
     PointerMove(f32, f32),
+    /// The pointer left the window. Without this the node it was over
+    /// never hears `pointer_leave`, and a local handler that lit it on
+    /// enter leaves it lit — a hover that outlives the pointer.
+    PointerOut,
     /// A button went down: `0` primary, `1` secondary, `2` middle.
     PointerDown(u8),
     /// A button came up.
@@ -312,6 +316,10 @@ pub struct Driver {
     /// refused too, the session ends rather than looping.
     resyncing: bool,
     layout_valid: bool,
+    /// A batch undid a previewed style: the node under the pointer runs
+    /// its `enter` again at the next hover settle, even though the pointer
+    /// has not moved.
+    hover_relight: bool,
     redraw: bool,
     closed: Option<Close>,
     /// Spec 04 §7.1: the row range last reported by each windowed list,
@@ -404,6 +412,7 @@ impl Driver {
             granted: granted & caps::ALL,
             welcomed: false,
             resyncing: false,
+            hover_relight: false,
             layout_valid: false,
             redraw: true,
             closed: None,
@@ -520,6 +529,15 @@ impl Driver {
                 self.video_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
+                // The batch put back every style a local handler had
+                // previewed. Whatever the pointer is still over must light
+                // again, so its `enter` runs once more at the next paint —
+                // where hover settles anyway. `hovered()` does not move in
+                // the meantime: the pointer never went anywhere.
+                if self.session.take_restored_local() {
+                    self.pointer.hover_pending = true;
+                    self.hover_relight = true;
+                }
                 // Focus and edits follow the tree.
                 if self.focused.is_some_and(|f| self.session.node(f).is_none()) {
                     self.focused = None;
@@ -683,6 +701,7 @@ impl Driver {
             }
             Input::Paste(t) => self.text_input(&t),
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
+            Input::PointerOut => self.clear_hover(),
             Input::Unfocused => {
                 let out = self.set_focus(None, false);
                 self.pointer.pressed_on = None;
@@ -947,6 +966,23 @@ impl Driver {
         self.hover(x, y)
     }
 
+    /// The pointer is over nothing: whatever it was over hears
+    /// `pointer_leave`, once, and the scrollbar it may have been on stops
+    /// being hot. Same path as a move that hits nothing, without needing
+    /// coordinates for a pointer that is no longer on this window.
+    fn clear_hover(&mut self) -> Vec<Frame> {
+        self.pointer.hover_pending = false;
+        if self.pointer.over_scrollbar.is_some() {
+            self.pointer.over_scrollbar = None;
+            self.redraw = true;
+        }
+        let Some(old) = self.pointer.over.take() else { return Vec::new() };
+        if self.session.node(old).is_none() {
+            return Vec::new();
+        }
+        self.emit(old, EventKind::PointerLeave, Value::Null)
+    }
+
     /// Enter, leave and move for the node under `(x, y)`, on a valid layout.
     fn hover(&mut self, x: f32, y: f32) -> Vec<Frame> {
         self.pointer.hover_pending = false;
@@ -957,6 +993,7 @@ impl Driver {
             self.redraw = true;
         }
         let mut out = Vec::new();
+        let relight = std::mem::take(&mut self.hover_relight);
         if now != self.pointer.over {
             if let Some(old) = self.pointer.over {
                 if self.session.node(old).is_some() {
@@ -967,6 +1004,10 @@ impl Driver {
                 out.extend(self.emit(new, EventKind::PointerEnter, Value::Null));
             }
             self.pointer.over = now;
+        } else if relight {
+            if let Some(ix) = now {
+                out.extend(self.emit(ix, EventKind::PointerEnter, Value::Null));
+            }
         }
         if let Some(ix) = now {
             let p = self.point_payload(ix, EventKind::PointerMove, x, y);

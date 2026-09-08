@@ -357,6 +357,7 @@ fn put_input(w: &mut W, i: &Input) {
             w.u8(*m as u8);
         }
         Input::Unfocused => w.u8(12),
+        Input::PointerOut => w.u8(13),
     }
 }
 
@@ -375,6 +376,7 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         10 => Input::Resized(r.f32()?, r.f32()?, r.f32()?),
         11 => Input::Mode(ThemeMode::from_u8(r.u8()?).map_err(|_| "theme mode")?),
         12 => Input::Unfocused,
+        13 => Input::PointerOut,
         _ => return Err("unknown input"),
     })
 }

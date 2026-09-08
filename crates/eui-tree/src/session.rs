@@ -41,6 +41,16 @@ pub struct Session {
     /// `(node, previous style id)` for every style change since the last
     /// [`Session::take_style_changes`]: what a client transitions from.
     style_changes: Vec<(NodeIx, u32)>,
+    /// `node -> the style the server last gave it`, for the nodes a local
+    /// handler has restyled since the last batch. A local change is a
+    /// preview the server never hears about, so the server's own diff
+    /// cannot undo it: a hover that lit a card and a frame that arrived
+    /// before the pointer left would have left the card lit for good.
+    /// Applying a batch puts these back first.
+    local_styles: std::collections::HashMap<NodeIx, u32>,
+    /// Whether the last batch put any of those back, so the client knows
+    /// to run the pointer's `enter` again over the fresh tree.
+    restored_local: bool,
     poisoned: bool,
     last_seq: Option<u64>,
 }
@@ -71,6 +81,8 @@ impl Session {
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
             style_changes: Vec::new(),
+            local_styles: std::collections::HashMap::new(),
+            restored_local: false,
             poisoned: false,
             last_seq: None,
         }
@@ -189,6 +201,7 @@ impl Session {
             Some(n) => {
                 let old = n.style;
                 n.style = style;
+                self.local_styles.entry(ix).or_insert(old);
                 self.style_changes.push((ix, old));
                 self.arena.mark_dirty(ix).is_ok()
             }
@@ -335,6 +348,7 @@ impl Session {
                 return Err(ApplyError::OutOfOrder { last, got: batch.seq });
             }
         }
+        self.restore_local_styles();
         for op in &batch.ops {
             if let Err(e) = self.apply_op(op) {
                 self.poisoned = true;
@@ -343,6 +357,29 @@ impl Session {
         }
         self.last_seq = Some(batch.seq);
         Ok(())
+    }
+
+    /// Put every previewed style back to what the server last said, so a
+    /// batch diffs against the tree the server believes it sent. The
+    /// client re-runs the pointer's `enter` after the batch, so a card
+    /// still under the pointer lights again in the same frame.
+    fn restore_local_styles(&mut self) {
+        for (ix, style) in std::mem::take(&mut self.local_styles) {
+            if let Some(n) = self.arena.get_mut(ix) {
+                if n.style != style {
+                    let old = n.style;
+                    n.style = style;
+                    self.style_changes.push((ix, old));
+                    self.restored_local = true;
+                    let _ = self.arena.mark_dirty(ix);
+                }
+            }
+        }
+    }
+
+    /// Whether the last batch undid a previewed style, and clear the flag.
+    pub fn take_restored_local(&mut self) -> bool {
+        std::mem::take(&mut self.restored_local)
     }
 
     /// Apply one op. Definitions and `Mount` are accepted while poisoned;
@@ -390,6 +427,7 @@ impl Session {
                 let n = self.arena.require_mut(ix)?;
                 let old = n.style;
                 n.style = *style;
+                self.local_styles.remove(&ix);
                 self.style_changes.push((ix, old));
                 self.arena.mark_dirty(ix)
             }
