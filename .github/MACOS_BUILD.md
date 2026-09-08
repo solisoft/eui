@@ -4,10 +4,19 @@ This document describes how to build EUI Demo applications for macOS, both local
 
 ## Overview
 
-The EUI Demo consists of:
-- **eui-client**: The native macOS app that connects to an EUI server via WebSocket
-- **counter-app**: A Soli-based demo application (run via `../lang/target/debug/soli serve examples/counter-app`)
-- **counter-server**: A minimal Rust server example for testing
+Two different apps come out of this repo, built two different ways:
+
+- **EUI Demo** — the `eui-client` binary. A native window that connects to an
+  EUI server over a WebSocket. Built by `cargo`, needs nothing outside this
+  repo, and needs a server to point at.
+- **Vitrine** — the widget gallery (`examples/counter-app`, component
+  `gallery`) as a self-contained desktop artifact: its own Soli server on a
+  thread, no database, the EUI window with the decoder in a confined worker.
+  Double-click and it runs; there is nothing to point it at.
+
+Supporting pieces: **counter-app** (the Soli app itself) and
+**counter-server** (a minimal hand-written Rust server, for testing the
+client without Soli).
 
 ## Local Build
 
@@ -76,9 +85,13 @@ The workflow `.github/workflows/build-macos-demo.yml` automatically:
    - Tar archives (compressed binary)
    - Zip archives (compressed app bundle)
 
-4. **Tests** on macOS (latest):
-   - Runs full test suite
-   - Clippy lints
+4. **Tests** on macOS:
+   - Runs the full test suite
+   - Runs `clippy -D warnings`. This catches lints that never fire on Linux,
+     because the Linux-only code (Wayland/X11, seccomp, Landlock) is `cfg`'d
+     out on macOS and anything only reachable from it becomes dead. These
+     cannot be reproduced locally from Linux: cross-checking the Darwin target
+     dies in `ring`'s build script, which wants a real macOS C toolchain.
 
 5. **Publishes** releases:
    - Automatically creates GitHub releases for tags
@@ -99,10 +112,17 @@ gh workflow run build-macos-demo.yml -r main
 
 ### Build Artifacts
 
-All builds produce:
-- `eui-aarch64-macos.tar.gz` — Apple Silicon binary (standalone)
-- `EUI-Demo-aarch64-macos.dmg` — app installer
-- `EUI-Demo-aarch64-macos.zip` — app bundle archive
+`eui-macos-aarch64`:
+- `eui-aarch64-macos.tar.gz` — the bare binary
+- `EUI-Demo-aarch64-macos.dmg` — installer
+- `EUI-Demo-aarch64-macos.zip` — app bundle
+
+`vitrine-macos-aarch64` (only when `SOLI_BUNDLE_KEY` is set):
+- `Vitrine-aarch64-macos.dmg` — installer
+- `Vitrine-aarch64-macos.zip` — app bundle
+
+Neither is signed or notarized, so the first launch of a downloaded build
+needs right-click → Open, or `xattr -dr com.apple.quarantine <app>`.
 
 ### Creating a Release
 
@@ -139,6 +159,59 @@ The `Info.plist` specifies:
 - Minimum OS: macOS 11
 - Supports automatic graphics switching (integrated + discrete GPUs)
 - Supports high-resolution displays
+
+## Vitrine
+
+Vitrine is packaged by `soli desktop build`, which lives in
+[`solisoft/soli_lang`](https://github.com/solisoft/soli_lang), not here. The
+CI job therefore checks out **two** repositories: this one for the app source
+(`examples/counter-app`), and the language repo for the tool that packages it.
+
+```bash
+soli desktop build examples/counter-app \
+  --app-id com.soli.vitrine \
+  --name Vitrine \
+  --eui gallery \
+  --no-db \
+  --output dist/vitrine-desktop
+```
+
+That emits **one executable**, which the shared `scripts/wrap-macos-app.sh`
+then wraps in a `.app` (macOS needs a bundle for a display name, an icon, and
+a URL scheme) with a DMG beside it.
+
+### It requires a bundle key
+
+A desktop artifact ships your application **encrypted** — there is no
+unencrypted desktop build — so it cannot be produced without a key, and there
+is no offline fallback. CI reads `SOLI_BUNDLE_KEY` from repository secrets:
+
+```bash
+gh secret set SOLI_BUNDLE_KEY -R solisoft/eui
+```
+
+The job checks for it in its first seconds and fails with that command in the
+message, rather than discovering the problem after a ten-minute build of the
+Soli toolchain.
+
+**Do not bake a key into a published artifact.** If the download carries its
+own key, the encryption and the ability to revoke an installation both stop
+meaning anything. The key belongs in a secret, or behind
+`SOLI_BUNDLE_AUTH_URL`.
+
+If you are rebuilding to replace an existing local install, reuse that
+install's key rather than minting a new one — a fresh key leaves the old
+launcher unable to unlock:
+
+```bash
+grep -o 'SOLI_BUNDLE_KEY=[0-9a-f]*' ~/.local/bin/vitrine | cut -d= -f2
+```
+
+### Build cost
+
+The Soli toolchain is built with `--no-default-features --features
+eui-desktop`. That is deliberate: the default features roughly double the
+build, and none of them are needed to package a desktop artifact.
 
 ## Signing & Notarization (Future)
 

@@ -124,7 +124,10 @@ no shader, no tessellator and no allocation beyond its quads.
 ## 3. Focus and keyboard
 
 - `input` and `textarea` take focus on primary click and on `Tab` order,
-  which is document order.
+  which is document order. A node that handles `key_down` or `key_up` takes
+  focus on primary click too — the nearest one on the path, after any
+  editable ancestor — so a grid, a canvas or a pattern editor is typed into
+  after a click rather than after being found with `Tab`.
 - A focused node draws a 2 px ring in `focus.ring`, outside its border box,
   when focus arrived from the keyboard; a client MAY suppress the ring after
   a pointer click.

@@ -792,6 +792,9 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
             conn.tx.send(f.encode()).unwrap();
         }
     };
+    // The click put the cursor where the pointer was, which may be on the
+    // instrument or volume column; `Tab` moves to the next channel's note.
+    key(&mut d, &conn, "Tab");
     key(&mut d, &conn, "y");
     pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A-5"));
 

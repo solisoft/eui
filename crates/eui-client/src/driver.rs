@@ -1187,10 +1187,13 @@ impl Driver {
             }
         }
         self.pointer.pressed_on = Some(ix);
-        // Focus moves to the nearest editable node on the path, or nowhere;
-        // a pointer never shows the ring.
+        // Focus moves to the nearest editable node on the path, else to the
+        // nearest one that handles keys — 03 §3: a grid or a canvas is
+        // typed into after a click, not after finding it with `Tab`.
+        // Nowhere, if the path has neither; a pointer never shows the ring.
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
-        let mut out = self.set_focus(editable, false);
+        let takes_keys = editable.or_else(|| self.ancestor_keyed(ix));
+        let mut out = self.set_focus(takes_keys, false);
         if let Some(e) = editable {
             let at = self.byte_at_pointer(e, x, y);
             trace(|| format!("click in field {:?} at ({x:.1},{y:.1}) rect={:?} text={:?} preedit={:?} -> byte {at:?}", self.session.node(e).map(|n| n.id), self.layout.rect(e), self.session.text_of(e), self.preedit));
@@ -1311,6 +1314,19 @@ impl Driver {
         while let Some(ix) = cur {
             let node = self.session.node(ix)?;
             if pred(node.kind) {
+                return Some(ix);
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        None
+    }
+
+    /// The nearest node on the path — itself first — that asked for keys.
+    fn ancestor_keyed(&self, from: NodeIx) -> Option<NodeIx> {
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let node = self.session.node(ix)?;
+            if node.handler(EventKind::KeyDown).is_some() || node.handler(EventKind::KeyUp).is_some() {
                 return Some(ix);
             }
             cur = if node.parent.is_some() { Some(node.parent) } else { None };
