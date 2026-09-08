@@ -622,7 +622,7 @@ end
 
 def tracker_button(label, event, props, lit)
   face = lit ? TRACKER_LIGHT : TRACKER_FACE
-  button = tracker_bevel(
+  face_box = tracker_bevel(
     {
       "display": "row",
       "align": "center",
@@ -893,7 +893,16 @@ def tracker_pattern(state)
       "width": "100%",
       "grow": 1
     },
-    [grid]
+    [{
+      "k": "scroll",
+      "s": {
+        "overflow": "scroll",
+        "width": "100%",
+        "grow": 1,
+        "bg": TRACKER_BLACK
+      },
+      "c": [grid]
+    }]
   )
 end
 
@@ -923,16 +932,25 @@ def tracker_view(raw_state)
     "volume": 90,
     "position": state["seek"]
   }, {"time_update": "tick", "ended": "ended"})
+  left = column(
+    {
+      "gap": 2,
+      "grow": 1,
+      "shrink": 1,
+      "min_width": 0
+    },
+    [tracker_top(state), tracker_scopes(state)]
+  )
   head = wide ? row(
     {
       "gap": 2,
       "align": "start",
       "width": "100%"
     },
-    [tracker_top(state), tracker_scopes(state), spacer(), tracker_instruments_panel(state)]
+    [left, tracker_instruments_panel(state)]
   ) : column(
     {"gap": 2, "width": "100%"},
-    [tracker_top(state), tracker_scopes(state), tracker_instruments_panel(state)]
+    [left, tracker_instruments_panel(state)]
   )
   column(
     {

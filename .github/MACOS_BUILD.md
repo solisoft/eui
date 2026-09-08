@@ -14,8 +14,8 @@ The EUI Demo consists of:
 ### Prerequisites
 
 - Rust toolchain (stable): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- macOS 11+ (the minimum supported OS version)
-- For universal binaries: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`
+- macOS 11+ on Apple Silicon. Intel macOS is not a supported target.
+- `rustup target add aarch64-apple-darwin`
 
 ### Build Release Binary
 
@@ -33,11 +33,8 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
 Use the provided build script:
 
 ```bash
-# Build release app bundle (native architecture)
+# Build release app bundle
 ./scripts/build-macos-app.sh release
-
-# Build universal binary (Intel + Apple Silicon)
-./scripts/build-macos-app.sh release universal
 
 # Build debug version
 ./scripts/build-macos-app.sh debug
@@ -67,11 +64,9 @@ open dist/EUI-Demo.app
 
 The workflow `.github/workflows/build-macos-demo.yml` automatically:
 
-1. **Builds** eui-client for both architectures:
-   - `x86_64-apple-darwin` (Intel macOS)
-   - `aarch64-apple-darwin` (Apple Silicon)
+1. **Builds** eui-client for `aarch64-apple-darwin` (Apple Silicon)
 
-2. **Creates** macOS app bundles with proper structure:
+2. **Creates** a macOS app bundle with proper structure:
    - `Info.plist` configuration
    - Executable entry point
    - Resource directories
@@ -105,12 +100,9 @@ gh workflow run build-macos-demo.yml -r main
 ### Build Artifacts
 
 All builds produce:
-- `eui-x86_64-macos.tar.gz` — Intel binary (standalone)
 - `eui-aarch64-macos.tar.gz` — Apple Silicon binary (standalone)
-- `EUI-Demo-x86_64-macos.dmg` — Intel app installer
-- `EUI-Demo-aarch64-macos.dmg` — Apple Silicon app installer
-- `EUI-Demo-x86_64-macos.zip` — Intel app bundle archive
-- `EUI-Demo-aarch64-macos.zip` — Apple Silicon app bundle archive
+- `EUI-Demo-aarch64-macos.dmg` — app installer
+- `EUI-Demo-aarch64-macos.zip` — app bundle archive
 
 ### Creating a Release
 
@@ -122,7 +114,7 @@ git push origin v0.1.0
 ```
 
 GitHub Actions will:
-1. Build both architectures
+1. Build the Apple Silicon app
 2. Create a GitHub Release
 3. Attach all artifacts automatically
 
@@ -169,7 +161,7 @@ These steps can be added to the GitHub Actions workflow with secrets for the dev
 ### Build fails: "unable to determine target architecture"
 Ensure you've installed the target:
 ```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+rustup target add aarch64-apple-darwin
 ```
 
 ### "Could not build Objective-C wrapper" on wgpu

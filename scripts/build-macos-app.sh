@@ -1,11 +1,13 @@
 #!/bin/bash
 # Build macOS app bundle and DMG for EUI Demo Client
-# Usage: ./scripts/build-macos-app.sh [release|debug] [x86_64|aarch64|universal]
+# Usage: ./scripts/build-macos-app.sh [release|debug]
+#
+# Apple Silicon only: Intel macOS is not a supported target.
 
 set -e
 
 BUILD_TYPE="${1:-release}"
-ARCH="${2:-universal}"
+ARCH="aarch64"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -18,12 +20,6 @@ echo -e "${BLUE}Building EUI Demo macOS App Bundle${NC}"
 echo "Build type: $BUILD_TYPE"
 echo "Architecture: $ARCH"
 
-# Check and install targets if needed
-if [ "$ARCH" = "universal" ]; then
-  echo -e "${BLUE}Checking Rust targets...${NC}"
-  rustup target add x86_64-apple-darwin aarch64-apple-darwin 2>/dev/null || true
-fi
-
 # Build the binary
 echo -e "${BLUE}Compiling eui-client...${NC}"
 if [ "$BUILD_TYPE" = "release" ]; then
@@ -32,24 +28,9 @@ else
   CARGO_FLAGS=""
 fi
 
-if [ "$ARCH" = "universal" ]; then
-  # Build for both architectures
-  echo "Building for x86_64-apple-darwin..."
-  cargo build $CARGO_FLAGS -p eui-client --target x86_64-apple-darwin
-  echo "Building for aarch64-apple-darwin..."
-  cargo build $CARGO_FLAGS -p eui-client --target aarch64-apple-darwin
-
-  # Create universal binary using lipo
-  RELEASE_FLAG=$([ "$BUILD_TYPE" = "release" ] && echo "release" || echo "debug")
-  lipo -create \
-    "target/x86_64-apple-darwin/$RELEASE_FLAG/eui" \
-    "target/aarch64-apple-darwin/$RELEASE_FLAG/eui" \
-    -output "target/$RELEASE_FLAG/eui-universal"
-  BINARY_PATH="target/$RELEASE_FLAG/eui-universal"
-else
-  cargo build $CARGO_FLAGS -p eui-client
-  BINARY_PATH="target/$BUILD_TYPE/eui"
-fi
+rustup target add aarch64-apple-darwin 2>/dev/null || true
+cargo build $CARGO_FLAGS -p eui-client --target aarch64-apple-darwin
+BINARY_PATH="target/aarch64-apple-darwin/$BUILD_TYPE/eui"
 
 # Create output directory
 DIST_DIR="$PROJECT_DIR/dist"
