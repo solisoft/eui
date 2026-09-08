@@ -222,11 +222,11 @@ impl Layout {
     /// pointer this frame without waiting for a style from the server.
     pub fn set_rect(&mut self, ix: NodeIx, r: Rect) {
         let i = ix.raw() as usize;
-        if i < self.rect.len() {
-            self.rect[i] = r;
+        if let Some(slot) = self.rect.get_mut(i) {
+            *slot = r;
         }
-        if i < self.present.len() {
-            self.present[i] = true;
+        if let Some(slot) = self.present.get_mut(i) {
+            *slot = true;
         }
     }
 

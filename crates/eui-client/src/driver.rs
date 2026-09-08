@@ -1102,10 +1102,8 @@ impl Driver {
         let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else { return };
         let (lead, thumb, rest) = {
             let kids = self.session.children(ix);
-            if kids.len() != 3 {
-                return;
-            }
-            (kids[0], kids[1], kids[2])
+            let [lead, thumb, rest] = kids[..] else { return };
+            (lead, thumb, rest)
         };
         let Some(track) = self.layout.rect(ix) else { return };
         if track.w <= 0.0 {
@@ -1580,7 +1578,7 @@ impl Driver {
         if to == from {
             return Vec::new();
         }
-        let ms = self.resolved.motion.get(0).copied().unwrap_or(100);
+        let ms = self.resolved.motion.first().copied().unwrap_or(100);
         self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
         self.next_due = Some(self.now);
         self.redraw = true;
