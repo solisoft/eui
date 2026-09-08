@@ -2376,14 +2376,12 @@ def needle_devices_bar(state, layout)
   chips = [needle_chip("this machine", "device", {"id": "here"}, state["device"] == "here")].concat(chips) if state["here"]
   # The narrowest window keeps the same button under a shorter name
   # rather than losing it: it is the only way to get a speaker at all.
-  if devices.length() == 0
-    chips = chips.concat([needle_chip(
-      layout["single"] ? "Speaker here" : "Start a speaker here",
-      "here_start",
-      nil,
-      false
-    )])
-  end
+  chips = chips.concat([needle_chip(
+    layout["single"] ? "Speaker here" : "Start a speaker here",
+    "here_start",
+    nil,
+    false
+  )]) if devices.length() == 0
   chips = chips.concat([needle_chip("Devices", "devices", nil, false)])
   row(
     {
@@ -2481,8 +2479,11 @@ def needle_bar(state, layout)
     )
     bar = column(shell.merge({"align": "stretch"}), [top, needle_seekbar(state, layout)].concat(sound))
   end
-  if state["mode"] == "remote" && state["playing"]
-    bar["p"] = (bar["p"] ?? {}).merge({"wake": 1000})
+  if state["mode"] == "remote"
+    # Once a second while it plays, every three when it does not: the
+    # pause may have come from a phone, and a bar that stopped asking
+    # would never learn that the music started again.
+    bar["p"] = (bar["p"] ?? {}).merge({"wake": state["playing"] ? 1000 : 3000})
     bar["on"] = (bar["on"] ?? {}).merge({"wake": "poll"})
   end
   bar
