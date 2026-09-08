@@ -1,4 +1,4 @@
-# Cheesetracker — a FastTracker 2 in an EUI window.
+# A tracker in an EUI window: FastTracker 2's shape, Soli's mixer.
 #
 # The demo the catalogue could not be: a pattern editor with a cursor that
 # lives under the keyboard, sixteen instruments, and a Play button that
@@ -537,7 +537,7 @@ def tracker_click(state, params)
   point = params["payload"] ?? [0, 0]
   props = params["props"] ?? {}
   top = props["top"] ?? 0
-  index = top + int(point[1] / TRACKER_ROW_H)
+  index = top + int((point[1] - TRACKER_ROW_H) / TRACKER_ROW_H)
   index = TRACKER_ROWS - 1 if index > TRACKER_ROWS - 1
   index = 0 if index < 0
   x = point[0] - TRACKER_GUTTER_W
@@ -705,6 +705,58 @@ def tracker_field(label, value)
           "display": "row"
         },
         [tracker_mono(value, TRACKER_NOTE, 0)]
+      )
+    ]
+  )
+end
+
+# FT2's nameplate, which is the first thing anyone recognises about it.
+def tracker_plate
+  tracker_bevel(
+    {
+      "display": "column",
+      "pad": [1, 3, 1, 3],
+      "bg": TRACKER_BLACK,
+      "shrink": 0
+    },
+    [
+      text(
+        "TRACKER II",
+        {
+          "font": "mono",
+          "size": 2,
+          "weight": "bold",
+          "fg": TRACKER_INST
+        }
+      ),
+      tracker_mono("eui · soli", TRACKER_DIM, 0)
+    ]
+  )
+end
+
+# Where the song is: which pattern, how long it is, and where the cursor
+# sits in it. A tracker tells you all three at once.
+def tracker_song_panel(state)
+  tracker_bevel(
+    {
+      "display": "column",
+      "gap": 1,
+      "pad": 2,
+      "bg": TRACKER_PANEL,
+      "shrink": 0
+    },
+    [
+      row(
+        {"gap": 2, "align": "center"},
+        [tracker_field("Pos", "00"), tracker_field("Ptn", "00"), tracker_field("Len", "01")]
+      ),
+      row(
+        {"gap": 2, "align": "center"},
+        [
+          tracker_field("Rows", str(TRACKER_ROWS)),
+          tracker_field("Chn", str(TRACKER_CHANNELS)),
+          tracker_field("Ins", tracker_hex(state["inst"], 2))
+        ]
       )
     ]
   )
@@ -935,6 +987,40 @@ def tracker_window_top(state)
   top
 end
 
+# The heading strip a tracker puts over its channels, so the eye can find
+# the one it is typing in.
+def tracker_channel_heads(state)
+  heads = range(0, TRACKER_CHANNELS).map(fn(c) {
+    {
+      "k": "box",
+      "s": {
+        "width": TRACKER_CELL_W,
+        "display": "row",
+        "justify": "center",
+        "shrink": 0,
+        "bg": state["chan"] == c ? TRACKER_CURSOR : "none"
+      },
+      "c": [tracker_mono("Channel " + str(c + 1), state["chan"] == c ? TRACKER_NOTE : TRACKER_DIM, 0)]
+    }
+  })
+  row(
+    {
+      "gap": 0,
+      "width": "100%",
+      "bg": TRACKER_ROW_16
+    },
+    [{
+      "k": "box",
+      "s": {
+        "width": TRACKER_GUTTER_W,
+        "display": "row",
+        "shrink": 0
+      },
+      "c": [tracker_mono("", TRACKER_DIM, 0)]
+    }].concat(heads)
+  )
+end
+
 def tracker_pattern(state)
   visible = tracker_visible(state)
   top = tracker_window_top(state)
@@ -953,7 +1039,7 @@ def tracker_pattern(state)
     },
     "on": {"click": "click", "key_down": "key"},
     "p": {"top": top},
-    "c": lines
+    "c": [tracker_channel_heads(state)].concat(lines)
   }
   tracker_bevel(
     {
@@ -966,7 +1052,7 @@ def tracker_pattern(state)
       "s": {
         "overflow": "scroll",
         "width": "100%",
-        "height": visible * TRACKER_ROW_H,
+        "height": (visible + 1) * TRACKER_ROW_H,
         "bg": TRACKER_BLACK
       },
       "c": [grid]
@@ -1007,7 +1093,17 @@ def tracker_view(raw_state)
       "shrink": 1,
       "min_width": 0
     },
-    [tracker_top(state), tracker_scopes(state)]
+    [
+      row(
+        {
+          "gap": 2,
+          "align": "start",
+          "wrap": "wrap"
+        },
+        [tracker_plate(), tracker_top(state), tracker_song_panel(state)]
+      ),
+      tracker_scopes(state)
+    ]
   )
   head = wide ? row(
     {
