@@ -1021,7 +1021,9 @@ def gallery_view(raw_state)
       {"gap": 3, "grow": 1},
       [
         accordion(sections, open, "toggle"),
-        code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl")
+        code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
+        h2("Code Viewer:"),
+        code_viewer("def hello(name)\n  puts(\"Hello, #{name}!\")\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()", {"line_numbers": true})
       ]
     ),
     column(
@@ -1219,10 +1221,17 @@ def feed(event_data)
   state = event_data["state"] ?? {}
   liked = state["liked"] ?? []
   posts = state["posts"] ?? []
+  trouble = state["trouble"] ?? ""
   # A real timeline is fetched when the window opens and when it is asked
   # for, never on a scroll: X allows five reads a quarter of an hour, and
-  # a scroll can ask for a hundred windows in that time.
-  posts = x_timeline(FEED_LIVE) if x_linked() && (event == "connect" || event == "refresh")
+  # a scroll can ask for a hundred windows in that time. What comes back
+  # says why when it is empty, so a feed that quietly shows the sample is
+  # never a mystery.
+  if x_linked() && (event == "connect" || event == "refresh")
+    answer = x_timeline(FEED_LIVE)
+    posts = answer["posts"]
+    trouble = answer["error"]
+  end
   count = posts.length() > 0 ? posts.length() : (state["count"] ?? 10)
   window = state["window"] ?? [0, 0]
   sound = state["sound"] ?? -1
@@ -1233,6 +1242,7 @@ def feed(event_data)
   keep = {
     "liked": liked,
     "posts": posts,
+    "trouble": trouble,
     "count": count,
     "window": window,
     "sound": sound,
@@ -1366,10 +1376,17 @@ def feed_view(state)
     live ? feed_live_card(i, posts[i], liked.includes?(i), play) : feed_card(i, liked.includes?(i), play)
   })
   heights = live ? posts.map(fn(post) { feed_card_height(post) }) : feed_heights(count)
-  tail = live ? loading_button("Refresh", "refresh", "refresh") : loading_button("Load 5 000 more", "more", "more")
-  # What the header says is what the feed is: an account's timeline, or
-  # the sample that needs no account at all.
+  # An account is linked, so a Refresh is what the header offers; the
+  # sample instead offers more of itself.
+  trouble = state["trouble"] ?? ""
+  linked = live || trouble != ""
+  tail = linked ? loading_button("Refresh", "refresh", "refresh") : loading_button("Load 5 000 more", "more", "more")
+  # What the header says is what the feed is: an account's timeline, the
+  # reason there is none, or the sample that needs no account at all.
   label = live ? str(count) + " posts from x.com" : str(count) + " posts"
+  label = trouble if trouble != ""
+  tone = live ? "success" : "info"
+  tone = "danger" if trouble != ""
   header = row(
     {
       "gap": 3,
@@ -1379,7 +1396,7 @@ def feed_view(state)
       "border": [0, 0, 1, 0],
       "border_color": "border.subtle"
     },
-    [h1("Feed"), badge(label, live ? "success" : "info"), spacer(), tail]
+    [h1("Feed"), badge(label, tone), spacer(), tail]
   )
   column(
     {

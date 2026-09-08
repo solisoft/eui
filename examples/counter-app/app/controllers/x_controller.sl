@@ -133,28 +133,31 @@ def x_access_token
   token
 end
 
-def x_api(path)
+# Every call says what happened, because a feed that silently shows the
+# sample instead of an account is a bug nobody can see: {"data", "error"}
+# with exactly one of them filled.
+def x_get(path)
   token = x_access_token()
-  return nil if token.nil?
+  return {"error": "no access token: check X_CLIENT_ID, X_CLIENT_SECRET and X_REFRESH_TOKEN"} if token.nil?
 
   opts = {"headers": {"Authorization": "Bearer " + token}, "timeout": 15}
   resp = HTTP.request("GET", X_API + path, opts) rescue nil
-  return nil if resp.nil?
-  return nil if resp["status"] != 200
+  return {"error": "x.com did not answer"} if resp.nil?
 
-  json_parse(resp["body"]) rescue nil
+  status = resp["status"]
+  return {"error": x_blame(status)} if status != 200
+
+  body = json_parse(resp["body"]) rescue nil
+  body.nil? ? {"error": "x.com answered something that is not JSON"} : {"data": body}
 end
 
-def x_me
-  hit = Cache.get("feedx:me") rescue nil
-  return hit unless hit.nil?
+# What a status code means for a person who has just linked an account.
+def x_blame(status)
+  return "x.com refused the token (401) — link the account again at /x/login" if status == 401
+  return "x.com refused the scope or the plan (403) — the home timeline needs Basic or above" if status == 403
+  return "x.com is rate limiting (429) — Basic allows five timeline reads a quarter of an hour" if status == 429
 
-  data = x_api("/users/me")
-  return nil if data.nil?
-
-  id = (data["data"] ?? {})["id"]
-  Cache.set("feedx:me", id, 86400) rescue nil
-  id
+  "x.com answered " + str(status)
 end
 
 # ------------------------------------------------------------- pictures
@@ -257,9 +260,27 @@ end
 
 # One request: the timeline, with its authors and its pictures attached,
 # mapped onto the cards the sample already draws.
+# Whose timeline: the account the token belongs to, asked once a day when
+# there is a cache to keep the answer in.
+def x_me
+  hit = Cache.get("feedx:me") rescue nil
+  return {"id": hit} unless hit.nil?
+
+  who = x_get("/users/me")
+  return {"error": who["error"]} if who["error"].present?
+
+  id = ((who["data"] ?? {})["data"] ?? {})["id"]
+  return {"error": "x.com did not say who you are"} if id.nil?
+
+  Cache.set("feedx:me", id, 86400) rescue nil
+  {"id": id}
+end
+
 def x_timeline(limit)
-  id = x_me()
-  return [] if id.nil?
+  me = x_me()
+  return {"posts": [], "error": me["error"]} if me["error"].present?
+
+  id = me["id"]
 
   query = [
     "max_results=" + str(limit),
@@ -268,14 +289,16 @@ def x_timeline(limit)
     "user.fields=" + url_encode("name,username,profile_image_url"),
     "media.fields=" + url_encode("type,url,preview_image_url")
   ]
-  data = x_api("/users/" + id + "/timelines/reverse_chronological?" + query.join("&"))
-  return [] if data.nil?
+  answer = x_get("/users/" + id + "/timelines/reverse_chronological?" + query.join("&"))
+  return {"posts": [], "error": answer["error"]} if answer["error"].present?
 
+  data = answer["data"] ?? {}
   tweets = data["data"] ?? []
   includes = data["includes"] ?? {}
   users = x_index(includes["users"] ?? [], "id")
   media = x_index(includes["media"] ?? [], "media_key")
-  range(0, tweets.length()).map(fn(i) { x_post(i, tweets[i], users, media) })
+  posts = range(0, tweets.length()).map(fn(i) { x_post(i, tweets[i], users, media) })
+  {"posts": posts, "error": posts.length() > 0 ? "" : "x.com sent an empty timeline"}
 end
 
 # ------------------------------------------------------------ the pages
