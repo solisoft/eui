@@ -387,9 +387,9 @@ impl Mixer {
                     // Wrap keeping the overshoot, so a loop does not drift
                     // by a fraction of a frame every time round.
                     source.at -= frames as f64;
-                    if !(source.at >= 0.0) {
-                        source.at = 0.0;
-                    }
+                    // `max` returns the other operand for a NaN, which is
+                    // the point: an overshoot that went bad starts again.
+                    source.at = source.at.max(0.0);
                 }
                 let i = (source.at as usize).min(frames.saturating_sub(1));
                 // Linear interpolation between the two neighbouring frames.

@@ -128,7 +128,7 @@ impl<'a> R<'a> {
         self.take(n)
     }
     fn str(&mut self) -> Wire<String> {
-        Ok(String::from_utf8(self.bytes()?.to_vec()).map_err(|_| "utf-8")?)
+        String::from_utf8(self.bytes()?.to_vec()).map_err(|_| "utf-8")
     }
     fn hash(&mut self) -> Wire<Hash> {
         self.take(32)?.try_into().map_err(|_| "hash")
@@ -1384,6 +1384,8 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     #[test]

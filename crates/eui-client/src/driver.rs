@@ -1330,7 +1330,7 @@ impl Driver {
     /// so the application's light/dark switch still does something. Both
     /// empty means the desktop has none and the theme's colours return.
     pub fn set_desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Frame> {
-        let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.is_none_or(|m| m == self.viewer.mode);
+        let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.map_or(true, |m| m == self.viewer.mode);
         if same {
             return Vec::new();
         }
@@ -1652,7 +1652,7 @@ impl Driver {
         // them — once the view has been still for a moment, not per frame
         // of a glide or a drag: a request a frame is a server render a
         // frame, and rows that will be scrolled past before they arrive.
-        let settled = self.scroll_anim.is_none() && self.scroll_touched.is_none_or(|t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
+        let settled = self.scroll_anim.is_none() && self.scroll_touched.map_or(true, |t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
         let mut settle_due = None;
         if settled {
             let asked = self.window_events();
@@ -1693,10 +1693,8 @@ impl Driver {
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
-        for due in [settle_due, self.video_due] {
-            if let Some(due) = due {
-                self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
-            }
+        for due in [settle_due, self.video_due].into_iter().flatten() {
+            self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         list
     }

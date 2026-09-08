@@ -822,7 +822,7 @@ fn a_notched_wheel_scroll_gets_its_cards_on_the_real_clock() {
     click(&mut d, &conn, button_box);
     pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("5010 posts")));
     // Drive it exactly as the window does: tick, paint, send, pump.
-    let mut turn = |d: &mut Driver, conn: &eui_client::Connection| {
+    let turn = |d: &mut Driver, conn: &eui_client::Connection| {
         d.tick(Instant::now());
         let _ = d.paint(700, 900);
         for f in d.take_pending() {
@@ -970,7 +970,7 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, _wake) = open(port, "gallery", 1000.0, 900.0);
     let mut clock = Instant::now();
-    let mut turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
+    let turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
         *clock += Duration::from_millis(ms);
         d.tick(*clock);
         let _ = d.paint(1000, 900);
@@ -1044,7 +1044,7 @@ fn feed_cards_are_numbered_and_carry_their_media() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "feed", 700.0, 2_400.0);
     let mut clock = Instant::now();
-    let mut settle = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant| {
+    let settle = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant| {
         for _ in 0..4 {
             *clock += Duration::from_millis(200);
             d.tick(*clock);
@@ -1098,7 +1098,7 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, _wake) = open(port, "feed", 700.0, 1_400.0);
     let mut clock = Instant::now();
-    let mut turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
+    let turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
         *clock += Duration::from_millis(ms);
         d.tick(*clock);
         let _ = d.paint(700, 1_400);

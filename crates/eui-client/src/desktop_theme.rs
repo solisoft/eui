@@ -194,6 +194,8 @@ pub fn watch(changed: impl Fn() + Send + 'static) -> Option<Box<dyn std::any::An
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     #[test]

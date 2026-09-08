@@ -302,8 +302,11 @@ fn decode_webp(bytes: &[u8]) -> Result<Movie, VideoError> {
             let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
             decoder.read_image(&mut rgb).map_err(|e| VideoError::Malformed(e.to_string()))?;
             for (out, px) in rgba.chunks_mut(4).zip(rgb.chunks(3)) {
-                out[..3].copy_from_slice(px);
-                out[3] = 255;
+                let Some(colour) = out.get_mut(..3) else { continue };
+                colour.copy_from_slice(px);
+                if let Some(alpha) = out.get_mut(3) {
+                    *alpha = 255;
+                }
             }
         }
         frames.push(Frame { rgba, delay_ms: u32::MAX / 2 });
@@ -314,7 +317,7 @@ fn decode_webp(bytes: &[u8]) -> Result<Movie, VideoError> {
 /// Where a picture is: what it should be doing, and which frame that
 /// makes due. The clock is the caller's — the driver's — so a player is
 /// as testable as arithmetic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Player {
     /// Playing, or held on the frame it is on.
     pub playing: bool,
@@ -326,12 +329,6 @@ pub struct Player {
     index: usize,
     /// It reached the end since the last [`Self::take_ended`].
     ended: bool,
-}
-
-impl Default for Player {
-    fn default() -> Self {
-        Self { playing: false, looping: false, at_ms: 0, index: 0, ended: false }
-    }
 }
 
 impl Player {

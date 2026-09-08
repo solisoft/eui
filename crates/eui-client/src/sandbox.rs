@@ -128,7 +128,10 @@ const ALLOWED: &[libc::c_long] = &[
     libc::SYS_getcpu,
 ];
 
+// `libc::SYS_*` is a `c_long`: already `i64` on a 64-bit target, `i32` on a
+// 32-bit one. The conversions below are what make both compile.
 #[cfg(target_os = "linux")]
+#[allow(clippy::useless_conversion)]
 fn seccomp() -> Result<String, String> {
     use seccompiler::{apply_filter_all_threads, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
     /// `PR_SET_VMA`, the one `prctl` an allocator makes.

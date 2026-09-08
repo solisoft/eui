@@ -17,7 +17,10 @@
 // eui-render's lib.rs for why this is the right scope for the lint.
 #![allow(clippy::arithmetic_side_effects)]
 
-#[cfg(feature = "a11y")]
+// The tree an assistive technology sees is plain data the worker builds
+// and the window forwards, so it is compiled whether or not the platform
+// adapter is: only `a11y::to_update`, which speaks AccessKit, is behind
+// the feature. `--no-default-features` drops the adapter, not the wire.
 pub mod a11y;
 pub mod app;
 pub mod manifest;
