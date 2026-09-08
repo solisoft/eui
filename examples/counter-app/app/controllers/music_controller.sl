@@ -2254,18 +2254,31 @@ def needle_chip(label, event, props, active)
   needle_hover("chip:" + event + label, base, hover, [face], event, props)
 end
 
-def needle_devices_bar(state)
+# The right of the bar: which device is playing, and how to get one.
+#
+# A narrow window used to drop this whole region, which took with it the
+# only control that starts a speaker — silently, at 999 px. It keeps the
+# chips that lead somewhere and sheds the list instead: one device at a
+# tight width, three otherwise.
+def needle_devices_bar(state, layout)
   empty = {"k": "box", "s": {"grow": 1, "width": 0}}
   return empty unless needle_linked()
 
   devices = state["devices"] ?? []
-  chips = devices.slice(0, 3).map(fn(d) {
+  chips = devices.slice(0, layout["tight"] ? 1 : 3).map(fn(d) {
     needle_chip(d["name"], "device", {"id": d["id"]}, d["id"] == state["device"])
   })
   # The client on this machine is not in Spotify's list until it is
   # playing, and it is the one that matters here, so it leads.
   chips = [needle_chip("this machine", "device", {"id": "here"}, state["device"] == "here")].concat(chips) if state["here"]
-  chips = chips.concat([needle_chip("Start a speaker here", "here_start", nil, false)]) if devices.length() == 0
+  # The narrowest window keeps the same button under a shorter name
+  # rather than losing it: it is the only way to get a speaker at all.
+  chips = chips.concat([needle_chip(
+    layout["single"] ? "Speaker here" : "Start a speaker here",
+    "here_start",
+    nil,
+    false
+  )]) if devices.length() == 0
   chips = chips.concat([needle_chip("Devices", "devices", nil, false)])
   row(
     {
@@ -2327,10 +2340,7 @@ def needle_bar(state, layout)
     },
     [needle_transport(state, layout), needle_seekbar(state, layout)]
   )
-  right = layout["tight"] ? {"k": "box", "s": {
-    "grow": 1,
-    "width": 0
-  }} : needle_devices_bar(state)
+  right = needle_devices_bar(state, layout)
   # A zero-sized leaf that plays (03 §7). `position` is `state["seek"]`
   # and not the running position: the client seeks when that number
   # changes, so sending the clock would restart the sound four times a
