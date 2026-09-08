@@ -150,8 +150,19 @@ space. It is then positioned by `align_self` on the vertical
 axis and `justify` on the horizontal, with its margins as offsets from the
 chosen edge. Children paint in ascending `z`, ties in child order.
 
-A `stack` with indefinite size takes the largest child border box plus that
-child's margins, per axis.
+A `stack` with indefinite size takes the largest **in-flow** child border box
+plus that child's margins, per axis: an absolute child is placed on the stack,
+never counted into it, and never stretched to it.
+
+**Popovers.** An `overlay` child of a `stack` with `position: absolute` hangs
+off the stack's first in-flow child — its *anchor* — instead of the stack's
+own corner. Its left edge starts on the anchor's; its top is the anchor's
+bottom plus its own top margin. When that would put its bottom outside the
+viewport and the anchor has more room above it than below, it goes over the
+anchor instead: its bottom the anchor's top, less the same margin. Either way
+the box is then clamped into the viewport on both axes, so a panel taller or
+wider than the window still starts inside it. Nothing is measured again: the
+panel and its subtree are moved.
 
 ## 6. `grid`
 

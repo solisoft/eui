@@ -1265,10 +1265,10 @@ def popover(anchor, content, open)
   stack({"gap": 0}, [
     anchor,
     {
-      "k": "box",
+      "k": "overlay",
       "s": {
         "position": "absolute",
-        "margin": [0, 0, 0, 0],
+        "margin": [2, 0, 0, 0],
         "pad": 3,
         "radius": 2,
         "shadow": 2,
@@ -1446,16 +1446,22 @@ def select_option(label, selected, on_pick, min_width)
 end
 
 # A popover that opens under its anchor rather than over it.
+# An open list floats: it is an `overlay`, so it paints in the top layer
+# and no card or scroller clips it, and it is `absolute` in a `stack`, so
+# it neither grows the box it hangs off nor pushes the page open. Where it
+# lands is the client's business (04 §5): under the anchor when the window
+# has room, over it when it has not, and never past an edge. The top
+# margin is the gap it keeps.
 def dropdown(anchor, content, open)
   return anchor unless open
 
   stack({"gap": 0}, [
     anchor,
     {
-      "k": "box",
+      "k": "overlay",
       "s": {
         "position": "absolute",
-        "margin": [40, 0, 0, 0],
+        "margin": [2, 0, 0, 0],
         "pad": 1,
         "radius": 2,
         "shadow": 2,

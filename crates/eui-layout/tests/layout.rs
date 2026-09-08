@@ -359,10 +359,52 @@ fn a_paragraph_wraps_before_it_squeezes_its_sibling() {
     assert!(tr.h > 22.0, "the text wrapped: {tr:?}");
 }
 
+/// §5: a popover — an absolute `overlay` in a `stack` — hangs under the
+/// stack's first in-flow child, flips over it when the window has no room
+/// below, and never crosses an edge.
+fn popover_at(before_h: u16, window_h: f32) -> (Rect, Rect) {
+    let mut b = B::default();
+    let col = b.style(col());
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let filler = b.style(StyleRecord { height: px(before_h), ..st() });
+    let box_h = b.style(StyleRecord { height: px(32), ..st() });
+    let panel = b.style(StyleRecord {
+        position: Position::Absolute,
+        width: px(160),
+        height: px(84),
+        // The scale's index 2 is four pixels: the gap it keeps.
+        margin: [2, 0, 0, 0],
+        ..st()
+    });
+    b.push(NodeKind::Box, col, 2);
+    b.push(NodeKind::Box, filler, 0);
+    b.push(NodeKind::Box, stack, 2);
+    let control = b.push(NodeKind::Box, box_h, 0);
+    let list = b.push(NodeKind::Overlay, panel, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, window_h);
+    (r(&l, &s, control), r(&l, &s, list))
+}
+
+#[test]
+fn a_popover_hangs_under_its_anchor_and_flips_when_the_window_is_short() {
+    // Room below: under the control, with the margin between them.
+    let (control, list) = popover_at(20, 400.0);
+    assert!((list.y - (control.y + control.h + 4.0)).abs() < 0.01, "under: {control:?} {list:?}");
+    assert!((list.x - control.x).abs() < 0.01, "left edges line up");
+    // Near the floor, with more room above than below: over it instead,
+    // the same distance away.
+    let (control, list) = popover_at(100, 200.0);
+    assert!((list.y + list.h + 4.0 - control.y).abs() < 0.01, "over: {control:?} {list:?}");
+    assert!(list.y >= 0.0, "and inside the window");
+}
+
 #[test]
 fn a_stack_stretches_auto_sized_children_on_both_axes() {
     // A page column layered under a sheet fills the window, not its content
-    // width; an absolute layer keeps its own size.
+    // width. §5: only an in-flow child stretches — an absolute one takes
+    // its content size on the axis it does not fix, so a popover is as
+    // tall as its options and not as tall as the box it hangs off.
     let mut b = B::default();
     let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
     let t = b.style(st());
@@ -370,11 +412,12 @@ fn a_stack_stretches_auto_sized_children_on_both_axes() {
     b.push(NodeKind::Box, stack, 2);
     let page = b.push(NodeKind::Box, t, 1);
     b.text(t, "hi");
-    let sheet = b.push(NodeKind::Box, layer, 0);
+    let sheet = b.push(NodeKind::Box, layer, 1);
+    b.text(t, "hi");
     let s = b.session();
     let (l, _) = lay(&s, 400.0, 300.0);
     assert_rect(&l, &s, page, 0.0, 0.0, 400.0, 300.0);
-    assert_rect(&l, &s, sheet, 0.0, 0.0, 100.0, 300.0);
+    assert_rect(&l, &s, sheet, 0.0, 0.0, 100.0, 22.0);
 }
 
 #[test]

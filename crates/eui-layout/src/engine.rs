@@ -103,6 +103,10 @@ pub struct Layout {
     viewport: Size,
     /// Windowed lists (§7.1) laid out this frame.
     windowed: Vec<NodeIx>,
+    /// Popovers laid out this frame, each with the node it hangs off:
+    /// §5's absolute `overlay` in a `stack`. They are settled after the
+    /// walk, when both boxes are known in viewport coordinates.
+    anchored: Vec<(NodeIx, NodeIx)>,
     /// For each windowed list, the rows that had a child this frame, in
     /// order: the painter draws a placeholder for every other row in view.
     placed_rows: HashMap<NodeIx, Vec<u32>>,
@@ -187,11 +191,13 @@ impl Layout {
         self.heights_atom = f.session.atom_id("heights");
         self.row_atom = f.session.atom_id("row");
         self.windowed.clear();
+        self.anchored.clear();
         self.viewport = viewport;
 
         let Some(root) = f.session.root() else { return };
         let m = self.measure(f, root, Constraint::Exact(viewport.w), Constraint::Exact(viewport.h));
         self.arrange(f, root, 0.0, 0.0, m.w, m.h);
+        self.settle_anchored(f);
         // Rows scrolled out of a list are not dirty, so they would stay
         // memoised forever; a frame that did not touch them lets them go.
         let generation = self.generation;
@@ -284,7 +290,29 @@ impl Layout {
     /// scroll clipping.
     pub fn hit(&self, s: &Session, x: f32, y: f32) -> Option<NodeIx> {
         let root = s.root()?;
-        self.hit_in(s, root, x, y, Rect::new(f32::MIN / 2.0, f32::MIN / 2.0, f32::MAX, f32::MAX))
+        let whole = Rect::new(f32::MIN / 2.0, f32::MIN / 2.0, f32::MAX, f32::MAX);
+        // An `overlay` paints in the top layer, above everything and
+        // clipped by nothing (03 §2.4), so it is asked first and asked
+        // outside whatever would have clipped it.
+        let mut tops = Vec::new();
+        self.overlays(s, root, &mut tops);
+        for top in tops.iter().rev() {
+            if let Some(hit) = self.hit_in(s, *top, x, y, whole) {
+                return Some(hit);
+            }
+        }
+        self.hit_in(s, root, x, y, whole)
+    }
+
+    /// Every `overlay` in the tree, in paint order.
+    fn overlays(&self, s: &Session, ix: NodeIx, out: &mut Vec<NodeIx>) {
+        let Some(node) = s.node(ix) else { return };
+        if node.kind == NodeKind::Overlay && ix != s.root().unwrap_or(ix) {
+            out.push(ix);
+        }
+        for c in node.children.clone() {
+            self.overlays(s, c, out);
+        }
     }
 
     fn hit_in(&self, s: &Session, ix: NodeIx, x: f32, y: f32, clip: Rect) -> Option<NodeIx> {
@@ -302,6 +330,10 @@ impl Layout {
             order.sort_by_key(|c| self.style_of(s, *c).map(|st| st.z).unwrap_or(0));
         }
         for child in order.iter().rev() {
+            // Overlays were asked first, in the top layer.
+            if s.node(*child).is_some_and(|n| n.kind == NodeKind::Overlay) {
+                continue;
+            }
             if let Some(hit) = self.hit_in(s, *child, x, y, inner_clip) {
                 return Some(hit);
             }
@@ -490,6 +522,71 @@ impl Layout {
                 continue;
             }
             self.arrange(f, p.ix, base_x + p.x, base_y + p.y, p.w, p.h);
+        }
+        if st.display == Display::Stack {
+            self.note_anchored(f, ix);
+        }
+    }
+
+    /// §5: an absolute `overlay` in a `stack` is a popover — it hangs off
+    /// the stack's first in-flow child rather than sitting on the stack's
+    /// own corner. Both boxes are wanted in viewport coordinates, so the
+    /// pair is only noted here and settled when the walk is over.
+    fn note_anchored(&mut self, f: &mut Env<'_>, ix: NodeIx) {
+        let children: Vec<NodeIx> = f.session.children(ix).to_vec();
+        let Some(anchor) = children.iter().copied().find(|c| {
+            let st = self.style(f, *c);
+            st.display != Display::None && st.position != Position::Absolute
+        }) else {
+            return;
+        };
+        for c in children {
+            let st = self.style(f, c);
+            let overlay = f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay);
+            if overlay && st.position == Position::Absolute && st.display != Display::None {
+                self.anchored.push((c, anchor));
+            }
+        }
+    }
+
+    /// Put every popover where it fits: under what it hangs off, over it
+    /// when the window has no room below, and never past an edge. The
+    /// panel's top margin is the gap it keeps from its anchor.
+    fn settle_anchored(&mut self, f: &mut Env<'_>) {
+        let pairs = std::mem::take(&mut self.anchored);
+        for (panel, anchor) in pairs {
+            let (Some(p), Some(a)) = (self.rect(panel), self.rect(anchor)) else { continue };
+            let gap = self.style(f, panel).margin.t;
+            let below = a.y + a.h + gap;
+            let above = a.y - gap - p.h;
+            // Below unless it would fall out of the window and there is
+            // more room above; then clamped, so a panel taller than the
+            // window still starts inside it.
+            let room_below = self.viewport.h - (a.y + a.h + gap);
+            let room_above = a.y - gap;
+            let y = if below + p.h <= self.viewport.h || room_below >= room_above { below } else { above };
+            let y = y.clamp(0.0, (self.viewport.h - p.h).max(0.0));
+            let x = a.x.clamp(0.0, (self.viewport.w - p.w).max(0.0));
+            self.shift(f.session, panel, x - p.x, y - p.y);
+        }
+    }
+
+    /// Move a laid-out subtree bodily. Only the popover's own boxes change;
+    /// nothing is measured again.
+    fn shift(&mut self, s: &Session, ix: NodeIx, dx: f32, dy: f32) {
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let i = ix.raw() as usize;
+        if self.present.get(i).copied().unwrap_or(false) {
+            if let Some(r) = self.rect.get_mut(i) {
+                r.x += dx;
+                r.y += dy;
+            }
+        }
+        let children: Vec<NodeIx> = s.children(ix).to_vec();
+        for c in children {
+            self.shift(s, c, dx, dy);
         }
     }
 
@@ -960,14 +1057,19 @@ impl Layout {
             let avail_w = inner_w.loosen().shrink(cst.margin.horizontal());
             let avail_h = inner_h.loosen().shrink(cst.margin.vertical());
             let align = self.align_of(st, cst);
+            // §5: `stretch` fills the stack for an in-flow child. An
+            // absolute one takes its content size, as CSS does — a
+            // popover is as tall as its options, not as tall as the
+            // control it hangs off.
+            let stretches = !absolute_only && cst.position != Position::Absolute;
             let cw = match (align, cst.width, inner_w) {
                 _ if cst.width.resolve(inner_w).is_some() => Constraint::Exact(cst.width.resolve(inner_w).unwrap_or(0.0)),
-                (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if !absolute_only => Constraint::Exact((b - cst.margin.horizontal()).max(0.0)),
+                (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if stretches => Constraint::Exact((b - cst.margin.horizontal()).max(0.0)),
                 _ => avail_w,
             };
             let ch = match (align, cst.height, inner_h) {
                 _ if cst.height.resolve(inner_h).is_some() => Constraint::Exact(cst.height.resolve(inner_h).unwrap_or(0.0)),
-                (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if !absolute_only => Constraint::Exact((b - cst.margin.vertical()).max(0.0)),
+                (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if stretches => Constraint::Exact((b - cst.margin.vertical()).max(0.0)),
                 _ => avail_h,
             };
             let m = self.measure(f, c, cw, ch);
@@ -986,8 +1088,13 @@ impl Layout {
             if first_baseline.is_none() {
                 first_baseline = Some(y + m.baseline);
             }
-            extent.w = extent.w.max(m.w + cst.margin.horizontal());
-            extent.h = extent.h.max(m.h + cst.margin.vertical());
+            // §5: an absolute child is placed on the stack, not counted
+            // into it — a popover that grew the box it hangs off would
+            // push the page open every time it opened.
+            if cst.position != Position::Absolute {
+                extent.w = extent.w.max(m.w + cst.margin.horizontal());
+                extent.h = extent.h.max(m.h + cst.margin.vertical());
+            }
             placed.push(Placed { ix: c, x, y, w: m.w, h: m.h, virtual_: false });
         }
         // Paint order is ascending z; `place` returns children in that order.

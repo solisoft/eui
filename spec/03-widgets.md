@@ -44,8 +44,11 @@ Everything paints as a rounded rectangle. For a node with style `s`:
 3. `text` paints its glyphs in `s.fg`, or the nearest ancestor's `fg`, or
    `text.default`; `image` paints its texture; `icon` paints its glyph in
    `fg`; `divider` paints a 1 px line in `bg` or `border.default`.
-4. Children paint in order; `stack` children in ascending `z`; `overlay`
-   after every non-overlay sibling of the same parent.
+4. Children paint in order; `stack` children in ascending `z`. An `overlay`
+   paints in the **top layer**: after every other node in the tree, overlays
+   among themselves in tree order, clipped by the window and by no ancestor —
+   so a dialog inside a card and a popover inside a scroller are both whole.
+   Hit-testing asks the top layer first, and in the same order.
 5. `scroll` and `list` clip their children to their border box, and one
    whose content is taller than its box wears a vertical scrollbar along
    its right edge: a thumb in `text.muted` at 45 % opacity, as long as

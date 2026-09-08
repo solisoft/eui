@@ -120,8 +120,17 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let mut list = DrawList { clear: linear(scene.theme.color(Role::SurfaceBase)), ..Default::default() };
     list.clips.push([0, 0, scene.size.0, scene.size.1]);
     let Some(root) = scene.session.root() else { return list };
-    let mut p = Painter { scene, list, clip: 0, run_start: 0, inherited_fg: vec![] };
+    let mut p = Painter { scene, list, clip: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false };
     p.node(root);
+    // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
+    // after everything, clipped by the window and by nothing else, so a
+    // dialog inside a card and a popover inside a scroller are both whole.
+    p.in_top = true;
+    while let Some(top) = p.deferred.first().copied() {
+        p.deferred.remove(0);
+        p.set_clip(0);
+        p.node(top);
+    }
     p.close_run();
     p.list
 }
@@ -132,6 +141,11 @@ struct Painter<'s, 'a> {
     clip: u32,
     run_start: u32,
     inherited_fg: Vec<[f32; 4]>,
+    /// Overlays met during the walk, kept for the top layer.
+    deferred: Vec<NodeIx>,
+    /// True once the top layer is being painted, so the overlays in it
+    /// are drawn instead of deferred again.
+    in_top: bool,
 }
 
 impl Painter<'_, '_> {
@@ -179,6 +193,12 @@ impl Painter<'_, '_> {
 
     fn node(&mut self, ix: NodeIx) {
         let Some(rect) = self.scene.layout.rect(ix) else { return };
+        // An overlay met in the flow is not painted here; it is put by for
+        // the top layer, which paints it whole.
+        if !self.in_top && self.scene.session.node(ix).is_some_and(|n| n.kind == NodeKind::Overlay) {
+            self.deferred.push(ix);
+            return;
+        }
         let spinning = self.scene.session.style_of(ix).animation == 1;
         let first = self.list.quads.len();
         self.node_inner(ix, rect);
