@@ -1037,7 +1037,11 @@ def gallery_view(raw_state)
         [progress(0.62), progress_legend()]
       ),
       row(
-        {"gap": 3, "align": "center"},
+        {
+          "gap": 3,
+          "align": "center",
+          "wrap": "wrap"
+        },
         [
           segmented(["Day", "Week", "Month"], seg, "seg"),
           pagination(page, 9, "page"),
@@ -1067,6 +1071,9 @@ def gallery_view(raw_state)
       skeleton(320, 12)
     ]
   )
+  # None of the three shrinks, so a narrow window moves them onto
+  # lines of their own rather than breaking their words.
+
   # Three tiles that wrap on their own: a line holds as many as fit at
   # 200 px each and they share the remainder, so the last one never
   # leaves a hole behind it.

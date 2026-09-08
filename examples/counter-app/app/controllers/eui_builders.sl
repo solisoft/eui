@@ -998,7 +998,11 @@ def breadcrumb(crumbs, on_go)
     i = i + 1
   end
   row(
-    {"gap": 2, "align": "center"},
+    {
+      "gap": 2,
+      "align": "center",
+      "shrink": 0
+    },
     parts
   )
 end
@@ -1009,7 +1013,11 @@ def pagination(page, pages, on_page)
   nxt = secondary_button("›", on_page)
   nxt["p"] = {"page": page + 1}
   row(
-    {"gap": 2, "align": "center"},
+    {
+      "gap": 2,
+      "align": "center",
+      "shrink": 0
+    },
     [prev, muted(page.to_s + " / " + pages.to_s), nxt]
   )
 end
@@ -1038,7 +1046,8 @@ def segmented(options, selected, on_select)
       "gap": 1,
       "pad": 1,
       "radius": 2,
-      "bg": "surface.sunken"
+      "bg": "surface.sunken",
+      "shrink": 0
     },
     cells
   )
