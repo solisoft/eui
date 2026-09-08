@@ -196,7 +196,7 @@ def x_png(tag, id, url, edge)
   png = "public/x/" + tag + "-" + id + ".png"
   return png if File.exists(png)
 
-  File.mkdir_p("public/x") rescue nil
+  mkdir_p("public/x") rescue nil
   raw = "public/x/" + tag + "-" + id + ".src"
   written = HTTP.download(url, raw) rescue 0
   return "" if written == 0

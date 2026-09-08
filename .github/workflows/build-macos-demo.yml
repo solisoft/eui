@@ -60,78 +60,11 @@ jobs:
           cp target/${{ matrix.target }}/release/eui dist/eui-${{ matrix.arch }}-macos
           ls -lh dist/eui-${{ matrix.arch }}-macos
 
-      - name: Create app bundle (macOS app structure)
-        run: |
-          # Create the app bundle structure
-          APP_DIR="dist/EUI-Demo.app/Contents"
-          mkdir -p "$APP_DIR/MacOS"
-          mkdir -p "$APP_DIR/Resources"
+      - name: Wrap in a .app bundle, with a DMG beside it
+        run: ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI-Demo com.soli.eui-demo dist
 
-          # Copy the binary
-          BINARY_PATH="dist/eui-${{ matrix.arch }}-macos"
-          if [ ! -f "$BINARY_PATH" ]; then
-            echo "Error: Binary not found at $BINARY_PATH"
-            ls -la dist/
-            exit 1
-          fi
-          cp "$BINARY_PATH" "$APP_DIR/MacOS/eui"
-          chmod +x "$APP_DIR/MacOS/eui"
-          echo "Binary copied and made executable"
-
-          # Create Info.plist
-          cat > "$APP_DIR/Info.plist" << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>en</string>
-              <key>CFBundleExecutable</key>
-              <string>eui</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.soli.eui-demo</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
-              <key>CFBundleName</key>
-              <string>EUI Demo</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>0.1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>LSMinimumSystemVersion</key>
-              <string>11.0</string>
-              <key>NSHighResolutionCapable</key>
-              <true/>
-              <key>NSSupportsAutomaticGraphicsSwitching</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
-
-          # Create a PkgInfo file
-          echo -n "APPL????" > "$APP_DIR/PkgInfo"
-
-      - name: Create DMG (macOS installer)
-        run: |
-          cd dist
-          # Create a temporary folder for DMG contents
-          mkdir -p dmg-temp
-          cp -r EUI-Demo.app dmg-temp/
-
-          # Create the DMG
-          hdiutil create -volname "EUI Demo" \
-                        -srcfolder dmg-temp \
-                        -ov -format UDZO \
-                        "EUI-Demo-${{ matrix.arch }}-macos.dmg"
-          rm -rf dmg-temp
-
-      - name: Create binary archive
-        run: |
-          cd dist
-          tar -czf "eui-${{ matrix.arch }}-macos.tar.gz" "eui-${{ matrix.arch }}-macos"
-          zip -r "EUI-Demo-${{ matrix.arch }}-macos.zip" "EUI-Demo.app"
+      - name: Archive the bare binary
+        run: cd dist && tar -czf "eui-${{ matrix.arch }}-macos.tar.gz" "eui-${{ matrix.arch }}-macos"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -143,9 +76,80 @@ jobs:
             dist/EUI-Demo*.zip
           retention-days: 30
 
+  build-vitrine:
+    name: Build Vitrine
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # `soli desktop build` is the thing that packages Vitrine, and it lives
+      # in the language repo, not this one.
+      - name: Check out soli_lang
+        uses: actions/checkout@v4
+        with:
+          repository: solisoft/soli_lang
+          path: lang
+
+      - name: Fail early, and legibly, without the bundle key
+        env:
+          SOLI_BUNDLE_KEY: ${{ secrets.SOLI_BUNDLE_KEY }}
+        run: |
+          if [ -z "$SOLI_BUNDLE_KEY" ]; then
+            echo "::error::SOLI_BUNDLE_KEY is not set on this repository."
+            echo "A desktop artifact embeds the app encrypted, so the build cannot"
+            echo "produce one without a key. Set it once with:"
+            echo "    gh secret set SOLI_BUNDLE_KEY -R solisoft/eui"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            lang/target
+          key: ${{ runner.os }}-vitrine-${{ hashFiles('lang/Cargo.lock') }}
+
+      # Only the eui-desktop feature is needed, and leaving the defaults off
+      # is what keeps this build around ten minutes instead of twenty-five.
+      - name: Build soli with eui-desktop
+        working-directory: lang
+        run: cargo build --release --no-default-features --features eui-desktop
+
+      - name: Package Vitrine
+        env:
+          SOLI_BUNDLE_KEY: ${{ secrets.SOLI_BUNDLE_KEY }}
+        run: |
+          mkdir -p dist
+          ./lang/target/release/soli desktop build examples/counter-app \
+            --app-id com.soli.vitrine \
+            --name Vitrine \
+            --eui gallery \
+            --no-db \
+            --output dist/vitrine-desktop
+          ls -lh dist/vitrine-desktop
+
+      - name: Wrap in a .app bundle, with a DMG beside it
+        run: ./scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitrine-macos-aarch64
+          path: |
+            dist/Vitrine*.dmg
+            dist/Vitrine*.zip
+          retention-days: 30
+
   create-release:
     name: Create Release (on tag push)
-    needs: build-matrix
+    needs: [build-matrix, build-vitrine]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -161,6 +165,8 @@ jobs:
             eui-macos-*/*.tar.gz
             eui-macos-*/*.dmg
             eui-macos-*/*.zip
+            vitrine-macos-*/*.dmg
+            vitrine-macos-*/*.zip
           draft: false
           prerelease: false
         env:

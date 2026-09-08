@@ -128,8 +128,8 @@ def tracker_cells
   } })
 end
 
-def tracker_note(cells, row, chan, note, inst)
-  cell = cells[row * TRACKER_CHANNELS + chan]
+def tracker_note(cells, at, chan, note, inst)
+  cell = cells[at * TRACKER_CHANNELS + chan]
   cell["n"] = note
   cell["i"] = inst
   cells
@@ -238,8 +238,8 @@ def tracker_defaults(state)
   base
 end
 
-def tracker_cell_at(state, row, chan)
-  state["cells"][row * TRACKER_CHANNELS + chan]
+def tracker_cell_at(state, at, chan)
+  state["cells"][at * TRACKER_CHANNELS + chan]
 end
 
 # ------------------------------------------------------- what a cell says
@@ -354,11 +354,11 @@ def tracker_render(state)
   count = int(TRACKER_RATE * tracker_row_ms(state) / 1000)
   voices = range(0, TRACKER_CHANNELS).map(fn(c) { nil })
   bytes = []
-  row = 0
-  while row < TRACKER_ROWS
+  index = 0
+  while index < TRACKER_ROWS
     chan = 0
     while chan < TRACKER_CHANNELS
-      cell = cells[row * TRACKER_CHANNELS + chan]
+      cell = cells[index * TRACKER_CHANNELS + chan]
       note = cell["n"]
       voices[chan] = nil if note == -2
       if note >= 0
@@ -373,7 +373,7 @@ def tracker_render(state)
       end
       chan = chan + 1
     end
-    mixed = tracker_mix_row(voices, count, row * count)
+    mixed = tracker_mix_row(voices, count, index * count)
     bytes = bytes.concat(mixed.map(fn(v) {
       out = 128 + v
       out = 255 if out > 255
@@ -391,9 +391,9 @@ def tracker_render(state)
       end
       chan = chan + 1
     end
-    row = row + 1
+    index = index + 1
   end
-  File.mkdir_p("public/tracker") rescue nil
+  mkdir_p("public/tracker") rescue nil
   file_write_bytes("public/tracker/song.wav", tracker_wav_header(bytes.length()).concat(bytes))
   ms = int((DateTime.now().to_unix() - started.to_unix()) * 1000)
   {
@@ -406,10 +406,10 @@ end
 # ------------------------------------------------------------- the events
 
 def tracker_move(state, drow, dchan)
-  row = state["row"] + drow
-  row = row % TRACKER_ROWS
-  row = row + TRACKER_ROWS if row < 0
-  state["row"] = row
+  index = state["row"] + drow
+  index = index % TRACKER_ROWS
+  index = index + TRACKER_ROWS if index < 0
+  state["row"] = index
   chan = state["chan"] + dchan
   chan = chan % TRACKER_CHANNELS
   chan = chan + TRACKER_CHANNELS if chan < 0
@@ -502,9 +502,9 @@ def tracker_click(state, params)
   point = params["payload"] ?? [0, 0]
   props = params["props"] ?? {}
   top = props["top"] ?? 0
-  row = top + int(point[1] / TRACKER_ROW_H)
-  row = TRACKER_ROWS - 1 if row > TRACKER_ROWS - 1
-  row = 0 if row < 0
+  index = top + int(point[1] / TRACKER_ROW_H)
+  index = TRACKER_ROWS - 1 if index > TRACKER_ROWS - 1
+  index = 0 if index < 0
   x = point[0] - TRACKER_GUTTER_W
   cell = int(x / TRACKER_CELL_W)
   cell = 0 if cell < 0
@@ -514,7 +514,7 @@ def tracker_click(state, params)
   col = 1 if within > 34
   col = 2 if within > 58
   col = 3 if within > 82
-  state["row"] = row
+  state["row"] = index
   state["chan"] = cell
   state["col"] = col
   state
@@ -550,9 +550,9 @@ def tracker_tick(state, params)
   state["at"] = at
   return state unless state["playing"]
 
-  row = int(at / tracker_row_ms(state))
-  row = TRACKER_ROWS - 1 if row > TRACKER_ROWS - 1
-  state["row"] = row
+  index = int(at / tracker_row_ms(state))
+  index = TRACKER_ROWS - 1 if index > TRACKER_ROWS - 1
+  state["row"] = index
   state
 end
 
@@ -777,9 +777,9 @@ end
 
 # ------------------------------------------------------------ the pattern
 
-def tracker_cell_nodes(state, row, chan, playing_row)
-  cell = tracker_cell_at(state, row, chan)
-  here = state["row"] == row && state["chan"] == chan
+def tracker_cell_nodes(state, at, chan, playing_row)
+  cell = tracker_cell_at(state, at, chan)
+  here = state["row"] == at && state["chan"] == chan
   parts = [
     {
       "w": TRACKER_NOTE_W,
