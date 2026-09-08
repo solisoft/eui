@@ -231,6 +231,17 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// for the rows now in view (04 §7.1).
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
 
+/// Spec 06 §1.1: the fastest a node may ask to be woken. A clock is not a
+/// render loop, and the budget of 10 §1 says a window at rest costs
+/// nothing — so what asks for time says how much, and cannot ask for all
+/// of it.
+const MIN_WAKE_MS: u64 = 100;
+
+/// How many nodes may be waking at once. Four clocks is a player, a
+/// countdown and two things left over; a thousand is a server spinning
+/// the client.
+const MAX_WAKES: usize = 4;
+
 /// A scroll offset easing from `from` to `to`, per wheel notch (03 §5's
 /// `motion.base`); a notch arriving mid-way retargets from where the view is.
 #[derive(Debug, Clone, Copy)]
@@ -342,6 +353,13 @@ pub struct Driver {
     video_sizes: HashMap<Hash, (f32, f32)>,
     /// The tree changed, so the video nodes must be looked at again.
     video_dirty: bool,
+    /// Spec 06 §1.1: the nodes that asked to be woken, as `(node id,
+    /// period, when it is next due)`. Rebuilt from the tree whenever a
+    /// batch changed it, and kept otherwise so a re-render does not reset
+    /// the phase of a clock that is already running.
+    wakes: Vec<(u32, Duration, Instant)>,
+    /// Whether the tree changed since the wakes were last collected.
+    wake_dirty: bool,
     /// When the players were last advanced.
     video_clock: Option<Instant>,
     /// When the next video frame is due. Applied at the end of the paint,
@@ -425,6 +443,8 @@ impl Driver {
             framed: HashMap::new(),
             video_sizes: HashMap::new(),
             video_dirty: false,
+            wakes: Vec::new(),
+            wake_dirty: false,
             video_clock: None,
             video_due: None,
             mixer: eui_audio::Mixer::new(48_000),
@@ -527,6 +547,7 @@ impl Driver {
                 self.resyncing = false;
                 self.audio_dirty = true;
                 self.video_dirty = true;
+                self.wake_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
                 // The batch put back every style a local handler had
@@ -1648,6 +1669,8 @@ impl Driver {
         let now = self.now;
         let ticks = self.time_updates();
         self.pending.extend(ticks);
+        let woken = self.wake_events();
+        self.pending.extend(woken);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
         // them — once the view has been still for a moment, not per frame
         // of a glide or a drag: a request a frame is a server render a
@@ -1693,7 +1716,8 @@ impl Driver {
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
-        for due in [settle_due, self.video_due].into_iter().flatten() {
+        let wake_due = self.wakes.iter().map(|(_, _, at)| *at).min();
+        for due in [settle_due, self.video_due, wake_due].into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         list
@@ -2015,6 +2039,78 @@ impl Driver {
             out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
         }
         out
+    }
+
+    /// Spec 06 §1.1: the nodes that asked to be woken.
+    ///
+    /// A node carrying a `wake` prop (milliseconds) and a `wake` handler
+    /// is sent one `wake` event every period for as long as it carries
+    /// both — the only event nobody caused, and the only way an
+    /// application can watch something that moves without it. The period
+    /// has a floor and the count a ceiling ([`MIN_WAKE_MS`],
+    /// [`MAX_WAKES`]): a server that asks for a thousand clocks gets four,
+    /// slowly.
+    ///
+    /// A clock already running keeps its phase across re-renders: only a
+    /// node that was not waking before, or whose period changed, is armed
+    /// afresh.
+    fn wake_events(&mut self) -> Vec<Frame> {
+        if self.wake_dirty {
+            self.wake_dirty = false;
+            self.collect_wakes();
+        }
+        if self.wakes.is_empty() {
+            return Vec::new();
+        }
+        let now = self.now;
+        let mut out = Vec::new();
+        let mut due: Vec<u32> = Vec::new();
+        for (id, period, at) in self.wakes.iter_mut() {
+            if *at <= now {
+                due.push(*id);
+                // From now, not from the missed instant: a window that was
+                // not painted for a second does not owe five events.
+                *at = now + *period;
+            }
+        }
+        for id in due {
+            let Some(ix) = self.session.lookup(id) else { continue };
+            out.extend(self.emit(ix, EventKind::Wake, Value::Null));
+        }
+        out
+    }
+
+    /// Walk the tree for the nodes that ask to be woken, keeping the phase
+    /// of the ones already running.
+    fn collect_wakes(&mut self) {
+        let Some(root) = self.session.root() else {
+            self.wakes.clear();
+            return;
+        };
+        let Some(atom) = self.session.atom_id("wake") else {
+            self.wakes.clear();
+            return;
+        };
+        let now = self.now;
+        let asked: Vec<(u32, Duration)> = self
+            .session
+            .preorder(root)
+            .filter_map(|ix| self.session.node(ix))
+            .filter(|n| n.handler(EventKind::Wake).is_some())
+            .filter_map(|n| match n.prop(atom) {
+                Some(Value::Int(ms)) if *ms > 0 => Some((n.id, Duration::from_millis((*ms as u64).max(MIN_WAKE_MS)))),
+                _ => None,
+            })
+            .take(MAX_WAKES)
+            .collect();
+        let old = std::mem::take(&mut self.wakes);
+        self.wakes = asked
+            .into_iter()
+            .map(|(id, period)| {
+                let kept = old.iter().find(|(o, p, _)| *o == id && *p == period).map(|(_, _, at)| *at);
+                (id, period, kept.unwrap_or(now + period))
+            })
+            .collect();
     }
 
     /// Spec 04 §7.1: for every windowed list laid out this frame, the rows

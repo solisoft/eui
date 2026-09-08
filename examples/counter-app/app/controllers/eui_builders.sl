@@ -533,9 +533,11 @@ def local_button(label, program, after)
   b
 end
 
-# The root node's props are the component's local state.
+# The root node's props are the component's local state — merged into
+# whatever props the root already carries, since a root may also ask the
+# client for something (a `wake`, 06 §1.1).
 def with_state(state, root)
-  root["p"] = state
+  root["p"] = (root["p"] ?? {}).merge(state)
   root
 end
 

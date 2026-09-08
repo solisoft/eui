@@ -148,6 +148,9 @@ pub enum EventKind {
     Ended = 0x17,
     /// A playing sound moved. Coalesced, and rate-limited by the client.
     TimeUpdate = 0x18,
+    /// The node asked to be woken and its `wake` interval elapsed
+    /// (spec 06 §1.1). The only event no one did.
+    Wake = 0x19,
 }
 
 impl EventKind {
@@ -178,6 +181,7 @@ impl EventKind {
             0x16 => Ok(Self::Window),
             0x17 => Ok(Self::Ended),
             0x18 => Ok(Self::TimeUpdate),
+            0x19 => Ok(Self::Wake),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

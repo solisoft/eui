@@ -39,11 +39,42 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x16` | `window` | `List[Int first, Int last]`, the rows a windowed `list` needs (spec 04 §7.1), inclusive | when the range changes, once a scroll has landed |
 | `0x17` | `ended` | `Null`, a sound or a picture reached its end (spec 03 §7, §8) | |
 | `0x18` | `time_update` | `List[Int position_ms, Int duration_ms]` | at most 10/s |
+| `0x19` | `wake` | `Null`, the node's `wake` interval elapsed (§1.1) | every `wake` ms, at most 10/s |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
 `2` control, `4` alt, `8` super. `key` is the key's name as in the W3C UI
 Events `KeyboardEvent.key` value (`"Enter"`, `"a"`, `"ArrowLeft"`).
+
+### 1.1 Being woken
+
+Every other event is something that happened. `wake` is the one an
+application asks for: a node carrying a **`wake` prop** — an integer of
+milliseconds — **and a `wake` handler** is sent one `wake` event every
+that many milliseconds, for as long as it carries both. Nothing else
+starts or stops it: remove the prop, the handler or the node and the
+clock is gone.
+
+It exists because an application that watches something the client cannot
+see — a player on another device, a job on a server, a countdown — has no
+other way to be given time. Without it such an application can only
+refresh when the person touches it.
+
+A client MUST bound this, because it is the one event a server can ask
+for without anyone doing anything:
+
+- a period below **100 ms** is raised to 100 ms;
+- at most **four** nodes wake at once, in tree order; the rest are
+  ignored;
+- a window that was not painted for a while owes **one** event, not the
+  ones it missed: the next is due a period after the one that fires, not
+  after the one that was scheduled;
+- a clock already running keeps its phase when the tree is re-rendered.
+  Only a node that was not waking, or whose period changed, starts one.
+
+The budget of `10-budgets.md` §1 — zero wakeups at rest — is about a
+window nobody asked to wake. A node with a `wake` prop is a window asked
+to wake, and it costs what it asked for.
 
 ## 2. Emission rules
 

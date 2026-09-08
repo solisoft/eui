@@ -13,6 +13,46 @@ def counter(event_data)
   end
 end
 
+# Spec 06 §1.1: the smallest thing that needs time to pass.
+#
+# The node carries a `wake` of 100 ms and a `wake` handler, so the client
+# sends one event every 100 ms for as long as both are there — nobody
+# clicks anything. It is what a progress bar for a player on another
+# machine, or a job somewhere, is made of.
+def clock(event_data)
+  state = event_data["state"]
+  ticks = state["ticks"] ?? 0
+  event_data["event"] == "tick" ? {"ticks": ticks + 1} : {"ticks": ticks}
+end
+
+def clock_view(state)
+  ticks = state["ticks"] ?? 0
+  face = column(
+    {
+      "pad": 6,
+      "gap": 2,
+      "bg": "surface.base"
+    },
+    [
+      text(
+        "Ticks",
+        {"size": 1, "fg": "text.muted"}
+      ),
+      text(
+        str(ticks),
+        {
+          "size": 6,
+          "weight": "bold",
+          "fg": "text.default"
+        }
+      )
+    ]
+  )
+  face["p"] = {"wake": 100}
+  face["on"] = {"wake": "tick"}
+  with_state({"ticks": ticks}, face)
+end
+
 # The view: state in, node tree out. Plain data; the server does the rest.
 def counter_view(state)
   count = state["count"] ?? 0

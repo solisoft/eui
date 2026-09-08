@@ -1255,6 +1255,60 @@ fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
     assert!(out.iter().all(|s| *s == 0.0));
 }
 
+/// Spec 06 §1.1: a node that asks to be woken is, on its own period and
+/// nobody's action; the floor holds, the phase survives a re-render, and
+/// dropping the prop stops the clock.
+#[test]
+fn a_node_that_asks_to_be_woken_is_woken_on_its_own_period() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const A_WAKE: u32 = 40;
+    const A_TICK: u32 = 41;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 0 });
+    // 10 ms asked, 100 ms given: a clock is not a render loop.
+    tree.props.push((A_WAKE, Value::Int(10)));
+    tree.handlers.push((EventKind::Wake, Handler::Server(A_TICK)));
+    let ops = vec![
+        Op::DefAtom { id: A_WAKE, value: "wake".into() },
+        Op::DefAtom { id: A_TICK, value: "tick".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let woken = |d: &mut Driver| d.take_pending().iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Wake)).count();
+
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 0, "nothing is due yet");
+    // Before the floor: still nothing, whatever the node asked for.
+    d.tick(t0 + Duration::from_millis(50));
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 0, "10 ms asked, 100 ms is the floor");
+    d.tick(t0 + Duration::from_millis(120));
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 1, "one wake, once the period passed");
+    // A frame that changed nothing else does not owe a second one.
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 0, "one event a period, not one a frame");
+    // A batch that leaves the prop alone leaves the clock running: the
+    // next event is due a period after the one that fired, not now.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetText { node: 1, text: TextRef::Inline("hello".into()) }] }));
+    d.tick(t0 + Duration::from_millis(180));
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 0, "a re-render does not restart the clock");
+    d.tick(t0 + Duration::from_millis(240));
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 1, "and the next one lands on time");
+    // Taking the prop away stops it.
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetProp { node: 1, prop: A_WAKE, value: Value::Null }] }));
+    d.tick(t0 + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    assert_eq!(woken(&mut d), 0, "no prop, no clock");
+    assert!(d.next_frame_at().is_none(), "and nothing is owed");
+}
+
 /// Spec 03 §7: `time_update` goes only to a node that asks for it, and at
 /// most four a second.
 #[test]

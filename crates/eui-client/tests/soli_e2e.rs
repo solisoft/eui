@@ -34,6 +34,15 @@ fn start_soli(bin: &str) -> (Server, u16) {
     };
     let child = Command::new(bin)
         .args(["serve", &app, "--port", &port.to_string()])
+        // The player's sample catalogue, not whatever catalogue the
+        // machine happens to be configured for. Soli's `.env` loader only
+        // fills a variable that is not already set, so setting these to
+        // empty is how a test says "no account" over a developer's own
+        // `examples/counter-app/.env`.
+        .env("SPOTIFY_CLIENT_ID", "")
+        .env("SPOTIFY_CLIENT_SECRET", "")
+        .env("SPOTIFY_REFRESH_TOKEN", "")
+        .env("SPOTIFY_USER_TOKEN", "")
         .stdout(Stdio::null())
         .stderr(stderr)
         .spawn()
@@ -1175,6 +1184,52 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
     let held = d.video_position_ms(id).expect("a position");
     turn(&mut d, &conn, &mut clock, 1_000);
     assert_eq!(d.video_position_ms(id), Some(held), "paused stays put");
+}
+
+/// Spec 06 §1.1 end to end: a node asks to be woken, the client wakes it
+/// on its own period with nobody touching anything, and the server counts.
+#[test]
+fn a_node_that_asks_to_be_woken_is_woken_without_anyone_doing_anything() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "clock", 400.0, 300.0);
+    let _ = d.paint(400, 300);
+    let ticks = |d: &Driver| -> i64 {
+        d.session()
+            .preorder(root(d))
+            .filter_map(|ix| d.session().text_of(ix).and_then(|t| t.parse::<i64>().ok()))
+            .next()
+            .unwrap_or(-1)
+    };
+    assert_eq!(ticks(&d), 0, "it starts at nothing");
+    // Nothing is clicked, nothing is typed: only the clock runs. The
+    // client owes a frame while a wake is pending, so painting when it
+    // says so is all the window does.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ticks(&d) < 3 {
+        assert!(Instant::now() < deadline, "the clock never ticked: {:?}", ticks(&d));
+        let _ = wake.recv_timeout(Duration::from_millis(20));
+        d.tick(Instant::now());
+        let _ = d.paint(400, 300);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
+            }
+        }
+    }
+    // And the client says a frame is owed for as long as the clock runs.
+    assert!(d.next_frame_at().is_some(), "a running clock owes a frame");
 }
 
 /// A tile lights under the pointer and goes out when it leaves — the
