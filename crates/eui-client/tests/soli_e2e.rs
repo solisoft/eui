@@ -781,9 +781,18 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
         .preorder(root(&d))
         .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
         .expect("the pattern takes the keyboard");
+    // Just past the row-number gutter on the first line: the note column of
+    // the first channel.
+    let _ = d.paint(1000, 800);
+    let r = d.layout().rect(grid).expect("the pattern is laid out");
     let seq = d.session().last_seq().unwrap();
-    click(&mut d, &conn, grid);
+    d.input(Input::PointerMove(r.x + 40.0, r.y + 5.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    assert_eq!(d.focused(), Some(grid), "clicking a grid that wants keys focuses it (03 §3)");
 
     // `y` is A in FT2's upper key row, so at the default octave the cell
     // reads A-5 — a note the demo song does not have anywhere.
@@ -792,9 +801,6 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
             conn.tx.send(f.encode()).unwrap();
         }
     };
-    // The click put the cursor where the pointer was, which may be on the
-    // instrument or volume column; `Tab` moves to the next channel's note.
-    key(&mut d, &conn, "Tab");
     key(&mut d, &conn, "y");
     pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A-5"));
 

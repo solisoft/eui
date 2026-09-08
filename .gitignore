@@ -16,3 +16,5 @@
 examples/counter-app/public/covers/
 # Pictures fetched from x.com for the feed, cached as PNG the same way.
 examples/counter-app/public/x/
+# What the tracker's Play button mixes: generated, never committed.
+examples/counter-app/public/tracker/
