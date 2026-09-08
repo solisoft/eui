@@ -1871,7 +1871,20 @@ def text_interned(content, style)
   interned
 end
 
+# A face when there is one, a coloured initial when there is not: a real
+# timeline brings pictures, the sample brings letters, and the card treats
+# them the same.
+def post_avatar(post, size)
+  face = post["avatar"] ?? ""
+  return initial_avatar(post["initial"], post["tone"], size) if face == ""
+
+  built = avatar(face, size)
+  built["s"]["shrink"] = 0
+  built
+end
+
 # An initial in a coloured disc, in place of a fetched avatar.
+
 def initial_avatar(letter, tone, size)
   {
     "k": "box",
@@ -2116,7 +2129,7 @@ def post_card(post, liked, play, height)
     },
     "p": {"item_height": height},
     "c": [
-      initial_avatar(post["initial"], post["tone"], 40),
+      post_avatar(post, 40),
       column(
         {
           "gap": 1,

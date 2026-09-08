@@ -22,5 +22,10 @@ get("/health", "home#health")
 get("/spotify/login", "spotify#login")
 get("/spotify/callback", "spotify#callback")
 
+# The same for an X account, which the feed needs before it can show a
+# real timeline: the home timeline is a user-context endpoint.
+get("/x/login", "x#login")
+get("/x/callback", "x#callback")
+
 # What the manifest asks the client for; the person still has to allow it.
 eui_capabilities("clipboard.read")

@@ -1145,6 +1145,10 @@ FEED_TEXTS = [
 ]
 FEED_TONES = ["accent.base", "info.base", "success.base", "warning.base", "danger.base"]
 
+# How many posts a real timeline asks X for. The endpoint takes 5 to 100;
+# fifty is two screens of scrolling and a fifth of a Basic day's quota.
+FEED_LIVE = 50
+
 # A card's media, decided by its number alone so the row heights cost an
 # arithmetic each and no card has to be built to know them.
 def feed_media(i)
@@ -1195,7 +1199,12 @@ def feed(event_data)
   params = event_data["params"]
   state = event_data["state"] ?? {}
   liked = state["liked"] ?? []
-  count = state["count"] ?? 10
+  posts = state["posts"] ?? []
+  # A real timeline is fetched when the window opens and when it is asked
+  # for, never on a scroll: X allows five reads a quarter of an hour, and
+  # a scroll can ask for a hundred windows in that time.
+  posts = x_timeline(FEED_LIVE) if x_linked() && (event == "connect" || event == "refresh")
+  count = posts.length() > 0 ? posts.length() : (state["count"] ?? 10)
   window = state["window"] ?? [0, 0]
   sound = state["sound"] ?? -1
   moving = state["moving"] ?? -1
@@ -1204,6 +1213,7 @@ def feed(event_data)
   seek = state["seek"] ?? 0
   keep = {
     "liked": liked,
+    "posts": posts,
     "count": count,
     "window": window,
     "sound": sound,
@@ -1214,7 +1224,7 @@ def feed(event_data)
   }
   match event {
     "like" => keep.merge({"liked": toggle_id(liked, params["props"]["id"])}),
-    "more" => keep.merge({"count": count + 5000}),
+    "more" => keep.merge({"count": posts.length() > 0 ? count : count + 5000}),
     "window" => keep.merge({"window": params["payload"]}),
     "play" => keep.merge({"sound": sound == params["props"]["id"] ? -1 : params["props"]["id"]}),
     "sound_ended" => keep.merge({"sound": -1}),
@@ -1268,6 +1278,13 @@ def video_seek(keep, params)
   keep.merge({"seek": ms, "at": ms})
 end
 
+# A card from a post X sent, rather than one invented from its number.
+def feed_live_card(i, post, liked, play)
+  built = keyed(i, post_card(post, liked, play, feed_card_height(post)))
+  built["p"] = {"row": i}
+  built
+end
+
 def feed_build(i, liked, play)
   post = feed_post(i)
   built = keyed(i, post_card(post, liked, play, feed_card_height(post)))
@@ -1305,7 +1322,9 @@ end
 
 def feed_view(state)
   liked = state["liked"] ?? []
-  count = state["count"] ?? 10
+  posts = state["posts"] ?? []
+  live = posts.length() > 0
+  count = live ? posts.length() : (state["count"] ?? 10)
   window = state["window"] ?? [0, 0]
   first = window[0]
   last = window[1] < count ? window[1] : count - 1
@@ -1316,14 +1335,22 @@ def feed_view(state)
   duration = state["duration"] ?? 0
   seek = state["seek"] ?? 0
   cards = last < first ? [] : range(first, last + 1).map(fn(i) {
-    feed_card(i, liked.includes?(i), {
+    play = {
       "sound": i == sound,
       "video": i == moving,
       "at": i == moving ? at : 0,
       "duration": i == moving ? duration : 0,
       "seek": i == moving ? seek : 0
-    })
+    }
+    # Fifty real cards are cheap to build and change under the account;
+    # forty thousand invented ones are what the cache is for.
+    live ? feed_live_card(i, posts[i], liked.includes?(i), play) : feed_card(i, liked.includes?(i), play)
   })
+  heights = live ? posts.map(fn(post) { feed_card_height(post) }) : feed_heights(count)
+  tail = live ? loading_button("Refresh", "refresh", "refresh") : loading_button("Load 5 000 more", "more", "more")
+  # What the header says is what the feed is: an account's timeline, or
+  # the sample that needs no account at all.
+  label = live ? str(count) + " posts from x.com" : str(count) + " posts"
   header = row(
     {
       "gap": 3,
@@ -1333,7 +1360,7 @@ def feed_view(state)
       "border": [0, 0, 1, 0],
       "border_color": "border.subtle"
     },
-    [h1("Feed"), badge(str(count) + " posts", "info"), spacer(), loading_button("Load 5 000 more", "more", "more")]
+    [h1("Feed"), badge(label, live ? "success" : "info"), spacer(), tail]
   )
   column(
     {
@@ -1349,7 +1376,7 @@ def feed_view(state)
         "grow": 1,
         "bg": "surface.raised"
       },
-      [header, list_window({"grow": 1}, 128, count, feed_heights(count), cards, "window")]
+      [header, list_window({"grow": 1}, 128, count, heights, cards, "window")]
     )]
   )
 end
