@@ -9,6 +9,7 @@
 
 use std::time::{Duration, Instant};
 
+use eui_client::worker::Backend;
 use eui_client::{Driver, Input};
 use eui_layout::{Env, Layout, Monospace, Size};
 use eui_proto::*;
@@ -149,6 +150,62 @@ fn bench() -> Vec<Row> {
     rows.push(Row { what: "driver RSS growth, table-10k with real text", value: format!("{:.1} MB", after.saturating_sub(before) as f64 / 1024.0), budget: "< 45 MB", ok: after.saturating_sub(before) < 45 * 1024 });
     rows.push(Row { what: "process RSS at the end", value: format!("{:.1} MB", rss_kb() as f64 / 1024.0), budget: "info", ok: true });
 
+    rows.extend(through_a_worker(scroll));
+
+    rows
+}
+
+/// The `eui` binary beside this one: what a worker is started from.
+fn worker_binary() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join(if cfg!(windows) { "eui.exe" } else { "eui" });
+    candidate.is_file().then_some(candidate)
+}
+
+/// The same 10 000 rows, scrolled through a real worker process (08 §10).
+///
+/// This is the configuration that ships: every input and every paint is a
+/// round trip over a pipe, and the draw list comes back whole. `in_process`
+/// is the paint measured above, so the difference is what the boundary
+/// costs rather than what the layout does.
+fn through_a_worker(in_process: Duration) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let Some(bin) = worker_binary() else {
+        rows.push(Row { what: "worker: the eui binary is not beside this one", value: "skipped".into(), budget: "info", ok: true });
+        return rows;
+    };
+    let (mut backend, how) = Backend::open_with(bin, 800.0, 600.0, 1.0, 0);
+    rows.push(Row { what: "worker: how the driver runs", value: how.split(':').next_back().unwrap_or("?").trim().to_string(), budget: "info", ok: true });
+    if backend.traffic().is_none() {
+        rows.push(Row { what: "worker: no worker started, nothing to measure", value: "skipped".into(), budget: "info", ok: true });
+        return rows;
+    }
+    backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }).encode());
+    backend.frame(Frame::Batch(table_batch(10_000)).encode());
+    let s = Instant::now();
+    let (list, _) = backend.paint(800, 600);
+    let first = s.elapsed();
+    rows.push(Row { what: "worker: first paint of table-10k, over the pipe", value: format!("{first:?}, {} quads", list.quads.len()), budget: "< 80 ms", ok: first < Duration::from_millis(80) });
+
+    let before = backend.traffic().unwrap_or_default();
+    let mut inputs = Vec::new();
+    let mut paints = Vec::new();
+    for _ in 0..10 {
+        let s = Instant::now();
+        backend.input(Input::Wheel(0.0, 22.0));
+        inputs.push(s.elapsed());
+        let s = Instant::now();
+        let _ = backend.paint(800, 600);
+        paints.push(s.elapsed());
+    }
+    let after = backend.traffic().unwrap_or_default();
+    let input = median(inputs);
+    let paint = median(paints);
+    let step = paint + input;
+    rows.push(Row { what: "worker: scroll step, input + paint over the pipe (median)", value: format!("{step:?}"), budget: "< 2 ms", ok: step < Duration::from_millis(2) });
+    rows.push(Row { what: "worker: of which the input round trip (median)", value: format!("{input:?}"), budget: "info", ok: true });
+    rows.push(Row { what: "worker: what the boundary adds to a paint", value: format!("{:?}", paint.saturating_sub(in_process)), budget: "info", ok: true });
+    rows.push(Row { what: "worker: bytes over the pipe per scroll step", value: format!("{:.1} KB out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0 / 1024.0, (after.1 - before.1) as f64 / 10.0 / 1024.0), budget: "info", ok: true });
     rows
 }
 

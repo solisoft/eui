@@ -913,6 +913,10 @@ pub struct Worker {
     /// an instant.
     due: Option<Instant>,
     dead: Option<String>,
+    /// Bytes written to and read from the pipe since the worker started,
+    /// framing included. What the process boundary costs is a number the
+    /// budgets ask for (10 §1), and only this side can count it.
+    traffic: (u64, u64),
 }
 
 impl std::fmt::Debug for Worker {
@@ -935,7 +939,7 @@ impl Worker {
         let mut child = cmd.spawn().map_err(|e| format!("cannot start the worker {}: {e}", program.display()))?;
         let input = child.stdin.take().ok_or("worker has no stdin")?;
         let output = child.stdout.take().ok_or("worker has no stdout")?;
-        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None };
+        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0) };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
             Some(Payload::Sandbox(s)) => Ok((worker, s)),
@@ -949,7 +953,15 @@ impl Worker {
         if self.dead.is_some() {
             return None;
         }
-        let result = write_message(&mut self.input, &request.encode()).and_then(|()| read_message(&mut self.output, MAX_REPLY)).and_then(|b| Reply::decode(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)));
+        let encoded = request.encode();
+        let result = write_message(&mut self.input, &encoded).and_then(|()| read_message(&mut self.output, MAX_REPLY));
+        let result = result.and_then(|b| {
+            // Four bytes of length either way, the same framing both ends
+            // agreed on above.
+            self.traffic.0 = self.traffic.0.saturating_add(encoded.len() as u64 + 4);
+            self.traffic.1 = self.traffic.1.saturating_add(b.len() as u64 + 4);
+            Reply::decode(&b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        });
         match result {
             Ok(reply) => {
                 self.status = reply.status.clone();
@@ -984,6 +996,11 @@ impl Worker {
     /// State after the last reply.
     pub fn status(&self) -> &Status {
         &self.status
+    }
+
+    /// `(sent, received)` bytes over the pipe since the worker started.
+    pub fn traffic(&self) -> (u64, u64) {
+        self.traffic
     }
 
     /// Kill the worker, for the test that checks a dead one is reported
@@ -1129,6 +1146,15 @@ impl Backend {
         match self {
             Backend::Remote { worker, .. } => worker.lock().ok().map(|mut w| f(&mut w)),
             Backend::Local(_) => None,
+        }
+    }
+
+    /// `(sent, received)` bytes over the pipe since the worker started, or
+    /// `None` when the driver is in this process and nothing crosses one.
+    pub fn traffic(&self) -> Option<(u64, u64)> {
+        match self {
+            Backend::Local(_) => None,
+            Backend::Remote { worker, .. } => worker.lock().ok().map(|w| w.traffic()),
         }
     }
 
