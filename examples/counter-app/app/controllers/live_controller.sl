@@ -1024,7 +1024,7 @@ def gallery_view(raw_state)
         code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
         h2("Code Viewer:"),
         code_viewer(
-          "def hello(name)\n  puts(\"Hello, #{name}!\")\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()",
+          "def hello(name)\n  puts(\"Hello, \" + name)\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()",
           {"line_numbers": true}
         )
       ]
