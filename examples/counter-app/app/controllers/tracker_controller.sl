@@ -511,14 +511,24 @@ def tracker_key(state, key, mods)
   note = state["col"] == 0 ? tracker_letter(state, lower) : nil
   return tracker_put(state, note) unless note.nil?
 
-  # A digit is an instrument, a volume or an effect parameter, unless the
-  # cursor is on the note column, where the digits pick the octave.
+  # On the other columns a digit is a value, typed the way a tracker types
+  # hex: shifted in from the right.
   digits = "0123456789abcdef"
   at = digits.index_of(lower) ?? -1
   return tracker_digit(state, at) if at >= 0 && state["col"] > 0
-  return set_key(state, "octave", at) if at >= 0 && at < 8 && state["col"] == 0
+
+  # FT2 moves the octave with the two keys beside the note rows.
+  return tracker_octave(state, 1) if key == "*" || key == "+"
+  return tracker_octave(state, -1) if key == "/" || key == "-"
 
   state
+end
+
+def tracker_octave(state, by)
+  octave = state["octave"] + by
+  octave = 0 if octave < 0
+  octave = 7 if octave > 7
+  set_key(state, "octave", octave)
 end
 
 # The pattern is a character grid, so where a click landed is two
@@ -614,7 +624,7 @@ def tracker(event_data)
     "ended" => tracker_stop(state),
     "tick" => tracker_tick(state, params),
     "inst" => set_key(state, "inst", props["id"]),
-    "octave" => set_key(state, "octave", props["id"]),
+    "octave" => tracker_octave(state, props["by"] ?? 0),
     "edit" => set_key(state, "edit", !state["edit"]),
     "bpm" => set_key(state, "bpm", state["bpm"] + props["by"] < 32 ? 32 : state["bpm"] + props["by"]),
     "speed" => set_key(state, "speed", state["speed"] + props["by"] < 1 ? 1 : state["speed"] + props["by"]),
@@ -724,6 +734,8 @@ def tracker_top(state)
       tracker_button("-", "speed", {"by": -1}, false),
       tracker_button("+", "speed", {"by": 1}, false),
       tracker_field("Oct", str(state["octave"])),
+      tracker_button("-", "octave", {"by": -1}, false),
+      tracker_button("+", "octave", {"by": 1}, false),
       tracker_field("Row", tracker_hex(state["row"], 2))
     ]
   )

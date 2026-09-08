@@ -646,11 +646,15 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
+// Only the Wayland/X11 window attributes are threaded through this, so on
+// every other platform the trait is dead and `-D warnings` says so.
+#[cfg(target_os = "linux")]
 trait Pipe: Sized {
     fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
         f(self)
     }
 }
+#[cfg(target_os = "linux")]
 impl<T> Pipe for T {}
 
 fn named(n: NamedKey) -> String {

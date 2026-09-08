@@ -758,6 +758,78 @@ fn the_player_searches_opens_a_record_and_plays_a_track() {
     assert!(all.iter().any(|t| t.contains("keeping time only")), "and says it keeps its own time: {all:?}");
 }
 
+/// The tracker: what is typed is what is mixed. The pattern takes the
+/// keyboard, Play walks it into eight-bit PCM on the server, and the
+/// window plays the file it is handed — so a note typed here is a sample
+/// out of the client's mixer three round trips later.
+#[test]
+fn the_tracker_types_a_note_and_plays_what_it_typed() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "tracker", 1000.0, 800.0);
+    let _ = d.paint(1000, 800);
+    // The demo song is there, in a pattern that shows its row numbers in hex.
+    let all = texts(&d, root(&d));
+    for expected in ["Play", "Instruments", "bass square", "C-2", "00"] {
+        assert!(all.iter().any(|t| t == expected), "the tracker shows {expected:?}");
+    }
+    // The grid is one node: clicking it puts the cursor where the pointer
+    // is and takes the keyboard.
+    let grid = d
+        .session()
+        .preorder(root(&d))
+        .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
+        .expect("the pattern takes the keyboard");
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, grid);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+
+    // `y` is A in FT2's upper key row, so at the default octave the cell
+    // reads A-5 — a note the demo song does not have anywhere.
+    let key = |d: &mut Driver, conn: &eui_client::Connection, k: &str| {
+        for f in d.input(Input::Key { key: k.into(), modifiers: 0, down: true }) {
+            conn.tx.send(f.encode()).unwrap();
+        }
+    };
+    key(&mut d, &conn, "y");
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A-5"));
+
+    // Play: the server mixes the pattern and the tree gains a sound.
+    let play = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Play")).expect("the Play button");
+    let button = d.session().node(play).unwrap().parent;
+    click(&mut d, &conn, button);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.starts_with("Playing")));
+    let _ = d.paint(1000, 800);
+    for hash in d.pending_assets() {
+        conn.request_asset(hash);
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !d.audio_playing() {
+        assert!(Instant::now() < deadline, "the mix never arrived");
+        let _ = wake.recv_timeout(Duration::from_millis(20));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    assert!(bytes.starts_with(b"RIFF"), "the server mixed a wav");
+                    d.asset_ready(hash, bytes);
+                }
+                Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
+            }
+        }
+        let _ = d.paint(1000, 800);
+    }
+    let mut out = vec![0.0f32; 11_025];
+    let _ = d.fill_audio(&mut out, 1, 11_025);
+    assert!(out.iter().any(|s| s.abs() > 0.05), "the pattern is audible: {:?}", &out[..4]);
+}
+
 #[test]
 fn the_player_plays_a_file_from_the_machine_and_the_bar_follows_it() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
