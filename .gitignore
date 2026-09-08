@@ -6,3 +6,11 @@
 /crates/*/fuzz/artifacts/
 # A Soli app's publisher key, generated on first serve; never committed.
 **/config/eui_publisher.pkcs8
+
+# A Soli app's environment: never committed.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Album art fetched from a catalogue at runtime: a cache, never committed.
+examples/counter-app/public/covers/

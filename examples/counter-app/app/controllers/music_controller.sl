@@ -163,6 +163,24 @@ def needle_sleeve(name, edge, radius)
   sleeve
 end
 
+# A record's face: Spotify's picture when it was fetched, the drawn
+# sleeve when there is none — the sample catalogue, or a fetch that
+# failed. Same shape, same corner, so a rail of them stays even.
+def needle_art(picture, name, edge, radius)
+  return needle_sleeve(name, edge, radius) if picture.nil? || picture == ""
+
+  {
+    "k": "image",
+    "p": {"src": picture},
+    "s": {
+      "width": edge,
+      "height": edge,
+      "radius": radius,
+      "shrink": 0
+    }
+  }
+end
+
 # The mark: a tonearm over a record, the app's whole identity in 22 px.
 def needle_mark
   canvas(22, 22, [
@@ -329,6 +347,53 @@ def needle_api(path)
   json_parse(resp["body"]) rescue nil
 end
 
+# Spotify hands out picture URLs, largest first, and the client fetches
+# assets only from its own origin by hash (01 §2.2) — a third party never
+# hears from it. So the server fetches instead, once, into `public`, and
+# the node names the file like any other picture. `HTTP.download` is what
+# makes this possible at all: every other HTTP builtin decodes its body
+# as UTF-8, which a JPEG is not.
+def needle_pick_art(images, small)
+  return "" if images.nil? || images.length() == 0
+
+  # [640, 300, 64] in that order: the last is the rail's thumbnail, the
+  # middle one is what a band or a tile shows.
+  wanted = small ? images.length() - 1 : (images.length() > 1 ? 1 : 0)
+  images[wanted]["url"] ?? ""
+end
+
+def needle_cache_art(id, url, tag)
+  return "" if url == "" || id == ""
+
+  # The client decodes PNG and nothing else (`eui-client/src/assets.rs`
+  # looks for the PNG magic and stores anything else undecoded), and
+  # Spotify serves JPEG. So the picture is re-encoded once, here, on its
+  # way into the cache, and the JPEG is dropped.
+  png = "public/covers/" + tag + "-" + id + ".png"
+  return png if File.exists(png)
+
+  raw = "public/covers/" + tag + "-" + id + ".jpg"
+  written = HTTP.download(url, raw) rescue 0
+  return "" if written == 0
+
+  needle_square(raw, png, tag == "s" ? 160 : 320) rescue nil
+  File.delete(raw) rescue nil
+  File.exists(png) ? png : ""
+end
+
+# A rail of faces reads as a rail only if they are all the same shape, and
+# Spotify's pictures are not all square — an artist's portrait comes back
+# 270×320 as often as not. So the middle square is taken and scaled to the
+# one size that node will draw, which also keeps the cache small: a 64 px
+# thumbnail is a few kilobytes, not forty.
+def needle_square(source, target, edge)
+  picture = Image.new(source)
+  wide = picture.width()
+  tall = picture.height()
+  side = wide < tall ? wide : tall
+  picture.crop((wide - side) / 2, (tall - side) / 2, side, side).resize(edge, edge).format("png").to_file(target)
+end
+
 def needle_year(date)
   date.nil? ? "" : date.substring(0, 4)
 end
@@ -337,13 +402,72 @@ def needle_album_stub(a)
   artists = a["artists"] ?? []
   name = artists.length() > 0 ? artists[0]["name"] : "Unknown"
   aid = artists.length() > 0 ? artists[0]["id"] : ""
+  images = a["images"] ?? []
   {
     "id": a["id"],
     "title": a["name"],
     "artist": name,
     "artist_id": aid,
     "year": needle_year(a["release_date"]),
-    "uri": a["uri"] ?? ""
+    "uri": a["uri"] ?? "",
+    "art": needle_cache_art(a["id"], needle_pick_art(images, true), "s"),
+    "art_big": needle_cache_art(a["id"], needle_pick_art(images, false), "m")
+  }
+end
+
+# ----------------------------------------------- records on this machine
+
+# What the client can decode: `eui-audio` reads WAV, FLAC, MP3 and Ogg
+# Vorbis, and nothing else — no C library under it, which is the whole
+# argument for the short list.
+def needle_is_sound(path)
+  low = path.downcase()
+  low.ends_with?(".wav") || low.ends_with?(".mp3") || low.ends_with?(".flac") || low.ends_with?(".ogg")
+end
+
+# `File.glob` may answer with the resolved absolute path; a node's `src`
+# is a path inside the application, so keep it from `public/` on.
+def needle_relative(path)
+  cut = path.index_of("public/")
+  cut < 0 ? path : path.substring(cut, path.length())
+end
+
+def needle_track_name(path)
+  name = path.split("/").last()
+  dot = name.index_of(".")
+  dot < 0 ? name : name.substring(0, dot)
+end
+
+def needle_local_files
+  found = File.glob("public/music/*") rescue []
+  found.filter(fn(f) { needle_is_sound(f) })
+end
+
+# A record made of the files sitting in `public/music`. Their length is
+# not read from the files — nothing here parses a container — it arrives
+# from the client's first `time_update`, which carries the duration the
+# decoder found (03 §7).
+def needle_local_record
+  files = needle_local_files()
+  tracks = range(0, files.length()).map(fn(i) {
+    {
+      "n": i + 1,
+      "title": needle_track_name(files[i]),
+      "seconds": 0,
+      "uri": "",
+      "file": needle_relative(files[i])
+    }
+  })
+  {
+    "id": "machine",
+    "title": "On this machine",
+    "artist": str(tracks.length()) + " files",
+    "artist_id": "",
+    "year": "",
+    "uri": "",
+    "art": "",
+    "art_big": "",
+    "tracks": tracks
   }
 end
 
@@ -442,10 +566,15 @@ def needle_search(q)
     }
   end
 
-  artists = ((data["artists"] ?? {})["items"] ?? []).map(fn(a) { {
-    "id": a["id"],
-    "name": a["name"]
-  } })
+  artists = ((data["artists"] ?? {})["items"] ?? []).map(fn(a) {
+    pictures = a["images"] ?? []
+    {
+      "id": a["id"],
+      "name": a["name"],
+      "art": needle_cache_art(a["id"], needle_pick_art(pictures, true), "s"),
+      "art_big": needle_cache_art(a["id"], needle_pick_art(pictures, false), "m")
+    }
+  })
   albums = ((data["albums"] ?? {})["items"] ?? []).map(fn(a) { needle_album_stub(a) })
   {
     "artists": artists,
@@ -455,6 +584,7 @@ def needle_search(q)
 end
 
 def needle_album(id)
+  return needle_local_record() if id == "machine"
   return needle_sample_album(id.replace("sample:", "").to_i()) if id.starts_with?("sample:")
 
   data = needle_api("/albums/" + id)
@@ -474,19 +604,40 @@ def needle_album(id)
   stub
 end
 
+# Everything the artist has, in pages. Ten at a time is not a choice:
+# an app registered after Spotify's 2025 restrictions is answered
+# "Invalid limit" above ten on this endpoint, whatever the documentation
+# says, and it stops serving past the first handful of pages. Spotify
+# also returns the same record under several editions, so the list is
+# thinned by name.
+def needle_artist_albums(id)
+  path = "/artists/" + id + "/albums?include_groups=album,single&limit=10&offset="
+  items = []
+  page = 0
+  while page < 6
+    data = needle_api(path + str(page * 10))
+    got = data.nil? ? [] : (data["items"] ?? [])
+    items = items.concat(got)
+    page = got.length() < 10 ? 99 : page + 1
+  end
+  # `uniq_by` takes a field name, not a block: the whole point is that it
+  # never leaves Rust.
+  items.uniq_by("name")
+end
+
 def needle_artist(id)
   return needle_sample_artist(id) if id.starts_with?("artist:")
 
   info = needle_api("/artists/" + id)
   return nil if info.nil?
 
-  listing = needle_api("/artists/" + id + "/albums?include_groups=album,single&limit=10")
+  listing = needle_artist_albums(id)
   # An app registered after Spotify's 2025 restrictions is refused this
   # one — 403, whatever the market — along with related-artists and
   # recommendations. An older app still gets it, so the call stays and the
   # page simply has no Popular section when it comes back empty.
   tops = needle_api("/artists/" + id + "/top-tracks?market=" + needle_market())
-  albums = listing.nil? ? [] : (listing["items"] ?? []).map(fn(a) { needle_album_stub(a) })
+  albums = listing.map(fn(a) { needle_album_stub(a) })
   top = tops.nil? ? [] : (tops["tracks"] ?? []).slice(0, 5).map(fn(t) {
     album = t["album"] ?? {}
     {
@@ -498,22 +649,130 @@ def needle_artist(id)
       "album_id": album["id"] ?? ""
     }
   })
+  pictures = info["images"] ?? []
   {
     "id": id,
     "name": info["name"],
     "genres": (info["genres"] ?? []).slice(0, 3).join(" · "),
     "albums": albums,
-    "top": top
+    "top": top,
+    "art": needle_cache_art(id, needle_pick_art(pictures, true), "s"),
+    "art_big": needle_cache_art(id, needle_pick_art(pictures, false), "m")
   }
 end
 
 # --------------------------------------------------------- playing a thing
 
+# ------------------------------------- the Spotify client on this machine
+
+# The installed client speaks MPRIS on the session bus, and that is a
+# better way to reach it than the Web API: no token, no round trip to
+# Stockholm, and it works on the machine Needle is running on rather than
+# on whichever device Connect feels like. `OpenUri` takes a `spotify:`
+# URI and plays it; the rest is transport. The window it opens can be
+# parked out of sight by a window rule — it does not need to be seen to
+# be driven.
+NEEDLE_MPRIS = "org.mpris.MediaPlayer2.spotify"
+
+def needle_dbus(method, args)
+  call = [
+    "gdbus",
+    "call",
+    "--session",
+    "--dest",
+    NEEDLE_MPRIS,
+    "--object-path",
+    "/org/mpris/MediaPlayer2",
+    "--method",
+    method
+  ]
+  out = System.run_sync(call.concat(args)) rescue nil
+  return nil if out.nil?
+  return nil if (out["exit_code"] ?? 1) != 0
+
+  out["stdout"] ?? ""
+end
+
+def needle_player_get(name)
+  needle_dbus("org.freedesktop.DBus.Properties.Get", ["org.mpris.MediaPlayer2.Player", name])
+end
+
+# Whether the client is running and listening. One cheap property read.
+def needle_here_ready
+  !needle_player_get("PlaybackStatus").nil?
+end
+
+def needle_here_play(uri)
+  needle_dbus("org.mpris.MediaPlayer2.Player.OpenUri", [uri]).nil? ? "refused" : "here"
+end
+
+def needle_here_toggle
+  needle_dbus("org.mpris.MediaPlayer2.Player.PlayPause", [])
+end
+
+def needle_here_step(forward)
+  needle_dbus(forward ? "org.mpris.MediaPlayer2.Player.Next" : "org.mpris.MediaPlayer2.Player.Previous", [])
+end
+
+# A read on the person's own account rather than the application's: the
+# device list, and what is playing on it.
+def needle_user_api(path)
+  token = needle_user_token()
+  return nil if token.nil?
+
+  opts = {"headers": {"Authorization": "Bearer " + token}, "timeout": 10}
+  resp = HTTP.request("GET", NEEDLE_API + path, opts) rescue nil
+  return nil if resp.nil?
+  return nil if resp["status"] != 200
+
+  json_parse(resp["body"]) rescue nil
+end
+
+# Everything Spotify will play on, this machine included when its own
+# client is open. A device is where the sound comes out; Needle only says
+# which one, and asks.
+def needle_devices
+  data = needle_user_api("/me/player/devices")
+  return [] if data.nil?;
+
+  (data["devices"] ?? []).map(fn(d) {
+    {
+      "id": d["id"] ?? "",
+      "name": d["name"] ?? "",
+      "kind": d["type"] ?? "",
+      "active": d["is_active"] ?? false
+    }
+  })
+end
+
+# The one to play on: the one already active, else the one the person
+# picked, else the first that answered.
+def needle_device_id(state, devices)
+  chosen = state["device"] ?? ""
+  return chosen if chosen != "" && devices.filter(fn(d) { d["id"] == chosen }).length() > 0
+
+  # The speaker Needle starts carries Needle's name, and it is the one on
+  # this machine: prefer it over whatever else the account has awake.
+  mine = devices.filter(fn(d) { d["name"] == "Needle" })
+  return mine[0]["id"] if mine.length() > 0
+
+  live = devices.filter(fn(d) { d["active"] })
+  return live[0]["id"] if live.length() > 0
+  return devices[0]["id"] if devices.length() > 0
+
+  ""
+end
+
+def needle_device_name(devices, id)
+  found = devices.filter(fn(d) { d["id"] == id })
+  found.length() > 0 ? found[0]["name"] : ""
+end
+
 # Nothing here makes a sound, for want of bytes rather than for want of a
 # widget (03 §7 has one). With a linked account it asks Spotify Connect to
 # start on a device that is already open, and the answer is what the bar
 # reports. "local" means the bar is keeping time by itself.
-def needle_remote(body)
+def needle_remote(body, device)
   token = needle_user_token()
   return "local" if token.nil? || token == ""
 
@@ -522,7 +781,8 @@ def needle_remote(body)
     "Content-Type": "application/json"
   }
   opts = {"headers": head, "timeout": 10}
-  url = NEEDLE_API + "/me/player/play"
+  where = device == "" ? "" : "?device_id=" + device
+  url = NEEDLE_API + "/me/player/play" + where
   resp = HTTP.request("PUT", url, opts, json_stringify(body)) rescue nil
   return "offline" if resp.nil?
   return "remote" if resp["status"] == 204 || resp["status"] == 202
@@ -533,10 +793,35 @@ def needle_remote(body)
   "refused"
 end
 
-def needle_note(mode)
+# Transport on a Connect device. `play` with no body resumes what is
+# already loaded, which is what a pause button's other half means.
+def needle_player_command(method, path, device)
+  token = needle_user_token()
+  return nil if token.nil?
+
+  where = device == "" ? "" : "?device_id=" + device
+  opts = {"headers": {"Authorization": "Bearer " + token}, "timeout": 10}
+  resp = HTTP.request(method, NEEDLE_API + path + where, opts, "") rescue nil
+  return nil if resp.nil?
+
+  resp["status"]
+end
+
+def needle_remote_toggle(state)
+  path = state["playing"] ? "/me/player/pause" : "/me/player/play"
+  needle_player_command("PUT", path, state["device"] ?? "")
+end
+
+def needle_remote_step(state, forward)
+  needle_player_command("POST", forward ? "/me/player/next" : "/me/player/previous", state["device"] ?? "")
+end
+
+def needle_note(mode, where)
+  return "playing here" if mode == "file"
+  return "playing on Spotify, on this machine" if mode == "here"
   return "the Spotify link expired — connect again" if mode == "the link expired"
-  return "playing on your Spotify device" if mode == "remote"
-  return "no Spotify device is open" if mode == "no device"
+  return "playing on " + (where == "" ? "your Spotify device" : where) if mode == "remote"
+  return "no Spotify device is open — start one below" if mode == "no device"
   return "Spotify Connect needs Premium" if mode == "needs Premium"
   return "Spotify Connect refused the call" if mode == "refused"
   return "Spotify could not be reached" if mode == "offline"
@@ -589,10 +874,14 @@ def needle_defaults(state)
   state["mode"] = state["mode"] ?? "local"
   state["error"] = state["error"] ?? ""
   state["notice"] = state["notice"] ?? ""
-  state["viewport"] = state["viewport"] ?? {
-    "width": 1200,
-    "height": 800
-  }
+  # The millisecond the client should seek to. It is sent on every frame
+  # and the client acts only when the number changes (03 §7), so it must
+  # not be recomputed from the position — that would stutter the sound.
+  state["seek"] = state["seek"] ?? 0
+  state["devices"] = state["devices"] ?? []
+  state["device"] = state["device"] ?? ""
+  state["device_name"] = state["device_name"] ?? ""
+  state["here"] = state["here"] ?? false
   state
 end
 
@@ -648,21 +937,43 @@ end
 # What the bar shows, and what Connect was asked for. A track carries its
 # own uri when it came from Spotify; a sample track has none, so the bar
 # keeps its own time.
-def needle_play(state, title, artist, album, seconds, uri, context, offset)
+def needle_play(state, title, artist, album, seconds, uri, context, offset, picture, file)
   state["now"] = {
     "title": title,
     "artist": artist,
     "album": album,
     "seconds": seconds,
-    "uri": uri
+    "uri": uri,
+    "art": picture,
+    "file": file
   }
+  state["seek"] = 0
   state["playing"] = true
   state["position"] = 0
+  return needle_set(state, "mode", "file") if file != ""
+
+  return needle_set(state, "mode", "local") if uri == "" && context == ""
+
   body = context == "" ? {"uris": [uri]} : {
     "context_uri": context,
     "offset": {"position": offset}
   }
-  state["mode"] = uri == "" && context == "" ? "local" : needle_remote(body)
+  # The client on this machine first: it is the only one whose sound
+  # comes out of these speakers, and reaching it is a D-Bus call rather
+  # than a round trip to Stockholm. Connect is the fallback, for
+  # everything that is somewhere else.
+  if state["device"] == "here" && needle_here_ready()
+    state["device_name"] = "this machine"
+    state["mode"] = needle_here_play(uri == "" ? context : uri)
+    return state
+  end
+
+  devices = needle_devices()
+  target = needle_device_id(state, devices)
+  state["devices"] = devices
+  state["device"] = target
+  state["device_name"] = needle_device_name(devices, target)
+  state["mode"] = needle_remote(body, target)
   state
 end
 
@@ -680,11 +991,36 @@ def needle_play_track(state, album, index)
     track["seconds"],
     track["uri"] ?? "",
     album["uri"] ?? "",
-    i
+    i,
+    album["art"] ?? "",
+    track["file"] ?? ""
   )
 end
 
+# Pause means pause where the sound is: the file in this window, or the
+# Spotify client this machine is running.
+# The window is closing. A speaker this application started is this
+# application's to stop: leaving it running would keep the music going
+# with nothing on screen, and keep forty megabytes resident for nobody.
+# A device somewhere else — a phone, a room — is not ours to touch.
+def needle_leaving(state)
+  return state unless state["mode"] == "remote" && state["device_name"] == "Needle"
+
+  needle_player_command("PUT", "/me/player/pause", state["device"] ?? "")
+  System.run(["pkill", "-f", "librespot -n Needle"]) rescue nil
+  state
+end
+
+def needle_toggle(state)
+  mode = state["mode"]
+  needle_here_toggle() if mode == "here"
+  needle_remote_toggle(state) if mode == "remote"
+  needle_set(state, "playing", !state["playing"])
+end
+
 def needle_step(state, delta)
+  needle_here_step(delta > 0) if state["mode"] == "here"
+  needle_remote_step(state, delta > 0) if state["mode"] == "remote"
   album = state["album"]
   tracks = album["tracks"] ?? []
   return state if tracks.length() == 0
@@ -697,6 +1033,20 @@ def needle_step(state, delta)
   needle_play_track(state, album, next_at)
 end
 
+# `time_update` carries `[position_ms, duration_ms]`, four times a second
+# while a sound plays. It is the only clock this application has: the
+# protocol has no timer, and a server cannot push a frame into a session
+# on its own — so a record playing here moves its own bar, and one
+# playing on a Spotify device does not.
+def needle_progress(state, params)
+  payload = params["payload"] ?? []
+  return state if payload.length() < 2
+
+  state["position"] = payload[0] / 1000
+  state["now"]["seconds"] = payload[1] / 1000
+  state
+end
+
 def needle_seek(state, params)
   return state if params["kind"] != "click"
 
@@ -706,6 +1056,7 @@ def needle_seek(state, params)
   width = needle_layout(state)["tight"] ? 200 : 360
   x = params["payload"][0]
   state["position"] = int(x * duration / width)
+  state["seek"] = state["position"] * 1000
   state
 end
 
@@ -717,6 +1068,75 @@ def needle_open_login(state)
   System.run(["xdg-open", needle_login_url()]) rescue nil
   state["notice"] = "Approve Needle in the browser that just opened, then follow the one line it gives you."
   state["error"] = ""
+  state
+end
+
+def needle_refresh_devices(state)
+  state["here"] = needle_here_ready()
+  state["devices"] = needle_devices()
+  state["notice"] = state["devices"].length() == 0 ? "No Spotify device answered. Start one on this machine and ask again." : ""
+  state
+end
+
+# Play what is playing, somewhere else — or here, if here is what was
+# picked. The track is sent again rather than transferred: a transfer
+# needs something already playing, and Needle may be the one starting it.
+def needle_use_device(state, id)
+  state["device"] = id
+  if id == "here"
+    state["device_name"] = "this machine"
+    state["here"] = true
+    playing = state["now"]["uri"] ?? ""
+    state["mode"] = playing == "" ? state["mode"] : needle_here_play(playing)
+    state["notice"] = playing == "" ? "Spotify on this machine takes the next track you play." : ""
+    return state
+  end
+
+  devices = needle_devices()
+  state["devices"] = devices
+  state["device_name"] = needle_device_name(devices, id)
+  now = state["now"]
+  uri = now["uri"] ?? ""
+  if uri == ""
+    return needle_set(
+      state,
+      "notice",
+      "Picked " + state["device_name"] + ". Play something and it will come out there."
+    )
+  end
+
+  state["mode"] = needle_remote({"uris": [uri]}, id)
+  state["notice"] = ""
+  state
+end
+
+# A speaker of our own. Spotify hands out no audio, so something on this
+# machine has to be the device its servers stream to; the official client
+# will do it and costs a few hundred megabytes of browser to do it, while
+# `librespot` is forty and has no window at all. It signs in once by
+# OAuth and keeps its credentials in the cache directory named here.
+#
+# It is worth being plain about what this is: librespot is a
+# reimplementation of a protocol Spotify never published. It wants a
+# Premium account, and Spotify's terms do not contemplate it. The button
+# starts what is installed; installing it was a decision made elsewhere.
+def needle_start_here(state)
+  cache = getenv("HOME") + "/.cache/needle-librespot"
+  # `--device pipewire` on purpose: the Arch build has no PulseAudio
+  # backend, and the default one (rodio, through cpal and ALSA) opened
+  # `default`, then dropped its output — Spotify went on reporting a
+  # playing track while PipeWire had no stream at all. `-O` drops the
+  # zeroconf discovery nobody here uses.
+  #
+  # The `sh` around it is a watchdog, and it is there because closing a
+  # window should stop the music: a spawned process outlives its parent
+  # on Unix, so the speaker would have gone on playing to an empty
+  # screen. `$PPID` inside the shell is this application; when it goes,
+  # the shell kills the speaker and follows it.
+  player = "librespot -n Needle -c " + cache + " --backend alsa --device pipewire --initial-volume 80 -O"
+  watch = player + " & speaker=$!; app=$PPID; while kill -0 $app 2>/dev/null; do sleep 2; done; kill $speaker"
+  System.run(["sh", "-c", watch]) rescue nil
+  state["notice"] = "Starting a speaker on this machine — give it a moment, then ask for the devices again."
   state
 end
 
@@ -744,10 +1164,19 @@ def music(event_data)
       props["seconds"],
       props["uri"],
       "",
-      0
+      0,
+      state["artist"]["art"] ?? "",
+      ""
     ),
+    "machine" => needle_open_album(state, "machine"),
+    "devices" => needle_refresh_devices(state),
+    "device" => needle_use_device(state, props["id"]),
+    "here_start" => needle_start_here(state),
+    "disconnect" => needle_leaving(state),
+    "progress" => needle_progress(state, params),
+    "ended" => needle_step(state, 1),
     "login" => needle_open_login(state),
-    "toggle" => needle_set(state, "playing", !state["playing"]),
+    "toggle" => needle_toggle(state),
     "next" => needle_step(state, 1),
     "prev" => needle_step(state, -1),
     "seek" => needle_seek(state, params),
@@ -1011,7 +1440,7 @@ def needle_rail(state, layout)
       "ar:" + a["id"],
       a["name"],
       "",
-      needle_sleeve(a["name"], 40, 4),
+      needle_art(a["art"], a["name"], 40, 4),
       "open_artist",
       {"id": a["id"]},
       a["id"] == open_artist
@@ -1023,7 +1452,7 @@ def needle_rail(state, layout)
       "al:" + a["id"],
       a["title"],
       sub,
-      needle_sleeve(a["title"] + a["artist"], 40, 1),
+      needle_art(a["art"], a["title"] + a["artist"], 40, 1),
       "open_album",
       {"id": a["id"]},
       a["id"] == open_album
@@ -1070,8 +1499,8 @@ end
 # The band is the one node that keeps its key across every record, so a
 # style change is all the client sees and 03 §5 fades its colour from the
 # last record's hue to this one over `motion.slow`.
-def needle_band(name, kind, title, meta, extra, sleeve_edge, on_play, props, layout)
-  sleeve = needle_sleeve(name, sleeve_edge, kind == "Artist" ? 4 : 2)
+def needle_band(name, picture, kind, title, meta, extra, sleeve_edge, on_play, props, layout)
+  sleeve = needle_art(picture, name, sleeve_edge, kind == "Artist" ? 4 : 2)
   sleeve["key"] = "band:sleeve"
   lines = [
     needle_label(kind.upcase(), 0, "bold", "#ffffffb0"),
@@ -1158,7 +1587,7 @@ def needle_track_row(state, key, n, title, sub, seconds, on_click, props)
       "display": "row",
       "justify": "center"
     },
-    "c": [current && state["playing"] ? needle_sleeve(title, 14, 4) : text(
+    "c": [current && needle_sounding(state) ? needle_sleeve(title, 14, 4) : text(
       n,
       {"size": 1, "fg": "text.muted"}
     )]
@@ -1227,36 +1656,35 @@ def needle_album_pane(state, layout)
     t = tracks[i]
     needle_track_row(state, "tr:" + str(i), str(t["n"]), t["title"], "", t["seconds"], "play_track", {"i": i})
   })
-  column(
+  body = column(
     {"gap": 4, "pad": [
       0,
       0,
       4,
       0
     ]},
-    [
-      needle_band(
-        name,
-        "Record",
-        album["title"],
-        meta,
-        artist_link,
-        layout["tight"] ? 120 : 168,
-        "play_album",
-        nil,
-        layout
-      ),
-      column(
-        {"gap": 1, "pad": [
-          0,
-          2,
-          0,
-          2
-        ]},
-        rows
-      )
-    ]
+    [column(
+      {"gap": 1, "pad": [
+        2,
+        2,
+        4,
+        2
+      ]},
+      rows
+    )]
   )
+  {"head": needle_band(
+    name,
+    album["art_big"] ?? "",
+    "Record",
+    album["title"],
+    meta,
+    artist_link,
+    layout["tight"] ? 120 : 168,
+    "play_album",
+    nil,
+    layout
+  ), "body": body}
 end
 
 def needle_artist_pane(state, layout)
@@ -1267,8 +1695,9 @@ def needle_artist_pane(state, layout)
   first = albums.length() > 0 ? albums[0] : nil
   props = first.nil? ? nil : {"id": first["id"]}
   event = first.nil? ? "results" : "open_album"
-  band = needle_band(
+  head = needle_band(
     artist["name"],
+    artist["art_big"] ?? "",
     "Artist",
     artist["name"],
     meta,
@@ -1288,7 +1717,7 @@ def needle_artist_pane(state, layout)
     })
   })
   cards = albums.map(fn(a) { needle_record_tile(a) })
-  sections = [band]
+  sections = []
   if tops.length() > 0
     sections = sections.concat([column(
       {"gap": 2, "pad": [
@@ -1314,20 +1743,20 @@ def needle_artist_pane(state, layout)
       )]
     )])
   end
-  column(
+  {"head": head, "body": column(
     {"gap": 4, "pad": [
-      0,
+      3,
       0,
       4,
       0
     ]},
     sections
-  )
+  )}
 end
 
 # One tile: the sleeve, the name under it. A record's is square and opens
 # the record; an artist's is round and opens the artist.
-def needle_tile(key, name, sub, art, round, on_click, props)
+def needle_tile(key, name, sub, seed, picture, round, on_click, props)
   base = {
     "display": "column",
     "gap": 2,
@@ -1341,7 +1770,7 @@ def needle_tile(key, name, sub, art, round, on_click, props)
   }
   hover = base.merge({"bg": "surface.sunken"})
   lines = [
-    needle_sleeve(art, 116, round ? 4 : 2),
+    needle_art(picture, seed, 124, round ? 4 : 2),
     text(
       name,
       {
@@ -1362,11 +1791,20 @@ def needle_tile(key, name, sub, art, round, on_click, props)
 end
 
 def needle_record_tile(a)
-  needle_tile("ca:" + a["id"], a["title"], a["year"], a["title"] + a["artist"], false, "open_album", {"id": a["id"]})
+  needle_tile(
+    "ca:" + a["id"],
+    a["title"],
+    a["year"],
+    a["title"] + a["artist"],
+    a["art_big"],
+    false,
+    "open_album",
+    {"id": a["id"]}
+  )
 end
 
 def needle_artist_tile(a)
-  needle_tile("at:" + a["id"], a["name"], "", a["name"], true, "open_artist", {"id": a["id"]})
+  needle_tile("at:" + a["id"], a["name"], "", a["name"], a["art_big"], true, "open_artist", {"id": a["id"]})
 end
 
 def needle_suggestion(name)
@@ -1386,13 +1824,53 @@ def needle_suggestion(name)
     "sg:" + name,
     base,
     hover,
-    [needle_sleeve(name, 112, 2), needle_label(name, 1, "medium", "text.default")],
+    [needle_sleeve(name, 120, 2), needle_label(name, 1, "medium", "text.default")],
     "suggest",
     {"q": name}
   )
 end
 
+# The one entry that plays in this window rather than on a device
+# somewhere else: whatever sits in `public/music`.
+def needle_machine_tile(count)
+  base = {
+    "display": "column",
+    "gap": 2,
+    "width": 128,
+    "pad": [2, 2, 3, 2],
+    "radius": 2,
+    "bg": "none",
+    "cursor": "pointer",
+    "transition": "fast",
+    "shrink": 0
+  }
+  hover = base.merge({"bg": "surface.sunken"})
+  face = {
+    "k": "box",
+    "s": {
+      "width": 120,
+      "height": 120,
+      "radius": 2,
+      "bg": "accent.base",
+      "display": "row",
+      "align": "center",
+      "justify": "center",
+      "shrink": 0
+    },
+    "c": [needle_label(str(count), 6, "bold", "accent.on")]
+  }
+  needle_hover(
+    "machine",
+    base,
+    hover,
+    [face, needle_label("On this machine", 1, "medium", "text.default")],
+    "machine",
+    nil
+  )
+end
+
 def needle_welcome(state)
+  local_count = needle_local_files().length()
   names = needle_configured() ? [
     "Radiohead",
     "Nina Simone",
@@ -1436,10 +1914,13 @@ def needle_welcome(state)
       ),
       column(
         {"gap": 3, "align": "center"},
-        [needle_caption("Try one"), row(
-          {"gap": 2, "wrap": "wrap"},
-          names.map(fn(n) { needle_suggestion(n) })
-        )]
+        [
+          needle_caption(local_count > 0 ? "Try one, or your own" : "Try one"),
+          row(
+            {"gap": 2, "wrap": "wrap"},
+            names.map(fn(n) { needle_suggestion(n) }).concat(local_count > 0 ? [needle_machine_tile(local_count)] : [])
+          )
+        ]
       )
     ]
   )
@@ -1502,13 +1983,13 @@ end
 
 def needle_detail(state, layout)
   pane = state["pane"]
-  body = needle_welcome(state)
+  parts = {"head": nil, "body": needle_welcome(state)}
   if pane == "album"
-    body = needle_album_pane(state, layout)
+    parts = needle_album_pane(state, layout)
   elsif pane == "artist"
-    body = needle_artist_pane(state, layout)
+    parts = needle_artist_pane(state, layout)
   elsif pane == "results"
-    body = needle_results_pane(state)
+    parts = {"head": nil, "body": needle_results_pane(state)}
   end
   head = layout["single"] && pane != "welcome" && pane != "results" ? [needle_back()] : []
   head = head.concat(state["error"] == "" ? [] : [{
@@ -1531,7 +2012,8 @@ def needle_detail(state, layout)
     },
     "c": [needle_label(state["notice"], 1, "medium", "info.base")]
   }])
-  scroll(
+  head = head.concat(parts["head"].nil? ? [] : [parts["head"]])
+  column(
     {
       "grow": 1,
       "min_height": 0,
@@ -1540,14 +2022,15 @@ def needle_detail(state, layout)
       "bg": "surface.raised",
       "radius": 3
     },
-    [column(
+    head.concat([scroll(
       {
-        "gap": 0,
         "grow": 1,
-        "min_height": 0
+        "min_height": 0,
+        "min_width": 0,
+        "gap": 0
       },
-      head.concat([body])
-    )]
+      [parts["body"]]
+    )])
   )
 end
 
@@ -1556,12 +2039,22 @@ end
 # The disc turns for exactly as long as something is playing: `spin` is
 # the one thing in 03 §5 that moves without a state change, and stopping
 # it is a style change like any other.
+# Whether something is actually coming out of a speaker — as opposed to
+# the player merely wanting it to. Connect can refuse, and a record with
+# no sound behind it never starts: neither should turn the disc.
+def needle_sounding(state)
+  return false unless state["playing"]
+
+  mode = state["mode"]
+  mode == "file" || mode == "here" || mode == "remote"
+end
+
 def needle_disc(state, size)
   now = state["now"]
   name = (now["title"] ?? "") + (now["artist"] ?? "")
-  disc = needle_sleeve(name == "" ? "Needle" : name, size, 4)
+  disc = needle_art(now["art"] ?? "", name == "" ? "Needle" : name, size, 4)
   disc["key"] = "disc"
-  disc["s"]["animation"] = state["playing"] ? "spin" : "none"
+  disc["s"]["animation"] = needle_sounding(state) ? "spin" : "none"
   disc
 end
 
@@ -1679,10 +2172,59 @@ def needle_seekbar(state, layout)
   )
 end
 
+# Where the sound comes out. The list is Spotify's answer for this
+# account, and the accent marks the one Needle is asking. The window
+# itself is never in it: EUI plays what the application gives it (03 §7)
+# and the Web API gives no audio, so the way to hear Spotify on this
+# machine is Spotify's own client, which is a device like any other once
+# it runs.
+def needle_chip(label, event, props, active)
+  base = {
+    "display": "row",
+    "align": "center",
+    "pad": [0, 2, 0, 2],
+    "radius": 4,
+    "bg": active ? "accent.base" : "surface.sunken",
+    "cursor": "pointer",
+    "transition": "fast",
+    "shrink": 0,
+    "max_width": 160
+  }
+  hover = base.merge({"bg": active ? "accent.hover" : "border.subtle"})
+  face = needle_label(label, 0, "medium", active ? "accent.on" : "text.muted")
+  face["s"]["clamp"] = 1
+  needle_hover("chip:" + event + label, base, hover, [face], event, props)
+end
+
+def needle_devices_bar(state)
+  empty = {"k": "box", "s": {"grow": 1, "width": 0}}
+  return empty unless needle_linked()
+
+  devices = state["devices"] ?? []
+  chips = devices.slice(0, 3).map(fn(d) {
+    needle_chip(d["name"], "device", {"id": d["id"]}, d["id"] == state["device"])
+  })
+  # The client on this machine is not in Spotify's list until it is
+  # playing, and it is the one that matters here, so it leads.
+  chips = [needle_chip("this machine", "device", {"id": "here"}, state["device"] == "here")].concat(chips) if state["here"]
+  chips = chips.concat([needle_chip("Start a speaker here", "here_start", nil, false)]) if devices.length() == 0
+  chips = chips.concat([needle_chip("Devices", "devices", nil, false)])
+  row(
+    {
+      "gap": 2,
+      "align": "center",
+      "grow": 1,
+      "width": 0,
+      "justify": "end"
+    },
+    chips
+  )
+end
+
 def needle_bar(state, layout)
   now = state["now"]
   title = now["title"] ?? "Nothing playing"
-  note = needle_note(state["mode"])
+  note = needle_note(state["mode"], state["device_name"])
   who = now["artist"] ?? ""
   sub = who == "" ? note : who + " · " + note
   left = row(
@@ -1727,7 +2269,20 @@ def needle_bar(state, layout)
     },
     [needle_transport(state, layout), needle_seekbar(state, layout)]
   )
-  right = {"k": "box", "s": {"grow": 1, "width": 0}}
+  right = layout["tight"] ? {"k": "box", "s": {
+    "grow": 1,
+    "width": 0
+  }} : needle_devices_bar(state)
+  # A zero-sized leaf that plays (03 §7). `position` is `state["seek"]`
+  # and not the running position: the client seeks when that number
+  # changes, so sending the clock would restart the sound four times a
+  # second.
+  file = now["file"] ?? ""
+  sound = file == "" ? [] : [audio(file, {
+    "playing": state["playing"],
+    "volume": 90,
+    "position": state["seek"]
+  }, {"ended": "ended", "time_update": "progress"})]
   row(
     {
       "gap": 4,
@@ -1737,7 +2292,7 @@ def needle_bar(state, layout)
       "radius": 3,
       "shrink": 0
     },
-    [left, middle, right]
+    [left, middle, right].concat(sound)
   )
 end
 

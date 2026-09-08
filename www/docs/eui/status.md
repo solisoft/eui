@@ -369,19 +369,61 @@ arrows to nudge once focused), and one calendar engine behind `date_picker`,
 picks an option, drags the slider by click and by keyboard, picks a day,
 turns a month and selects a range.
 
-**Soundly, a sample in a familiar shape.** `examples/counter-app`'s
-`music` component is a music player laid out like the one everybody
-knows: a black shell, a rounded library panel, a home of covers whose
-green play button appears under the pointer (a local handler swaps two
-styles, no round trip), album and artist pages with tinted headers and
-track tables, playlists, liked songs, a queue, genre tiles, a profile,
-settings with switches, a now-playing bar whose icons are drawn on
-canvases, navigation history behind the chevrons — and three layouts by
-viewport width, since the client's viewport now reaches the handler with
-`connect` and as a `viewport` event on change. Every page was rendered
-off-screen while it was written; an end-to-end test opens an album and
-plays a track. The colours are literal on purpose (05 §6): the app is
-always dark, like its model.
+**Needle, a player that is nobody's copy.** `examples/counter-app`'s
+`music` component searches a catalogue, opens an artist or a record and
+plays a track: a field at the top, a rail of what the search found, one
+detail pane, a bar at the bottom, and on a window under 720 px the rail
+and the pane take turns. It is drawn out of roles, not brand colours —
+`surface`, `text`, `accent`, `border` — so the viewer's own mode is the
+app's, and the one literal colour anywhere is the record's own hue: a
+number taken from its name gives the band behind it, and the same number
+draws its sleeve on a `canvas`, five arcs and a label, for every record
+that has no picture of its own. One that does gets it: the server fetches
+the catalogue's artwork with Soli's new `HTTP.download`, crops the middle
+square, re-encodes it as PNG — the client decodes that and nothing else —
+and the node names the file like any other picture, so the client still
+speaks to no one but its own origin (01 §2.2). Three things move,
+and only three, because 03 §5 animates colour and opacity and nothing
+else: the band keeps its key across records, so switching one morphs its
+hue over `motion.slow`; a row's highlight fades under the pointer from a
+local handler, no round trip; and the disc in the bar wears `spin` for
+exactly as long as something is playing.
+
+The catalogue is Spotify's when `SPOTIFY_CLIENT_ID` and
+`SPOTIFY_CLIENT_SECRET` are in the app's `.env`, and a generated one
+otherwise, so the sample runs configured with nothing. Those two are the
+client-credentials grant, which has no browser step and no callback at
+all. Playing on a device the person already has open is Spotify Connect,
+which is *their* account rather than the app's, so the top bar's
+**connect account** opens the consent screen — the server spawns the
+browser, since no capability in 01 §2.1 lets a client open a URL — and
+the two ordinary routes in `spotify_controller.sl` finish the
+authorization code exchange. The `state` parameter is derived from the
+client secret rather than kept between the two requests, and the refresh
+token is handed to the person to paste into their launcher rather than
+saved, because `Cache` is SoliKV and `File` is jailed to an application
+folder that, in a desktop build, is a directory under `/dev/shm` that
+dies with the process: there is nowhere durable for that process to put
+a secret, and pretending otherwise would have been the wrong lesson.
+
+The tree can carry a sound — 03 §7's `audio` node — and a record in
+`public/music` really plays: the file is an asset like a picture, the
+client decodes it in the worker, and `time_update` four times a second
+is the only clock this application has, so that bar advances because the
+sound does. Spotify's own catalogue never plays here, because the Web
+API returns metadata and never audio to anyone. What it offers instead
+is a device to play *on*, so Needle lists them, marks the one it is
+asking, and can start one of its own on this machine — `librespot`, 41
+MB and no window, rather than the several hundred megabytes of the
+official client. Closing the window stops that speaker: the session
+posts a `disconnect` to the component before it tears down, and what an
+application started on the way in it can stop on the way out.
+
+Every pane was rendered off-screen while it was written; three
+end-to-end tests search and open a record, play a file from the machine
+and watch the bar follow it, and light a card under the pointer to check
+it goes out again — including when a frame arrives while it is lit,
+which is what used to leave a wall of them on.
 
 **What the window weighs, by mapping.** Measured on the standalone
 client with the feed open, release, PSS (what the process really costs,

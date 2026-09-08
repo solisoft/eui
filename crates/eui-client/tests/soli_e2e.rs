@@ -690,6 +690,71 @@ fn the_player_searches_opens_a_record_and_plays_a_track() {
     assert!(all.iter().any(|t| t.contains("keeping time only")), "and says it keeps its own time: {all:?}");
 }
 
+#[test]
+fn the_player_plays_a_file_from_the_machine_and_the_bar_follows_it() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "music", 1000.0, 900.0);
+    let _ = d.paint(1000, 900);
+    // The welcome offers what sits in `public/music` beside the catalogue.
+    let tile = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("On this machine")).expect("the machine tile");
+    let tile_box = d.session().node(tile).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, tile_box);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 900);
+    // Its tracks are the files. Play the first.
+    let row_text = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("A chime")).expect("the file is a track");
+    let row = d.session().node(d.session().node(row_text).unwrap().parent).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, row);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 900);
+    // A sound is in the tree now, named by hash and told to play.
+    let find_audio = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).expect("an audio node");
+    let playing = d.session().atom_id("playing").unwrap();
+    assert_eq!(d.session().node(find_audio(&d)).and_then(|n| n.prop(playing)), Some(&eui_proto::Value::Bool(true)), "the server said play");
+    // Fetch it like a picture, and it comes out of the mixer.
+    for hash in d.pending_assets() {
+        conn.request_asset(hash);
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !d.audio_playing() {
+        assert!(Instant::now() < deadline, "the file never arrived");
+        let _ = wake.recv_timeout(Duration::from_millis(20));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
+            }
+        }
+        let _ = d.paint(1000, 900);
+    }
+    let mut out = vec![0.0f32; 22_050];
+    let _ = d.fill_audio(&mut out, 1, 22_050);
+    assert!(out.iter().any(|s| s.abs() > 0.05), "the file plays: {:?}", &out[..4]);
+    // `time_update` is the only clock this application has, and it is what
+    // fills in a length nothing here could read from the file itself. The
+    // client emits it as it paints, at the rate 03 §7 allows.
+    let _ = d.paint(1000, 900);
+    let reports = d.take_pending();
+    assert!(!reports.is_empty(), "a second of sound reports its position");
+    for f in reports {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix).is_some_and(|t| t == "0:01")));
+    let _ = d.paint(1000, 900);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t.contains("playing here")), "and the bar says where: {all:?}");
+}
+
 /// A wheel scroll into rows the client does not have: placeholders first,
 /// then the window is asked for once the scroll has settled, and the
 /// cards arrive and are laid out where the placeholders were.
@@ -1110,4 +1175,71 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
     let held = d.video_position_ms(id).expect("a position");
     turn(&mut d, &conn, &mut clock, 1_000);
     assert_eq!(d.video_position_ms(id), Some(held), "paused stays put");
+}
+
+/// A tile lights under the pointer and goes out when it leaves — the
+/// whole exchange local to the client, and the leave as reliable as the
+/// enter.
+#[test]
+fn a_hover_that_lights_a_tile_puts_it_out_again() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "music", 1000.0, 900.0);
+    let _ = d.paint(1000, 900);
+    // A suggestion lays out a wall of records.
+    let tile = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Nova Reyes")).unwrap();
+    let tile_box = d.session().node(tile).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, tile_box);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 900);
+    let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Night Drive")).expect("a record tile");
+    // The label sits inside the hoverable box, sometimes a column deep:
+    // walk up to whatever carries the handler, the way an event does.
+    let mut card_box = d.session().node(card).unwrap().parent;
+    while d.session().handler(card_box, eui_proto::EventKind::PointerEnter).is_none() {
+        let up = d.session().node(card_box).unwrap().parent;
+        assert_ne!(up, card_box, "no hoverable ancestor");
+        card_box = up;
+    }
+    let rest = d.session().style_of(card_box).bg;
+    let r = d.layout().rect(card_box).expect("laid out");
+    // Over it.
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    let _ = d.paint(1000, 900);
+    let lit = d.session().style_of(card_box).bg;
+    assert_ne!(lit, rest, "the pointer lights the tile");
+    // Away from it, inside the window.
+    d.input(Input::PointerMove(r.x + r.w / 2.0, 4.0));
+    let _ = d.paint(1000, 900);
+    assert_eq!(d.session().style_of(card_box).bg, rest, "and leaving puts it out");
+    // And away from the window altogether.
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    let _ = d.paint(1000, 900);
+    assert_ne!(d.session().style_of(card_box).bg, rest, "lit again");
+    d.input(Input::PointerOut);
+    let _ = d.paint(1000, 900);
+    assert_eq!(d.session().style_of(card_box).bg, rest, "the pointer leaving the window puts it out too");
+    // And the case that left a wall of cards lit: the pointer is over a
+    // card when a frame arrives. The server never heard about the local
+    // style, so its diff cannot undo it — the batch has to, and the
+    // pointer's `enter` runs again on the fresh tree.
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    let _ = d.paint(1000, 900);
+    assert_ne!(d.session().style_of(card_box).bg, rest, "lit under the pointer");
+    let seq = d.session().last_seq().unwrap();
+    for f in d.input(Input::Resized(1000.0, 880.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 880);
+    let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Night Drive")).expect("still there");
+    let mut card_box = d.session().node(card).unwrap().parent;
+    while d.session().handler(card_box, eui_proto::EventKind::PointerEnter).is_none() {
+        card_box = d.session().node(card_box).unwrap().parent;
+    }
+    d.input(Input::PointerMove(r.x + r.w / 2.0, 4.0));
+    let _ = d.paint(1000, 880);
+    assert_eq!(d.session().style_of(card_box).bg, rest, "not lit once the pointer has gone");
 }

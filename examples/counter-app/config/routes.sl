@@ -12,6 +12,10 @@ router_eui("music", "music#music", "music#music_view")
 
 get("/health", "home#health")
 
+# Linking a Spotify account: the only two pages this app serves. The
+# catalogue itself needs neither — client credentials has no browser step.
+get("/spotify/login", "spotify#login")
+get("/spotify/callback", "spotify#callback")
 
 # What the manifest asks the client for; the person still has to allow it.
 eui_capabilities("clipboard.read")
