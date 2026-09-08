@@ -144,6 +144,20 @@ BP = {
   "2xl": 1536
 }
 
+# The spacing scale, 05 §2, in px at cozy density — the same numbers the
+# client resolves `pad`, `gap` and `margin` against. A view needs them
+# when it has to predict a box's width instead of being told: a canvas is
+# drawn at a size the server chooses, so it can only fill its parent if
+# the server can work out what the parent will give it.
+SPACE = [0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 96]
+
+def space_px(ix, density)
+  factor = 1.0
+  factor = 0.8 if density == "compact"
+  factor = 1.25 if density == "comfortable"
+  int((SPACE[ix] * factor).round())
+end
+
 def bp_px(name)
   BP[name] ?? 0
 end
@@ -887,15 +901,48 @@ def skeleton(width, height)
   }}
 end
 
+# The × that drops a chip. A button carries its hover and press styles with
+# it, so reusing one here and narrowing only the live style let the × jump
+# back to a button's padding under the pointer. This one is a fixed box:
+# what changes on hover is the colour, which 03 §5 animates without ever
+# running layout again.
+def chip_remove(on_remove, props)
+  base = {
+    "display": "row",
+    "justify": "center",
+    "align": "center",
+    "width": 16,
+    "height": 16,
+    "radius": 4,
+    "bg": "none",
+    "fg": "text.muted",
+    "cursor": "pointer",
+    "transition": "fast"
+  }
+  hover = base.merge({"fg": "danger.base"})
+  active = base.merge({"bg": "danger.subtle", "fg": "danger.base"})
+  {
+    "k": "box",
+    "key": "chip-x:" + on_remove + ":" + str(props["id"] ?? ""),
+    "s": base,
+    "p": props,
+    "on": {
+      "click": on_remove,
+      "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
+      "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}},
+      "pointer_down": {"local": "self.style = @active", "styles": {"active": active}},
+      "pointer_up": {"local": "self.style = @hover", "styles": {"hover": hover}}
+    },
+    "c": [text(
+      "×",
+      {"size": 1, "weight": "semibold"}
+    )]
+  }
+end
+
 def chip(label, on_remove, props)
   parts = [text(label, {"size": 1})]
-  if on_remove.present?
-    x = ghost_button("×", on_remove)
-    x["p"] = props
-    x["s"]["pad"] = [0, 1, 0, 1]
-    x["s"]["min_width"] = 0
-    parts = parts.concat([x])
-  end
+  parts = parts.concat([chip_remove(on_remove, props)]) if on_remove.present?
   {
     "k": "box",
     "s": {
@@ -1606,8 +1653,19 @@ def calendar(month, selected, range_start, range_end, on_pick, on_nav)
     "p": {"columns": 7},
     "c": blanks.concat(cells)
   }
+  # A month is a panel of its own: a surface a shade lighter than the card
+  # it sits on, padded and rounded, so the days read as one block rather
+  # than as text loose on the card.
   column(
-    {"gap": 1, "width": "100%"},
+    {
+      "gap": 1,
+      "width": "100%",
+      "pad": 3,
+      "radius": 2,
+      "bg": "surface.overlay",
+      "border": 1,
+      "border_color": "border.subtle"
+    },
     [header, weekday_header(), grid]
   )
 end

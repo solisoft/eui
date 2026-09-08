@@ -845,12 +845,19 @@ def gallery_calendar(state)
 end
 
 def gallery_charts(state)
-  w = (state["viewport"] ?? {})["width"] ?? 1280
+  view = state["viewport"] ?? {}
+  w = view["width"] ?? 1280
+  density = view["density"] ?? "cozy"
   cols = 1
   cols = 2 if bp_min(w, "sm")
   cols = 3 if bp_min(w, "md")
   cols = 4 if bp_min(w, "lg")
-  cw = int((w - 80) / cols) - 24
+  # A canvas is drawn at the size the server picks, so the width has to be
+  # the one the layout will hand it: the window, less the page's padding,
+  # less the card's, less the gaps between the columns.
+  gap = space_px(4, density)
+  inner = w - 2 * space_px(bp_min(w, "md") ? 6 : 4, density) - 2 * space_px(5, density)
+  cw = int((inner - (cols - 1) * gap) / cols)
   cw = 160 if cw < 160
   ch = 140
   series = [3, 5, 4, 8, 6, 9, 7]
