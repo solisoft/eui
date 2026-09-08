@@ -1023,7 +1023,10 @@ def gallery_view(raw_state)
         accordion(sections, open, "toggle"),
         code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
         h2("Code Viewer:"),
-        code_viewer("def hello(name)\n  puts(\"Hello, #{name}!\")\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()", {"line_numbers": true})
+        code_viewer(
+          "def hello(name)\n  puts(\"Hello, #{name}!\")\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()",
+          {"line_numbers": true}
+        )
       ]
     ),
     column(
@@ -1222,6 +1225,7 @@ def feed(event_data)
   liked = state["liked"] ?? []
   posts = state["posts"] ?? []
   trouble = state["trouble"] ?? ""
+  source = state["source"] ?? "x.com"
   # A real timeline is fetched when the window opens and when it is asked
   # for, never on a scroll: X allows five reads a quarter of an hour, and
   # a scroll can ask for a hundred windows in that time. What comes back
@@ -1231,6 +1235,7 @@ def feed(event_data)
     answer = x_timeline(FEED_LIVE)
     posts = answer["posts"]
     trouble = answer["error"]
+    source = answer["source"] ?? "x.com"
   end
   count = posts.length() > 0 ? posts.length() : (state["count"] ?? 10)
   window = state["window"] ?? [0, 0]
@@ -1243,6 +1248,7 @@ def feed(event_data)
     "liked": liked,
     "posts": posts,
     "trouble": trouble,
+    "source": source,
     "count": count,
     "window": window,
     "sound": sound,
@@ -1383,7 +1389,7 @@ def feed_view(state)
   tail = linked ? loading_button("Refresh", "refresh", "refresh") : loading_button("Load 5 000 more", "more", "more")
   # What the header says is what the feed is: an account's timeline, the
   # reason there is none, or the sample that needs no account at all.
-  label = live ? str(count) + " posts from x.com" : str(count) + " posts"
+  label = live ? str(count) + " posts from " + (state["source"] ?? "x.com") : str(count) + " posts"
   label = trouble if trouble != ""
   tone = live ? "success" : "info"
   tone = "danger" if trouble != ""

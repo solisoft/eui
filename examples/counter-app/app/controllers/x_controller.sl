@@ -35,7 +35,23 @@ def x_configured
   id != "" && secret != ""
 end
 
+# An app-only bearer token, which X hands out beside the OAuth 2.0 client
+# and which needs no browser step. It cannot read a *home* timeline —
+# that endpoint is user context — but it can read what an account has
+# posted, which is real data to draw and enough to prove the path.
+def x_bearer
+  getenv("X_BEARER_TOKEN") ?? ""
+end
+
+# Whose posts the app-only mode shows.
+def x_account
+  handle = getenv("X_ACCOUNT") ?? ""
+  handle.replace("@", "")
+end
+
 def x_linked
+  return true if x_bearer() != ""
+
   x_configured() && (getenv("X_REFRESH_TOKEN") ?? "") != ""
 end
 
@@ -136,9 +152,18 @@ end
 # Every call says what happened, because a feed that silently shows the
 # sample instead of an account is a bug nobody can see: {"data", "error"}
 # with exactly one of them filled.
+# The account's own token when one is linked, the app's otherwise.
+def x_token
+  linked = x_access_token()
+  return linked unless linked.nil?
+
+  bearer = x_bearer()
+  bearer == "" ? nil : bearer
+end
+
 def x_get(path)
-  token = x_access_token()
-  return {"error": "no access token: check X_CLIENT_ID, X_CLIENT_SECRET and X_REFRESH_TOKEN"} if token.nil?
+  token = x_token()
+  return {"error": "no token: set X_BEARER_TOKEN, or X_CLIENT_ID, X_CLIENT_SECRET and X_REFRESH_TOKEN"} if token.nil?
 
   opts = {"headers": {"Authorization": "Bearer " + token}, "timeout": 15}
   resp = HTTP.request("GET", X_API + path, opts) rescue nil
@@ -276,29 +301,68 @@ def x_me
   {"id": id}
 end
 
-def x_timeline(limit)
-  me = x_me()
-  return {"posts": [], "error": me["error"]} if me["error"].present?
-
-  id = me["id"]
-
-  query = [
+# What the feed asks for: the fields an account's posts need, expanded
+# with their authors and their pictures.
+def x_query(limit)
+  [
     "max_results=" + str(limit),
     "tweet.fields=" + url_encode("created_at,public_metrics,attachments"),
     "expansions=" + url_encode("author_id,attachments.media_keys"),
     "user.fields=" + url_encode("name,username,profile_image_url"),
     "media.fields=" + url_encode("type,url,preview_image_url")
-  ]
-  answer = x_get("/users/" + id + "/timelines/reverse_chronological?" + query.join("&"))
-  return {"posts": [], "error": answer["error"]} if answer["error"].present?
+  ].join("&")
+end
 
+def x_posts_of(answer)
   data = answer["data"] ?? {}
   tweets = data["data"] ?? []
   includes = data["includes"] ?? {}
   users = x_index(includes["users"] ?? [], "id")
   media = x_index(includes["media"] ?? [], "media_key")
-  posts = range(0, tweets.length()).map(fn(i) { x_post(i, tweets[i], users, media) })
-  {"posts": posts, "error": posts.length() > 0 ? "" : "x.com sent an empty timeline"}
+  range(0, tweets.length()).map(fn(i) { x_post(i, tweets[i], users, media) })
+end
+
+# App-only: no home timeline — that one is user context — but an account's
+# own posts, which is what a bearer token may read, and real data to draw.
+def x_account_timeline(limit)
+  handle = x_account()
+  return {"posts": [], "error": "set X_ACCOUNT to the account whose posts to show"} if handle == ""
+
+  who = x_get("/users/by/username/" + url_encode(handle))
+  return {"posts": [], "error": who["error"]} if who["error"].present?
+
+  id = ((who["data"] ?? {})["data"] ?? {})["id"]
+  return {
+    "posts": [],
+    "error": "x.com does not know @" + handle
+  } if id.nil?
+
+  answer = x_get("/users/" + id + "/tweets?" + x_query(limit))
+  return {"posts": [], "error": answer["error"]} if answer["error"].present?
+
+  posts = x_posts_of(answer)
+  {
+    "posts": posts,
+    "source": "@" + handle,
+    "error": posts.length() > 0 ? "" : "@" + handle + " has posted nothing X will show"
+  }
+end
+
+def x_timeline(limit)
+  return x_account_timeline(limit) if x_access_token().nil?
+
+  me = x_me()
+  return {"posts": [], "error": me["error"]} if me["error"].present?
+
+  answer = x_get("/users/" + me["id"] + "/timelines/reverse_chronological?" + x_query(limit))
+  return {"posts": [], "error": answer["error"]} if answer["error"].present?
+
+  posts = x_posts_of(answer)
+  {
+    "posts": posts,
+    "source": "your timeline",
+    "error": posts.length() > 0 ? "" : "x.com sent an empty timeline"
+  }
 end
 
 # ------------------------------------------------------------ the pages
