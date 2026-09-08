@@ -32,7 +32,9 @@ TRACKER_CHANNELS = 8
 # middle of the pattern and scrolls the rows past it, which is also why a
 # tracker never needs a scrollbar.
 TRACKER_VISIBLE = 23
-TRACKER_RATE = 22050
+# 11 025 Hz, eight bits: what a tracker sounded like on the hardware this
+# one is dressed as, and half the samples to mix in an interpreter.
+TRACKER_RATE = 11025
 
 TRACKER_NOTE_NAMES = [
   "C-",
@@ -229,8 +231,17 @@ def tracker_defaults(state)
     "at": 0,
     "seek": 0,
     "rendered": "",
+    "print": "",
     "took": 0,
-    "status": "Ready."
+    "status": "Ready.",
+    "viewport": {
+      "width": 1280,
+      "height": 800,
+      "scale": 1.0,
+      "mode": "dark",
+      "density": "cozy",
+      "font_scale": 1.0
+    }
   }
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -295,11 +306,18 @@ def tracker_wave_at(wave, phase, i)
   int(i * 1103515245 / 65536) % 200 - 100
 end
 
-# One row of one voice, as an array of signed samples.
-def tracker_voice_row(voice, count, at)
-  return range(0, count).map(fn(i) { 0 }) if voice.nil?
+# A voice's shape, sampled once into 256 steps. The mixer's inner loop is
+# then an index and a multiply — no branch on the waveform, and none of
+# the arithmetic that decides what a saw looks like.
+def tracker_table(wave)
+  range(0, 256).map(fn(i) { tracker_wave_at(wave, i * 256, i) })
+end
 
-  wave = voice["wave"]
+# One row of one voice, added into what is already there. Adding as it
+# goes rather than building a part and summing it afterwards halves the
+# work, which on a hundred and seventy thousand samples is a second.
+def tracker_add_voice(sum, voice, count)
+  table = tracker_table(voice["wave"])
   step = voice["step"]
   vol = voice["vol"]
   phase0 = voice["phase"]
@@ -307,11 +325,11 @@ def tracker_voice_row(voice, count, at)
   range(0, count).map(fn(i) {
     age = age0 + i
     # A short attack and a long decay, so a note has an edge and a tail
-    # instead of a click at each end.
+    # instead of a click at either end.
     gain = age < 64 ? age * 100 / 64 : 100
     fade = age > 2000 ? 100 - int((age - 2000) / 60) : 100
     fade = 0 if fade < 0
-    tracker_wave_at(wave, (phase0 + i * step) % 65536, age) * vol * gain * fade / 1000000
+    sum[i] + table[int((phase0 + i * step) % 65536 / 256)] * vol * gain * fade / 1000000
   })
 end
 
@@ -321,8 +339,7 @@ def tracker_mix_row(voices, count, at)
     next if voice.nil?
     next if voice["vol"] == 0
 
-    part = tracker_voice_row(voice, count, at)
-    sum = range(0, count).map(fn(i) { sum[i] + part[i] })
+    sum = tracker_add_voice(sum, voice, count)
   end
   sum
 end
@@ -348,12 +365,12 @@ end
 # the channel is given another one — which is the whole difference between
 # a tracker and a drum machine.
 def tracker_render(state)
-  started = DateTime.now()
+  started = DateTime.microtime()
   cells = state["cells"]
   instruments = state["instruments"]
   count = int(TRACKER_RATE * tracker_row_ms(state) / 1000)
   voices = range(0, TRACKER_CHANNELS).map(fn(c) { nil })
-  bytes = []
+  mixed = []
   index = 0
   while index < TRACKER_ROWS
     chan = 0
@@ -373,13 +390,7 @@ def tracker_render(state)
       end
       chan = chan + 1
     end
-    mixed = tracker_mix_row(voices, count, index * count)
-    bytes = bytes.concat(mixed.map(fn(v) {
-      out = 128 + v
-      out = 255 if out > 255
-      out = 0 if out < 0
-      out
-    }))
+    mixed = mixed.concat(tracker_mix_row(voices, count, index * count))
     # Carry each voice forward: the phase it reached and the samples it has
     # lived, so the next row continues the note rather than restarting it.
     chan = 0
@@ -393,9 +404,23 @@ def tracker_render(state)
     end
     index = index + 1
   end
+  # One pass to find the loudest sample, one to scale by it: eight bits
+  # have no headroom to waste, and four voices at full volume would clip
+  # every time the chord lands.
+  peak = 1
+  for v in mixed
+    peak = v if v > peak
+    peak = 0 - v if 0 - v > peak
+  end
+  bytes = mixed.map(fn(v) {
+    out = 128 + int(v * 120 / peak)
+    out = 255 if out > 255
+    out = 0 if out < 0
+    out
+  })
   mkdir_p("public/tracker") rescue nil
   file_write_bytes("public/tracker/song.wav", tracker_wav_header(bytes.length()).concat(bytes))
-  ms = int((DateTime.now().to_unix() - started.to_unix()) * 1000)
+  ms = int((DateTime.microtime() - started) / 1000)
   {
     "path": "public/tracker/song.wav",
     "ms": ms,
@@ -524,8 +549,26 @@ TRACKER_ROW_H = 15
 TRACKER_CELL_W = 116
 TRACKER_GUTTER_W = 34
 
+# What the song is, in one string: the same pattern, tempo and instruments
+# render to the same wav, so the second Play is free.
+def tracker_fingerprint(state)
+  notes = state["cells"].map(fn(c) { str(c["n"]) + ":" + str(c["i"]) + ":" + str(c["v"]) })
+  shapes = state["instruments"].map(fn(i) { str(i["wave"]) + ":" + str(i["vol"]) })
+  str(state["bpm"]) + "/" + str(state["speed"]) + "/" + notes.join(",") + "/" + shapes.join(",")
+end
+
 def tracker_play(state)
+  print_of = tracker_fingerprint(state)
+  if state["rendered"] != "" && state["print"] == print_of
+    state["playing"] = true
+    state["at"] = 0
+    state["seek"] = 0
+    state["status"] = "Playing — the same song, already mixed"
+    return state
+  end
+
   answer = tracker_render(state)
+  state["print"] = print_of
   state["rendered"] = answer["path"]
   state["took"] = answer["ms"]
   state["playing"] = true
@@ -562,6 +605,8 @@ def tracker(event_data)
   props = params["props"] ?? {}
   state = tracker_defaults(event_data["state"] ?? {})
   match event {
+    "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
     "key" => tracker_key(state, params["payload"][0], params["payload"][1]),
     "click" => tracker_click(state, params),
     "play" => tracker_play(state),
@@ -860,17 +905,29 @@ end
 # The window of rows around the cursor. A tracker keeps the current row in
 # the middle and moves the pattern past it, so there is no scrollbar to
 # chase and the server sends twenty-three rows instead of sixty-four.
+# As many rows as the window has room for, which is how a tracker uses a
+# screen: the pattern is the screen, and everything else is furniture.
+def tracker_visible(state)
+  height = (state["viewport"] ?? {})["height"] ?? 800
+  fits = int((height - 250) / TRACKER_ROW_H)
+  fits = 8 if fits < 8
+  fits = TRACKER_ROWS if fits > TRACKER_ROWS
+  fits
+end
+
 def tracker_window_top(state)
-  top = state["row"] - int(TRACKER_VISIBLE / 2)
+  visible = tracker_visible(state)
+  top = state["row"] - int(visible / 2)
   top = 0 if top < 0
-  top = TRACKER_ROWS - TRACKER_VISIBLE if top > TRACKER_ROWS - TRACKER_VISIBLE
+  top = TRACKER_ROWS - visible if top > TRACKER_ROWS - visible
   top
 end
 
 def tracker_pattern(state)
+  visible = tracker_visible(state)
   top = tracker_window_top(state)
   playing_row = state["playing"] ? state["row"] : -1
-  lines = range(top, top + TRACKER_VISIBLE).map(fn(r) { tracker_row_line(state, r, playing_row) })
+  lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, r, playing_row) })
   grid = {
     "k": "box",
     "s": {
@@ -890,15 +947,14 @@ def tracker_pattern(state)
     {
       "display": "column",
       "bg": TRACKER_BLACK,
-      "width": "100%",
-      "grow": 1
+      "width": "100%"
     },
     [{
       "k": "scroll",
       "s": {
         "overflow": "scroll",
         "width": "100%",
-        "grow": 1,
+        "height": visible * TRACKER_ROW_H,
         "bg": TRACKER_BLACK
       },
       "c": [grid]
@@ -960,6 +1016,6 @@ def tracker_view(raw_state)
       "width": "100%",
       "height": "100%"
     },
-    [sound, head, tracker_pattern(state), tracker_status(state)]
+    [sound, head, tracker_pattern(state), spacer(), tracker_status(state)]
   )
 end
