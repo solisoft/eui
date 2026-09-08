@@ -9,6 +9,9 @@ router_eui("table", "live#table", "live#table_view")
 router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("feed", "live#feed", "live#feed_view")
 router_eui("music", "music#music", "music#music_view")
+# A tracker: the pattern, the instruments and the mixer are Soli; the
+# window is handed the wav its Play button rendered.
+router_eui("tracker", "tracker#tracker", "tracker#tracker_view")
 # Spec 06 §1.1, in ten lines: a node that asks to be woken.
 router_eui("clock", "live#clock", "live#clock_view")
 # Spec 01 §4: a view the server cannot encode, so the suite can watch a
