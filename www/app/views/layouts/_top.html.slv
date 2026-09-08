@@ -1,0 +1,10 @@
+<header class="top">
+    <a class="wordmark" href="/"><b>EUI</b></a>
+    <span class="tagline">applications without a browser</span>
+    <nav>
+        <a href="/components"<% if here == "components" %> aria-current="page"<% end %>>Components</a>
+        <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui">Docs</a>
+        <a href="https://github.com/solisoft/eui/tree/main/spec">Spec</a>
+        <a href="https://github.com/solisoft/eui">Source</a>
+    </nav>
+</header>

@@ -38,6 +38,38 @@ The client keeps only what genuinely must be local: layout, because it depends o
 the viewport and the viewer's font scale; text shaping; painting; and the handful
 of interactions that must not cost a round trip.
 
+## What it looks like
+
+A view is a Soli function: state in, a tree out, as plain data. This is the
+counter from `examples/counter-app`, with both buttons taking the round trip;
+its real `+` answers locally first, which [writing views](/docs/views) shows.
+
+```soli
+def counter_view(state)
+  count = state["count"] ?? 0
+  column({"pad": 6, "gap": 4, "bg": "surface.base"}, [
+    text("Counter", {"size": 4, "weight": "semibold"}),
+    keyed("value", text(count.to_s, {"size": 7, "weight": "bold"})),
+    row({"gap": 2}, [
+      button("−", "decrement"),
+      button("+", "increment")
+    ])
+  ])
+end
+```
+
+`column`, `text`, `button` are ordinary functions returning hashes — the whole
+catalogue is in [Components](/docs/components). When the count changes, the
+server does not re-send that tree. It sends the difference:
+
+```
+03  14  02  01  23  8d 01  01  0d  31 20 39 38 34 2c 20 34 32 20 e2 82 ac
+```
+
+Twenty-two bytes: a batch frame, its length, the sequence number, one op,
+`set_text`, node 141, an inline string of thirteen bytes, and the thirteen
+bytes a person actually reads. No row, no table, no page.
+
 ## Three ideas carry the encoding
 
 **A session atom table.** Every repeated string — property names, labels, list
@@ -78,8 +110,8 @@ are on [Budgets](/docs/budgets).
 
 Each refusal is why the client stays small enough to audit.
 
-- **An open element vocabulary.** Fourteen primitive kinds, and the set is
-  closed. Everything a person would call a widget is composed on the server.
+- **An open element vocabulary.** Sixteen node kinds, and the set is closed.
+  Everything a person would call a widget is composed on the server.
 - **The cascade.** No selectors, no specificity, no `!important`.
 - **Code from the network.** No native code, no JIT, no `eval`.
 - **Ambient authority.** A capability the manifest never requested has no code

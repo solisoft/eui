@@ -96,6 +96,92 @@ fn press_and_release_on_different_targets_is_not_a_click() {
 }
 
 #[test]
+fn a_pointer_move_handler_follows_the_press_off_the_node() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Box,
+        id: 1,
+        style: 1,
+        key: 0,
+        text: None,
+        props: (0, 0),
+        handlers: (0, 3),
+        child_count: 0,
+    });
+    tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::PointerDown, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::PointerUp, Handler::Server(ATOM_INC)));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: ATOM_INC, value: "slider".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(20), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(400, 300);
+    let r = d.layout().rect(d.session().lookup(1).unwrap()).unwrap();
+    let out = d.input(Input::PointerMove(r.x + 10.0, r.y + r.h / 2.0));
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove && e.node == 1)));
+    let _ = d.input(Input::PointerDown(0));
+    assert!(d.input(Input::PointerMove(r.x + r.w + 40.0, r.y + r.h / 2.0)).is_empty(), "captured moves stay local");
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove)), "no move until release");
+    let out = d.input(Input::PointerUp(0));
+    let Some(Frame::Event(e)) = out.iter().find(|f| matches!(f, Frame::Event(ev) if ev.event == EventKind::PointerMove)) else {
+        panic!("expected the last move on release, got {out:?}");
+    };
+    assert_eq!(e.node, 1);
+    let Value::List(p) = &e.payload else { panic!("{:?}", e.payload) };
+    let Value::Float(x) = &p[0] else { panic!("{:?}", p[0]) };
+    assert!(*x > 100.0, "local x past the box: {x}");
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerUp && e.node == 1)), "{out:?}");
+}
+
+#[test]
+fn a_captured_pointer_move_is_emitted_while_layout_is_owed() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Box,
+        id: 1,
+        style: 1,
+        key: 0,
+        text: None,
+        props: (0, 0),
+        handlers: (0, 2),
+        child_count: 0,
+    });
+    tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::PointerDown, Handler::Server(ATOM_INC)));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: ATOM_INC, value: "slider".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(20), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(400, 300);
+    let r = d.layout().rect(d.session().lookup(1).unwrap()).unwrap();
+    d.input(Input::PointerMove(r.x + 10.0, r.y + r.h / 2.0));
+    let _ = d.input(Input::PointerDown(0));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 2,
+        ops: vec![
+            Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(20), padding: [1, 0, 0, 0], ..Default::default() } },
+            Op::SetStyle { node: 1, style: 2 },
+        ],
+    }));
+    assert!(d.input(Input::PointerMove(r.x + 40.0, r.y + r.h / 2.0)).is_empty(), "captured moves stay local");
+    let out = d.input(Input::PointerUp(0));
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove && e.node == 1)), "last move on release while layout owed: {out:?}");
+}
+
+#[test]
 fn a_server_update_repaints_with_the_new_text() {
     let mut d = welcomed();
     let before = d.paint(400, 300);
@@ -149,10 +235,13 @@ fn an_unusable_version_is_refused() {
 #[test]
 fn resize_and_mode_changes_report_the_viewport_and_relayout() {
     let mut d = welcomed();
-    let out = d.input(Input::Resized(800.0, 600.0, 2.0));
-    let [Frame::Viewport(v)] = out.as_slice() else { panic!("{out:?}") };
-    assert_eq!((v.width, v.height, v.scale), (800, 600, 200));
+    assert!(d.input(Input::Resized(800.0, 600.0, 2.0)).is_empty(), "viewport waits until the resize settles");
     assert!(d.needs_redraw());
+    d.tick(std::time::Instant::now() + std::time::Duration::from_millis(50));
+    let _ = d.paint(1600, 1200);
+    let out = d.take_pending();
+    let Some(Frame::Viewport(v)) = out.iter().find(|f| matches!(f, Frame::Viewport(_))) else { panic!("{out:?}") };
+    assert_eq!((v.width, v.height, v.scale), (800, 600, 200));
     let light = d.paint(1600, 1200);
     let out = d.input(Input::Mode(ThemeMode::Dark));
     let [Frame::Viewport(v)] = out.as_slice() else { panic!() };
@@ -245,6 +334,46 @@ fn wheel_over_a_list_scrolls_it_and_reports_the_offset() {
     let _ = d.paint(200, 100);
     let last = d.layout().rect(d.session().lookup(109).unwrap()).unwrap();
     assert!(last.y < 100.0 && last.y >= 0.0, "{last:?}");
+}
+
+#[test]
+fn wheel_over_a_fitted_list_scrolls_the_page() {
+    // A list that fits its rows must not eat the wheel: the page underneath
+    // is the scroller that can still move. This is the data-grid-in-a-gallery
+    // case — eight rows in a 256 px list, inside a page `scroll`.
+    let mut d = Driver::new(200.0, 80.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    let page = StyleRecord { display: Display::Column, height: Dim::Px(80), ..Default::default() };
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let list = StyleRecord { display: Display::Column, height: Dim::Px(40), ..Default::default() };
+    let pad = StyleRecord { height: Dim::Px(200), ..Default::default() };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::List, id: 3, style: 3, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
+    tree.props.push((ATOM_ITEM_H, Value::Int(20)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 4, style: 0, key: 0, text: Some(TextRef::Inline("a".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 5, style: 0, key: 0, text: Some(TextRef::Inline("b".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 6, style: 4, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "scrolled".into() },
+            Op::DefAtom { id: ATOM_ITEM_H, value: "item_height".into() },
+            Op::DefStyle { id: 1, record: page },
+            Op::DefStyle { id: 2, record: col },
+            Op::DefStyle { id: 3, record: list },
+            Op::DefStyle { id: 4, record: pad },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(200, 80);
+    let r = d.layout().rect(d.session().lookup(3).unwrap()).unwrap();
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    let out = d.input(Input::Wheel(0.0, 40.0));
+    let [Frame::Event(e)] = out.as_slice() else { panic!("expected the page to scroll, got {out:?}") };
+    assert_eq!((e.node, e.event), (1, EventKind::Scroll), "the fitted list must not swallow the wheel");
 }
 
 #[test]

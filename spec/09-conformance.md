@@ -83,4 +83,4 @@ by position and key; a changed cell is one `SetText`.
 
 With `EUI_SOLI_BIN` set, the client drives a real Soli server: the counter's
 local-first `+`, the todo's keyed rows and fetched avatar, ten thousand rows
-sorted by moves, and the gallery's select, slider, pickers and charts.
+sorted by moves, and the gallery's select, slider, pickers, data grid and charts.

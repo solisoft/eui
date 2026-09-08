@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
+use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
 use eui_audio::Control;
 use eui_proto::{AlignItems, ColorRef, Cursor, Dim, Display, FlatNode, FontWeight, Justify, Op, StyleRecord, Subtree, TextAlign,
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
@@ -105,6 +105,10 @@ struct Pointer {
     hover_pending: bool,
     /// The scroller whose scrollbar strip the pointer rests on.
     over_scrollbar: Option<NodeIx>,
+    /// Spec 06 §2: at most one `pointer_move` per frame per node. A slider
+    /// drag stores the latest and flushes it at paint, so the server is not
+    /// asked to re-render the page a hundred times a second.
+    coalesced_move: Option<(NodeIx, Value)>,
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -243,6 +247,9 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
+/// Wait this long after the last resize before telling the server. Sending
+/// every size during a drag makes charts and grids step through layouts.
+const VIEWPORT_SETTLE: Duration = Duration::from_millis(50);
 
 /// Spec 06 §1.1: the fastest a node may ask to be woken. A clock is not a
 /// render loop, and the budget of 10 §1 says a window at rest costs
@@ -381,6 +388,9 @@ pub struct Driver {
     /// When the next video frame is due. Applied at the end of the paint,
     /// after the transition scheduling, which overwrites `next_due`.
     video_due: Option<Instant>,
+    /// After a resize, wait [`VIEWPORT_SETTLE`] before sending `Viewport`
+    /// so a drag does not restyle the tree once per pixel.
+    viewport_due: Option<Instant>,
     /// Spec 03 §7: the sounds this session is playing, and the decoded
     /// bytes behind them. The mixer lives here — in the worker — because
     /// decoding runs on bytes a server chose; the window owns the device.
@@ -464,6 +474,7 @@ impl Driver {
             stopped: false,
             video_clock: None,
             video_due: None,
+            viewport_due: None,
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
             audio_at: HashMap::new(),
@@ -643,7 +654,7 @@ impl Driver {
     /// should redraw; false at rest, which is almost always.
     pub fn tick(&mut self, now: Instant) -> bool {
         self.now = now;
-        match self.next_due {
+        match [self.next_due, self.viewport_due].into_iter().flatten().min() {
             Some(due) if now >= due => {
                 self.redraw = true;
                 true
@@ -655,7 +666,7 @@ impl Driver {
     /// When the next transition frame is due — `None` at rest. The window
     /// sleeps until then and not a moment less.
     pub fn next_frame_at(&self) -> Option<Instant> {
-        self.next_due
+        [self.next_due, self.viewport_due].into_iter().flatten().min()
     }
 
     /// True while any transition runs.
@@ -714,13 +725,19 @@ impl Driver {
 
     /// Feed input; returns event frames to send.
     pub fn input(&mut self, input: Input) -> Vec<Frame> {
+        self.now = Instant::now();
         match input {
             Input::Resized(w, h, scale) => {
                 self.size = Size::new(w, h);
                 self.scale = scale;
                 self.layout.invalidate_all();
                 self.invalidate();
-                vec![Frame::Viewport(self.viewport())]
+                let now = Instant::now();
+                self.now = now;
+                let due = now + VIEWPORT_SETTLE;
+                self.viewport_due = Some(due);
+                self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+                Vec::new()
             }
             Input::Mode(mode) => self.set_mode(mode),
             Input::PointerMove(x, y) => self.pointer_move(x, y),
@@ -741,8 +758,12 @@ impl Driver {
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::PointerOut => self.clear_hover(),
             Input::Unfocused => {
-                let out = self.set_focus(None, false);
-                self.pointer.pressed_on = None;
+                let mut out = self.set_focus(None, false);
+                if let Some(pressed) = self.pointer.pressed_on.take() {
+                    let (x, y) = (self.pointer.x, self.pointer.y);
+                    let payload = self.button_payload(pressed, EventKind::PointerUp, x, y, 0);
+                    out.extend(self.emit(pressed, EventKind::PointerUp, payload));
+                }
                 out
             }
         }
@@ -994,6 +1015,17 @@ impl Driver {
                 }
             }
         }
+        // A press on a `pointer_move` handler captures the pointer. The
+        // thumb follows locally this frame; the event waits for paint so
+        // the server sees one move, not one per OS sample.
+        if let Some(pressed) = self.pointer.pressed_on {
+            if self.session.node(pressed).is_some() && self.target(pressed, EventKind::PointerMove).is_some() {
+                let p = self.point_payload(pressed, EventKind::PointerMove, x, y);
+                self.pointer.coalesced_move = Some((pressed, p));
+                self.redraw = true;
+                return Vec::new();
+            }
+        }
         // Pointer events arrive faster than frames. When a frame is already
         // owed — a scroll just invalidated the layout — hover waits for it
         // rather than forcing a layout per event; the paint settles it.
@@ -1054,6 +1086,88 @@ impl Driver {
         out
     }
 
+    fn flush_coalesced_move(&mut self) -> Vec<Frame> {
+        let Some((from, payload)) = self.pointer.coalesced_move.take() else { return Vec::new() };
+        if self.session.node(from).is_none() {
+            return Vec::new();
+        }
+        self.emit(from, EventKind::PointerMove, payload)
+    }
+
+    /// Place a slider's fill and thumb on the pointer this frame, so a drag
+    /// is not waiting for the server's next tree. The press is often a child
+    /// of the track; the handler node is the row with the three parts.
+    fn follow_slider_drag(&mut self) {
+        let Some(pressed) = self.pointer.pressed_on else { return };
+        let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else { return };
+        let (lead, thumb, rest) = {
+            let kids = self.session.children(ix);
+            if kids.len() != 3 {
+                return;
+            }
+            (kids[0], kids[1], kids[2])
+        };
+        let Some(track) = self.layout.rect(ix) else { return };
+        if track.w <= 0.0 {
+            return;
+        }
+        let thumb_w = self.layout.rect(thumb).map(|r| r.w).unwrap_or(16.0);
+        let thumb_h = self.layout.rect(thumb).map(|r| r.h).unwrap_or(16.0);
+        let lead_h = self.layout.rect(lead).map(|r| r.h).unwrap_or(4.0);
+        let rest_h = self.layout.rect(rest).map(|r| r.h).unwrap_or(4.0);
+        let max_lead = (track.w - thumb_w).max(0.0);
+        let at = ((self.pointer.x - track.x) - thumb_w / 2.0).clamp(0.0, max_lead);
+        let mid_y = track.y + track.h / 2.0;
+        self.layout.set_rect(lead, Rect::new(track.x, mid_y - lead_h / 2.0, at, lead_h));
+        self.layout.set_rect(thumb, Rect::new(track.x + at, mid_y - thumb_h / 2.0, thumb_w, thumb_h));
+        let rest_x = track.x + at + thumb_w;
+        self.layout.set_rect(rest, Rect::new(rest_x, mid_y - rest_h / 2.0, (track.x + track.w - rest_x).max(0.0), rest_h));
+        if let Some(value) = self.slider_value_at(ix, track) {
+            self.update_slider_caption(ix, value);
+        }
+    }
+
+    fn slider_value_at(&self, ix: NodeIx, track: Rect) -> Option<i64> {
+        let n = self.session.node(ix)?;
+        let int_prop = |name: &str| {
+            let atom = self.session.atom_id(name)?;
+            match n.prop(atom)? {
+                Value::Int(i) => Some(*i),
+                Value::Float(f) => Some(*f as i64),
+                _ => None,
+            }
+        };
+        let min = int_prop("min").unwrap_or(0);
+        let max = int_prop("max").unwrap_or(100);
+        let w = track.w.max(1.0);
+        let x = (self.pointer.x - track.x).clamp(0.0, w);
+        let span = (max - min) as f32;
+        Some((min + (x / w * span).round() as i64).clamp(min.min(max), min.max(max)))
+    }
+
+    fn update_slider_caption(&mut self, slider: NodeIx, value: i64) {
+        let want = format!("Value {value}");
+        if let Some(atom) = self.session.atom_id("gallery_slider_value") {
+            if let Some(label) = self.session.lookup_key(atom) {
+                let cur = self.session.text_of(label).map(str::to_owned);
+                if cur.as_deref() != Some(want.as_str()) {
+                    self.session.set_text_local(label, want);
+                }
+                return;
+            }
+        }
+        let parent = self.session.node(slider).map(|n| n.parent).filter(|p| p.is_some());
+        let Some(parent) = parent else { return };
+        let kids: Vec<_> = self.session.children(parent).to_vec();
+        for c in kids {
+            let cur = self.session.text_of(c).map(str::to_owned);
+            if cur.as_deref().is_some_and(|t| t.starts_with("Value ") && t != want) {
+                self.session.set_text_local(c, want);
+                break;
+            }
+        }
+    }
+
     fn pointer_down(&mut self, button: u8) -> Vec<Frame> {
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
@@ -1098,22 +1212,32 @@ impl Driver {
         if button == 0 && self.pointer.dragging_thumb.take().is_some() {
             return Vec::new();
         }
+        let mut out = self.flush_coalesced_move();
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
-        let mut out = Vec::new();
-        let Some(ix) = self.layout.hit(&self.session, x, y) else {
-            self.pointer.pressed_on = None;
-            return out;
-        };
-        let payload = self.button_payload(ix, EventKind::PointerUp, x, y, button);
-        out.extend(self.emit(ix, EventKind::PointerUp, payload));
-        // A click is a press and a release that resolve to the same handler.
-        if let Some(pressed) = self.pointer.pressed_on.take() {
-            let same = self.target(pressed, EventKind::Click).map(|t| t.0) == self.target(ix, EventKind::Click).map(|t| t.0);
-            if same {
-                let kind = if button == 1 { EventKind::ContextMenu } else { EventKind::Click };
-                let p = self.point_payload(ix, kind, x, y);
-                out.extend(self.emit(ix, kind, p));
+        let hit = self.layout.hit(&self.session, x, y);
+        let pressed = self.pointer.pressed_on.take();
+        if let Some(ix) = hit {
+            let payload = self.button_payload(ix, EventKind::PointerUp, x, y, button);
+            out.extend(self.emit(ix, EventKind::PointerUp, payload));
+            // A click is a press and a release that resolve to the same handler.
+            if let Some(pressed) = pressed {
+                let same = self.target(pressed, EventKind::Click).map(|t| t.0) == self.target(ix, EventKind::Click).map(|t| t.0);
+                if same {
+                    let kind = if button == 1 { EventKind::ContextMenu } else { EventKind::Click };
+                    let p = self.point_payload(ix, kind, x, y);
+                    out.extend(self.emit(ix, kind, p));
+                }
+            }
+        }
+        // Capture: the press target hears `pointer_up` even if the release
+        // is off it, so a slider drag can end off the track.
+        if let Some(pressed) = pressed {
+            let already = hit.and_then(|ix| self.target(ix, EventKind::PointerUp).map(|t| t.0));
+            let captured = self.target(pressed, EventKind::PointerUp).map(|t| t.0);
+            if captured.is_some() && captured != already {
+                let payload = self.button_payload(pressed, EventKind::PointerUp, x, y, button);
+                out.extend(self.emit(pressed, EventKind::PointerUp, payload));
             }
         }
         out
@@ -1196,19 +1320,56 @@ impl Driver {
         None
     }
 
-    /// The scroller under the pointer. On a valid layout, by hit test; while
-    /// a frame is owed, the one under the last settled hover — scrolling
-    /// does not change which scroller the pointer is in.
-    fn scroller_under_pointer(&mut self) -> Option<NodeIx> {
+    /// Hit node under the pointer, without requiring it to be a scroller.
+    fn hit_under_pointer(&mut self) -> Option<NodeIx> {
         let settled = self.pointer.over.filter(|o| self.session.node(*o).is_some());
-        let hit = match settled {
-            Some(o) if !self.layout_valid => o,
+        match settled {
+            Some(o) if !self.layout_valid => Some(o),
             _ => {
                 self.ensure_layout();
-                self.layout.hit(&self.session, self.pointer.x, self.pointer.y)?
+                self.layout.hit(&self.session, self.pointer.x, self.pointer.y)
             }
-        };
-        self.ancestor_where(hit, |k| matches!(k, NodeKind::Scroll | NodeKind::List))
+        }
+    }
+
+    /// Whether `ix` can still move in the direction `(dx, dy)`. A zero delta
+    /// means "overflows at all". A nested list that cannot move must not eat
+    /// the wheel: the page underneath should.
+    fn scroller_accepts(&self, ix: NodeIx, dx: f32, dy: f32) -> bool {
+        let Some(content) = self.layout.content_size(ix) else { return false };
+        let Some(view) = self.layout.rect(ix) else { return false };
+        let max_x = (content.w - view.w).max(0.0);
+        let max_y = (content.h - view.h).max(0.0);
+        let (sx, sy) = self.session.node(ix).map(|n| n.scroll).unwrap_or((0, 0));
+        if dx == 0.0 && dy == 0.0 {
+            return max_x > 0.5 || max_y > 0.5;
+        }
+        (dx < 0.0 && sx > 0)
+            || (dx > 0.0 && (sx as f32) + 0.5 < max_x)
+            || (dy < 0.0 && sy > 0)
+            || (dy > 0.0 && (sy as f32) + 0.5 < max_y)
+    }
+
+    /// Nearest `scroll`/`list` ancestor of `from` that [`Self::scroller_accepts`].
+    fn scroller_from(&self, from: NodeIx, dx: f32, dy: f32) -> Option<NodeIx> {
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let Some(node) = self.session.node(ix) else { break };
+            if matches!(node.kind, NodeKind::Scroll | NodeKind::List) && self.scroller_accepts(ix, dx, dy) {
+                return Some(ix);
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        None
+    }
+
+    /// Spec 03 §3: the scroller under the pointer that can still move in
+    /// `(dx, dy)`, else its ancestor that can. A nested list that fits its
+    /// rows must not swallow the page's wheel.
+    fn scroller_under_pointer_for(&mut self, dx: f32, dy: f32) -> Option<NodeIx> {
+        let hit = self.hit_under_pointer()?;
+        self.ensure_layout();
+        self.scroller_from(hit, dx, dy)
     }
 
     /// The scroller whose scrollbar strip the pointer is in, if the hit node
@@ -1259,15 +1420,21 @@ impl Driver {
     /// pointer, else the focused node's, else the page's first. `None` when
     /// there is nothing to scroll.
     fn scroll_key(&mut self, key: &str) -> Option<Vec<Frame>> {
-        let is_scroller = |k: NodeKind| matches!(k, NodeKind::Scroll | NodeKind::List);
+        let dy = match key {
+            "ArrowDown" | "PageDown" | "End" => 1.0,
+            "ArrowUp" | "PageUp" | "Home" => -1.0,
+            _ => return None,
+        };
+        self.ensure_layout();
         let scroller = self
-            .scroller_under_pointer()
-            .or_else(|| self.focused.and_then(|f| self.ancestor_where(f, is_scroller)))
+            .scroller_under_pointer_for(0.0, dy)
+            .or_else(|| self.focused.and_then(|f| self.scroller_from(f, 0.0, dy)))
             .or_else(|| {
                 let root = self.session.root()?;
-                self.session.preorder(root).find(|ix| self.session.node(*ix).is_some_and(|n| is_scroller(n.kind)))
+                self.session.preorder(root).find(|ix| {
+                    self.session.node(*ix).is_some_and(|n| matches!(n.kind, NodeKind::Scroll | NodeKind::List)) && self.scroller_accepts(*ix, 0.0, dy)
+                })
             })?;
-        self.ensure_layout();
         let view = self.layout.rect(scroller)?;
         let content = self.layout.content_size(scroller)?;
         let max_y = (content.h - view.h).max(0.0);
@@ -1394,11 +1561,11 @@ impl Driver {
     }
 
     /// A notched wheel: 100 logical px per notch — what browsers scroll per
-    /// click of a wheel — eased over `motion.base`.
-    /// Notches accumulate onto the running target, so a fast spin covers
-    /// ground without waiting for each step to land.
+    /// click of a wheel — eased out over `motion.fast` so a step starts at
+    /// once and settles quickly. Notches accumulate onto the running target,
+    /// so a fast spin covers ground without waiting for each step to land.
     fn wheel_step(&mut self, lines_x: f32, lines_y: f32) -> Vec<Frame> {
-        let Some(scroller) = self.scroller_under_pointer() else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer_for(lines_x, lines_y) else { return Vec::new() };
         let content = self.layout.content_size(scroller).unwrap_or_default();
         let view = self.layout.rect(scroller).unwrap_or_default();
         let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
@@ -1413,7 +1580,7 @@ impl Driver {
         if to == from {
             return Vec::new();
         }
-        let ms = self.resolved.motion.get(1).copied().unwrap_or(180);
+        let ms = self.resolved.motion.get(0).copied().unwrap_or(100);
         self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
         self.next_due = Some(self.now);
         self.redraw = true;
@@ -1427,7 +1594,7 @@ impl Driver {
             return Vec::new();
         }
         self.scroll_anim = None;
-        let Some(scroller) = self.scroller_under_pointer() else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer_for(dx, dy) else { return Vec::new() };
         // Whole pixels move the view; the fraction waits for the next event.
         let (ax, ay) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
         // Ten events of 0.7 px are 7 px, not 6.999: snap before truncating.
@@ -1742,7 +1909,14 @@ impl Driver {
             self.pending.extend(settled);
         }
         self.ensure_layout();
+        self.follow_slider_drag();
         let now = self.now;
+        if let Some(due) = self.viewport_due {
+            if now >= due {
+                self.viewport_due = None;
+                self.pending.push(Frame::Viewport(self.viewport()));
+            }
+        }
         let ticks = self.time_updates();
         self.pending.extend(ticks);
         let woken = self.wake_events();
@@ -1791,9 +1965,15 @@ impl Driver {
         });
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
-        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame { None } else { Some(now + Duration::from_millis(16)) };
+        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
+            None
+        } else if self.scroll_anim.is_some() {
+            Some(now + Duration::from_millis(8))
+        } else {
+            Some(now + Duration::from_millis(16))
+        };
         let wake_due = self.wakes.iter().map(|(_, _, at)| *at).min();
-        for due in [settle_due, self.video_due, wake_due].into_iter().flatten() {
+        for due in [settle_due, self.video_due, self.viewport_due, wake_due].into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         list

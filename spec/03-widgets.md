@@ -129,9 +129,11 @@ no shader, no tessellator and no allocation beyond its quads.
   way. From rest the view eases in and out over `motion.slow`; a press
   that arrives while it is moving keeps the momentum and eases out to the
   new target over `motion.base`, like a wheel notch, so a held key is one
-  glide rather than a series of departures. The scroller is the one under the pointer, else the
-  focused node's, else the first in document order. Nothing is reported but
-  the `scroll` the landing produces.
+  glide rather than a series of departures. The scroller is the one under the
+  pointer that can still move in that direction, else its ancestor that can,
+  else the focused node's, else the first in document order that can. A nested
+  `list` that does not overflow must not swallow the page's wheel. Nothing is
+  reported but the `scroll` the landing produces.
 - The pointer takes the shape of what it is over: the nearest ancestor's
   `cursor` style when one names a shape, else a text beam over an editable
   node, else a hand over anything with a `click` handler, else the arrow —

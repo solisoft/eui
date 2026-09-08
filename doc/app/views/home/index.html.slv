@@ -145,7 +145,9 @@
     number above comes from a test you can run;
     <a href="/docs/budgets">the budgets page</a> names each one.
     If you want the argument rather than the numbers,
-    <a href="/docs/overview">start with the overview</a>.
+    <a href="/docs/overview">start with the overview</a>. If you want to write
+    one, <a href="/docs/components">the component reference</a> has the node,
+    the style vocabulary, and all 107 builders.
   </p>
 </section>
 

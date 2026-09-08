@@ -3,6 +3,15 @@
 This page is the honest one. It is kept current by hand, and if it disagrees
 with the repository, the repository is right.
 
+Everything below is produced by a command you can run:
+
+```
+cargo test --workspace                                     # the client and protocol tests
+cargo test -p eui-proto --test size_budget -- --nocapture  # the wire numbers
+cargo run -p xtask -- conform                              # every vector of spec/09
+cargo run --release -p xtask -- bench                      # the budgets; exits 1 on a miss
+```
+
 ## Built and tested
 
 **`eui-proto` — the wire format.** Encodes and decodes every construct in
@@ -388,11 +397,22 @@ order itself — editable fields and anything with a `click` handler, in
 document order — draws the focus ring for keyboard and server focus only,
 turns `Enter` and `Space` on a focused button into the `click` they stand
 for, and drops focus on `Escape`. On top of that the catalogue gained
-`select` (a dropdown the server opens and closes), `slider` (click to set,
-arrows to nudge once focused), and one calendar engine behind `date_picker`,
+`select` (a dropdown the server opens and closes), `slider` (drag or click to
+set, arrows to nudge once focused), and one calendar engine behind `date_picker`,
 `datetime_picker` and `date_range_picker`. The gallery's end-to-end test
-picks an option, drags the slider by click and by keyboard, picks a day,
+picks an option, drags the slider and nudges it from the keyboard, picks a day,
 turns a month and selects a range.
+
+**A data grid, not a printout.** `table_header` and `table_row` still draw
+the 10 000-row invoice list. `data_grid` is the same columns as a tool: the
+header sits outside the virtualised list (sticky without sticky), a click
+selects a cell, a second click on an editable one puts an `input` in it, a
+header click sorts by `MoveChild`. The gallery shows eight invoices; its
+end-to-end test sorts by amount and edits a client. A list that fits its
+rows no longer swallows the page's wheel — the scroller under the pointer
+is the one that can still move in that direction (03 §3). Column resize and a
+sticky header inside the scroll are still out — layout §9 has no sticky,
+and a local handler cannot yet set a width from `pointer_move`.
 
 **Needle, a player that is nobody's copy.** `examples/counter-app`'s
 `music` component searches a catalogue, opens an artist or a record and

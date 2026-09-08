@@ -375,7 +375,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
         conn.tx.send(f.encode()).unwrap();
     }
     let all = texts(&d, root(&d));
-    for expected in ["Overview", "Nodes", "62 %", "Spec", "What is EUI?", "Rename", "A tooltip", "Nothing here yet", "1 / 9"] {
+    for expected in ["Overview", "Nodes", "62 %", "Spec", "What is EUI?", "Rename", "A tooltip", "Nothing here yet", "1 / 9", "FA-1001 first"] {
         assert!(all.iter().any(|t| t == expected), "gallery shows {expected:?}");
     }
     let nodes_before = d.session().live_nodes();
@@ -438,7 +438,30 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     }
     pump(&mut d, &conn, &wake, |d| has(d, "Value 80"));
 
-    // Date picker: pick the 15th, then turn the month.
+    // Drag: press, move along the track, the value follows.
+    let value = within(&d, "Slider", "Value 80");
+    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let _ = d.paint(1000, 900);
+    let r = d.layout().rect(track).unwrap();
+    d.input(Input::PointerMove(r.x + r.w * 0.8, r.y + r.h / 2.0));
+    for f in d.input(Input::PointerDown(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let seq = d.session().last_seq().unwrap();
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let label = texts(&d, root(&d)).into_iter().find(|t| t.starts_with("Value ")).expect("slider value");
+    let value = within(&d, "Slider", &label);
+    let track = d.session().children(d.session().node(value).unwrap().parent)[0];
+    let _ = d.paint(1000, 900);
+    let r = d.layout().rect(track).unwrap();
+    d.input(Input::PointerMove(r.x + r.w * 0.2, r.y + r.h / 2.0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Value 20"));
+
+    // Date picker: pick the 15th, then turn the month. Three calendars in
+    // a grid (4 / 2 / 1 columns by viewport); clicks are scoped by title.
     let target = within(&d, "Date", "15");
     click(&mut d, &conn, target);
     pump(&mut d, &conn, &wake, |d| has(d, "2026-09-15"));
@@ -447,7 +470,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     pump(&mut d, &conn, &wake, |d| has(d, "October 2026"));
     assert!(has(&d, "2026-09-15"), "the pick survives turning the month");
 
-    // Range: two clicks, the second earlier than the first — the server orders them.
+    // Range: two clicks — the second earlier than the first.
     let target = within(&d, "Range", "20");
     click(&mut d, &conn, target);
     pump(&mut d, &conn, &wake, |d| has(d, "2026-09-20 → …"));
@@ -455,8 +478,33 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     click(&mut d, &conn, target);
     pump(&mut d, &conn, &wake, |d| has(d, "2026-09-10 → 2026-09-20"));
 
-    // Charts: four canvases carrying resolved paths; a line segment paints
-    // as a rotated quad.
+    // Data grid: a header click sorts by moving keyed rows; a second click
+    // on an editable cell turns it into an input, and a commit patches it.
+    assert!(has(&d, "FA-1001 first"));
+    let target = within(&d, "Grid", "Amount");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1004 first"));
+    let target = within(&d, "Grid", "Ada SARL");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client"));
+    let target = within(&d, "Grid", "Ada SARL");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client · editing"));
+    let field = within(&d, "Grid", "Ada SARL");
+    click(&mut d, &conn, field);
+    for f in d.input(Input::Key { key: "a".into(), modifiers: 2, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::Text("Ada & Co".into())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Ada & Co"));
+
+    // Charts: four canvases in a grid (4 / 3 / 2 / 1 columns by viewport)
+    // plus the spinner; a line segment paints as a rotated quad.
     let paths = d.session().atom_id("paths").expect("the paths atom");
     let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
     assert_eq!(canvases.len(), 5, "four charts and the spinner");
@@ -977,7 +1025,7 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
-    let (mut d, conn, _wake) = open(port, "gallery", 1000.0, 900.0);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
     let mut clock = Instant::now();
     let turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
         *clock += Duration::from_millis(ms);
@@ -1002,6 +1050,10 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
             }
         }
     };
+    // One player at a time, switched by the segmented control in the Media card.
+    let tab = within(&d, "Media", "Video");
+    click(&mut d, &conn, tab);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)));
     let node = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)).expect("a video node");
     let src = d.session().atom_id("src").unwrap();
     assert!(matches!(d.session().node(node(&d)).and_then(|n| n.prop(src)), Some(eui_proto::Value::Asset(_))), "the src is a hash");

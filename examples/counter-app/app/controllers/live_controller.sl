@@ -304,44 +304,272 @@ end
 # ended (EUI spec 03 §7).
 def gallery_sound(state)
   playing = state["sound"] ?? false
-  column(
-    {"gap": 2},
-    [
-      audio("public/sounds/chime.wav", {"playing": playing, "volume": 80}, {"ended": "sound_ended"}),
-      row(
-        {"gap": 3, "align": "center"},
-        [
-          button(playing ? "Stop" : "Play a chime", "sound"),
-          muted(playing ? "playing…" : "1.6 s, decoded and mixed by the client")
-        ]
-      )
-    ]
-  )
+  column({"gap": 2}, [
+    audio("public/sounds/chime.wav", {
+      "playing": playing,
+      "volume": 80
+    }, {"ended": "sound_ended"}),
+    row(
+      {"gap": 3, "align": "center"},
+      [
+        button(playing ? "Stop" : "Play a chime", "sound"),
+        muted(playing ? "playing…" : "1.6 s, decoded and mixed by the client")
+      ]
+    )
+  ])
 end
 
 # The gallery's moving picture: a loop the client decodes and plays. The
 # node says what it should be doing; the client owns the clock.
 def gallery_video(state)
   playing = state["video"] ?? false
-  column(
-    {"gap": 2},
-    [
-      video(
-        "public/video/pulse.gif",
-        {"playing": playing, "loop": false, "position": state["video_seek"] ?? 0},
-        {"width": 320, "height": 180, "radius": 3},
-        {"time_update": "video_time", "ended": "video_done"}
-      ),
-      row(
-        {"gap": 3, "align": "center"},
-        [
-          media_button(playing, "video", {}),
-          media_scrubber(200, state["video_at"] ?? 0, 1440, "video_scrub", {"w": 200}),
-          muted(media_clock(state["video_at"] ?? 0) + " / 0:01")
-        ]
-      )
-    ]
-  )
+  column({"gap": 2}, [
+    video("public/video/pulse.gif", {
+      "playing": playing,
+      "loop": false,
+      "position": state["video_seek"] ?? 0
+    }, {
+      "width": 320,
+      "height": 180,
+      "radius": 3
+    }, {"time_update": "video_time", "ended": "video_done"}),
+    row(
+      {"gap": 3, "align": "center"},
+      [
+        media_button(playing, "video", {}),
+        media_scrubber(200, state["video_at"] ?? 0, 1440, "video_scrub", {"w": 200}),
+        muted(media_clock(state["video_at"] ?? 0) + " / 0:01")
+      ]
+    )
+  ])
+end
+
+def gallery_invoices
+  [
+    {
+      "id": "FA-1001",
+      "ref": "FA-1001",
+      "client": "Ada SARL",
+      "status": "Open",
+      "amount": "137 €"
+    },
+    {
+      "id": "FA-1002",
+      "ref": "FA-1002",
+      "client": "Grace Ltd",
+      "status": "Paid",
+      "amount": "412 €"
+    },
+    {
+      "id": "FA-1003",
+      "ref": "FA-1003",
+      "client": "Linus GmbH",
+      "status": "Open",
+      "amount": "850 €"
+    },
+    {
+      "id": "FA-1004",
+      "ref": "FA-1004",
+      "client": "Margaret SA",
+      "status": "Paid",
+      "amount": "112 €"
+    },
+    {
+      "id": "FA-1005",
+      "ref": "FA-1005",
+      "client": "Dennis BV",
+      "status": "Open",
+      "amount": "920 €"
+    },
+    {
+      "id": "FA-1006",
+      "ref": "FA-1006",
+      "client": "Barbara LLC",
+      "status": "Paid",
+      "amount": "256 €"
+    },
+    {
+      "id": "FA-1007",
+      "ref": "FA-1007",
+      "client": "Ken SAS",
+      "status": "Open",
+      "amount": "640 €"
+    },
+    {
+      "id": "FA-1008",
+      "ref": "FA-1008",
+      "client": "Radia Inc",
+      "status": "Paid",
+      "amount": "318 €"
+    }
+  ]
+end
+
+def gallery_grid_columns
+  [
+    {
+      "id": "ref",
+      "label": "Ref",
+      "width": 80
+    },
+    {
+      "id": "client",
+      "label": "Client",
+      "width": 120
+    },
+    {
+      "id": "status",
+      "label": "Status",
+      "width": 88,
+      "align": "center",
+      "options": ["Open", "Paid"]
+    },
+    {
+      "id": "amount",
+      "label": "Amount",
+      "width": 80,
+      "align": "end"
+    }
+  ]
+end
+
+def gallery_grid_col_editable(id)
+  for col in gallery_grid_columns()
+    return grid_col_editable(col) if col["id"] == id
+  end
+
+  true
+end
+
+def gallery_grid_col_options(id)
+  for col in gallery_grid_columns()
+    return col["options"] ?? [] if col["id"] == id
+  end
+
+  []
+end
+
+def gallery_grid_visible_columns(width)
+  cols = gallery_grid_columns()
+  return cols.filter(fn(c) { ["ref", "amount"].includes?(c["id"]) }) unless bp_min(width, "sm")
+  return cols.filter(fn(c) { c["id"] != "client" }) unless bp_min(width, "md")
+
+  cols
+end
+
+def gallery_grid_write(state, row_id, col, value)
+  for record in state["grid_rows"]
+    record[col] = value if record["id"] == row_id
+  end
+  state
+end
+
+def gallery_grid_caption(state)
+  rows = state["grid_rows"]
+  first = rows.length() > 0 ? rows[0]["id"] : ""
+  if state["grid_row"].present?
+    line = state["grid_row"] + " · " + state["grid_col"]
+    return state["grid_edit"] == true ? line + " · editing" : line
+  end
+
+  first + " first"
+end
+
+def gallery_grid_select(state, params)
+  props = params["props"] ?? {}
+  kind = params["kind"]
+  if props["value"].present? && props["col"].present?
+    gallery_grid_write(state, props["row"], props["col"], props["value"])
+    state["grid_edit"] = false
+    state["grid_menu"] = false
+    return state
+  end
+
+  if kind == "blur" || kind == "submit"
+    state["grid_edit"] = false
+    state["grid_menu"] = false
+    return state
+  end
+
+  row_id = props["row"]
+  col = props["col"]
+  same = state["grid_row"] == row_id && state["grid_col"] == col
+  choices = gallery_grid_col_options(col)
+  state["grid_row"] = row_id
+  state["grid_col"] = col
+  if same && gallery_grid_col_editable(col)
+    if choices.length() > 0
+      if state["grid_edit"] == true
+        state["grid_menu"] = state["grid_menu"] == true ? false : true
+      else
+        state["grid_edit"] = true
+        state["grid_menu"] = true
+      end
+    else
+      state["grid_edit"] = true
+      state["grid_menu"] = false
+    end
+  else
+    state["grid_edit"] = false
+    state["grid_menu"] = false
+  end
+  state
+end
+
+def gallery_grid_change(state, params)
+  value = params["payload"]
+  return state if value.nil?
+
+  props = params["props"] ?? {}
+  row_id = props["row"]
+  col = props["col"]
+  for record in state["grid_rows"]
+    record[col] = value if record["id"] == row_id
+  end
+  # Stay in edit: Enter sends change then submit, and validate runs
+  # against the tree *after* each handler. Leaving here would replace
+  # the input before submit arrives (error 300).
+  state
+end
+
+def gallery_grid_sort(state, col)
+  dir = "asc"
+  dir = "desc" if state["grid_sort"] == col && state["grid_dir"] == "asc"
+  state["grid_sort"] = col
+  state["grid_dir"] = dir
+  state["grid_rows"] = grid_sort_rows(state["grid_rows"], col, dir)
+  state
+end
+
+def gallery_grid_key(state, params)
+  key = params["payload"][0]
+  return state if state["grid_row"].blank?
+
+  if key == "Enter" || key == "F2"
+    state["grid_edit"] = gallery_grid_col_editable(state["grid_col"])
+    state["grid_menu"] = gallery_grid_col_options(state["grid_col"]).length() > 0
+    return state
+  end
+
+  delta = 0
+  delta = 1 if key == "ArrowRight"
+  delta = -1 if key == "ArrowLeft"
+  return state if delta == 0
+
+  col_ids = ["ref", "client", "status", "amount"]
+  at = 0
+  i = 0
+  for cid in col_ids
+    at = i if cid == state["grid_col"]
+    i = i + 1
+  end
+  at = at + delta
+  at = 0 if at < 0
+  at = 3 if at > 3
+  state["grid_col"] = col_ids[at]
+  state["grid_edit"] = false
+  state["grid_menu"] = false
+  state
 end
 
 def gallery_defaults(state)
@@ -355,18 +583,37 @@ def gallery_defaults(state)
     "select_open": false,
     "select_value": "Medium",
     "slider": 40,
+    "slider_drag": false,
+    "media_tab": "Sound",
     "cal_month": "2026-09",
     "cal_date": "",
     "dt_month": "2026-09",
     "dt_date": "2026-09-06",
     "dt_time": "09:30",
+    "dt_hour_open": false,
+    "dt_min_open": false,
     "range_month": "2026-09",
     "range_start": "",
     "range_end": "",
     "sound": false,
     "video": false,
     "video_at": 0,
-    "video_seek": 0
+    "video_seek": 0,
+    "grid_rows": gallery_invoices(),
+    "grid_row": "",
+    "grid_col": "",
+    "grid_edit": false,
+    "grid_sort": "",
+    "grid_dir": "asc",
+    "grid_menu": false,
+    "viewport": {
+      "width": 1280,
+      "height": 800,
+      "scale": 1.0,
+      "mode": "light",
+      "density": "cozy",
+      "font_scale": 1.0
+    }
   }
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -381,8 +628,18 @@ end
 
 def set_slider(state, params)
   payload = params["payload"]
-  if params["kind"] == "click"
-    state["slider"] = int(payload[0] * 100 / 240)
+  kind = params["kind"]
+  props = params["props"] ?? {}
+  sw = props["width"] ?? 240
+  dragging = state["slider_drag"] ?? false
+  from_pointer = kind == "click" || kind == "pointer_down" || kind == "pointer_up"
+  from_pointer = true if kind == "pointer_move" && dragging
+  if from_pointer
+    x = payload[0]
+    x = 0 if x < 0
+    x = sw if x > sw
+    state["slider"] = int(x * 100 / sw)
+    state["slider_drag"] = kind == "pointer_down" || kind == "pointer_move"
   elsif payload[0] == "ArrowRight"
     state["slider"] = state["slider"] + 5
   elsif payload[0] == "ArrowLeft"
@@ -390,6 +647,19 @@ def set_slider(state, params)
   end
   state["slider"] = 0 if state["slider"] < 0
   state["slider"] = 100 if state["slider"] > 100
+  state
+end
+
+def set_dt_part(state, which, value)
+  bits = (state["dt_time"] ?? "00:00").split(":")
+  h = bits[0]
+  m = "00"
+  m = bits[1] if bits.length() > 1
+  h = value if which == "hour"
+  m = value if which == "min"
+  state["dt_time"] = h + ":" + m
+  state["dt_hour_open"] = false
+  state["dt_min_open"] = false
   state
 end
 
@@ -422,18 +692,40 @@ def gallery(event_data)
     "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
     "slider" => set_slider(state, params),
     "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
-    "video" => set_key(set_key(state, "video", !(state["video"] ?? false)), "video_at", state["video"] ?? false ? state["video_at"] : 0),
+    "video" => set_key(
+      set_key(state, "video", !(state["video"] ?? false)),
+      "video_at",
+      state["video"] ?? false ? state["video_at"] : 0
+    ),
     "video_time" => set_key(state, "video_at", params["payload"][0]),
     "video_done" => set_key(set_key(state, "video", false), "video_at", 1440),
-    "video_scrub" => set_key(set_key(state, "video_seek", int(params["payload"][0] * 1440 / 200)), "video_at", int(params["payload"][0] * 1440 / 200)),
+    "video_scrub" => set_key(
+      set_key(state, "video_seek", int(params["payload"][0] * 1440 / 200)),
+      "video_at",
+      int(params["payload"][0] * 1440 / 200)
+    ),
     "sound_ended" => set_key(state, "sound", false),
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),
     "dt_nav" => set_key(state, "dt_month", month_shift(state["dt_month"], props["delta"])),
     "dt_pick" => set_key(state, "dt_date", props["date"]),
-    "dt_time" => set_key(state, "dt_time", params["payload"]),
+    "dt_hour_toggle" => set_key(
+      set_key(state, "dt_hour_open", !(state["dt_hour_open"] ?? false)),
+      "dt_min_open",
+      false
+    ),
+    "dt_min_toggle" => set_key(set_key(state, "dt_min_open", !(state["dt_min_open"] ?? false)), "dt_hour_open", false),
+    "dt_hour" => set_dt_part(state, "hour", props["value"]),
+    "dt_min" => set_dt_part(state, "min", props["value"]),
     "range_nav" => set_key(state, "range_month", month_shift(state["range_month"], props["delta"])),
     "range_pick" => pick_range(state, props["date"]),
+    "media_tab" => set_key(set_key(set_key(state, "media_tab", props["option"]), "sound", false), "video", false),
+    "grid_select" => gallery_grid_select(state, params),
+    "grid_change" => gallery_grid_change(state, params),
+    "grid_sort" => gallery_grid_sort(state, props["col"]),
+    "grid_key" => gallery_grid_key(state, params),
+    "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
     _ => state,
   }
 end
@@ -444,6 +736,184 @@ def toggle_id(ids, id)
   ids.concat([id])
 end
 
+def gallery_controls(state)
+  card(
+    {"gap": 3, "width": "100%"},
+    [
+      text("Controls", {"weight": "bold"}),
+      row(
+        {
+          "gap": 6,
+          "wrap": "wrap",
+          "align": "start",
+          "width": "100%"
+        },
+        [
+          column({"gap": 2}, [
+            text("Select", {"weight": "bold"}),
+            select(["Small", "Medium", "Large"], state["select_value"], state["select_open"], "select_toggle", "select_pick")
+          ]),
+          column(
+            {"gap": 2, "grow": 1},
+            [
+              text("Slider", {"weight": "bold"}),
+              keyed("gallery_slider", slider(state["slider"], 0, 100, "slider")),
+              keyed("gallery_slider_value", muted("Value " + str(state["slider"])))
+            ]
+          )
+        ]
+      )
+    ]
+  )
+end
+
+def gallery_media(state)
+  kind = state["media_tab"] ?? "Sound"
+  body = gallery_sound(state)
+  body = gallery_video(state) if kind == "Video"
+  card(
+    {"gap": 3, "width": "100%"},
+    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab"), body]
+  )
+end
+
+def gallery_calendar(state)
+  w = (state["viewport"] ?? {})["width"] ?? 1280
+  cols = 1
+  cols = 2 if bp_min(w, "sm")
+  cols = 3 if bp_min(w, "md")
+  pickers = [
+    column(
+      {
+        "gap": 2,
+        "width": "100%",
+        "pad": [0, 4, 0, 4]
+      },
+      [text("Date", {"weight": "bold"}), date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")]
+    ),
+    column(
+      {
+        "gap": 2,
+        "width": "100%",
+        "pad": [0, 4, 0, 4]
+      },
+      [
+        text("DateTime", {"weight": "bold"}),
+        datetime_picker(
+          state["dt_month"],
+          state["dt_date"],
+          state["dt_time"],
+          state["dt_hour_open"] == true,
+          state["dt_min_open"] == true,
+          "dt_pick",
+          "dt_nav",
+          "dt_hour_toggle",
+          "dt_min_toggle",
+          "dt_hour",
+          "dt_min"
+        )
+      ]
+    ),
+    column(
+      {
+        "gap": 2,
+        "width": "100%",
+        "pad": [0, 4, 0, 4]
+      },
+      [
+        text("Range", {"weight": "bold"}),
+        date_range_picker(state["range_month"], state["range_start"], state["range_end"], "range_pick", "range_nav")
+      ]
+    )
+  ]
+  card(
+    {"gap": 3, "width": "100%"},
+    [
+      text("Calendar", {"weight": "bold"}),
+      {
+        "k": "box",
+        "s": {
+          "display": "grid",
+          "gap": 5,
+          "width": "100%"
+        },
+        "p": {"columns": cols},
+        "c": pickers
+      }
+    ]
+  )
+end
+
+def gallery_charts(state)
+  w = (state["viewport"] ?? {})["width"] ?? 1280
+  cols = 1
+  cols = 2 if bp_min(w, "sm")
+  cols = 3 if bp_min(w, "md")
+  cols = 4 if bp_min(w, "lg")
+  cw = int((w - 80) / cols) - 24
+  cw = 160 if cw < 160
+  ch = 140
+  series = [3, 5, 4, 8, 6, 9, 7]
+  plots = [
+    column({"gap": 2}, [text("Line", {"weight": "bold"}), chart_line(series, cw, ch)]),
+    column({"gap": 2}, [text("Area", {"weight": "bold"}), chart_area([
+      2,
+      4,
+      3,
+      6,
+      5,
+      8,
+      9
+    ], cw, ch)]),
+    column({"gap": 2}, [text("Bars", {"weight": "bold"}), chart_bar([
+      4,
+      7,
+      3,
+      8,
+      5,
+      6
+    ], cw, ch)]),
+    column({"gap": 2}, [text("Donut", {"weight": "bold"}), chart_donut([
+      5,
+      3,
+      2,
+      1
+    ], ch, ch)])
+  ]
+  card(
+    {"gap": 3, "width": "100%"},
+    [
+      text("Charts", {"weight": "bold"}),
+      {
+        "k": "box",
+        "s": {
+          "display": "grid",
+          "gap": 4,
+          "width": "100%"
+        },
+        "p": {"columns": cols},
+        "c": plots
+      }
+    ]
+  )
+end
+
+# What sits beside the progress bar: a percentage, a spinner and three
+# labels. It refuses to shrink, so the row spends its narrowness on the
+# bar; if the labels still do not fit on one line they wrap among
+# themselves rather than breaking a word.
+def progress_legend
+  row(
+    {
+      "gap": 2,
+      "align": "center",
+      "wrap": "wrap",
+      "shrink": 0
+    },
+    [muted("62 %"), spinner(), badge("beta", "warning"), chip("keyed", "", {}), chip("removable", "noop", {"id": 1})]
+  )
+end
+
 def gallery_view(raw_state)
   state = gallery_defaults(raw_state ?? {})
   tab = state["tab"]
@@ -452,74 +922,35 @@ def gallery_view(raw_state)
   seg = state["seg"]
   sheet_open = state["sheet"]
   tree_open = state["tree_open"]
-  pickers = row(
-    {
-      "gap": 4,
-      "wrap": "wrap",
-      "align": "start"
-    },
+  w = (state["viewport"] ?? {})["width"] ?? 1280
+  wide = bp_min(w, "md")
+  invoices = card(
+    {"gap": 3, "width": "100%"},
     [
-      labelled("Select", select([
-        "Small",
-        "Medium",
-        "Large"
-      ], state["select_value"], state["select_open"], "select_toggle", "select_pick")),
-      labelled(
-        "Slider",
-        column({"gap": 2}, [slider(state["slider"], 0, 100, "slider"), muted("Value " + str(state["slider"]))])
+      text("Grid", {"weight": "bold"}),
+      data_grid(
+        gallery_grid_visible_columns(w),
+        state["grid_rows"],
+        state["grid_row"].present? ? {
+          "row": state["grid_row"],
+          "col": state["grid_col"]
+        } : {},
+        state["grid_edit"] == true ? {
+          "row": state["grid_row"],
+          "col": state["grid_col"],
+          "open": state["grid_menu"]
+        } : {},
+        state["grid_sort"].present? ? {
+          "col": state["grid_sort"],
+          "dir": state["grid_dir"]
+        } : {},
+        "grid_select",
+        "grid_sort",
+        "grid_change",
+        "grid_key"
       ),
-      labelled("Sound", gallery_sound(state)),
-      labelled("Video", gallery_video(state)),
-      labelled("Date", date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")),
-      labelled(
-        "Date and time",
-        datetime_picker(state["dt_month"], state["dt_date"], state["dt_time"], "dt_pick", "dt_nav", "dt_time")
-      ),
-      labelled(
-        "Range",
-        date_range_picker(state["range_month"], state["range_start"], state["range_end"], "range_pick", "range_nav")
-      )
-    ]
-  )
-  charts = row(
-    {
-      "gap": 4,
-      "wrap": "wrap",
-      "align": "start"
-    },
-    [
-      labelled("Line", chart_line([
-        3,
-        5,
-        4,
-        8,
-        6,
-        9,
-        7
-      ], 240, 120)),
-      labelled("Area", chart_area([
-        2,
-        4,
-        3,
-        6,
-        5,
-        8,
-        9
-      ], 240, 120)),
-      labelled("Bars", chart_bar([
-        4,
-        7,
-        3,
-        8,
-        5,
-        6
-      ], 240, 120)),
-      labelled("Donut", chart_donut([
-        5,
-        3,
-        2,
-        1
-      ], 120, 120))
+      muted(gallery_grid_caption(state)),
+      muted("bp " + bp(w))
     ]
   )
   sections = [
@@ -559,26 +990,51 @@ def gallery_view(raw_state)
       }
     ]
   }]
+  structure = [
+    column(
+      {"gap": 3, "grow": 1},
+      [
+        accordion(sections, open, "toggle"),
+        code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl")
+      ]
+    ),
+    column(
+      {"gap": 3, "width": wide ? 240 : "100%"},
+      [
+        card({"gap": 2}, [h2("Tree"), tree_view(tree, tree_open, "tree", 0)]),
+        menu(["Rename", "Duplicate", "Delete"], "noop"),
+        tooltip("A tooltip")
+      ]
+    )
+  ]
   page_content = column(
-    {"gap": 5, "pad": 6},
+    {"gap": wide ? 5 : 3, "pad": wide ? 6 : 4},
     [
       navbar("EUI", ["Overview", "Inputs", "Data"], tab, "tab"),
       tabs(["Overview", "Inputs", "Data"], tab, "tab"),
       row(
-        {"gap": 3, "wrap": "wrap"},
-        [stat("Nodes", "14", "primitives"), stat("Roles", "28", "colours"), stat("Tests", "181", "and counting")]
+        {
+          "gap": 3,
+          "width": "100%",
+          "wrap": "wrap"
+        },
+        [
+          tile(200, stat("Nodes", "14", "primitives")),
+          tile(200, stat("Roles", "28", "colours")),
+          tile(200, stat("Tests", "181", "and counting"))
+        ]
       ),
       banner("This gallery is served by Soli and drawn by EUI.", "info", "Open sheet", "sheet"),
-      row(
-        {"gap": 2, "align": "center"},
-        [
-          progress(0.62),
-          muted("62 %"),
-          spinner(),
-          badge("beta", "warning"),
-          chip("keyed", "", {}),
-          chip("removable", "noop", {"id": 1})
-        ]
+      wide ? row(
+        {
+          "gap": 3,
+          "align": "center",
+          "width": "100%"
+        },
+        [progress(0.62), progress_legend()]
+      ) : column(
+        {"gap": 2, "width": "100%"},
+        [progress(0.62), progress_legend()]
       ),
       row(
         {"gap": 3, "align": "center"},
@@ -592,28 +1048,15 @@ def gallery_view(raw_state)
         ]
       ),
       stepper(["Spec", "Client", "Soli", "Ship"], 2),
-      pickers,
-      charts,
-      row(
+      gallery_controls(state),
+      gallery_media(state),
+      gallery_calendar(state),
+      invoices,
+      gallery_charts(state),
+      wide ? row(
         {"gap": 4, "align": "start"},
-        [
-          column(
-            {"gap": 3, "grow": 1},
-            [
-              accordion(sections, open, "toggle"),
-              code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl")
-            ]
-          ),
-          column(
-            {"gap": 3, "width": 240},
-            [
-              card({"gap": 2}, [h2("Tree"), tree_view(tree, tree_open, "tree", 0)]),
-              menu(["Rename", "Duplicate", "Delete"], "noop"),
-              tooltip("A tooltip")
-            ]
-          )
-        ]
-      ),
+        structure
+      ) : column({"gap": 4}, structure),
       empty_state(
         "Nothing here yet",
         "Filters that match nothing land here. Clear them to see everything.",
@@ -624,6 +1067,14 @@ def gallery_view(raw_state)
       skeleton(320, 12)
     ]
   )
+  # Three tiles that wrap on their own: a line holds as many as fit at
+  # 200 px each and they share the remainder, so the last one never
+  # leaves a hole behind it.
+
+  # The bar takes the room the legend does not want: the legend never
+  # shrinks, so "62 %" keeps its two words on one line, and below md
+  # the bar goes above it instead of squeezing it.
+
   # The page scrolls as a whole, like a browser's viewport would; the sheet
   # is a layer above it.
   page = scroll({}, [page_content])
@@ -737,21 +1188,40 @@ def feed(event_data)
   at = state["at"] ?? 0
   duration = state["duration"] ?? 0
   seek = state["seek"] ?? 0
-  keep = {"liked": liked, "count": count, "window": window, "sound": sound, "moving": moving, "at": at, "duration": duration, "seek": seek}
+  keep = {
+    "liked": liked,
+    "count": count,
+    "window": window,
+    "sound": sound,
+    "moving": moving,
+    "at": at,
+    "duration": duration,
+    "seek": seek
+  }
   match event {
     "like" => keep.merge({"liked": toggle_id(liked, params["props"]["id"])}),
     "more" => keep.merge({"count": count + 5000}),
     "window" => keep.merge({"window": params["payload"]}),
     "play" => keep.merge({"sound": sound == params["props"]["id"] ? -1 : params["props"]["id"]}),
     "sound_ended" => keep.merge({"sound": -1}),
-    # A picture plays only when asked, and only one at a time.
-    "video_play" => keep.merge({"moving": moving == params["props"]["id"] ? -1 : params["props"]["id"], "at": 0, "seek": 0}),
-    "video_time" => keep.merge({"at": params["payload"][0], "duration": params["payload"][1]}),
-    "video_ended" => keep.merge({"moving": -1, "at": duration}),
+    "video_play" => keep.merge({
+      "moving": moving == params["props"]["id"] ? -1 : params["props"]["id"],
+      "at": 0,
+      "seek": 0
+    }),
+    "video_time" => keep.merge({
+      "at": params["payload"][0],
+      "duration": params["payload"][1]
+    }),
+    "video_ended" => keep.merge({
+      "moving": -1,
+      "at": duration
+    }),
     "video_seek" => video_seek(keep, params),
     _ => keep,
   }
 end
+# A picture plays only when asked, and only one at a time.
 
 # The height of row `i`, without building the post: what the client needs
 # for every row, so the scroll extent and the row tops are exact.
@@ -814,9 +1284,7 @@ def feed_prune(first, last)
   keep = {}
   for key in FEED_CARDS.keys()
     i = int(key.split(":")[0])
-    if i >= first - 100 && i <= last + 100
-      keep[key] = FEED_CARDS[key]
-    end
+    keep[key] = FEED_CARDS[key] if i >= first - 100 && i <= last + 100
   end
   FEED_CARDS = keep
 end

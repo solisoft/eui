@@ -4,6 +4,9 @@
 # Home page
 get("/", "home#index")
 
+# The component reference
+get("/components", "home#components")
+
 # Health check endpoint
 get("/health", "home#health")
 

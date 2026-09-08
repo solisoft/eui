@@ -1,17 +1,18 @@
 # Widget catalogue
 
-> The primitives are specified (`spec/03`) and painted. About forty of the
-> widgets below are built as plain Soli functions in
+> The primitives are specified (`spec/03`) and painted. A hundred and seven plain
+> Soli functions build the catalogue below in
 > `examples/counter-app/app/controllers/eui_builders.sl`, and a `gallery`
-> component shows them together. Charts, select/combobox, slider and the
-> pickers are still to come.
+> component shows them together. Every signature is in
+> [Components](/docs/components); this page is the shape of the catalogue,
+> not its reference.
 
 There are two tiers, and the split is what lets the catalogue grow without ever
 shipping a new client.
 
 ## Tier 0 — primitives
 
-Implemented in the client. **Fourteen kinds, and the set is closed.** This is
+Implemented in the client. **Sixteen kinds, and the set is closed.** This is
 the entire vocabulary the protocol can express.
 
 | Kind | What it is |
@@ -30,6 +31,8 @@ the entire vocabulary the protocol can express.
 | `overlay` | A layer above the flow: menus, tooltips, dialogs |
 | `slot` | A named insertion point for composed content |
 | `sizer` | An invisible box that only imposes constraints |
+| `audio` | A sound. Draws nothing, plays |
+| `video` | A moving picture, decoded in the sandboxed worker |
 
 Adding a kind is a protocol version bump. That is a deliberately high price,
 and it is why the list has to be argued down to what genuinely cannot be
@@ -56,7 +59,7 @@ error display
 
 **Navigation.** `navbar`, `sidebar`, `breadcrumb`, `pagination`, `tree_view`
 
-**Data.** `table` (sortable, virtualised), `data_grid`, `list_item`, `chart`
+**Data.** `table` (sortable, virtualised), `data_grid` (editable cells, header outside the scroll), `list_item`, `chart`
 (line, bar, area, donut, drawn on `canvas`), `stat`, `code_block`, `markdown`
 
 **Feedback.** `toast`, `banner`, `progress`, `spinner`, `skeleton`,
@@ -65,41 +68,49 @@ error display
 Every one of them is themeable through roles, keyboard-navigable, and carries
 documented accessibility semantics.
 
-## Not in version 1: video
+## Sound and moving pictures
 
-A video player is the one thing on this page that does not compose from the
-primitives, and it is worth saying why. Decoding video in the client means
-either shipping a codec library — tens of megabytes and a large attack surface,
-everything EUI refuses — or handing the stream to the **platform's** decoder
-(AVFoundation, Media Foundation, GStreamer with VA-API) and drawing its output
-as a texture. The second keeps the client small and is the design. It needs a
-fifteenth primitive, `video`, and adding a primitive is a protocol version
-bump, so it is EUI/2 work. Audio follows the same path.
+`audio` and `video` were the fifteenth and sixteenth kinds, and they cost a
+protocol version, exactly as this page said they would.
+
+They are in because the decode stays small and stays confined. `eui-audio`
+decodes with `symphonia` and mixes up to eight sources; `eui-video` decodes
+GIF and animated WebP in Rust. Both run in the **sandboxed worker** — the
+process that may not open a file, a socket or a device — and hand frames and
+samples to the window process, which owns the audio device and the GPU. No
+codec library is downloaded, and nothing is handed to a system decoder.
+
+Compressed video (H.264 and friends) is still out. Taking it would mean
+shipping a codec or calling the platform's decoder, and neither fits in the
+worker as it stands.
 
 ## How a button is a box
 
 ```soli
-def button(label, variant: :primary, size: :md, loading: false, on_click: nil)
-  box(
-    display:  :row,
-    align:    :center,
-    justify:  :center,
-    gap:      @space.2,
-    pad_x:    _pad_x(size),
-    height:   _height(size),
-    radius:   @radius.md,
-    bg:       _bg(variant),
-    fg:       _fg(variant),
-    cursor:   :pointer,
-    on_click: on_click
-  ) do
-    spinner(size: :sm) if loading
-    text(label, style: _text(size), weight: :semibold)
-  end
+def button_variant(label, on_click, bg, fg)
+  base = {
+    "display": "row", "justify": "center", "align": "center",
+    "pad": [2, 4, 2, 4], "min_width": 44,
+    "bg": bg, "fg": fg, "radius": 2,
+    "cursor": "pointer", "transition": "fast"
+  }
+  hover = base.merge({"bg": bg == "accent.base" ? "accent.hover" : bg})
+  {
+    "k": "box",
+    "key": "btn:" + on_click + ":" + label,
+    "s": base,
+    "on": {
+      "click": on_click,
+      "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
+      "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}}
+    },
+    "c": [text(label, {"weight": "semibold"})]
+  }
 end
 ```
 
 No new node kind, no client change, no protocol version. The button is a
-function that returns primitives, and `_bg(variant)` returns a **role** — which
-is why the same button follows the viewer into dark mode without the server
-knowing they went there.
+function that returns a hash of primitives, and its colours are **roles** —
+which is why the same button follows the viewer into dark mode without the
+server knowing they went there. Its hover runs on the client, against a style
+record the session already holds, so it costs no network.

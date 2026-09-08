@@ -6,6 +6,11 @@ class HomeController < Controller
     render("home/index", {"title": "EUI — an interface is not a document"})
   end
 
+  # GET /components
+  def components
+    render("home/components", {"title": "EUI components"})
+  end
+
   # GET /health
   def health
     {

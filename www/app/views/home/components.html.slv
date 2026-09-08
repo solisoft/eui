@@ -1,0 +1,620 @@
+<main class="sheet">
+    <%- partial("layouts/top", {"here": "components"}) %>
+
+    <section class="hero">
+        <div class="mark">Reference<span>&sect;03</span></div>
+        <div>
+            <h1>A hundred and seven functions, and the vocabulary they speak.</h1>
+            <p class="lede">
+                An EUI component is a Soli function that returns a hash. There is no
+                widget runtime, no component registry and no client release behind any
+                of the names below &mdash; each one composes primitives, so an
+                application can add its own without asking anyone.
+            </p>
+
+            <nav class="toc">
+                <a href="#node"><b>The node</b><span>eight keys, sixteen kinds</span></a>
+                <a href="#style"><b>Style</b><span>thirty-seven keys, twenty-eight roles</span></a>
+                <a href="#events"><b>Events</b><span>twenty-four names, two handler forms</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 107, by family</span></a>
+                <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
+            </nav>
+        </div>
+    </section>
+
+    <section id="node">
+        <div class="mark">Node<span>&sect;02</span></div>
+        <div>
+            <h2>Everything is one hash</h2>
+            <p>
+                A view returns this shape; the server converts it to nodes, diffs it
+                against the tree this session already has, and encodes the patch. Eight
+                keys, all optional but the kind.
+            </p>
+
+            <div class="pair">
+                <div class="pane">
+                    <b>a node, whole</b>
+<pre>{
+  <span class="s">"k"</span>: <span class="s">"box"</span>,
+  <span class="s">"key"</span>: <span class="s">"post:412"</span>,
+  <span class="s">"s"</span>: {<span class="s">"display"</span>: <span class="s">"row"</span>, <span class="s">"gap"</span>: <span class="n">3</span>,
+        <span class="s">"bg"</span>: <span class="s">"surface.raised"</span>},
+  <span class="s">"p"</span>: {<span class="s">"id"</span>: <span class="n">412</span>},
+  <span class="s">"on"</span>: {<span class="s">"click"</span>: <span class="s">"like"</span>},
+  <span class="s">"c"</span>: [ &hellip; ],
+  <span class="s">"t"</span>: <span class="s">"Ada Lovelace"</span>,
+  <span class="s">"intern"</span>: <span class="k">true</span>
+}</pre>
+                </div>
+                <div class="pane">
+                    <b>what each key is for</b>
+                    <dl class="keys">
+                        <dt>k</dt><dd>The kind. One of sixteen, and the set is closed</dd>
+                        <dt>key</dt><dd>Identity. Keyed children are matched by key and <strong>moved</strong>, not rebuilt</dd>
+                        <dt>s</dt><dd>Style, resolved once per session and then referenced by id</dd>
+                        <dt>p</dt><dd>Props. They come back to the handler as the props of the node that fired</dd>
+                        <dt>on</dt><dd>Handlers, by event name</dd>
+                        <dt>c</dt><dd>Children</dd>
+                        <dt>t</dt><dd>Text content, for <code>text</code> and <code>input</code></dd>
+                        <dt>intern</dt><dd>Put this text in the atom table instead of inline</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <h3>The sixteen kinds</h3>
+            <p class="soft">
+                Implemented in the client. Adding one is a protocol version bump, which
+                is a deliberately high price: it is what keeps the catalogue a library
+                rather than a client release.
+            </p>
+            <div class="kinds">
+                <div><b>box</b><span>A styled rectangle that arranges children</span></div>
+                <div><b>text</b><span>A run of text. Leaf</span></div>
+                <div><b>image</b><span>A raster picture, referenced by content hash</span></div>
+                <div><b>icon</b><span>A vector glyph. Leaf</span></div>
+                <div><b>input</b><span>A single-line editable field</span></div>
+                <div><b>textarea</b><span>A multi-line editable field</span></div>
+                <div><b>scroll</b><span>A clipping viewport</span></div>
+                <div><b>list</b><span>A virtualised child list</span></div>
+                <div><b>canvas</b><span>A retained path list: lines, rectangles, areas, circles, arcs</span></div>
+                <div><b>spacer</b><span>Flexible empty space. Leaf</span></div>
+                <div><b>divider</b><span>A hairline rule. Leaf</span></div>
+                <div><b>overlay</b><span>A layer above the flow</span></div>
+                <div><b>slot</b><span>A named insertion point</span></div>
+                <div><b>sizer</b><span>An invisible box that only constrains</span></div>
+                <div><b>audio</b><span>A sound. Draws nothing, plays</span></div>
+                <div><b>video</b><span>A moving picture, decoded in the worker</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="style">
+        <div class="mark">Style<span>&sect;05</span></div>
+        <div>
+            <h2>Thirty-seven keys, and no cascade</h2>
+            <p>
+                A style is a flat hash. There is nothing to select against, no
+                inheritance to compute, and no specificity to lose an afternoon to. If
+                two places should look alike, they call the same function. A key the
+                server does not know is an <strong>error</strong>, not a shrug: the
+                render fails, and says which key.
+            </p>
+
+            <table class="vocab">
+                <thead><tr><th>Key</th><th>Values</th></tr></thead>
+                <tbody>
+                    <tr><td>display</td><td>row · column · stack · grid · none</td></tr>
+                    <tr><td>wrap</td><td>nowrap · wrap · wrap_reverse</td></tr>
+                    <tr><td>justify</td><td>start · center · end · between · around · evenly</td></tr>
+                    <tr><td>align</td><td>start · center · end · stretch · baseline</td></tr>
+                    <tr><td>self</td><td>as align, plus auto — this node's own cross-axis placement</td></tr>
+                    <tr><td>grow · shrink</td><td>0–255</td></tr>
+                    <tr><td>gap</td><td>a space index, 0–255</td></tr>
+                    <tr><td>width · height · min_width · min_height · max_width · max_height · basis</td><td>a length</td></tr>
+                    <tr><td>pad · margin · border</td><td>edges</td></tr>
+                    <tr><td>bg · fg · border_color</td><td>a colour</td></tr>
+                    <tr><td>radius · shadow · opacity · z</td><td>0–255</td></tr>
+                    <tr><td>font</td><td>sans · mono</td></tr>
+                    <tr><td>size</td><td>a text-scale index</td></tr>
+                    <tr><td>weight</td><td>regular · medium · semibold · bold</td></tr>
+                    <tr><td>text_align</td><td>start · center · end · justify</td></tr>
+                    <tr><td>clamp</td><td>maximum lines, then an ellipsis</td></tr>
+                    <tr><td>underline · strike</td><td>true · false</td></tr>
+                    <tr><td>overflow</td><td>visible · clip · scroll</td></tr>
+                    <tr><td>transition</td><td>none · fast · base · slow</td></tr>
+                    <tr><td>animation</td><td>none · spin</td></tr>
+                    <tr><td>position</td><td>flow · absolute</td></tr>
+                    <tr><td>cursor</td><td>default · pointer · text · grab · grabbing · resize_h · resize_v · wait · not_allowed</td></tr>
+                </tbody>
+            </table>
+
+            <div class="units">
+                <div>
+                    <b>Lengths</b>
+                    <p><code>120</code> pixels, <code>"auto"</code>, <code>"50%"</code>,
+                    <code>"1fr"</code>, or <code>"sp:4"</code> for a space-scale index.</p>
+                </div>
+                <div>
+                    <b>Edges</b>
+                    <p><code>2</code> for all four, <code>[y, x]</code>, or
+                    <code>[t, r, b, l]</code>. They are space indices, not pixels, so the
+                    viewer's density setting scales them.</p>
+                </div>
+                <div>
+                    <b>Colours</b>
+                    <p>A role, a literal <code>"#RRGGBB"</code>, or <code>"none"</code>.
+                    A literal is right for a brand mark or a chart series, and wrong for
+                    a surface.</p>
+                </div>
+            </div>
+
+            <h3>The twenty-eight roles</h3>
+            <p class="soft">
+                The server never sends a colour. It sends a role, and the client resolves
+                it against the viewer's mode &mdash; which is why the same view is
+                correct in dark mode without the server ever learning the viewer went
+                there, and why switching costs zero bytes.
+            </p>
+            <div class="roles">
+                <div><b>surface</b><span>base · raised · sunken · overlay</span></div>
+                <div><b>text</b><span>default · muted · inverted · disabled</span></div>
+                <div><b>accent</b><span>base · hover · active · on</span></div>
+                <div><b>success</b><span>base · subtle · on</span></div>
+                <div><b>warning</b><span>base · subtle · on</span></div>
+                <div><b>danger</b><span>base · subtle · on</span></div>
+                <div><b>info</b><span>base · subtle · on</span></div>
+                <div><b>border</b><span>subtle · default · strong</span></div>
+                <div><b>focus</b><span>ring</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section id="events">
+        <div class="mark">Events<span>&sect;06</span></div>
+        <div>
+            <h2>What comes back</h2>
+            <p>
+                A handler named as a string is a server event: the client sends it, the
+                handler runs, the view re-renders, the diff comes back. The handler is
+                given the event, the state, and the props of the node that fired &mdash;
+                which is how one handler serves ten thousand rows.
+            </p>
+
+            <div class="events">
+                <span>click</span>
+                <span>double_click</span>
+                <span>long_press</span>
+                <span>context_menu</span>
+                <span>pointer_down</span>
+                <span>pointer_up</span>
+                <span>pointer_move</span>
+                <span>pointer_enter</span>
+                <span>pointer_leave</span>
+                <span>drag_start</span>
+                <span>drag_over</span>
+                <span>drop</span>
+                <span>key_down</span>
+                <span>key_up</span>
+                <span>text_input</span>
+                <span>change</span>
+                <span>focus</span>
+                <span>blur</span>
+                <span>submit</span>
+                <span>scroll</span>
+                <span>resize</span>
+                <span>window</span>
+                <span>ended</span>
+                <span>time_update</span>
+            </div>
+
+            <div class="pair">
+                <div class="pane">
+                    <b>server: a round trip</b>
+<pre><span class="c"># The node carries the identity the handler will need.</span>
+checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span>],
+         <span class="s">"toggle"</span>, {<span class="s">"id"</span>: item[<span class="s">"id"</span>]})
+
+<span class="c"># The handler reads it back.</span>
+<span class="k">def</span> todo(event_data)
+  id = event_data[<span class="s">"params"</span>][<span class="s">"props"</span>][<span class="s">"id"</span>]
+  &hellip;
+<span class="k">end</span></pre>
+                </div>
+                <div class="pane">
+                    <b>local: no round trip</b>
+<pre>{<span class="s">"local"</span>: <span class="s">"self.style = @hover"</span>,
+ <span class="s">"styles"</span>: {<span class="s">"hover"</span>: hover},
+ <span class="s">"then"</span>: <span class="s">"like"</span>}</pre>
+                    <p class="soft">
+                        Compiled to bytecode, verified by the client before its first
+                        run, metered by fuel. <code>styles</code> declares the records
+                        the chunk may point a node at, so hover and press switch between
+                        styles the session already holds. <code>then</code> sends a
+                        server event afterwards. Nothing a local handler does is trusted
+                        &mdash; authorisation is never local.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="catalogue">
+        <div class="mark">Catalogue<span>&sect;03</span></div>
+        <div>
+            <h2>All 107</h2>
+            <p>
+                They live in one file &mdash;
+                <code>examples/counter-app/app/controllers/eui_builders.sl</code> &mdash;
+                and you are meant to copy it and change it. A widget is not a protocol
+                feature, and none of these had to ask permission to exist. Each one
+                below carries a call you can paste into a view.
+            </p>
+
+            <p class="note">
+                Every entry carries a drawing of what it makes, next to a call you can
+                paste into a view. The drawings are HTML: this page is a document and
+                cannot run a client, so the shapes are the widget's and the mechanism is
+                not. A function that returns a value rather than a tree shows the value.
+            </p>
+
+            <div class="family">
+                <h3>Primitives and wrappers <span>22</span></h3>
+                <p class="soft">The whole vocabulary the protocol can express, plus the helpers every view uses.</p>
+                <dl class="api">
+                    <dt><b>node(kind, style, children)</b><i>node("box", {"gap": 2}, [text("Total", {})])</i></dt>
+                    <dd><span class="d">The bare hash. Everything else on this page is built on it</span><div class="p val">&rarr; <em>{"k": "box", "s": {"gap": 2}, "c": [ … ]}</em></div></dd>
+                    <dt><b>column(style, children)</b><i>column({"gap": 4, "pad": 6}, [header, body])</i></dt>
+                    <dd><span class="d">A box, laid out down</span><div class="p"><span class="g-c"><i class="g-l w3"></i><i class="g-l w2"></i><i class="g-l w4"></i></span></div></dd>
+                    <dt><b>row(style, children)</b><i>row({"gap": 2, "align": "center"}, [mark, label])</i></dt>
+                    <dd><span class="d">A box, laid out across</span><div class="p"><span class="g-r"><i class="g-l tall w1"></i><i class="g-l tall w1"></i><i class="g-l tall w1"></i></span></div></dd>
+                    <dt><b>stack(style, children)</b><i>stack({}, [backdrop, caption])</i></dt>
+                    <dd><span class="d">A box whose children are superimposed</span><div class="p"><span class="g-stack"><i></i><i></i></span></div></dd>
+                    <dt><b>text(content, style)</b><i>text("Total", {"size": 4, "weight": "semibold"})</i></dt>
+                    <dd><span class="d">A run of text</span><div class="p"><span class="g-t">Total</span></div></dd>
+                    <dt><b>spacer()</b><i>row({}, [label, spacer(), button("Save", "save")])</i></dt>
+                    <dd><span class="d">Empty space with grow: 1</span><div class="p"><span class="g-between"><i class="g-l w2"></i><span class="w-btn primary">Save</span></span></div></dd>
+                    <dt><b>divider()</b><i>column({"gap": 3}, [header, divider(), body])</i></dt>
+                    <dd><span class="d">A hairline rule</span><div class="p"><span class="g-c full"><i class="g-l w3"></i><i class="g-rule"></i><i class="g-l w2"></i></span></div></dd>
+                    <dt><b>scroll(style, children)</b><i>scroll({"height": 400}, rows)</i></dt>
+                    <dd><span class="d">A clipping viewport</span><div class="p"><span class="g-scroll g-c"><i class="g-l w4"></i><i class="g-l w3"></i><i class="g-l w4"></i></span></div></dd>
+                    <dt><b>list(style, item_height, children)</b><i>list({"height": 400}, 22, rows)</i></dt>
+                    <dd><span class="d">A virtualised list: only the visible rows are laid out</span><div class="p"><span class="g-clip"><i class="g-l w4"></i><i class="g-l w4"></i><i class="g-l w4"></i><i class="g-l w4"></i></span></div></dd>
+                    <dt><b>list_window(style, item_height, count, heights, children, on_window)</b><i>list_window({"grow": 1}, 128, count, heights, cards, "window")</i></dt>
+                    <dd><span class="d">A windowed list — the server sends only what is in view</span><div class="p"><span class="g-clip"><i class="g-l w4"></i><i class="g-l w4"></i><i class="g-l w4 ghost"></i><i class="g-l w4 ghost"></i></span></div></dd>
+                    <dt><b>input(value, on_change)</b><i>input(state["typed"], "typed")</i></dt>
+                    <dd><span class="d">A bordered single-line field</span><div class="p"><span class="g-in">Ada<span class="g-cur"></span></span></div></dd>
+                    <dt><b>button(label, on_click)</b><i>button("Save", "save")</i></dt>
+                    <dd><span class="d">The primary button: accent roles, local hover and press</span><div class="p"><span class="w-btn primary">Save</span></div></dd>
+                    <dt><b>image(src, width, height)</b><i>image("public/images/chart.png", 320, 200)</i></dt>
+                    <dd><span class="d">A picture from a file in the application, sent as a hash</span><div class="p"><i class="g-img"></i></div></dd>
+                    <dt><b>avatar(src, size)</b><i>avatar("public/images/avatar.png", 32)</i></dt>
+                    <dd><span class="d">A round picture</span><div class="p"><i class="g-sq round big"></i></div></dd>
+                    <dt><b>canvas(width, height, paths)</b><i>canvas(320, 120, [[3, "accent.base", 40, 60, 6]])</i></dt>
+                    <dd><span class="d">A drawing surface: polylines, rectangles, areas, circles, arcs</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><polyline class="ln" points="4,36 40,10 76,28 112,6 146,20"/></svg></div></dd>
+                    <dt><b>audio(src, props, on)</b><i>audio("public/sounds/chime.wav", {"playing": true, "volume": 80}, {"ended": "sound_ended"})</i></dt>
+                    <dd><span class="d">A sound. Draws nothing</span><div class="p"><span class="g-r"><i class="g-init">&#9654;</i><span class="g-m">chime.wav &middot; 1.6 s</span></span></div></dd>
+                    <dt><b>video(src, props, style, on)</b><i>video("public/video/pulse.gif", {"playing": on}, {"width": "100%"}, {"ended": "video_ended"})</i></dt>
+                    <dd><span class="d">A moving picture. GIF and animated WebP</span><div class="p"><span class="g-r"><i class="g-img"></i><span class="g-m">&#9654; 0:00 / 1:26</span></span></div></dd>
+                    <dt><b>keyed(key, n)</b><i>keyed(invoice["id"], row({"gap": 2}, cells))</i></dt>
+                    <dd><span class="d">Gives a node its identity for the diff, and returns it</span><div class="p val">&rarr; <em>{"key": "412", "k": "box", … }</em></div></dd>
+                    <dt><b>with_state(state, root)</b><i>with_state({"count": count}, column({"pad": 6}, children))</i></dt>
+                    <dd><span class="d">Puts the state in the root's props, where local handlers read it</span><div class="p val">&rarr; <em>{"p": {"count": 3}, "k": "box", … }</em></div></dd>
+                    <dt><b>bp(width)</b><i>bp(state["viewport"]["width"])</i></dt>
+                    <dd><span class="d">Breakpoint name for a viewport width — xs sm md lg xl 2xl, Tailwind rungs</span><div class="p val">&rarr; <em>"md"</em></div></dd>
+                    <dt><b>bp_min(width, name)</b><i>bp_min(w, "md")</i></dt>
+                    <dd><span class="d">true when width is at least that breakpoint</span><div class="p val">&rarr; <em>true</em></div></dd>
+                    <dt><b>bp_px(name)</b><i>bp_px("md")</i></dt>
+                    <dd><span class="d">The pixel floor</span><div class="p val">&rarr; <em>768</em></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Text <span>4</span></h3>
+                <p class="soft">Four functions, because a heading is a size and a weight, not a tag.</p>
+                <dl class="api">
+                    <dt><b>h1(content)</b><i>h1("Todo")</i></dt>
+                    <dd><span class="d">Size 5, bold</span><div class="p"><span class="g-h1">Todo</span></div></dd>
+                    <dt><b>h2(content)</b><i>h2("Invoices")</i></dt>
+                    <dd><span class="d">Size 4, semibold</span><div class="p"><span class="g-h2">Invoices</span></div></dd>
+                    <dt><b>muted(content)</b><i>muted(remaining.to_s + " left")</i></dt>
+                    <dd><span class="d">Size 1, text.muted</span><div class="p"><span class="g-m">3 left</span></div></dd>
+                    <dt><b>text_interned(content, style)</b><i>text_interned(post["handle"], {"fg": "text.muted", "size": 1})</i></dt>
+                    <dd><span class="d">Text put in the session's atom table — for short strings that repeat</span><div class="p"><span class="g-r"><span class="g-t">@ada</span><span class="g-m">one atom, sent once</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Buttons <span>8</span></h3>
+                <p class="soft">One engine, and the variants are arguments to it.</p>
+                <dl class="api">
+                    <dt><b>button_variant(label, on_click, bg, fg)</b><i>button_variant("Publish", "publish", "accent.base", "accent.on")</i></dt>
+                    <dd><span class="d">The engine: a keyed box whose hover and press repoint it at declared styles, with no round trip</span><div class="p"><span class="w-btn primary">Publish</span></div></dd>
+                    <dt><b>secondary_button(label, on_click)</b><i>secondary_button("Clear done", "clear_done")</i></dt>
+                    <dd><span class="d">surface.sunken on text.default</span><div class="p"><span class="w-btn secondary">Clear done</span></div></dd>
+                    <dt><b>danger_button(label, on_click)</b><i>danger_button("Delete", "destroy")</i></dt>
+                    <dd><span class="d">danger.base on danger.on</span><div class="p"><span class="w-btn danger">Delete</span></div></dd>
+                    <dt><b>ghost_button(label, on_click)</b><i>ghost_button("×", "remove")</i></dt>
+                    <dd><span class="d">No fill, accent text</span><div class="p"><span class="w-btn ghost">&times;</span></div></dd>
+                    <dt><b>icon_button(label, on_click, props)</b><i>icon_button("›", "nav", {"delta": 1})</i></dt>
+                    <dd><span class="d">A 28×28 square carrying props back to the handler</span><div class="p"><span class="w-btn secondary icon">&rsaquo;</span></div></dd>
+                    <dt><b>loading_button(label, on_click, key)</b><i>loading_button("Load 5 000 more", "more", "more")</i></dt>
+                    <dd><span class="d">Reveals its spinner and changes its label locally, then sends the event</span><div class="p"><span class="w-btn secondary"><i class="g-spin"></i>Loading&hellip;</span></div></dd>
+                    <dt><b>local_button(label, program, after)</b><i>local_button("+", "state.count += 1; value.text = str(state.count)", "increment")</i></dt>
+                    <dd><span class="d">A button whose click runs a bytecode chunk first, then a server event</span><div class="p"><span class="g-r"><span class="w-btn primary">+</span><span class="g-m">no round trip</span></span></div></dd>
+                    <dt><b>theme_toggle()</b><i>theme_toggle()</i></dt>
+                    <dd><span class="d">Light and dark, decided on the client; the server is never told</span><div class="p"><span class="w-btn secondary">&#9728;/&#9790;</span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Input and forms <span>9</span></h3>
+                <p class="soft">None of them holds state. The handler does.</p>
+                <dl class="api">
+                    <dt><b>checkbox(label, checked, on_toggle, props)</b><i>checkbox(it["title"], it["done"], "toggle", {"id": it["id"]})</i></dt>
+                    <dd><span class="d">The mark's fill says its state; props say which item it was</span><div class="p"><span class="w-check"><i></i>Write the spec</span></div></dd>
+                    <dt><b>switch(label, on, on_toggle, props)</b><i>switch("Notify me", state["notify"], "toggle_notify", {})</i></dt>
+                    <dd><span class="d">A track and a knob, placed by justify</span><div class="p"><span class="g-r"><span class="w-switch"><i></i></span><span class="g-t">Notify me</span></span></div></dd>
+                    <dt><b>field(label, value, on_change)</b><i>field("Name", state["name"], "name_changed")</i></dt>
+                    <dd><span class="d">A muted label over an input</span><div class="p"><span class="g-c"><span class="g-m">Name</span><span class="g-in">Ada</span></span></div></dd>
+                    <dt><b>form(children, submit_label, on_submit)</b><i>form([field("Name", "", "noop")], "Save", "save")</i></dt>
+                    <dd><span class="d">The children, then a right-aligned submit</span><div class="p"><span class="g-c full"><span class="g-in">Ada</span><span class="w-btn primary g-end">Save</span></span></div></dd>
+                    <dt><b>sized_input(value, on_change, width)</b><i>sized_input(state["time"], "time_changed", 80)</i></dt>
+                    <dd><span class="d">An input of a fixed width</span><div class="p"><span class="g-in sm">09:30</span></div></dd>
+                    <dt><b>select(options, value, open, on_toggle, on_pick)</b><i>select(["EUR", "GBP"], state["ccy"], state["open"], "toggle_ccy", "pick_ccy")</i></dt>
+                    <dd><span class="d">Closed, it is its anchor; open, a dropdown. The server owns open</span><div class="p"><span class="g-in">EUR&nbsp;&nbsp;&#9662;</span></div></dd>
+                    <dt><b>select_option(label, selected, on_pick)</b><i>select_option("EUR", value == "EUR", "pick_ccy")</i></dt>
+                    <dd><span class="d">One row of that dropdown</span><div class="p"><span class="g-p"><span class="g-t b">EUR</span></span></div></dd>
+                    <dt><b>dropdown(anchor, content, open)</b><i>dropdown(anchor, options, state["open"])</i></dt>
+                    <dd><span class="d">A panel under its anchor; the anchor alone when closed</span><div class="p"><span class="g-c"><span class="g-in">EUR&nbsp;&nbsp;&#9662;</span><span class="g-p col"><span class="g-m">GBP</span><span class="g-m">USD</span></span></span></div></dd>
+                    <dt><b>slider(value, min, max, on_set)</b><i>slider(state["volume"], 0, 100, "set_volume")</i></dt>
+                    <dd><span class="d">A 240 px track. Click sets from the pointer x, arrows nudge</span><div class="p"><span class="g-slider"><i></i><b></b><u></u></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Calendar and pickers <span>12</span></h3>
+                <p class="soft">One engine, three pickers. Months are "YYYY-MM", days are ISO strings — which compare correctly as strings, so no date arithmetic reaches the view.</p>
+                <dl class="api">
+                    <dt><b>calendar(month, selected, range_start, range_end, on_pick, on_nav)</b><i>calendar(state["month"], [state["day"]], "", "", "pick", "nav")</i></dt>
+                    <dd><span class="d">Navigation, weekday header, a seven-column grid</span><div class="p"><span class="g-grid7"><i></i><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div></dd>
+                    <dt><b>date_picker(month, value, on_pick, on_nav)</b><i>date_picker(state["month"], state["day"], "pick", "nav")</i></dt>
+                    <dd><span class="d">One day</span><div class="p"><span class="g-c full"><span class="g-grid7"><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></span><span class="g-m">2026-09-08</span></span></div></dd>
+                    <dt><b>datetime_picker(month, date, time, on_pick, on_nav, on_time)</b><i>datetime_picker(month, date, time, "pick", "nav", "set_time")</i></dt>
+                    <dd><span class="d">A day and an HH:MM field</span><div class="p"><span class="g-c full"><span class="g-grid7"><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></span><span class="g-in sm">09:30</span></span></div></dd>
+                    <dt><b>date_range_picker(month, start, finish, on_pick, on_nav)</b><i>date_range_picker(month, start, finish, "pick", "nav")</i></dt>
+                    <dd><span class="d">Two ends on one calendar</span><div class="p"><span class="g-grid7"><i></i><i class="a"></i><i class="r"></i><i class="r"></i><i class="a"></i><i></i><i></i></span></div></dd>
+                    <dt><b>day_cell(iso, label, selected, in_range, on_pick)</b><i>day_cell("2026-09-08", "8", true, false, "pick")</i></dt>
+                    <dd><span class="d">One day, carrying its ISO date</span><div class="p"><i class="g-day">8</i></div></dd>
+                    <dt><b>day_blank()</b><i>day_blank()</i></dt>
+                    <dd><span class="d">The gap before the first of the month</span><div class="p"><i class="g-day blank"></i></div></dd>
+                    <dt><b>weekday_header()</b><i>weekday_header()</i></dt>
+                    <dd><span class="d">Mo to Su</span><div class="p"><span class="g-m">Mo&nbsp; Tu&nbsp; We&nbsp; Th&nbsp; Fr&nbsp; Sa&nbsp; Su</span></div></dd>
+                    <dt><b>month_label(month)</b><i>month_label("2026-09")</i></dt>
+                    <dd><span class="d">The month, spelled for a person</span><div class="p val">&rarr; <em>"September 2026"</em></div></dd>
+                    <dt><b>month_shift(month, delta)</b><i>month_shift("2026-09", 1)</i></dt>
+                    <dd><span class="d">The next or previous month</span><div class="p val">&rarr; <em>"2026-10"</em></div></dd>
+                    <dt><b>weekday_index(day)</b><i>weekday_index(DateTime.parse("2026-09-01"))</i></dt>
+                    <dd><span class="d">Monday is 0</span><div class="p val">&rarr; <em>0</em></div></dd>
+                    <dt><b>two_digits(n)</b><i>two_digits(7)</i></dt>
+                    <dd><span class="d">A number padded to two digits</span><div class="p val">&rarr; <em>"07"</em></div></dd>
+                    <dt><b>labelled(title, child)</b><i>labelled("Due date", date_picker(month, day, "pick", "nav"))</i></dt>
+                    <dd><span class="d">A titled card, so a picker reads as one thing</span><div class="p"><span class="g-p col"><span class="g-t b">Due date</span><span class="g-grid7"><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Structure and overlays <span>12</span></h3>
+                <dl class="api">
+                    <dt><b>card(style, children)</b><i>card({"gap": 2}, [h2("Tree"), body])</i></dt>
+                    <dd><span class="d">Raised surface, subtle border, radius 3 — your style wins where it sets a key</span><div class="p"><span class="g-p col"><span class="g-t b">Tree</span><i class="g-l w3"></i><i class="g-l w2"></i></span></div></dd>
+                    <dt><b>tabs(names, active, on_select)</b><i>tabs(["Overview", "Inputs", "Data"], tab, "tab")</i></dt>
+                    <dd><span class="d">A row of labels, the active one underlined</span><div class="p"><span class="g-tabs"><b>Overview</b><span>Inputs</span><span>Data</span></span></div></dd>
+                    <dt><b>dialog(title, body_children, actions)</b><i>dialog("Delete this?", [text("It cannot be undone.", {})], [secondary_button("Cancel", "close"), danger_button("Delete", "destroy")])</i></dt>
+                    <dd><span class="d">An overlay: dimmed ground, centred panel, actions right</span><div class="p"><span class="g-dim"><span class="g-p col"><span class="g-t b">Delete this?</span><span class="w-btn danger g-end">Delete</span></span></span></div></dd>
+                    <dt><b>sheet(side, children)</b><i>sheet("right", [h2("Filters"), body])</i></dt>
+                    <dd><span class="d">A 320 px panel at an edge, over a dimmed ground</span><div class="p"><span class="g-dim right"><span class="g-p col"><i class="g-l w2"></i><i class="g-l w2"></i></span></span></div></dd>
+                    <dt><b>drawer(children)</b><i>drawer([sidebar(links, active, "go")])</i></dt>
+                    <dd><span class="d">sheet("left", …)</span><div class="p"><span class="g-dim left"><span class="g-p col"><i class="g-l w2"></i><i class="g-l w2"></i></span></span></div></dd>
+                    <dt><b>popover(anchor, content, open)</b><i>popover(button("Help", "toggle_help"), [tooltip("Ctrl+K")], state["help"])</i></dt>
+                    <dd><span class="d">A panel over its anchor</span><div class="p"><span class="g-c"><span class="w-btn secondary">Help</span><span class="g-p"><span class="g-m">Ctrl+K</span></span></span></div></dd>
+                    <dt><b>toolbar(children)</b><i>toolbar([ghost_button("Undo", "undo"), ghost_button("Redo", "redo")])</i></dt>
+                    <dd><span class="d">A raised strip with a bottom rule</span><div class="p"><span class="g-p"><i class="g-sq"></i><i class="g-sq"></i><i class="g-sq"></i></span></div></dd>
+                    <dt><b>accordion(sections, open_id, on_toggle)</b><i>accordion(sections, state["open"], "toggle_section")</i></dt>
+                    <dd><span class="d">Sections of id, title and body; the open one shows its body</span><div class="p"><span class="g-p col full"><span class="g-t">&#9662; Delivery</span><span class="g-m">Ships in two days</span><span class="g-t">&#9656; Returns</span></span></div></dd>
+                    <dt><b>stepper(steps, current)</b><i>stepper(["Cart", "Address", "Payment"], 1)</i></dt>
+                    <dd><span class="d">Numbered dots: done filled, current ringed</span><div class="p"><span class="g-r"><i class="g-sq round a"></i><i class="g-l w1"></i><i class="g-sq round"></i><i class="g-l w1"></i><i class="g-sq round"></i></span></div></dd>
+                    <dt><b>menu(items, on_pick)</b><i>menu(["Rename", "Duplicate", "Delete"], "pick")</i></dt>
+                    <dd><span class="d">A raised column; each item carries its own value</span><div class="p"><span class="g-p col"><span class="g-m">Rename</span><span class="g-m">Duplicate</span><span class="g-m">Delete</span></span></div></dd>
+                    <dt><b>tooltip(content)</b><i>tooltip("Ctrl+K")</i></dt>
+                    <dd><span class="d">Inverted text on the default ink</span><div class="p"><span class="g-tip">Ctrl+K</span></div></dd>
+                    <dt><b>segmented(options, selected, on_select)</b><i>segmented(["Day", "Week", "Month"], seg, "seg")</i></dt>
+                    <dd><span class="d">One sunken row, the selected option raised</span><div class="p"><span class="g-seg"><span class="on">Day</span><span>Week</span><span>Month</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Navigation <span>5</span></h3>
+                <dl class="api">
+                    <dt><b>navbar(brand, links, active, on_go)</b><i>navbar("Needle", ["Home", "Search"], active, "go")</i></dt>
+                    <dd><span class="d">A brand and links, each carrying its path</span><div class="p"><span class="g-p full"><span class="g-t b">Needle</span><span class="g-m">Home</span><span class="g-m">Search</span></span></div></dd>
+                    <dt><b>sidebar(links, active, on_go)</b><i>sidebar(["Inbox", "Sent"], active, "go")</i></dt>
+                    <dd><span class="d">A 200 px rail, the active entry filled</span><div class="p"><span class="g-p col"><span class="g-t b">Inbox</span><span class="g-m">Sent</span><span class="g-m">Drafts</span></span></div></dd>
+                    <dt><b>breadcrumb(crumbs, on_go)</b><i>breadcrumb([{"label": "app", "path": "/"}, {"label": "invoices", "path": "/invoices"}], "go")</i></dt>
+                    <dd><span class="d">Every crumb but the last is a link</span><div class="p"><span class="g-m">app&nbsp;/&nbsp;invoices&nbsp;/&nbsp;<b>412</b></span></div></dd>
+                    <dt><b>pagination(page, pages, on_page)</b><i>pagination(page, 9, "page")</i></dt>
+                    <dd><span class="d">‹ and ›, each carrying the page it would reach</span><div class="p"><span class="g-r"><span class="w-btn secondary icon">&lsaquo;</span><span class="g-m">3 / 9</span><span class="w-btn secondary icon">&rsaquo;</span></span></div></dd>
+                    <dt><b>tree_view(nodes, open_ids, on_toggle, depth)</b><i>tree_view(tree, state["open"], "toggle", 0)</i></dt>
+                    <dd><span class="d">Recursive, indented by depth</span><div class="p"><span class="g-tree"><span>&#9662; app</span><span class="in">&#9662; views</span><span class="in">&middot; home</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Data <span>15</span></h3>
+                <dl class="api">
+                    <dt><b>table_header(labels, widths)</b><i>table_header(["Reference", "Client", "Amount"], widths)</i></dt>
+                    <dd><span class="d">A header row of fixed column widths</span><div class="p"><span class="g-c full"><span class="g-r"><span class="g-m">Reference</span><span class="g-m">Client</span><span class="g-m">Amount</span></span><i class="g-rule"></i></span></div></dd>
+                    <dt><b>table_row(key, values, widths)</b><i>table_row(inv["id"], [inv["ref"], inv["client"], inv["total"]], widths)</i></dt>
+                    <dd><span class="d">A keyed body row — so re-sorting moves rows instead of rebuilding them</span><div class="p"><span class="g-c full"><span class="g-r"><span class="g-t">INV-412</span><span class="g-t">Ada</span><span class="g-t">84,20</span></span><i class="g-rule"></i></span></div></dd>
+                    <dt><b>data_grid(columns, rows, selected, editing, sort, on_select, on_sort, on_change, on_key)</b><i>data_grid(columns, rows, selected, editing, sort, "select", "sort", "change", "key")</i></dt>
+                    <dd><span class="d">Header outside the scroll, virtualised rows, a selected cell, an input in the one being edited. A sort moves keyed rows; a commit is set_text</span><div class="p"><span class="g-dgrid"><span class="g-r head"><span class="g-m">Ref</span><span class="g-m">Client</span><span class="g-m">Amount &uarr;</span></span><span class="g-r"><span class="g-t">FA-1001</span><span class="g-in sm">Ada SARL<span class="g-cur"></span></span><span class="g-t">137&nbsp;&euro;</span></span><span class="g-r"><span class="g-t">FA-1004</span><span class="g-t">Margaret SA</span><span class="g-t hit">112&nbsp;&euro;</span></span></span></div></dd>
+                    <dt><b>grid_header(columns, sort, on_sort)</b><i>grid_header(columns, {"col": "amount", "dir": "asc"}, "sort")</i></dt>
+                    <dd><span class="d">One labelled cell per column; the active sort is marked</span><div class="p"><span class="g-r"><span class="g-m">Ref</span><span class="g-m">Client</span><span class="g-m">Amount &uarr;</span></span></div></dd>
+                    <dt><b>grid_row(record, columns, selected, editing, on_select, on_change, on_key)</b><i>grid_row(row, columns, selected, {}, "select", "change", "key")</i></dt>
+                    <dd><span class="d">A keyed row of grid_cell</span><div class="p"><span class="g-r"><span class="g-t">FA-1001</span><span class="g-t hit">Ada SARL</span><span class="g-t">137&nbsp;&euro;</span></span></div></dd>
+                    <dt><b>grid_cell(row_id, col, value, selected, editing, open, on_select, on_change, on_key)</b><i>grid_cell(row["id"], col, row["status"], true, true, true, "select", "change", "key")</i></dt>
+                    <dd><span class="d">A keyed box: text, an input, or a compact select when the column has options</span><div class="p"><span class="g-in sm">Paid&nbsp;&#9662;</span></div></dd>
+                    <dt><b>grid_col_editable(col)</b><i>grid_col_editable({"id": "ref", "editable": false})</i></dt>
+                    <dd><span class="d">false only when the column sets editable: false</span><div class="p val">&rarr; <em>false</em></div></dd>
+                    <dt><b>grid_col_align(col)</b><i>grid_col_align({"id": "amount", "align": "end"})</i></dt>
+                    <dd><span class="d">start, center or end — default start</span><div class="p val">&rarr; <em>"end"</em></div></dd>
+                    <dt><b>grid_sort_rows(rows, col, dir)</b><i>grid_sort_rows(rows, "amount", "asc")</i></dt>
+                    <dd><span class="d">sort_by that column, reversed when dir is "desc"</span><div class="p val">&rarr; <em>[{id: "FA-1004", amount: "112 €"}, …]</em></div></dd>
+                    <dt><b>stat(label, value, hint)</b><i>stat("Nodes", "14", "primitives")</i></dt>
+                    <dd><span class="d">A card with one big number</span><div class="p"><span class="w-stat"><em>Nodes</em><b>14</b><small>primitives</small></span></div></dd>
+                    <dt><b>chip(label, on_remove, props)</b><i>chip("invoices", "remove_filter", {"id": "invoices"})</i></dt>
+                    <dd><span class="d">A pill with an optional ×</span><div class="p"><span class="w-chip">invoices <b>&times;</b></span></div></dd>
+                    <dt><b>badge(label, tone)</b><i>badge("10 000 rows", "info")</i></dt>
+                    <dd><span class="d">A tone is a role family: "info" means info.subtle under info.base</span><div class="p"><span class="w-badge info">10 000 rows</span></div></dd>
+                    <dt><b>progress(fraction)</b><i>progress(0.62)</i></dt>
+                    <dd><span class="d">A bar; the fraction is clamped to 0–1</span><div class="p col"><span class="w-progress"><i></i></span></div></dd>
+                    <dt><b>skeleton(width, height)</b><i>skeleton(320, 12)</i></dt>
+                    <dd><span class="d">A sunken placeholder</span><div class="p col"><span class="w-skeleton"></span></div></dd>
+                    <dt><b>code_block(code)</b><i>code_block(state["snippet"])</i></dt>
+                    <dd><span class="d">Monospace on a sunken ground</span><div class="p"><span class="g-code">router_eui("counter", …)</span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Feedback <span>5</span></h3>
+                <dl class="api">
+                    <dt><b>toast(message, tone)</b><i>toast("Saved", "success")</i></dt>
+                    <dd><span class="d">A raised, toned strip</span><div class="p"><span class="g-toast">Saved</span></div></dd>
+                    <dt><b>banner(message, tone, action_label, on_action)</b><i>banner("Served by Soli, drawn by EUI.", "info", "Open sheet", "sheet")</i></dt>
+                    <dd><span class="d">Full width, an accent edge, an action at the end</span><div class="p"><span class="g-banner">Served by Soli, drawn by EUI.</span></div></dd>
+                    <dt><b>spinner()</b><i>spinner()</i></dt>
+                    <dd><span class="d">An 18 px arc the client spins — no frames on the wire</span><div class="p"><i class="g-spin"></i></div></dd>
+                    <dt><b>spinner_sized(size)</b><i>spinner_sized(14)</i></dt>
+                    <dd><span class="d">The same, sized</span><div class="p"><i class="g-spin"></i></div></dd>
+                    <dt><b>empty_state(title, body, action_label, on_action)</b><i>empty_state("No invoices yet", "They will appear here.", "New invoice", "new")</i></dt>
+                    <dd><span class="d">A mark, a title, a line, one button</span><div class="p"><span class="g-c mid"><i class="g-sq big"></i><span class="g-t b">No invoices yet</span><span class="w-btn primary">New invoice</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Charts <span>8</span></h3>
+                <p class="soft">A chart is a canvas and a list of numbers. No chart library, no SVG, no client change.</p>
+                <dl class="api">
+                    <dt><b>chart_line(values, w, h)</b><i>chart_line([3, 7, 4, 9, 6], 320, 120)</i></dt>
+                    <dd><span class="d">Grid, polyline, a dot per point</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><polyline class="ln" points="4,36 40,10 76,28 112,6 146,20"/><circle class="dt" cx="4" cy="36" r="2.5"/><circle class="dt" cx="40" cy="10" r="2.5"/><circle class="dt" cx="76" cy="28" r="2.5"/><circle class="dt" cx="112" cy="6" r="2.5"/><circle class="dt" cx="146" cy="20" r="2.5"/></svg></div></dd>
+                    <dt><b>chart_area(values, w, h)</b><i>chart_area([3, 7, 4, 9, 6], 320, 120)</i></dt>
+                    <dd><span class="d">Grid, filled area, line on top</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><polygon class="ar" points="4,44 4,36 40,10 76,28 112,6 146,20 146,44"/><polyline class="ln" points="4,36 40,10 76,28 112,6 146,20"/></svg></div></dd>
+                    <dt><b>chart_bar(values, w, h)</b><i>chart_bar([3, 7, 4, 9, 6], 320, 120)</i></dt>
+                    <dd><span class="d">Grid and bars</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><rect class="br" x="6" y="26" width="20" height="18"/><rect class="br" x="36" y="8" width="20" height="36"/><rect class="br" x="66" y="20" width="20" height="24"/><rect class="br" x="96" y="4" width="20" height="40"/><rect class="br" x="126" y="16" width="18" height="28"/></svg></div></dd>
+                    <dt><b>chart_donut(parts, w, h)</b><i>chart_donut([5, 3, 2], 140, 140)</i></dt>
+                    <dd><span class="d">One arc per part, in the four base roles</span><div class="p"><svg class="g-chart sm" viewBox="0 0 48 48"><circle class="g-arc" cx="24" cy="24" r="16" stroke="var(--rule-faint)"/><circle class="g-arc" cx="24" cy="24" r="16" stroke="var(--blue)" stroke-dasharray="50 100" transform="rotate(-90 24 24)"/><circle class="g-arc" cx="24" cy="24" r="16" stroke="var(--green)" stroke-dasharray="30 100" stroke-dashoffset="-52" transform="rotate(-90 24 24)"/></svg></div></dd>
+                    <dt><b>chart_points(values, w, h)</b><i>chart_points([3, 7, 4], 320, 120)</i></dt>
+                    <dd><span class="d">The series scaled into w × h as [x, y] pairs</span><div class="p val">&rarr; <em>[[4, 4], [82, 44], [160, 24]]</em></div></dd>
+                    <dt><b>chart_grid(w, h)</b><i>chart_grid(320, 120)</i></dt>
+                    <dd><span class="d">Four hairlines to read a series against</span><div class="p val">&rarr; <em>[[0, "border.subtle", 1, 4, 4, 316, 4], … ]</em></div></dd>
+                    <dt><b>chart_max(values)</b><i>chart_max([3, 7, 4])</i></dt>
+                    <dd><span class="d">The top of the scale, never 0</span><div class="p val">&rarr; <em>7</em></div></dd>
+                    <dt><b>flatten_points(points)</b><i>flatten_points([[0, 10], [8, 4]])</i></dt>
+                    <dd><span class="d">[[x, y], …] into [x, y, …]</span><div class="p val">&rarr; <em>[0, 10, 8, 4]</em></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Media <span>3</span></h3>
+                <p class="soft">The client seeks when position changes, which is how a scrubber works without a seek opcode.</p>
+                <dl class="api">
+                    <dt><b>media_button(on, event, props)</b><i>media_button(playing, "play", {"id": post["id"]})</i></dt>
+                    <dd><span class="d">28 px play and pause</span><div class="p"><span class="g-r"><i class="g-init">&#9654;</i><span class="g-m">play</span></span></div></dd>
+                    <dt><b>media_scrubber(width, at, duration, on_seek, props)</b><i>media_scrubber(300, at, duration, "seek", {"id": id, "w": 300})</i></dt>
+                    <dd><span class="d">A fixed-width bar, so the click's x maps straight onto the position</span><div class="p"><span class="g-slider"><i></i><u></u></span></div></dd>
+                    <dt><b>media_clock(ms)</b><i>media_clock(67000)</i></dt>
+                    <dd><span class="d">Milliseconds as minutes and seconds</span><div class="p val">&rarr; <em>"1:07"</em></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Feed <span>4</span></h3>
+                <p class="soft">The pieces that make a hundred thousand cards work — virtualisation is a composition question, not a client feature.</p>
+                <dl class="api">
+                    <dt><b>post_card(post, liked, play, height)</b><i>post_card(post, liked.includes?(i), play, 128)</i></dt>
+                    <dd><span class="d">One card of a fixed height, which is what lets the list virtualise</span><div class="p"><span class="g-r"><i class="g-init">A</i><span class="g-c"><i class="g-l w3"></i><i class="g-l w2"></i><span class="g-m">&#9829; 12&nbsp;&nbsp;&#8617; 3</span></span></span></div></dd>
+                    <dt><b>post_media(post, play)</b><i>post_media(post, {"sound": false, "video": true})</i></dt>
+                    <dd><span class="d">The card's picture, moving picture, or sound with controls</span><div class="p"><span class="g-c"><i class="g-img"></i><span class="g-m">&#9654; 0:00 / 1:26</span></span></div></dd>
+                    <dt><b>post_action(glyph, count, on_click, props, active)</b><i>post_action("♥", post["likes"], "like", {"id": post["id"]}, liked)</i></dt>
+                    <dd><span class="d">One action under a post, carrying the post id</span><div class="p"><span class="g-m">&#9829;&nbsp; 12</span></div></dd>
+                    <dt><b>initial_avatar(letter, tone, size)</b><i>initial_avatar("A", "accent.base", 40)</i></dt>
+                    <dd><span class="d">A letter in a coloured disc</span><div class="p"><i class="g-init">A</i></div></dd>
+                </dl>
+            </div>
+        </div>
+    </section>
+
+    <section id="patterns">
+        <div class="mark">Patterns<span>&sect;04</span></div>
+        <div>
+            <h2>Six things worth knowing</h2>
+
+            <h3>State lives in the handler</h3>
+            <p>
+                No widget holds any. <code>select</code> is given <code>open</code>,
+                <code>accordion</code> is given <code>open_id</code>, <code>tabs</code>
+                is given <code>active</code>. That is why they are functions rather than
+                objects, and why any of them can appear twice on a page without a name
+                collision.
+            </p>
+
+            <h3>Props carry identity</h3>
+            <p>
+                A click arrives with the props of the node that fired, so one handler
+                serves every row of a table. The client cannot invent them: the server
+                keeps the tree it sent, and reads the props off its own copy.
+            </p>
+
+            <h3>Keys are for the diff</h3>
+            <p>
+                <code>keyed(id, node)</code> makes a child matched by key instead of by
+                position &mdash; the difference between one move and a rebuilt subtree.
+                Reversing fifty keyed rows costs 201 bytes on the wire.
+                <code>data_grid</code> is that contract as a widget: a sort moves rows,
+                a cell commit is <code>set_text</code>, and the header sits outside the
+                list because version 1 has no sticky.
+            </p>
+
+            <h3>Interning is for repetition</h3>
+            <p>
+                <code>text_interned</code> puts a short string in the session's atom
+                table, so the wire carries it once. That table is append-only, so a
+                unique value would be a permanent entry: intern a glyph or a handle,
+                never a cell value.
+            </p>
+
+            <h3>A window, not a list</h3>
+            <p>
+                <code>list_window</code> is given how many rows exist, every row's
+                height, and only the rows in view &mdash; each carrying its absolute
+                index. The client draws placeholders for what it has not received yet.
+                That is how a hundred thousand cards scroll on a budget of tens.
+            </p>
+
+            <h3>Responsive is a view branch</h3>
+            <p>
+                There are no <code>sm:</code> style prefixes. Store
+                <code>params["viewport"]</code> on <code>connect</code> and
+                <code>viewport</code>, then <code>bp_min(width, "md")</code>
+                chooses a different tree. The client never runs a media query.
+            </p>
+        </div>
+    </section>
+
+    <footer>
+        <span>EUI &middot; a protocol, a client, a specification</span>
+        <a href="/">The argument</a>
+        <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui">Docs</a>
+        <a href="https://github.com/solisoft/eui">Source</a>
+    </footer>
+</main>

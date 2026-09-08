@@ -886,9 +886,6 @@ code, pre, .mono {
   color: var(--ink);
   text-decoration: none;
 }
-.bar__mark span {
-  color: var(--signal);
-}
 .bar nav {
   margin-left: auto;
   display: flex;

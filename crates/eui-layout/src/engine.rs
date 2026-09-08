@@ -218,6 +218,18 @@ impl Layout {
         if self.present.get(i).copied().unwrap_or(false) { self.rect.get(i).copied() } else { None }
     }
 
+    /// Overwrite a node's box after layout. A slider drag follows the
+    /// pointer this frame without waiting for a style from the server.
+    pub fn set_rect(&mut self, ix: NodeIx, r: Rect) {
+        let i = ix.raw() as usize;
+        if i < self.rect.len() {
+            self.rect[i] = r;
+        }
+        if i < self.present.len() {
+            self.present[i] = true;
+        }
+    }
+
     /// True for a virtualised list row that was assigned a size but never
     /// measured: it has a rect and no laid-out content, so a painter must
     /// draw its box and nothing inside it.

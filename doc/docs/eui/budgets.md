@@ -43,7 +43,7 @@ That last pair is the argument for `MoveChild`.
 ## Runtime — targets
 
 Not yet measurable: the client does not exist. These are what
-`cargo xtask bench` will enforce.
+`cargo run --release -p xtask -- bench` will enforce.
 
 | | Budget |
 |---|---|

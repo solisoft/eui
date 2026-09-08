@@ -24,6 +24,13 @@ Deny by default. A manifest declares what it wants — `camera`, `microphone`,
 `clipboard.read`, `clipboard.write`, `notifications`, `location`, `fs.pick`,
 `fs.save` — and the user grants per application, revocably.
 
+An application asks for them in its routes, and asking grants nothing:
+
+```soli
+# config/routes.sl
+eui_capabilities("clipboard.read", "notifications")
+```
+
 The important part is not the prompt. It is that **a capability that was not
 granted has no code path in the client**: the check is not "is this allowed?" at
 the call site, because the call site is absent. Unknown capability bits in a

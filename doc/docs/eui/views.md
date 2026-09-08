@@ -46,7 +46,8 @@ end
 ```
 
 `column`, `row`, `text`, `button` and the rest are ordinary Soli functions in
-`app/controllers/eui_builders.sl`. Each returns a hash:
+`app/controllers/eui_builders.sl` — all 107 of them are listed, with
+their signatures, in [Components](/docs/components). Each returns a hash:
 
 ```
 {"k": "box", "s": {style}, "t": text, "c": [children], "on": {"click": "increment"}, "key": ..., "p": {props}}

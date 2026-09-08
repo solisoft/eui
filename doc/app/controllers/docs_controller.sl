@@ -91,7 +91,13 @@ class DocsController < Controller
           "slug": "views",
           "file": "views.md",
           "title": "Writing views",
-          "lead": "The .eui.sl DSL, and where a handler runs."
+          "lead": "A view is a Soli function: state in, node tree out."
+        },
+        {
+          "slug": "components",
+          "file": "components.md",
+          "title": "Components",
+          "lead": "The node, the style vocabulary, and all 107 builders."
         },
         {
           "slug": "widgets",

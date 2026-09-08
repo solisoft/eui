@@ -19,6 +19,7 @@
     --amber: #a96a00;
     --rose: #b32a55;
     --green: #2f6b3a;
+    --scrim: rgba(18, 23, 27, 0.4);
 
     --measure: 34rem;
     --rail: 8.5rem;
@@ -41,6 +42,7 @@
         --amber: #e0a33a;
         --rose: #ff819e;
         --green: #7fc08d;
+        --scrim: rgba(230, 234, 236, 0.16);
     }
 }
 
@@ -55,6 +57,7 @@
     --amber: #e0a33a;
     --rose: #ff819e;
     --green: #7fc08d;
+    --scrim: rgba(230, 234, 236, 0.16);
 }
 
 *,
@@ -90,6 +93,13 @@ a {
 
 a:hover {
     text-decoration-color: var(--blue);
+}
+
+/* A link inside prose has to look like one: the nav, the two hero actions and
+   the footer all set their own colour below, so this only reaches the text. */
+p a {
+    color: var(--blue);
+    text-decoration-color: currentColor;
 }
 
 :focus-visible {
@@ -722,6 +732,12 @@ code {
     min-width: 0;
 }
 
+.pane pre + p {
+    margin-top: 1.1rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--rule-faint);
+}
+
 .pane > b {
     font-family: var(--mono);
     font-size: 0.7rem;
@@ -862,4 +878,1005 @@ footer a {
 
 footer a:hover {
     color: var(--blue);
+}
+
+/* ------------------------------------------------------- component reference
+ *
+ * The reference page. Same drawing language as the argument page: rules,
+ * mono labels, and nothing coloured that is not carrying meaning.
+ */
+
+.wordmark {
+    text-decoration: none;
+}
+
+.top nav a[aria-current="page"] {
+    color: var(--ink);
+}
+
+.toc {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 0 2rem;
+    margin-top: 2.5rem;
+    max-width: 52rem;
+}
+
+.toc a {
+    padding: 0.75rem 0 0.85rem;
+    border-top: 1px solid var(--rule);
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.toc a:hover b {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+.toc b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: var(--blue);
+}
+
+.toc span {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    line-height: 1.4;
+}
+
+/* The node's keys, beside the node itself. */
+.keys {
+    margin: 0;
+    display: grid;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    gap: 0.55rem 1rem;
+    font-size: 0.85rem;
+}
+
+.keys dt {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--blue);
+}
+
+.keys dd {
+    margin: 0;
+    color: var(--ink-soft);
+    line-height: 1.45;
+}
+
+.kinds {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0 2rem;
+    margin-top: 1.25rem;
+    max-width: 56rem;
+}
+
+.kinds div {
+    padding: 0.6rem 0;
+    border-top: 1px solid var(--rule-faint);
+}
+
+.kinds b {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--blue);
+    margin-right: 0.6rem;
+}
+
+.kinds span {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+}
+
+.vocab {
+    width: 100%;
+    max-width: 56rem;
+    border-collapse: collapse;
+    margin-top: 1.5rem;
+    font-size: 0.88rem;
+}
+
+.vocab th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--ink-soft);
+    padding: 0 1.5rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule);
+}
+
+.vocab td {
+    padding: 0.5rem 1.5rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule-faint);
+    vertical-align: baseline;
+}
+
+.vocab td:first-child {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--blue);
+    width: 38%;
+}
+
+.vocab td:last-child {
+    color: var(--ink-soft);
+}
+
+.units {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1.75rem;
+    margin-top: 2rem;
+    max-width: 56rem;
+}
+
+.units b {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 500;
+    display: block;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.6rem;
+}
+
+.units p {
+    margin: 0;
+    font-size: 0.88rem;
+    line-height: 1.55;
+}
+
+.roles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 0 2rem;
+    margin-top: 1.25rem;
+    max-width: 56rem;
+}
+
+.roles div {
+    padding: 0.55rem 0;
+    border-top: 1px solid var(--rule-faint);
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+}
+
+.roles b {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--blue);
+    min-width: 4.5rem;
+}
+
+.roles span {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+}
+
+.events {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 0 1.75rem;
+    margin: 1.5rem 0 0;
+    max-width: 52rem;
+}
+
+.events span {
+    padding: 0.45rem 0;
+    border-top: 1px solid var(--rule-faint);
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--ink-soft);
+}
+
+/* The catalogue itself: one block per family. */
+.family {
+    margin-top: 2.75rem;
+    max-width: 56rem;
+}
+
+.family h3 {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.5rem;
+}
+
+.family h3 span {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+}
+
+.family > p {
+    font-size: 0.88rem;
+    max-width: 44rem;
+    margin-bottom: 0.5rem;
+}
+
+.api {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 0;
+    margin: 0;
+}
+
+.api dt {
+    font-family: var(--mono);
+    font-size: 0.79rem;
+    line-height: 1.5;
+    color: var(--ink);
+    padding: 0.5rem 1.5rem 0.5rem 0;
+    border-top: 1px solid var(--rule-faint);
+    overflow-wrap: anywhere;
+}
+
+.api dt b {
+    display: block;
+    font-weight: 500;
+    color: var(--ink);
+}
+
+/* The example call: a real one, so it has to read as code and not as prose. */
+.api dt i {
+    display: block;
+    font-style: normal;
+    font-size: 0.74rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin-top: 0.3rem;
+    padding-left: 0.75rem;
+    border-left: 2px solid var(--rule-faint);
+    overflow-wrap: anywhere;
+}
+
+.api dd .d {
+    display: block;
+}
+
+.api dd {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    padding: 0.5rem 0;
+    border-top: 1px solid var(--rule-faint);
+}
+
+@media (max-width: 46rem) {
+    .api {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .api dd {
+        padding-top: 0;
+        border-top: 0;
+    }
+}
+
+.w-btn {
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.35rem 0.85rem;
+    border-radius: 3px;
+    border: 1px solid transparent;
+}
+
+.w-btn.primary {
+    background: var(--blue);
+    color: var(--paper);
+}
+
+.w-btn.secondary {
+    background: var(--paper-sunk);
+    color: var(--ink);
+    border-color: var(--rule);
+}
+
+.w-btn.danger {
+    background: var(--rose);
+    color: var(--paper);
+}
+
+.w-btn.ghost {
+    color: var(--blue);
+}
+
+.w-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+}
+
+.w-badge.info {
+    color: var(--blue);
+}
+
+.w-badge.success {
+    color: var(--green);
+}
+
+.w-badge.warning {
+    color: var(--amber);
+}
+
+.w-badge.danger {
+    color: var(--rose);
+}
+
+.w-switch {
+    width: 36px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--blue);
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 2px;
+}
+
+.w-switch i {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--paper);
+}
+
+.w-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.w-check i {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    background: var(--blue);
+    position: relative;
+}
+
+.w-check i::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid var(--paper);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.w-progress {
+    display: block;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule-faint);
+    overflow: hidden;
+}
+
+.w-progress i {
+    display: block;
+    height: 100%;
+    width: 62%;
+    background: var(--blue);
+}
+
+.w-skeleton {
+    display: block;
+    height: 12px;
+    width: 70%;
+    border-radius: 3px;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule-faint);
+}
+
+.w-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    padding: 0.15rem 0.5rem 0.15rem 0.7rem;
+    border-radius: 999px;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule);
+}
+
+.w-chip b {
+    color: var(--ink-soft);
+    font-weight: 400;
+}
+
+.w-stat {
+    display: block;
+    border: 1px solid var(--rule);
+    background: var(--paper-sunk);
+    border-radius: 3px;
+    padding: 0.7rem 0.9rem;
+}
+
+.w-stat em {
+    display: block;
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+.w-stat b {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+
+.w-stat small {
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+}
+
+/* ------------------------------------------------------------------ previews
+ *
+ * Every catalogue entry carries a small drawing of what its function makes.
+ * These are HTML stand-ins: the page is a document and cannot run a client,
+ * so the shapes are the widget's, the mechanism is not. A function that
+ * returns a value rather than a tree shows the value instead.
+ */
+
+.p {
+    margin-top: 0.7rem;
+    background: var(--paper-sunk);
+    border: 1px solid var(--rule-faint);
+    border-radius: 3px;
+    padding: 0.7rem 0.8rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 3.1rem;
+    overflow: hidden;
+}
+
+.p.col {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+}
+
+/* A returned value, not a drawing. */
+.p.val {
+    font-family: var(--mono);
+    font-size: 0.73rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+}
+
+.p.val em {
+    font-style: normal;
+    color: var(--blue);
+}
+
+/* The drawing kit: bars, boxes, panels, text. Everything composes from these. */
+.g-l {
+    display: block;
+    height: 7px;
+    border-radius: 2px;
+    background: var(--rule);
+    flex: 0 0 auto;
+}
+
+.g-l.a {
+    background: var(--blue);
+}
+
+.g-l.w1 { width: 24px; }
+.g-l.w2 { width: 44px; }
+.g-l.w3 { width: 72px; }
+.g-l.w4 { width: 110px; }
+.g-l.full { width: 100%; }
+.g-l.tall { height: 22px; border-radius: 3px; }
+
+.g-p {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.45rem 0.55rem;
+    display: flex;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.g-p.col {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.g-r {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.g-c {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.g-t {
+    font-size: 0.78rem;
+    line-height: 1.3;
+}
+
+.g-t.b {
+    font-weight: 600;
+}
+
+.g-m {
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+}
+
+.g-sq {
+    width: 22px;
+    height: 22px;
+    border-radius: 3px;
+    background: var(--rule);
+    flex: 0 0 auto;
+}
+
+.g-sq.a {
+    background: var(--blue);
+}
+
+.g-sq.round {
+    border-radius: 999px;
+}
+
+.g-sq.big {
+    width: 30px;
+    height: 30px;
+}
+
+.g-init {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: var(--blue);
+    color: var(--paper);
+    font-size: 0.72rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.g-rule {
+    display: block;
+    width: 100%;
+    height: 1px;
+    background: var(--rule);
+}
+
+.g-dgrid {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.g-dgrid .g-r {
+    padding: 0.2rem 0.4rem;
+    gap: 0.55rem;
+    border-bottom: 1px solid var(--rule-faint);
+}
+
+.g-dgrid .g-r:last-child {
+    border-bottom: 0;
+}
+
+.g-dgrid .head {
+    background: var(--rule-faint);
+}
+
+.g-t.hit {
+    background: color-mix(in oklab, var(--blue) 18%, transparent);
+    color: var(--blue);
+    border-radius: 2px;
+    padding: 0 0.2rem;
+}
+
+.g-in {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--paper);
+    font-size: 0.74rem;
+    color: var(--ink-soft);
+    min-width: 88px;
+}
+
+.g-cur {
+    display: inline-block;
+    width: 1px;
+    height: 0.85em;
+    background: var(--blue);
+    margin-left: 1px;
+}
+
+.g-dim {
+    background: var(--scrim);
+    padding: 0.35rem;
+    border-radius: 3px;
+    display: flex;
+    width: 100%;
+    justify-content: center;
+}
+
+.g-grid7 {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    width: 100%;
+    max-width: 130px;
+}
+
+.g-grid7 i {
+    height: 11px;
+    border-radius: 2px;
+    background: var(--rule-faint);
+    border: 1px solid var(--rule-faint);
+}
+
+.g-grid7 i.a {
+    background: var(--blue);
+    border-color: var(--blue);
+}
+
+.g-grid7 i.r {
+    background: var(--rule);
+}
+
+.g-chart {
+    display: block;
+    width: 100%;
+    max-width: 150px;
+    height: 46px;
+}
+
+.g-chart .ax {
+    stroke: var(--rule-faint);
+    stroke-width: 1;
+}
+
+.g-chart .ln {
+    fill: none;
+    stroke: var(--blue);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.g-chart .ar {
+    fill: var(--rule-faint);
+}
+
+.g-chart .dt {
+    fill: var(--blue);
+}
+
+.g-chart .br {
+    fill: var(--blue);
+}
+
+.g-arc {
+    fill: none;
+    stroke-width: 9;
+}
+
+.g-spin {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    border: 2px solid var(--rule);
+    border-top-color: var(--blue);
+    flex: 0 0 auto;
+}
+
+/* Shapes a few of the previews need on their own. */
+.g-between {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.g-c.full,
+.g-r.full {
+    width: 100%;
+}
+
+.g-end {
+    align-self: flex-end;
+}
+
+.g-stack {
+    position: relative;
+    width: 52px;
+    height: 34px;
+}
+
+.g-stack i {
+    position: absolute;
+    width: 32px;
+    height: 22px;
+    border-radius: 3px;
+    background: var(--rule);
+}
+
+.g-stack i + i {
+    left: 18px;
+    top: 10px;
+    background: var(--blue);
+}
+
+.g-scroll {
+    position: relative;
+    width: 100%;
+    max-width: 120px;
+    padding-right: 8px;
+}
+
+.g-scroll::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 3px;
+    height: 60%;
+    border-radius: 3px;
+    background: var(--rule);
+}
+
+.g-clip {
+    width: 100%;
+    max-width: 120px;
+    height: 42px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.g-clip .ghost {
+    opacity: 0.35;
+}
+
+.g-img {
+    width: 46px;
+    height: 30px;
+    border-radius: 3px;
+    background: var(--rule);
+    flex: 0 0 auto;
+}
+
+.g-h1 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.g-h2 {
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.w-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.w-btn.icon {
+    padding: 0.2rem 0.5rem;
+}
+
+.g-in.sm {
+    min-width: 54px;
+}
+
+.g-slider {
+    display: flex;
+    align-items: center;
+    width: 110px;
+    height: 14px;
+}
+
+.g-slider i {
+    display: block;
+    height: 4px;
+    border-radius: 4px;
+    background: var(--blue);
+    width: 45px;
+}
+
+.g-slider b {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--blue);
+    border: 2px solid var(--paper);
+    flex: 0 0 auto;
+}
+
+.g-slider u {
+    display: block;
+    height: 4px;
+    border-radius: 4px;
+    background: var(--rule);
+    flex: 1 1 auto;
+}
+
+.g-day {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    background: var(--blue);
+    color: var(--paper);
+    font-size: 0.68rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.g-day.blank {
+    background: none;
+    border: 1px dashed var(--rule);
+}
+
+.g-tabs {
+    display: flex;
+    gap: 0.7rem;
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.3rem;
+}
+
+.g-tabs b {
+    font-weight: 600;
+    color: var(--ink);
+    border-bottom: 2px solid var(--blue);
+    padding-bottom: 0.3rem;
+    margin-bottom: -0.4rem;
+}
+
+.g-seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 4px;
+    background: var(--rule-faint);
+    font-size: 0.72rem;
+}
+
+.g-seg span {
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    color: var(--ink-soft);
+}
+
+.g-seg span.on {
+    background: var(--paper);
+    color: var(--ink);
+    font-weight: 600;
+}
+
+.g-tip {
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+}
+
+.g-dim.left {
+    justify-content: flex-start;
+}
+
+.g-dim.right {
+    justify-content: flex-end;
+}
+
+.g-code {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--ink-soft);
+    background: var(--paper);
+    border: 1px solid var(--rule-faint);
+    border-radius: 3px;
+    padding: 0.35rem 0.5rem;
+    width: 100%;
+}
+
+.g-toast {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--green);
+    border: 1px solid var(--green);
+    border-radius: 3px;
+    padding: 0.25rem 0.6rem;
+    background: var(--paper);
+}
+
+.g-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    font-size: 0.74rem;
+    color: var(--ink-soft);
+    background: var(--paper);
+    border-left: 3px solid var(--blue);
+    padding: 0.35rem 0.5rem;
+}
+
+.g-tree {
+    font-size: 0.73rem;
+    color: var(--ink-soft);
+    line-height: 1.6;
+}
+
+.g-tree span {
+    display: block;
+}
+
+.g-tree .in {
+    padding-left: 0.9rem;
+}
+
+.g-c.mid {
+    align-items: center;
+}
+
+.g-chart.sm {
+    max-width: 48px;
 }

@@ -1,5 +1,5 @@
 <header class="bar">
-  <a class="bar__mark" href="/">EUI<span>/1</span></a>
+  <a class="bar__mark" href="/">EUI</a>
   <nav>
     <a href="/docs/overview"<% if here == "docs" %> aria-current="page"<% end %>>Documentation</a>
     <a href="/docs/wire-format"<% if here == "spec" %> aria-current="page"<% end %>>Specification</a>

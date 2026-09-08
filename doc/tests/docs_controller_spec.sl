@@ -49,6 +49,12 @@ describe("DocsController") do
       assert_eq(view_path(), "docs/show.html")
     end
 
+    test("renders components") do
+      response = get("/docs/components")
+      assert_eq(res_status(response), 200)
+      assert_eq(view_path(), "docs/show.html")
+    end
+
     test("renders widgets") do
       response = get("/docs/widgets")
       assert_eq(res_status(response), 200)

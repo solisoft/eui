@@ -72,7 +72,11 @@ def list_window(style, item_height, count, heights, children, on_window)
     "k": "list",
     "s": style,
     "c": children,
-    "p": {"item_height": item_height, "count": count, "heights": heights},
+    "p": {
+      "item_height": item_height,
+      "count": count,
+      "heights": heights
+    },
     "on": {"window": on_window}
   }
 end
@@ -84,10 +88,7 @@ end
 # "time_update" handlers.
 def audio(src, props, on)
   # `sound`, not `node`: a bare assignment to a builder's name rebinds it.
-  sound = {
-    "k": "audio",
-    "p": props.merge({"src": src})
-  }
+  sound = {"k": "audio", "p": props.merge({"src": src})}
   sound["on"] = on unless on.nil?
   sound
 end
@@ -129,6 +130,36 @@ end
 def keyed(key, n)
   n["key"] = key
   n
+end
+
+# Viewport breakpoints, same rungs as Tailwind: the view branches on these
+# because the client has no media-query engine. `width` is
+# `state["viewport"]["width"]`, sent on connect and every resize.
+BP = {
+  "xs": 0,
+  "sm": 640,
+  "md": 768,
+  "lg": 1024,
+  "xl": 1280,
+  "2xl": 1536
+}
+
+def bp_px(name)
+  BP[name] ?? 0
+end
+
+def bp(width)
+  return "2xl" if width >= BP["2xl"]
+  return "xl" if width >= BP["xl"]
+  return "lg" if width >= BP["lg"]
+  return "md" if width >= BP["md"]
+  return "sm" if width >= BP["sm"]
+
+  "xs"
+end
+
+def bp_min(width, name)
+  width >= bp_px(name)
 end
 
 # ---------------------------------------------------------------- catalogue
@@ -289,7 +320,8 @@ def badge(label, tone)
       "display": "row",
       "pad": [0, 2, 0, 2],
       "radius": 4,
-      "bg": tone + ".subtle"
+      "bg": tone + ".subtle",
+      "shrink": 0
     },
     "c": [text(
       label,
@@ -375,7 +407,7 @@ end
 # handler (`theme.toggle()`), so it costs no round trip and the server
 # learns of it only as the next viewport. Not shown in the feed: a client
 # that follows the desktop's theme has no use for it.
-def theme_toggle()
+def theme_toggle
   {
     "k": "box",
     "s": {
@@ -525,6 +557,260 @@ def table_row(key, values, widths)
   ))
 end
 
+# ---- Data grid -------------------------------------------------------------
+# An editable, sortable grid. The header sits outside the list — sticky
+# without sticky — and rows are keyed so a sort is MoveChild and a cell
+# edit is set_text. `columns` are `{id, label, width, editable, options,
+# align}`; `rows` are hashes keyed by those ids plus `id`. A column is
+# editable unless `editable` is `false`. A non-empty `options` list makes
+# the editor a compact select. `align` is `start`, `center` or `end`
+# (default `start`). `selected` / `editing` / `sort` are `{row, col}`,
+# `{row, col, open}`, `{col, dir}` — empty hashes when none. Rows are an
+# equal-column `grid` (`1fr` each), so two columns are 50 %, three 33 %,
+# filling the parent. The handler owns all three.
+
+def grid_sort_rows(rows, col, dir)
+  sorted = rows.sort_by(col)
+  dir == "desc" ? sorted.reverse() : sorted
+end
+
+def grid_col_editable(col)
+  return false if col["editable"] == false
+
+  true
+end
+
+def grid_col_align(col)
+  a = col["align"] ?? "start"
+  return a if a == "center" || a == "end"
+
+  "start"
+end
+
+def grid_cell(row_id, col, value, selected, editing, open, on_select, on_change, on_key)
+  col_id = col["id"]
+  props = {"row": row_id, "col": col_id}
+  key = "cell:" + str(row_id) + ":" + col_id
+  editable = grid_col_editable(col)
+  align = grid_col_align(col)
+  choices = col["options"] ?? []
+  # The keyed node is always a box. Swapping it for an `input` is a kind
+  # change, which replaces the node id — and the next event in the same
+  # gesture (Enter's key_down, or change-then-submit) misses the tree.
+  inner = text(
+    value,
+    {
+      "size": 1,
+      "clamp": 1,
+      "text_align": align,
+      "fg": selected == true ? "info.base" : "text.default"
+    }
+  )
+  if choices.length() > 0 && !(editing == true)
+    tone = value == "Paid" ? "success" : (value == "Open" ? "warning" : "info")
+    inner = badge(value, tone)
+  end
+  if editing == true && editable == true && choices.length() > 0
+    head = row(
+      {
+        "align": "center",
+        "justify": align,
+        "gap": 1,
+        "grow": 1
+      },
+      [text(
+        value,
+        {
+          "size": 1,
+          "grow": 1,
+          "clamp": 1
+        }
+      ), text(
+        open == true ? "▴" : "▾",
+        {"size": 0, "fg": "text.muted"}
+      )]
+    )
+    picks = choices.map(fn(o) {
+      {
+        "k": "box",
+        "s": {
+          "pad": [1, 2, 1, 2],
+          "radius": 1,
+          "bg": o == value ? "surface.sunken" : "none",
+          "cursor": "pointer"
+        },
+        "p": props.merge({"value": o}),
+        "on": {"click": on_select},
+        "c": [text(
+          o,
+          {"size": 1, "weight": o == value ? "bold" : "regular"}
+        )]
+      }
+    })
+    inner = open == true ? column(
+      {"gap": 0, "grow": 1},
+      [head].concat(picks)
+    ) : head
+  end
+  if editing == true && editable == true && choices.length() == 0
+    inner = {
+      "k": "input",
+      "t": value,
+      "s": {
+        "grow": 1,
+        "pad": [1, 2, 1, 2],
+        "border": 1,
+        "border_color": "focus.ring",
+        "radius": 1,
+        "bg": "surface.raised",
+        "text_align": align
+      },
+      "p": props,
+      "on": {
+        "change": on_change,
+        "submit": on_select,
+        "blur": on_select
+      }
+    }
+  end
+  cursor = "pointer"
+  cursor = "text" if editable == true && choices.length() == 0
+  base = {
+    "display": "row",
+    "justify": align,
+    "align": "center",
+    "pad": [1, 2, 1, 2],
+    "radius": 1,
+    "cursor": cursor,
+    "bg": selected == true ? "info.subtle" : "none",
+    "transition": "fast"
+  }
+  hover = base.merge({"bg": selected == true ? "info.subtle" : "surface.sunken"})
+  {
+    "k": "box",
+    "key": key,
+    "s": base,
+    "p": props,
+    "on": {
+      "click": on_select,
+      "key_down": on_key,
+      "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
+      "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}}
+    },
+    "c": [inner]
+  }
+end
+
+def grid_row(record, columns, selected, editing, on_select, on_change, on_key)
+  row_id = record["id"]
+  cells = columns.map(fn(col) {
+    id = col["id"]
+    is_edit = editing["row"] == row_id && editing["col"] == id
+    grid_cell(
+      row_id,
+      col,
+      str(record[id] ?? ""),
+      selected["row"] == row_id && selected["col"] == id,
+      is_edit,
+      is_edit && editing["open"] == true,
+      on_select,
+      on_change,
+      on_key
+    )
+  })
+  n = columns.length()
+  n = 1 if n < 1
+  keyed(
+    row_id,
+    {
+      "k": "box",
+      "s": {
+        "display": "grid",
+        "width": "100%",
+        "gap": 4,
+        "align": "center",
+        "border": [0, 0, 1, 0],
+        "border_color": "border.subtle"
+      },
+      "p": {"columns": n},
+      "c": cells
+    }
+  )
+end
+
+def grid_header(columns, sort, on_sort)
+  cells = columns.map(fn(col) {
+    id = col["id"]
+    active = sort["col"] == id
+    mark = ""
+    mark = sort["dir"] == "desc" ? " ↓" : " ↑" if active
+    align = grid_col_align(col)
+    hs = {
+      "display": "row",
+      "justify": align,
+      "align": "center",
+      "pad": [2, 2, 2, 2],
+      "cursor": "pointer"
+    }
+    {
+      "k": "box",
+      "key": "grid-h:" + id,
+      "s": hs,
+      "p": {"col": id},
+      "on": {"click": on_sort},
+      "c": [text(
+        col["label"] + mark,
+        {
+          "weight": "semibold",
+          "size": 1,
+          "text_align": align,
+          "fg": active == true ? "accent.base" : "text.muted"
+        }
+      )]
+    }
+  })
+  n = columns.length()
+  n = 1 if n < 1
+  {
+    "k": "box",
+    "s": {
+      "display": "grid",
+      "width": "100%",
+      "gap": 4,
+      "pad": [1, 2, 1, 2],
+      "align": "center",
+      "border": [0, 0, 1, 0],
+      "border_color": "border.default",
+      "bg": "surface.sunken"
+    },
+    "p": {"columns": n},
+    "c": cells
+  }
+end
+
+def data_grid(columns, rows, selected, editing, sort, on_select, on_sort, on_change, on_key)
+  body = rows.map(fn(r) { grid_row(r, columns, selected, editing, on_select, on_change, on_key) })
+  n = rows.length()
+  h = n * 32
+  # A list that fits its rows still eats the wheel. Only virtualise when
+  # the body is taller than the cap; otherwise a column lets the page scroll.
+  inner = h > 256 ? list({"height": 256, "width": "100%"}, 32, body) : column(
+    {"gap": 0, "width": "100%"},
+    body
+  )
+  column(
+    {
+      "gap": 0,
+      "width": "100%",
+      "border": 1,
+      "border_color": "border.subtle",
+      "radius": 2,
+      "bg": "surface.raised"
+    },
+    [grid_header(columns, sort, on_sort), inner]
+  )
+end
+
 # A button whose click runs a local chunk first, then a server event.
 # `program` is the assembly list of spec/07; node targets are keys.
 def local_button(label, program, after)
@@ -580,7 +866,9 @@ def progress(fraction)
       "height": 6,
       "radius": 4,
       "bg": "surface.sunken",
-      "overflow": "clip"
+      "overflow": "clip",
+      "grow": 1,
+      "width": "100%"
     },
     "c": [{"k": "box", "s": {
       "width": filled.to_s + "%",
@@ -618,15 +906,28 @@ def chip(label, on_remove, props)
       "radius": 4,
       "bg": "surface.sunken",
       "border": 1,
-      "border_color": "border.subtle"
+      "border_color": "border.subtle",
+      "shrink": 0
     },
     "c": parts
   }
 end
 
+# A card that asks a wrapping row for `basis` pixels and takes an equal
+# share of whatever the line has left: three tiles across on a desktop,
+# two on a tablet, one on a phone, decided by the width itself rather
+# than by a breakpoint, and with no hole at the end of the last line.
+def tile(basis, node)
+  node["s"]["width"] = "auto"
+  node["s"]["basis"] = basis
+  node["s"]["grow"] = 1
+  node["s"]["shrink"] = 1
+  node
+end
+
 def stat(label, value, hint)
   card(
-    {"gap": 1, "min_width": 160},
+    {"gap": 1, "width": "100%"},
     [muted(label), text(
       value,
       {"size": 6, "weight": "bold"}
@@ -981,7 +1282,7 @@ def sidebar(links, active, on_go)
         "s": {
           "pad": [1, 2, 1, 2],
           "radius": 1,
-          "bg": l == active ? "accent.subtle" : "none",
+          "bg": l == active ? "surface.sunken" : "none",
           "cursor": "pointer"
         },
         "on": {"click": on_go},
@@ -1043,36 +1344,42 @@ end
 # The server owns `open`: the anchor toggles it, an option picks and closes.
 # The anchor has a click handler, so Tab reaches it and Enter opens it.
 def select(options, value, open, on_toggle, on_pick)
+  select_sized(options, value, open, on_toggle, on_pick, 160, false)
+end
+
+def select_sized(options, value, open, on_toggle, on_pick, min_width, grow)
+  s = {
+    "display": "row",
+    "align": "center",
+    "gap": 2,
+    "pad": [2, 3, 2, 3],
+    "min_width": min_width,
+    "border": 1,
+    "border_color": "border.default",
+    "radius": 2,
+    "bg": "surface.raised",
+    "cursor": "pointer"
+  }
+  s["grow"] = 1 if grow
   anchor = {
     "k": "box",
-    "s": {
-      "display": "row",
-      "align": "center",
-      "gap": 2,
-      "pad": [2, 3, 2, 3],
-      "min_width": 160,
-      "border": 1,
-      "border_color": "border.default",
-      "radius": 2,
-      "bg": "surface.raised",
-      "cursor": "pointer"
-    },
+    "s": s,
     "on": {"click": on_toggle},
     "c": [text(value, {"grow": 1}), text(
       "▾",
       {"fg": "text.muted", "size": 0}
     )]
   }
-  dropdown(anchor, options.map(fn(o) { select_option(o, o == value, on_pick) }), open)
+  dropdown(anchor, options.map(fn(o) { select_option(o, o == value, on_pick, min_width) }), open)
 end
 
-def select_option(label, selected, on_pick)
+def select_option(label, selected, on_pick, min_width)
   {
     "k": "box",
     "s": {
       "pad": [1, 3, 1, 3],
       "radius": 1,
-      "min_width": 150,
+      "min_width": min_width,
       "bg": selected ? "surface.sunken" : "none",
       "cursor": "pointer"
     },
@@ -1109,24 +1416,38 @@ end
 
 # ---- Slider ----------------------------------------------------------------
 
-# A 240 px track. A click sets the value from the pointer x; once the track
-# has focus (Tab reaches it through its click handler) the arrow keys nudge
-# it. The server owns the value: `on_set` receives `params["kind"]` — "click"
-# or "key_down" — and `params["payload"]`, the local point or the key name.
+# A 240 px track. A press sets the value from the pointer x and a drag
+# follows it; once the track has focus (Tab reaches it through its click
+# handler) the arrow keys nudge it. The server owns the value: `on_set`
+# receives `params["kind"]` — "click", "pointer_down", "pointer_move",
+# "pointer_up", or "key_down" — and `params["payload"]`.
 def slider(value, min, max, on_set)
-  filled = (value - min) * 240 / (max - min)
+  width = 240
+  span = max - min
+  span = 1 if span == 0
+  filled = (value - min) * width / span
   lead = filled > 8 ? filled - 8 : 0
   {
     "k": "box",
     "s": {
       "display": "row",
       "align": "center",
-      "width": 240,
+      "width": width,
       "height": 24,
-      "cursor": "pointer"
+      "cursor": "grab"
     },
-    "p": {"min": min, "max": max},
-    "on": {"click": on_set, "key_down": on_set},
+    "p": {
+      "min": min,
+      "max": max,
+      "width": width
+    },
+    "on": {
+      "click": on_set,
+      "key_down": on_set,
+      "pointer_down": on_set,
+      "pointer_move": on_set,
+      "pointer_up": on_set
+    },
     "c": [
       node("box", {
         "width": lead,
@@ -1204,7 +1525,6 @@ def day_cell(iso, label, selected, in_range, on_pick)
   {
     "k": "box",
     "s": {
-      "width": 32,
       "height": 32,
       "radius": 1,
       "display": "row",
@@ -1223,18 +1543,23 @@ def day_cell(iso, label, selected, in_range, on_pick)
 end
 
 def day_blank
-  node("box", {"width": 32, "height": 32}, [])
+  node("box", {"height": 32}, [])
 end
 
 def weekday_header
   cells = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(fn(w) {
-    node("box", {
-      "width": 32,
-      "display": "row",
-      "justify": "center"
-    }, [muted(w)])
+    node("box", {"display": "row", "justify": "center"}, [muted(w)])
   })
-  row({"gap": 0}, cells)
+  {
+    "k": "box",
+    "s": {
+      "display": "grid",
+      "gap": 0,
+      "width": "100%"
+    },
+    "p": {"columns": 7},
+    "c": cells
+  }
 end
 
 # The month grid: navigation, weekday header, seven columns of days.
@@ -1267,13 +1592,13 @@ def calendar(month, selected, range_start, range_end, on_pick, on_nav)
     "s": {
       "display": "grid",
       "gap": 0,
-      "width": 224
+      "width": "100%"
     },
     "p": {"columns": 7},
     "c": blanks.concat(cells)
   }
   column(
-    {"gap": 1, "width": 224},
+    {"gap": 1, "width": "100%"},
     [header, weekday_header(), grid]
   )
 end
@@ -1282,7 +1607,7 @@ end
 
 def date_picker(month, value, on_pick, on_nav)
   column(
-    {"gap": 2},
+    {"gap": 2, "width": "100%"},
     [
       calendar(month, value.present? ? [value] : [], "", "", on_pick, on_nav),
       muted(value.present? ? value : "Pick a day")
@@ -1290,17 +1615,49 @@ def date_picker(month, value, on_pick, on_nav)
   )
 end
 
-# A date and a time: the calendar plus an "HH:MM" field committed on change.
-def datetime_picker(month, date, time, on_pick, on_nav, on_time)
-  clock = row(
-    {"gap": 2, "align": "center"},
-    [muted("Time"), sized_input(time, on_time, 80)]
+# A date and a time: the calendar plus hour and minute selects, so the
+# clock cannot hold anything but HH:MM.
+def datetime_picker(
+  month,
+  date,
+  time,
+  hour_open,
+  min_open,
+  on_pick,
+  on_nav,
+  on_hour_toggle,
+  on_min_toggle,
+  on_hour,
+  on_min
+)
+  bits = (time ?? "00:00").split(":")
+  hour = bits[0]
+  minute = "00"
+  minute = bits[1] if bits.length() > 1
+  hours = range(0, 24).map(fn(h) { two_digits(h) })
+  minutes = range(0, 60).map(fn(m) { two_digits(m) })
+  clock = column(
+    {"gap": 1, "width": "100%"},
+    [
+      muted("Time"),
+      row(
+        {
+          "gap": 2,
+          "align": "center",
+          "width": "100%"
+        },
+        [
+          select_sized(hours, hour, hour_open, on_hour_toggle, on_hour, 64, true),
+          text(":", {"weight": "bold"}),
+          select_sized(minutes, minute, min_open, on_min_toggle, on_min, 64, true)
+        ]
+      )
+    ]
   )
-  column({"gap": 2}, [
-    calendar(month, date.present? ? [date] : [], "", "", on_pick, on_nav),
-    clock,
-    muted(date + " " + time)
-  ])
+  column(
+    {"gap": 2, "width": "100%"},
+    [calendar(month, date.present? ? [date] : [], "", "", on_pick, on_nav), clock, muted(date + " " + time)]
+  )
 end
 
 def sized_input(value, on_change, width)
@@ -1314,7 +1671,10 @@ end
 def date_range_picker(month, start, finish, on_pick, on_nav)
   ends = [start, finish].filter(fn(d) { d.present? })
   caption = finish.present? ? start + " → " + finish : (start.present? ? start + " → …" : "Pick a start day")
-  column({"gap": 2}, [calendar(month, ends, start, finish, on_pick, on_nav), muted(caption)])
+  column(
+    {"gap": 2, "width": "100%"},
+    [calendar(month, ends, start, finish, on_pick, on_nav), muted(caption)]
+  )
 end
 
 # A titled card, so a picker reads as one thing.
@@ -1501,10 +1861,23 @@ def media_scrubber(width, at, duration, on_seek, props)
   filled = width if filled > width
   {
     "k": "box",
-    "s": {"display": "row", "align": "center", "width": width, "height": 6, "radius": 4, "bg": "surface.sunken", "cursor": "pointer"},
+    "s": {
+      "display": "row",
+      "align": "center",
+      "width": width,
+      "height": 6,
+      "radius": 4,
+      "bg": "surface.sunken",
+      "cursor": "pointer"
+    },
     "p": props,
     "on": {"click": on_seek},
-    "c": [{"k": "box", "s": {"width": filled, "height": 6, "radius": 4, "bg": "accent.base"}}]
+    "c": [{"k": "box", "s": {
+      "width": filled,
+      "height": 6,
+      "radius": 4,
+      "bg": "accent.base"
+    }}]
   }
 end
 
@@ -1538,11 +1911,18 @@ end
 def post_media(post, play)
   playing = play["sound"] ?? false
   kind = post["media"]
-  return [{
-    "k": "image",
-    "p": {"src": post["image"]},
-    "s": {"width": "100%", "max_width": 480, "height": 180, "radius": 2}
-  }] if kind == "image"
+  if kind == "image"
+    return [{
+      "k": "image",
+      "p": {"src": post["image"]},
+      "s": {
+        "width": "100%",
+        "max_width": 480,
+        "height": 180,
+        "radius": 2
+      }
+    }]
+  end
 
   if kind == "video"
     on = play["video"] ?? false
@@ -1550,15 +1930,23 @@ def post_media(post, play)
     duration = play["duration"] ?? 0
     props = {"id": post["id"]}
     return [
-      # Full width, like a video on a timeline anywhere else.
-      video(
-        "public/video/pulse.gif",
-        {"playing": on, "loop": false, "position": play["seek"] ?? 0},
-        {"width": "100%", "max_width": 480, "height": 180, "radius": 2},
-        {"time_update": "video_time", "ended": "video_ended"}
-      ),
+      video("public/video/pulse.gif", {
+        "playing": on,
+        "loop": false,
+        "position": play["seek"] ?? 0
+      }, {
+        "width": "100%",
+        "max_width": 480,
+        "height": 180,
+        "radius": 2
+      }, {"time_update": "video_time", "ended": "video_ended"}),
       row(
-        {"gap": 3, "align": "center", "width": "100%", "max_width": 480},
+        {
+          "gap": 3,
+          "align": "center",
+          "width": "100%",
+          "max_width": 480
+        },
         [
           media_button(on, "video_play", props),
           media_scrubber(300, at, duration > 0 ? duration : 1440, "video_seek", props.merge({"w": 300})),
@@ -1567,6 +1955,7 @@ def post_media(post, play)
       )
     ]
   end
+  # Full width, like a video on a timeline anywhere else.
 
   if kind == "audio"
     controls = row(
@@ -1586,13 +1975,21 @@ def post_media(post, play)
           },
           "p": {"id": post["id"]},
           "on": {"click": "play"},
-          "c": [text(playing ? "▮▮  Playing" : "▶  Play the chime", {"size": 1, "weight": "semibold"})]
+          "c": [text(
+            playing ? "▮▮  Playing" : "▶  Play the chime",
+            {"size": 1, "weight": "semibold"}
+          )]
         },
         muted("1.6 s")
       ]
     )
     parts = [controls]
-    parts = parts.concat([audio("public/sounds/chime.wav", {"playing": true, "volume": 80}, {"ended": "sound_ended"})]) if playing
+    if playing
+      parts = parts.concat([audio("public/sounds/chime.wav", {
+        "playing": true,
+        "volume": 80
+      }, {"ended": "sound_ended"})])
+    end
     return parts
   end
 
@@ -1607,9 +2004,14 @@ def post_card(post, liked, play, height)
       "wrap": "wrap"
     },
     [
-      # The card's number, so a scroll through a hundred thousand of them
-      # can be checked by eye: nothing skipped, nothing repeated.
-      text("#" + str(post["n"]), {"fg": "text.muted", "size": 1, "font": "mono"}),
+      text(
+        "#" + str(post["n"]),
+        {
+          "fg": "text.muted",
+          "size": 1,
+          "font": "mono"
+        }
+      ),
       text_interned(post["name"], {"weight": "semibold"}),
       text_interned(
         post["handle"],
@@ -1621,6 +2023,8 @@ def post_card(post, liked, play, height)
       )
     ]
   )
+  # The card's number, so a scroll through a hundred thousand of them
+  # can be checked by eye: nothing skipped, nothing repeated.
   body = text(post["text"], {"clamp": 2})
   picture = post_media(post, play)
   actions = row(
