@@ -454,6 +454,45 @@ fn a_virtualised_list_does_not_measure_what_it_cannot_see() {
     assert_eq!(r(&l, &s, rows[0]).h, 22.0);
 }
 
+/// §7 again, across frames: the tops of a list's rows are the rows' own
+/// heights added up, so a scroll — which moves the window and nothing else
+/// — reuses them, and a change to a row does not.
+#[test]
+fn a_scroll_keeps_the_row_tops_it_already_added_up() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let ls = b.style(StyleRecord { height: px(100), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let list_id = b.push(NodeKind::List, ls, 1000);
+    b.prop("item_height", Value::Int(20));
+    let rows: Vec<u32> = (0..1000).map(|i| b.text(t, &format!("row {i}"))).collect();
+    let mut s = b.session();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
+
+    frame(&mut l, &s);
+    // Measure and arrange each ask once; both are served by one addition.
+    assert_eq!(l.stats().rows_added_up, 1, "the first frame adds them up");
+    let list = s.lookup(list_id).unwrap();
+    assert_eq!(l.row_tops(list).map(<[f32]>::len), Some(1001));
+
+    // A scroll: the window moves, the tops do not.
+    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    s.clear_all_dirty();
+    frame(&mut l, &s);
+    assert_eq!(l.stats().rows_added_up, 0, "a scrolled frame adds nothing up");
+    assert_rect(&l, &s, rows[200], 0.0, 0.0, 800.0, 22.0);
+
+    // A row that grows is a change: the tops below it move.
+    s.apply(&Batch { seq: 3, ops: vec![Op::SetProp { node: rows[100], prop: 1, value: Value::Int(60) }] }).unwrap();
+    frame(&mut l, &s);
+    assert_eq!(l.stats().rows_added_up, 1, "a taller row is added up again");
+    assert_rect(&l, &s, rows[200], 0.0, 40.0, 800.0, 22.0);
+}
+
 // ----------------------------------------------------------------- misc
 
 #[test]

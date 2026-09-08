@@ -283,7 +283,7 @@ impl Session {
         match self.arena.get_mut(ix) {
             Some(n) if matches!(n.kind, NodeKind::Scroll | NodeKind::List) => {
                 n.scroll = (x, y);
-                self.arena.mark_dirty(ix).is_ok()
+                self.arena.mark_scrolled(ix).is_ok()
             }
             _ => false,
         }
@@ -550,7 +550,7 @@ impl Session {
                     return Err(ApplyError::NotScrollable(*node));
                 }
                 n.scroll = (*x, *y);
-                self.arena.mark_dirty(ix)
+                self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
             Op::DefAtom { .. }

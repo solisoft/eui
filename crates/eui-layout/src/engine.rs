@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use eui_proto::{AlignItems, AlignSelf, Display, Justify, NodeKind, Position, Value, Wrap};
 use eui_theme::Resolved;
-use eui_tree::{NodeIx, Session};
+use eui_tree::{dirty, NodeIx, Session};
 
 use crate::geom::{Constraint, Rect, Size};
 use crate::measure::TextMeasurer;
@@ -70,6 +70,10 @@ pub struct Stats {
     pub rows_measured: u32,
     /// Rows assigned by arithmetic and never visited.
     pub rows_virtual: u32,
+    /// Times a virtualised list's row tops were added up. Zero on a frame
+    /// that only scrolled: the tops of rows that did not change are the
+    /// tops they had.
+    pub rows_added_up: u32,
     /// Memoised measures kept after the frame: what the next one can reuse.
     pub memo_size: u32,
 }
@@ -102,10 +106,30 @@ pub struct Layout {
     /// For each windowed list, the rows that had a child this frame, in
     /// order: the painter draws a placeholder for every other row in view.
     placed_rows: HashMap<NodeIx, Vec<u32>>,
-    /// Each virtualised list's row tops in content coordinates, as placed
-    /// this frame (one more entry than rows: the content's end). What a
-    /// keyboard needs to land on the next row.
-    row_tops: HashMap<NodeIx, Vec<f32>>,
+    /// Each virtualised list's row tops in content coordinates (one more
+    /// entry than rows: the content's end). What a keyboard needs to land
+    /// on the next row — and what a scroll frame would otherwise rebuild
+    /// from ten thousand rows to move a window by a few pixels.
+    row_tops: HashMap<NodeIx, RowTops>,
+}
+
+/// One virtualised list's row tops, kept across frames.
+///
+/// The tops are the rows' heights added up: they change when a row's
+/// height, the list's gap or its count does, and never when the list is
+/// scrolled — which is why `set_scroll` marks [`dirty::SCROLL`] rather
+/// than [`dirty::SELF`]. `id`, `gap`, `item_h` and `n` are the rest of
+/// what they were computed from, checked because a node index can be
+/// reused and a style can change without the tree saying which part did.
+#[derive(Debug)]
+struct RowTops {
+    id: u32,
+    gap: f32,
+    item_h: f32,
+    n: usize,
+    tops: Vec<f32>,
+    /// The last frame that read or wrote this entry.
+    seen: u32,
 }
 
 /// What the engine needs from outside for one frame. (Not `Frame`: that is
@@ -142,8 +166,12 @@ impl Layout {
         self.virtual_.clear();
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
-        self.row_tops.clear();
         self.placed_rows.clear();
+        // Row tops survive a frame the list did not change in — a scroll is
+        // not such a change (`dirty::SCROLL`). An index reused by another
+        // node carries a different id, and the rest of what they were
+        // computed from is checked where they are read.
+        self.row_tops.retain(|ix, e| f.session.node(*ix).is_some_and(|n| n.id == e.id && n.dirty & (dirty::SELF | dirty::DESCENDANT) == 0));
         // Measures survive across frames for nodes nothing touched: the
         // session's dirty bits say which subtrees changed (a node's own
         // change sets SELF, its ancestors' DESCENDANT), and an index reused
@@ -168,6 +196,7 @@ impl Layout {
         // memoised forever; a frame that did not touch them lets them go.
         let generation = self.generation;
         self.memo.retain(|_, (_, seen)| *seen == generation);
+        self.row_tops.retain(|_, e| e.seen == generation);
         self.stats.memo_size = self.memo.len() as u32;
     }
 
@@ -175,6 +204,7 @@ impl Layout {
     /// so nothing measured before applies.
     pub fn invalidate_all(&mut self) {
         self.memo.clear();
+        self.row_tops.clear();
     }
 
     /// Work done by the last `compute`.
@@ -205,7 +235,7 @@ impl Layout {
     /// else. Spec 03 §3: what `ArrowUp`/`ArrowDown` land on.
     pub fn row_tops(&self, list: NodeIx) -> Option<&[f32]> {
         self.rect(list)?;
-        self.row_tops.get(&list).map(Vec::as_slice)
+        self.row_tops.get(&list).map(|e| e.tops.as_slice())
     }
 
     /// The windowed lists (§7.1) laid out this frame.
@@ -511,34 +541,56 @@ impl Layout {
         // are walked once for their tops — an add per row, no measure — so
         // a feed of cards of two heights still costs nothing off screen.
         let atom = self.item_height_atom;
-        let mut tops: Vec<f32> = Vec::with_capacity(n.saturating_add(1));
-        let mut y = 0.0f32;
-        if count.is_some() {
-            let heights: Vec<f32> = match self.heights_atom.and_then(|a| f.session.node(ix)?.prop(a)) {
-                Some(Value::List(items)) => items.iter().map(|v| if let Value::Int(h) = v { if *h > 0 { *h as f32 } else { item_h } } else { item_h }).collect(),
-                _ => Vec::new(),
-            };
-            for i in 0..n {
-                tops.push(y);
-                y += heights.get(i).copied().unwrap_or(item_h) + st.gap;
+        let id = f.session.node(ix).map_or(0, |n| n.id);
+        let generation = self.generation;
+        // The tops of the rows this list had last frame still are its tops
+        // unless a row, the gap or the count changed — a scroll is none of
+        // those. Rebuilding them was the whole cost of a scrolled frame:
+        // ten thousand additions, and a prop read per row, to move a
+        // window by a few pixels.
+        let stale = !self.row_tops.get(&ix).is_some_and(|e| e.id == id && e.gap == st.gap && e.item_h == item_h && e.n == n);
+        if stale {
+            let mut tops: Vec<f32> = Vec::with_capacity(n.saturating_add(1));
+            let mut y = 0.0f32;
+            if count.is_some() {
+                let heights: Vec<f32> = match self.heights_atom.and_then(|a| f.session.node(ix)?.prop(a)) {
+                    Some(Value::List(items)) => items.iter().map(|v| if let Value::Int(h) = v { if *h > 0 { *h as f32 } else { item_h } } else { item_h }).collect(),
+                    _ => Vec::new(),
+                };
+                for i in 0..n {
+                    tops.push(y);
+                    y += heights.get(i).copied().unwrap_or(item_h) + st.gap;
+                }
+            } else {
+                for &c in children {
+                    tops.push(y);
+                    let h = self.int_prop(f, c, atom).filter(|h| *h > 0).map_or(item_h, |h| h as f32);
+                    y += h + st.gap;
+                }
             }
-        } else {
-            for &c in children {
-                tops.push(y);
-                let h = self.int_prop(f, c, atom).filter(|h| *h > 0).map_or(item_h, |h| h as f32);
-                y += h + st.gap;
-            }
+            tops.push(y);
+            self.row_tops.insert(ix, RowTops { id, gap: st.gap, item_h, n, tops, seen: generation });
+            self.stats.rows_added_up = self.stats.rows_added_up.saturating_add(1);
         }
-        tops.push(y);
-        let content_h = if n == 0 { 0.0 } else { (y - st.gap).max(0.0) };
-        let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
-        let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
-        let window = if n == 0 { 0 } else { last.saturating_sub(first).saturating_add(1) };
+        // The window, and the tops the rows in it need. Only those are
+        // copied out, so the placement below borrows nothing.
+        let (content_h, first, last, window, win_tops) = {
+            let Some(entry) = self.row_tops.get_mut(&ix) else {
+                return Placement { children: Vec::new(), content: Size::new(width, 0.0), baseline: None };
+            };
+            entry.seen = generation;
+            let tops = &entry.tops;
+            let content_h = if n == 0 { 0.0 } else { (tops.last().copied().unwrap_or(0.0) - st.gap).max(0.0) };
+            let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
+            let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
+            let window = if n == 0 { 0 } else { last.saturating_sub(first).saturating_add(1) };
+            let win_tops = if measure_only || n == 0 { Vec::new() } else { tops.get(first..=last).map(<[f32]>::to_vec).unwrap_or_default() };
+            (content_h, first, last, window, win_tops)
+        };
         self.stats.rows_virtual = self.stats.rows_virtual.saturating_add(n.saturating_sub(window) as u32);
         if measure_only || n == 0 {
             return Placement { children: Vec::new(), content: Size::new(width, content_h), baseline: None };
         }
-        self.row_tops.insert(ix, tops.clone());
         if count.is_some() {
             self.windowed.push(ix);
         }
@@ -556,7 +608,7 @@ impl Layout {
         let mut first_baseline = None;
         for (i, c) in rows {
             self.stats.rows_measured = self.stats.rows_measured.saturating_add(1);
-            let y = tops.get(i).copied().unwrap_or(0.0);
+            let y = win_tops.get(i.saturating_sub(first)).copied().unwrap_or(0.0);
             let cst = self.style(f, c);
             if cst.display == Display::None {
                 continue;

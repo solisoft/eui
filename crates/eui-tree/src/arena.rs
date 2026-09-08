@@ -49,6 +49,13 @@ pub mod dirty {
     pub const SELF: u8 = 1;
     /// Something below this node changed.
     pub const DESCENDANT: u8 = 2;
+    /// Only this node's scroll offset moved. Its children must be placed
+    /// again — every frame places them anyway — but nothing it or anything
+    /// under it *measured* can have changed, and neither can the row tops
+    /// of a virtualised list: they are the rows' heights, not where the
+    /// list is scrolled. Kept apart from [`SELF`] so a scroll can leave
+    /// that work standing.
+    pub const SCROLL: u8 = 4;
 }
 
 /// One node.
@@ -197,8 +204,19 @@ impl Arena {
     /// stopping at the first ancestor already marked — everything above it
     /// already is.
     pub(crate) fn mark_dirty(&mut self, ix: NodeIx) -> Result<()> {
+        self.mark(ix, dirty::SELF)
+    }
+
+    /// [`Self::mark_dirty`] with [`dirty::SCROLL`] instead: the ancestors
+    /// still learn something below them moved, so a redraw is owed, but the
+    /// node itself is not marked as having changed.
+    pub(crate) fn mark_scrolled(&mut self, ix: NodeIx) -> Result<()> {
+        self.mark(ix, dirty::SCROLL)
+    }
+
+    fn mark(&mut self, ix: NodeIx, bit: u8) -> Result<()> {
         let node = self.require_mut(ix)?;
-        node.dirty |= dirty::SELF;
+        node.dirty |= bit;
         let mut cur = node.parent;
         while cur.is_some() {
             let node = self.require_mut(cur)?;

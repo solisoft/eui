@@ -174,8 +174,13 @@ in a column, with one addition: when the list carries an `item_height` prop
 either side is **not measured** — it is assigned `item_height` and skipped. A
 child carrying its own `item_height` prop takes that height instead, so a
 feed of cards of a few known heights virtualises like a table: the client
-sums the heights once per layout, one addition per row, and measures only
-the rows in view.
+sums the heights once, one addition per row, and measures only the rows in
+view. Once, not once per frame: the sum is a function of the rows'
+heights and the list's gap, and a scroll changes neither — a client is
+expected to keep it until something under the list changes, since
+rebuilding it is the whole cost of a scrolled frame otherwise (the
+reference client marks a scrolled node `dirty::SCROLL` rather than
+`dirty::SELF` for this).
 This is the only place the algorithm is allowed to use an estimate, and it is
 what makes a ten-thousand-row table cost what a fifty-row one costs.
 
