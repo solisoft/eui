@@ -1186,6 +1186,47 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
     assert_eq!(d.video_position_ms(id), Some(held), "paused stays put");
 }
 
+/// Spec 01 §4 end to end: a view the server cannot encode ends the session
+/// with the reason, and the window says so instead of freezing on the last
+/// frame it was given.
+#[test]
+fn a_view_that_cannot_be_encoded_ends_the_session_and_says_why() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    // Not `open`: this component never produces a tree, which is the point.
+    let url = format!("ws://127.0.0.1:{port}/_eui/session/broken");
+    let mut d = Driver::new(600.0, 400.0, 1.0, 0);
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let conn = connect(&url, d.hello().encode(), move || {
+        let _ = wake_tx.send(());
+    })
+    .expect("connect to soli");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while d.closed().is_none() {
+        assert!(Instant::now() < deadline, "the session never ended");
+        let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("{e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
+            }
+        }
+    }
+    let why = d.closed().map(ToString::to_string).unwrap_or_default();
+    assert!(why.contains("unknown event 'nope'"), "the reason travels: {why}");
+    let _ = d.paint(600, 400);
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "The application stopped"), "{all:?}");
+    assert!(all.iter().any(|t| t.contains("nope")), "and the window says why: {all:?}");
+}
+
 /// Spec 06 §1.1 end to end: a node asks to be woken, the client wakes it
 /// on its own period with nobody touching anything, and the server counts.
 #[test]

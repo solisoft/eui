@@ -1255,6 +1255,39 @@ fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
     assert!(out.iter().all(|s| *s == 0.0));
 }
 
+/// Spec 01 §4: a session that ends says so on the glass. A window that
+/// stopped talking to its application must not look like one that is
+/// merely idle.
+#[test]
+fn a_session_that_ends_replaces_the_tree_with_the_reason() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("the application".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+    let texts = |d: &Driver| -> Vec<String> {
+        d.session().root().map_or_else(Vec::new, |root| d.session().preorder(root).filter_map(|ix| d.session().text_of(ix).map(str::to_owned)).collect())
+    };
+    assert!(texts(&d).iter().any(|t| t == "the application"), "the server's tree is what is drawn");
+
+    // The server gives up on a view it cannot encode.
+    d.handle_frame(Frame::Error { code: 400, message: "EUI: unknown event 'wake'".into() });
+    let list = d.paint(400, 300);
+    let after = texts(&d);
+    assert!(after.iter().any(|t| t == "The application stopped"), "{after:?}");
+    assert!(after.iter().any(|t| t.contains("unknown event 'wake'")), "and why: {after:?}");
+    assert!(!after.iter().any(|t| t == "the application"), "the tree it stopped on is gone: {after:?}");
+    assert!(!list.quads.is_empty(), "and something is painted");
+    // Mounted once, not on every frame after.
+    let again = d.paint(400, 300);
+    assert_eq!(again.quads.len(), list.quads.len());
+}
+
 /// Spec 06 §1.1: a node that asks to be woken is, on its own period and
 /// nobody's action; the floor holds, the phase survives a re-render, and
 /// dropping the prop stops the clock.

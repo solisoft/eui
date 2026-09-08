@@ -147,6 +147,16 @@ opposite of what a resync is for. The server answers `Resync` with a `Mount`
 that references the session's existing tables and MUST NOT repeat definitions
 the session already holds (§02 §2: tables are never cleared).
 
+A server whose view cannot be encoded — it names an event kind, a role or a
+value the protocol does not have — MUST send `Error` (code `400`) with the
+reason and end the session. Such a view fails identically on every later
+render, and a server that only logs it leaves a window that looks alive and
+answers nothing.
+
+Whatever ends a session, the client SHOULD **show** the reason rather than
+leave the last frame standing: a window that stopped talking to its
+application must not look like one that is merely idle.
+
 ## 5. Idle behaviour
 
 `Ping` is sent by whichever side has been silent for 30 s. A client MUST NOT
@@ -154,3 +164,9 @@ poll, MUST NOT keep a timer that wakes it when nothing has changed, and MUST NOT
 redraw unless a frame, an input event, or a window event asked it to. The
 zero-wakeup idle budget in [`10-budgets.md`](10-budgets.md) is a property of
 this rule.
+
+The one exception is a timer the application asked for in the tree: a node
+carrying a `wake` prop and a `wake` handler ([`06-events.md`](06-events.md)
+§1.1) is woken on its period, within the bounds that section sets. It is not a
+poll the client invented; it is the only way a view can watch something the
+client cannot see, and it stops with the prop.

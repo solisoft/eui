@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use eui_layout::{Env, FontSpec, Layout, Size, TextMeasurer, TextMetrics};
 use eui_audio::Control;
-use eui_proto::{Cursor, 
+use eui_proto::{AlignItems, ColorRef, Cursor, Dim, Display, FlatNode, FontWeight, Justify, Op, StyleRecord, Subtree, TextAlign,
     caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
@@ -77,6 +77,19 @@ pub enum Close {
     /// The transport handed over something that was not a frame, or went
     /// away; the window's reason.
     Transport(String),
+}
+
+impl std::fmt::Display for Close {
+    /// The sentence a person reads when the window stops talking to its
+    /// application (01 §4), not a debug print.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ServerError(code, message) => write!(f, "{message} (error {code})"),
+            Self::Version(v) => write!(f, "the server speaks protocol version {v}, which this client does not"),
+            Self::Protocol(why) => write!(f, "the connection broke the protocol: {why}"),
+            Self::Transport(why) => write!(f, "{why}"),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -360,6 +373,9 @@ pub struct Driver {
     wakes: Vec<(u32, Duration, Instant)>,
     /// Whether the tree changed since the wakes were last collected.
     wake_dirty: bool,
+    /// Whether the notice of [`Self::show_stopped`] has replaced the tree,
+    /// so it is mounted once and not on every frame after.
+    stopped: bool,
     /// When the players were last advanced.
     video_clock: Option<Instant>,
     /// When the next video frame is due. Applied at the end of the paint,
@@ -445,6 +461,7 @@ impl Driver {
             video_dirty: false,
             wakes: Vec::new(),
             wake_dirty: false,
+            stopped: false,
             video_clock: None,
             video_due: None,
             mixer: eui_audio::Mixer::new(48_000),
@@ -1637,11 +1654,70 @@ impl Driver {
         self.emit(f, EventKind::Change, Value::Str(value))
     }
 
+    /// Spec 01 §4: when a session ends, say so on the glass.
+    ///
+    /// A window that stopped talking to its application must not look like
+    /// one that is merely idle — that is a person clicking at a picture. So
+    /// the last tree is replaced, once, by a small one the client mounts
+    /// itself: what stopped, and why. The session is a fresh one, so the
+    /// notice cannot collide with the ids the server had defined, and what
+    /// the old tree was driving — sound, pictures, clocks, focus — goes
+    /// with it.
+    fn show_stopped(&mut self) {
+        if self.stopped || self.closed.is_none() {
+            return;
+        }
+        self.stopped = true;
+        let why = self.closed.as_ref().map(ToString::to_string).unwrap_or_default();
+        self.mixer = eui_audio::Mixer::new(48_000);
+        self.players.clear();
+        self.wakes.clear();
+        self.anims.clear();
+        self.edits.clear();
+        self.windows.clear();
+        self.focused = None;
+        self.pointer = Pointer::default();
+        self.scroll_anim = None;
+        self.next_due = None;
+        self.session = Session::new();
+        let role = |r: eui_theme::Role| ColorRef::role(r.id());
+        let page = StyleRecord {
+            display: Display::Column,
+            justify: Justify::Center,
+            align_items: AlignItems::Center,
+            gap: 3,
+            padding: [6, 6, 6, 6],
+            bg: role(eui_theme::Role::SurfaceBase),
+            ..Default::default()
+        };
+        let heading = StyleRecord { font_size: 4, font_weight: FontWeight::Bold, fg: role(eui_theme::Role::TextDefault), ..Default::default() };
+        let reason = StyleRecord { font_size: 1, fg: role(eui_theme::Role::TextMuted), text_align: TextAlign::Center, max_width: Dim::Px(420), ..Default::default() };
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("The application stopped".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 3, style: 3, key: 0, text: Some(TextRef::Inline(why)), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        let batch = Batch {
+            seq: 1,
+            ops: vec![
+                Op::DefStyle { id: 1, record: page },
+                Op::DefStyle { id: 2, record: heading },
+                Op::DefStyle { id: 3, record: reason },
+                Op::Mount(tree),
+            ],
+        };
+        if self.session.apply(&batch).is_err() {
+            return;
+        }
+        self.invalidate();
+        self.redraw = true;
+    }
+
     // --------------------------------------------------------------- paint
 
     /// Lay out if needed and produce this frame's draw list for a
     /// `w × h` device-pixel target. Clears the redraw flag.
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
+        self.show_stopped();
         self.note_style_changes();
         // Spec 03 §7 and §8: the tree says what should be playing, and a
         // picture that just decoded has a size the layout must know before

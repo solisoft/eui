@@ -11,6 +11,9 @@ router_eui("feed", "live#feed", "live#feed_view")
 router_eui("music", "music#music", "music#music_view")
 # Spec 06 §1.1, in ten lines: a node that asks to be woken.
 router_eui("clock", "live#clock", "live#clock_view")
+# Spec 01 §4: a view the server cannot encode, so the suite can watch a
+# session end with its reason instead of freezing.
+router_eui("broken", "live#broken", "live#broken_view")
 
 get("/health", "home#health")
 

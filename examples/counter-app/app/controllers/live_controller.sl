@@ -53,6 +53,22 @@ def clock_view(state)
   with_state({"ticks": ticks}, face)
 end
 
+# Spec 01 §4, on purpose: a view that cannot be encoded.
+#
+# `nope` is not an event kind the protocol has, so the server cannot turn
+# this tree into ops. It exists so the end-to-end suite can check what
+# happens next — the session ends with the reason and the window says so,
+# rather than freezing on the last frame it was given.
+def broken(event_data)
+  event_data["state"] ?? {}
+end
+
+def broken_view(state)
+  face = text("This view names an event that does not exist", {"size": 2})
+  face["on"] = {"nope": "never"}
+  column({"pad": 6}, [face])
+end
+
 # The view: state in, node tree out. Plain data; the server does the rest.
 def counter_view(state)
   count = state["count"] ?? 0

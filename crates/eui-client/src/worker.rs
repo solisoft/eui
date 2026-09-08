@@ -1323,7 +1323,7 @@ impl Backend {
 
     /// Why the session ended, if it did.
     pub fn closed(&self) -> Option<String> {
-        self.with_local(|d| d.closed().map(|c| format!("{c:?}")))
+        self.with_local(|d| d.closed().map(ToString::to_string))
             .or_else(|| self.with_worker(|w| w.status.closed.clone()))
             .flatten()
     }
