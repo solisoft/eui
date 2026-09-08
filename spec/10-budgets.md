@@ -31,8 +31,11 @@ learned to do — sound and moving pictures decoded in the worker (03 §7,
 §8: symphonia's WAV, FLAC, MP3 and Vorbis, GIF and animated WebP), a
 symbols fallback face at 227 KB beside the two variable ones, the desktop
 theme's watcher, and the worker boundary itself. Naming the miss is the
-point of this document; the levers are known and none of them is free:
-the accessibility adapter (2.72 MB), the four embedded faces (1.33 MB of
+point of this document; the levers are known, measured, and none of them
+is free: the accessibility adapter (2.72 MB, by building without it), OGG
+and Vorbis (0.72 MB — symphonia reserves FFT twiddle tables up to 65 536
+points, half a megabyte of zeroes in `.data` because they are `Lazy`
+statics rather than `.bss`), the four embedded faces (1.33 MB of
 `.rodata`), and the shader translator wgpu needs at runtime (naga, 876 KB
 of `.text`).
 
@@ -50,16 +53,19 @@ table, x86-64 Linux, 2026-09-08:
 
 | Measure | In this process | Through a worker |
 |---|---:|---:|
-| First paint (shaping) | 5.92 ms | 5.52 ms |
-| Scroll step (median) | 201 µs | 453 µs |
-| of which the input round trip | — | 77 µs |
-| what the boundary adds to a paint | — | 175 µs |
-| bytes over the pipe per scroll step | — | 47.1 KB back, ~30 B out |
+| First paint (shaping) | 5.9 ms | 5.8 ms |
+| Scroll step (median of ten, four runs) | 180–200 µs | 355–500 µs |
+| of which the input round trip | — | 77–104 µs |
+| what the boundary adds to a paint | — | 96–218 µs |
+| bytes over the pipe per scroll step | — | 27 B out, 47.1 KB back |
 
-Two round trips a frame — the input, then the paint — cost about 250 µs of
-the 453, and the draw list is 96 bytes a quad, sent as the renderer will
-upload it. The rest is layout and paint, which the boundary does not
-change. Both sides are inside the 2 ms budget.
+Two round trips a frame — the input, then the paint — are most of the
+difference, and the draw list is 96 bytes a quad, sent in the shape the
+renderer uploads. The rest is layout and paint, which the boundary does
+not change; the in-process figure is steady and the worker's is not,
+because it includes two process wake-ups. Both sides are inside the 2 ms
+budget, and folding an input into the paint that follows it would make it
+one wake-up a frame.
 
 A scroll step was 1.75 ms in this process and 2.03 ms through a worker
 until 2026-09-08, when the row tops of a virtualised list stopped being

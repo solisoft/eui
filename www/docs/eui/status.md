@@ -305,7 +305,21 @@ features); the window costs 12 MB and the rest is the Soli runtime and
 its database. `soli desktop build --no-db` (or `--db-url` for a database
 elsewhere) drops the database from the artifact and from the launch: the
 feed as a desktop app is 76 MB and starts no database process. Getting to
-15 MB means a runtime built for an offline app, which is open work.
+15 MB means a runtime built for an offline app, which is open work — and
+now a measured one. `cargo bloat --release --features eui-desktop --bin
+soli --crates` on 2026-09-08 puts 45 MB of `.text` in the 78 MB binary,
+and the shape of it says what a slim build could and could not do:
+**`solilang` itself is 10.2 MB** of that, the interpreter and its
+builtins, before any dependency. Then 4.4 MB of `std`, 2.0 MB of
+`openssl-sys` (pulled in by SSH), 3.5 MB of window (naga, wgpu, winit,
+rustybuzz, skrifa, the client crates), 1.3 MB of accessibility (zbus and
+its AT-SPI adapter), and a tail of 388 crates worth 9 MB — spreadsheets,
+PDF, images, the language server, the terminal UI, S3, mail, three SQL
+drivers. Feature-gating what an offline application never calls is
+therefore worth tens of megabytes, not sixty: a runtime that keeps the
+interpreter, the window and nothing else still has the interpreter in it.
+The honest target to replace 15 MB will be set when that build exists,
+and this page will say what it measured rather than what it hoped.
 
 **The manifest, signed and pinned.** `GET /.well-known/eui` is a record
 (spec 01 §2.1, keys fixed now) signed by the publisher's Ed25519 key. The
@@ -501,11 +515,12 @@ in-process driver. A dead worker ends the session with a reason and the
 window stands.
 
 **What the sandbox costs, measured.** On the 10 000-row table of spec 10
-§1, a scroll frame is 201 µs with the driver in this process and 453 µs
-through a worker: 77 µs for the input's round trip, 175 µs for the
-paint's, and 47 KB of draw list coming back — 96 bytes a quad, in the
-shape the renderer uploads. Both are inside the 2 ms budget. Only the
-rows of an atlas that changed cross, not the atlas. What the boundary
+§1, a scroll frame is about 180 µs with the driver in this process and
+355–500 µs through a worker: two round trips over the pipe, 80–100 µs
+each, and 47 KB of draw list coming back — 96 bytes a quad, in the shape
+the renderer uploads, against 27 bytes going out. Both are inside the
+2 ms budget. Only the rows of an atlas that changed cross, not the
+atlas. What the boundary
 does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
 (AppContainer), where it is its own process but not a sandboxed one, and
 fold an input into the paint that follows it, which would make it one
@@ -516,11 +531,11 @@ was not the pipe. A virtualised list added its rows' heights up on every
 frame — ten thousand additions and a prop read per row, to move a window
 by a few pixels. The tops are now kept until something under the list
 changes, which a scroll is not: `set_scroll` marks the node
-`dirty::SCROLL` rather than `dirty::SELF`, and the layout keeps both its
-measures and its row tops across the frame. A scroll step went from
-1.75 ms to 201 µs in this process, and from 2.03 ms — over budget — to
-453 µs through the worker; the first paint of the table, which used to
-add the same heights up twice, from 9.98 ms to 5.92 ms.
+`dirty::SCROLL` rather than `dirty::SELF`, and the layout keeps its row
+tops across the frame. A scroll step went from 1.75 ms to about 180 µs in
+this process, and from 2.03 ms — over budget — to under 500 µs through
+the worker; the first paint of the table, which used to add the same
+heights up twice, from 9.98 ms to 5.9 ms.
 
 ## What the specification covers
 

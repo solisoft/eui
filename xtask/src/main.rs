@@ -205,7 +205,7 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
     rows.push(Row { what: "worker: scroll step, input + paint over the pipe (median)", value: format!("{step:?}"), budget: "< 2 ms", ok: step < Duration::from_millis(2) });
     rows.push(Row { what: "worker: of which the input round trip (median)", value: format!("{input:?}"), budget: "info", ok: true });
     rows.push(Row { what: "worker: what the boundary adds to a paint", value: format!("{:?}", paint.saturating_sub(in_process)), budget: "info", ok: true });
-    rows.push(Row { what: "worker: bytes over the pipe per scroll step", value: format!("{:.1} KB out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0 / 1024.0, (after.1 - before.1) as f64 / 10.0 / 1024.0), budget: "info", ok: true });
+    rows.push(Row { what: "worker: bytes over the pipe per scroll step", value: format!("{:.0} B out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0, (after.1 - before.1) as f64 / 10.0 / 1024.0), budget: "info", ok: true });
     rows
 }
 
