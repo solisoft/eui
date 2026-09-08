@@ -844,6 +844,37 @@ def needle_player_command(method, path, device)
   resp["status"]
 end
 
+# What the sound is doing when it is not coming out of this window.
+#
+# A local sound has `time_update` (03 §7) and a remote one has nothing, so
+# the bar used to freeze where the last click left it. The bar asks to be
+# woken once a second (06 §1.1) while something plays elsewhere, and this
+# is what it does with the second: one call, the position, and whether it
+# is still playing at all — the person may have paused it from their
+# phone.
+def needle_poll(state)
+  token = needle_user_token()
+  return state if token.nil?
+
+  opts = {"headers": {"Authorization": "Bearer " + token}, "timeout": 10}
+  resp = HTTP.request("GET", NEEDLE_API + "/me/player", opts) rescue nil
+  return state if resp.nil?
+  # 204: nothing is playing anywhere. The bar keeps the track it shows and
+  # stops pretending it moves.
+  return needle_set(state, "playing", false) if resp["status"] == 204
+  return state if resp["status"] != 200
+
+  data = json_parse(resp["body"]) rescue nil
+  return state if data.nil?
+
+  state["playing"] = data["is_playing"] ?? false
+  state["position"] = (data["progress_ms"] ?? 0) / 1000
+  item = data["item"] ?? {}
+  length = item["duration_ms"] ?? 0
+  state["now"]["seconds"] = length / 1000 if length > 0
+  state
+end
+
 def needle_remote_toggle(state)
   path = state["playing"] ? "/me/player/pause" : "/me/player/play"
   needle_player_command("PUT", path, state["device"] ?? "")
@@ -1285,6 +1316,7 @@ def music(event_data)
     "here_start" => needle_start_here(state),
     "disconnect" => needle_leaving(state),
     "progress" => needle_progress(state, params),
+    "poll" => needle_poll(state),
     "ended" => needle_step(state, 1),
     "login" => needle_open_login(state),
     "toggle" => needle_toggle(state),
@@ -2334,12 +2366,14 @@ def needle_devices_bar(state, layout)
   chips = [needle_chip("this machine", "device", {"id": "here"}, state["device"] == "here")].concat(chips) if state["here"]
   # The narrowest window keeps the same button under a shorter name
   # rather than losing it: it is the only way to get a speaker at all.
-  chips = chips.concat([needle_chip(
-    layout["single"] ? "Speaker here" : "Start a speaker here",
-    "here_start",
-    nil,
-    false
-  )]) if devices.length() == 0
+  if devices.length() == 0
+    chips = chips.concat([needle_chip(
+      layout["single"] ? "Speaker here" : "Start a speaker here",
+      "here_start",
+      nil,
+      false
+    )])
+  end
   chips = chips.concat([needle_chip("Devices", "devices", nil, false)])
   row(
     {
@@ -2412,7 +2446,11 @@ def needle_bar(state, layout)
     "volume": 90,
     "position": state["seek"]
   }, {"ended": "ended", "time_update": "progress"})]
-  row(
+  # 06 §1.1: while the sound is somewhere else, the bar asks to be woken
+  # once a second — it is the only clock a remote player has. A local
+  # sound needs none: its own `time_update` is the clock, and asking for
+  # both would poll Spotify for a position the mixer already knows.
+  bar = row(
     {
       "gap": 4,
       "align": "center",
@@ -2423,6 +2461,11 @@ def needle_bar(state, layout)
     },
     [left, middle, right].concat(sound)
   )
+  if state["mode"] == "remote" && state["playing"]
+    bar["p"] = (bar["p"] ?? {}).merge({"wake": 1000})
+    bar["on"] = (bar["on"] ?? {}).merge({"wake": "poll"})
+  end
+  bar
 end
 
 # ------------------------------------------------------------------ shell
