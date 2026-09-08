@@ -552,24 +552,41 @@ def needle_sample_artist(id)
   }
 end
 
-# What came out this fortnight, as records with their own sleeves. The
-# welcome page asks for it once, when the window opens: `tag:new` is
-# search's own way of saying new release, and it is the way that still
-# answers — `/browse/new-releases` returns 403 to an application
-# registered after November 2024. A market is required or the answer is
-# whatever the token's country happens to be.
+# The four records the welcome page offers, with their own sleeves.
 #
-# It costs one call and, the first time, eight pictures fetched and
-# re-encoded into `public/covers`; after that the files are there. An
-# unconfigured sample catalogue has no pictures at all, so it says so and
-# the welcome draws its sleeves instead.
+# They are named rather than discovered: `/browse/new-releases` returns
+# 403 to an application registered after November 2024, and search's
+# `tag:new` answers with the world's fortnight — Hebrew, Arabic, Korean
+# titles this client has no face for, which paint as tofu. A sample page
+# is not the place to discover that; four records asked for by name are
+# four sleeves that arrive.
+#
+# One call each, the first time, plus its picture into `public/covers`;
+# afterwards the files are there. A record that cannot be found is simply
+# not offered, and an unconfigured catalogue offers none, so the welcome
+# draws its sleeves instead.
+NEEDLE_PICKS = [
+  ["Radiohead", "OK Computer"],
+  ["Nina Simone", "I Put A Spell On You"],
+  ["Aphex Twin", "Selected Ambient Works 85-92"],
+  ["Fela Kuti", "Zombie"]
+]
+
+def needle_pick(who, what)
+  data = needle_api("/search?type=album&limit=1&market=" + needle_market() + "&q="
+  + url_encode("artist:" + who + " album:" + what))
+  return nil if data.nil?
+
+  items = ((data["albums"] ?? {})["items"] ?? [])
+  return nil if items.length() == 0
+
+  needle_album_stub(items[0])
+end
+
 def needle_fresh
   return [] unless needle_configured()
 
-  data = needle_api("/search?type=album&limit=8&market=" + needle_market() + "&q=" + url_encode("tag:new"))
-  return [] if data.nil?;
-
-  ((data["albums"] ?? {})["items"] ?? []).map(fn(a) { needle_album_stub(a) })
+  NEEDLE_PICKS.map(fn(pair) { needle_pick(pair[0], pair[1]) }).filter(fn(a) { !a.nil? })
 end
 
 # ----------------------------------------------- one catalogue, two backs
@@ -1937,7 +1954,7 @@ def needle_welcome(state)
             }
           ),
           text(
-            fresh.length() > 0 ? "Type a name and press Enter, or open one of these — they came out this fortnight. Their sleeves are the catalogue's own, fetched once by the server and served to the window as ordinary pictures." : "Type a name and press Enter. Every sleeve is drawn from the record's own name — no picture is fetched — and the ground behind it comes from your own theme.",
+            fresh.length() > 0 ? "Type a name and press Enter, or open one of these. Their sleeves are the catalogue's own: the server fetched each one, cropped it and re-encoded it, and the window sees an ordinary picture from its own origin." : "Type a name and press Enter. Every sleeve is drawn from the record's own name — no picture is fetched — and the ground behind it comes from your own theme.",
             {
               "size": 2,
               "fg": "text.muted",
@@ -1949,7 +1966,7 @@ def needle_welcome(state)
       column(
         {"gap": 3, "align": "center"},
         [
-          needle_caption(fresh.length() > 0 ? (local_count > 0 ? "Out this fortnight, or your own" : "Out this fortnight") : (local_count > 0 ? "Try one, or your own" : "Try one")),
+          needle_caption(local_count > 0 ? "Try one, or your own" : "Try one"),
           row(
             {
               "gap": 2,

@@ -396,7 +396,12 @@ that has no picture of its own. One that does gets it: the server fetches
 the catalogue's artwork with Soli's new `HTTP.download`, crops the middle
 square, re-encodes it as PNG — the client decodes that and nothing else —
 and the node names the file like any other picture, so the client still
-speaks to no one but its own origin (01 §2.2). Three things move,
+speaks to no one but its own origin (01 §2.2). The welcome page opens on
+four records asked for by name, sleeves and all, when a catalogue is
+configured: `/browse/new-releases` answers 403 to an application
+registered since November 2024, and search's `tag:new` — which does
+answer — returns the world's fortnight, whose Hebrew and Korean titles
+this client has no face for and paints as tofu. Three things move,
 and only three, because 03 §5 animates colour and opacity and nothing
 else: the band keeps its key across records, so switching one morphs its
 hue over `motion.slow`; a row's highlight fades under the pointer from a
