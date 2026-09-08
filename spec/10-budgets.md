@@ -19,18 +19,53 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, scroll | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
 
-Measured on 2026-09-06, `cargo build --release -p eui-client`, x86-64 Linux,
-LTO, stripped: **12.13 MB** with the default features and **9.81 MB** with
-`--no-default-features`. The difference is the accessibility stack —
-AccessKit and, on Linux, the AT-SPI bus client it needs (`zbus`). The
-default build misses the budget by one per cent, and the budget stays: an
-accessible client is the one that ships, and the 2.3 MB is where the next
-size work goes (the bus client brings its own async runtime beside tokio).
+Measured on 2026-09-08, `cargo build --release -p eui-client`, x86-64 Linux,
+LTO, stripped: **15.38 MB** (15 379 648 bytes) with the default features and
+**12.66 MB** with `--no-default-features`. The difference is the
+accessibility stack — AccessKit and, on Linux, the AT-SPI bus client it
+needs (`zbus`), which brings its own async runtime beside tokio.
+
+On 2026-09-06 the same build was 12.13 MB, one per cent over. It is a
+quarter over now, and the budget stays: what grew is what the client
+learned to do — sound and moving pictures decoded in the worker (03 §7,
+§8: symphonia's WAV, FLAC, MP3 and Vorbis, GIF and animated WebP), a
+symbols fallback face at 227 KB beside the two variable ones, the desktop
+theme's watcher, and the worker boundary itself. Naming the miss is the
+point of this document; the levers are known and none of them is free:
+the accessibility adapter (2.72 MB), the four embedded faces (1.33 MB of
+`.rodata`), and the shader translator wgpu needs at runtime (naga, 876 KB
+of `.text`).
 
 The zero-wakeup line is an architectural consequence, not a tuning parameter:
 `winit` runs in `ControlFlow::Wait` and the client redraws only when a frame, an
 input event, or a window event asked it to. There is no render loop in the code
 to accidentally leave running.
+
+### What the process boundary costs — measured
+
+The configuration that ships puts the driver in a confined worker process
+(08 §10), so the scroll budget above is met, or not, *over a pipe*. `cargo
+run --release -p xtask -- bench` measures both sides on the same 10 000-row
+table, x86-64 Linux, 2026-09-08:
+
+| Measure | In this process | Through a worker |
+|---|---:|---:|
+| First paint (shaping) | 5.92 ms | 5.52 ms |
+| Scroll step (median) | 201 µs | 453 µs |
+| of which the input round trip | — | 77 µs |
+| what the boundary adds to a paint | — | 175 µs |
+| bytes over the pipe per scroll step | — | 47.1 KB back, ~30 B out |
+
+Two round trips a frame — the input, then the paint — cost about 250 µs of
+the 453, and the draw list is 96 bytes a quad, sent as the renderer will
+upload it. The rest is layout and paint, which the boundary does not
+change. Both sides are inside the 2 ms budget.
+
+A scroll step was 1.75 ms in this process and 2.03 ms through a worker
+until 2026-09-08, when the row tops of a virtualised list stopped being
+rebuilt on every frame (04 §7): the tops are the rows' heights added up,
+and a scroll changes neither. `set_scroll` marks a node `dirty::SCROLL`
+rather than `dirty::SELF` for exactly that reason.
 
 ## 2. Wire — measured
 

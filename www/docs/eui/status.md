@@ -498,11 +498,29 @@ core of the session on disk. The self-tests show a file read, a TCP
 connect and an exec each end the worker with `SIGSYS`; the counter runs
 end to end through a confined worker and paints the same quads as an
 in-process driver. A dead worker ends the session with a reason and the
-window stands. What the sandbox cost: one round trip per input and per
-frame over a pipe, microseconds; a frame's draw list at a few hundred
-kilobytes. What it does not do yet: macOS and Windows confinement, and
-the atlases cross whole when they change (a megabyte of glyphs, sixteen of
-images) rather than by dirty rectangle.
+window stands.
+
+**What the sandbox costs, measured.** On the 10 000-row table of spec 10
+§1, a scroll frame is 201 µs with the driver in this process and 453 µs
+through a worker: 77 µs for the input's round trip, 175 µs for the
+paint's, and 47 KB of draw list coming back — 96 bytes a quad, in the
+shape the renderer uploads. Both are inside the 2 ms budget. Only the
+rows of an atlas that changed cross, not the atlas. What the boundary
+does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
+(AppContainer), where it is its own process but not a sandboxed one, and
+fold an input into the paint that follows it, which would make it one
+round trip a frame rather than two.
+
+That measurement is what found the real cost of a scrolled frame, and it
+was not the pipe. A virtualised list added its rows' heights up on every
+frame — ten thousand additions and a prop read per row, to move a window
+by a few pixels. The tops are now kept until something under the list
+changes, which a scroll is not: `set_scroll` marks the node
+`dirty::SCROLL` rather than `dirty::SELF`, and the layout keeps both its
+measures and its row tops across the frame. A scroll step went from
+1.75 ms to 201 µs in this process, and from 2.03 ms — over budget — to
+453 µs through the worker; the first paint of the table, which used to
+add the same heights up twice, from 9.98 ms to 5.92 ms.
 
 ## What the specification covers
 
