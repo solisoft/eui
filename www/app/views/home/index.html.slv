@@ -296,15 +296,17 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
             </table>
 
             <p class="note">
-                A desktop artifact is 76 MB today against a 15 MB promise, and the
-                reason is the runtime it embeds, not the window. That number is on the
-                status page with the rest of the losses.
+                A desktop artifact is 52.6 MB today against a 15 MB promise — it was
+                76 MB until the runtime it embeds learned to drop what an application
+                never calls. The reason for what is left is that runtime, not the
+                window: the interpreter alone is 10 MB. Both numbers are on the status
+                page with the rest of the losses.
             </p>
         </div>
     </section>
 
     <footer>
-        <span>EUI/1 · a protocol, a client, a specification</span>
+        <span>EUI · a protocol, a client, a specification</span>
         <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui/status.md">Status, in full</a>
         <a href="https://github.com/solisoft/eui">Source</a>
         <a href="https://soli-lang.com">Soli</a>

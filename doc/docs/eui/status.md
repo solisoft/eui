@@ -315,11 +315,22 @@ builtins, before any dependency. Then 4.4 MB of `std`, 2.0 MB of
 rustybuzz, skrifa, the client crates), 1.3 MB of accessibility (zbus and
 its AT-SPI adapter), and a tail of 388 crates worth 9 MB — spreadsheets,
 PDF, images, the language server, the terminal UI, S3, mail, three SQL
-drivers. Feature-gating what an offline application never calls is
-therefore worth tens of megabytes, not sixty: a runtime that keeps the
-interpreter, the window and nothing else still has the interpreter in it.
-The honest target to replace 15 MB will be set when that build exists,
-and this page will say what it measured rather than what it hoped.
+drivers.
+
+That build now exists. Six of those — `soli deploy` and its vendored
+OpenSSL, the spreadsheet class, the PDF class and its signatures, S3, the
+mailer, the language server — became cargo features in Soli on
+2026-09-08, all on by default, and a runtime built without them plus the
+database clients and the code-graph grammars is **46 MB** where it was 61
+(78 with the default set). Fifteen megabytes for six features, and the
+remainder is not more of the same: the interpreter is 10 MB of machine
+code before any dependency, the application's own server needs its HTTP
+stack, and the window needs wgpu, a shader translator, text shaping and
+the accessibility bridge. **15 MB is not reachable by subtraction**, and
+this page will not keep printing it as a target. The artifact that
+follows from it was built and booted the same day: the feed as a desktop
+application, `--no-db`, is **52.6 MB** where the same thing with the
+default runtime was 76.
 
 **The manifest, signed and pinned.** `GET /.well-known/eui` is a record
 (spec 01 §2.1, keys fixed now) signed by the publisher's Ed25519 key. The
