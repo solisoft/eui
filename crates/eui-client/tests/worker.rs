@@ -145,8 +145,13 @@ fn a_hostile_frame_ends_the_session_and_the_window_stands() {
     assert!(out.is_empty());
     let why = backend.closed().expect("closed");
     assert!(why.contains("bad frame"), "{why}");
+    // 01 §4: a window that stopped talking says so — the driver replaces
+    // the tree with its own notice, so the worker still has something to
+    // paint and the pipe still carries a list.
     let (list, _) = backend.paint(100, 100);
-    assert_eq!(list.quads.len(), 0, "nothing to paint, no panic");
+    assert!(!list.quads.is_empty(), "the notice is painted, and nothing panicked");
+    let tree = backend.access_tree();
+    assert!(tree.nodes.iter().any(|n| n.label == "The application stopped"), "{tree:?}");
 }
 
 #[test]
