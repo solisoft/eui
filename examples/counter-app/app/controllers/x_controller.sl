@@ -179,6 +179,7 @@ end
 # What a status code means for a person who has just linked an account.
 def x_blame(status)
   return "x.com refused the token (401) — link the account again at /x/login" if status == 401
+  return "x.com has no read credits for this project (402) — reading needs a paid plan" if status == 402
   return "x.com refused the scope or the plan (403) — the home timeline needs Basic or above" if status == 403
   return "x.com is rate limiting (429) — Basic allows five timeline reads a quarter of an hour" if status == 429
 
@@ -332,10 +333,12 @@ def x_account_timeline(limit)
   return {"posts": [], "error": who["error"]} if who["error"].present?
 
   id = ((who["data"] ?? {})["data"] ?? {})["id"]
-  return {
-    "posts": [],
-    "error": "x.com does not know @" + handle
-  } if id.nil?
+  if id.nil?
+    return {
+      "posts": [],
+      "error": "x.com does not know @" + handle
+    }
+  end
 
   answer = x_get("/users/" + id + "/tweets?" + x_query(limit))
   return {"posts": [], "error": answer["error"]} if answer["error"].present?
