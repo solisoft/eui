@@ -923,6 +923,9 @@ def needle_defaults(state)
   state["device"] = state["device"] ?? ""
   state["device_name"] = state["device_name"] ?? ""
   state["here"] = state["here"] ?? false
+  # Whether this window started a speaker of its own, which is what it
+  # stops on the way out.
+  state["spawned"] = state["spawned"] ?? false
   state
 end
 
@@ -932,7 +935,7 @@ end
 def needle_open(state, viewport)
   state["viewport"] = viewport ?? state["viewport"]
   state["fresh"] = needle_fresh()
-  state
+  needle_ensure_speaker(state)
 end
 
 def needle_set(state, key, value)
@@ -1054,9 +1057,10 @@ end
 # with nothing on screen, and keep forty megabytes resident for nobody.
 # A device somewhere else — a phone, a room — is not ours to touch.
 def needle_leaving(state)
-  return state unless state["mode"] == "remote" && state["device_name"] == "Needle"
+  played_ours = state["mode"] == "remote" && state["device_name"] == "Needle"
+  return state unless played_ours || state["spawned"]
 
-  needle_player_command("PUT", "/me/player/pause", state["device"] ?? "")
+  needle_player_command("PUT", "/me/player/pause", state["device"] ?? "") if played_ours
   System.run(["pkill", "-f", "librespot -n Needle"]) rescue nil
   state
 end
@@ -1170,23 +1174,80 @@ end
 # reimplementation of a protocol Spotify never published. It wants a
 # Premium account, and Spotify's terms do not contemplate it. The button
 # starts what is installed; installing it was a decision made elsewhere.
-def needle_start_here(state)
+# The line that starts a speaker of our own, and the watchdog around it.
+#
+# `--device pipewire` on purpose: the Arch build has no PulseAudio
+# backend, and the default one (rodio, through cpal and ALSA) opened
+# `default`, then dropped its output — Spotify went on reporting a
+# playing track while PipeWire had no stream at all. `-O` drops the
+# zeroconf discovery nobody here uses.
+#
+# The `sh` around it is a watchdog, and it is there because closing a
+# window should stop the music: a spawned process outlives its parent on
+# Unix, so the speaker would have gone on playing to an empty screen.
+# `$PPID` inside the shell is this application; when it goes, the shell
+# kills the speaker and follows it.
+def needle_speaker_line
   cache = getenv("HOME") + "/.cache/needle-librespot"
-  # `--device pipewire` on purpose: the Arch build has no PulseAudio
-  # backend, and the default one (rodio, through cpal and ALSA) opened
-  # `default`, then dropped its output — Spotify went on reporting a
-  # playing track while PipeWire had no stream at all. `-O` drops the
-  # zeroconf discovery nobody here uses.
-  #
-  # The `sh` around it is a watchdog, and it is there because closing a
-  # window should stop the music: a spawned process outlives its parent
-  # on Unix, so the speaker would have gone on playing to an empty
-  # screen. `$PPID` inside the shell is this application; when it goes,
-  # the shell kills the speaker and follows it.
   player = "librespot -n Needle -c " + cache + " --backend alsa --device pipewire --initial-volume 80 -O"
-  watch = player + " & speaker=$!; app=$PPID; while kill -0 $app 2>/dev/null; do sleep 2; done; kill $speaker"
-  System.run(["sh", "-c", watch]) rescue nil
-  state["notice"] = "Starting a speaker on this machine — give it a moment, then ask for the devices again."
+  player + " & speaker=$!; app=$PPID; while kill -0 $app 2>/dev/null; do sleep 2; done; kill $speaker"
+end
+
+def needle_spawn_speaker
+  System.run(["sh", "-c", needle_speaker_line()]) rescue nil
+end
+
+def needle_ours(devices)
+  devices.filter(fn(d) { d["name"] == "Needle" })
+end
+
+# On the way in: if the account has no speaker of ours, start one. The
+# first frame does not wait for it to sign in — that takes a second or
+# two and there is nothing to play yet; it is in the list by the time
+# anything is asked of it. A speaker we started is one we stop on the way
+# out, played through or not.
+def needle_ensure_speaker(state)
+  return state unless needle_linked()
+
+  devices = needle_devices() ?? []
+  state["devices"] = devices
+  ours = needle_ours(devices)
+  if ours.length() > 0
+    state["device"] = ours[0]["id"]
+    state["device_name"] = ours[0]["name"]
+    return state
+  end
+
+  needle_spawn_speaker()
+  state["spawned"] = true
+  state
+end
+
+# The same, asked for by the button, which does wait: the person clicked
+# and is owed an answer.
+def needle_start_here(state)
+  needle_spawn_speaker()
+  state["spawned"] = true
+  # It takes librespot a second or two to sign in and appear in the
+  # account's device list, so the handler waits for it rather than
+  # leaving a notice the person has to dismiss by clicking Devices
+  # again. Five looks, half a second apart: either the speaker is there
+  # and selected, or it is not and the notice says what to do.
+  found = []
+  tries = 0
+  while tries < 5 && found.length() == 0
+    sleep(0.5)
+    found = needle_devices().filter(fn(d) { d["name"] == "Needle" })
+    tries = tries + 1
+  end
+  if found.length() > 0
+    state["devices"] = needle_devices()
+    state["device"] = found[0]["id"]
+    state["device_name"] = found[0]["name"]
+    state["notice"] = ""
+  else
+    state["notice"] = "Starting a speaker on this machine — give it a moment, then ask for the devices again."
+  end
   state
 end
 
@@ -2371,7 +2432,12 @@ end
 def needle_panes(state, layout)
   return [needle_detail(state, layout)] if state["pane"] == "welcome"
   return [needle_rail(state, layout)] if layout["single"] && state["pane"] == "results"
-  return [needle_detail(state, layout)] if layout["single"];
+  return [needle_detail(state, layout)] if layout["single"]
+
+  # A record opened from the welcome page has no search behind it, so the
+  # rail would stand there empty — a column of nothing beside the thing
+  # you asked for. It appears when it has something to hold.
+  return [needle_detail(state, layout)] if state["artists"].length() + state["albums"].length() == 0;
 
   [needle_rail(state, layout), needle_detail(state, layout)]
 end
