@@ -11,6 +11,10 @@ use eui_proto::*;
 use eui_theme::Role;
 
 const AVATAR: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.png");
+/// The same 32×32 avatar as a JPEG (flattened onto its own blue, since a
+/// JPEG has no alpha) and as a lossless WebP (which keeps it).
+const AVATAR_JPEG: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.jpg");
+const AVATAR_WEBP: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.webp");
 
 fn hash_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
@@ -74,6 +78,28 @@ fn the_avatar_decodes() {
     assert_eq!(px(0, 0)[3], 0);
     assert_eq!(&px(4, 16)[..3], [0x22, 0x29, 0xa8]);
     assert!(matches!(assets::decode_png(b"not a png"), Err(AssetError::Decode(_))));
+}
+
+#[test]
+fn the_other_two_pictures_decode_too() {
+    // A picture is told by its first bytes, not by a name: the store
+    // decodes whichever of the three it was handed.
+    let png = assets::decode_image(AVATAR).unwrap();
+    let jpeg = assets::decode_image(AVATAR_JPEG).unwrap();
+    let webp = assets::decode_image(AVATAR_WEBP).unwrap();
+    for img in [&png, &jpeg, &webp] {
+        assert_eq!((img.width, img.height), (32, 32));
+        assert_eq!(img.rgba.len(), 32 * 32 * 4);
+    }
+    let px = |img: &assets::Image, x: usize, y: usize| img.rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].to_vec();
+    // The centre is white in all three; JPEG is lossy, so it is only nearly.
+    assert_eq!(px(&png, 16, 16), [255, 255, 255, 255]);
+    assert_eq!(px(&webp, 16, 16), [255, 255, 255, 255]);
+    assert!(px(&jpeg, 16, 16).iter().take(3).all(|c| *c > 240), "{:?}", px(&jpeg, 16, 16));
+    // Lossless WebP keeps the transparent corner; the JPEG has none to keep.
+    assert_eq!(px(&webp, 0, 0)[3], 0);
+    assert_eq!(px(&jpeg, 0, 0)[3], 255);
+    assert!(matches!(assets::decode_image(b"not a picture at all"), Err(AssetError::Decode(_))));
 }
 
 #[test]

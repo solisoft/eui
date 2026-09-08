@@ -120,7 +120,7 @@ is worth more here than the compression a real codec would buy.
 ## 10. Process isolation
 
 Everything that reads bytes a server chose — the frame decoder, the tree,
-layout, text shaping, the PNG decoder, the bytecode VM — runs in a
+layout, text shaping, the picture decoders, the bytecode VM — runs in a
 **worker** process. The **window** process keeps what needs the platform:
 the display, the GPU driver, TLS, the pin store, the clipboard, the
 accessibility adapter. Two pipes carry a private request/reply protocol

@@ -114,7 +114,7 @@ image("public/images/chart.png", 320, 200)
 The path is a file in the application. The server hashes it and sends the
 hash; the client fetches it once from `/_eui/asset/<hash>`, verifies the
 bytes against the name, and caches it for good. Without an explicit size the
-image takes its own. PNG only, in version 1.
+image takes its own. PNG, JPEG or WebP, told apart by their first bytes.
 
 ## Lists
 

@@ -14,9 +14,10 @@
 #   * It is not on the free tier. Basic reads ten thousand posts a month,
 #     five requests per fifteen minutes; the app fetches on connect and
 #     when asked, never on a scroll.
-#   * The client fetches assets from its own origin by hash (01 §2.2) and
-#     decodes PNG only, so pictures are downloaded here, re-encoded, and
-#     named like any other file in `public`. X never hears from the window.
+#   * The client fetches assets from its own origin by hash (01 §2.2), so
+#     pictures are downloaded here and named like any other file in
+#     `public`: X never hears from the window. They are re-encoded on the
+#     way in because they are also cut down to the size a card draws.
 #
 # Set these before starting: X_CLIENT_ID, X_CLIENT_SECRET, then visit
 # /x/login once and put the X_REFRESH_TOKEN it hands you in the launcher.
@@ -157,9 +158,8 @@ def x_me
 end
 
 # ------------------------------------------------------------- pictures
-# X serves JPEG and the client decodes PNG (`eui-client/src/assets.rs`),
-# so every picture is fetched once, re-encoded, and kept under a name that
-# is its own cache key.
+# Every picture is fetched once, scaled to what a card draws, and kept
+# under a name that is its own cache key.
 
 def x_png(tag, id, url, edge)
   return "" if url.nil? || url == "" || id == ""

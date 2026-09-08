@@ -212,7 +212,8 @@ process-wide content-addressed store: an image in a view is a file path,
 hashed and served immutable, so a client caches it forever and nothing on
 the path can substitute it. On the client, a deliberately small HTTP/1.1
 reader over TLS — status 200, one `Content-Length` body, no chunked
-encoding — verifies the hash before anything is decoded, decodes PNG, and
+encoding — verifies the hash before anything is decoded, decodes PNG, JPEG
+and WebP, and
 packs images into an RGBA atlas beside the glyph atlas. An image with no
 explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
@@ -425,8 +426,8 @@ number taken from its name gives the band behind it, and the same number
 draws its sleeve on a `canvas`, five arcs and a label, for every record
 that has no picture of its own. One that does gets it: the server fetches
 the catalogue's artwork with Soli's new `HTTP.download`, crops the middle
-square, re-encodes it as PNG — the client decodes that and nothing else —
-and the node names the file like any other picture, so the client still
+square, re-encodes it — the picture is cut down to the size the node draws,
+which is a re-encode either way — and names the file like any other picture, so the client still
 speaks to no one but its own origin (01 §2.2). The welcome page opens on
 four records asked for by name, sleeves and all, when a catalogue is
 configured: `/browse/new-releases` answers 403 to an application

@@ -767,13 +767,32 @@ def gallery_controls(state)
   )
 end
 
+# The same 32-pixel avatar three times, as the three formats a picture may
+# arrive in (03 §1). The client tells them apart by their first bytes; the
+# server only ever sends a hash.
+def gallery_pictures
+  row(
+    {
+      "gap": 3,
+      "align": "center",
+      "wrap": "wrap"
+    },
+    [
+      avatar("public/images/avatar.png", 32),
+      avatar("public/images/avatar.jpg", 32),
+      avatar("public/images/avatar.webp", 32),
+      muted("PNG · JPEG · WebP")
+    ]
+  )
+end
+
 def gallery_media(state)
   kind = state["media_tab"] ?? "Sound"
   body = gallery_sound(state)
   body = gallery_video(state) if kind == "Video"
   card(
     {"gap": 3, "width": "100%"},
-    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab"), body]
+    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab"), body, gallery_pictures()]
   )
 end
 

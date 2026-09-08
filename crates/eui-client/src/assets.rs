@@ -178,7 +178,99 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
-/// Decode a PNG. Other formats are not accepted in version 1.
+/// Decode whatever the bytes are, by their first bytes: PNG always, JPEG
+/// and WebP when the client was built with them (`jpeg`, `webp`). A format
+/// the build does not carry is a decode failure with its name in it, so
+/// the reason reaches the log rather than a blank box.
+pub fn decode_image(bytes: &[u8]) -> Result<Image, AssetError> {
+    if bytes.starts_with(b"\x89PNG") {
+        return decode_png(bytes);
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        #[cfg(feature = "jpeg")]
+        return decode_jpeg(bytes);
+        #[cfg(not(feature = "jpeg"))]
+        return Err(AssetError::Decode("JPEG: this build has no decoder".into()));
+    }
+    if bytes.len() > 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        #[cfg(feature = "webp")]
+        return decode_webp(bytes);
+        #[cfg(not(feature = "webp"))]
+        return Err(AssetError::Decode("WebP: this build has no decoder".into()));
+    }
+    Err(AssetError::Decode("not a PNG, JPEG or WebP".into()))
+}
+
+/// True for bytes that name a format the client decodes at all, whatever
+/// this build carries: what tells a picture from a sound or a font.
+pub fn looks_like_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG")
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+}
+
+/// Decode a JPEG. Baseline and progressive, greyscale or colour; the
+/// decoder hands back RGB and the alpha is filled in.
+#[cfg(feature = "jpeg")]
+pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, AssetError> {
+    use zune_jpeg::zune_core::colorspace::ColorSpace;
+    use zune_jpeg::zune_core::options::DecoderOptions;
+    let options = DecoderOptions::default()
+        .jpeg_set_out_colorspace(ColorSpace::RGB)
+        .set_max_width(MAX_IMAGE_EDGE as usize)
+        .set_max_height(MAX_IMAGE_EDGE as usize);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
+    let rgb = decoder.decode().map_err(|e| AssetError::Decode(e.to_string()))?;
+    let (w, h) = decoder.dimensions().ok_or_else(|| AssetError::Decode("no dimensions".to_string()))?;
+    let (width, height) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+    if width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE {
+        return Err(AssetError::Decode("image too large".into()));
+    }
+    let want = (width as usize).saturating_mul(height as usize).saturating_mul(3);
+    if rgb.len() != want {
+        return Err(AssetError::Decode("unexpected pixel count".into()));
+    }
+    let rgba = rgb
+        .chunks_exact(3)
+        .flat_map(|p| match p {
+            [r, g, b] => [*r, *g, *b, 255],
+            _ => [0, 0, 0, 0],
+        })
+        .collect();
+    Ok(Image { width, height, rgba })
+}
+
+/// Decode a WebP, lossy or lossless, with its alpha when it has one. An
+/// animation is decoded to its first frame: a still is what an `image`
+/// node draws.
+#[cfg(feature = "webp")]
+pub fn decode_webp(bytes: &[u8]) -> Result<Image, AssetError> {
+    let mut decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| AssetError::Decode(e.to_string()))?;
+    let (width, height) = decoder.dimensions();
+    if width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE {
+        return Err(AssetError::Decode("image too large".into()));
+    }
+    let channels = if decoder.has_alpha() { 4 } else { 3 };
+    let count = (width as usize).saturating_mul(height as usize);
+    let mut buf = vec![0u8; count.saturating_mul(channels)];
+    decoder.read_image(&mut buf).map_err(|e| AssetError::Decode(e.to_string()))?;
+    let rgba = if channels == 4 {
+        buf
+    } else {
+        buf.chunks_exact(3)
+            .flat_map(|p| match p {
+                [r, g, b] => [*r, *g, *b, 255],
+                _ => [0, 0, 0, 0],
+            })
+            .collect()
+    };
+    if rgba.len() != count.saturating_mul(4) {
+        return Err(AssetError::Decode("unexpected pixel count".into()));
+    }
+    Ok(Image { width, height, rgba })
+}
+
+/// Decode a PNG.
 pub fn decode_png(bytes: &[u8]) -> Result<Image, AssetError> {
     let mut decoder = png::Decoder::new(bytes);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -261,8 +353,8 @@ impl AssetStore {
     /// Deliver fetched, already-verified bytes. Images are decoded now.
     pub fn deliver(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.wanted.remove(&hash);
-        if bytes.starts_with(b"\x89PNG") {
-            match decode_png(&bytes) {
+        if looks_like_image(&bytes) {
+            match decode_image(&bytes) {
                 Ok(img) => {
                     self.images.insert(hash, Arc::new(img));
                 }

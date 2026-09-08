@@ -33,6 +33,13 @@ An inert kind MUST carry no text, props or handlers; a leaf kind MUST have
 no children. Both are decoder errors ([`02-wire-format.md`](02-wire-format.md)
 §4.1).
 
+An `image`'s bytes are **PNG, JPEG or WebP**, told apart by their first bytes
+and never by a name or a header the server sent. A client MAY be built without
+the JPEG or the WebP decoder — they are counted in
+[`10-budgets.md`](10-budgets.md) §1 — and then such an asset fails to decode,
+with the format in the reason, and the node draws nothing. Anything else is a
+decode failure in every build.
+
 ## 2. Painting
 
 Everything paints as a rounded rectangle. For a node with style `s`:

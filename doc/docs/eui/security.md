@@ -94,7 +94,7 @@ server-side before anything is trusted.
 
 ## Process isolation
 
-The decoder, the tree, layout, text shaping, PNG decoding and the VM run
+The decoder, the tree, layout, text shaping, picture decoding and the VM run
 in a worker process; the window keeps the display, the GPU, TLS, the pin
 store, the clipboard and the accessibility adapter, and never decodes a
 frame. On Linux the worker confines itself before its first byte: Landlock

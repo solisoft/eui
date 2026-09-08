@@ -32,6 +32,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 blake3 = "1"
 png = "0.17"
+# JPEG and WebP, both pure Rust and both optional: see the `jpeg` and
+# `webp` features.
+zune-jpeg = { version = "0.5.15", optional = true }
+image-webp = { version = "0.2.0", optional = true }
 # Ed25519 for the manifest signature; already in the tree under rustls.
 ring = "0.17"
 # Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
@@ -47,9 +51,13 @@ cpal = "0.15"
 # open one, and must not (08 §10).
 
 [features]
-default = ["a11y", "clipboard"]
+default = ["a11y", "clipboard", "jpeg", "webp"]
 a11y = ["dep:accesskit", "dep:accesskit_winit"]
 clipboard = ["dep:arboard"]
+# The two other pictures the web has. PNG is always decoded; these are
+# separable because they are bytes in the binary and 10 §1 counts them.
+jpeg = ["dep:zune-jpeg"]
+webp = ["dep:image-webp"]
 
 [dev-dependencies]
 eui-render = { path = "../eui-render", version = "0.1.0" }
