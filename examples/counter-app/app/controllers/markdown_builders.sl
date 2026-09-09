@@ -166,10 +166,17 @@ def md_heading_size(level)
   size < 2 ? 2 : size
 end
 
+# The cells of a table row, the outer pipes dropped. Counted in characters:
+# `length()` counts bytes, and a row with an em dash in it kept its last
+# pipe, split into one cell too many, and drew a third column.
 def md_table_cells(line)
   trimmed = line.strip()
-  trimmed = trimmed.substring(1, trimmed.length()) if md_starts(trimmed, "|")
-  trimmed = trimmed.substring(0, trimmed.length() - 1) if trimmed.length() > 0 && trimmed.substring(trimmed.length() - 1, trimmed.length()) == "|"
+  cells_wide = trimmed.chars().length()
+  if md_starts(trimmed, "|")
+    trimmed = trimmed.substring(1, cells_wide)
+    cells_wide = cells_wide - 1
+  end
+  trimmed = trimmed.substring(0, cells_wide - 1) if cells_wide > 0 && trimmed.substring(cells_wide - 1, cells_wide) == "|"
   trimmed.split("|").map(fn(c) { c.strip() })
 end
 
