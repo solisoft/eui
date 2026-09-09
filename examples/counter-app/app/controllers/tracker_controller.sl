@@ -234,6 +234,7 @@ def tracker_defaults(state)
     "print": "",
     "took": 0,
     "status": "Ready.",
+    "skin": "modern",
     "viewport": {
       "width": 1280,
       "height": 800,
@@ -626,6 +627,7 @@ def tracker(event_data)
     "inst" => set_key(state, "inst", props["id"]),
     "octave" => tracker_octave(state, props["by"] ?? 0),
     "edit" => set_key(state, "edit", !state["edit"]),
+    "skin" => set_key(state, "skin", state["skin"] == "retro" ? "modern" : "retro"),
     "bpm" => set_key(state, "bpm", state["bpm"] + props["by"] < 32 ? 32 : state["bpm"] + props["by"]),
     "speed" => set_key(state, "speed", state["speed"] + props["by"] < 1 ? 1 : state["speed"] + props["by"]),
     "wave" => tracker_set_wave(state, props["id"]),
@@ -642,15 +644,89 @@ def tracker_set_wave(state, id)
 end
 
 # ---------------------------------------------------------------- the look
-# Everything below draws FastTracker 2's own furniture: a face colour, a
-# light edge above and left, a dark one below and right. Two boxes, since
-# a border in EUI has one colour and four widths.
+#
+# Two skins over one tracker. The **modern** one draws with the theme's
+# roles — `surface.raised`, `accent.base`, `text.muted` — so it follows the
+# viewer into dark mode and into whatever palette their desktop is wearing
+# (05 §1), and it borrows the catalogue's own buttons and cards. The
+# **retro** one paints FastTracker 2's furniture literally: a face colour,
+# a light edge above and left, a dark one below and right, and the exact
+# greens and yellows a DOS tracker put on black.
+#
+# Nothing below decides which: the view resolves a skin once and hands it
+# down, so a cell knows what colour a note is and nothing else.
 
-def tracker_bevel(style, children)
+def tracker_skin(state)
+  if !(state["skin"] == "retro")
+    return {
+      "modern": true,
+      "desk": "surface.base",
+      "panel": "surface.raised",
+      "face": "surface.sunken",
+      "edge": "border.subtle",
+      "grid": "surface.base",
+      "row4": "surface.raised",
+      "row16": "surface.sunken",
+      "head": "surface.raised",
+      "note": "text.default",
+      "inst": "accent.base",
+      "vol": "success.base",
+      "fx": "warning.base",
+      "dim": "text.disabled",
+      "cursor": "accent.base",
+      "on_cursor": "accent.on",
+      "play": "success.subtle",
+      "ink": "text.default",
+      "label": "text.muted",
+      "radius": 2,
+      "pad": 3
+    }
+  end
+
+  {
+    "modern": false,
+    "desk": TRACKER_DESK,
+    "panel": TRACKER_PANEL,
+    "face": TRACKER_FACE,
+    "edge": TRACKER_DARK,
+    "grid": TRACKER_BLACK,
+    "row4": TRACKER_ROW_4,
+    "row16": TRACKER_ROW_16,
+    "head": TRACKER_ROW_16,
+    "note": TRACKER_NOTE,
+    "inst": TRACKER_INST,
+    "vol": TRACKER_VOL,
+    "fx": TRACKER_FX,
+    "dim": TRACKER_DIM,
+    "cursor": TRACKER_CURSOR,
+    "on_cursor": TRACKER_NOTE,
+    "play": TRACKER_PLAY,
+    "ink": TRACKER_INK,
+    "label": TRACKER_INK,
+    "radius": 0,
+    "pad": 2
+  }
+end
+
+# A panel. Bevelled in the retro skin — two boxes, since a border in EUI
+# has one colour and four widths — and a flat bordered surface with a
+# radius in the modern one.
+def tracker_frame(skin, style, children)
+  if skin["modern"]
+    flat = style.merge({
+      "bg": style["bg"] ?? skin["panel"],
+      "border": 1,
+      "border_color": skin["edge"],
+      "radius": skin["radius"],
+      "display": style["display"] ?? "column"
+    })
+    return node("box", flat, children)
+  end
+
   inner = style.merge({
     "border": [0, 1, 1, 0],
     "border_color": TRACKER_DARK,
-    "bg": style["bg"] ?? TRACKER_FACE
+    "bg": style["bg"] ?? skin["face"]
   })
   {
     "k": "box",
@@ -664,6 +740,8 @@ def tracker_bevel(style, children)
   }
 end
 
+# The grid is monospaced in both skins: a tracker's columns only line up
+# because every glyph is the same width.
 def tracker_mono(content, colour, size)
   text(
     content,
@@ -675,101 +753,118 @@ def tracker_mono(content, colour, size)
   )
 end
 
-def tracker_button(label, event, props, lit)
-  face = lit ? TRACKER_LIGHT : TRACKER_FACE
-  face_box = tracker_bevel(
-    {
-      "display": "row",
-      "align": "center",
-      "justify": "center",
-      "bg": face,
-      "pad": [1, 2, 1, 2],
-      "cursor": "pointer"
-    },
-    [tracker_mono(label, TRACKER_INK, 0)]
-  )
+# A label reads in the skin's own voice: the theme's face when modern, the
+# same mono as everything else when retro.
+def tracker_label(skin, content)
+  if skin["modern"]
+    return text(
+      content,
+      {"fg": skin["label"], "size": 1}
+    )
+  end
+
+  tracker_mono(content, skin["label"], 0)
+end
+
+def tracker_button(skin, label, event, props, lit)
+  if skin["modern"]
+    pressed = lit ? button(label, event) : secondary_button(label, event)
+    pressed["p"] = props
+    pressed["s"]["min_width"] = 0
+    pressed["s"]["pad"] = [
+      1,
+      3,
+      1,
+      3
+    ]
+    return pressed
+  end
+
+  face_box = tracker_frame(skin, {
+    "display": "row",
+    "align": "center",
+    "justify": "center",
+    "bg": lit ? TRACKER_LIGHT : TRACKER_FACE,
+    "pad": [1, 2, 1, 2],
+    "cursor": "pointer"
+  }, [tracker_mono(label, TRACKER_INK, 0)])
   face_box["on"] = {"click": event}
   face_box["p"] = props
   face_box
 end
 
-def tracker_field(label, value)
+# A number in a sunken well, which is how a tracker shows a value you can
+# change without a text field.
+def tracker_field(skin, label, value)
   row(
     {"gap": 2, "align": "center"},
     [
-      tracker_mono(label, TRACKER_INK, 0),
-      tracker_bevel(
-        {
-          "bg": TRACKER_BLACK,
-          "pad": [0, 2, 0, 2],
-          "display": "row"
-        },
-        [tracker_mono(value, TRACKER_NOTE, 0)]
-      )
+      tracker_label(skin, label),
+      tracker_frame(skin, {
+        "bg": skin["grid"],
+        "pad": [0, 2, 0, 2],
+        "display": "row",
+        "shrink": 0
+      }, [tracker_mono(value, skin["note"], 0)])
     ]
   )
 end
 
-# FT2's nameplate, which is the first thing anyone recognises about it.
-def tracker_plate
-  tracker_bevel(
-    {
-      "display": "column",
-      "pad": [1, 3, 1, 3],
-      "bg": TRACKER_BLACK,
-      "shrink": 0
-    },
-    [
-      text(
-        "TRACKER II",
-        {
-          "font": "mono",
-          "size": 2,
-          "weight": "bold",
-          "fg": TRACKER_INST
-        }
-      ),
-      tracker_mono("eui · soli", TRACKER_DIM, 0)
-    ]
-  )
+# The nameplate, which is the first thing anyone recognises about FT2.
+def tracker_plate(skin)
+  tracker_frame(skin, {
+    "display": "column",
+    "pad": [1, 3, 1, 3],
+    "bg": skin["grid"],
+    "shrink": 0
+  }, [
+    text(
+      "TRACKER II",
+      {
+        "font": "mono",
+        "size": 2,
+        "weight": "bold",
+        "fg": skin["inst"]
+      }
+    ),
+    tracker_mono("eui · soli", skin["dim"], 0)
+  ])
 end
 
-# Where the song is: which pattern, how long it is, and where the cursor
-# sits in it. A tracker tells you all three at once.
-def tracker_song_panel(state)
-  tracker_bevel(
-    {
-      "display": "column",
-      "gap": 1,
-      "pad": 2,
-      "bg": TRACKER_PANEL,
-      "shrink": 0
-    },
-    [
-      row(
-        {"gap": 2, "align": "center"},
-        [tracker_field("Pos", "00"), tracker_field("Ptn", "00"), tracker_field("Len", "01")]
-      ),
-      row(
-        {"gap": 2, "align": "center"},
-        [
-          tracker_field("Rows", str(TRACKER_ROWS)),
-          tracker_field("Chn", str(TRACKER_CHANNELS)),
-          tracker_field("Ins", tracker_hex(state["inst"], 2))
-        ]
-      )
-    ]
-  )
+# Where the song is: which pattern, how long it is, and what the cursor
+# has in hand. A tracker tells you all of it at once.
+def tracker_song_panel(state, skin)
+  tracker_frame(skin, {
+    "display": "column",
+    "gap": 1,
+    "pad": 2,
+    "bg": skin["panel"],
+    "shrink": 0
+  }, [
+    row(
+      {"gap": 2, "align": "center"},
+      [tracker_field(skin, "Pos", "00"), tracker_field(skin, "Ptn", "00"), tracker_field(skin, "Len", "01")]
+    ),
+    row(
+      {"gap": 2, "align": "center"},
+      [
+        tracker_field(skin, "Rows", str(TRACKER_ROWS)),
+        tracker_field(skin, "Chn", str(TRACKER_CHANNELS)),
+        tracker_field(skin, "Ins", tracker_hex(state["inst"], 2))
+      ]
+    )
+  ])
 end
 
-# The transport, the tempo and the state of the editor: FT2's top left.
-def tracker_top(state)
+# The transport, the tempo, the octave, and which skin is on.
+def tracker_top(state, skin)
   transport = row(
     {"gap": 1, "align": "center"},
     [
-      tracker_button("Play", "play", {}, state["playing"]),
-      tracker_button("Stop", "stop", {}, false),
-      tracker_button(state["edit"] ? "Edit ON" : "Edit off", "edit", {}, state["edit"])
+      tracker_button(skin, "Play", "play", {}, state["playing"]),
+      tracker_button(skin, "Stop", "stop", {}, false),
+      tracker_button(skin, state["edit"] ? "Edit ON" : "Edit off", "edit", {}, state["edit"]),
+      tracker_button(skin, skin["modern"] ? "Retro skin" : "Modern skin", "skin", {}, false)
     ]
   )
   numbers = row(
@@ -779,59 +874,54 @@ def tracker_top(state)
       "wrap": "wrap"
     },
     [
-      tracker_field("BPM", str(state["bpm"])),
-      tracker_button("-", "bpm", {"by": -5}, false),
-      tracker_button("+", "bpm", {"by": 5}, false),
-      tracker_field("Spd", str(state["speed"])),
-      tracker_button("-", "speed", {"by": -1}, false),
-      tracker_button("+", "speed", {"by": 1}, false),
-      tracker_field("Oct", str(state["octave"])),
-      tracker_button("-", "octave", {"by": -1}, false),
-      tracker_button("+", "octave", {"by": 1}, false),
-      tracker_field("Row", tracker_hex(state["row"], 2))
+      tracker_field(skin, "BPM", str(state["bpm"])),
+      tracker_button(skin, "-", "bpm", {"by": -5}, false),
+      tracker_button(skin, "+", "bpm", {"by": 5}, false),
+      tracker_field(skin, "Spd", str(state["speed"])),
+      tracker_button(skin, "-", "speed", {"by": -1}, false),
+      tracker_button(skin, "+", "speed", {"by": 1}, false),
+      tracker_field(skin, "Oct", str(state["octave"])),
+      tracker_button(skin, "-", "octave", {"by": -1}, false),
+      tracker_button(skin, "+", "octave", {"by": 1}, false),
+      tracker_field(skin, "Row", tracker_hex(state["row"], 2))
     ]
   )
-  tracker_bevel(
-    {
-      "display": "column",
-      "gap": 2,
-      "pad": 2,
-      "width": "100%"
-    },
-    [transport, numbers]
-  )
+  tracker_frame(skin, {
+    "display": "column",
+    "gap": 2,
+    "pad": 2,
+    "grow": 1,
+    "shrink": 1,
+    "min_width": 0
+  }, [transport, numbers])
 end
 
 # One scope per channel, drawing the shape of whatever that channel is
 # sounding. A tracker's scopes move; these say what the voice *is*, which
 # is what a still picture of a tracker can honestly show.
-def tracker_scope(state, chan)
+def tracker_scope(state, skin, chan)
   cell = tracker_cell_at(state, state["row"], chan)
-  playing = cell["n"] >= 0
+  sounding = cell["n"] >= 0
   instrument = state["instruments"][cell["i"] - 1] ?? state["instruments"][0]
   wave = instrument["wave"]
   points = range(0, 30).map(fn(i) { [i * 2, 13 - tracker_wave_at(wave, i * 4369 % 65536, i) * 11 / 100] })
-  line = [0, playing ? TRACKER_INST : TRACKER_DIM, 1].concat(flatten_points(points))
-  tracker_bevel(
-    {"bg": TRACKER_BLACK, "pad": 0},
-    [canvas(60, 26, [line])]
-  )
+  line = [0, sounding ? skin["inst"] : skin["dim"], 1].concat(flatten_points(points))
+  tracker_frame(skin, {"bg": skin["grid"], "pad": 0}, [canvas(60, 26, [line])])
 end
 
-def tracker_scopes(state)
+def tracker_scopes(state, skin)
   row(
     {
       "gap": 1,
       "wrap": "wrap",
       "shrink": 1
     },
-    range(0, TRACKER_CHANNELS).map(fn(c) { tracker_scope(state, c) })
+    range(0, TRACKER_CHANNELS).map(fn(c) { tracker_scope(state, skin, c) })
   )
 end
 
-# The instrument list, FT2's right-hand column: a number, a name, and the
-# shape it plays.
-def tracker_instrument_row(state, i)
+# The instrument list: a number, a name, and the shape it plays.
+def tracker_instrument_row(state, skin, i)
   instrument = state["instruments"][i]
   chosen = state["inst"] == i + 1
   line = row(
@@ -840,13 +930,15 @@ def tracker_instrument_row(state, i)
       "align": "center",
       "width": "100%",
       "pad": [0, 1, 0, 1],
-      "bg": chosen ? TRACKER_CURSOR : "none"
+      "radius": skin["radius"],
+      "bg": chosen ? skin["cursor"] : "none",
+      "cursor": "pointer"
     },
     [
-      tracker_mono(tracker_hex(i + 1, 2), chosen ? TRACKER_NOTE : TRACKER_DIM, 0),
-      tracker_mono(instrument["name"] == "" ? "—" : instrument["name"], chosen ? TRACKER_NOTE : TRACKER_INST, 0),
+      tracker_mono(tracker_hex(i + 1, 2), chosen ? skin["on_cursor"] : skin["dim"], 0),
+      tracker_mono(instrument["name"] == "" ? "—" : instrument["name"], chosen ? skin["on_cursor"] : skin["inst"], 0),
       spacer(),
-      tracker_mono(TRACKER_WAVES[instrument["wave"]], TRACKER_DIM, 0)
+      tracker_mono(TRACKER_WAVES[instrument["wave"]], chosen ? skin["on_cursor"] : skin["dim"], 0)
     ]
   )
   line["on"] = {"click": "inst"}
@@ -854,61 +946,62 @@ def tracker_instrument_row(state, i)
   line
 end
 
-def tracker_instruments_panel(state)
+def tracker_instruments_panel(state, skin)
   waves = row(
     {"gap": 1, "wrap": "wrap"},
-    range(0, TRACKER_WAVES.length()).map(fn(w) { tracker_button(TRACKER_WAVES[w], "wave", {"id": w}, false) })
+    range(0, TRACKER_WAVES.length()).map(fn(w) {
+      tracker_button(skin, TRACKER_WAVES[w], "wave", {"id": w}, false)
+    })
   )
-  tracker_bevel(
-    {
+  tracker_frame(skin, {
+    "display": "column",
+    "gap": 1,
+    "pad": 2,
+    "bg": skin["panel"],
+    "width": 280,
+    "shrink": 0
+  }, [
+    tracker_label(skin, "Instruments"),
+    tracker_frame(skin, {
+      "bg": skin["grid"],
+      "pad": 1,
       "display": "column",
-      "gap": 1,
-      "pad": 2,
-      "bg": TRACKER_PANEL,
-      "width": 260,
-      "shrink": 0
-    },
-    [
-      tracker_mono("Instruments", TRACKER_INK, 0),
-      tracker_bevel(
-        {
-          "bg": TRACKER_BLACK,
-          "pad": 1,
-          "display": "column",
-          "width": "100%"
-        },
-        range(0, state["instruments"].length()).map(fn(i) { tracker_instrument_row(state, i) })
-      ),
-      waves
-    ]
-  )
+      "width": "100%"
+    }, range(0, state["instruments"].length()).map(fn(i) { tracker_instrument_row(state, skin, i) })),
+    waves
+  ])
 end
 
 # ------------------------------------------------------------ the pattern
 
-def tracker_cell_nodes(state, at, chan, playing_row)
+TRACKER_NOTE_W = 34
+TRACKER_INST_W = 24
+TRACKER_VOL_W = 24
+TRACKER_FX_W = 34
+
+def tracker_cell_nodes(state, skin, at, chan)
   cell = tracker_cell_at(state, at, chan)
   here = state["row"] == at && state["chan"] == chan
   parts = [
     {
       "w": TRACKER_NOTE_W,
       "t": tracker_note_text(cell["n"]),
-      "c": cell["n"] < 0 ? TRACKER_DIM : TRACKER_NOTE
+      "c": cell["n"] < 0 ? skin["dim"] : skin["note"]
     },
     {
       "w": TRACKER_INST_W,
       "t": cell["i"] > 0 ? tracker_hex(cell["i"], 2) : "..",
-      "c": cell["i"] > 0 ? TRACKER_INST : TRACKER_DIM
+      "c": cell["i"] > 0 ? skin["inst"] : skin["dim"]
     },
     {
       "w": TRACKER_VOL_W,
       "t": cell["v"] > 0 ? tracker_hex(cell["v"], 2) : "..",
-      "c": cell["v"] > 0 ? TRACKER_VOL : TRACKER_DIM
+      "c": cell["v"] > 0 ? skin["vol"] : skin["dim"]
     },
     {
       "w": TRACKER_FX_W,
       "t": cell["f"] >= 0 ? tracker_hex(cell["f"], 1) + tracker_hex(cell["p"], 2) : "...",
-      "c": cell["f"] >= 0 ? TRACKER_FX : TRACKER_DIM
+      "c": cell["f"] >= 0 ? skin["fx"] : skin["dim"]
     }
   ]
   range(0, parts.length()).map(fn(i) {
@@ -919,23 +1012,19 @@ def tracker_cell_nodes(state, at, chan, playing_row)
       "s": {
         "width": part["w"],
         "display": "row",
-        "bg": lit ? TRACKER_CURSOR : "none"
+        "radius": lit ? skin["radius"] : 0,
+        "bg": lit ? skin["cursor"] : "none"
       },
-      "c": [tracker_mono(part["t"], part["c"], 0)]
+      "c": [tracker_mono(part["t"], lit ? skin["on_cursor"] : part["c"], 0)]
     }
   })
 end
 
-TRACKER_NOTE_W = 34
-TRACKER_INST_W = 24
-TRACKER_VOL_W = 24
-TRACKER_FX_W = 34
-
-def tracker_row_line(state, at, playing_row)
-  background = TRACKER_BLACK
-  background = TRACKER_ROW_4 if at % 4 == 0
-  background = TRACKER_ROW_16 if at % 16 == 0
-  background = TRACKER_PLAY if at == playing_row
+def tracker_row_line(state, skin, at, playing_row)
+  background = "none"
+  background = skin["row4"] if at % 4 == 0
+  background = skin["row16"] if at % 16 == 0
+  background = skin["play"] if at == playing_row
   cells = range(0, TRACKER_CHANNELS).map(fn(c) {
     row(
       {
@@ -943,7 +1032,7 @@ def tracker_row_line(state, at, playing_row)
         "width": TRACKER_CELL_W,
         "shrink": 0
       },
-      tracker_cell_nodes(state, at, c, playing_row)
+      tracker_cell_nodes(state, skin, at, c)
     )
   })
   keyed("r" + str(at), row(
@@ -961,19 +1050,18 @@ def tracker_row_line(state, at, playing_row)
         "display": "row",
         "shrink": 0
       },
-      "c": [tracker_mono(tracker_hex(at, 2), at == state["row"] ? TRACKER_NOTE : TRACKER_DIM, 0)]
+      "c": [tracker_mono(tracker_hex(at, 2), at == state["row"] ? skin["note"] : skin["dim"], 0)]
     }].concat(cells)
   ))
 end
 
-# The window of rows around the cursor. A tracker keeps the current row in
-# the middle and moves the pattern past it, so there is no scrollbar to
-# chase and the server sends twenty-three rows instead of sixty-four.
 # As many rows as the window has room for, which is how a tracker uses a
 # screen: the pattern is the screen, and everything else is furniture.
 def tracker_visible(state)
   height = (state["viewport"] ?? {})["height"] ?? 800
-  fits = int((height - 250) / TRACKER_ROW_H)
+  # What the furniture above and below takes: the panels, the scopes, the
+  # heading strip and the status line.
+  fits = int((height - 300) / TRACKER_ROW_H)
   fits = 8 if fits < 8
   fits = TRACKER_ROWS if fits > TRACKER_ROWS
   fits
@@ -987,9 +1075,9 @@ def tracker_window_top(state)
   top
 end
 
-# The heading strip a tracker puts over its channels, so the eye can find
-# the one it is typing in.
-def tracker_channel_heads(state)
+# The heading strip over the channels, so the eye can find the one it is
+# typing in. It scrolls with the pattern, so it stays over its own column.
+def tracker_channel_heads(state, skin)
   heads = range(0, TRACKER_CHANNELS).map(fn(c) {
     {
       "k": "box",
@@ -998,16 +1086,17 @@ def tracker_channel_heads(state)
         "display": "row",
         "justify": "center",
         "shrink": 0,
-        "bg": state["chan"] == c ? TRACKER_CURSOR : "none"
+        "radius": skin["radius"],
+        "bg": state["chan"] == c ? skin["cursor"] : "none"
       },
-      "c": [tracker_mono("Channel " + str(c + 1), state["chan"] == c ? TRACKER_NOTE : TRACKER_DIM, 0)]
+      "c": [tracker_mono("Channel " + str(c + 1), state["chan"] == c ? skin["on_cursor"] : skin["dim"], 0)]
     }
   })
   row(
     {
       "gap": 0,
       "width": "100%",
-      "bg": TRACKER_ROW_16
+      "bg": skin["head"]
     },
     [{
       "k": "box",
@@ -1016,22 +1105,22 @@ def tracker_channel_heads(state)
         "display": "row",
         "shrink": 0
       },
-      "c": [tracker_mono("", TRACKER_DIM, 0)]
+      "c": [tracker_mono("", skin["dim"], 0)]
     }].concat(heads)
   )
 end
 
-def tracker_pattern(state)
+def tracker_pattern(state, skin)
   visible = tracker_visible(state)
   top = tracker_window_top(state)
   playing_row = state["playing"] ? state["row"] : -1
-  lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, r, playing_row) })
+  lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, skin, r, playing_row) })
   grid = {
     "k": "box",
     "s": {
       "display": "column",
       "gap": 0,
-      "bg": TRACKER_BLACK,
+      "bg": skin["grid"],
       "pad": 0,
       "cursor": "pointer",
       "width": "100%",
@@ -1039,46 +1128,42 @@ def tracker_pattern(state)
     },
     "on": {"click": "click", "key_down": "key"},
     "p": {"top": top},
-    "c": [tracker_channel_heads(state)].concat(lines)
+    "c": [tracker_channel_heads(state, skin)].concat(lines)
   }
-  tracker_bevel(
-    {
-      "display": "column",
-      "bg": TRACKER_BLACK,
-      "width": "100%"
+  tracker_frame(skin, {
+    "display": "column",
+    "bg": skin["grid"],
+    "width": "100%"
+  }, [{
+    "k": "scroll",
+    "s": {
+      "overflow": "scroll",
+      "width": "100%",
+      "height": (visible + 1) * TRACKER_ROW_H,
+      "bg": skin["grid"],
+      "radius": skin["radius"]
     },
-    [{
-      "k": "scroll",
-      "s": {
-        "overflow": "scroll",
-        "width": "100%",
-        "height": (visible + 1) * TRACKER_ROW_H,
-        "bg": TRACKER_BLACK
-      },
-      "c": [grid]
-    }]
-  )
+    "c": [grid]
+  }])
 end
 
-def tracker_status(state)
-  tracker_bevel(
-    {
-      "display": "row",
-      "gap": 3,
-      "align": "center",
-      "pad": [0, 2, 0, 2],
-      "width": "100%"
-    },
-    [
-      tracker_mono(state["status"], TRACKER_INK, 0),
-      spacer(),
-      tracker_mono("Z-M / Q-U notes  ·  arrows move  ·  Esc toggles edit", TRACKER_INK, 0)
-    ]
-  )
+def tracker_status(state, skin)
+  tracker_frame(skin, {
+    "display": "row",
+    "gap": 3,
+    "align": "center",
+    "pad": [0, 2, 0, 2],
+    "width": "100%"
+  }, [
+    tracker_label(skin, state["status"]),
+    spacer(),
+    tracker_label(skin, "Z-M / Q-U notes  ·  arrows move  ·  Esc toggles edit")
+  ])
 end
 
 def tracker_view(raw_state)
   state = tracker_defaults(raw_state ?? {})
+  skin = tracker_skin(state)
   w = (state["viewport"] ?? {})["width"] ?? 1280
   wide = bp_min(w, "md")
   sound = audio(state["rendered"] == "" ? "public/sounds/chime.wav" : state["rendered"], {
@@ -1100,9 +1185,9 @@ def tracker_view(raw_state)
           "align": "start",
           "wrap": "wrap"
         },
-        [tracker_plate(), tracker_top(state), tracker_song_panel(state)]
+        [tracker_plate(skin), tracker_top(state, skin), tracker_song_panel(state, skin)]
       ),
-      tracker_scopes(state)
+      tracker_scopes(state, skin)
     ]
   )
   head = wide ? row(
@@ -1111,19 +1196,19 @@ def tracker_view(raw_state)
       "align": "start",
       "width": "100%"
     },
-    [left, tracker_instruments_panel(state)]
+    [left, tracker_instruments_panel(state, skin)]
   ) : column(
     {"gap": 2, "width": "100%"},
-    [left, tracker_instruments_panel(state)]
+    [left, tracker_instruments_panel(state, skin)]
   )
   column(
     {
       "gap": 2,
-      "pad": 2,
-      "bg": TRACKER_DESK,
+      "pad": skin["pad"],
+      "bg": skin["desk"],
       "width": "100%",
       "height": "100%"
     },
-    [sound, head, tracker_pattern(state), spacer(), tracker_status(state)]
+    [sound, head, tracker_pattern(state, skin), spacer(), tracker_status(state, skin)]
   )
 end
