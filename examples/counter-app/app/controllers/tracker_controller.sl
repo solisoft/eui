@@ -333,28 +333,42 @@ end
 # A voice's shape, sampled once into 256 steps. The mixer's inner loop is
 # then an index and a multiply — no branch on the waveform, and none of
 # the arithmetic that decides what a saw looks like.
-def tracker_table(wave)
-  range(0, 256).map(fn(i) { tracker_wave_at(wave, i * 256, i) })
+# A voice's shape, sampled into 256 steps and already scaled by the volume
+# and the envelope this row wants. Folding both into the table is what
+# takes the mixer's inner loop down to a multiply, a lookup and an add:
+# the four multiplies and two divisions that used to be *per sample* are
+# now 256 of each, per voice, per row.
+def tracker_table(wave, level)
+  range(0, 256).map(fn(i) { tracker_wave_at(wave, i * 256, i) * level / 10000 })
 end
 
-# One row of one voice, added into what is already there. Adding as it
-# goes rather than building a part and summing it afterwards halves the
-# work, which on a hundred and seventy thousand samples is a second.
+# The envelope, read once for the row rather than per sample: a note is
+# flat for two thousand samples and then falls away. The attack is the
+# exception — sixty-four samples, patched in below, because a square wave
+# that starts at full height clicks.
+def tracker_level(vol, age)
+  fade = age > 2000 ? 100 - int((age - 2000) / 60) : 100
+  fade = 0 if fade < 0
+  vol * fade
+end
+
 def tracker_add_voice(sum, voice, count)
-  table = tracker_table(voice["wave"])
+  level = tracker_level(voice["vol"], voice["age"])
+  return sum if level <= 0
+
+  table = tracker_table(voice["wave"], level)
   step = voice["step"]
-  vol = voice["vol"]
   phase0 = voice["phase"]
-  age0 = voice["age"]
-  range(0, count).map(fn(i) {
-    age = age0 + i
-    # A short attack and a long decay, so a note has an edge and a tail
-    # instead of a click at either end.
-    gain = age < 64 ? age * 100 / 64 : 100
-    fade = age > 2000 ? 100 - int((age - 2000) / 60) : 100
-    fade = 0 if fade < 0
-    sum[i] + table[int((phase0 + i * step) % 65536 / 256)] * vol * gain * fade / 1000000
-  })
+  mixed = range(0, count).map(fn(i) { sum[i] + table[int((phase0 + i * step) % 65536 / 256)] })
+  return mixed if voice["age"] > 0
+
+  # The note starts here: ramp its first sixty-four samples in place.
+  i = 0
+  while i < 64 && i < count
+    mixed[i] = sum[i] + int((mixed[i] - sum[i]) * i / 64)
+    i = i + 1
+  end
+  mixed
 end
 
 def tracker_mix_row(voices, count, at)
