@@ -165,9 +165,7 @@ pub fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
         // Spec 01 §1: TLS 1.3 is REQUIRED. Saying so here rather than
         // leaving it to the library's default is what makes "no downgrade"
         // a property of this client and not of its dependency tree.
-        let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]).with_root_certificates(roots).with_no_client_auth();
         std::sync::Arc::new(config)
     }))
 }

@@ -1212,16 +1212,24 @@ fn the_docs_dialog_is_a_window_of_blocks_that_scrolling_extends() {
     // The list knows the whole document — its count — and holds a window.
     let count = d.session().atom_id("count").unwrap();
     let row = d.session().atom_id("row").unwrap();
-    let list = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List) && d.session().node(*ix).unwrap().prop(count).is_some()).expect("the docs list");
+    let list = d
+        .session()
+        .preorder(root(&d))
+        .find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List) && d.session().node(*ix).unwrap().prop(count).is_some())
+        .expect("the docs list");
     let total = match d.session().node(list).unwrap().prop(count) {
         Some(eui_proto::Value::Int(n)) => *n,
         other => panic!("{other:?}"),
     };
     let rows_of = |d: &Driver| -> Vec<i64> {
-        d.session().children(list).iter().filter_map(|c| match d.session().node(*c).and_then(|n| n.prop(row)) {
-            Some(eui_proto::Value::Int(r)) => Some(*r),
-            _ => None,
-        }).collect()
+        d.session()
+            .children(list)
+            .iter()
+            .filter_map(|c| match d.session().node(*c).and_then(|n| n.prop(row)) {
+                Some(eui_proto::Value::Int(r)) => Some(*r),
+                _ => None,
+            })
+            .collect()
     };
     let held = rows_of(&d);
     assert!(total as usize > held.len(), "{total} blocks, {} held", held.len());
