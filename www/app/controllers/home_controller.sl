@@ -11,6 +11,11 @@ class HomeController < Controller
     render("home/components", {"title": "EUI components"})
   end
 
+  # GET /samples
+  def samples
+    render("home/samples", {"title": "EUI samples — seven applications, one client"})
+  end
+
   # GET /health
   def health
     {

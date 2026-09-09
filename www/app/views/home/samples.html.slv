@@ -1,0 +1,328 @@
+<main class="sheet">
+    <%- partial("layouts/top", {"here": "samples"}) %>
+
+    <section class="hero">
+        <div class="mark">Samples<span>&sect;07</span></div>
+        <div>
+            <h1>Seven applications, and one client that drew all of them.</h1>
+            <p class="lede">
+                Every picture below is a real render, taken off the wire: a Soli server
+                answering an EUI session, the Rust client laying it out and painting it
+                on the GPU, captured at 2&times; by the repository's own
+                <code>snapshot</code> tool. No mockups, and no browser anywhere in the
+                chain.
+            </p>
+
+            <p>
+                They all live in one Soli application &mdash;
+                <code>examples/counter-app</code> &mdash; and each is a route of four
+                words: a handler that takes an event and returns state, and a view that
+                takes state and returns a hash. Clone the repository and you are running
+                these in about a minute.
+            </p>
+
+            <div class="pane">
+                <b>run any of them</b>
+<pre>soli serve examples/counter-app --port 5092
+cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">tracker</span></pre>
+            </div>
+
+            <nav class="toc">
+                <a href="#tracker"><b>Tracker</b><span>a pattern editor that mixes its own sound</span></a>
+                <a href="#needle"><b>Needle</b><span>a music player, 40 000 rows and a scope</span></a>
+                <a href="#catalogue"><b>Catalogue</b><span>every widget on one page</span></a>
+                <a href="#feed"><b>Feed</b><span>40 000 cards, virtualised</span></a>
+                <a href="#table"><b>Table</b><span>10 000 rows, sorted by permutation</span></a>
+                <a href="#todo"><b>Todo</b><span>keyed rows, local text, one round trip</span></a>
+                <a href="#counter"><b>Counter</b><span>the whole protocol in nine nodes</span></a>
+            </nav>
+        </div>
+    </section>
+
+    <section id="tracker">
+        <div class="mark">Tracker<span>&sect;07.1</span></div>
+        <div>
+            <h2>A tracker, mixed by the server</h2>
+            <p>
+                FastTracker 2's shape: sixty-four rows, eight channels, five instrument
+                shapes, and a cursor that lives under the keyboard. The client has no
+                synthesiser and no note scheduler &mdash; on Play the <em>server</em>
+                walks the pattern into PCM, writes a <code>wav</code>, and the window
+                fetches it by hash like any picture. The milliseconds the window reports
+                back are what move the row cursor: the pattern scrolls because the sound
+                says where it is.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/tracker.png" width="1800" height="1200"
+                     alt="The tracker: a nameplate, transport and tempo panels, eight scopes, an instrument list, a channel heading strip and a 64-row pattern with the playing row lit."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/tracker_controller.sl</span>
+                    <span>router_eui("tracker", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>169 344</dt>
+                    <dd>samples mixed for one pattern at 22 kHz, 16-bit
+                        <small>0.9 s of interpreted Soli — eight times faster than it plays</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>2</dt>
+                    <dd>handlers on the whole grid, one click and one key_down
+                        <small>a pattern is a character grid, so a click's point is two divisions</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>2 skins</dt>
+                    <dd>theme roles, or FastTracker 2's own bevels
+                        <small>the modern one follows the viewer's desktop palette; the retro one is painted in hex</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="needle">
+        <div class="mark">Needle<span>&sect;07.2</span></div>
+        <div>
+            <h2>A music player that ships as one binary</h2>
+            <p>
+                Search, a record, a track list, a transport, and a disc that turns for
+                exactly as long as something plays. Its sleeves are drawn from each
+                record's own name, so nothing is fetched; point it at a Spotify client
+                and the server fetches the real artwork instead, crops it and re-encodes
+                it, and the window still sees an ordinary picture from its own origin.
+                Packaged with <code>soli desktop build</code> it is one file in the
+                application menu.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/music.png" width="1800" height="1200"
+                     alt="Needle: a search bar, five generated record sleeves, and a transport bar across the foot of the window."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/music_controller.sl</span>
+                    <span>router_eui("music", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>0 pictures</dt>
+                    <dd>fetched by the window, ever
+                        <small>assets come from the session's own origin, by BLAKE3 hash (01 §2.2)</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>MPRIS</dt>
+                    <dd>plays on the machine it runs on, or on a Spotify Connect device
+                        <small>the server talks to the desktop bus; the client only draws</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="catalogue">
+        <div class="mark">Catalogue<span>&sect;07.3</span></div>
+        <div>
+            <h2>Every widget, on one page</h2>
+            <p>
+                The conformance page: navbar, tabs, stat tiles, banner, progress,
+                badges, chips, segmented control, pager, breadcrumb, stepper, select,
+                slider, sound, moving picture, three calendars, a data grid with inline
+                editing, four charts, an accordion, a tree, a menu, a tooltip, an empty
+                state, a form and a sheet. Every one of them is a Soli function that
+                returns a hash &mdash; there is no widget runtime in the client to
+                update.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/gallery.png" width="1800" height="1200"
+                     alt="The catalogue page: stat tiles, an info banner, a progress bar with badges, a segmented control, a pager, a stepper and the controls card."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>router_eui("gallery", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>107</dt>
+                    <dd>functions in the catalogue, none of them in the client
+                        <small><a href="/components">the component reference</a> lists all of them</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>1 breakpoint</dt>
+                    <dd>per layout decision, evaluated on the server
+                        <small>the tiles wrap themselves; the client has no media queries</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="feed">
+        <div class="mark">Feed<span>&sect;07.4</span></div>
+        <div>
+            <h2>Forty thousand cards, and only the ones you can see</h2>
+            <p>
+                A social feed, windowed: the client sends the row range it can show, the
+                server builds those cards and no others. A like is one round trip that
+                patches one card. Given an X account it fills the same cards from a real
+                timeline instead, and says why in the header when the API refuses.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/feed.png" width="1800" height="840"
+                     alt="The feed: a header with a post count and a load button, and a card with an avatar, text and a moving picture with a scrubber."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>router_eui("feed", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>40 000</dt>
+                    <dd>rows the client knows the height of
+                        <small>row heights are arithmetic, not measurement (04 §7.1)</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>1 window</dt>
+                    <dd>of cards built per scroll, not forty thousand
+                        <small>the server is told the range; the rest are never encoded</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="table">
+        <div class="mark">Table<span>&sect;07.5</span></div>
+        <div>
+            <h2>Ten thousand rows, sorted without rebuilding one</h2>
+            <p>
+                The performance check. Sorting sends a permutation of keys, not a new
+                table: the client matches keyed children by key and <strong>moves</strong>
+                them. Mounting the whole thing and sorting it are both measured in the
+                repository's budget suite, and the numbers on the front page come from
+                that run.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/table.png" width="1800" height="1200"
+                     alt="The table: a header row and ten thousand virtualised rows of reference, client, status and amount."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>router_eui("table", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>50 014</dt>
+                    <dd>nodes in the session, five per row
+                        <small>only the rows in view are measured or painted</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>&lt; 2 ms</dt>
+                    <dd>of CPU per scrolled frame, the budget this holds to
+                        <small>spec/10 §2 — measured by <code>cargo xtask bench</code></small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="todo">
+        <div class="mark">Todo<span>&sect;07.6</span></div>
+        <div>
+            <h2>The list everyone writes first</h2>
+            <p>
+                Keyed rows, checkboxes that carry the id of what they toggle, and a text
+                field whose value belongs to the client: what a person has typed
+                survives every re-render the application does for other reasons, because
+                the caret, the selection and the clipboard never leave the window
+                (03 §3).
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/todo.png" width="1800" height="1200"
+                     alt="The todo list: an avatar and title, a text field with an add button, and four rows with checkboxes."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>router_eui("todo", &hellip;)</span>
+                </figcaption>
+            </figure>
+        </div>
+    </section>
+
+    <section id="counter">
+        <div class="mark">Counter<span>&sect;07.7</span></div>
+        <div>
+            <h2>Nine nodes, and the whole protocol</h2>
+            <p>
+                A title, a number, two buttons and a hint. It is here because it is the
+                smallest thing that exercises every part of the round trip &mdash; and
+                because one of its buttons never asks the server at all: a declared
+                local handler updates the number in the window and reports afterwards.
+                The other is 25 bytes out and 9 bytes back.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/counter.png" width="1800" height="1200"
+                     alt="The counter: a title, the number 0, a minus and a plus button, and a line of help text."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>router_eui("counter", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>25 B</dt>
+                    <dd>a click, on the wire
+                        <small>and 9 bytes for the answer that changes the number</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>0 B</dt>
+                    <dd>for the button that runs locally
+                        <small>a declared handler, not code from the network (07 §1)</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <section id="build">
+        <div class="mark">Yours<span>&sect;07.8</span></div>
+        <div>
+            <h2>What it takes to add the eighth</h2>
+            <p>
+                One line in <code>config/routes.sl</code>, a handler, a view. No client
+                release, no widget registration, no build step: the client already knows
+                the sixteen kinds, and everything above composes them.
+            </p>
+
+            <div class="pane">
+                <b>config/routes.sl</b>
+<pre>router_eui(<span class="s">"tracker"</span>, <span class="s">"tracker#tracker"</span>, <span class="s">"tracker#tracker_view"</span>)</pre>
+            </div>
+
+            <p class="soft">
+                The handler is <code>(event, params, state) -&gt; state</code>. The view is
+                <code>state -&gt; hash</code>. Everything else &mdash; diffing the tree,
+                encoding the patch, resolving the styles, fetching the assets &mdash;
+                belongs to the two ends and not to you.
+            </p>
+        </div>
+    </section>
+
+    <footer>
+        <span>EUI · a protocol, a client, a specification</span>
+        <a href="/components">Components</a>
+        <a href="https://github.com/solisoft/eui/tree/main/examples/counter-app">The sample application</a>
+        <a href="https://github.com/solisoft/eui">Source</a>
+    </footer>
+</main>

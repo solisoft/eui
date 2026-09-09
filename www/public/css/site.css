@@ -1880,3 +1880,43 @@ footer a:hover {
 .g-chart.sm {
     max-width: 48px;
 }
+
+/* ---------------------------------------------------------------- plates
+ *
+ * The samples page: each application is a plate in the drawing — the render
+ * itself, framed by one hairline, over a caption strip that says where the
+ * thing lives. The screenshots are 2× so they hold on a retina screen; the
+ * frame keeps its own aspect from the width and height attributes, so the
+ * page does not reflow as they arrive.
+ */
+
+.plate {
+    margin: 0 0 2rem;
+    border: 1px solid var(--rule);
+    background: var(--paper-sunk);
+}
+
+.plate img {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.plate figcaption {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--rule);
+    padding: 0.55rem 0.75rem 0.6rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft);
+}
+
+/* A plate's numbers sit closer to it than a section's usually would. */
+.plate + .dims {
+    gap: 1.1rem;
+}

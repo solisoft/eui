@@ -7,6 +7,9 @@ get("/", "home#index")
 # The component reference
 get("/components", "home#components")
 
+# What people build with it: every sample application, rendered
+get("/samples", "home#samples")
+
 # Health check endpoint
 get("/health", "home#health")
 
