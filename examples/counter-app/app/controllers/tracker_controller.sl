@@ -338,8 +338,19 @@ end
 # takes the mixer's inner loop down to a multiply, a lookup and an add:
 # the four multiplies and two divisions that used to be *per sample* are
 # now 256 of each, per voice, per row.
+# Kept between rows: a voice's level only changes when its envelope moves,
+# so most rows of most notes ask for a table that has already been built.
+# Five shapes and a hundred-odd levels is a few hundred entries at worst.
+TRACKER_TABLES = {}
+
 def tracker_table(wave, level)
-  range(0, 256).map(fn(i) { tracker_wave_at(wave, i * 256, i) * level / 10000 })
+  key = str(wave) + ":" + str(level)
+  hit = TRACKER_TABLES[key]
+  return hit unless hit.nil?
+
+  built = range(0, 256).map(fn(i) { tracker_wave_at(wave, i * 256, i) * level / 10000 })
+  TRACKER_TABLES[key] = built
+  built
 end
 
 # The envelope, read once for the row rather than per sample: a note is
