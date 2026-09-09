@@ -293,6 +293,18 @@ impl ColorRef {
     }
 }
 
+/// `animation`: the node's painting turns about its own centre, one
+/// revolution every 1.2 s, for as long as it is on screen (03 §5).
+pub const ANIMATION_SPIN: u8 = 1;
+/// `animation`: the node fades in — and frosts in, if it wears a `blur` —
+/// when it is mounted, over its `transition` duration (03 §5).
+///
+/// This is the one exception to "a node that is mounted appears at once",
+/// and it is opt-in for exactly that reason: a dialog should arrive, but a
+/// button that carries a transition for its hover should not fade in every
+/// time a resync rebuilds the tree.
+pub const ANIMATION_ENTER: u8 = 2;
+
 /// The 64-byte computed style record.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StyleRecord {
@@ -367,8 +379,7 @@ pub struct StyleRecord {
     /// `0` none, else a `motion` scale index + 1: colours and opacity
     /// animate into this record when a node's style changes to it.
     pub transition: u8,
-    /// `0` none, `1` spin: the node's painting turns about its centre, one
-    /// revolution every 1.2 s, for as long as it is on screen (03 §5).
+    /// `0` none, `1` [`ANIMATION_SPIN`], `2` [`ANIMATION_ENTER`] (03 §5).
     pub animation: u8,
     /// Backdrop blur: the standard deviation, in device-independent px, of
     /// the Gaussian the node sees its backdrop through; `0` is none (03 §2).
@@ -470,8 +481,8 @@ impl StyleRecord {
         if out.transition > 3 {
             return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
         }
-        if out.animation > 1 {
-            return Err(DecodeError::IllegalValue("animation is 0 or 1 (spin)"));
+        if out.animation > ANIMATION_ENTER {
+            return Err(DecodeError::IllegalValue("animation is 0, 1 (spin) or 2 (enter)"));
         }
 
         if out.text_decoration & !0b11 != 0 {

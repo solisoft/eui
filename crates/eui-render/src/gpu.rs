@@ -85,9 +85,14 @@ pub struct Renderer {
 
 /// The off-screen textures a blurred frame works in.
 struct Blur {
-    /// Format, region, and the standard deviations: everything that decides
-    /// the sizes below. A frame whose key matches reuses them untouched.
-    key: (wgpu::TextureFormat, [u32; 4], Vec<f32>),
+    /// Format, region, and the *reduction* each chain works at — which is
+    /// everything the sizes below depend on, and deliberately not the
+    /// standard deviations themselves. An entrance animates a radius from
+    /// zero over some tenths of a second (03 §5); keying on the radius
+    /// would throw every texture away sixty times a second to redraw the
+    /// same sizes, where keying on the reduction reallocates about four
+    /// times over the whole animation.
+    key: (wgpu::TextureFormat, [u32; 4], Vec<u32>),
     /// The frame as it stood before the first blurred quad, at the region's
     /// own size.
     snap: wgpu::Texture,
@@ -479,7 +484,7 @@ impl Renderer {
     /// The textures the frame's blurs work in, made afresh only when the
     /// region, the radii or the format have moved since the last frame.
     fn blur_targets(&mut self, format: wgpu::TextureFormat, b: &Backdrop) {
-        let key = (format, b.rect, b.sigmas.clone());
+        let key = (format, b.rect, b.sigmas.iter().map(|s| reduce_factor(*s)).collect::<Vec<_>>());
         if self.blur.as_ref().is_some_and(|x| x.key == key) {
             return;
         }

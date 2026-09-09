@@ -281,3 +281,68 @@ fn theme_document_rejects_garbage() {
         let _ = Theme::decode(&buf);
     }
 }
+
+// ------------------------------------------------------------------ curves
+
+/// Every easing curve is a path from (0,0) to (1,1) that never goes
+/// backwards. A solver that stalled, overshot or returned NaN fails here
+/// whatever curve it was handed.
+#[test]
+fn every_curve_runs_from_nothing_to_everything_without_turning_back() {
+    use eui_theme::Curve;
+    for (name, c) in [("standard", Curve::STANDARD), ("decelerate", Curve::DECELERATE), ("accelerate", Curve::ACCELERATE), ("smooth", Curve::SMOOTH), ("linear", Curve::LINEAR)] {
+        assert_eq!(c.at(0.0), 0.0, "{name} starts at rest");
+        assert_eq!(c.at(1.0), 1.0, "{name} arrives exactly");
+        assert_eq!(c.at(-1.0), 0.0, "{name} clamps below");
+        assert_eq!(c.at(2.0), 1.0, "{name} clamps above");
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let y = c.at(i as f32 / 100.0);
+            assert!(y.is_finite(), "{name} at {i} is {y}");
+            assert!(y >= last - 1e-4, "{name} went backwards at {i}: {last} then {y}");
+            assert!((-1e-4..=1.0 + 1e-4).contains(&y), "{name} left the unit square at {i}: {y}");
+            last = y;
+        }
+    }
+}
+
+/// `linear` is the identity, which is the one curve whose every value can
+/// be checked against arithmetic rather than against itself.
+#[test]
+fn the_linear_curve_is_the_identity() {
+    for i in 0..=20 {
+        let t = i as f32 / 20.0;
+        assert!((eui_theme::Curve::LINEAR.at(t) - t).abs() < 1e-3, "at {t}");
+    }
+}
+
+/// What separates the two is which side of the diagonal they sit on:
+/// a decelerating curve is always ahead of its own clock, an accelerating
+/// one always behind it. (They are not reflections of each other — these
+/// are the familiar `(0, 0, 0.2, 1)` and `(0.4, 0, 1, 1)`, and the exact
+/// mirror of the first would be `(0.8, 0, 1, 1)`.)
+#[test]
+fn decelerate_leads_its_clock_and_accelerate_trails_it() {
+    use eui_theme::Curve;
+    for i in 1..20 {
+        let t = i as f32 / 20.0;
+        assert!(Curve::DECELERATE.at(t) > t, "decelerate at {t} is {}", Curve::DECELERATE.at(t));
+        assert!(Curve::ACCELERATE.at(t) < t, "accelerate at {t} is {}", Curve::ACCELERATE.at(t));
+    }
+    // The theme's own curve leads too — it leaves at once and arrives gently.
+    assert!(Curve::STANDARD.at(0.5) > 0.5);
+    // A symmetric one crosses the diagonal exactly at the middle.
+    assert!((Curve::SMOOTH.at(0.5) - 0.5).abs() < 1e-3);
+}
+
+/// `scale::ease` is the theme's curve of 05 §2 and nothing else, so the
+/// control points in the document and the ones in the code cannot drift.
+#[test]
+fn the_themes_easing_is_the_standard_curve() {
+    use eui_theme::scale::{ease, EASING};
+    assert_eq!(EASING, [eui_theme::Curve::STANDARD.x1, eui_theme::Curve::STANDARD.y1, eui_theme::Curve::STANDARD.x2, eui_theme::Curve::STANDARD.y2]);
+    for i in 0..=10 {
+        let t = i as f32 / 10.0;
+        assert!((ease(t) - eui_theme::Curve::STANDARD.at(t)).abs() < 1e-6, "at {t}");
+    }
+}

@@ -98,7 +98,7 @@ resolution against a parent.
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
 | 60 | 1 | `transition` | 0 none, else `motion` scale index + 1: colours and opacity animate into this record (03 §5) |
-| 61 | 1 | `animation` | 0 none, 1 `spin`: the node turns about its centre while on screen (03 §5) |
+| 61 | 1 | `animation` | 0 none, 1 `spin`: the node turns about its centre while on screen; 2 `enter`: it fades and frosts in when mounted (03 §5) |
 | 62 | 1 | `blur` | backdrop blur, as the standard deviation of a Gaussian in device-independent px; 0 none (03 §2) |
 | 63 | 1 | — | reserved, MUST be zero |
 

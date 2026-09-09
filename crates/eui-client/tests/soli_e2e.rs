@@ -1153,6 +1153,222 @@ fn a_notched_wheel_scroll_gets_its_cards_on_the_real_clock() {
     }
 }
 
+/// Spec 03 §3, on the real page: the gallery's content is a single column
+/// inside one `scroll`, so its only "row top" is the top of the document.
+/// Landing on it made `ArrowUp` a `Home` key from anywhere on the page.
+#[test]
+fn an_arrow_up_on_the_gallery_steps_back_rather_than_going_home() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, _conn, _wake) = open(port, "gallery", 1000.0, 900.0);
+    let mut clock = Instant::now();
+    // A keyed scroll eases over `motion.slow`; these are the frames it takes.
+    let settle = |d: &mut Driver, clock: &mut Instant| {
+        for _ in 0..40 {
+            *clock += Duration::from_millis(30);
+            d.tick(*clock);
+            let _ = d.paint(1000, 900);
+        }
+    };
+    let page = d.session().preorder(root(&d)).find(|ix| matches!(d.session().node(*ix).map(|n| n.kind), Some(eui_proto::NodeKind::Scroll))).expect("the page scroller");
+    for _ in 0..5 {
+        d.input(Input::Key { key: "ArrowDown".into(), modifiers: 0, down: true });
+        settle(&mut d, &mut clock);
+    }
+    assert_eq!(d.session().node(page).unwrap().scroll.1, 200, "five 40 px steps down");
+    d.input(Input::Key { key: "ArrowUp".into(), modifiers: 0, down: true });
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(page).unwrap().scroll.1, 160, "one step back up, not the top");
+    d.input(Input::Key { key: "Home".into(), modifiers: 0, down: true });
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(page).unwrap().scroll.1, 0, "Home is still Home");
+}
+
+/// Spec 04 §7.1, on the docs dialog: the page is a windowed list, so
+/// opening it costs the client one window of blocks rather than the page,
+/// and scrolling asks the server for the rows that come into view.
+#[test]
+fn the_docs_dialog_is_a_window_of_blocks_that_scrolling_extends() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 3_600.0);
+    let _ = d.paint(1000, 3_600);
+    let before = d.session().live_nodes();
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Read the docs")).expect("the button");
+    let button = d.session().node(label).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    let t = Instant::now();
+    click(&mut d, &conn, button);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let round_trip = t.elapsed();
+    let t = Instant::now();
+    let _ = d.paint(1000, 3_600);
+    let first_paint = t.elapsed();
+    let added = d.session().live_nodes().saturating_sub(before);
+    println!("docs: round trip {:.0} ms, first paint {:.0} ms, {added} nodes added", round_trip.as_secs_f64() * 1e3, first_paint.as_secs_f64() * 1e3);
+    assert!(added < 1_500, "a window of blocks, not the page: {added} nodes");
+    // The list knows the whole document — its count — and holds a window.
+    let count = d.session().atom_id("count").unwrap();
+    let row = d.session().atom_id("row").unwrap();
+    let list = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List) && d.session().node(*ix).unwrap().prop(count).is_some()).expect("the docs list");
+    let total = match d.session().node(list).unwrap().prop(count) {
+        Some(eui_proto::Value::Int(n)) => *n,
+        other => panic!("{other:?}"),
+    };
+    let rows_of = |d: &Driver| -> Vec<i64> {
+        d.session().children(list).iter().filter_map(|c| match d.session().node(*c).and_then(|n| n.prop(row)) {
+            Some(eui_proto::Value::Int(r)) => Some(*r),
+            _ => None,
+        }).collect()
+    };
+    let held = rows_of(&d);
+    assert!(total as usize > held.len(), "{total} blocks, {} held", held.len());
+    assert_eq!(held.first(), Some(&0), "the window starts at the top");
+    // Scroll the list a long way: once the scroll settles the client asks for
+    // the rows now in view, and the server answers with those.
+    let r = d.layout().rect(list).unwrap();
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    let seq = d.session().last_seq().unwrap();
+    d.input(Input::Wheel(0.0, 4_000.0));
+    let mut clock = Instant::now();
+    for _ in 0..40 {
+        clock += Duration::from_millis(30);
+        d.tick(clock);
+        let _ = d.paint(1000, 3_600);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 3_600);
+    let later = rows_of(&d);
+    assert!(later.iter().any(|r| *r > 24), "rows past the first window arrived: {later:?}");
+    assert!(later.len() < total as usize, "and still only a window is held");
+}
+
+/// The dev bar is the server's, and it costs a production session nothing.
+/// `eui_stats()` answers only under `--dev`, and with no numbers the widget
+/// draws a `display: none` box — so the gallery composes it unconditionally
+/// and the tree that reaches a client outside dev carries no figures at all.
+#[test]
+fn the_dev_bar_is_absent_from_a_session_that_is_not_in_dev_mode() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    let _ = d.paint(1000, 900);
+    // A second render, so a bar that had numbers to draw would have them.
+    let week = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Week")).unwrap();
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, week);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 900);
+    let all = texts(&d, root(&d));
+    for figure in ["view", "encode", "ops", "interned"] {
+        assert!(!all.iter().any(|t| t == figure), "no dev bar outside --dev: {figure:?} is on screen");
+    }
+}
+
+/// The gallery's editor card: the same component code the `editor` route
+/// serves, with the gallery holding the buffer. A click puts the cursor on
+/// the line clicked, a keystroke is a round trip, and what comes back is the
+/// line that changed — there is no text widget anywhere in it.
+#[test]
+fn the_gallerys_editor_takes_a_keystroke_and_gives_back_the_line() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    // Tall enough that the card is in the viewport: a click is hit-tested
+    // against the page's scroller, and what is below the fold is under
+    // nothing at all.
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 3_600.0);
+    let _ = d.paint(1000, 3_600);
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    let reads = |d: &Driver, prefix: &str| texts(d, root(d)).iter().any(|x| x.starts_with(prefix));
+    assert!(has(&d, "sample.sl"), "the card is in the page");
+    assert!(has(&d, "unchanged"), "and says the buffer is the sample it shipped with");
+    // A line the cursor is not on is tokenised, one node per token, so the
+    // last line of the sample is found by its string and clicked through the
+    // row that carries the handler.
+    let token = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("\"Ada\"")).expect("the sample's last line");
+    let line_row = d.session().node(d.session().node(token).unwrap().parent).unwrap().parent;
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, line_row);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 3_600);
+    assert!(reads(&d, "Ln 11,"), "the cursor moved to the line that was clicked");
+    // The line under the cursor is drawn plain, in three pieces, so that the
+    // caret can invert the character it sits on: what is left of the cursor
+    // is one node, and that is the whole line when the cursor is at its end.
+    assert!(has(&d, "greet(\"Ada\")"), "the click landed the caret at the end of the line");
+    // A keystroke: `key_down` on the box that holds the buffer, and the
+    // server sends back the line it changed.
+    let seq = d.session().last_seq().unwrap();
+    for f in d.input(Input::Key { key: "x".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1000, 3_600);
+    assert!(has(&d, "greet(\"Ada\")x"), "the character landed in the buffer at the cursor");
+    assert!(has(&d, "modified"), "and the bar says the buffer is no longer the sample");
+    assert!(reads(&d, "Ln 11, Col 14"), "with the cursor after it");
+}
+
+/// Spec 07 §1 and 03 §5: a chart answers the pointer on its own. The band
+/// under it repoints two nodes at styles its handler declared — the column
+/// behind the drawing and its own value chip — and the donut's legend writes
+/// the reading into the hole. Nothing goes on the wire, and nothing moves.
+#[test]
+fn a_chart_shows_the_value_under_the_pointer_without_a_round_trip() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    // Tall enough to have the charts in view: hit-testing stops at the
+    // page's scroller, and a band below the fold is under nothing.
+    let (mut d, _conn, _wake) = open(port, "gallery", 1000.0, 2_600.0);
+    let keyed = |d: &Driver, key: &str| d.session().atom_id(key).and_then(|a| d.session().lookup_key(a)).unwrap_or_else(|| panic!("a node keyed {key}"));
+    // Hover settles on a valid layout, so a move is worth a paint either
+    // side of it; what the chunk did must still leave the wire silent.
+    let hover = |d: &mut Driver, ix: eui_tree::NodeIx| {
+        let _ = d.paint(1000, 2_600);
+        let r = d.layout().rect(ix).expect("laid out");
+        let sent = d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        let _ = d.paint(1000, 2_600);
+        let mut frames = sent;
+        frames.extend(d.take_pending());
+        assert!(!frames.iter().any(|f| matches!(f, Frame::Event(_))), "a hover on a chart says nothing to the server: {frames:?}");
+    };
+    let _ = d.paint(1000, 2_600);
+    let chip = keyed(&d, "ct_bars_1");
+    let wash = keyed(&d, "cw_bars_1");
+    assert_eq!(d.session().text_of(chip), Some("7"), "the chip carries the value it stands for");
+    assert_eq!(d.session().style_of(chip).opacity, 0, "and is transparent until it is asked for");
+    assert_eq!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE);
+    let band = d.session().node(chip).unwrap().parent;
+    hover(&mut d, band);
+    assert_eq!(d.session().style_of(chip).opacity, 255, "the tooltip is up");
+    assert_ne!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE, "and its column is washed");
+    // The donut has no bands — an arc is not a box — so its legend is what
+    // the pointer finds, and what it changes is the text in the hole.
+    let hole = keyed(&d, "dv_mix");
+    let name = keyed(&d, "dl_mix");
+    assert_eq!(d.session().text_of(hole), Some("11"), "the total, until a row says otherwise");
+    assert_eq!(d.session().text_of(name), Some("Total"));
+    let row = keyed(&d, "dr_mix_1");
+    hover(&mut d, row);
+    assert_eq!(d.session().text_of(hole), Some("3 · 27%"), "the row's share, worked out server-side");
+    assert_eq!(d.session().text_of(name), Some("Search"));
+    // Leaving the band put its pair back on the way here: a chart's hover
+    // is not provisional, it is undone by the leave that follows it.
+    assert_eq!(d.session().style_of(chip).opacity, 0, "the tooltip is down");
+    assert_eq!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE);
+    let _ = d.paint(1000, 2_600);
+    d.input(Input::PointerOut);
+    assert_eq!(d.session().text_of(hole), Some("11"), "and the hole reads the total again");
+}
+
 /// Spec 03 §7: the gallery's chime — an `audio` node whose sound is an
 /// asset Soli hashed, played by a button, ending on its own.
 #[test]

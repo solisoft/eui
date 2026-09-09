@@ -62,6 +62,228 @@ ED_DIGITS = "0123456789"
 ED_INDENT = "                                                                "
 ED_WORD = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789?!"
 
+# ------------------------------------------------------------- languages
+#
+# A fence in a markdown document says what it holds, and this is what
+# colours it. What the lexer needs to know about a language is small: the
+# words it reserves, what opens a comment, what quotes a string, and what
+# either of those does when it runs past the end of the line. Five answers
+# is all colour needs (`ed_colour`), so five is all a language is here.
+#
+# Soli is Ruby-shaped — `def … end`, `#` to the end of the line, the same
+# quotes — so `ruby` is this lexer with Ruby's own words added and nothing
+# else changed. `sdbql` and `sql` are two dialects, not one: the first is
+# SolidB's `FOR … IN … FILTER … RETURN`, which shares almost no vocabulary
+# with the second.
+#
+# A record is {kw, line, quotes, blocks, fold}:
+#   kw      the reserved words, lower case
+#   line    what starts a comment that ends with the line ("" for none)
+#   quotes  the characters that open and close a string
+#   blocks  runs that may cross lines, flat triples: open, close, kind
+#           (flat because `[["/*"` opens a Lua-style multiline string in
+#           Soli, not a list of lists — the same reason `spans` is flat)
+#   fold    true where the words are written in either case (SQL)
+ED_RUBY_WORDS = [
+  "do",
+  "then",
+  "yield",
+  "self",
+  "begin",
+  "ensure",
+  "raise",
+  "case",
+  "when",
+  "require",
+  "super",
+  "lambda",
+  "attr_accessor",
+  "puts"
+]
+
+ED_C_WORDS = [
+  "int", "long", "short", "char", "float", "double", "void", "bool", "auto",
+  "const", "static", "struct", "class", "enum", "union", "typedef", "template",
+  "namespace", "public", "private", "protected", "virtual", "override", "new",
+  "delete", "if", "else", "for", "while", "do", "switch", "case", "default",
+  "break", "continue", "return", "sizeof", "true", "false", "null", "nullptr",
+  "this", "try", "catch", "throw", "import", "package", "final", "extends",
+  "implements", "interface", "fun", "val", "var", "let", "func"
+]
+
+ED_LANGS = {
+  "soli": {"kw": ED_KEYWORDS, "line": "#", "quotes": "\"'", "blocks": [], "fold": false},
+  "ruby": {"kw": ED_KEYWORDS.concat(ED_RUBY_WORDS), "line": "#", "quotes": "\"'", "blocks": [], "fold": false},
+  "javascript": {
+    "kw": [
+      "const", "let", "var", "function", "return", "if", "else", "for", "while",
+      "do", "switch", "case", "break", "continue", "new", "class", "extends",
+      "import", "from", "export", "default", "async", "await", "try", "catch",
+      "finally", "throw", "typeof", "instanceof", "this", "null", "undefined",
+      "true", "false", "yield", "delete", "in", "of", "static", "interface", "type"
+    ],
+    "line": "//",
+    "quotes": "\"'",
+    "blocks": ["/*", "*/", "comment", "`", "`", "string"],
+    "fold": false
+  },
+  "python": {
+    "kw": [
+      "def", "class", "return", "if", "elif", "else", "for", "while", "in",
+      "not", "and", "or", "import", "from", "as", "with", "try", "except",
+      "finally", "raise", "lambda", "yield", "pass", "break", "continue",
+      "global", "nonlocal", "assert", "del", "is", "async", "await", "self",
+      "None", "True", "False"
+    ],
+    "line": "#",
+    "quotes": "\"'",
+    "blocks": ["\"\"\"", "\"\"\"", "string", "'''", "'''", "string"],
+    "fold": false
+  },
+  "rust": {
+    "kw": [
+      "fn", "let", "mut", "const", "static", "struct", "enum", "impl", "trait",
+      "for", "in", "if", "else", "match", "while", "loop", "break", "continue",
+      "return", "use", "mod", "pub", "crate", "self", "super", "where", "as",
+      "dyn", "ref", "move", "unsafe", "async", "await", "type", "true", "false",
+      "Some", "None", "Ok", "Err"
+    ],
+    "line": "//",
+    "quotes": "\"'",
+    "blocks": ["/*", "*/", "comment"],
+    "fold": false
+  },
+  "go": {
+    "kw": [
+      "func", "package", "import", "var", "const", "type", "struct", "interface",
+      "map", "chan", "go", "defer", "if", "else", "for", "range", "switch",
+      "case", "default", "break", "continue", "return", "select", "nil",
+      "true", "false"
+    ],
+    "line": "//",
+    "quotes": "\"'`",
+    "blocks": ["/*", "*/", "comment"],
+    "fold": false
+  },
+  "c": {"kw": ED_C_WORDS, "line": "//", "quotes": "\"'", "blocks": ["/*", "*/", "comment"], "fold": false},
+  "shell": {
+    "kw": [
+      "if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while",
+      "case", "esac", "function", "return", "export", "local", "source",
+      "echo", "cd", "set", "unset", "exit", "sudo"
+    ],
+    "line": "#",
+    "quotes": "\"'",
+    "blocks": [],
+    "fold": false
+  },
+  "sdbql": {
+    "kw": [
+      "for", "in", "filter", "sort", "limit", "return", "let", "collect",
+      "aggregate", "insert", "update", "replace", "remove", "upsert", "with",
+      "into", "graph", "inbound", "outbound", "any", "distinct", "asc", "desc",
+      "and", "or", "not", "null", "true", "false", "like", "options", "search"
+    ],
+    "line": "//",
+    "quotes": "\"'",
+    "blocks": ["/*", "*/", "comment"],
+    "fold": true
+  },
+  "sql": {
+    "kw": [
+      "select", "from", "where", "insert", "into", "values", "update", "set",
+      "delete", "join", "inner", "left", "right", "outer", "full", "on",
+      "group", "by", "order", "asc", "desc", "limit", "offset", "having",
+      "distinct", "as", "and", "or", "not", "null", "is", "in", "between",
+      "like", "exists", "union", "all", "create", "table", "index", "view",
+      "drop", "alter", "add", "primary", "key", "foreign", "references",
+      "default", "case", "when", "then", "else", "end", "count", "sum", "avg",
+      "min", "max", "with", "returning"
+    ],
+    "line": "--",
+    "quotes": "\"'",
+    "blocks": ["/*", "*/", "comment"],
+    "fold": true
+  },
+  "json": {"kw": ["true", "false", "null"], "line": "", "quotes": "\"", "blocks": [], "fold": false},
+  "yaml": {"kw": ["true", "false", "null", "yes", "no"], "line": "#", "quotes": "\"'", "blocks": [], "fold": false},
+  "toml": {"kw": ["true", "false"], "line": "#", "quotes": "\"'", "blocks": [], "fold": false},
+  "html": {"kw": [], "line": "", "quotes": "\"'", "blocks": ["<!--", "-->", "comment"], "fold": false},
+  "css": {"kw": [], "line": "", "quotes": "\"'", "blocks": ["/*", "*/", "comment"], "fold": false},
+  # What a fence gets when it names a language nobody here knows: no
+  # keywords, because guessing them is worse than not colouring, but
+  # strings and numbers, which nearly every language spells the same way.
+  "other": {"kw": [], "line": "", "quotes": "\"", "blocks": [], "fold": false},
+  # And what a fence gets when it says it is prose: nothing at all.
+  "plain": {"kw": [], "line": "", "quotes": "", "blocks": [], "fold": false}
+}
+
+# What a fence may say for each of them. A name nobody claims falls to
+# `other`: colouring Rust's words in Haskell is worse than not colouring,
+# but a string is a string nearly everywhere.
+ED_LANG_ALIAS = {
+  "rb": "ruby",
+  "js": "javascript",
+  "jsx": "javascript",
+  "mjs": "javascript",
+  "ts": "javascript",
+  "tsx": "javascript",
+  "typescript": "javascript",
+  "node": "javascript",
+  "py": "python",
+  "python3": "python",
+  "rs": "rust",
+  "golang": "go",
+  "cpp": "c",
+  "c++": "c",
+  "cc": "c",
+  "h": "c",
+  "hpp": "c",
+  "java": "c",
+  "cs": "c",
+  "csharp": "c",
+  "kotlin": "c",
+  "kt": "c",
+  "swift": "c",
+  "wgsl": "c",
+  "glsl": "c",
+  "sh": "shell",
+  "bash": "shell",
+  "zsh": "shell",
+  "console": "shell",
+  "aql": "sdbql",
+  "postgres": "sql",
+  "postgresql": "sql",
+  "mysql": "sql",
+  "sqlite": "sql",
+  "yml": "yaml",
+  "xml": "html",
+  "svg": "html",
+  "vue": "html",
+  "slv": "html",
+  "scss": "css",
+  "sass": "css",
+  "less": "css",
+  "md": "plain",
+  "markdown": "plain",
+  "text": "plain",
+  "txt": "plain",
+  "diff": "plain"
+}
+
+# The record a fence's info string asks for. An empty fence is Soli: this
+# is a Soli application, and its documentation is written in it.
+def ed_lang(name)
+  asked = (name ?? "").strip().downcase()
+  return ED_LANGS["soli"] if asked == ""
+
+  # A fence may carry more than a name — ```soli title="x" — and the name
+  # is the first word of it.
+  asked = asked.split(" ")[0]
+  asked = ED_LANG_ALIAS[asked] ?? asked
+  ED_LANGS[asked] ?? ED_LANGS["other"]
+end
+
 # ----------------------------------------------------------------- the file
 
 def ed_source
@@ -73,7 +295,6 @@ end
 
 def ed_defaults(state)
   base = {
-    "lines": ed_source(),
     "row": 0,
     "col": 0,
     "name": ED_FILE,
@@ -91,6 +312,12 @@ def ed_defaults(state)
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
   end
+  # Outside the loop, and only when it has to be: `ed_source` reads a file,
+  # and a state that already has a buffer — the gallery's card, every render
+  # after the first — must not pay for it.
+  base_lines = state["lines"]
+  base_lines = ed_source() if base_lines.nil?
+  base["lines"] = base_lines
   base
 end
 
@@ -100,54 +327,177 @@ end
 
 # ------------------------------------------------------------- the tokeniser
 # One line in, a list of {text, kind} out. Not a parser: a lexer with five
-# answers, which is what colour needs.
+# answers, which is what colour needs — and now a language to answer for,
+# since a markdown fence says what it holds.
 
-def ed_kind_of_word(word)
-  return "keyword" if ED_KEYWORDS.includes?(word)
+def ed_kind_of_word(word, lang)
+  words = lang["kw"]
+  return "keyword" if words.includes?(word)
+  return "keyword" if lang["fold"] == true && words.includes?(word.downcase())
   return "number" if ED_DIGITS.index_of(word[0]) >= 0
 
   "word"
 end
 
-def ed_tokens(line)
-  tokens = []
+# Where a run of punctuation has to stop: the next character that could
+# begin something the lexer has an answer for.
+# A bare assignment in a callee overwrites the caller's variable of that
+# name, so everything here is named for this function alone: `ed_scan` is
+# in the middle of a loop over `j` when it asks, and a `j` here would put
+# that loop back where it started, for ever.
+def ed_interesting(c, lang)
+  return true if ED_WORD.index_of(c) >= 0
+  return true if (lang["quotes"] ?? "").index_of(c) >= 0
+
+  probe_mark = lang["line"] ?? ""
+  return true if probe_mark != "" && c == probe_mark[0]
+
+  probe_runs = lang["blocks"] ?? []
+  probe_at = 0
+  while probe_at < probe_runs.length()
+    return true if c == probe_runs[probe_at][0]
+    probe_at = probe_at + 3
+  end
+  false
+end
+
+# The block whose opener stands at the head of `rest`, as [open, close,
+# kind], or nil. Longest first would matter if two openers shared a prefix;
+# none of them do.
+
+# Does `mark` stand exactly at `at`? Compared in place: asking `ed_find`
+# and testing what it returned would search the rest of the line for every
+# character of it, which is a lexer that takes the square of its input.
+#
+# Its locals are named for it alone: a bare assignment in a callee writes
+# the caller's variable of that name, and `ed_find` below calls this from
+# inside its own loop.
+def ed_at(glyphs, mark, at)
+  needle = mark.chars()
+  wide = needle.length()
+  return false if at + wide > glyphs.length()
+
+  m = 0
+  while m < wide
+    return false if glyphs[at + m] != needle[m]
+    m = m + 1
+  end
+  true
+end
+
+# Where `mark` next stands in `glyphs`, at or after `at`, counted in
+# characters — `String.index_of` counts bytes, and this lexer counts
+# characters, so it cannot use it.
+def ed_find(glyphs, mark, at)
+  find_at = at
+  find_stop = glyphs.length() - mark.chars().length()
+  while find_at <= find_stop
+    return find_at if ed_at(glyphs, mark, find_at)
+    find_at = find_at + 1
+  end
+  -1
+end
+
+# The block whose opener stands at `at`, as [open, close, kind], or nil.
+def ed_block_at(blocks, glyphs, at)
+  seek_at = 0
+  while seek_at < blocks.length()
+    seek_open = blocks[seek_at]
+    return [seek_open, blocks[seek_at + 1], blocks[seek_at + 2]] if ed_at(glyphs, seek_open, at)
+    seek_at = seek_at + 3
+  end
+  nil
+end
+
+# One line in, its tokens out — and whatever run is still open at the end
+# of it, because a `/* … */` or a `""" … """` colours the lines under it
+# too. `carry` is what the line before left open: {c: the marker that
+# closes it, k: what it is}, or nil.
+#
+# One `if` chain rather than the `next` the editor's first tokeniser used,
+# because `next` is rejected by the static checker outside a server (it is
+# fine in a handler), and a lexer nobody can run from a script is a lexer
+# nobody can test.
+#
+# Everything here is counted in **characters**. Soli's `length()` and
+# `index_of` count bytes while `[]`, `chars()` and `substring()` count
+# characters, and a lexer that mixed the two walked off the end of every
+# line with an em dash in it. `code_spans` measures the tokens this hands
+# back, in bytes, which is where bytes are actually wanted: the client
+# colours glyphs by their byte offset.
+def ed_scan(line, lang, carry)
+  toks = []
+  glyphs = line.chars()
+  size = glyphs.length()
   i = 0
-  size = line.length()
+
+  unless carry.nil?
+    close_at = ed_find(glyphs, carry["c"], 0)
+    return {"toks": [{"t": line, "k": carry["k"]}], "carry": carry} if close_at < 0
+
+    i = close_at + carry["c"].chars().length()
+    toks = toks.concat([{"t": line.substring(0, i), "k": carry["k"]}])
+    carry = nil
+  end
+
+  line_mark = lang["line"] ?? ""
+  quotes = lang["quotes"] ?? ""
+  blocks = lang["blocks"] ?? []
   while i < size
-    c = line[i]
-    if c == "#"
-      tokens = tokens.concat([{"t": line.substring(i, size), "k": "comment"}])
+    c = glyphs[i]
+    block = ed_block_at(blocks, glyphs, i)
+
+    if line_mark != "" && ed_at(glyphs, line_mark, i)
+      # A comment to the end of the line.
+      toks = toks.concat([{"t": line.substring(i, size), "k": "comment"}])
       i = size
-      next
-    end
-    if c == "\""
+    elsif !block.nil?
+      # A run that may cross lines: `/* … */`, a template string, a
+      # docstring. Unclosed, it takes the rest of the line and says so.
+      head = i + block[0].chars().length()
+      close_at = ed_find(glyphs, block[1], head)
+      if close_at < 0
+        toks = toks.concat([{"t": line.substring(i, size), "k": block[2]}])
+        return {"toks": toks, "carry": {"c": block[1], "k": block[2]}}
+      end
+      stop = close_at + block[1].chars().length()
+      toks = toks.concat([{"t": line.substring(i, stop), "k": block[2]}])
+      i = stop
+    elsif quotes.index_of(c) >= 0
+      # A string, to its closing quote or to the end of the line.
       j = i + 1
-      while j < size && line[j] != "\""
+      while j < size && glyphs[j] != c
         j = j + 1
       end
       j = j + 1 if j < size
-      tokens = tokens.concat([{"t": line.substring(i, j), "k": "string"}])
+      toks = toks.concat([{"t": line.substring(i, j), "k": "string"}])
       i = j
-      next
-    end
-    if ED_WORD.index_of(c) >= 0
+    elsif ED_WORD.index_of(c) >= 0
       j = i
-      while j < size && ED_WORD.index_of(line[j]) >= 0
+      while j < size && ED_WORD.index_of(glyphs[j]) >= 0
         j = j + 1
       end
       word = line.substring(i, j)
-      tokens = tokens.concat([{"t": word, "k": ed_kind_of_word(word)}])
+      toks = toks.concat([{"t": word, "k": ed_kind_of_word(word, lang)}])
       i = j
-      next
+    else
+      # Punctuation. The run starts at `i + 1`, not `i`: a `/` that opens
+      # nothing in a language whose comment is `//` is interesting to
+      # `ed_interesting`, and a run that ends where it starts never ends.
+      j = i + 1
+      while j < size && !ed_interesting(glyphs[j], lang)
+        j = j + 1
+      end
+      toks = toks.concat([{"t": line.substring(i, j), "k": "plain"}])
+      i = j
     end
-    j = i
-    while j < size && ED_WORD.index_of(line[j]) < 0 && line[j] != "#" && line[j] != "\""
-      j = j + 1
-    end
-    tokens = tokens.concat([{"t": line.substring(i, j), "k": "plain"}])
-    i = j
   end
-  tokens
+  {"toks": toks, "carry": nil}
+end
+
+# The editor's own buffer is Soli, and nothing in it crosses a line.
+def ed_tokens(line)
+  ed_scan(line, ed_lang("soli"), nil)["toks"]
 end
 
 def ed_colour(kind)
@@ -331,8 +681,7 @@ def ed_visible(state)
   fits
 end
 
-def ed_top(state)
-  visible = ed_visible(state)
+def ed_top(state, visible)
   count = state["lines"].length()
   top = state["row"] - int(visible / 2)
   top = 0 if top < 0
@@ -360,7 +709,7 @@ def ed_cursor_line(line, col)
   )
 end
 
-def ed_line_row(state, at)
+def ed_line_row(state, at, on_click)
   here = state["row"] == at
   line = ed_line(state, at)
   body = here ? ed_cursor_line(line, state["col"]) : row(
@@ -391,12 +740,12 @@ def ed_line_row(state, at)
       body
     ]
   )
-  line_row["on"] = {"click": "click"}
+  line_row["on"] = {"click": on_click}
   line_row["p"] = {"row": at}
   keyed("l" + str(at), line_row)
 end
 
-def ed_bar(state)
+def ed_bar(state, on_reload, clean_label)
   where = "Ln " + str(state["row"] + 1) + ", Col " + str(state["col"] + 1)
   row(
     {
@@ -410,67 +759,86 @@ def ed_bar(state)
     },
     [
       text(state["name"], {"weight": "semibold"}),
-      badge(state["dirty"] ? "modified" : "as on disk", state["dirty"] ? "warning" : "success"),
+      badge(state["dirty"] ? "modified" : clean_label, state["dirty"] ? "warning" : "success"),
       muted(str(state["lines"].length()) + " lines"),
       spacer(),
       muted(where),
-      secondary_button("Reload", "reload")
+      secondary_button("Reload", on_reload)
+    ]
+  )
+end
+
+# The editor as a panel, so a page that is not the editor can hold one.
+# `opts` says what its host answers to — the component's own view keeps the
+# short names, the gallery's card says `ed_key`, `ed_click`, `ed_reload` —
+# and how many lines to show. Given a line count the panel is that tall;
+# given none it fills what it is in, which is what a whole window wants.
+#
+# Every local here is named for this function. A bare assignment inside a
+# `def` writes the caller's variable of that name, and this one is called
+# from the middle of other people's views.
+def ed_panel(state, opts)
+  panel_click = opts["click"] ?? "click"
+  panel_lines = opts["lines"]
+  panel_visible = panel_lines ?? ed_visible(state)
+  panel_top = ed_top(state, panel_visible)
+  panel_last = panel_top + panel_visible
+  panel_last = state["lines"].length() if panel_last > state["lines"].length()
+  panel_rows = range(panel_top, panel_last).map(fn(at) { ed_line_row(state, at, panel_click) })
+  # One box takes the keyboard for the whole buffer. A click anywhere in it
+  # focuses it (03 §3), which is why the lines carry the click that moves
+  # the cursor and this box carries none.
+  panel_style = {
+    "display": "column",
+    "gap": 0,
+    "width": "100%",
+    "grow": 1,
+    "bg": "surface.base",
+    "pad": [1, 0, 1, 0]
+  }
+  panel_style["height"] = panel_visible * ED_ROW_H + 4 unless panel_lines.nil?
+  panel_body = {
+    "k": "box",
+    "s": panel_style,
+    "on": {"key_down": opts["key"] ?? "key"},
+    "c": panel_rows
+  }
+  panel_frame = {"gap": 0, "width": "100%", "bg": "surface.base"}
+  panel_frame["height"] = "100%" if panel_lines.nil?
+  column(
+    panel_frame,
+    [
+      ed_bar(state, opts["reload"] ?? "reload", opts["clean"] ?? "as on disk"),
+      panel_body,
+      ed_status(state, panel_last - panel_top)
+    ]
+  )
+end
+
+# What the window is doing, under the buffer: the last thing that happened,
+# and how much of the file the server actually sent.
+def ed_status(state, sent)
+  row(
+    {
+      "gap": 3,
+      "align": "center",
+      "width": "100%",
+      "pad": [1, 3, 1, 3],
+      "bg": "surface.raised",
+      "border": [1, 0, 0, 0],
+      "border_color": "border.subtle"
+    },
+    [
+      muted(state["message"]),
+      spacer(),
+      muted("Soli · highlighted by the server · " + str(sent) + " of " + str(state["lines"].length())
+      + " lines sent")
     ]
   )
 end
 
 def editor_view(raw_state)
-  state = ed_defaults(raw_state ?? {})
-  visible = ed_visible(state)
-  top = ed_top(state)
-  last = top + visible
-  last = state["lines"].length() if last > state["lines"].length()
-  lines = range(top, last).map(fn(at) { ed_line_row(state, at) })
-  # One box takes the keyboard for the whole buffer. A click anywhere in it
-  # focuses it (03 §3), which is why the lines carry the click that moves
-  # the cursor and this box carries none.
-  page = {
-    "k": "box",
-    "s": {
-      "display": "column",
-      "gap": 0,
-      "width": "100%",
-      "grow": 1,
-      "bg": "surface.base",
-      "pad": [1, 0, 1, 0]
-    },
-    "on": {"key_down": "key"},
-    "c": lines
-  }
-  column(
-    {
-      "gap": 0,
-      "width": "100%",
-      "height": "100%",
-      "bg": "surface.base"
-    },
-    [
-      ed_bar(state),
-      page,
-      row(
-        {
-          "gap": 3,
-          "align": "center",
-          "width": "100%",
-          "pad": [1, 3, 1, 3],
-          "bg": "surface.raised",
-          "border": [1, 0, 0, 0],
-          "border_color": "border.subtle"
-        },
-        [
-          muted(state["message"]),
-          spacer(),
-          muted("Soli · highlighted by the server · " + str(visible) + " of " + str(state["lines"].length())
-          + " lines sent")
-        ]
-      )
-    ]
-  )
+  ed_panel(ed_defaults(raw_state ?? {}), {})
 end
 
 # ---------------------------------------------------------- spans for a viewer
@@ -482,20 +850,25 @@ end
 #
 # Offsets are counted in characters, which is the same as bytes only while
 # the source is ASCII. Code that is not would need `bytesize` per token.
-def code_spans(source)
+def code_spans(source, language = "soli")
+  lang = ed_lang(language)
   spans = []
-  at = 0
+  offset = 0
+  carry = nil
   for line in source.split("\n")
-    for tok in ed_tokens(line)
-      size = tok["t"].length()
+    scanned = ed_scan(line, lang, carry)
+    carry = scanned["carry"]
+    line_toks = scanned["toks"]
+    for tok in line_toks
+      span_size = tok["t"].length()
       # `plain` is what the node's own colour already is, so a span for it
       # would be several thousand triples that change nothing.
-      spans = spans.concat([at, size, ed_colour(tok["k"])]) unless tok["k"] == "plain"
-      at = at + size
+      spans = spans.concat([offset, span_size, ed_colour(tok["k"])]) unless tok["k"] == "plain"
+      offset = offset + span_size
     end
     # The newline `split` removed still occupies a byte in the source the
     # client shaped, so the next line starts one further on.
-    at = at + 1
+    offset = offset + 1
   end
   spans
 end

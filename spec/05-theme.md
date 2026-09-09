@@ -68,6 +68,25 @@ The default `StyleRecord` carries `font_size = 2`, `base`.
 **`motion`** (index 0–2), milliseconds: `fast 100`, `base 180`, `slow 320`,
 all with the easing curve `cubic-bezier(0.2, 0, 0, 1)`.
 
+A curve is evaluated as CSS evaluates one: it gives `y` for an `x`, `x` is
+the fraction of the duration elapsed, and solving `x` for the Bézier
+parameter has no closed form — so a client iterates, and `0` and `1` are
+exact. Beside the theme's own curve a client keeps four more, chosen by
+what is moving rather than named on the wire, because motion that has to
+be specified per node is motion nobody gets right twice:
+
+| Curve | Control points | For |
+|---|---|---|
+| standard | `0.2, 0, 0, 1` | a style change (03 §5) |
+| decelerate | `0, 0, 0.2, 1` | something arriving (03 §5 `enter`) |
+| accelerate | `0.4, 0, 1, 1` | something leaving |
+| smooth | `0.45, 0, 0.55, 1` | rest to rest — a keyboard scroll |
+| linear | `0, 0, 1, 1` | a value that is not a movement |
+
+Something arriving decelerates rather than easing: it was already moving
+when it was first seen, which is what makes it read as having come from
+somewhere instead of having been switched on.
+
 **`control`** heights, used by composed widgets: `sm 28`, `md 36`, `lg 44`.
 
 An index past the end of a scale is an error at style definition time; the

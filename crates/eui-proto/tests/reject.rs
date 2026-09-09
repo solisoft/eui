@@ -379,7 +379,14 @@ fn a_transition_past_the_motion_scale_is_rejected() {
 
 #[test]
 fn an_unknown_animation_is_rejected() {
-    assert_eq!(style_with(61, &[2]), E::IllegalValue("animation is 0 or 1 (spin)"));
+    assert_eq!(style_with(61, &[3]), E::IllegalValue("animation is 0, 1 (spin) or 2 (enter)"));
+}
+
+#[test]
+fn enter_is_a_known_animation() {
+    let mut raw = style_bytes();
+    raw[61] = 2;
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).map(|s| s.animation), Ok(2));
 }
 
 #[test]

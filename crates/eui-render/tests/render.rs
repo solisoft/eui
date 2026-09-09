@@ -611,7 +611,7 @@ fn overrides_replace_a_nodes_colours_for_the_frame() {
     let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), height: Dim::Px(10), ..Default::default() };
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
     let ix = fx.session.lookup(2).unwrap();
-    let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5 };
+    let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5, blur: 0.0 };
     let overrides = [(ix, mid)];
     let list = paint(&mut Scene {
         session: &fx.session,

@@ -84,7 +84,7 @@ pub use manifest::{Manifest, Rotation};
 pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
 pub use reader::Reader;
-pub use style::{AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Justify, Overflow, Position, StyleRecord, TextAlign, Wrap};
+pub use style::{AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Justify, Overflow, Position, StyleRecord, TextAlign, Wrap, ANIMATION_ENTER, ANIMATION_SPIN};
 pub use writer::Writer;
 
 /// The protocol version this crate implements.

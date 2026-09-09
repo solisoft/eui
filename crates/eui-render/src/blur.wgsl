@@ -60,8 +60,14 @@ fn reduce(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
 // standard deviations in the first place: nothing that matters is out there.
 @fragment
 fn gauss(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let hw = clamp(i32(ceil(3.0 * p.sigma)), 1, 16);
-    let denom = 2.0 * p.sigma * p.sigma;
+    // An entrance animates the radius up from zero (03 §5), and a standard
+    // deviation of zero is a division by zero here -- every weight NaN, and
+    // a pane of noise for the frame it passes through. A twentieth of a
+    // pixel is below what the reduction can resolve, so the floor costs
+    // nothing and the first frame of a dialog is simply sharp.
+    let sigma = max(p.sigma, 0.05);
+    let hw = clamp(i32(ceil(3.0 * sigma)), 1, 16);
+    let denom = 2.0 * sigma * sigma;
     let at = floor(pos.xy) + 0.5;
     var sum = vec4<f32>(0.0);
     var total = 0.0;

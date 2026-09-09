@@ -631,7 +631,7 @@ impl ApplicationHandler<Wake> for App {
                 };
                 if down && self.modifiers & 0b1110 == 0 {
                     if let Some(text) = &event.text {
-                        if !matches!(event.logical_key, Key::Named(_)) {
+                        if types_text(&event.logical_key) {
                             self.input(Input::Text(text.to_string()));
                         }
                     }
@@ -700,6 +700,19 @@ trait Pipe: Sized {
 }
 #[cfg(target_os = "linux")]
 impl<T> Pipe for T {}
+
+/// Whether a key press should insert the text winit reports for it.
+///
+/// Most named keys carry text they must not insert: Enter reports "\r",
+/// Tab "\t", Backspace "\u{8}". `Space` is the exception — it is a named
+/// key whose text is an ordinary character, and excluding the whole class
+/// is what made it impossible to type a space into a field.
+fn types_text(key: &Key) -> bool {
+    match key {
+        Key::Named(n) => *n == NamedKey::Space,
+        _ => true,
+    }
+}
 
 fn named(n: NamedKey) -> String {
     match n {
@@ -772,4 +785,28 @@ pub fn launch(launch: Launch) -> Result<(), String> {
     // The worker and the GPU go here, on this thread, before anyone exits.
     drop(app);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn space_is_the_named_key_that_types() {
+        // winit calls Space a *named* key, and the guard here used to
+        // exclude that whole class — which is right for every other member
+        // of it and wrong for this one. A field could not take a space.
+        assert!(types_text(&Key::Named(NamedKey::Space)), "a space must reach the field");
+
+        // The rest of the class reports text that must not be inserted:
+        // Enter would type a carriage return, Tab a tab, Backspace a
+        // control character.
+        for named in [NamedKey::Enter, NamedKey::Tab, NamedKey::Backspace, NamedKey::Escape, NamedKey::ArrowLeft, NamedKey::Delete] {
+            assert!(!types_text(&Key::Named(named)), "{named:?} must not insert its own text");
+        }
+
+        // An ordinary character always types.
+        assert!(types_text(&Key::Character("a".into())));
+        assert!(types_text(&Key::Character("é".into())));
+    }
 }

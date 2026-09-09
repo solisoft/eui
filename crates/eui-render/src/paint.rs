@@ -43,7 +43,8 @@ pub struct Editing {
 }
 
 /// A node's resolved paint colours, linear RGBA; `None` draws nothing.
-/// What a transition interpolates.
+/// What a transition interpolates — and, since 03 §5's entrance animates a
+/// frost as well as a fade, the blur radius rides here too.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Colors {
     /// Background.
@@ -54,6 +55,8 @@ pub struct Colors {
     pub border: Option<[f32; 4]>,
     /// Opacity, `0..=1`.
     pub opacity: f32,
+    /// Backdrop blur, device-independent px, before the device scale.
+    pub blur: f32,
 }
 
 /// One instance. Layout matches the vertex buffer in `shader.wgsl`.
@@ -181,7 +184,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let Some(root) = scene.session.root() else {
         return list;
     };
-    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, blur: None };
+    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, fade: 1.0, blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -210,6 +213,12 @@ struct Painter<'s, 'a> {
     /// True once the top layer is being painted, so the overlays in it
     /// are drawn instead of deferred again.
     in_top: bool,
+    /// The entrances (03 §5) this node sits inside, multiplied together.
+    /// `opacity` is otherwise a property of one node's own quads, but an
+    /// entrance is the node *and everything painted for it* arriving — a
+    /// dialog whose panel faded up while its words were already at full
+    /// strength would read as the text arriving on its own.
+    fade: f32,
     /// The backdrop being accumulated, once some node has asked for one:
     /// the region as `x0, y0, x1, y1` in device pixels, the first blurred
     /// instance, and the standard deviations met.
@@ -308,7 +317,8 @@ impl Painter<'_, '_> {
         rect[0] < cx + cw && rect[0] + rect[2] > cx && rect[1] < cy + ch && rect[1] + rect[3] > cy
     }
 
-    fn push(&mut self, q: Quad) {
+    fn push(&mut self, mut q: Quad) {
+        q.params[3] *= self.fade;
         // A rotated quad's `rect` is not its bounding box; the scissor
         // handles it, the cull does not.
         if (q.extra[0] != 0.0 || self.visible(q.rect)) && q.rect[2] > 0.0 && q.rect[3] > 0.0 {
@@ -399,7 +409,7 @@ impl Painter<'_, '_> {
         // 03 §2: a `blur` shows the backdrop through the border box, and the
         // background is composited over that. It is therefore worth a quad
         // even when `bg` is none — a pane of clear frosted glass.
-        let sigma = f32::from(record.blur) * scale;
+        let sigma = over.map_or_else(|| f32::from(record.blur), |c| c.blur) * scale;
         let frosted = sigma > 0.0 && dev[2] > 0.0 && dev[3] > 0.0 && self.visible(dev);
         let (chain, flags) = if frosted { (self.note_blur(sigma, dev), BLURRED as f32) } else { (0, 0.0) };
         if uniform {
@@ -507,6 +517,15 @@ impl Painter<'_, '_> {
 
         // Children, with a scissor for scrolling containers.
         if !virtual_ {
+            // A node mid-entrance dims everything below it by as much as it
+            // is dimmed itself. `over` is set only while an animation runs,
+            // so this is 1.0 for every node of every ordinary frame.
+            let saved_fade = self.fade;
+            if record.animation == eui_proto::ANIMATION_ENTER {
+                if let Some(c) = over {
+                    self.fade *= c.opacity;
+                }
+            }
             let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
             let saved = self.clip;
             if clips {
@@ -529,6 +548,7 @@ impl Painter<'_, '_> {
             if node.kind == NodeKind::List {
                 self.placeholders(ix, rect, &style, opacity);
             }
+            self.fade = saved_fade;
             if clips {
                 self.set_clip(saved);
                 self.scrollbar(ix, rect, opacity);
@@ -875,6 +895,7 @@ pub fn colors_of(session: &Session, theme: &Resolved, record: &eui_proto::StyleR
         fg: resolve_color(session, theme, record.fg),
         border: resolve_color(session, theme, record.border_color),
         opacity: f32::from(record.opacity) / 255.0,
+        blur: f32::from(record.blur),
     }
 }
 

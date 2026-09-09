@@ -35,6 +35,11 @@ pub struct Session {
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
+    /// Nodes grafted since the last [`Session::take_entrances`] whose style
+    /// asks to be animated in (`animation` = `ANIMATION_ENTER`, 03 §5).
+    /// Only those: a mount is the whole tree, and a list that recorded all
+    /// of it would hand the client a hundred thousand indices to discard.
+    entrances: Vec<NodeIx>,
     /// `(node, previous style id)` for every style change since the last
     /// [`Session::take_style_changes`]: what a client transitions from.
     style_changes: Vec<(NodeIx, u32)>,
@@ -77,6 +82,7 @@ impl Session {
             arena: Arena::default(),
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
+            entrances: Vec::new(),
             style_changes: Vec::new(),
             local_styles: std::collections::HashMap::new(),
             restored_local: false,
@@ -299,6 +305,12 @@ impl Session {
     /// previous style id)`. A node removed since is still listed; look it up.
     pub fn take_style_changes(&mut self) -> Vec<(NodeIx, u32)> {
         std::mem::take(&mut self.style_changes)
+    }
+
+    /// The nodes grafted since the last call whose style asks to be animated
+    /// in (03 §5): what a client starts an entrance from.
+    pub fn take_entrances(&mut self) -> Vec<NodeIx> {
+        std::mem::take(&mut self.entrances)
     }
 
     /// True when any node changed since the dirty bits were last cleared.
@@ -637,6 +649,12 @@ impl Session {
             })?;
             if root.is_none() {
                 root = ix;
+            }
+            // Every new node in the session passes through here — `Mount`,
+            // `Replace` and `InsertChild` all graft — so this is the one
+            // place an entrance can be noticed.
+            if flat.style != 0 && self.styles.get(flat.style).is_some_and(|r| r.animation == eui_proto::ANIMATION_ENTER) {
+                self.entrances.push(ix);
             }
             if let Some(top) = open.last_mut() {
                 self.arena.require_mut(top.0)?.children.push(ix);

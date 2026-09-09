@@ -109,11 +109,36 @@ index plus one; `0` is none. When a node's style changes — by `SetStyle`, or
 by a local handler's `set_style` — and the **new** record's `transition` is
 non-zero, the client animates `bg`, `fg`, `border_color` and `opacity` from
 the old record's resolved values to the new over that duration, along the
-theme's easing curve. Nothing else animates: layout never runs per frame,
-and a node that is mounted or replaced appears at once. The server is never
+theme's easing curve, plus `blur` (§2.1) — nothing else, because layout
+never runs per frame. A node that is mounted or replaced appears at once
+unless it asks otherwise, which is `enter` below. The server is never
 told; a transition is the client's rendering of a state change it already
 knows about, and a client MAY skip it (reduced motion) without any
 difference on the wire.
+
+A record's `animation` byte of `2` is **enter**: a node grafted wearing it
+— by `Mount`, `Replace` or `InsertChild` — arrives from nothing and
+reaches its own record over its `transition` duration, or `motion.base`
+when it names none, along the **decelerate** curve of 05 §2 rather than
+the theme's standard one. From nothing means transparent and unblurred: `bg`,
+`fg` and `border_color` fade up from no colour at all, `opacity` from `0`,
+and `blur` from `0`, so a dialog's scrim darkens and widens its Gaussian
+together and the page is handed out of play rather than shown already
+gone.
+
+An entrance dims **everything painted for the node**, as `spin` turns
+everything painted for one: a panel arriving at a third of its opacity
+shows its own text at a third too. `opacity` is otherwise a property of a
+single node's own painting, and this is the one place it descends —
+without it a dialog's words would be at full strength before the card
+under them had arrived, which reads as text appearing on its own.
+
+It has to be asked for, and that is the whole of why it is a separate
+byte rather than an extension of `transition`: a button carrying a
+transition for its hover would otherwise fade in every time a resync
+rebuilt the tree, which is the flash the sentence above exists to
+prevent. A client MAY skip an entrance for the same reason it may skip a
+transition, and the server hears nothing either way.
 
 A record's `animation` byte (02 §3, offset 61) is `0` or `1`, **spin**: a
 node wearing it turns about its own centre, one revolution every 1.2 s,
@@ -169,9 +194,12 @@ no shader, no tessellator and no allocation beyond its quads.
   `key_down` or `key_up`. An application that asked for the arrows gets them:
   a pattern editor, a grid, a game. Otherwise:
   `ArrowDown`/`ArrowUp` land the scroller on its next/previous row — a
-  `list`'s rows, or the scroller's children; a plain 40 px step where there
-  are none — `PageDown`/`PageUp` move one viewport, `Home`/`End` the whole
-  way. From rest the view eases in and out over `motion.slow`; a press
+  `list`'s rows, or the scroller's children. A plain 40 px step where there
+  are none, where there is only **one** — a page whose content is a single
+  column has one row top, at 0, and an arrow that honoured it would be `Home`
+  — or where the nearest is more than a viewport away, so that an arrow never
+  travels further than `PageUp` would. `PageDown`/`PageUp` move one viewport,
+  `Home`/`End` the whole way. From rest the view eases in and out over `motion.slow`; a press
   that arrives while it is moving keeps the momentum and eases out to the
   new target over `motion.base`, like a wheel notch, so a held key is one
   glide rather than a series of departures. The scroller is the one under the

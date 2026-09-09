@@ -528,10 +528,34 @@ def toast(message, tone)
 end
 
 # A dialog is a stack: a dimming overlay, then the panel, centred.
-def dialog(title, body_children, actions)
+# A region of the tree that is built only when something asks for it.
+#
+# `make` is a thunk — `fn() { ... }` — and it is not called at all unless
+# `id` is in `shown`. That is the whole mechanism: an unopened modal, an
+# unselected tab and a collapsed section cost nothing to build, nothing to
+# encode and nothing to send, because their content never exists.
+#
+# This is lazy *evaluation*, not a loading spinner. Every EUI frame answers
+# a client event and a handler is synchronous, so the thunk runs during the
+# very event that reveals the region and its content lands in that same
+# frame — `placeholder` is what stands there while the region is closed,
+# not something the viewer watches being replaced.
+#
+# Nothing is cached here on purpose. `lazy` cannot know what a subtree
+# reads, and a cached panel that depends on state would serve stale nodes.
+# A builder whose input really is fixed — a document at a path — memoises
+# on that input itself.
+def lazy(id, shown, placeholder, make)
+  return placeholder unless (shown ?? []).includes?(id)
+
+  make()
+end
+
+def dialog(title, body_children, actions, opts = {})
   panel = card(
     {
-      "width": 360,
+      "width": opts["width"] ?? 360,
+      "height": opts["height"] ?? "auto",
       "gap": 4,
       "self": "center"
     },
@@ -546,17 +570,17 @@ def dialog(title, body_children, actions)
       "display": "stack",
       "justify": "center",
       "align": "center",
-      # The page behind is put out of play twice over: blurred, so nothing
-      # on it is legible enough to invite a click, and dimmed, so the panel
-      # is plainly the brighter thing. The blur does most of the work, which
-      # is why the scrim is a third lighter than it was when it did all of
-      # it — the page should still read as present, just out of reach.
       "blur": 16,
       "bg": "#00000073"
     },
     "c": [panel]
   }
 end
+# The page behind is put out of play twice over: blurred, so nothing
+# on it is legible enough to invite a click, and dimmed, so the panel
+# is plainly the brighter thing. The blur does most of the work, which
+# is why the scrim is a third lighter than it was when it did all of
+# it — the page should still read as present, just out of reach.
 
 # An alert: one thing to say and nothing to decide, so one button. The
 # handler fires on the button, not on the backdrop — a dialog that closes
@@ -578,10 +602,7 @@ def confirm(title, message, on_confirm, on_cancel, opts)
   ok_label = opts["ok"] ?? "Confirm"
   destructive = opts["danger"] ?? false
   ok = destructive ? danger_button(ok_label, on_confirm) : button(ok_label, on_confirm)
-  dialog(title, [text(message, {})], [
-    secondary_button(opts["cancel"] ?? "Cancel", on_cancel),
-    ok
-  ])
+  dialog(title, [text(message, {})], [secondary_button(opts["cancel"] ?? "Cancel", on_cancel), ok])
 end
 
 def field(label, value, on_change)
@@ -1312,15 +1333,15 @@ def sheet(side, children)
       "display": "row",
       "justify": side == "left" ? "start" : "end",
       "align": "stretch",
-      # Lighter than a dialog's, and blurred less: a sheet is somewhere you
-      # went, not a question you have to answer, and the page it slid over
-      # should stay recognisable behind it.
       "blur": 10,
       "bg": "#00000047"
     },
     "c": [panel]
   }
 end
+# Lighter than a dialog's, and blurred less: a sheet is somewhere you
+# went, not a question you have to answer, and the page it slid over
+# should stay recognisable behind it.
 
 def drawer(children)
   sheet("left", children)
@@ -1495,14 +1516,14 @@ def code_viewer(code, opts)
       "display": "column",
       "overflow": "scroll",
       "grow": 1,
-      # The code needs air on its left or the first character sits against
-      # the gutter and the two columns read as one. The padding goes on the
-      # scroller, not the text: padding the text node would move the run
-      # the spans are measured against.
       "pad": [0, 0, 0, 3]
     },
     "c": [code_text_node]
   }
+  # The code needs air on its left or the first character sits against
+  # the gutter and the two columns read as one. The padding goes on the
+  # scroller, not the text: padding the text node would move the run
+  # the spans are measured against.
 
   # Content row: gutter + code, both inside.
   content_row = row(
@@ -1510,21 +1531,33 @@ def code_viewer(code, opts)
     show_numbers ? [gutter_box, code_scroll] : [code_scroll]
   )
 
-  # The outer scroll takes the height of the code, up to a ceiling it then
-  # scrolls within. It deliberately does not `grow`: a viewer that fills
-  # whatever column it is dropped into leaves a field of empty sunken
-  # background under a short file, which reads as a bug rather than a box.
-  outer_scroll = scroll(
-    {
-      "radius": 2,
-      "bg": "surface.sunken",
-      "pad": 1,
-      "max_height": opts["max_height"] ?? 320
-    },
+  # The frame. Two cases, and they want two different kinds of box.
+  #
+  # With no ceiling asked for, the viewer shows the whole file and ends at
+  # the last line — so it is a plain `box`, which a column sizes to its
+  # content. A `scroll` cannot do that job: the engine gives a scroll its
+  # bound rather than its content (04, `place_scroll`), so a scroll in a
+  # column that has room takes all of it, and the only way to stop it is to
+  # predict the content's height and hand it back as `max_height`. That
+  # prediction was a line of mono at this size being 18 px, which is true
+  # at font scale 1 and false at every other, and what it left under the
+  # last line was a strip of sunken background with no gutter beside it.
+  # Nothing here computes a height any more; the engine measures the text
+  # that is actually there.
+  #
+  # With a ceiling, a scroll is exactly right: `max_height` is the bound,
+  # the viewer stops there, and the code scrolls inside it.
+  frame_style = {
+    "radius": 2,
+    "bg": "surface.sunken",
+    "pad": 1,
+    "overflow": "clip"
+  }
+  ceiling = opts["max_height"]
+  ceiling.nil? ? node("box", frame_style.merge({"display": "column"}), [content_row]) : scroll(
+    frame_style.merge({"max_height": ceiling}),
     [content_row]
   )
-
-  outer_scroll
 end
 
 def tree_view(nodes, open_ids, on_toggle, depth)
@@ -1914,6 +1947,100 @@ def labelled(title, child)
   card({"gap": 3}, [text(title, {"weight": "bold"}), child])
 end
 
+# ---- The dev bar --------------------------------------------------------
+#
+# A dev bar in HTML is spliced into the document on its way out. EUI has no
+# document: the server composes the tree, so the bar is a widget the
+# application places itself — an `overlay`, which paints in the top layer and
+# is clipped by nothing (03 §2.4), pinned to the bottom of the window.
+#
+# What it reports is what EUI costs: the view and the encode in milliseconds,
+# the ops and the bytes that went on the wire, and the four tables a session
+# interns once. `eui_stats()` gives the *previous* render — the work behind
+# what is on the screen — and gives nothing at all outside `--dev`, so a view
+# can compose `dev_bar(eui_stats())` and ship it: with no numbers there is no
+# bar, and the node never reaches the client.
+#
+# Nothing the window knows is in here — frame time, quads, memory. Spec 08
+# says the client reports nothing about the machine beyond its viewport, and
+# a dev bar is not a reason to change that.
+#
+# It sits over the page rather than beside it, and EUI has no way to make a
+# node transparent to the pointer, so it takes the clicks that land on it.
+# That is why it is one line at the very bottom and not a panel.
+
+def dev_figure(label, value, tone)
+  row(
+    {"gap": 2, "align": "baseline"},
+    [
+      text(value, {"font": "mono", "size": 0, "weight": "semibold", "fg": tone}),
+      text(label, {"font": "mono", "size": 0, "fg": "text.muted"})
+    ]
+  )
+end
+
+# How heavy the last patch was, as a colour: a render that sends a few ops is
+# what the design is for, and one that sends the tree is worth noticing.
+def dev_wire_tone(ops)
+  return "success.base" if ops <= 24
+  return "warning.base" if ops <= 200
+
+  "danger.base"
+end
+
+def dev_bar(stats, shown = true)
+  return {"k": "box", "s": {"display": "none"}} if (stats ?? {})["renders"].nil? || !shown
+
+  ms = fn(v) { str((v * 10).round() / 10.0) + " ms" }
+  figures = [
+    dev_figure("event", stats["event"] == "" ? "—" : stats["event"], "accent.base"),
+    dev_figure("view", ms(stats["view_ms"]), "text.default"),
+    dev_figure("encode", ms(stats["encode_ms"]), "text.default"),
+    dev_figure("ops", str(stats["ops"]), dev_wire_tone(stats["ops"])),
+    dev_figure("B", str(stats["bytes"]), dev_wire_tone(stats["ops"])),
+    dev_figure("nodes", str(stats["nodes"]), "text.default"),
+    dev_figure("seq", str(stats["seq"]), "text.muted"),
+    dev_figure("renders", str(stats["renders"]), "text.muted"),
+    dev_figure("interned", str(stats["atoms"]) + "/" + str(stats["styles"]) + "/" + str(stats["colors"]) + "/" + str(stats["chunks"]), "text.muted")
+  ]
+  {
+    "k": "overlay",
+    "s": {
+      "position": "absolute",
+      "align": "end",
+      "justify": "center",
+      "width": "100%"
+    },
+    "c": [row(
+      {
+        "gap": 4,
+        "align": "center",
+        "wrap": "wrap",
+        "pad": [1, 3, 1, 3],
+        "margin": [0, 0, 2, 0],
+        "radius": 2,
+        "bg": "surface.overlay",
+        "border": 1,
+        "border_color": "border.subtle",
+        "shadow": 2
+      },
+      [dev_bar_tag()].concat(figures)
+    )]
+  }
+end
+
+# The tag at the head of the bar is also its switch: a click hides the bar
+# for the rest of the session. It asks the server rather than repointing a
+# style locally, because the next render would draw the bar again.
+def dev_bar_tag
+  {
+    "k": "box",
+    "s": {"cursor": "pointer", "pad": [0, 1, 0, 1], "radius": 1},
+    "on": {"click": "dev_bar_toggle"},
+    "c": [text("EUI", {"font": "mono", "size": 0, "weight": "bold", "fg": "accent.base"})]
+  }
+end
+
 # ---- Charts ----------------------------------------------------------------
 
 # A chart is a `canvas` with a `paths` prop, spec 03 §1.1: each path is a
@@ -1968,7 +2095,129 @@ def flatten_points(points)
   flat
 end
 
-def chart_line(values, w, h)
+# The four roles a chart spends, in order.
+def chart_role(i)
+  roles = ["accent.base", "info.base", "success.base", "warning.base"]
+  roles[i % 4]
+end
+
+# ---- Answering the pointer -------------------------------------------------
+#
+# The client hit-tests boxes, not paths: a canvas is one node, so a chart that
+# answers the pointer needs boxes over it. Every chart is a `stack` of three
+# layers — a row of wash columns behind the drawing, the drawing itself, and a
+# row of invisible bands in front holding the handlers and the value chips.
+# Entering a band repoints two nodes at styles the handler declared, its wash
+# and its chip, and leaving puts them back; the keys are how a chunk names a
+# node it does not carry (07 §1), so they are identifiers: `cw_line_3`.
+#
+# Nothing here waits for the network, and nothing here moves: what the new
+# records change is a colour and an opacity, which 03 §5 animates on its own
+# while layout stays exactly where it was.
+
+# One column of the plot, behind the drawing. `lit` is the state under the
+# pointer; the width is in the record because the handler has to declare the
+# same box it is repointing, not a narrower one.
+def chart_wash_style(width, lit)
+  {
+    "width": width,
+    "height": "100%",
+    "radius": 2,
+    "bg": lit ? "surface.sunken" : "none",
+    "transition": "fast"
+  }
+end
+
+# The tooltip: a chip that is always there and is transparent until the
+# pointer is in its band. Fading one in costs no layout; mounting one would.
+def chart_chip_style(shown)
+  {
+    "bg": "surface.overlay",
+    "fg": "text.default",
+    "border": 1,
+    "border_color": "border.subtle",
+    "radius": 2,
+    "shadow": 1,
+    "pad": [1, 2, 1, 2],
+    "size": 0,
+    "weight": "semibold",
+    "opacity": shown ? 255 : 0,
+    "transition": "fast"
+  }
+end
+
+# A string as the local language's source will read it back: a chunk's
+# `set_text` takes a literal, and a literal wants its quotes.
+def chart_quoted(s)
+  "\"" + s + "\""
+end
+
+# Where the bands meet: the midpoint between neighbouring marks, rounded once
+# so the columns still add up to the plot's width — a band per mark, from the
+# left edge of the plot to its right.
+def chart_spans(centres, w)
+  count = centres.length()
+  edges = [4]
+  for i in range(1, count)
+    edges = edges.concat([int(((centres[i - 1] + centres[i]) / 2) + 0.5)])
+  end
+  edges = edges.concat([int(w - 4)])
+  range(0, count).map(fn(i) { edges[i + 1] - edges[i] })
+end
+
+# One band: an invisible box over its share of the plot, carrying the chip and
+# the two handlers that light the pair.
+def chart_band(id, i, width, label)
+  wash_key = "cw_" + id + "_" + str(i)
+  chip_key = "ct_" + id + "_" + str(i)
+  {
+    "k": "box",
+    "s": {
+      "display": "column",
+      "justify": "start",
+      "align": "center",
+      "pad": [1, 0, 0, 0],
+      "width": width,
+      "height": "100%"
+    },
+    "on": {
+      "pointer_enter": {
+        "local": wash_key + ".style = @lit; " + chip_key + ".style = @shown",
+        "styles": {"lit": chart_wash_style(width, true), "shown": chart_chip_style(true)}
+      },
+      "pointer_leave": {
+        "local": wash_key + ".style = @rest; " + chip_key + ".style = @hidden",
+        "styles": {"rest": chart_wash_style(width, false), "hidden": chart_chip_style(false)}
+      }
+    },
+    "c": [keyed(chip_key, text(label, chart_chip_style(false)))]
+  }
+end
+
+# The three layers, stacked on the plot the drawing was scaled into. The
+# strips are the plot itself — `w − 8` by `h − 8`, centred — so a band sits
+# exactly over the marks `chart_points` placed.
+def chart_layers(id, spans, labels, w, h, drawing)
+  count = spans.length()
+  washes = range(0, count).map(fn(i) {
+    keyed("cw_" + id + "_" + str(i), {"k": "box", "s": chart_wash_style(spans[i], false)})
+  })
+  bands = range(0, count).map(fn(i) { chart_band(id, i, spans[i], labels[i]) })
+  stack(
+    {"width": w, "height": h, "justify": "center", "align": "center"},
+    [
+      row({"width": int(w - 8), "height": int(h - 8)}, washes),
+      drawing,
+      row({"width": int(w - 8), "height": int(h - 8)}, bands)
+    ]
+  )
+end
+
+def chart_labels(values)
+  values.map(fn(v) { str(v) })
+end
+
+def chart_line(id, values, w, h)
   points = chart_points(values, w, h)
   line = [0, "accent.base", 2].concat(flatten_points(points))
   dots = points.map(fn(p) { [
@@ -1978,17 +2227,22 @@ def chart_line(values, w, h)
     p[1],
     3
   ] })
-  canvas(w, h, chart_grid(w, h).concat([line]).concat(dots))
+  drawing = canvas(w, h, chart_grid(w, h).concat([line]).concat(dots))
+  spans = chart_spans(points.map(fn(p) { p[0] }), w)
+  chart_layers(id, spans, chart_labels(values), w, h, drawing)
 end
 
-def chart_area(values, w, h)
-  flat = flatten_points(chart_points(values, w, h))
+def chart_area(id, values, w, h)
+  points = chart_points(values, w, h)
+  flat = flatten_points(points)
   area = [2, "info.subtle", h - 4].concat(flat)
   line = [0, "info.base", 2].concat(flat)
-  canvas(w, h, chart_grid(w, h).concat([area, line]))
+  drawing = canvas(w, h, chart_grid(w, h).concat([area, line]))
+  spans = chart_spans(points.map(fn(p) { p[0] }), w)
+  chart_layers(id, spans, chart_labels(values), w, h, drawing)
 end
 
-def chart_bar(values, w, h)
+def chart_bar(id, values, w, h)
   top = chart_max(values)
   count = values.length()
   slot = (w - 8) / count
@@ -1996,23 +2250,58 @@ def chart_bar(values, w, h)
     bar_h = (h - 8) * values[i] / top;
     [1, "accent.base", 4 + i * slot + slot / 8, h - 4 - bar_h, slot - slot / 4, bar_h, 1]
   })
-  canvas(w, h, chart_grid(w, h).concat(bars))
+  drawing = canvas(w, h, chart_grid(w, h).concat(bars))
+  centres = range(0, count).map(fn(i) { 4 + i * slot + slot / 2 })
+  chart_layers(id, chart_spans(centres, w), chart_labels(values), w, h, drawing)
 end
 
-# A donut: one arc per part, in the four "base" roles, a small gap between.
-def chart_donut(parts, w, h)
-  total = parts.sum()
-  total = 1 if total == 0
-  roles = ["accent.base", "info.base", "success.base", "warning.base"]
+# A donut has no bands: an arc is not a box, and a quadrant is not an arc. Its
+# legend is the thing under the pointer instead, and what it shows is the
+# reading in the hole — one `set_text` for the number, one for the name, which
+# is what a chunk is for (07 §1).
+def chart_donut_legend_row(id, i, part, label, total)
+  rest = {
+    "display": "row",
+    "align": "center",
+    "gap": 2,
+    "pad": [1, 1, 1, 1],
+    "radius": 2,
+    "bg": "none",
+    "width": "100%",
+    "transition": "fast"
+  }
+  lit = rest.merge({"bg": "surface.sunken"})
+  share = total > 0 ? int(part * 100 / total) : 0
+  reading = str(part) + " · " + str(share) + "%"
+  says = "dv_" + id + ".text = " + chart_quoted(reading) + "; dl_" + id + ".text = " + chart_quoted(label)
+  rests = "dv_" + id + ".text = " + chart_quoted(str(total)) + "; dl_" + id + ".text = " + chart_quoted("Total")
+  swatch = {"k": "box", "s": {"width": 10, "height": 10, "radius": 4, "bg": chart_role(i)}}
+  {
+    "k": "box",
+    "key": "dr_" + id + "_" + str(i),
+    "s": rest,
+    "on": {
+      "pointer_enter": {"local": "self.style = @lit; " + says, "styles": {"lit": lit}},
+      "pointer_leave": {"local": "self.style = @rest; " + rests, "styles": {"rest": rest}}
+    },
+    "c": [swatch, text(label, {"size": 1}), spacer(), text(str(part), {"size": 1, "fg": "text.muted"})]
+  }
+end
+
+# A donut: one arc per part, in the four "base" roles, a small gap between,
+# and the total in the hole until a legend row says otherwise.
+def chart_donut(id, parts, labels, w, h)
+  total = int(parts.sum())
+  scale = total > 0 ? total : 1
   radius = (w < h ? w : h) / 2 - 10
   arcs = []
   start = -1.5707963
   i = 0
   for p in parts
-    sweep = 6.2831853 * p / total
+    sweep = 6.2831853 * p / scale
     arcs = arcs.concat([ [
       4,
-      roles[i % 4],
+      chart_role(i),
       14,
       w / 2,
       h / 2,
@@ -2023,7 +2312,26 @@ def chart_donut(parts, w, h)
     start = start + sweep
     i = i + 1
   end
-  canvas(w, h, arcs)
+  hole = column(
+    {"gap": 0, "align": "center", "justify": "center"},
+    [
+      keyed("dv_" + id, text(str(total), {"size": 3, "weight": "bold"})),
+      keyed("dl_" + id, text("Total", {"size": 0, "fg": "text.muted"}))
+    ]
+  )
+  # As wide as the wheel, so the two read as one block whatever the cell
+  # around them is doing.
+  legend = column(
+    {"gap": 1, "width": w},
+    range(0, parts.length()).map(fn(j) {
+      chart_donut_legend_row(id, j, parts[j], labels[j] ?? ("Part " + str(j + 1)), total)
+    })
+  )
+  wheel = stack(
+    {"width": w, "height": h, "justify": "center", "align": "center"},
+    [canvas(w, h, arcs), hole]
+  )
+  column({"gap": 3, "width": "100%", "align": "center"}, [wheel, legend])
 end
 
 # ---- Feed ------------------------------------------------------------------

@@ -581,6 +581,9 @@ def gallery_defaults(state)
     "sheet": false,
     "dialog": "",
     "dialog_said": "",
+    # Which lazy regions are revealed. A list, so one key serves every
+    # region in the view rather than each growing its own flag.
+    "shown": [],
     "tree_open": ["root"],
     "select_open": false,
     "select_value": "Medium",
@@ -608,6 +611,12 @@ def gallery_defaults(state)
     "grid_sort": "",
     "grid_dir": "asc",
     "grid_menu": false,
+    # The editor card's buffer. Every key of the state has to be declared
+    # here or `gallery_defaults` drops it on the next round trip, which for
+    # an editor means every keystroke.
+    "ed": {},
+    "doc_window": [0, 24],
+    "devbar": true,
     "viewport": {
       "width": 1280,
       "height": 800,
@@ -728,9 +737,25 @@ def gallery(event_data)
     "grid_key" => gallery_grid_key(state, params),
     "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
     "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    # The editor card. The `ed_*` functions are the editor component's, and
+    # they take a state and give one back, so the gallery keeps the buffer
+    # under one key of its own and hands it over for each keystroke.
+    "ed_key" => set_key(state, "ed", ed_key(gallery_editor_state(state), params["payload"][0], params["payload"][1])),
+    "ed_click" => set_key(state, "ed", ed_click(gallery_editor_state(state), params)),
+    "ed_reload" => set_key(state, "ed", gallery_editor_reset(state)),
     # Which dialog is up, and what the last one was answered with. The
     # answer is kept so the gallery can show that the choice arrived
     # somewhere, rather than the dialog just vanishing.
+    # Any node can reveal or hide a lazy region by carrying its id; the
+    # regions do not each need an event of their own.
+    "lazy_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], props["id"])),
+    "lazy_close" => set_key(state, "shown", (state["shown"] ?? []).filter(fn(x) { x != props["id"] })),
+    # The docs list asked for a window of rows (04 §7.1); the view builds
+    # those and no others.
+    "doc_window" => set_key(state, "doc_window", params["payload"]),
+    # The dev bar's own tag hides it for the session; there is no way back
+    # short of reconnecting, which is what a bar that is in the way wants.
+    "dev_bar_toggle" => set_key(state, "devbar", false),
     "ask_alert" => set_key(state, "dialog", "alert"),
     "ask_confirm" => set_key(state, "dialog", "confirm"),
     "dialog_ok" => set_key(set_key(state, "dialog", ""), "dialog_said", "confirmed"),
@@ -819,6 +844,102 @@ end
 def gallery_code_viewer
   source = "# A greeting, twice over.\ndef hello(name)\n  puts(\"Hello, \" + name)\nend\n\ndef world\n  puts(\"World\")\n  42\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()"
   code_viewer(source, {"line_numbers": true, "spans": code_spans(source)})
+end
+
+# A page of documentation, rendered from markdown by `markdown_builders.sl`.
+# The sample exercises what this project's own docs actually lean on: a lot
+# of inline code, tables, and the occasional fence.
+# The editor, in a card. It is the `editor` component's own code — the same
+# buffer in the session's state, the same round trip per keystroke, the same
+# tokeniser — told to name the three handlers the gallery answers to and to
+# stop after twelve lines. What it opens is a sample, not a file: a gallery
+# card that could rewrite the application it is in would be a different kind
+# of demonstration.
+def gallery_editor_lines
+  sample = "# Type in me. Every keystroke is a round trip: the client sends\n# `key_down`, the server edits the buffer and sends back the line\n# that changed and the cursor that moved. Nothing here is a text\n# widget — the gutter, the colours and the caret are the view's.\ndef greet(name)\n  return \"Hello, stranger\" if name == \"\"\n\n  \"Hello, \" + name\nend\n\ngreet(\"Ada\")"
+  sample.split("\n")
+end
+
+def gallery_editor_state(state)
+  seat = state["ed"] ?? {}
+  # Seeded on the first look rather than in `gallery_defaults`, so the sample
+  # is split once a session and not once an event. Without a buffer of its
+  # own `ed_defaults` would go and read the editor's source file.
+  seat = {
+    "lines": gallery_editor_lines(),
+    "name": "sample.sl",
+    "message": "A sample, not a file. Nothing is written anywhere."
+  } if seat["lines"].nil?
+  seat["viewport"] = state["viewport"] ?? {}
+  ed_defaults(seat)
+end
+
+def gallery_editor_reset(state)
+  seat = gallery_editor_state(state)
+  seat["lines"] = gallery_editor_lines()
+  seat["row"] = 0
+  seat["col"] = 0
+  seat["dirty"] = false
+  seat["message"] = "Back to the sample."
+  seat
+end
+
+def gallery_editor(state)
+  frame = {
+    "k": "box",
+    "s": {
+      "display": "column",
+      "width": "100%",
+      "radius": 2,
+      "overflow": "clip",
+      "border": 1,
+      "border_color": "border.subtle"
+    },
+    "c": [ed_panel(
+      gallery_editor_state(state),
+      {"key": "ed_key", "click": "ed_click", "reload": "ed_reload", "lines": 12, "clean": "unchanged"}
+    )]
+  }
+  card({"gap": 3, "width": "100%"}, [text("Code Editor", {"weight": "bold"}), frame])
+end
+
+def gallery_markdown
+  doc = "## Widgets\n\nEverything is composed from the **16 primitive kinds**. A widget is a\nfunction returning a hash — there is no registry and nothing to install.\n\n| Kind | Leaf | Note |\n|---|---|---|\n| `box` | no | arranges children |\n| `text` | yes | one run, one style |\n| `scroll` | no | clips and offers scrolling |\n\n- A `list` virtualises: only the visible window is laid out.\n- An `overlay` paints in the top layer, clipped by the window alone.\n\n> The set is closed. Adding a kind is a protocol version bump.\n\n```\nrouter_eui(\"gallery\", \"live#gallery\", \"live#gallery_view\")\n```\n"
+  card({"gap": 3}, [markdown(doc, {})])
+end
+
+# The document, in a dialog wide enough to read it in. Only ever built
+# through `lazy`, so `markdown_file` — and the parse behind it — happens on
+# the click that opens this and never before.
+def gallery_doc(state)
+  # The document as a windowed list, 04 §7.1: the client holds a height
+  # for every block and lays out the ones in view, so opening a page costs
+  # a window of blocks however long the page is. `doc_window` is what the
+  # client last asked for; the rows it names are the only ones built.
+  doc = md_doc_rows("app/docs/components.md", 800)
+  doc_count = doc["rows"].length()
+  doc_window = state["doc_window"] ?? [0, 24]
+  doc_first = doc_window[0] ?? 0
+  doc_last = doc_window[1] ?? 24
+  doc_last = doc_count - 1 if doc_last > doc_count - 1
+  # Each block rides in a box that names its row. A box, not the block:
+  # a divider is an inert kind and may carry nothing, not even a prop, and
+  # the cached block is shared by every window that shows it.
+  doc_rows = doc_first > doc_last ? [] : range(doc_first, doc_last + 1).map(fn(i) {
+    {"k": "box", "s": {"display": "column", "width": "100%"}, "p": {"row": i}, "c": [doc["rows"][i]]}
+  })
+  dialog(
+    "EUI components",
+    [list_window({"grow": 1, "max_height": 560, "gap": 3}, 24, doc_count, doc["heights"], doc_rows, "doc_window")],
+    [{
+      "k": "box",
+      "s": {"display": "row", "justify": "center", "align": "center", "pad": [2, 4, 2, 4], "min_width": 44, "bg": "accent.base", "fg": "accent.on", "border": 1, "radius": 2, "cursor": "pointer"},
+      "p": {"id": "doc"},
+      "on": {"click": "lazy_close"},
+      "c": [text("Close", {"weight": "semibold"})]
+    }],
+    {"width": 860}
+  )
 end
 
 def gallery_media(state)
@@ -927,9 +1048,11 @@ def gallery_charts(state)
   cw = 160 if cw < 160
   ch = 140
   series = [3, 5, 4, 8, 6, 9, 7]
+  # The `id` is what the hover handlers name their nodes by, so it has to be
+  # an identifier and it has to be unique in this tree.
   plots = [
-    column({"gap": 2}, [text("Line", {"weight": "bold"}), chart_line(series, cw, ch)]),
-    column({"gap": 2}, [text("Area", {"weight": "bold"}), chart_area([
+    column({"gap": 2}, [text("Line", {"weight": "bold"}), chart_line("line", series, cw, ch)]),
+    column({"gap": 2}, [text("Area", {"weight": "bold"}), chart_area("area", [
       2,
       4,
       3,
@@ -938,7 +1061,7 @@ def gallery_charts(state)
       8,
       9
     ], cw, ch)]),
-    column({"gap": 2}, [text("Bars", {"weight": "bold"}), chart_bar([
+    column({"gap": 2}, [text("Bars", {"weight": "bold"}), chart_bar("bars", [
       4,
       7,
       3,
@@ -946,12 +1069,15 @@ def gallery_charts(state)
       5,
       6
     ], cw, ch)]),
-    column({"gap": 2}, [text("Donut", {"weight": "bold"}), chart_donut([
-      5,
-      3,
-      2,
-      1
-    ], ch, ch)])
+    column({"gap": 2}, [
+      text("Donut", {"weight": "bold"}),
+      chart_donut("mix", [
+        5,
+        3,
+        2,
+        1
+      ], ["Direct", "Search", "Social", "Mail"], ch, ch)
+    ])
   ]
   card(
     {"gap": 3, "width": "100%"},
@@ -1070,7 +1196,8 @@ def gallery_view(raw_state)
         accordion(sections, open, "toggle"),
         code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
         h2("Code Viewer:"),
-        gallery_code_viewer()
+        gallery_code_viewer(),
+        gallery_editor(state)
       ]
     ),
     column(
@@ -1084,6 +1211,15 @@ def gallery_view(raw_state)
             danger_button("Delete…", "ask_confirm"),
             secondary_button("Save…", "ask_alert")
           ]),
+          # The document is 630 lines of markdown. Nothing of it exists
+          # until this is clicked.
+          {
+            "k": "box",
+            "s": {"display": "row", "justify": "center", "align": "center", "pad": [2, 4, 2, 4], "bg": "surface.raised", "border": 1, "border_color": "border.default", "radius": 2, "cursor": "pointer"},
+            "p": {"id": "doc"},
+            "on": {"click": "lazy_toggle"},
+            "c": [text("Read the docs", {"weight": "semibold", "size": 1})]
+          },
           # The answer, so the choice is visibly received rather than the
           # dialog merely disappearing.
           (state["dialog_said"] ?? "") == "" ? muted("No answer yet.") : muted("You " + state["dialog_said"] + " it.")
@@ -1096,6 +1232,7 @@ def gallery_view(raw_state)
   page_content = column(
     {"gap": wide ? 5 : 3, "pad": wide ? 6 : 4},
     [
+      gallery_markdown(),
       navbar("EUI", ["Overview", "Inputs", "Data"], tab, "tab"),
       tabs(["Overview", "Inputs", "Data"], tab, "tab"),
       row(
@@ -1185,12 +1322,26 @@ def gallery_view(raw_state)
     "dialog_cancel",
     {"ok": "Delete", "danger": true}
   )]) if asking == "confirm"
+  # The documentation modal. `lazy` means the file is neither read nor
+  # parsed while this is closed — the thunk is not called at all — so the
+  # page behind pays nothing for a modal nobody has opened.
+  layers = layers.concat([lazy(
+    "doc",
+    state["shown"],
+    {"k": "box", "s": {"display": "none"}},
+    fn() { gallery_doc(state) }
+  )])
   layers = layers.concat([alert(
     "Saved",
     "The sheet is written. This one has nothing to decide, so it has one button.",
     "dialog_close",
     {"ok": "Got it"}
   )]) if asking == "alert"
+  # Last, so it is over every layer: an overlay is in the top layer anyway,
+  # and this way it is over the dialogs too. Outside `--dev` it is a node
+  # with `display: none` and nothing else, which is the point of asking the
+  # server rather than the view.
+  layers = layers.concat([dev_bar(eui_stats(), state["devbar"] ?? true)])
   stack({"gap": 0}, layers)
 end
 
