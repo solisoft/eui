@@ -338,7 +338,8 @@ impl App {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        self.backend.with_atlases(|atlas, images| gpu.renderer.render(&view, (w, h), &list, atlas, images));
+        let format = gpu.config.format;
+        self.backend.with_atlases(|atlas, images| gpu.renderer.render(&view, format, (w, h), &list, atlas, images));
         frame.present();
         crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
         // A scroll that landed during this paint reports its offset now.
@@ -456,9 +457,28 @@ impl ApplicationHandler<Wake> for App {
         };
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
+        // A surface only takes a format it advertises, and configuring it with
+        // any other is a validation error inside wgpu — which aborts, because
+        // it happens in a callback that cannot unwind. Metal advertises BGRA
+        // and the float formats and no RGBA8 at all, so the off-screen
+        // `FORMAT` is a request the Mac cannot serve.
+        //
+        // The shader writes linear values and leaves the conversion to the
+        // target, so the choice has to stay sRGB; only the channel order gives.
+        let format = if caps.formats.contains(&eui_render::FORMAT) {
+            eui_render::FORMAT
+        } else if let Some(srgb) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb) {
+            srgb
+        } else {
+            // No sRGB anywhere: draw rather than refuse, and say why the
+            // colours look washed out.
+            let first = caps.formats.first().copied().unwrap_or(eui_render::FORMAT);
+            eprintln!("eui: no sRGB surface format, falling back to {first:?} — colours will be light");
+            first
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: eui_render::FORMAT,
+            format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,

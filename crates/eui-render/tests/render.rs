@@ -498,3 +498,68 @@ fn a_tall_field_centres_its_text_and_caret() {
     assert_eq!(c44 - c22, 11.0, "the caret moved down by half the spare height");
     assert_eq!(g44 - g22, 11.0, "and so did the text");
 }
+
+// A window's surface format is whatever the platform offers, and on Metal
+// that is BGRA — never the RGBA `FORMAT` the off-screen path uses. Before
+// the renderer built a pipeline per format, the Mac aborted inside
+// `Surface::configure` on the first frame: "Requested format
+// Rgba8UnormSrgb is not in list of supported formats". This draws the same
+// scene into a BGRA target and checks it comes out as the same picture with
+// the channels swapped, which is the whole of what the platform asked for.
+#[test]
+fn a_bgra_target_draws_the_same_picture_with_its_channels_swapped() {
+    let Some(mut r) = gpu() else { return };
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [3; 4], ..Default::default() };
+    let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+
+    // The same texture the surface would hand over, in the order Metal wants.
+    let tex = r.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("bgra"),
+        size: wgpu::Extent3d { width: 100, height: 100, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&Default::default());
+    r.render(&view, wgpu::TextureFormat::Bgra8UnormSrgb, (100, 100), &list, &mut fx.atlas, &mut fx.images);
+
+    let px = read_texture(&mut r, &tex, 100, 100);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    let bgra = |c: [u8; 4]| [c[2], c[1], c[0], c[3]];
+    assert!(close(pixel(&px, 100, 28, 18), bgra(accent), 2), "centre {:?}", pixel(&px, 100, 28, 18));
+    assert!(close(pixel(&px, 100, 2, 2), bgra(surface), 2), "outside {:?}", pixel(&px, 100, 2, 2));
+}
+
+/// `read_back` only knows the off-screen target; this reads any texture.
+fn read_texture(r: &mut Renderer, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
+    let bpr = (w * 4).div_ceil(256) * 256;
+    let buffer = r.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: u64::from(bpr) * u64::from(h),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = r.device().create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::ImageCopyTexture { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::ImageCopyBuffer { buffer: &buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    r.queue().submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    r.device().poll(wgpu::Maintain::Wait);
+    let mapped = slice.get_mapped_range();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for row in 0..h {
+        let start = (row * bpr) as usize;
+        out.extend_from_slice(&mapped[start..start + (w * 4) as usize]);
+    }
+    out
+}

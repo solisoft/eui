@@ -1,5 +1,7 @@
-//! The wgpu side: one pipeline, one instance buffer, one atlas texture.
+//! The wgpu side: a pipeline per target format, one instance buffer, one
+//! atlas texture.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::atlas::{Atlas, ImageAtlas};
@@ -29,14 +31,25 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// The output format for every target, on screen or off.
+/// The off-screen format, and what `read_back` hands back: sRGB, RGBA byte
+/// order, which is what a PNG wants.
+///
+/// A window's format is **not** this one. It is whatever its surface offers,
+/// and a surface is entitled to offer none of it: Metal advertises only BGRA
+/// and the float formats, so asking for this one there fails `configure` and
+/// takes the process with it. The window picks from `get_capabilities` and
+/// tells `render` what it picked.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// GPU state that lives for the session.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    /// One per format drawn into. A session uses one or two — a window's
+    /// surface format, and `FORMAT` if it also renders off-screen.
+    pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     uniforms: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
@@ -142,36 +155,6 @@ impl Renderer {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("eui quad"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Quad>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: 16,
@@ -198,7 +181,9 @@ impl Renderer {
         Ok(Self {
             device,
             queue,
-            pipeline,
+            shader,
+            pipeline_layout: layout,
+            pipelines: HashMap::new(),
             uniforms,
             uniform_bind,
             atlas_layout,
@@ -209,6 +194,45 @@ impl Renderer {
             instances,
             instance_cap,
             adapter_name: adapter.get_info().name,
+        })
+    }
+
+    /// The pipeline for a target format, built the first time that format is
+    /// drawn into. A pipeline's colour target must match the view it writes
+    /// to, so this cannot be settled once at start-up: the window does not
+    /// know its surface format until it has an adapter to ask.
+    fn pipeline_for(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        let (device, shader, layout) = (&self.device, &self.shader, &self.pipeline_layout);
+        self.pipelines.entry(format).or_insert_with(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("eui quad"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Quad>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
         })
     }
 
@@ -295,8 +319,10 @@ impl Renderer {
         atlas.mark_clean();
     }
 
-    /// Draw a list into a target view of the given device size.
-    pub fn render(&mut self, view: &wgpu::TextureView, size: (u32, u32), list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    /// Draw a list into a target view of the given device size. `format` is
+    /// the view's own format — a window passes what its surface was
+    /// configured with, which is not `FORMAT` on every platform.
+    pub fn render(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         self.sync_atlas(atlas, images);
         if list.quads.len() > self.instance_cap {
             self.instance_cap = list.quads.len().next_power_of_two();
@@ -311,6 +337,11 @@ impl Renderer {
             self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&list.quads));
         }
         self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0]));
+
+        // Built (or found) before the encoder, so the pass below can hold it
+        // alongside the immutable borrows of the buffers it also needs.
+        self.pipeline_for(format);
+        let Some(pipeline) = self.pipelines.get(&format) else { return };
 
         let c = list.clear;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("eui frame") });
@@ -329,7 +360,7 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &self.atlas_bind, &[]);
             pass.set_vertex_buffer(0, self.instances.slice(..));
@@ -365,7 +396,7 @@ impl Renderer {
     /// Draw into an off-screen target.
     pub fn render_offscreen(&mut self, target: &Offscreen, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         let view = target.texture.create_view(&Default::default());
-        self.render(&view, (target.width, target.height), list, atlas, images);
+        self.render(&view, FORMAT, (target.width, target.height), list, atlas, images);
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.
