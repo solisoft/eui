@@ -202,10 +202,44 @@ def muted(content)
   )
 end
 
+# Narrowing a widget after it is built only reaches its resting style: the
+# hover and pressed styles are declared inside the local handlers, where a
+# `n["s"]["pad"] = …` cannot see them. The pointer then snaps the node back to
+# the catalogue's geometry, which is the same layout shift as a border that
+# only exists on hover, several times larger. This applies one patch to every
+# style a node declares, so all of its states keep the same shape.
+def restyle(n, patch)
+  n["s"] = n["s"].merge(patch)
+  handlers = n["on"]
+  return n if handlers.nil?
+
+  names = ["pointer_enter", "pointer_leave", "pointer_down", "pointer_up"]
+  for name in names
+    handler = handlers[name]
+    unless handler.nil?
+      styles = handler["styles"] ?? {}
+      for key in styles.keys()
+        styles[key] = styles[key].merge(patch)
+      end
+      handler["styles"] = styles
+      handlers[name] = handler
+    end
+  end
+  n["on"] = handlers
+  n
+end
+
 # A button: a box with a click handler, and hover/pressed states that run
 # locally — the client repoints the node at a declared style on pointer
 # enter/down/up/leave, so feedback never waits for the network. The node is
 # keyed so the local handler can name it (`self`).
+#
+# The border is in the resting style, uncoloured. A border in EUI is part of
+# the box — layout adds its widths to the frame — so a border that appears on
+# hover makes the button 2 px wider and taller and shoves its whole row
+# sideways under the pointer. Reserving the width at rest and colouring it on
+# hover leaves nothing for layout to do: what changes is a colour, which 03 §5
+# animates on its own. Same rule as `chip_remove` below.
 def button_variant(label, on_click, bg, fg)
   base = {
     "display": "row",
@@ -215,15 +249,12 @@ def button_variant(label, on_click, bg, fg)
     "min_width": 44,
     "bg": bg,
     "fg": fg,
+    "border": 1,
     "radius": 2,
     "cursor": "pointer",
     "transition": "fast"
   }
-  hover = base.merge({
-    "bg": bg == "accent.base" ? "accent.hover" : bg,
-    "border": 1,
-    "border_color": "border.strong"
-  })
+  hover = base.merge({"bg": bg == "accent.base" ? "accent.hover" : bg, "border_color": "border.strong"})
   active = base.merge({"bg": bg == "accent.base" ? "accent.active" : "surface.sunken"})
   {
     "k": "box",
