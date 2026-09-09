@@ -140,6 +140,23 @@ jobs:
             lang/target
           key: ${{ runner.os }}-vitrine-${{ hashFiles('lang/Cargo.lock') }}
 
+      # The binary itself, keyed by everything it is built from: the exact
+      # soli_lang commit, its lock file, and the two crates of this repo
+      # that are patched into it. The cargo cache above only makes a rebuild
+      # incremental; `solilang` is one crate of ten minutes, and it is
+      # rebuilt whenever eui-proto or eui-client changed — nearly every
+      # push. When nothing in that key moved, there is nothing to build,
+      # and this step says so.
+      - name: Which soli_lang this is
+        id: lang
+        run: echo "sha=$(git -C lang rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Cache the built soli
+        id: soli
+        uses: actions/cache@v4
+        with:
+          path: lang/target/release/soli
+          key: ${{ runner.os }}-soli-eui-desktop-${{ steps.lang.outputs.sha }}-${{ hashFiles('lang/Cargo.lock', 'eui/crates/eui-proto/**', 'eui/crates/eui-client/**', 'eui/crates/eui-tree/**', 'eui/crates/eui-theme/**', 'eui/crates/eui-layout/**', 'eui/crates/eui-text/**', 'eui/crates/eui-render/**', 'eui/crates/eui-vm/**', 'eui/crates/eui-audio/**', 'eui/crates/eui-video/**') }}
+
       # Only the eui-desktop feature is needed, and leaving the defaults off
       # is what keeps this build around ten minutes instead of twenty-five.
       # soli_lang pins eui by git revision, so without this the artifact is
@@ -147,6 +164,7 @@ jobs:
       # ever reach it — including a fix for a crash the artifact is showing.
       # The patch points those two crates at the checkout beside us.
       - name: Build soli with eui-desktop, against this checkout
+        if: steps.soli.outputs.cache-hit != 'true'
         working-directory: lang
         run: |
           cargo build --release --no-default-features --features eui-desktop \
