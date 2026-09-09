@@ -211,9 +211,14 @@ shows where the rows are rather than nothing.
 When the range of rows that intersects the viewport plus two viewports of
 margin on each side changes, and the scroll has been still for a moment
 (the reference client waits 120 ms — a request a frame would be a server
-render a frame), — after a scroll lands, a mount, a resize, a
-change of `count` — the list emits `window` (spec 06) with `[first, last]`,
-inclusive row indices, if it holds a handler of that kind. A server that
+render a frame) — after a scroll lands, a mount, a resize, a change of
+`count` — the list emits `window` (spec 06) with `[first, last]`, inclusive
+row indices, if it holds a handler of that kind. While the view is still
+moving, it also asks the moment the rows within half a viewport of what it
+shows are not all among those it last asked for — a drag that has outrun
+its rows would otherwise show placeholders until it stopped — at most once
+every 50 ms in the reference client, and the settle that follows then finds
+nothing new to ask. A server that
 answers with those rows as children, and lets the others go, holds one
 window of a feed in memory, not the feed: forty thousand posts cost the
 client forty thousand integers and the server a few dozen cards.

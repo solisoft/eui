@@ -85,6 +85,43 @@ takes none of this: no texture is allocated, no pipeline is built, and the
 frame is the one pass and one draw per scissor run it always was. The rows
 above are therefore unaffected, and are meant to stay that way.
 
+### The shaped-run cache
+
+The text engine keeps shaped runs in a cache of **16 384** entries, keyed by
+the run, the face, the size and the width it was measured at. The size is a
+budget of its own: a page whose working set does not fit is not merely a
+cache miss, it is a *guaranteed* one, because an entry evicted before its
+next use will be shaped again — and layout measures the same run at several
+widths on the way to a line break.
+
+A 630-line markdown document — 4 400 nodes, one per word, because a
+paragraph that flows across lines cannot be one text node (03 §1) — asks for
+23 324 shapes against a 4 096-entry cache and 7 785 against this one: the
+difference is thrash, and it was 334 ms of layout against 137 ms in a
+release build. Eviction is first-in, first-out; with a cache that holds a
+page that is enough, and a page larger than this one would thrash again.
+
+Two more things were found on the same page. A run that fits on one line is
+the same run at every width that holds it, so the engine answers a bounded
+request from the run's natural shape whenever that fits (`Stats::reused`):
+7 785 shapes became 5 713. And a `text` leaf with no height of its own is as
+tall as its lines whatever room it was offered, so layout memoises every
+non-`Exact` height constraint as one: 53 477 uncached measures became
+21 617. Together, release layout of that page went 334 → 108 ms; a debug
+build, which shapes text at a twentieth of the speed, 6.9 s → 1.9 s.
+
+What remains is the shape of the work, not its cost: a paragraph that flows
+around a styled word is one node per word (03 §1), and a wrapping row
+measures every word for its line, its minimum and its cross size, once per
+pass of each ancestor. A page that long wants the protocol's own answer to
+long content — a windowed `list` (04 §7.1) laying out only the rows in view —
+rather than a faster full layout.
+
+Measured 2026-09-09: `RSS growth: session + layout, 10k rows` 25.8 MB and
+`driver RSS growth, table-10k with real text` 17.7 MB, both against the
+45 MB line above — the cache only fills as runs are shaped, so an idle
+application holds a few hundred entries, not sixteen thousand.
+
 A frame that *does* carry one adds, per distinct radius, three passes over
 a snapshot of the region that asked — the union of the blurred rects grown
 by three standard deviations, clipped to the window — and one pass to take

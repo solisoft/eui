@@ -4,6 +4,9 @@
 //! `snapshot <out-dir> --soli <session-url> <name> <w> <h>` — connect to a
 //! running Soli, mount `<name>`'s component, fetch its assets, and render it
 //! in light and dark. `EUI_ALLOW_INSECURE_LOOPBACK=1` for a `ws://` URL.
+//! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL` and `SNAPSHOT_HOVER` drive it first,
+//! so a pane two clicks in, a card below the fold, or a state that only
+//! exists under the pointer can be looked at without a screen.
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -195,6 +198,39 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     }
                 }
             }
+        }
+        // SNAPSHOT_SCROLL=<px> — wheel the page down before the last paint,
+        // so a card below the fold can be looked at at all.
+        if let Some(dy) = std::env::var("SNAPSHOT_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+            let _ = driver.paint(dw, dh);
+            driver.input(Input::PointerMove(w / 2.0, h / 2.0));
+            driver.input(Input::Wheel(0.0, dy));
+            // A scroll glides: it lands on the clock, not on the wheel
+            // event, so the frames it wants are run here rather than
+            // painting the page half way there.
+            let mut clock = Instant::now();
+            for _ in 0..60 {
+                clock += Duration::from_millis(16);
+                driver.tick(clock);
+                let _ = driver.paint(dw, dh);
+            }
+        }
+        // SNAPSHOT_HOVER="x,y" — logical px, where the pointer is left
+        // standing before the last paint, so a state that only exists under
+        // it (a chart's band, a button) can be looked at. Hover settles at
+        // paint, and a transition needs a clock: the tick after the wait is
+        // what the fade would have had on a screen.
+        if let Some((x, y)) = std::env::var("SNAPSHOT_HOVER").ok().and_then(|at| {
+            let (x, y) = at.split_once(',')?;
+            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+        }) {
+            let _ = driver.paint(dw, dh);
+            for f in driver.input(Input::PointerMove(x, y)) {
+                conn.tx.send(f.encode()).unwrap();
+            }
+            let _ = driver.paint(dw, dh);
+            std::thread::sleep(Duration::from_millis(200));
+            driver.tick(Instant::now());
         }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);

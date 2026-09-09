@@ -84,10 +84,18 @@ fn shaping_is_cached_and_deterministic() {
     assert_eq!(e.stats().misses, 1);
     assert_eq!(e.stats().hits, 1);
     assert_eq!(*a, *b);
-    // A different width is a different entry, even if the result is equal.
+    // A different width is a different entry — but not a different shape:
+    // a run that fits on one line is the same run at every width that holds
+    // it, so it was shaped once, unbounded, and both widths reuse that.
     let c = e.shape("cache me", base(), Some(400.0), 0);
-    assert_eq!(e.stats().misses, 2);
+    assert_eq!(e.stats().misses, 1);
+    assert_eq!(e.stats().reused, 2);
     assert_eq!(a.metrics, c.metrics);
+    assert_eq!(*a, *c);
+    // A width it does not fit in is a real shape, wrapped.
+    let d = e.shape("cache me", base(), Some(20.0), 0);
+    assert_eq!(e.stats().misses, 2);
+    assert!(d.metrics.lines > 1);
     // Two engines agree exactly: no system fonts are consulted.
     let mut f = TextEngine::new();
     assert_eq!(*f.shape("cache me", base(), Some(300.0), 0), *a);

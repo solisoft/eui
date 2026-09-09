@@ -211,6 +211,10 @@ struct Anim {
     to: Colors,
     start: Instant,
     duration: Duration,
+    /// A style change eases along the theme's own curve; something
+    /// arriving decelerates instead, so it reads as having come from
+    /// somewhere rather than having been switched on (03 §5).
+    curve: eui_theme::Curve,
 }
 
 impl Anim {
@@ -224,12 +228,13 @@ impl Anim {
             return self.to;
         }
         let t = now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32().max(1e-3);
-        let k = eui_theme::scale::ease(t);
+        let k = self.curve.at(t);
         Colors {
             bg: mix(self.from.bg, self.to.bg, k),
             fg: mix(self.from.fg, self.to.fg, k),
             border: mix(self.from.border, self.to.border, k),
             opacity: self.from.opacity + (self.to.opacity - self.from.opacity) * k,
+            blur: self.from.blur + (self.to.blur - self.from.blur) * k,
         }
     }
 }
@@ -248,6 +253,10 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
+/// While a scroll is still moving, how often it may ask for rows it has
+/// outrun: often enough that a drag sees rows rather than placeholders,
+/// seldom enough that a drag is not a server render a frame.
+const WINDOW_OUTRUN: Duration = Duration::from_millis(50);
 /// Wait this long after the last resize before telling the server. Sending
 /// every size during a drag makes charts and grids step through layouts.
 const VIEWPORT_SETTLE: Duration = Duration::from_millis(50);
@@ -357,6 +366,8 @@ pub struct Driver {
     /// Spec 04 §7.1: the row range last reported by each windowed list,
     /// by node id, so a range is reported once.
     windows: HashMap<u32, (u32, u32)>,
+    /// When a moving scroll last asked for rows it had outrun.
+    outrun_at: Option<Instant>,
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
@@ -469,6 +480,7 @@ impl Driver {
             desktop_colors: Vec::new(),
             desktop_mode: None,
             windows: HashMap::new(),
+            outrun_at: None,
             scroll_touched: None,
             movies: HashMap::new(),
             players: HashMap::new(),
@@ -585,6 +597,7 @@ impl Driver {
                 self.wake_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
+                self.note_entrances();
                 // The batch put back every style a local handler had
                 // previewed. Whatever the pointer is still over must light
                 // again, so its `enter` runs once more at the next paint —
@@ -653,7 +666,34 @@ impl Driver {
                 Some(i) => self.anims.remove(i).1.at(self.now),
                 None => self.session.style(old).map_or(to, |r| colors_of(&self.session, &self.resolved, r)),
             };
-            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)) }));
+            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)), curve: eui_theme::Curve::STANDARD }));
+            self.next_due = Some(self.now);
+            self.redraw = true;
+        }
+    }
+
+    /// Spec 03 §5: a node grafted with `animation` = `enter` arrives from
+    /// nothing — transparent, unblurred — and reaches its own record over
+    /// its `transition` duration, or `motion.base` when it names none.
+    ///
+    /// This is the only thing a mount animates, and it has to be asked for.
+    /// A node that is restyled mid-entrance is left to `note_style_changes`,
+    /// which picks the animation up from wherever it visibly is.
+    fn note_entrances(&mut self) {
+        for ix in self.session.take_entrances() {
+            if self.session.node(ix).is_none() {
+                continue;
+            }
+            let record = self.session.style_of(ix);
+            let ms = record.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))).or_else(|| self.resolved.motion.get(1));
+            let Some(ms) = ms else { continue };
+            let to = colors_of(&self.session, &self.resolved, &record);
+            // `mix` fades an absent colour through transparent, so leaving
+            // the three of them `None` is what makes this a fade rather than
+            // a wash through some arbitrary starting colour.
+            let from = Colors { bg: None, fg: None, border: None, opacity: 0.0, blur: 0.0 };
+            self.anims.retain(|(n, _)| *n != ix);
+            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)), curve: eui_theme::Curve::DECELERATE }));
             self.next_due = Some(self.now);
             self.redraw = true;
         }
@@ -1510,14 +1550,24 @@ impl Driver {
         // Presses chain onto a scroll in flight, as wheel notches do.
         let base = self.scroll_anim.filter(|a| a.node == scroller).map_or(here, |a| a.to.1);
         // Rows to land on: a virtualised list's own, else the scroller's
-        // laid-out children.
-        let tops: Vec<f32> = match self.layout.row_tops(scroller) {
+        // laid-out children — but only where there are rows to speak of. A
+        // page whose content is a single column has exactly one "row top",
+        // at 0, and an `ArrowUp` that honoured it would be `Home`: that is
+        // not a row above, it is the beginning of the document.
+        let mut tops: Vec<f32> = match self.layout.row_tops(scroller) {
             Some(t) => t.to_vec(),
             None => self.session.children(scroller).iter().filter_map(|c| self.layout.rect(*c)).map(|r| r.y - view.y + here).collect(),
         };
+        if tops.len() < 2 {
+            tops.clear();
+        }
+        // And a row is only the next one if it is one press away: an arrow
+        // never travels further than `PageUp` would, so a row beyond a
+        // viewport — a card three screens tall — is the plain step instead.
+        let near = |t: f32| (t - base).abs() <= view.h;
         let target = match key {
-            "ArrowDown" => tops.iter().copied().find(|t| *t > base + 0.5).unwrap_or(base + 40.0),
-            "ArrowUp" => tops.iter().rev().copied().find(|t| *t < base - 0.5).unwrap_or(base - 40.0),
+            "ArrowDown" => tops.iter().copied().find(|t| *t > base + 0.5).filter(|t| near(*t)).unwrap_or(base + 40.0),
+            "ArrowUp" => tops.iter().rev().copied().find(|t| *t < base - 0.5).filter(|t| near(*t)).unwrap_or(base - 40.0),
             "PageDown" => base + view.h,
             "PageUp" => base - view.h,
             "Home" => 0.0,
@@ -2006,6 +2056,7 @@ impl Driver {
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
         self.show_stopped();
         self.note_style_changes();
+        self.note_entrances();
         // Spec 03 §7 and §8: the tree says what should be playing, and a
         // picture that just decoded has a size the layout must know before
         // it measures anything.
@@ -2050,9 +2101,17 @@ impl Driver {
         if settled {
             let asked = self.window_events();
             self.pending.extend(asked);
-        } else if self.scroll_anim.is_none() && !self.layout.windowed_lists().is_empty() {
-            // Come back when it has.
-            settle_due = Some(self.scroll_touched.map_or(now, |t| t + WINDOW_SETTLE));
+        } else {
+            // Still moving. A drag that has outrun the rows it holds would
+            // show placeholders until it stopped; it asks for the rows it
+            // is about to need instead, throttled, and the settle below
+            // then finds nothing new to ask.
+            let outran = self.window_outrun_events(now);
+            self.pending.extend(outran);
+            if self.scroll_anim.is_none() && !self.layout.windowed_lists().is_empty() {
+                // Come back when it has.
+                settle_due = Some(self.scroll_touched.map_or(now, |t| t + WINDOW_SETTLE));
+            }
         }
         let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
         self.redraw = false;
@@ -2567,6 +2626,38 @@ impl Driver {
             out.extend(self.emit(ix, EventKind::Window, Value::List(vec![Value::Int(i64::from(range.0)), Value::Int(i64::from(range.1))])));
         }
         self.windows.retain(|id, _| seen.contains(id));
+        out
+    }
+
+    /// Spec 04 §7.1, while the view is moving: for each windowed list whose
+    /// rows within half a viewport of the view are not all among those last
+    /// asked for, ask for the full window around it now — at most once per
+    /// [`WINDOW_OUTRUN`]. The range is recorded as asked, so the settle that
+    /// follows the drag repeats nothing.
+    fn window_outrun_events(&mut self, now: Instant) -> Vec<Frame> {
+        if self.outrun_at.is_some_and(|t| now.saturating_duration_since(t) < WINDOW_OUTRUN) {
+            return Vec::new();
+        }
+        let lists = self.layout.windowed_lists().to_vec();
+        let mut out = Vec::new();
+        for ix in lists {
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
+            let (id, sy) = (node.id, node.scroll.1 as f32);
+            let Some(near) = self.layout.row_span(ix, sy, 0.5, 0.5) else {
+                continue;
+            };
+            if self.windows.get(&id).is_some_and(|(a, b)| near.0 >= *a && near.1 <= *b) {
+                continue;
+            }
+            let Some(range) = self.layout.row_window(ix, sy) else {
+                continue;
+            };
+            self.windows.insert(id, range);
+            self.outrun_at = Some(now);
+            out.extend(self.emit(ix, EventKind::Window, Value::List(vec![Value::Int(i64::from(range.0)), Value::Int(i64::from(range.1))])));
+        }
         out
     }
 

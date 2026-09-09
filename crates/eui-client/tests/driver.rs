@@ -587,6 +587,117 @@ fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
     assert!(!d.tick(t0 + Duration::from_millis(300)));
 }
 
+/// Spec 03 §5 `enter`: a node grafted wearing it arrives from nothing —
+/// transparent and unblurred — rather than appearing already there.
+#[test]
+fn a_node_that_asks_to_enter_fades_and_frosts_in() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+
+    let scrim = StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(80),
+        height: Dim::Px(40),
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        blur: 16,
+        animation: eui_proto::ANIMATION_ENTER,
+        transition: 2, // `base`, 180 ms
+        ..Default::default()
+    };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 9, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: scrim }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+    assert!(d.animating(), "the graft started an entrance");
+
+    let pane = |list: &eui_render::DrawList| *list.quads.iter().find(|q| q.rect[2] == 80.0 && q.rect[3] == 40.0).expect("the scrim");
+
+    // At the start it is not there at all: no opacity, and no blur, so the
+    // frame has not been asked for a backdrop either.
+    let start = d.paint(400, 300);
+    assert_eq!(pane(&start).params[3], 0.0, "arrives transparent");
+    assert_eq!(start.backdrop, None, "and unblurred, so no extra pass yet");
+
+    // Halfway, both are partway there and the backdrop is being built.
+    d.tick(t0 + Duration::from_millis(90));
+    let mid = d.paint(400, 300);
+    let m = pane(&mid);
+    assert!(m.params[3] > 0.0 && m.params[3] < 1.0, "opacity {:?}", m.params[3]);
+    assert!(m.extra[2] > 0.0 && m.extra[2] < 16.0, "sigma {:?}", m.extra[2]);
+    assert!(mid.backdrop.is_some(), "a partial frost still needs its backdrop");
+
+    // And at the end it is exactly its own record, with the driver at rest.
+    d.tick(t0 + Duration::from_millis(200));
+    let end = d.paint(400, 300);
+    assert_eq!(pane(&end).params[3], 1.0);
+    assert_eq!(pane(&end).extra[2], 16.0);
+    assert!(!d.animating());
+    assert_eq!(d.next_frame_at(), None);
+}
+
+/// 03 §5: an entrance dims everything painted for the node, not just the
+/// node's own quads — otherwise a dialog's text is at full strength before
+/// the card under it has arrived.
+#[test]
+fn an_entrance_dims_what_is_painted_inside_it() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let panel = StyleRecord {
+        display: Display::Column,
+        width: Dim::Px(80),
+        height: Dim::Px(40),
+        bg: ColorRef::role(Role::SurfaceRaised.id()),
+        fg: ColorRef::role(Role::TextDefault.id()),
+        animation: eui_proto::ANIMATION_ENTER,
+        transition: 2,
+        ..Default::default()
+    };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 9, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10, style: 0, key: 0, text: Some(TextRef::Inline("hello".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: panel }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+
+    d.tick(t0 + Duration::from_millis(90));
+    let list = d.paint(400, 300);
+    let pane = list.quads.iter().find(|q| q.rect[2] == 80.0 && q.rect[3] == 40.0).expect("the panel");
+    assert!(pane.params[3] > 0.0 && pane.params[3] < 1.0, "panel {:?}", pane.params[3]);
+    // Only the glyphs inside the panel — the counter behind it has its own,
+    // and those must stay at full strength, which is half of what this
+    // checks: the fade descends, and it stops where the node does.
+    let inside = |q: &eui_render::Quad, p: &eui_render::Quad| q.rect[0] >= p.rect[0] && q.rect[0] < p.rect[0] + p.rect[2] && q.rect[1] >= p.rect[1] && q.rect[1] < p.rect[1] + p.rect[3];
+    let glyphs: Vec<&eui_render::Quad> = list.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).collect();
+    let (within, without): (Vec<&eui_render::Quad>, Vec<&eui_render::Quad>) = glyphs.into_iter().partition(|q| inside(q, pane));
+    assert!(!within.is_empty(), "the panel's text was painted");
+    assert!(!without.is_empty(), "the counter's text is still there to compare against");
+    for g in &within {
+        assert!((g.params[3] - pane.params[3]).abs() < 1e-3, "a glyph at {} while its panel is at {}", g.params[3], pane.params[3]);
+    }
+    for g in &without {
+        assert_eq!(g.params[3], 1.0, "a glyph outside the entrance was dimmed by it");
+    }
+
+    // And once it has arrived, everything is back to full strength.
+    d.tick(t0 + Duration::from_millis(200));
+    let done = d.paint(400, 300);
+    assert!(done.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).all(|q| q.params[3] == 1.0));
+}
+
+/// The exception is opt-in: the same node without the byte is simply there.
+#[test]
+fn a_node_without_enter_is_mounted_at_once() {
+    let mut d = welcomed();
+    let scrim = StyleRecord { display: Display::Stack, width: Dim::Px(80), height: Dim::Px(40), bg: ColorRef::role(Role::SurfaceOverlay.id()), transition: 2, ..Default::default() };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 9, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: scrim }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+    assert!(!d.animating(), "a transition alone does not animate a mount");
+    let list = d.paint(400, 300);
+    assert_eq!(list.quads.iter().find(|q| q.rect[2] == 80.0).expect("the scrim").params[3], 1.0);
+}
+
 #[test]
 fn a_style_change_without_a_transition_is_immediate() {
     let mut d = welcomed();
@@ -1066,6 +1177,47 @@ fn settle(d: &mut Driver, clock: &mut std::time::Instant) {
     let _ = d.paint(400, 300);
 }
 
+/// A page whose content is one tall column has a single "row", at the very
+/// top, and honouring it made `ArrowUp` a `Home` key: the gallery jumped to
+/// the top from wherever it was. A row further than a viewport away is not
+/// the next row, it is a different part of the page.
+#[test]
+fn an_arrow_on_a_page_of_one_column_steps_instead_of_jumping_home() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 12, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), overflow: Overflow::Scroll, ..Default::default() } },
+        Op::DefStyle { id: 12, record: StyleRecord { display: Display::Column, height: Dim::Px(1000), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+    let t0 = Instant::now();
+    let mut clock = t0;
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let page = d.session().lookup(2).unwrap();
+    // Down a few steps, the way a reader would arrive part-way down.
+    for _ in 0..3 {
+        press(&mut d, "ArrowDown");
+        settle(&mut d, &mut clock);
+    }
+    assert_eq!(d.session().node(page).unwrap().scroll, (0, 120), "three 40 px steps");
+    // Up is one step back, not the whole way: the column's top is 120 px
+    // away here, but it is the only row there is.
+    press(&mut d, "ArrowUp");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(page).unwrap().scroll, (0, 80), "one step up, not Home");
+    // Home still goes home.
+    press(&mut d, "Home");
+    settle(&mut d, &mut clock);
+    assert_eq!(d.session().node(page).unwrap().scroll, (0, 0));
+}
+
 #[test]
 fn arrows_land_on_rows_and_page_keys_move_a_viewport() {
     use std::time::{Duration, Instant};
@@ -1263,19 +1415,28 @@ fn a_windowed_list_asks_for_its_rows_when_the_view_lands() {
     d.input(Input::PointerMove(50.0, 50.0));
     d.input(Input::Wheel(0.0, 1000.0));
     assert_eq!(d.session().node(list).unwrap().scroll, (0, 1000));
-    // Not while the view is still moving: a wheel a frame is a drag.
-    d.tick(Instant::now());
+    // The view has outrun the rows it holds — it is at rows 50..=55 with
+    // 0..=14 in hand — so it asks at once rather than showing placeholders
+    // until it stops: the full window around where it is, 40..=64.
+    let t1 = Instant::now();
+    d.tick(t1);
     let _ = d.paint(400, 300);
-    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "nothing asked mid-scroll");
-    assert!(d.next_frame_at().is_some(), "but a frame is due to ask once it settles");
-    // Once still for a moment, the rows around 45..=59.
+    let windows = |frames: &[Frame]| -> Vec<Value> { frames.iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Window).then_some(e.payload.clone()) } else { None }).collect() };
+    assert_eq!(windows(&d.take_pending()), vec![Value::List(vec![Value::Int(40), Value::Int(64)])], "asked mid-scroll, once it outran what it held");
+    // Not again the next frame: what it holds now covers what it sees, and
+    // asking is throttled besides.
+    d.tick(t1 + Duration::from_millis(16));
+    let _ = d.paint(400, 300);
+    assert!(windows(&d.take_pending()).is_empty(), "nothing asked while covered");
+    assert!(d.next_frame_at().is_some(), "but a frame is due to settle");
+    // Once still for a moment there is nothing new to ask: the settle finds
+    // the window it already asked for.
     std::thread::sleep(Duration::from_millis(130));
     d.tick(Instant::now());
     let _ = d.paint(400, 300);
-    let asked = d.take_pending();
-    let windows: Vec<&Value> = asked.iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Window).then_some(&e.payload) } else { None }).collect();
-    assert_eq!(windows, vec![&Value::List(vec![Value::Int(40), Value::Int(64)])]);
-    // A glide asks nothing until it lands.
+    assert!(windows(&d.take_pending()).is_empty(), "the settle repeats nothing");
+    // A glide that stays within the rows it holds asks nothing until it
+    // lands: a page down from 1 000 reaches 1 100, rows 55..=60, all held.
     d.input(Input::Key { key: "PageDown".into(), modifiers: 0, down: true });
     d.tick(t0 + Duration::from_millis(50));
     let _ = d.paint(400, 300);

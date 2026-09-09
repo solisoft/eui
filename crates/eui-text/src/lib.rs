@@ -40,7 +40,15 @@ const SANS_FAMILY: &str = "Inter";
 const MONO_FAMILY: &str = "JetBrains Mono";
 
 /// How many shaped runs to keep before evicting the oldest.
-const CACHE_ENTRIES: usize = 4096;
+/// How many shaped runs to keep. Sized to hold a page's working set rather
+/// than a screenful: layout measures the same run at several widths on the
+/// way to a line break, so an entry evicted before its next use is not a
+/// miss, it is a re-shape. A 630-line markdown document (4 400 nodes, one
+/// per word) asked for 23 324 shapes against 4 096 entries and 7 785
+/// against these — 334 ms of layout against 137 (10 §"The shaped-run
+/// cache"). Eviction is first-in, first-out, which is enough for a cache
+/// that holds a page.
+const CACHE_ENTRIES: usize = 16_384;
 
 /// One positioned glyph, ready for the renderer.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,6 +142,9 @@ pub struct Stats {
     pub hits: u64,
     /// Runs shaped.
     pub misses: u64,
+    /// Bounded requests answered from the run's natural shape, because it
+    /// fit: neither a hit under that key nor a shape.
+    pub reused: u64,
     /// Runs evicted.
     pub evictions: u64,
 }
@@ -210,8 +221,39 @@ impl TextEngine {
     }
 
     /// Shape a run, from cache when possible.
+    ///
+    /// Layout asks for the same run at every width it tries on the way to a
+    /// line break — unbounded first, then the row's width, then the line's —
+    /// and a run that fits on one line is the same run at every width that
+    /// holds it. So a bounded request is answered from the run's natural
+    /// shape whenever that shape fits, and the natural shape is made once. A
+    /// 4 400-node markdown page asked for 7 785 shapes before this and 4 6xx
+    /// after; the difference was most of its layout time.
     pub fn shape(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> Arc<Shaped> {
-        let key = ShapeKey {
+        let key = Self::key(text, font, max_width, line_clamp);
+        if let Some(hit) = self.lookup(&key, text) {
+            return hit;
+        }
+        if let Some(w) = max_width.filter(|w| w.is_finite() && *w >= 0.0) {
+            if !text.contains('\n') {
+                let natural = self.shape(text, font, None, line_clamp);
+                // The same slack `shape_uncached` gives a bounded buffer, so
+                // "fits" here and "did not wrap" there agree at the edge.
+                if natural.metrics.lines <= 1 && natural.metrics.width <= w + 0.05 {
+                    self.stats.reused = self.stats.reused.saturating_add(1);
+                    self.remember(key, text, Arc::clone(&natural));
+                    return natural;
+                }
+            }
+        }
+        self.stats.misses = self.stats.misses.saturating_add(1);
+        let shaped = Arc::new(self.shape_uncached(text, font, max_width, line_clamp));
+        self.remember(key, text, Arc::clone(&shaped));
+        shaped
+    }
+
+    fn key(text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> ShapeKey {
+        ShapeKey {
             text_hash: text_hash(text),
             family: font.family.to_u8(),
             weight: font.weight.to_u8(),
@@ -219,15 +261,20 @@ impl TextEngine {
             line_height: font.line_height.to_bits(),
             max_width: max_width.map(f32::to_bits),
             clamp: line_clamp,
-        };
-        if let Some((cached_text, hit)) = self.cache.get(&key) {
-            if cached_text == text {
-                self.stats.hits = self.stats.hits.saturating_add(1);
-                return Arc::clone(hit);
-            }
         }
-        self.stats.misses = self.stats.misses.saturating_add(1);
-        let shaped = Arc::new(self.shape_uncached(text, font, max_width, line_clamp));
+    }
+
+    fn lookup(&mut self, key: &ShapeKey, text: &str) -> Option<Arc<Shaped>> {
+        let (cached_text, hit) = self.cache.get(key)?;
+        if cached_text != text {
+            return None;
+        }
+        self.stats.hits = self.stats.hits.saturating_add(1);
+        Some(Arc::clone(hit))
+    }
+
+    /// Keep a shape under a key, evicting the oldest entry when full.
+    fn remember(&mut self, key: ShapeKey, text: &str, shaped: Arc<Shaped>) {
         if self.cache.len() >= CACHE_ENTRIES {
             if let Some(old) = self.order.pop_front() {
                 self.cache.remove(&old);
@@ -235,8 +282,7 @@ impl TextEngine {
             }
         }
         self.order.push_back(key);
-        self.cache.insert(key, (text.to_owned(), Arc::clone(&shaped)));
-        shaped
+        self.cache.insert(key, (text.to_owned(), shaped));
     }
 
     fn shape_uncached(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> Shaped {

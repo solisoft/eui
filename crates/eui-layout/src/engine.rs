@@ -276,10 +276,18 @@ impl Layout {
     /// inclusive indices; `None` for an empty list or one not laid out.
     /// Two viewports: a wheel's worth of runway before a placeholder shows.
     pub fn row_window(&self, list: NodeIx, scroll_y: f32) -> Option<(u32, u32)> {
+        self.row_span(list, scroll_y, 2.0, 2.0)
+    }
+
+    /// The rows within `before` viewports above the view and `after` below
+    /// it, inclusive — `row_window` with the margin chosen by the caller. A
+    /// drag asks about half a viewport around what it can see, to know
+    /// whether the rows it holds are about to run out.
+    pub fn row_span(&self, list: NodeIx, scroll_y: f32, before: f32, after: f32) -> Option<(u32, u32)> {
         let tops = self.row_tops(list)?;
         let n = tops.len().checked_sub(1).filter(|n| *n > 0)?;
         let view_h = self.rect(list)?.h;
-        let (start, end) = (scroll_y - 2.0 * view_h, scroll_y + 3.0 * view_h);
+        let (start, end) = (scroll_y - before * view_h, scroll_y + (1.0 + after) * view_h);
         let first = tops.partition_point(|t| *t <= start).saturating_sub(1).min(n.saturating_sub(1));
         let last = tops.partition_point(|t| *t < end).saturating_sub(1).min(n.saturating_sub(1));
         Some((first as u32, last as u32))
@@ -379,7 +387,17 @@ impl Layout {
 
     fn measure(&mut self, f: &mut Env<'_>, ix: NodeIx, cw: Constraint, ch: Constraint) -> Metrics {
         let id = f.session.node(ix).map_or(0, |n| n.id);
-        let key = (ix.raw(), id, cw.key(), ch.key());
+        // A text leaf whose style says nothing about its height is as tall
+        // as its lines, whatever room it was offered: `measure_uncached`
+        // reads the height constraint only to resolve a height, a min or a
+        // max, and an `Exact` one, which sets the size outright. So every
+        // other height it is asked under is the same question, and is
+        // memoised as one. This is what keeps a paragraph of one node per
+        // word from being measured once more for every pass of every
+        // ancestor — a 630-line markdown page went from ten measures a node
+        // to three.
+        let ch_key = if matches!(ch, Constraint::Exact(_)) || !self.height_free_text(f, ix) { ch } else { Constraint::Unbounded };
+        let key = (ix.raw(), id, cw.key(), ch_key.key());
         let generation = self.generation;
         if let Some((m, seen)) = self.memo.get_mut(&key) {
             *seen = generation;
@@ -390,6 +408,16 @@ impl Layout {
         let m = self.measure_uncached(f, ix, cw, ch);
         self.memo.insert(key, (m, generation));
         m
+    }
+
+    /// A `text` node with no height, min-height or max-height of its own:
+    /// nothing in its measurement reads a height constraint short of `Exact`.
+    fn height_free_text(&mut self, f: &mut Env<'_>, ix: NodeIx) -> bool {
+        if f.session.node(ix).map(|n| n.kind) != Some(NodeKind::Text) {
+            return false;
+        }
+        let st = self.style(f, ix);
+        matches!(st.height, Length::Auto) && matches!(st.min_height, Length::Auto) && matches!(st.max_height, Length::Auto)
     }
 
     fn measure_uncached(&mut self, f: &mut Env<'_>, ix: NodeIx, cw: Constraint, ch: Constraint) -> Metrics {
@@ -442,8 +470,19 @@ impl Layout {
                 if let Some(slot) = self.content.get_mut(ix.raw() as usize) {
                     *slot = content;
                 }
-                // A scroll box is its bound, not its content.
-                let visible = Size::new(inner_w.bound().unwrap_or(content.w), inner_h.bound().unwrap_or(content.h));
+                // A scroll box is bounded by what it was given, but it is
+                // not obliged to fill it. `AtMost` means "shrink to fit, but
+                // no larger than this" everywhere else in this engine, and
+                // reading it as a target here is what made a code viewer in
+                // a tall column take the whole column and show a field of
+                // empty background under its last line. `Exact` still wins:
+                // a scroll told what size to be is that size.
+                let fit = |c: Constraint, content: f32| match c {
+                    Constraint::Exact(v) => v,
+                    Constraint::AtMost(v) => content.min(v),
+                    Constraint::Unbounded => content,
+                };
+                let visible = Size::new(fit(inner_w, content.w), fit(inner_h, content.h));
                 (visible, baseline)
             }
             _ => {

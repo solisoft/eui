@@ -691,3 +691,64 @@ fn a_windowed_list_places_its_rows_by_index_and_sizes_the_rest_from_heights() {
     assert!(tops[a as usize] <= 14_800.0 && tops[(a + 1) as usize] > 14_800.0, "first {a}");
     assert!(tops[z as usize] < 15_300.0 && tops[(z + 1) as usize] >= 15_300.0, "last {z}");
 }
+
+// ------------------------------------------------- sizing a code viewer
+
+/// A `max_height` on a scroll is a ceiling, not a height: content shorter
+/// than it leaves the box at the content's size. Reading the ceiling as a
+/// target is what put a field of empty background under a code viewer's
+/// last line, with no gutter beside it.
+#[test]
+fn a_scroll_shrinks_to_its_content_under_its_ceiling() {
+    let mut b = B::default();
+    let outer = b.style(StyleRecord { max_height: px(300), ..col() });
+    let line = b.style(col());
+    let page = b.style(StyleRecord { height: px(600), ..col() });
+    b.push(NodeKind::Box, page, 1);
+    let sc = b.push(NodeKind::Scroll, outer, 1);
+    let inner = b.text(line, "one\ntwo");
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 600.0);
+    // Two lines at 22 px is 44, and the ceiling is not reached.
+    assert_eq!(r(&l, &s, inner).h, 44.0);
+    assert_eq!(r(&l, &s, sc).h, 44.0, "the ceiling is a limit, not a size");
+}
+
+/// The ceiling still binds when the content is taller than it — that is
+/// what makes it a viewport at all — and an `Exact` height still wins,
+/// because a scroll told what size to be is that size.
+#[test]
+fn a_scroll_stops_at_its_ceiling_and_obeys_a_height() {
+    for (h, max, want) in [(None, Some(120u16), 120.0f32), (Some(200u16), None, 200.0), (Some(80u16), Some(300u16), 80.0)] {
+        let mut b = B::default();
+        let outer = b.style(StyleRecord { height: h.map_or(Dim::Auto, px), max_height: max.map_or(Dim::Auto, px), ..col() });
+        let line = b.style(col());
+        let page = b.style(StyleRecord { height: px(600), ..col() });
+        b.push(NodeKind::Box, page, 1);
+        let sc = b.push(NodeKind::Scroll, outer, 1);
+        // Twenty lines at 22 px is 440, taller than any ceiling here.
+        b.text(line, &vec!["x"; 20].join("\n"));
+        let s = b.session();
+        let (l, _) = lay(&s, 400.0, 600.0);
+        assert_eq!(r(&l, &s, sc).h, want, "height {h:?}, max {max:?}");
+    }
+}
+
+/// A plain `box` in a column sizes to its content, which is what a viewer
+/// that shows a whole file wants: it ends just below the last line, with no
+/// strip of background under it. `code_viewer` uses one for exactly this,
+/// and keeps the scroll for the case where a caller does name a ceiling.
+#[test]
+fn a_box_ends_at_its_last_line() {
+    let mut b = B::default();
+    let frame = b.style(StyleRecord { overflow: Overflow::Clip, ..col() });
+    let line = b.style(col());
+    let page = b.style(StyleRecord { height: px(600), ..col() });
+    b.push(NodeKind::Box, page, 1);
+    let fr = b.push(NodeKind::Box, frame, 1);
+    let inner = b.text(line, "one\ntwo");
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 600.0);
+    assert_eq!(r(&l, &s, inner).h, 44.0);
+    assert_eq!(r(&l, &s, fr).h, 44.0, "the frame is exactly its content, in a column with room to spare");
+}
