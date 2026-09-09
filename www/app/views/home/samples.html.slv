@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Samples<span>&sect;07</span></div>
         <div>
-            <h1>Seven applications, and one client that drew all of them.</h1>
+            <h1>Eight applications, and one client that drew all of them.</h1>
             <p class="lede">
                 Every picture below is a real render, taken off the wire: a Soli server
                 answering an EUI session, the Rust client laying it out and painting it
@@ -29,6 +29,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
 
             <nav class="toc">
                 <a href="#tracker"><b>Tracker</b><span>a pattern editor that mixes its own sound</span></a>
+                <a href="#editor"><b>Editor</b><span>code, highlighted by the server</span></a>
                 <a href="#needle"><b>Needle</b><span>a music player, 40 000 rows and a scope</span></a>
                 <a href="#catalogue"><b>Catalogue</b><span>every widget on one page</span></a>
                 <a href="#feed"><b>Feed</b><span>40 000 cards, virtualised</span></a>
@@ -83,8 +84,60 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
         </div>
     </section>
 
+    <section id="editor">
+        <div class="mark">Editor<span>&sect;07.2</span></div>
+        <div>
+            <h2>A code editor, and the highlighting is a function</h2>
+            <p>
+                The buffer is an array of lines in the session's state; the keyboard
+                arrives as <code>key_down</code> on one box, and every keystroke is a
+                round trip that comes back as a patch &mdash; the line that changed and
+                the cursor that moved. There is no text widget involved: the client has
+                a field whose caret belongs to the window, and that is the wrong shape
+                for an editor, which wants the gutter, the highlighting and the cursor
+                to be one thing.
+            </p>
+            <p>
+                The lexer is thirty lines of Soli. It cuts a line into keywords,
+                strings, comments and numbers, and each token gets a <code>text</code>
+                node with a <em>role</em> for its colour &mdash; so the same buffer is
+                olive on one desktop and blue on another, and the client is never asked
+                to know what a keyword is. What it opens is its own source. Nothing is
+                ever written back: there is no route that could.
+            </p>
+
+            <figure class="plate">
+                <img src="/images/samples/editor.png" width="1800" height="1200"
+                     alt="The editor: a header with the file name, its state and the cursor position, a line-numbered gutter, the controller's own source with comments dimmed and strings and numbers coloured, and a status line."
+                     loading="lazy" decoding="async">
+                <figcaption>
+                    <span>examples/counter-app &middot; app/controllers/editor_controller.sl</span>
+                    <span>router_eui("editor", &hellip;)</span>
+                </figcaption>
+            </figure>
+
+            <dl class="dims">
+                <div class="dim">
+                    <dt>27 of 475</dt>
+                    <dd>lines sent for a window of a 475-line file
+                        <small>the buffer is windowed around the cursor, like the tracker's pattern</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>5 kinds</dt>
+                    <dd>the lexer answers with: keyword, string, comment, number, the rest
+                        <small>each one a theme role, resolved on the client (05 §1)</small></dd>
+                </div>
+                <div class="dim">
+                    <dt>1 handler</dt>
+                    <dd>for the whole keyboard
+                        <small>a click on a line moves the cursor; the box itself only takes keys</small></dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
     <section id="needle">
-        <div class="mark">Needle<span>&sect;07.2</span></div>
+        <div class="mark">Needle<span>&sect;07.3</span></div>
         <div>
             <h2>A music player that ships as one binary</h2>
             <p>
@@ -123,7 +176,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="catalogue">
-        <div class="mark">Catalogue<span>&sect;07.3</span></div>
+        <div class="mark">Catalogue<span>&sect;07.4</span></div>
         <div>
             <h2>Every widget, on one page</h2>
             <p>
@@ -162,7 +215,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="feed">
-        <div class="mark">Feed<span>&sect;07.4</span></div>
+        <div class="mark">Feed<span>&sect;07.5</span></div>
         <div>
             <h2>Forty thousand cards, and only the ones you can see</h2>
             <p>
@@ -198,7 +251,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="table">
-        <div class="mark">Table<span>&sect;07.5</span></div>
+        <div class="mark">Table<span>&sect;07.6</span></div>
         <div>
             <h2>Ten thousand rows, sorted without rebuilding one</h2>
             <p>
@@ -235,7 +288,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="todo">
-        <div class="mark">Todo<span>&sect;07.6</span></div>
+        <div class="mark">Todo<span>&sect;07.7</span></div>
         <div>
             <h2>The list everyone writes first</h2>
             <p>
@@ -259,7 +312,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="counter">
-        <div class="mark">Counter<span>&sect;07.7</span></div>
+        <div class="mark">Counter<span>&sect;07.8</span></div>
         <div>
             <h2>Nine nodes, and the whole protocol</h2>
             <p>
@@ -296,9 +349,9 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     </section>
 
     <section id="build">
-        <div class="mark">Yours<span>&sect;07.8</span></div>
+        <div class="mark">Yours<span>&sect;07.9</span></div>
         <div>
-            <h2>What it takes to add the eighth</h2>
+            <h2>What it takes to add the ninth</h2>
             <p>
                 One line in <code>config/routes.sl</code>, a handler, a view. No client
                 release, no widget registration, no build step: the client already knows

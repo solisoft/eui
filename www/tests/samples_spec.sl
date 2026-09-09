@@ -6,9 +6,9 @@
 describe("Samples", fn() {
   test("serves the page", fn() { assert_eq(res_status(get("/samples")), 200) })
 
-  test("shows all seven applications", fn() {
+  test("shows all eight applications", fn() {
     let body = res_body(get("/samples"))
-    for name in ["Tracker", "Needle", "Catalogue", "Feed", "Table", "Todo", "Counter"]
+    for name in ["Tracker", "Editor", "Needle", "Catalogue", "Feed", "Table", "Todo", "Counter"]
       assert_contains(body, name)
     end
   })

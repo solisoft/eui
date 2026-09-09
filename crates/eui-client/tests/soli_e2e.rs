@@ -758,6 +758,58 @@ fn the_player_searches_opens_a_record_and_plays_a_track() {
     assert!(all.iter().any(|t| t.contains("keeping time only")), "and says it keeps its own time: {all:?}");
 }
 
+/// The editor: a buffer in the session's state, a keyboard on one box, and
+/// highlighting the server computes. Typing changes the line under the
+/// cursor and the bar says the file is no longer what is on disk.
+#[test]
+fn the_editor_types_into_its_own_source() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "editor", 1000.0, 800.0);
+    let _ = d.paint(1000, 800);
+    // It opened its own source, and says so.
+    let all = texts(&d, root(&d));
+    assert!(all.iter().any(|t| t == "app/controllers/editor_controller.sl"), "{all:?}");
+    assert!(all.iter().any(|t| t == "as on disk"), "the file matches the disk: {all:?}");
+    // The first line is numbered 1 and the line count is the file's.
+    assert!(all.iter().any(|t| t == "1"), "a gutter number");
+    assert!(all.iter().any(|t| t.ends_with(" lines")), "a line count: {all:?}");
+
+    // One box takes the keyboard; a click anywhere in the buffer focuses it.
+    let keyed = d
+        .session()
+        .preorder(root(&d))
+        .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
+        .expect("the buffer takes the keyboard");
+    let r = d.layout().rect(keyed).expect("laid out");
+    let seq = d.session().last_seq().unwrap();
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + 8.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    assert_eq!(d.focused(), Some(keyed), "clicking the buffer focuses it (03 §3)");
+
+    // Type. The line under the cursor gains the character, and the header
+    // stops claiming the file is as on disk.
+    for key in ["Z", "Z", "Z"] {
+        for f in d.input(Input::Key { key: key.into(), modifiers: 0, down: true }) {
+            conn.tx.send(f.encode()).unwrap();
+        }
+    }
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.contains("ZZZ")));
+    assert!(texts(&d, root(&d)).iter().any(|t| t == "modified"), "the bar says the buffer changed");
+
+    // Reload throws it away: the file on disk was never touched.
+    let reload = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Reload")).expect("the Reload button");
+    let button = d.session().node(reload).unwrap().parent;
+    click(&mut d, &conn, button);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "as on disk"));
+    assert!(!texts(&d, root(&d)).iter().any(|t| t.contains("ZZZ")), "what was typed is gone");
+}
+
 /// The tracker: what is typed is what is mixed. The pattern takes the
 /// keyboard, Play walks it into eight-bit PCM on the server, and the
 /// window plays the file it is handed — so a note typed here is a sample
