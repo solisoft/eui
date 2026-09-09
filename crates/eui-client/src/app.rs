@@ -392,7 +392,14 @@ impl ApplicationHandler<Wake> for App {
             return;
         }
         event_loop.set_control_flow(ControlFlow::Wait);
-        let attrs = Window::default_attributes().with_title(self.title.clone()).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        // Born hidden, shown once the renderer exists. Two reasons: the
+        // AccessKit adapter must exist before the window is first shown, and
+        // macOS enforces that with a panic where AT-SPI merely tolerates it;
+        // and a window shown before its first frame is a flash of nothing.
+        let attrs = Window::default_attributes()
+            .with_title(self.title.clone())
+            .with_visible(false)
+            .with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         // The Wayland app id, so a compositor can match rules and a taskbar
         // an icon; on X11 the same two strings are the WM_CLASS.
         #[cfg(target_os = "linux")]
@@ -482,6 +489,9 @@ impl ApplicationHandler<Wake> for App {
             });
         }
         self.gpu = Some(Gpu { surface, config, renderer });
+        // Everything the first frame needs is in place, and any assistive
+        // technology has already registered: it is safe to be seen.
+        window.set_visible(true);
         self.window = Some(window);
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
