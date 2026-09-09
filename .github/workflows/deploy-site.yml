@@ -1,0 +1,254 @@
+# Verify, then deploy the public site (www/) to eui.solisoft.net.
+#
+# The server-side contract (soli-proxy, already installed):
+#   1. rsync www/ into <sites_dir>/<domain>/ — that folder and nothing else;
+#   2. soli-proxy deploy: the proxy starts the idle slot, waits for /up,
+#      moves the traffic across, then stops the old slot.
+#
+# There is no database step: this site has no database. It serves views and
+# the Markdown under docs/ from disk, which is also why the whole thing is
+# one rsync and a restart.
+#
+# See deploy/README.md for the one-time server setup (app.infos, .env, the
+# GitHub secrets and variables this workflow reads).
+name: verify & deploy the site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "www/**"
+      - ".github/workflows/deploy-site.yml"
+  workflow_dispatch:
+
+# Two pushes close together must not cross in the middle of an rsync, and a
+# deployment already running is never interrupted: that would leave the
+# server holding half a tree.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+env:
+  # Pinned, so the CI tests exactly what the server runs. The step
+  # "Check the server runs the pinned version" verifies that rather than
+  # hoping for it — a CI testing a different version tests nothing.
+  SOLI_VERSION: "2.0.7"
+  # The site is a Soli app in this subdirectory, not at the repository root.
+  APP_DIR: www
+
+jobs:
+  verify:
+    name: fmt + lint + suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official install.sh only knows `latest`; the release tarball is
+      # what a pinned version means.
+      - name: Install soli (pinned version)
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          curl -fsSL "https://github.com/solisoft/soli_lang/releases/download/v$SOLI_VERSION/soli-linux-amd64.tar.gz" \
+            -o "$tmp/pkg.tar.gz"
+          tar -xzf "$tmp/pkg.tar.gz" -C "$tmp"
+          sudo install -m 0755 "$(find "$tmp" -type f -name soli -perm -u+x | head -1)" /usr/local/bin/soli
+          rm -rf "$tmp"
+          got="$(soli --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          [ "$got" = "$SOLI_VERSION" ] || { echo "soli $got installed, $SOLI_VERSION expected" >&2; exit 1; }
+          echo "soli $got"
+
+      - name: Format
+        working-directory: ${{ env.APP_DIR }}
+        run: soli fmt --check
+
+      - name: Lint
+        working-directory: ${{ env.APP_DIR }}
+        run: soli lint
+
+      # The suite asserts what the page claims: that every sample plate's
+      # picture is served, and that the numbers printed on the site are the
+      # ones this repository measures. A page that drifts from its own tests
+      # is worse than no page.
+      - name: Suite
+        working-directory: ${{ env.APP_DIR }}
+        run: soli test
+
+  deploy:
+    name: deploy eui.solisoft.net
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ vars.DEPLOY_DOMAIN || 'eui.solisoft.net' }}
+    env:
+      HOST: ${{ secrets.DEPLOY_HOST }}
+      USER: ${{ vars.DEPLOY_USER || 'rocky' }}
+      SITES_DIR: ${{ vars.DEPLOY_SITES_DIR || '/home/rocky/sites' }}
+      DOMAIN: ${{ vars.DEPLOY_DOMAIN || 'eui.solisoft.net' }}
+      # The `name` declared in app.infos, which soli-proxy uses as the app's id.
+      APP: ${{ vars.DEPLOY_APP || 'eui' }}
+      # The pids serving THIS site, and the /up probe on one of their ports.
+      # The filter is an `if`, not `[ … ] && echo`: the server hosts a dozen
+      # sites, the last `soli` inspected is almost never ours, and a false
+      # `&&` at the end of the loop makes the `for` exit 1 — which, under
+      # `set -e`, would take the whole step down with the right pids on stdout.
+      PIDS: |
+        for x in $(pgrep -x soli 2>/dev/null); do
+          if [ "$(readlink /proc/$x/cwd 2>/dev/null)" = "${{ vars.DEPLOY_SITES_DIR || '/home/rocky/sites' }}/${{ vars.DEPLOY_DOMAIN || 'eui.solisoft.net' }}" ]; then
+            echo $x
+          fi
+        done
+      PROBE: |
+        p=$(for x in $(pgrep -x soli 2>/dev/null); do
+              if [ "$(readlink /proc/$x/cwd 2>/dev/null)" = "${{ vars.DEPLOY_SITES_DIR || '/home/rocky/sites' }}/${{ vars.DEPLOY_DOMAIN || 'eui.solisoft.net' }}" ]; then
+                tr "\0" "\n" < /proc/$x/cmdline | grep -A1 -- "--port" | tail -1
+              fi
+            done | sort -u | tail -1)
+        [ -n "$p" ] || { echo 000; exit 0; }
+        curl -s -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:$p/up"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the configuration
+        run: |
+          set -euo pipefail
+          [ -n "$HOST" ]   || { echo "secret DEPLOY_HOST is missing" >&2; exit 1; }
+          [ -n "$DOMAIN" ] || { echo "variable DEPLOY_DOMAIN is missing (the site folder is <sites_dir>/<domain>)" >&2; exit 1; }
+          case "$DOMAIN" in *.*) ;; *) echo "DEPLOY_DOMAIN must contain a dot: $DOMAIN" >&2; exit 1 ;; esac
+          echo "Target: $USER@$HOST:$SITES_DIR/$DOMAIN (from $APP_DIR/)"
+
+      - name: Prepare SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # known_hosts rather than StrictHostKeyChecking=no: host verification
+          # is not something to switch off on a channel carrying production code.
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # The site is created by hand once (app.infos + .env). This workflow
+      # creates nothing on the server and touches no other folder.
+      - name: Check the site exists on the server
+        run: |
+          set -euo pipefail
+          ssh "$USER@$HOST" "test -f '$SITES_DIR/$DOMAIN/app.infos' && test -f '$SITES_DIR/$DOMAIN/.env'" \
+            || { echo "$SITES_DIR/$DOMAIN must hold app.infos and .env — see deploy/README.md" >&2; exit 1; }
+
+      # --delete-delay: what leaves the repository leaves the server. The
+      # exclusions protect what lives on the server (.env, app.infos,
+      # restart.txt) and what has no business there (the nested checkout, the
+      # test environment, the agent instructions).
+      - name: Sync the files
+        run: |
+          set -euo pipefail
+          rsync -rlzv --delete-delay --delay-updates \
+            --exclude='.git/' \
+            --exclude='.claude/' \
+            --exclude='coverage/' \
+            --exclude='tmp/' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='app.infos' \
+            --exclude='restart.txt' \
+            "$APP_DIR/" "$USER@$HOST:$SITES_DIR/$DOMAIN/"
+
+      # One second to check; a version drift between CI and production has
+      # already cost an intermittent 500 that the CI could not see.
+      - name: Check the server runs the pinned version
+        run: |
+          set -euo pipefail
+          installed="$(ssh "$USER@$HOST" 'soli --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          echo "server: $installed — pinned: $SOLI_VERSION"
+          if [ "$installed" != "$SOLI_VERSION" ]; then
+            echo "" >&2
+            echo "The server runs Soli $installed; the CI tested $SOLI_VERSION." >&2
+            echo "Align SOLI_VERSION in this file, or update the server." >&2
+            exit 1
+          fi
+
+      # `soli-proxy deploy` rather than `touch restart.txt`: the trigger file
+      # is ignored in silence when the proxy cannot start the slot — an
+      # orphaned process still holding the port, say — and the deployment goes
+      # green with the old code still serving. The command returns a status
+      # and a reason.
+      - name: Switch the blue-green slot
+        run: |
+          set -euo pipefail
+          before="$(ssh "$USER@$HOST" "$PIDS")"
+          echo "processes before: ${before:-none}"
+          echo "$before" > /tmp/pids-before
+
+          if ! ssh "$USER@$HOST" "soli-proxy deploy -c '$SITES_DIR/config.toml' '$APP' 2>&1"; then
+            echo "" >&2
+            echo "The switch failed. Common cause: an orphaned slot still holds" >&2
+            echo "its port, so the proxy cannot start a new one." >&2
+            echo "  ssh $USER@$HOST 'soli-proxy logs -c $SITES_DIR/config.toml $APP'" >&2
+            exit 1
+          fi
+
+      # The check is on a NEW process: a 200 from the old slot would only
+      # prove the site answers, not that it answers with what was just pushed.
+      - name: Check the new slot answers
+        run: |
+          set -euo pipefail
+          before="$(cat /tmp/pids-before)"
+          for i in $(seq 1 30); do
+            sleep 3
+            now="$(ssh "$USER@$HOST" "$PIDS")"
+            fresh="$(comm -13 <(echo "$before" | sort) <(echo "$now" | sort) | tr -d ' ')"
+            if [ -n "$fresh" ]; then
+              code="$(ssh "$USER@$HOST" "$PROBE" 2>/dev/null | tail -1 || echo 000)"
+              echo "attempt $i: new process $fresh, /up -> $code"
+              [ "$code" = "200" ] && { echo "The new slot answers."; exit 0; }
+            else
+              echo "attempt $i: no fresh process"
+            fi
+          done
+          echo "" >&2
+          echo "No new slot answered 200 on /up within 90 s." >&2
+          echo "  ssh $USER@$HOST 'soli-proxy logs -c $SITES_DIR/config.toml $APP'" >&2
+          exit 1
+
+      # After a switch the proxy still balances across BOTH slot ports while
+      # only one process is up: every other request hits a dead port and gets
+      # a 421. `restart` brings both slots up on the current code.
+      - name: Bring both slots up
+        run: ssh "$USER@$HOST" "soli-proxy restart -c '$SITES_DIR/config.toml' '$APP'"
+
+      # End to end, through the proxy, with the real hostname — where the 421
+      # shows. The /up probe on the app's own port bypasses exactly the part
+      # that fails.
+      - name: Check the service through the proxy
+        run: |
+          set -euo pipefail
+          want=12
+          probe="for i in \$(seq 1 $want); do curl -sk -m 8 --resolve '$DOMAIN:443:127.0.0.1' -o /dev/null -w '%{http_code} ' 'https://$DOMAIN/up'; done"
+          # Count the 200s, do not count the rest: the probe separates its
+          # codes with a space, including after the last one, so `tr ' ' '\n'`
+          # yields one empty line more. Counted as "not 200", it made the
+          # check fail with twelve 200s out of twelve.
+          for attempt in 1 2 3 4 5; do
+            sleep 4
+            codes="$(ssh "$USER@$HOST" "$probe" 2>/dev/null || true)"
+            ok="$(printf '%s' "$codes" | tr ' ' '\n' | grep -c '^200$' || true)"
+            echo "attempt $attempt: $codes(${ok:-0}/$want at 200)"
+            [ "${ok:-0}" -eq "$want" ] && { echo "$want requests out of $want at 200."; exit 0; }
+          done
+          echo "" >&2
+          echo "The site does not answer reliably through the proxy." >&2
+          echo "A dead slot is still taking traffic; restart it:" >&2
+          echo "  ssh $USER@$HOST 'soli-proxy restart -c $SITES_DIR/config.toml $APP'" >&2
+          exit 1
+
+      # The samples page is the one that can rot without anything failing:
+      # its pictures are files, and a file that stopped being deployed still
+      # leaves the page rendering. Ask the proxy for one of them.
+      - name: Check a sample plate is served
+        run: |
+          set -euo pipefail
+          code="$(ssh "$USER@$HOST" "curl -sk -m 8 --resolve '$DOMAIN:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://$DOMAIN/images/samples/tracker.png'")"
+          echo "/images/samples/tracker.png -> $code"
+          [ "$code" = "200" ] || { echo "The samples page's pictures are not being served." >&2; exit 1; }

@@ -1,0 +1,14 @@
+# /home/rocky/sites/<domain>/app.infos — declares the site to soli-proxy.
+# Copy it onto the server once; the CI never sends this file.
+name = "eui"
+domain = "eui.solisoft.net"
+
+# --strict-port matters: without it `soli serve` slides onto the next free
+# port when its own is taken, the proxy probes the port it assigned, and
+# after three failures it quarantines the app.
+start_script = "soli serve . --port $PORT --workers $WORKERS --strict-port"
+workers = 2
+
+# /up, not /health: /up is Soli's own readiness probe (503 until the server
+# is actually ready to answer).
+health_check = "/up"
