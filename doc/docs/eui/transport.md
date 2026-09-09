@@ -7,7 +7,25 @@ ordinary proxies and CDNs.
 ## Requirements
 
 - **TLS 1.3, no exceptions.** A client refuses `http://` origins, loopback
-  included, in any release build.
+  included, in any release build — and offers no earlier version, so a server
+  answering with TLS 1.2 is refused rather than accommodated.
+- **The roots your machine trusts.** Verification is against the public web's
+  roots *and* the platform trust store, so a development proxy under a
+  `.test` name works with no configuration at all — `mkcert -install` put its
+  CA where the browser beside you reads it, and the client reads the same
+  place:
+
+  ```bash
+  eui wss://app.example.test/_eui/session/gallery
+  ```
+
+  `EUI_CA_SYSTEM=0` drops back to the public roots alone. A root that is in
+  neither — one carried with a deployment rather than installed — goes in
+  `EUI_CA_FILE`, one PEM bundle or several separated by `:`. All three sets
+  cover the manifest, the assets and the session alike.
+
+  There is no flag that turns verification off. A client that would accept
+  any certificate on request is a client whose TLS means nothing.
 - No cross-origin redirect during discovery.
 - No user-agent string and no client identifier, ever.
 

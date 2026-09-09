@@ -107,6 +107,71 @@ pub fn session_cookie() -> Option<String> {
     SESSION_COOKIE.lock().ok().and_then(|c| c.clone())
 }
 
+/// The TLS the client speaks, built once: **TLS 1.3 only** (spec 01 §1),
+/// verified against three sets of roots.
+///
+/// 1. The **public web's**, from `webpki-roots`: a published EUI application
+///    is served from an ordinary origin behind an ordinary certificate.
+/// 2. The **machine's own**, from the platform trust store. An application on
+///    a private network, a staging box, or a development proxy under a
+///    `.test` name is signed by a root no public list carries — but one the
+///    browser on the same desktop already trusts, because an administrator
+///    or `mkcert -install` put it there. A window that refused what the
+///    browser beside it accepts reads as broken, not as careful.
+///    `EUI_CA_SYSTEM=0` leaves the client on the public roots alone.
+/// 3. Whatever **`EUI_CA_FILE`** names — one PEM bundle, or several
+///    separated by `:` — for a root that is in neither, such as a CA carried
+///    with a deployment rather than installed on the machine.
+///
+/// Roots are added, never removed, and there is no flag anywhere that turns
+/// verification off: a client that would accept any certificate on request
+/// is a client whose TLS means nothing.
+pub fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
+    static CONFIG: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    std::sync::Arc::clone(CONFIG.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        // Then the machine's own store, unless told not to. This is what
+        // makes the client agree with everything else on the desktop: a
+        // development CA from `mkcert -install`, a corporate root, a
+        // private CA an administrator installed — all of them are already
+        // trusted by the browser beside it, and a window that refused what
+        // the browser accepts would be read as broken, not as careful.
+        // `EUI_CA_SYSTEM=0` leaves the client on the public roots alone.
+        if std::env::var("EUI_CA_SYSTEM").as_deref() != Ok("0") {
+            let found = rustls_native_certs::load_native_certs();
+            for cert in found.certs {
+                let _ = roots.add(cert);
+            }
+            for e in found.errors {
+                eprintln!("eui: platform trust store: {e}");
+            }
+        }
+        for path in std::env::var("EUI_CA_FILE").unwrap_or_default().split(':').filter(|p| !p.is_empty()) {
+            use rustls::pki_types::pem::PemObject;
+            match rustls::pki_types::CertificateDer::pem_file_iter(path) {
+                Ok(certs) => {
+                    let mut added = 0usize;
+                    for cert in certs.flatten() {
+                        if roots.add(cert).is_ok() {
+                            added += 1;
+                        }
+                    }
+                    eprintln!("eui: EUI_CA_FILE {path}: {added} additional root(s)");
+                }
+                Err(e) => eprintln!("eui: EUI_CA_FILE {path}: {e}; ignored"),
+            }
+        }
+        // Spec 01 §1: TLS 1.3 is REQUIRED. Saying so here rather than
+        // leaving it to the library's default is what makes "no downgrade"
+        // a property of this client and not of its dependency tree.
+        let config = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        std::sync::Arc::new(config)
+    }))
+}
+
 /// Enforce `spec/01-transport.md` §1: TLS only. A release build refuses
 /// `ws://` unconditionally, except on loopback when
 /// `EUI_ALLOW_INSECURE_LOOPBACK=1` is set — how the examples run, and how a
@@ -180,7 +245,8 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
                         return;
                     }
                 };
-                let (ws, _) = match tokio_tungstenite::connect_async(request).await {
+                let connector = tokio_tungstenite::Connector::Rustls(crate::transport::tls_config());
+                let (ws, _) = match tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector)).await {
                     Ok(ok) => ok,
                     Err(e) => {
                         let _ = in_tx.send(Incoming::Closed(TransportError::Connect(e.to_string())));

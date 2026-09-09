@@ -8,9 +8,21 @@ behind ordinary proxies and CDNs.
 
 ## 1. Requirements
 
-- TLS 1.3 is REQUIRED. A client MUST refuse `http://` origins with no exception,
-  including loopback in release builds. (`EUI_ALLOW_INSECURE_LOOPBACK=1` MAY
-  relax this in debug builds only; a release client MUST NOT honour it.)
+- TLS 1.3 is REQUIRED, and a client MUST offer no earlier version: a server
+  that answers `wss://` with TLS 1.2 is refused, not accommodated. A client
+  MUST refuse `http://` origins with no exception, including loopback in
+  release builds. (`EUI_ALLOW_INSECURE_LOOPBACK=1` MAY relax this in debug
+  builds only; a release client MUST NOT honour it.)
+- A client verifies the certificate chain. The public web's roots are the
+  baseline, but an application on a private network or behind a development
+  proxy is signed by a root no public list carries, so a client SHOULD also
+  honour **the roots the machine it runs on already trusts** — a client that
+  refused what the browser beside it accepts would be read as broken — and
+  SHOULD accept further roots named out of band. The reference client takes
+  all three: `webpki-roots`, the platform trust store (`EUI_CA_SYSTEM=0`
+  opts out), and `EUI_CA_FILE` (one PEM bundle, or several separated by
+  `:`). A client MUST NOT offer a way to skip verification — an option that
+  accepts any certificate makes every other requirement here decorative.
 - A client MUST NOT follow a redirect that changes origin during discovery.
 - A client MUST send no user-agent string and no client identifier. The only
   request headers it sends are those required by HTTP itself plus `Accept`.

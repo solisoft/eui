@@ -105,10 +105,10 @@ async fn get_async(origin: &str, path: &str, accept: &str) -> Result<Vec<u8>, As
     let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
     let mut raw = Vec::new();
     if scheme == "https" {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        // The same roots and the same TLS 1.3 as the session socket: the
+        // manifest, the assets and the session are one origin's, and they
+        // cannot be trusted differently.
+        let connector = tokio_rustls::TlsConnector::from(crate::transport::tls_config());
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| AssetError::Origin("bad host name".into()))?;
         let mut tls = connector.connect(name, tcp).await.map_err(|e| AssetError::Connect(e.to_string()))?;
         tls.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
