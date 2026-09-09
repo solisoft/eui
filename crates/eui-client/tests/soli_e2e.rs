@@ -906,9 +906,66 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
         }
         let _ = d.paint(1000, 800);
     }
+    // Whatever is already queued was reported before the mixer moved — the
+    // source's own start, a millisecond in. Drop it, or the tracker is told
+    // the music is where it was when it began.
+    let _ = d.take_pending();
     let mut out = vec![0.0f32; 11_025];
     let _ = d.fill_audio(&mut out, 1, 11_025);
     assert!(out.iter().any(|s| s.abs() > 0.05), "the pattern is audible: {:?}", &out[..4]);
+    // Filling the buffer moves the mixer; the client reports where it got
+    // to as it paints, four times a second at most (03 §7), so the next
+    // report has to be waited for. That report is the tracker's only clock.
+    std::thread::sleep(Duration::from_millis(300));
+    // The driver's clock is the window's: it moves on input and on `tick`,
+    // never on its own, so a test that only paints stays inside the rate
+    // limit for ever.
+    d.tick(Instant::now());
+    let _ = d.paint(1000, 800);
+    let reports = d.take_pending();
+    assert!(
+        reports.iter().any(|f| matches!(f, Frame::Event(e) if e.event == eui_proto::EventKind::TimeUpdate)),
+        "a second of sound reports its position: {reports:?}"
+    );
+    for f in reports {
+        conn.tx.send(f.encode()).unwrap();
+    }
+
+    // A second of it has gone past, and the window says so: `time_update`
+    // carries the mixer's own position back, and the playhead is a row of
+    // its own — "Head" beside "Row". A row is 120 ms at the demo's tempo,
+    // so a second in is row 8.
+    let field = |d: &Driver, name: &str| {
+        let label = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(name))?;
+        let holder = d.session().node(label).unwrap().parent;
+        d.session().preorder(holder).filter_map(|ix| d.session().text_of(ix)).find(|t| *t != name).map(str::to_owned)
+    };
+    let cursor = field(&d, "Row");
+    pump(&mut d, &conn, &wake, |d| field(d, "Head").is_some_and(|h| h != "--" && h != "00"));
+    assert_eq!(field(&d, "Row"), cursor, "the music moved, the cursor stayed where it was typing");
+
+    // And it is still a tracker while it plays. Pressing Play took the
+    // keyboard with it, so the pattern gets it back the way anything does,
+    // with a click — which is also how a typist picks the cell to work in
+    // while the song runs.
+    let _ = d.paint(1000, 800);
+    let r = d.layout().rect(grid).expect("the pattern is laid out");
+    let seq = d.session().last_seq().unwrap();
+    d.input(Input::PointerMove(r.x + 40.0, r.y + 20.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    // `x` is D in FT2's lower key row, and at octave 4 the cell reads D-4 —
+    // a note the demo song has nowhere.
+    key(&mut d, &conn, "x");
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "D-4"));
+    assert!(
+        texts(&d, root(&d)).iter().any(|t| t.starts_with("Edited")),
+        "the mix in the air is older than the edit, and the status says so: {:?}",
+        d.session().preorder(root(&d)).filter_map(|ix| d.session().text_of(ix)).last()
+    );
 }
 
 #[test]

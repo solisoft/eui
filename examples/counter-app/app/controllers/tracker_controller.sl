@@ -133,6 +133,8 @@ TRACKER_VOL = "#e8e07c"
 TRACKER_FX = "#e8a87c"
 TRACKER_DIM = "#4d5773"
 TRACKER_CURSOR = "#2f5fb0"
+TRACKER_CELL = "#1d3a70"
+TRACKER_LINE = "#262d47"
 TRACKER_PLAY = "#294b2b"
 TRACKER_INK = "#0b0d16"
 
@@ -246,6 +248,8 @@ def tracker_defaults(state)
     "bpm": 125,
     "speed": 6,
     "playing": false,
+    "play_row": -1,
+    "follow": true,
     "at": 0,
     "seek": 0,
     "rendered": "",
@@ -500,7 +504,11 @@ end
 
 # ------------------------------------------------------------- the events
 
+# Moving the cursor takes the window off the playhead: while it plays, the
+# pattern scrolls with the music until the typist says otherwise, and from
+# then on it stays where they are working. Play or Stop hands it back.
 def tracker_move(state, drow, dchan)
+  state["follow"] = false
   index = state["row"] + drow
   index = index % TRACKER_ROWS
   index = index + TRACKER_ROWS if index < 0
@@ -512,13 +520,21 @@ def tracker_move(state, drow, dchan)
   state
 end
 
+# The wav that is playing was mixed before the key was pressed, so an edit
+# cannot be heard until the next Play. Saying so is the whole difference
+# between a tracker that ignores you and one you understand.
+def tracker_edited(state)
+  state["status"] = "Edited — Play again to hear it" if state["playing"]
+  state
+end
+
 def tracker_put(state, note)
   return state unless state["edit"]
 
   cell = tracker_cell_at(state, state["row"], state["chan"])
   cell["n"] = note
   cell["i"] = note < 0 ? 0 : state["inst"]
-  tracker_move(state, 1, 0)
+  tracker_move(tracker_edited(state), 1, 0)
 end
 
 def tracker_clear(state)
@@ -530,7 +546,7 @@ def tracker_clear(state)
   cell["v"] = 0
   cell["f"] = -1
   cell["p"] = 0
-  tracker_move(state, 1, 0)
+  tracker_move(tracker_edited(state), 1, 0)
 end
 
 # A digit typed on the instrument, volume or effect column shifts the
@@ -543,7 +559,7 @@ def tracker_digit(state, digit)
   cell["i"] = (cell["i"] * 16 + digit) % 256 if col == 1
   cell["v"] = (cell["v"] * 16 + digit) % 128 if col == 2
   cell["p"] = (cell["p"] * 16 + digit) % 256 if col == 3
-  state
+  tracker_edited(state)
 end
 
 def tracker_letter(state, key)
@@ -627,6 +643,7 @@ def tracker_click(state, params)
   state["row"] = index
   state["chan"] = cell
   state["col"] = col
+  state["follow"] = false
   state
 end
 
@@ -649,6 +666,8 @@ end
 def tracker_open(state, params)
   state["viewport"] = params["viewport"] ?? state["viewport"]
   state["playing"] = false
+  state["play_row"] = -1
+  state["follow"] = true
   state["at"] = 0
   state["status"] = "Ready."
   state
@@ -658,6 +677,8 @@ def tracker_play(state)
   print_of = tracker_fingerprint(state)
   if state["rendered"] != "" && state["print"] == print_of
     state["playing"] = true
+    state["play_row"] = 0
+    state["follow"] = true
     state["at"] = 0
     state["seek"] = state["seek"] == 0 ? 1 : 0
     state["status"] = "Playing — the same song, already mixed"
@@ -669,6 +690,8 @@ def tracker_play(state)
   state["rendered"] = answer["path"]
   state["took"] = answer["ms"]
   state["playing"] = true
+  state["play_row"] = 0
+  state["follow"] = true
   state["at"] = 0
   state["seek"] = state["seek"] == 0 ? 1 : 0
   state["status"] = "Playing " + answer["mode"] + " — " + str(answer["samples"]) + " samples mixed in "
@@ -679,13 +702,17 @@ end
 
 def tracker_stop(state)
   state["playing"] = false
+  state["play_row"] = -1
+  state["follow"] = true
   state["at"] = 0
   state["status"] = "Stopped."
   state
 end
 
-# The playhead says where the sound is; the cursor follows it. This is the
-# only clock in the application — nothing here counts frames.
+# The playhead says where the sound is. It is its own row, not the cursor:
+# the cursor is where typing lands, and a tracker one can only watch is
+# half a tracker. This is the only clock in the application — nothing here
+# counts frames; the window reports where its own mixer has got to.
 def tracker_tick(state, params)
   payload = params["payload"] ?? [0, 0]
   at = payload[0]
@@ -694,8 +721,17 @@ def tracker_tick(state, params)
 
   index = int(at / tracker_row_ms(state))
   index = TRACKER_ROWS - 1 if index > TRACKER_ROWS - 1
-  state["row"] = index
+  state["play_row"] = index
   state
+end
+
+# Which row is sounding: the playhead while it plays, the cursor otherwise.
+# The scopes read it, so they show the chord that is in the air rather than
+# the one under the cursor.
+def tracker_sounding_row(state)
+  return state["play_row"] if state["playing"] && state["play_row"] >= 0
+
+  state["row"]
 end
 
 def tracker(event_data)
@@ -764,6 +800,8 @@ def tracker_skin(state)
       "dim": "text.disabled",
       "cursor": "accent.base",
       "on_cursor": "accent.on",
+      "cell": "info.subtle",
+      "line": "surface.overlay",
       "play": "success.subtle",
       "ink": "text.default",
       "label": "text.muted",
@@ -789,6 +827,8 @@ def tracker_skin(state)
     "dim": TRACKER_DIM,
     "cursor": TRACKER_CURSOR,
     "on_cursor": TRACKER_NOTE,
+    "cell": TRACKER_CELL,
+    "line": TRACKER_LINE,
     "play": TRACKER_PLAY,
     "ink": TRACKER_INK,
     "label": TRACKER_INK,
@@ -1000,7 +1040,8 @@ def tracker_top(state, skin)
       tracker_field(skin, "Oct", str(state["octave"])),
       tracker_button(skin, "-", "octave", {"by": -1}, false),
       tracker_button(skin, "+", "octave", {"by": 1}, false),
-      tracker_field(skin, "Row", tracker_hex(state["row"], 2))
+      tracker_field(skin, "Row", tracker_hex(state["row"], 2)),
+      tracker_field(skin, "Head", state["play_row"] < 0 ? "--" : tracker_hex(state["play_row"], 2))
     ]
   )
   tracker_frame(skin, {
@@ -1017,7 +1058,7 @@ end
 # sounding. A tracker's scopes move; these say what the voice *is*, which
 # is what a still picture of a tracker can honestly show.
 def tracker_scope(state, skin, chan)
-  cell = tracker_cell_at(state, state["row"], chan)
+  cell = tracker_cell_at(state, tracker_sounding_row(state), chan)
   sounding = cell["n"] >= 0
   instrument = state["instruments"][cell["i"] - 1] ?? state["instruments"][0]
   wave = instrument["wave"]
@@ -1137,17 +1178,27 @@ def tracker_cell_nodes(state, skin, at, chan)
   })
 end
 
+# Four things want to be visible at once on the same line: the row the
+# cursor is on, the cell in it, the character group being typed, and the
+# row the music has reached — which may be the same row. They are drawn as
+# four nested washes, strongest innermost, and the row number keeps the
+# cursor's colour whatever the line under it is doing, so the two are never
+# confused for one another.
 def tracker_row_line(state, skin, at, playing_row, first, across)
+  here = at == state["row"]
   background = "none"
   background = skin["row4"] if at % 4 == 0
   background = skin["row16"] if at % 16 == 0
+  background = skin["line"] if here
   background = skin["play"] if at == playing_row
   cells = range(first, first + across).map(fn(c) {
     row(
       {
         "gap": 0,
         "width": TRACKER_CELL_W,
-        "shrink": 0
+        "shrink": 0,
+        "radius": skin["radius"],
+        "bg": here && state["chan"] == c ? skin["cell"] : "none"
       },
       tracker_cell_nodes(state, skin, at, c)
     )
@@ -1166,9 +1217,10 @@ def tracker_row_line(state, skin, at, playing_row, first, across)
       "s": {
         "width": TRACKER_GUTTER_W,
         "display": "row",
-        "shrink": 0
+        "shrink": 0,
+        "bg": here ? skin["cursor"] : "none"
       },
-      "c": [tracker_mono(tracker_hex(at, 2), at == state["row"] ? skin["note"] : skin["dim"], 0)]
+      "c": [tracker_mono(tracker_hex(at, 2), here ? skin["on_cursor"] : skin["dim"], 0)]
     }].concat(cells)
   )
   keyed("r" + str(at), line)
@@ -1206,7 +1258,9 @@ end
 
 def tracker_window_top(state)
   visible = tracker_visible(state)
-  top = state["row"] - int(visible / 2)
+  centre = state["row"]
+  centre = state["play_row"] if state["playing"] && state["follow"] && state["play_row"] >= 0
+  top = centre - int(visible / 2)
   top = 0 if top < 0
   top = TRACKER_ROWS - visible if top > TRACKER_ROWS - visible
   top
@@ -1258,7 +1312,7 @@ def tracker_pattern(state, skin)
   top = tracker_window_top(state)
   first = tracker_first_channel(state)
   across = tracker_across(state)
-  playing_row = state["playing"] ? state["row"] : -1
+  playing_row = state["playing"] ? state["play_row"] : -1
   lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, skin, r, playing_row, first, across) })
   grid = {
     "k": "box",
@@ -1293,7 +1347,7 @@ def tracker_status(state, skin)
   }, [
     tracker_label(skin, state["status"]),
     spacer(),
-    tracker_label(skin, "Z-M / Q-U notes · arrows move · Space plays · Insert toggles edit")
+    tracker_label(skin, "Z-M / Q-U notes · arrows move · Space plays · type while it plays")
   ])
 end
 
