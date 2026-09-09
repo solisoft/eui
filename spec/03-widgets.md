@@ -134,8 +134,15 @@ no shader, no tessellator and no allocation beyond its quads.
 - `Enter` in an `input` emits `submit`; `Escape` blurs. `Tab` and
   `Shift+Tab` move focus; the client, not the server, owns that order.
 - A node with a `click` handler is activatable: it takes focus on `Tab` and
-  `Enter` or `Space` emits `click` at its centre.
-- The scrolling keys belong to the client while no editable node has focus:
+  `Enter` or `Space` emits `click` at its centre — unless that same node
+  handles `key_down`, in which case both keys are reported and nothing is
+  activated: it asked for the keyboard, and `Space` in a tracker starts the
+  song. A node handling `key_down` or `key_up` takes focus on `Tab` too, so
+  an editor is reachable without a pointer.
+- The scrolling keys belong to the client while nothing that wants keys has
+  focus — no editable node, and no node on the focused path handling
+  `key_down` or `key_up`. An application that asked for the arrows gets them:
+  a pattern editor, a grid, a game. Otherwise:
   `ArrowDown`/`ArrowUp` land the scroller on its next/previous row — a
   `list`'s rows, or the scroller's children; a plain 40 px step where there
   are none — `PageDown`/`PageUp` move one viewport, `Home`/`End` the whole

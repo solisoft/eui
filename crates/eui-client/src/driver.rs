@@ -1275,7 +1275,13 @@ impl Driver {
         let mut stack = vec![root];
         while let Some(ix) = stack.pop() {
             let Some(node) = self.session.node(ix) else { continue };
-            let focusable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea) || node.handler(EventKind::Click).is_some();
+            // 03 §3: what can be typed into can be reached with `Tab` — a
+            // field, something clickable, and anything that asked for keys.
+            // A pattern editor that only the mouse can focus is not one.
+            let focusable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea)
+                || node.handler(EventKind::Click).is_some()
+                || node.handler(EventKind::KeyDown).is_some()
+                || node.handler(EventKind::KeyUp).is_some();
             if focusable && self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) {
                 order.push(ix);
             }
@@ -1740,8 +1746,13 @@ impl Driver {
         if key == "Tab" {
             return if down { self.move_focus(modifiers & 1 != 0) } else { Vec::new() };
         }
-        // Spec 03 §3: the scrolling keys, unless a field has them.
-        if down && modifiers & 0b1110 == 0 && matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End") && !self.focused.is_some_and(|f| self.is_editable(f)) {
+        // Spec 03 §3: the scrolling keys belong to the client only while
+        // nothing that wants keys has focus. A field has them; so does a
+        // pattern editor, a grid or a game that asked for `key_down` — an
+        // application that cannot use the arrows is not much of one, and a
+        // scroller anywhere in the tree used to be enough to take them.
+        let claimed = self.focused.is_some_and(|f| self.is_editable(f) || self.ancestor_keyed(f).is_some());
+        if down && modifiers & 0b1110 == 0 && matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End") && !claimed {
             if let Some(out) = self.scroll_key(key) {
                 return out;
             }
@@ -1759,7 +1770,12 @@ impl Driver {
                     out.extend(self.commit_edit(f));
                     out.extend(self.emit(f, EventKind::Submit, Value::Null));
                 }
-                "Enter" | " " if !editable => out.extend(self.activate(f)),
+                // A node that handles keys is not activated by `Enter` or
+                // `Space`: it asked for the keys, and in a tracker `Space`
+                // is what starts the song, not a click on the pattern.
+                "Enter" | " " if !editable && self.session.node(f).is_none_or(|n| n.handler(EventKind::KeyDown).is_none()) => {
+                    out.extend(self.activate(f));
+                }
                 _ => {}
             }
         }

@@ -563,7 +563,8 @@ def tracker_key(state, key, mods)
   return set_key(state, "row", TRACKER_ROWS - 1) if key == "End"
   return tracker_clear(state) if key == "Delete" || key == "Backspace"
   return tracker_put(state, -2) if key == "`" || key == "CapsLock"
-  return set_key(state, "edit", !state["edit"]) if key == "Escape"
+  return set_key(state, "edit", !state["edit"]) if key == "Insert"
+  return state["playing"] ? tracker_stop(state) : tracker_play(state) if key == " "
 
   if key == "ArrowLeft"
     return tracker_move(set_key(state, "col", 3), 0, -1) if state["col"] == 0
@@ -603,6 +604,9 @@ end
 
 # The pattern is a character grid, so where a click landed is two
 # divisions: the row from the y, the channel and its column from the x.
+# A click carries its row in its props; the channel and the column come
+# from the x, because a pattern is a character grid and a point in it is
+# two divisions.
 def tracker_click(state, params)
   point = params["payload"] ?? [0, 0]
   props = params["props"] ?? {}
@@ -611,10 +615,11 @@ def tracker_click(state, params)
   index = TRACKER_ROWS - 1 if index > TRACKER_ROWS - 1
   index = 0 if index < 0
   x = point[0] - TRACKER_GUTTER_W
-  cell = int(x / TRACKER_CELL_W)
+  cell = props["first"] ?? 0
+  cell = cell + int(x / TRACKER_CELL_W)
   cell = 0 if cell < 0
   cell = TRACKER_CHANNELS - 1 if cell > TRACKER_CHANNELS - 1
-  within = x - cell * TRACKER_CELL_W
+  within = x % TRACKER_CELL_W
   col = 0
   col = 1 if within > 34
   col = 2 if within > 58
@@ -638,12 +643,23 @@ def tracker_fingerprint(state)
   + shapes.join(",")
 end
 
+# A new window starts stopped, whatever the last one was doing: the state
+# survives the session that made it, and a transport that comes back
+# playing is a Play button that does nothing.
+def tracker_open(state, params)
+  state["viewport"] = params["viewport"] ?? state["viewport"]
+  state["playing"] = false
+  state["at"] = 0
+  state["status"] = "Ready."
+  state
+end
+
 def tracker_play(state)
   print_of = tracker_fingerprint(state)
   if state["rendered"] != "" && state["print"] == print_of
     state["playing"] = true
     state["at"] = 0
-    state["seek"] = 0
+    state["seek"] = state["seek"] == 0 ? 1 : 0
     state["status"] = "Playing — the same song, already mixed"
     return state
   end
@@ -654,7 +670,7 @@ def tracker_play(state)
   state["took"] = answer["ms"]
   state["playing"] = true
   state["at"] = 0
-  state["seek"] = 0
+  state["seek"] = state["seek"] == 0 ? 1 : 0
   state["status"] = "Playing " + answer["mode"] + " — " + str(answer["samples"]) + " samples mixed in "
   + str(answer["ms"])
   + " ms"
@@ -688,7 +704,7 @@ def tracker(event_data)
   props = params["props"] ?? {}
   state = tracker_defaults(event_data["state"] ?? {})
   match event {
-    "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    "connect" => tracker_open(state, params),
     "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
     "key" => tracker_key(state, params["payload"][0], params["payload"][1]),
     "click" => tracker_click(state, params),
@@ -796,10 +812,15 @@ def tracker_frame(skin, style, children)
     return node("box", flat, children)
   end
 
+  # The bevel is two boxes, so anything the caller wants the frame to do in
+  # its parent's flow — grow into the window, take its width — belongs on
+  # the outer one, and the inner one has to fill it.
   inner = style.merge({
     "border": [0, 1, 1, 0],
     "border_color": TRACKER_DARK,
-    "bg": style["bg"] ?? skin["face"]
+    "bg": style["bg"] ?? skin["face"],
+    "grow": style["grow"] ?? 0,
+    "height": style["grow"] ?? 0 > 0 ? "100%" : "auto"
   })
   {
     "k": "box",
@@ -807,7 +828,9 @@ def tracker_frame(skin, style, children)
       "border": [1, 0, 0, 1],
       "border_color": TRACKER_LIGHT,
       "display": style["display"] ?? "column",
-      "shrink": 0
+      "shrink": 0,
+      "grow": style["grow"] ?? 0,
+      "width": style["width"] ?? "auto"
     },
     "c": [node("box", inner, children)]
   }
@@ -839,18 +862,38 @@ def tracker_label(skin, content)
   tracker_mono(content, skin["label"], 0)
 end
 
+# The transport's Play spins while the mixer works. A pattern takes about
+# a second to render, and a button that looks inert for a second is a
+# button people press twice and then call broken.
+def tracker_play_button(skin, state)
+  return tracker_button(skin, "Play", "play", {}, true) unless skin["modern"]
+
+  spinner = loading_button(state["playing"] ? "Playing" : "Play", "play", "tracker_play")
+  spinner["s"]["min_width"] = 0
+  spinner["s"]["pad"] = [
+    1,
+    3,
+    1,
+    3
+  ]
+  spinner
+end
+
 def tracker_button(skin, label, event, props, lit)
   if skin["modern"]
     pressed = lit ? button(label, event) : secondary_button(label, event)
     pressed["p"] = props
-    pressed["s"]["min_width"] = 0
-    pressed["s"]["pad"] = [
-      1,
-      3,
-      1,
-      3
-    ]
-    return pressed
+    # A tracker's toolbar is tighter than the catalogue's default, and the
+    # narrowing has to reach the hover and pressed styles too — see `restyle`.
+    return restyle(
+      pressed,
+      {"min_width": 0, "pad": [
+        1,
+        3,
+        1,
+        3
+      ]}
+    )
   end
 
   face_box = tracker_frame(skin, {
@@ -934,7 +977,7 @@ def tracker_top(state, skin)
   transport = row(
     {"gap": 1, "align": "center"},
     [
-      tracker_button(skin, "Play", "play", {}, state["playing"]),
+      tracker_play_button(skin, state),
       tracker_button(skin, "Stop", "stop", {}, false),
       tracker_button(skin, state["edit"] ? "Edit ON" : "Edit off", "edit", {}, state["edit"]),
       tracker_button(skin, skin["modern"] ? "Retro skin" : "Modern skin", "skin", {}, false),
@@ -1094,12 +1137,12 @@ def tracker_cell_nodes(state, skin, at, chan)
   })
 end
 
-def tracker_row_line(state, skin, at, playing_row)
+def tracker_row_line(state, skin, at, playing_row, first, across)
   background = "none"
   background = skin["row4"] if at % 4 == 0
   background = skin["row16"] if at % 16 == 0
   background = skin["play"] if at == playing_row
-  cells = range(0, TRACKER_CHANNELS).map(fn(c) {
+  cells = range(first, first + across).map(fn(c) {
     row(
       {
         "gap": 0,
@@ -1109,13 +1152,14 @@ def tracker_row_line(state, skin, at, playing_row)
       tracker_cell_nodes(state, skin, at, c)
     )
   })
-  keyed("r" + str(at), row(
+  line = row(
     {
       "gap": 0,
       "height": TRACKER_ROW_H,
       "align": "center",
       "bg": background,
-      "width": "100%"
+      "width": "100%",
+      "cursor": "pointer"
     },
     [{
       "k": "box",
@@ -1126,11 +1170,30 @@ def tracker_row_line(state, skin, at, playing_row)
       },
       "c": [tracker_mono(tracker_hex(at, 2), at == state["row"] ? skin["note"] : skin["dim"], 0)]
     }].concat(cells)
-  ))
+  )
+  keyed("r" + str(at), line)
 end
 
-# As many rows as the window has room for, which is how a tracker uses a
-# screen: the pattern is the screen, and everything else is furniture.
+# How many channels fit across, and which one they start at. A tracker
+# does not scroll its pattern: the cursor moves and the visible channels
+# follow it, which is also what lets the arrow keys belong to the
+# application — a scroller in the tree would take them first (03 §3).
+def tracker_across(state)
+  width = (state["viewport"] ?? {})["width"] ?? 1280
+  fits = int((width - TRACKER_GUTTER_W - 24) / TRACKER_CELL_W)
+  fits = 1 if fits < 1
+  fits = TRACKER_CHANNELS if fits > TRACKER_CHANNELS
+  fits
+end
+
+def tracker_first_channel(state)
+  across = tracker_across(state)
+  first = state["chan"] - int(across / 2)
+  first = 0 if first < 0
+  first = TRACKER_CHANNELS - across if first > TRACKER_CHANNELS - across
+  first
+end
+
 def tracker_visible(state)
   height = (state["viewport"] ?? {})["height"] ?? 800
   # What the furniture above and below takes: the panels, the scopes, the
@@ -1151,8 +1214,10 @@ end
 
 # The heading strip over the channels, so the eye can find the one it is
 # typing in. It scrolls with the pattern, so it stays over its own column.
-def tracker_channel_heads(state, skin)
-  heads = range(0, TRACKER_CHANNELS).map(fn(c) {
+# The heading strip over the channels that are on screen, so the eye can
+# find the column it is typing in — and see that there are others.
+def tracker_channel_heads(state, skin, first, across)
+  heads = range(first, first + across).map(fn(c) {
     {
       "k": "box",
       "s": {
@@ -1184,11 +1249,17 @@ def tracker_channel_heads(state, skin)
   )
 end
 
+# The pattern fills what the window has left. It never scrolls: the rows
+# it shows are the rows that fit, centred on the cursor, and the channels
+# it shows follow the cursor across. A scroller here would take the arrow
+# keys before the application saw them (03 §3).
 def tracker_pattern(state, skin)
   visible = tracker_visible(state)
   top = tracker_window_top(state)
+  first = tracker_first_channel(state)
+  across = tracker_across(state)
   playing_row = state["playing"] ? state["row"] : -1
-  lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, skin, r, playing_row) })
+  lines = range(top, top + visible).map(fn(r) { tracker_row_line(state, skin, r, playing_row, first, across) })
   grid = {
     "k": "box",
     "s": {
@@ -1196,29 +1267,20 @@ def tracker_pattern(state, skin)
       "gap": 0,
       "bg": skin["grid"],
       "pad": 0,
-      "cursor": "pointer",
       "width": "100%",
-      "grow": 1
+      "grow": 1,
+      "overflow": "clip"
     },
     "on": {"click": "click", "key_down": "key"},
-    "p": {"top": top},
-    "c": [tracker_channel_heads(state, skin)].concat(lines)
+    "p": {"top": top, "first": first},
+    "c": [tracker_channel_heads(state, skin, first, across)].concat(lines)
   }
   tracker_frame(skin, {
     "display": "column",
     "bg": skin["grid"],
-    "width": "100%"
-  }, [{
-    "k": "scroll",
-    "s": {
-      "overflow": "scroll",
-      "width": "100%",
-      "height": (visible + 1) * TRACKER_ROW_H,
-      "bg": skin["grid"],
-      "radius": skin["radius"]
-    },
-    "c": [grid]
-  }])
+    "width": "100%",
+    "grow": 1
+  }, [grid])
 end
 
 def tracker_status(state, skin)
@@ -1231,7 +1293,7 @@ def tracker_status(state, skin)
   }, [
     tracker_label(skin, state["status"]),
     spacer(),
-    tracker_label(skin, "Z-M / Q-U notes  ·  arrows move  ·  Esc toggles edit")
+    tracker_label(skin, "Z-M / Q-U notes · arrows move · Space plays · Insert toggles edit")
   ])
 end
 
@@ -1275,14 +1337,26 @@ def tracker_view(raw_state)
     {"gap": 2, "width": "100%"},
     [left, tracker_instruments_panel(state, skin)]
   )
-  column(
+  page = column(
     {
       "gap": 2,
       "pad": skin["pad"],
       "bg": skin["desk"],
       "width": "100%",
-      "height": "100%"
+      "height": "100%",
+      "min_height": 420
     },
-    [sound, head, tracker_pattern(state, skin), spacer(), tracker_status(state, skin)]
+    [sound, head, tracker_pattern(state, skin), tracker_status(state, skin)]
   )
+  # A window too short for the panels can be scrolled — with the wheel or
+  # the bar, never with the arrows, which belong to the pattern (03 §3).
+  {
+    "k": "scroll",
+    "s": {
+      "width": "100%",
+      "height": "100%",
+      "bg": skin["desk"]
+    },
+    "c": [page]
+  }
 end

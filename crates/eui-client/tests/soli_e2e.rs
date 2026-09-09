@@ -833,12 +833,12 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
         .preorder(root(&d))
         .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
         .expect("the pattern takes the keyboard");
-    // Just past the row-number gutter on the first line: the note column of
-    // the first channel.
+    // Just past the row-number gutter, on the first line under the channel
+    // headings: the note column of the first channel.
     let _ = d.paint(1000, 800);
     let r = d.layout().rect(grid).expect("the pattern is laid out");
     let seq = d.session().last_seq().unwrap();
-    d.input(Input::PointerMove(r.x + 40.0, r.y + 5.0));
+    d.input(Input::PointerMove(r.x + 40.0, r.y + 20.0));
     d.input(Input::PointerDown(0));
     for f in d.input(Input::PointerUp(0)) {
         conn.tx.send(f.encode()).unwrap();
@@ -855,6 +855,21 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
     };
     key(&mut d, &conn, "y");
     pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A-5"));
+
+    // The arrows move the cursor. They are also the client's scrolling keys
+    // (03 §3), so this is the check that the pattern gets them at all.
+    // The panel prints the cursor's row in hex beside the word "Row".
+    let row_now = |d: &Driver| {
+        let label = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some("Row")).expect("the Row field");
+        let holder = d.session().node(label).unwrap().parent;
+        d.session().preorder(holder).filter_map(|ix| d.session().text_of(ix)).find(|t| *t != "Row").map(str::to_owned)
+    };
+    let before = row_now(&d);
+    key(&mut d, &conn, "ArrowDown");
+    pump(&mut d, &conn, &wake, |d| row_now(d) != before);
+    key(&mut d, &conn, "ArrowRight");
+    key(&mut d, &conn, "ArrowUp");
+    pump(&mut d, &conn, &wake, |d| row_now(d) == before);
 
     // Play: the server mixes the pattern and the tree gains a sound.
     let play = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Play")).expect("the Play button");
