@@ -69,6 +69,13 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
+    // SNAPSHOT_COOKIE=soli_desktop=… — a desktop artifact run with
+    // SOLI_DESKTOP_NO_WINDOW=1 prints its session URL and the cookie its
+    // loopback gate wants; without it the upgrade is refused, so a bundled
+    // app could not be looked at at all.
+    if let Ok(cookie) = std::env::var("SNAPSHOT_COOKIE") {
+        eui_client::transport::set_session_cookie(Some(cookie));
+    }
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
     for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {
