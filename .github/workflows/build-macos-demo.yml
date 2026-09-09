@@ -95,17 +95,16 @@ jobs:
           repository: solisoft/soli_lang
           path: lang
 
-      - name: Fail early, and legibly, without the bundle key
-        env:
-          SOLI_BUNDLE_KEY: ${{ secrets.SOLI_BUNDLE_KEY }}
-        run: |
-          if [ -z "$SOLI_BUNDLE_KEY" ]; then
-            echo "::error::SOLI_BUNDLE_KEY is not set on this repository."
-            echo "A desktop artifact embeds the app encrypted, so the build cannot"
-            echo "produce one without a key. Set it once with:"
-            echo "    gh secret set SOLI_BUNDLE_KEY -R solisoft/eui"
-            exit 1
-          fi
+      # There is no unencrypted desktop build, so this artifact is encrypted
+      # whether or not it has anything to hide — and it then needs that same
+      # key at every launch or it will not start. Vitrine is a demo, so the
+      # key is minted here, used to seal the artifact, and shipped inside it.
+      #
+      # It is deliberately NOT the repository secret. That one also unlocks a
+      # real installation, and baking it into a downloadable app would
+      # publish it.
+      - name: Mint a throwaway key for this build
+        run: echo "BUNDLE_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -129,7 +128,7 @@ jobs:
 
       - name: Package Vitrine
         env:
-          SOLI_BUNDLE_KEY: ${{ secrets.SOLI_BUNDLE_KEY }}
+          SOLI_BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
         run: |
           mkdir -p dist
           ./lang/target/release/soli desktop build eui/examples/counter-app \
@@ -140,7 +139,11 @@ jobs:
             --output dist/vitrine-desktop
           ls -lh dist/vitrine-desktop
 
+      # The same key goes beside the executable, or the app cannot unlock
+      # itself at launch and exits before drawing anything.
       - name: Wrap in a .app bundle, with a DMG beside it
+        env:
+          BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
         run: ./eui/scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
 
       - name: Upload artifacts
