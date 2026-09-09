@@ -69,13 +69,21 @@ None of this touches the other sites on the server.
    `SOLI_APP_HOSTS` and `SOLI_SESSION_SECRET` (32 characters or more) are
    required: under `APP_ENV=production`, Soli refuses to start without them.
 
-3. Let the proxy know about the site. If your `soli-proxy` discovers new
-   folders by itself, there is nothing to do; otherwise
-   `systemctl restart soli-proxy` is needed, and it briefly restarts **every**
-   site — do it in a quiet moment.
+3. Nothing to restart. `soli-proxy` runs with `--watch` on by default, which
+   watches the sites directory and re-runs its discovery — and auto-starts
+   what it finds — within a second of the folder appearing. A
+   `systemctl restart soli-proxy` is only needed if this instance was started
+   with `--watch=false`, and it briefly restarts **every** site, so pick a
+   quiet moment.
 
-4. Point the domain's DNS at the server; the proxy obtains the Let's Encrypt
-   certificate itself.
+   Between the folder appearing and the first deploy, the proxy may discover
+   an app whose code is not there yet, fail to start it, and **quarantine**
+   it — automatic restarts suspended. That is not a problem to fix: any
+   explicit deploy releases it, which is what the workflow does.
+
+4. Point the domain's DNS at the server **before** the first deploy; the proxy
+   issues the Let's Encrypt certificate for the domains it has discovered, so
+   the name has to resolve to the box by then.
 
 5. First deployment: push to `main`, or run the workflow by hand
    (*Actions → verify & deploy the site → Run workflow*).
