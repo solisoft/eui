@@ -12,3 +12,8 @@ workers = 2
 # /up, not /health: /up is Soli's own readiness probe (503 until the server
 # is actually ready to answer).
 health_check = "/up"
+
+# `[apps] default_user` is commented out in the server's config.toml, so each
+# site names its own; without it the proxy refuses to drop privileges.
+user = "rocky"
+group = "rocky"

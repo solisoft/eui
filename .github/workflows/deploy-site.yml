@@ -32,7 +32,7 @@ env:
   # Pinned, so the CI tests exactly what the server runs. The step
   # "Check the server runs the pinned version" verifies that rather than
   # hoping for it — a CI testing a different version tests nothing.
-  SOLI_VERSION: "2.0.7"
+  SOLI_VERSION: "2.0.6"
   # The site is a Soli app in this subdirectory, not at the repository root.
   APP_DIR: www
 
