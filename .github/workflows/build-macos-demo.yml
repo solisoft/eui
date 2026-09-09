@@ -80,7 +80,12 @@ jobs:
     name: Build Vitrine
     runs-on: macos-14
     steps:
+      # Both repos are checked out as siblings, neither inside the other.
+      # This one is a cargo workspace, so a second workspace nested under it
+      # makes cargo insist the inner crate be a member of the outer.
       - uses: actions/checkout@v4
+        with:
+          path: eui
 
       # `soli desktop build` is the thing that packages Vitrine, and it lives
       # in the language repo, not this one.
@@ -127,7 +132,7 @@ jobs:
           SOLI_BUNDLE_KEY: ${{ secrets.SOLI_BUNDLE_KEY }}
         run: |
           mkdir -p dist
-          ./lang/target/release/soli desktop build examples/counter-app \
+          ./lang/target/release/soli desktop build eui/examples/counter-app \
             --app-id com.soli.vitrine \
             --name Vitrine \
             --eui gallery \
@@ -136,7 +141,7 @@ jobs:
           ls -lh dist/vitrine-desktop
 
       - name: Wrap in a .app bundle, with a DMG beside it
-        run: ./scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
+        run: ./eui/scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
