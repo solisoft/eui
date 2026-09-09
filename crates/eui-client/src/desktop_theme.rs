@@ -78,7 +78,11 @@ fn hex(v: &str) -> Option<u32> {
 /// The text colour that reads on `bg`, out of the palette's two.
 fn on(bg: u32, fg: u32, alt: u32) -> u32 {
     let (b, f, a) = (Linear::from_rgba(bg), Linear::from_rgba(fg), Linear::from_rgba(alt));
-    if contrast(b, f) >= contrast(b, a) { fg } else { alt }
+    if contrast(b, f) >= contrast(b, a) {
+        fg
+    } else {
+        alt
+    }
 }
 
 /// `rgba` with its lightness moved by `dl` in OKLCH, clipped to gamut.
@@ -200,7 +204,8 @@ mod tests {
 
     #[test]
     fn omarchy_colors_map_onto_roles() {
-        let text = "# Baltic Dusk\nmode = \"dark\"\n\naccent = \"#f7a96a\"\nmuted = \"#527493\"\nbackground = \"#101a26\"\nlighter_background = \"#1e3952\"\nforeground = \"#e6eef7\"\nred = \"#e06c75\"\n";
+        let text =
+            "# Baltic Dusk\nmode = \"dark\"\n\naccent = \"#f7a96a\"\nmuted = \"#527493\"\nbackground = \"#101a26\"\nlighter_background = \"#1e3952\"\nforeground = \"#e6eef7\"\nred = \"#e06c75\"\n";
         let (mode, colors) = parse_omarchy(text).unwrap();
         assert_eq!(mode, ThemeMode::Dark);
         let of = |r: Role| colors.iter().find(|(x, _)| *x == r).map(|(_, c)| *c);

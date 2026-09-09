@@ -148,76 +148,26 @@ impl Op {
     /// Decode one op, opcode included.
     pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
         match r.u8()? {
-            0x10 => Ok(Self::DefAtom {
-                id: nonzero(r.varint32()?, "atom id")?,
-                value: r.str(MAX_ATOM_BYTES, "atom value")?.to_owned(),
-            }),
-            0x11 => Ok(Self::DefStyle {
-                id: nonzero(r.varint32()?, "style id")?,
-                record: StyleRecord::decode(r)?,
-            }),
-            0x12 => Ok(Self::DefColor {
-                id: nonzero(r.varint32()?, "color id")?,
-                rgba: r.u32()?,
-            }),
+            0x10 => Ok(Self::DefAtom { id: nonzero(r.varint32()?, "atom id")?, value: r.str(MAX_ATOM_BYTES, "atom value")?.to_owned() }),
+            0x11 => Ok(Self::DefStyle { id: nonzero(r.varint32()?, "style id")?, record: StyleRecord::decode(r)? }),
+            0x12 => Ok(Self::DefColor { id: nonzero(r.varint32()?, "color id")?, rgba: r.u32()? }),
             0x13 => {
                 let id = nonzero(r.varint32()?, "chunk id")?;
                 Ok(Self::DefChunk { id, hash: r.array::<HASH_BYTES>()? })
             }
-            0x14 => Ok(Self::DefChunkBytes {
-                id: nonzero(r.varint32()?, "chunk id")?,
-                bytes: r.bytes(MAX_CHUNK_BYTES, "chunk bytes")?.to_vec(),
-            }),
+            0x14 => Ok(Self::DefChunkBytes { id: nonzero(r.varint32()?, "chunk id")?, bytes: r.bytes(MAX_CHUNK_BYTES, "chunk bytes")?.to_vec() }),
             0x20 => Ok(Self::Mount(Subtree::decode(r)?)),
-            0x21 => Ok(Self::Replace {
-                node: nonzero(r.varint32()?, "node id")?,
-                subtree: Subtree::decode(r)?,
-            }),
-            0x22 => Ok(Self::SetStyle {
-                node: nonzero(r.varint32()?, "node id")?,
-                style: r.varint32()?,
-            }),
-            0x23 => Ok(Self::SetText {
-                node: nonzero(r.varint32()?, "node id")?,
-                text: TextRef::decode(r)?,
-            }),
-            0x24 => Ok(Self::SetProp {
-                node: nonzero(r.varint32()?, "node id")?,
-                prop: r.varint32()?,
-                value: Value::decode(r)?,
-            }),
-            0x25 => Ok(Self::InsertChild {
-                parent: nonzero(r.varint32()?, "node id")?,
-                index: r.varint32()?,
-                subtree: Subtree::decode(r)?,
-            }),
-            0x26 => Ok(Self::RemoveChild {
-                parent: nonzero(r.varint32()?, "node id")?,
-                index: r.varint32()?,
-                count: r.varint32()?,
-            }),
-            0x27 => Ok(Self::MoveChild {
-                parent: nonzero(r.varint32()?, "node id")?,
-                from: r.varint32()?,
-                to: r.varint32()?,
-            }),
-            0x28 => Ok(Self::SetHandler {
-                node: nonzero(r.varint32()?, "node id")?,
-                event: EventKind::from_u8(r.u8()?)?,
-                handler: Handler::decode(r)?,
-            }),
-            0x29 => Ok(Self::ClearHandler {
-                node: nonzero(r.varint32()?, "node id")?,
-                event: EventKind::from_u8(r.u8()?)?,
-            }),
-            0x2A => Ok(Self::Focus {
-                node: nonzero(r.varint32()?, "node id")?,
-            }),
-            0x2B => Ok(Self::ScrollTo {
-                node: nonzero(r.varint32()?, "node id")?,
-                x: r.svarint()?,
-                y: r.svarint()?,
-            }),
+            0x21 => Ok(Self::Replace { node: nonzero(r.varint32()?, "node id")?, subtree: Subtree::decode(r)? }),
+            0x22 => Ok(Self::SetStyle { node: nonzero(r.varint32()?, "node id")?, style: r.varint32()? }),
+            0x23 => Ok(Self::SetText { node: nonzero(r.varint32()?, "node id")?, text: TextRef::decode(r)? }),
+            0x24 => Ok(Self::SetProp { node: nonzero(r.varint32()?, "node id")?, prop: r.varint32()?, value: Value::decode(r)? }),
+            0x25 => Ok(Self::InsertChild { parent: nonzero(r.varint32()?, "node id")?, index: r.varint32()?, subtree: Subtree::decode(r)? }),
+            0x26 => Ok(Self::RemoveChild { parent: nonzero(r.varint32()?, "node id")?, index: r.varint32()?, count: r.varint32()? }),
+            0x27 => Ok(Self::MoveChild { parent: nonzero(r.varint32()?, "node id")?, from: r.varint32()?, to: r.varint32()? }),
+            0x28 => Ok(Self::SetHandler { node: nonzero(r.varint32()?, "node id")?, event: EventKind::from_u8(r.u8()?)?, handler: Handler::decode(r)? }),
+            0x29 => Ok(Self::ClearHandler { node: nonzero(r.varint32()?, "node id")?, event: EventKind::from_u8(r.u8()?)? }),
+            0x2A => Ok(Self::Focus { node: nonzero(r.varint32()?, "node id")? }),
+            0x2B => Ok(Self::ScrollTo { node: nonzero(r.varint32()?, "node id")?, x: r.svarint()?, y: r.svarint()? }),
             _ => Err(DecodeError::UnknownTag("opcode")),
         }
     }

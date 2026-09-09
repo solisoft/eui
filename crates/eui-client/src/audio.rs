@@ -64,12 +64,7 @@ impl Output {
         let callback_ring = Arc::clone(&ring);
         let err = |e| eprintln!("eui: audio device: {e}");
         let stream = match format {
-            cpal::SampleFormat::F32 => device.build_output_stream(
-                &config,
-                move |data: &mut [f32], _| fill_device(data, device_channels, channels, &callback_ring),
-                err,
-                None,
-            ),
+            cpal::SampleFormat::F32 => device.build_output_stream(&config, move |data: &mut [f32], _| fill_device(data, device_channels, channels, &callback_ring), err, None),
             other => return Err(format!("the device wants {other} samples, which this client does not write")),
         }
         .map_err(|e| format!("cannot open the output: {e}"))?;

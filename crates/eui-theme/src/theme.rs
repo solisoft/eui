@@ -35,14 +35,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self {
-            accent: Oklch::new(0.55, 0.18, 264.0),
-            surface: Oklch::new(0.98, 0.006, 250.0),
-            radius_md: 6.0,
-            density: Density::Cozy,
-            font_sans: None,
-            font_mono: None,
-        }
+        Self { accent: Oklch::new(0.55, 0.18, 264.0), surface: Oklch::new(0.98, 0.006, 250.0), radius_md: 6.0, density: Density::Cozy, font_sans: None, font_mono: None }
     }
 }
 
@@ -117,7 +110,11 @@ impl Resolved {
 /// at paint time.
 pub fn check_style(r: &StyleRecord) -> Result<(), ThemeError> {
     let space = |ix: u8| {
-        if usize::from(ix) < scale::SPACE.len() { Ok(()) } else { Err(ThemeError::ScaleIndex("space", ix)) }
+        if usize::from(ix) < scale::SPACE.len() {
+            Ok(())
+        } else {
+            Err(ThemeError::ScaleIndex("space", ix))
+        }
     };
     space(r.gap)?;
     for ix in r.padding.iter().chain(r.margin.iter()) {
@@ -252,13 +249,7 @@ impl Theme {
         put(&mut p, AccentActive, base.with_l(base.l + dir * 0.12));
 
         // §4.2 — the `on` roles.
-        for (base, on) in [
-            (AccentBase, AccentOn),
-            (SuccessBase, SuccessOn),
-            (WarningBase, WarningOn),
-            (DangerBase, DangerOn),
-            (InfoBase, InfoOn),
-        ] {
+        for (base, on) in [(AccentBase, AccentOn), (SuccessBase, SuccessOn), (WarningBase, WarningOn), (DangerBase, DangerOn), (InfoBase, InfoOn)] {
             let chosen = on_color(get(&p, base));
             put(&mut p, on, chosen);
         }
@@ -275,12 +266,7 @@ impl Theme {
     /// Encode as an `EUIT` record.
     pub fn encode(&self) -> Vec<u8> {
         let seed = |c: Oklch| Value::List(vec![Value::Float(c.l), Value::Float(c.c), Value::Float(c.h)]);
-        let mut fields: Vec<(u32, Value)> = vec![
-            (1, seed(self.accent)),
-            (2, seed(self.surface)),
-            (3, Value::Float(f64::from(self.radius_md))),
-            (4, Value::Int(i64::from(self.density as u8))),
-        ];
+        let mut fields: Vec<(u32, Value)> = vec![(1, seed(self.accent)), (2, seed(self.surface)), (3, Value::Float(f64::from(self.radius_md))), (4, Value::Int(i64::from(self.density as u8)))];
         if let Some(h) = self.font_sans {
             fields.push((5, Value::Asset(h)));
         }
@@ -323,8 +309,7 @@ impl Theme {
                 (2, v) => theme.surface = seed_of(&v)?,
                 (3, Value::Float(f)) if f.is_finite() && f >= 0.0 => theme.radius_md = f as f32,
                 (4, Value::Int(n)) => {
-                    theme.density = Density::from_u8(u8::try_from(n).map_err(|_| bad("density"))?)
-                        .map_err(|_| bad("density"))?;
+                    theme.density = Density::from_u8(u8::try_from(n).map_err(|_| bad("density"))?).map_err(|_| bad("density"))?;
                 }
                 (5, Value::Asset(h)) => theme.font_sans = Some(h),
                 (6, Value::Asset(h)) => theme.font_mono = Some(h),
@@ -375,7 +360,11 @@ fn enforce(p: &mut [Oklch; 29], fg: Role, bgs: &[Role], min: f64) {
 fn on_color(base: Oklch) -> Oklch {
     let white = Oklch::new(1.0, 0.0, 0.0);
     let black = Oklch::new(0.0, 0.0, 0.0);
-    if contrast_oklch(white, base) >= contrast_oklch(black, base) { white } else { black }
+    if contrast_oklch(white, base) >= contrast_oklch(black, base) {
+        white
+    } else {
+        black
+    }
 }
 
 impl Resolved {

@@ -6,10 +6,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
 use eui_audio::Control;
-use eui_proto::{AlignItems, ColorRef, Cursor, Dim, Display, FlatNode, FontWeight, Justify, Op, StyleRecord, Subtree, TextAlign,
-    caps, Batch, EventFrame, EventKind, Frame, Handler, Hello, NodeKind, TextRef, ThemeMode, Value, Viewport, PROTOCOL_VERSION,
+use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
+use eui_proto::{
+    caps, AlignItems, Batch, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, StyleRecord, Subtree, TextAlign, TextRef,
+    ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
 
@@ -644,7 +645,9 @@ impl Driver {
                 continue;
             }
             let new = self.session.style_of(ix);
-            let Some(ms) = new.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))) else { continue };
+            let Some(ms) = new.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))) else {
+                continue;
+            };
             let to = colors_of(&self.session, &self.resolved, &new);
             let from = match self.anims.iter().position(|(n, _)| *n == ix) {
                 Some(i) => self.anims.remove(i).1.at(self.now),
@@ -683,7 +686,9 @@ impl Driver {
     /// Move a scroll animation to `now`: the offset it dictates goes into
     /// the tree before layout. Returns the frames to send once it lands.
     fn advance_scroll(&mut self) -> Vec<Frame> {
-        let Some(a) = self.scroll_anim else { return Vec::new() };
+        let Some(a) = self.scroll_anim else {
+            return Vec::new();
+        };
         if self.session.node(a.node).is_none() {
             self.scroll_anim = None;
             return Vec::new();
@@ -709,7 +714,11 @@ impl Driver {
     /// technology's Focus action.
     pub fn focus_node(&mut self, ix: NodeIx) -> Vec<Frame> {
         self.ensure_layout();
-        if self.focus_order().contains(&ix) { self.set_focus(Some(ix), true) } else { Vec::new() }
+        if self.focus_order().contains(&ix) {
+            self.set_focus(Some(ix), true)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Focus and press `ix`, as Tab then Enter would — an assistive
@@ -849,7 +858,9 @@ impl Driver {
     /// `LocalThenServer` then sends its named event; an aborted chunk sends
     /// nothing.
     fn emit(&mut self, from: NodeIx, kind: EventKind, payload: Value) -> Vec<Frame> {
-        let Some((target, handler)) = self.target(from, kind) else { return Vec::new() };
+        let Some((target, handler)) = self.target(from, kind) else {
+            return Vec::new();
+        };
         let node = self.session.node(target).map(|n| n.id).unwrap_or(0);
         let mut out = Vec::new();
         let name = match handler {
@@ -885,8 +896,12 @@ impl Driver {
     /// The root props as an event payload: the local state, for the server
     /// to compare against its own.
     fn root_state(&self) -> Value {
-        let Some(root) = self.session.root() else { return Value::Null };
-        let Some(n) = self.session.node(root) else { return Value::Null };
+        let Some(root) = self.session.root() else {
+            return Value::Null;
+        };
+        let Some(n) = self.session.node(root) else {
+            return Value::Null;
+        };
         Value::List(n.props.iter().flat_map(|(a, v)| [Value::Atom(*a), v.clone()]).collect())
     }
 
@@ -970,10 +985,13 @@ impl Driver {
                     self.session.set_style_local(ix, style);
                 }
                 Undo::Text(ix, text) => {
-                    self.session.set_text_local(ix, text.map_or(String::new(), |t| match t {
-                        TextRef::Inline(s) => s,
-                        TextRef::Atom(a) => self.session.atom(a).unwrap_or("").to_owned(),
-                    }));
+                    self.session.set_text_local(
+                        ix,
+                        text.map_or(String::new(), |t| match t {
+                            TextRef::Inline(s) => s,
+                            TextRef::Atom(a) => self.session.atom(a).unwrap_or("").to_owned(),
+                        }),
+                    );
                 }
                 Undo::Prop(ix, atom, old) => {
                     self.session.set_prop_local(ix, atom, old.unwrap_or(Value::Null));
@@ -1052,7 +1070,9 @@ impl Driver {
             self.pointer.over_scrollbar = None;
             self.redraw = true;
         }
-        let Some(old) = self.pointer.over.take() else { return Vec::new() };
+        let Some(old) = self.pointer.over.take() else {
+            return Vec::new();
+        };
         if self.session.node(old).is_none() {
             return Vec::new();
         }
@@ -1093,7 +1113,9 @@ impl Driver {
     }
 
     fn flush_coalesced_move(&mut self) -> Vec<Frame> {
-        let Some((from, payload)) = self.pointer.coalesced_move.take() else { return Vec::new() };
+        let Some((from, payload)) = self.pointer.coalesced_move.take() else {
+            return Vec::new();
+        };
         if self.session.node(from).is_none() {
             return Vec::new();
         }
@@ -1104,14 +1126,22 @@ impl Driver {
     /// is not waiting for the server's next tree. The press is often a child
     /// of the track; the handler node is the row with the three parts.
     fn follow_slider_drag(&mut self) {
-        let Some(pressed) = self.pointer.pressed_on else { return };
-        let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else { return };
+        let Some(pressed) = self.pointer.pressed_on else {
+            return;
+        };
+        let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else {
+            return;
+        };
         let (lead, thumb, rest) = {
             let kids = self.session.children(ix);
-            let [lead, thumb, rest] = kids[..] else { return };
+            let [lead, thumb, rest] = kids[..] else {
+                return;
+            };
             (lead, thumb, rest)
         };
-        let Some(track) = self.layout.rect(ix) else { return };
+        let Some(track) = self.layout.rect(ix) else {
+            return;
+        };
         if track.w <= 0.0 {
             return;
         }
@@ -1175,7 +1205,9 @@ impl Driver {
     fn pointer_down(&mut self, button: u8) -> Vec<Frame> {
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
-        let Some(ix) = self.layout.hit(&self.session, x, y) else { return Vec::new() };
+        let Some(ix) = self.layout.hit(&self.session, x, y) else {
+            return Vec::new();
+        };
         // Spec 03 §2: the scrollbar strip belongs to the client. A press on
         // the thumb takes hold of it; a press on the track pages.
         if button == 0 {
@@ -1202,7 +1234,15 @@ impl Driver {
         let mut out = self.set_focus(takes_keys, false);
         if let Some(e) = editable {
             let at = self.byte_at_pointer(e, x, y);
-            trace(|| format!("click in field {:?} at ({x:.1},{y:.1}) rect={:?} text={:?} preedit={:?} -> byte {at:?}", self.session.node(e).map(|n| n.id), self.layout.rect(e), self.session.text_of(e), self.preedit));
+            trace(|| {
+                format!(
+                    "click in field {:?} at ({x:.1},{y:.1}) rect={:?} text={:?} preedit={:?} -> byte {at:?}",
+                    self.session.node(e).map(|n| n.id),
+                    self.layout.rect(e),
+                    self.session.text_of(e),
+                    self.preedit
+                )
+            });
             if let Some(at) = at {
                 if let Some(edit) = self.edit_mut(e) {
                     edit.place(at, false);
@@ -1277,10 +1317,14 @@ impl Driver {
     /// in document order, skipping what is not laid out.
     fn focus_order(&self) -> Vec<NodeIx> {
         let mut order = Vec::new();
-        let Some(root) = self.session.root() else { return order };
+        let Some(root) = self.session.root() else {
+            return order;
+        };
         let mut stack = vec![root];
         while let Some(ix) = stack.pop() {
-            let Some(node) = self.session.node(ix) else { continue };
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
             // 03 §3: what can be typed into can be reached with `Tab` — a
             // field, something clickable, and anything that asked for keys.
             // A pattern editor that only the mouse can focus is not one.
@@ -1362,25 +1406,28 @@ impl Driver {
     /// means "overflows at all". A nested list that cannot move must not eat
     /// the wheel: the page underneath should.
     fn scroller_accepts(&self, ix: NodeIx, dx: f32, dy: f32) -> bool {
-        let Some(content) = self.layout.content_size(ix) else { return false };
-        let Some(view) = self.layout.rect(ix) else { return false };
+        let Some(content) = self.layout.content_size(ix) else {
+            return false;
+        };
+        let Some(view) = self.layout.rect(ix) else {
+            return false;
+        };
         let max_x = (content.w - view.w).max(0.0);
         let max_y = (content.h - view.h).max(0.0);
         let (sx, sy) = self.session.node(ix).map(|n| n.scroll).unwrap_or((0, 0));
         if dx == 0.0 && dy == 0.0 {
             return max_x > 0.5 || max_y > 0.5;
         }
-        (dx < 0.0 && sx > 0)
-            || (dx > 0.0 && (sx as f32) + 0.5 < max_x)
-            || (dy < 0.0 && sy > 0)
-            || (dy > 0.0 && (sy as f32) + 0.5 < max_y)
+        (dx < 0.0 && sx > 0) || (dx > 0.0 && (sx as f32) + 0.5 < max_x) || (dy < 0.0 && sy > 0) || (dy > 0.0 && (sy as f32) + 0.5 < max_y)
     }
 
     /// Nearest `scroll`/`list` ancestor of `from` that [`Self::scroller_accepts`].
     fn scroller_from(&self, from: NodeIx, dx: f32, dy: f32) -> Option<NodeIx> {
         let mut cur = Some(from);
         while let Some(ix) = cur {
-            let Some(node) = self.session.node(ix) else { break };
+            let Some(node) = self.session.node(ix) else {
+                break;
+            };
             if matches!(node.kind, NodeKind::Scroll | NodeKind::List) && self.scroller_accepts(ix, dx, dy) {
                 return Some(ix);
             }
@@ -1452,15 +1499,10 @@ impl Driver {
             _ => return None,
         };
         self.ensure_layout();
-        let scroller = self
-            .scroller_under_pointer_for(0.0, dy)
-            .or_else(|| self.focused.and_then(|f| self.scroller_from(f, 0.0, dy)))
-            .or_else(|| {
-                let root = self.session.root()?;
-                self.session.preorder(root).find(|ix| {
-                    self.session.node(*ix).is_some_and(|n| matches!(n.kind, NodeKind::Scroll | NodeKind::List)) && self.scroller_accepts(*ix, 0.0, dy)
-                })
-            })?;
+        let scroller = self.scroller_under_pointer_for(0.0, dy).or_else(|| self.focused.and_then(|f| self.scroller_from(f, 0.0, dy))).or_else(|| {
+            let root = self.session.root()?;
+            self.session.preorder(root).find(|ix| self.session.node(*ix).is_some_and(|n| matches!(n.kind, NodeKind::Scroll | NodeKind::List)) && self.scroller_accepts(*ix, 0.0, dy))
+        })?;
         let view = self.layout.rect(scroller)?;
         let content = self.layout.content_size(scroller)?;
         let max_y = (content.h - view.h).max(0.0);
@@ -1520,11 +1562,15 @@ impl Driver {
         if self.pointer.dragging_thumb.is_some() || self.pointer.over_scrollbar.is_some() {
             return Cursor::Default;
         }
-        let Some(over) = self.pointer.over else { return Cursor::Default };
+        let Some(over) = self.pointer.over else {
+            return Cursor::Default;
+        };
         let mut cur = Some(over);
         let mut first = true;
         while let Some(ix) = cur {
-            let Some(node) = self.session.node(ix) else { break };
+            let Some(node) = self.session.node(ix) else {
+                break;
+            };
             let styled = self.session.style_of(ix).cursor;
             if styled != Cursor::Default {
                 return styled;
@@ -1574,7 +1620,11 @@ impl Driver {
         self.resolve_theme();
         self.layout.invalidate_all();
         self.invalidate();
-        if mode_changed { vec![Frame::Viewport(self.viewport())] } else { Vec::new() }
+        if mode_changed {
+            vec![Frame::Viewport(self.viewport())]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Resolve the theme for the viewer, the desktop's colours on top when
@@ -1591,7 +1641,9 @@ impl Driver {
     /// once and settles quickly. Notches accumulate onto the running target,
     /// so a fast spin covers ground without waiting for each step to land.
     fn wheel_step(&mut self, lines_x: f32, lines_y: f32) -> Vec<Frame> {
-        let Some(scroller) = self.scroller_under_pointer_for(lines_x, lines_y) else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer_for(lines_x, lines_y) else {
+            return Vec::new();
+        };
         let content = self.layout.content_size(scroller).unwrap_or_default();
         let view = self.layout.rect(scroller).unwrap_or_default();
         let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
@@ -1620,11 +1672,19 @@ impl Driver {
             return Vec::new();
         }
         self.scroll_anim = None;
-        let Some(scroller) = self.scroller_under_pointer_for(dx, dy) else { return Vec::new() };
+        let Some(scroller) = self.scroller_under_pointer_for(dx, dy) else {
+            return Vec::new();
+        };
         // Whole pixels move the view; the fraction waits for the next event.
         let (ax, ay) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
         // Ten events of 0.7 px are 7 px, not 6.999: snap before truncating.
-        let whole = |v: f32| if (v - v.round()).abs() < 1e-3 { v.round() } else { v.trunc() };
+        let whole = |v: f32| {
+            if (v - v.round()).abs() < 1e-3 {
+                v.round()
+            } else {
+                v.trunc()
+            }
+        };
         let (dx, dy) = (whole(ax), whole(ay));
         self.wheel_rest = (ax - dx, ay - dy);
         trace(|| format!("wheel {dx},{dy} (rest {:.2},{:.2})", self.wheel_rest.0, self.wheel_rest.1));
@@ -1666,8 +1726,12 @@ impl Driver {
     }
 
     fn text_input(&mut self, t: &str) -> Vec<Frame> {
-        let Some(f) = self.focused else { return Vec::new() };
-        let Some(edit) = self.edit_mut(f) else { return Vec::new() };
+        let Some(f) = self.focused else {
+            return Vec::new();
+        };
+        let Some(edit) = self.edit_mut(f) else {
+            return Vec::new();
+        };
         edit.insert(t);
         self.show_edit(f);
         self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
@@ -1705,7 +1769,13 @@ impl Driver {
         let pre = self.preedit.len();
         let id = self.session.node(f)?.id;
         let edit = self.edits.get_mut(&id)?;
-        let shown = |o: usize| if o > edit.caret { o.saturating_add(pre) } else { o };
+        let shown = |o: usize| {
+            if o > edit.caret {
+                o.saturating_add(pre)
+            } else {
+                o
+            }
+        };
         let caret = edit.caret.saturating_add(pre);
         let inner_w = (rect.w - style.inset_h()).max(0.0);
         let cx = shaped.caret(caret).0;
@@ -1724,7 +1794,9 @@ impl Driver {
     /// Spec 06 §3: a composition is local. The field shows its buffer plus
     /// the preedit; nothing leaves the client until the method commits.
     fn preedit(&mut self, t: String) {
-        let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else { return };
+        let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else {
+            return;
+        };
         self.preedit = t;
         let _ = self.edit_mut(f);
         self.show_edit(f);
@@ -1733,7 +1805,9 @@ impl Driver {
     /// Put the field's value, with any composition at the caret, into the tree.
     fn show_edit(&mut self, f: NodeIx) {
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
-        let Some(edit) = self.edits.get(&id) else { return };
+        let Some(edit) = self.edits.get(&id) else {
+            return;
+        };
         let mut value = edit.value.clone();
         value.insert_str(edit.caret.min(value.len()), &self.preedit);
         self.session.set_text_local(f, value);
@@ -1763,7 +1837,9 @@ impl Driver {
                 return out;
             }
         }
-        let Some(f) = self.focused else { return Vec::new() };
+        let Some(f) = self.focused else {
+            return Vec::new();
+        };
         if key == "Escape" {
             return if down { self.set_focus(None, false) } else { Vec::new() };
         }
@@ -1795,19 +1871,33 @@ impl Driver {
     fn edit_key(&mut self, f: NodeIx, key: &str, modifiers: u32) -> bool {
         let (shift, ctrl) = (modifiers & 1 != 0, modifiers & (2 | 8) != 0);
         let multiline = self.session.node(f).map(|n| n.kind) == Some(NodeKind::TextArea);
-        let Some(edit) = self.edit_mut(f) else { return false };
+        let Some(edit) = self.edit_mut(f) else {
+            return false;
+        };
         let mut copied = None;
         match key {
             "Backspace" => edit.delete(false),
             "Delete" => edit.delete(true),
             "ArrowLeft" => {
                 let r = edit.selection();
-                let at = if ctrl { word_left(&edit.value, edit.caret) } else if !shift && !r.is_empty() { r.start } else { prev_char(&edit.value, edit.caret) };
+                let at = if ctrl {
+                    word_left(&edit.value, edit.caret)
+                } else if !shift && !r.is_empty() {
+                    r.start
+                } else {
+                    prev_char(&edit.value, edit.caret)
+                };
                 edit.place(at, shift);
             }
             "ArrowRight" => {
                 let r = edit.selection();
-                let at = if ctrl { word_right(&edit.value, edit.caret) } else if !shift && !r.is_empty() { r.end } else { next_char(&edit.value, edit.caret) };
+                let at = if ctrl {
+                    word_right(&edit.value, edit.caret)
+                } else if !shift && !r.is_empty() {
+                    r.end
+                } else {
+                    next_char(&edit.value, edit.caret)
+                };
                 edit.place(at, shift);
             }
             "Home" => {
@@ -1848,7 +1938,9 @@ impl Driver {
     /// `change`, if the field's value differs from what the server has.
     fn commit_edit(&mut self, f: NodeIx) -> Vec<Frame> {
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
-        let Some(edit) = self.edits.get_mut(&id) else { return Vec::new() };
+        let Some(edit) = self.edits.get_mut(&id) else {
+            return Vec::new();
+        };
         if edit.value == edit.seed {
             return Vec::new();
         }
@@ -1899,15 +1991,7 @@ impl Driver {
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
         tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("The application stopped".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
         tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 3, style: 3, key: 0, text: Some(TextRef::Inline(why)), props: (0, 0), handlers: (0, 0), child_count: 0 });
-        let batch = Batch {
-            seq: 1,
-            ops: vec![
-                Op::DefStyle { id: 1, record: page },
-                Op::DefStyle { id: 2, record: heading },
-                Op::DefStyle { id: 3, record: reason },
-                Op::Mount(tree),
-            ],
-        };
+        let batch = Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: page }, Op::DefStyle { id: 2, record: heading }, Op::DefStyle { id: 3, record: reason }, Op::Mount(tree)] };
         if self.session.apply(&batch).is_err() {
             return;
         }
@@ -1976,7 +2060,7 @@ impl Driver {
         let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
         let editing = self.editing();
         trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
-        let list = paint(&mut Scene {
+        let mut list = paint(&mut Scene {
             session: &self.session,
             layout: &self.layout,
             theme: &self.resolved,
@@ -1997,7 +2081,14 @@ impl Driver {
         self.session.clear_all_dirty();
         trace(|| {
             let st = self.layout.stats();
-            format!("paint: layout {layout_ms:.1} ms (relaid {relaid}, {} measures, {} memo hits, {} rows measured), paint {:.1} ms, text cache misses {}", st.measures, st.memo_hits, st.rows_measured, t_layout.elapsed().as_secs_f64() * 1e3 - layout_ms, self.text.stats().misses)
+            format!(
+                "paint: layout {layout_ms:.1} ms (relaid {relaid}, {} measures, {} memo hits, {} rows measured), paint {:.1} ms, text cache misses {}",
+                st.measures,
+                st.memo_hits,
+                st.rows_measured,
+                t_layout.elapsed().as_secs_f64() * 1e3 - layout_ms,
+                self.text.stats().misses
+            )
         });
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
@@ -2009,7 +2100,15 @@ impl Driver {
             Some(now + Duration::from_millis(16))
         };
         let wake_due = self.wakes.iter().map(|(_, _, at)| *at).min();
-        for due in [settle_due, self.video_due, self.viewport_due, wake_due].into_iter().flatten() {
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due];
+        // A spin is the only thing owed when nothing else is: no transition
+        // to interpolate, no scroll to carry, no timer about to fire. The
+        // angle is not in the list -- the vertex stage takes it from the
+        // clock -- so the next frame is this list again, and the window can
+        // draw it without asking for it. Anything it sends the driver puts
+        // an end to that, because it may change what the tree paints.
+        list.spin_only = list.wants_frame && self.anims.is_empty() && self.scroll_anim.is_none() && others.iter().all(Option::is_none);
+        for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         list
@@ -2032,12 +2131,16 @@ impl Driver {
         let mut live: Vec<u32> = Vec::new();
         let mut work: Vec<(u32, Hash, bool, bool, Option<i64>)> = Vec::new();
         for ix in self.session.preorder(root) {
-            let Some(node) = self.session.node(ix) else { continue };
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
             if node.kind != NodeKind::Video {
                 continue;
             }
             let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
-            let Some(Value::Asset(hash)) = prop(a_src) else { continue };
+            let Some(Value::Asset(hash)) = prop(a_src) else {
+                continue;
+            };
             live.push(node.id);
             work.push((
                 node.id,
@@ -2052,7 +2155,9 @@ impl Driver {
         }
         self.players.retain(|id, _| live.contains(id));
         for (id, hash, playing, looping, position) in work {
-            let Some(movie) = self.movie(&hash) else { continue };
+            let Some(movie) = self.movie(&hash) else {
+                continue;
+            };
             let entry = self.players.entry(id).or_insert_with(|| (hash, eui_video::Player::new()));
             // A node pointed at another picture starts that one over.
             if entry.0 != hash {
@@ -2081,7 +2186,17 @@ impl Driver {
         let bytes = self.assets.raw(hash)?;
         let decoded = match eui_video::decode(&bytes, None) {
             Ok(movie) => {
-                trace(|| format!("video: {} decoded, {}×{}, {} frames, {} ms, {} kB", crate::assets::hex(hash), movie.width(), movie.height(), movie.frames().len(), movie.duration_ms(), movie.bytes() / 1024));
+                trace(|| {
+                    format!(
+                        "video: {} decoded, {}×{}, {} frames, {} ms, {} kB",
+                        crate::assets::hex(hash),
+                        movie.width(),
+                        movie.height(),
+                        movie.frames().len(),
+                        movie.duration_ms(),
+                        movie.bytes() / 1024
+                    )
+                });
                 self.video_sizes.insert(*hash, (movie.width() as f32, movie.height() as f32));
                 Some(Arc::new(movie))
             }
@@ -2118,9 +2233,13 @@ impl Driver {
         // otherwise they would overwrite each other's frame every paint.
         let mut uploaded: Vec<Hash> = Vec::new();
         for id in ids {
-            let Some((hash, player)) = self.players.get_mut(&id) else { continue };
+            let Some((hash, player)) = self.players.get_mut(&id) else {
+                continue;
+            };
             let (hash, mut player) = (*hash, player.clone());
-            let Some(movie) = self.movies.get(&hash).cloned().flatten() else { continue };
+            let Some(movie) = self.movies.get(&hash).cloned().flatten() else {
+                continue;
+            };
             let changed = player.advance(&movie, elapsed);
             let ended = player.take_ended();
             let index = player.index();
@@ -2138,11 +2257,7 @@ impl Driver {
             if first_for_picture && (changed || fresh) {
                 if let Some(frame) = movie.frames().get(index) {
                     let packed = self.images.get(&hash).is_some();
-                    let ok = if packed {
-                        self.images.update(&hash, &frame.rgba)
-                    } else {
-                        self.images.insert(hash, movie.width(), movie.height(), &frame.rgba).is_some()
-                    };
+                    let ok = if packed { self.images.update(&hash, &frame.rgba) } else { self.images.insert(hash, movie.width(), movie.height(), &frame.rgba).is_some() };
                     if ok {
                         self.framed.insert(hash, index);
                         self.redraw = true;
@@ -2192,12 +2307,16 @@ impl Driver {
         let mut live: Vec<u32> = Vec::new();
         let mut work: Vec<(u32, Hash, Control, Option<i64>)> = Vec::new();
         for ix in self.session.preorder(root) {
-            let Some(node) = self.session.node(ix) else { continue };
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
             if node.kind != NodeKind::Audio {
                 continue;
             }
             let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
-            let Some(Value::Asset(hash)) = prop(a_src) else { continue };
+            let Some(Value::Asset(hash)) = prop(a_src) else {
+                continue;
+            };
             let control = Control {
                 playing: matches!(prop(a_playing), Some(Value::Bool(true))),
                 volume: match prop(a_volume) {
@@ -2282,7 +2401,9 @@ impl Driver {
         let ended = self.mixer.fill(out, channels);
         let mut frames = Vec::new();
         for id in ended {
-            let Some(ix) = self.session.lookup(id) else { continue };
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
             frames.extend(self.emit(ix, EventKind::Ended, Value::Null));
         }
         frames
@@ -2332,11 +2453,15 @@ impl Driver {
         self.audio_reported = Some(now);
         let mut out = Vec::new();
         for id in playing {
-            let (Some(ix), Some(at), Some(len)) = (self.session.lookup(id), self.mixer.position_ms(id), self.mixer.duration_ms(id)) else { continue };
+            let (Some(ix), Some(at), Some(len)) = (self.session.lookup(id), self.mixer.position_ms(id), self.mixer.duration_ms(id)) else {
+                continue;
+            };
             out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
         }
         for (id, at, len) in moving {
-            let Some(ix) = self.session.lookup(id) else { continue };
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
             out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
         }
         out
@@ -2375,7 +2500,9 @@ impl Driver {
             }
         }
         for id in due {
-            let Some(ix) = self.session.lookup(id) else { continue };
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
             out.extend(self.emit(ix, EventKind::Wake, Value::Null));
         }
         out
@@ -2425,9 +2552,13 @@ impl Driver {
         let mut out = Vec::new();
         let mut seen = Vec::with_capacity(lists.len());
         for ix in lists {
-            let Some(node) = self.session.node(ix) else { continue };
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
             let (id, sy) = (node.id, node.scroll.1 as f32);
-            let Some(range) = self.layout.row_window(ix, sy) else { continue };
+            let Some(range) = self.layout.row_window(ix, sy) else {
+                continue;
+            };
             seen.push(id);
             if self.windows.get(&id) == Some(&range) {
                 continue;
@@ -2460,7 +2591,6 @@ impl Driver {
         self.focused
     }
 }
-
 
 /// The chunk's window onto the session: root props as state, text and props
 /// on nodes by key atom, and an event queue. Nothing else is reachable.
@@ -2516,7 +2646,9 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.set_root_prop_local(atom, to_wire(value))
     }
     fn set_text(&mut self, key: u32, text: String) -> bool {
-        let Some(ix) = self.session.lookup_key(key) else { return false };
+        let Some(ix) = self.session.lookup_key(key) else {
+            return false;
+        };
         self.touched = true;
         if let Some(undo) = &mut self.undo {
             undo.push(Undo::Text(ix, self.session.node(ix).and_then(|n| n.text.clone())));
@@ -2524,7 +2656,9 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.set_text_local(ix, text)
     }
     fn set_prop(&mut self, key: u32, atom: u32, value: eui_vm::Value) -> bool {
-        let Some(ix) = self.session.lookup_key(key) else { return false };
+        let Some(ix) = self.session.lookup_key(key) else {
+            return false;
+        };
         self.touched = true;
         if let Some(undo) = &mut self.undo {
             let old = self.session.node(ix).and_then(|n| n.props.iter().find(|(a, _)| *a == atom).map(|(_, v)| v.clone()));
@@ -2533,7 +2667,9 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.set_prop_local(ix, atom, to_wire(value))
     }
     fn set_style(&mut self, key: u32, style: u32) -> bool {
-        let Some(ix) = self.session.lookup_key(key) else { return false };
+        let Some(ix) = self.session.lookup_key(key) else {
+            return false;
+        };
         self.touched = true;
         if let Some(undo) = &mut self.undo {
             undo.push(Undo::Style(ix, self.session.node(ix).map_or(0, |n| n.style)));
@@ -2551,7 +2687,6 @@ impl eui_vm::Host for SessionHost<'_> {
         true
     }
 }
-
 
 /// Layout's view of text and assets: shaping from the text engine, image
 /// sizes from the store. An image not yet fetched has no size, and gets one

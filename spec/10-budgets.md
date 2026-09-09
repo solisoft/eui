@@ -76,6 +76,29 @@ rebuilt on every frame (04 §7): the tops are the rows' heights added up,
 and a scroll changes neither. `set_scroll` marks a node `dirty::SCROLL`
 rather than `dirty::SELF` for exactly that reason.
 
+### What a blurred frame costs
+
+A `blur` (03 §2.1) is the one thing in the client that is not a single
+pass, so it is worth saying what it is allowed to cost. A frame with no
+blurred node in it — every frame of the applications measured above —
+takes none of this: no texture is allocated, no pipeline is built, and the
+frame is the one pass and one draw per scissor run it always was. The rows
+above are therefore unaffected, and are meant to stay that way.
+
+A frame that *does* carry one adds, per distinct radius, three passes over
+a snapshot of the region that asked — the union of the blurred rects grown
+by three standard deviations, clipped to the window — and one pass to take
+that snapshot. The snapshot is a texture the size of that region, not of
+the framebuffer: a 360 px dialog is a few hundred kilobytes where a 4K
+window would be 33 MB. It is freed when a frame stops asking, so a closed
+dialog costs nothing, which is what keeps the idle RSS line above honest.
+
+The reduction is chosen so the kernel is about fifteen taps whatever radius
+was asked for, so a wider blur buys a smaller texture rather than more
+samples and the cost does not grow with the radius. What it does grow with
+is the *area*, and a scrim covers the window: that is the case to measure
+before this line can stop saying "goal".
+
 ## 2. Wire — measured
 
 Source: `crates/eui-proto/tests/size_budget.rs`, run with `--nocapture`. The

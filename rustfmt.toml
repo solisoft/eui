@@ -1,0 +1,13 @@
+# One formatting, applied by a tool, so nobody argues about it in review and
+# nobody reformats a file by opening it.
+#
+# The width is not rustfmt's default 100. This codebase was written wide —
+# a struct literal, a `Quad`, a style record reads as one thing and had been
+# kept on one line — and adopting the default would have rewritten about
+# five thousand lines to no one's benefit. 200 with `Max` heuristics is the
+# width that leaves the existing code most nearly alone: it was measured
+# against every candidate, and it moves a tenth of what the default does.
+# It is a floor, not a target — most lines are far shorter, and a line that
+# needs 200 columns is usually a line that wants breaking up.
+max_width = 200
+use_small_heuristics = "Max"

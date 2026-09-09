@@ -23,16 +23,16 @@
 // the feature. `--no-default-features` drops the adapter, not the wire.
 pub mod a11y;
 pub mod app;
-pub mod manifest;
 pub mod assets;
 pub mod audio;
 pub mod desktop_theme;
 pub mod driver;
+pub mod manifest;
 pub mod sandbox;
 pub mod transport;
 pub mod worker;
 
 pub use assets::{AssetError, AssetStore, Image};
 pub use driver::{Close, Driver, Input};
-pub use worker::Backend;
 pub use transport::{check_url, connect, Connection, Incoming, TransportError};
+pub use worker::Backend;

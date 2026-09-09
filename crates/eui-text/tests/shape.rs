@@ -187,3 +187,29 @@ fn an_empty_text_has_the_baseline_of_a_real_line() {
     assert!((empty.metrics.baseline - some.metrics.baseline).abs() < 0.01, "empty {} vs text {}", empty.metrics.baseline, some.metrics.baseline);
     assert!((empty.metrics.baseline - some.glyphs[0].y).abs() < 0.01);
 }
+
+#[test]
+fn a_glyph_range_indexes_the_whole_text_not_its_line() {
+    // cosmic-text numbers a glyph from the start of its own buffer line, so
+    // on multi-line text every line begins again at zero. Everything that
+    // reads these — a caret, a selection, a `spans` prop — addresses the
+    // whole string, and against per-line numbers they all silently land on
+    // the first line. This is the difference, so it cannot come back.
+    let mut e = TextEngine::new();
+    let text = "abc\ndefgh\nij";
+    let shaped = e.shape(text, base(), None, 0);
+
+    let last = shaped.glyphs.last().expect("the text shaped to something");
+    assert_eq!(last.end, text.len(), "the final glyph ends at the end of the text");
+
+    // Every glyph's range is inside the text, and reads back as the source.
+    for g in &shaped.glyphs {
+        assert!(g.end <= text.len(), "glyph {}..{} escapes a {}-byte text", g.start, g.end, text.len());
+        assert!(text.get(g.start..g.end).is_some(), "glyph {}..{} is not a char boundary", g.start, g.end);
+    }
+
+    // The three lines are actually distinguished: a glyph on the last line
+    // has an offset past everything on the first.
+    let max = shaped.glyphs.iter().map(|g| g.start).max().unwrap();
+    assert!(max > 5, "the last line's glyphs sit past the first line, got {max}");
+}

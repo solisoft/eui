@@ -254,14 +254,7 @@ fn role_ids_are_stable_and_bounded() {
 
 #[test]
 fn theme_document_round_trips() {
-    let t = Theme {
-        accent: Oklch::new(0.62, 0.19, 264.0),
-        surface: Oklch::new(0.98, 0.01, 150.0),
-        radius_md: 8.0,
-        density: Density::Comfortable,
-        font_sans: Some([7; 32]),
-        font_mono: None,
-    };
+    let t = Theme { accent: Oklch::new(0.62, 0.19, 264.0), surface: Oklch::new(0.98, 0.01, 150.0), radius_md: 8.0, density: Density::Comfortable, font_sans: Some([7; 32]), font_mono: None };
     let bytes = t.encode();
     assert_eq!(&bytes[..4], b"EUIT");
     assert_eq!(Theme::decode(&bytes).unwrap(), t);

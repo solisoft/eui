@@ -221,7 +221,11 @@ impl Layout {
     /// The node's absolute border box, if it was laid out this frame.
     pub fn rect(&self, ix: NodeIx) -> Option<Rect> {
         let i = ix.raw() as usize;
-        if self.present.get(i).copied().unwrap_or(false) { self.rect.get(i).copied() } else { None }
+        if self.present.get(i).copied().unwrap_or(false) {
+            self.rect.get(i).copied()
+        } else {
+            None
+        }
     }
 
     /// Overwrite a node's box after layout. A slider drag follows the
@@ -338,7 +342,11 @@ impl Layout {
                 return Some(hit);
             }
         }
-        if rect.contains(x, y) && clip.contains(x, y) { Some(ix) } else { None }
+        if rect.contains(x, y) && clip.contains(x, y) {
+            Some(ix)
+        } else {
+            None
+        }
     }
 
     /// The style resolved this frame for the node's style id; absent for a
@@ -484,9 +492,7 @@ impl Layout {
 
         let placement = match kind {
             NodeKind::Scroll | NodeKind::List => self.place_scroll(f, ix, st, inner_w, inner_h, false),
-            NodeKind::Text | NodeKind::Input | NodeKind::TextArea | NodeKind::Image | NodeKind::Icon | NodeKind::Video | NodeKind::Spacer | NodeKind::Divider => {
-                Placement::default()
-            }
+            NodeKind::Text | NodeKind::Input | NodeKind::TextArea | NodeKind::Image | NodeKind::Icon | NodeKind::Video | NodeKind::Spacer | NodeKind::Divider => Placement::default(),
             _ => self.place(f, ix, st, inner_w, inner_h),
         };
         if let Some(slot) = self.content.get_mut(i) {
@@ -663,7 +669,20 @@ impl Layout {
             let mut y = 0.0f32;
             if count.is_some() {
                 let heights: Vec<f32> = match self.heights_atom.and_then(|a| f.session.node(ix)?.prop(a)) {
-                    Some(Value::List(items)) => items.iter().map(|v| if let Value::Int(h) = v { if *h > 0 { *h as f32 } else { item_h } } else { item_h }).collect(),
+                    Some(Value::List(items)) => items
+                        .iter()
+                        .map(|v| {
+                            if let Value::Int(h) = v {
+                                if *h > 0 {
+                                    *h as f32
+                                } else {
+                                    item_h
+                                }
+                            } else {
+                                item_h
+                            }
+                        })
+                        .collect(),
                     _ => Vec::new(),
                 };
                 for i in 0..n {
@@ -706,7 +725,8 @@ impl Layout {
         // Which child sits in which row: its `row` prop when windowed, its
         // position otherwise. Only rows in the window are placed.
         let rows: Vec<(usize, NodeIx)> = if count.is_some() {
-            let mut rows: Vec<(usize, NodeIx)> = children.iter().filter_map(|&c| self.int_prop(f, c, self.row_atom).filter(|r| *r >= 0).map(|r| (r as usize, c))).filter(|(r, _)| *r >= first && *r <= last && *r < n).collect();
+            let mut rows: Vec<(usize, NodeIx)> =
+                children.iter().filter_map(|&c| self.int_prop(f, c, self.row_atom).filter(|r| *r >= 0).map(|r| (r as usize, c))).filter(|(r, _)| *r >= first && *r <= last && *r < n).collect();
             rows.sort_by_key(|(r, _)| *r);
             self.placed_rows.insert(ix, rows.iter().map(|(r, _)| *r as u32).collect());
             rows
@@ -733,15 +753,7 @@ impl Layout {
 
     /// §4. `virt` is `(item height, window start, window end)` for a
     /// virtualised list.
-    fn place_flow(
-        &mut self,
-        f: &mut Env<'_>,
-        ix: NodeIx,
-        st: Style,
-        inner_w: Constraint,
-        inner_h: Constraint,
-        virt: Option<(f32, f32, f32)>,
-    ) -> Placement {
+    fn place_flow(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, inner_h: Constraint, virt: Option<(f32, f32, f32)>) -> Placement {
         let row = st.display == Display::Row;
         let (main_c, cross_c) = if row { (inner_w, inner_h) } else { (inner_h, inner_w) };
         let children: Vec<NodeIx> = f.session.children(ix).to_vec();
@@ -772,11 +784,7 @@ impl Layout {
             if cst.display == Display::None || cst.position == Position::Absolute {
                 continue;
             }
-            let (m_before, m_after, c_before, c_after) = if row {
-                (cst.margin.l, cst.margin.r, cst.margin.t, cst.margin.b)
-            } else {
-                (cst.margin.t, cst.margin.b, cst.margin.l, cst.margin.r)
-            };
+            let (m_before, m_after, c_before, c_after) = if row { (cst.margin.l, cst.margin.r, cst.margin.t, cst.margin.b) } else { (cst.margin.t, cst.margin.b, cst.margin.l, cst.margin.r) };
             let mut virtual_ = false;
             let hyp = if let Some((item_h, start, end)) = virt {
                 let outside = cursor + item_h < start || cursor > end;
@@ -806,21 +814,7 @@ impl Layout {
                 None
             };
             cursor += hyp + m_before + m_after + st.gap;
-            items.push(Item {
-                ix: c,
-                st: cst,
-                hyp,
-                main: hyp,
-                cross: 0.0,
-                m_before,
-                m_after,
-                c_before,
-                c_after,
-                frozen: false,
-                virtual_,
-                baseline: 0.0,
-                auto_min,
-            });
+            items.push(Item { ix: c, st: cst, hyp, main: hyp, cross: 0.0, m_before, m_after, c_before, c_after, frozen: false, virtual_, baseline: 0.0, auto_min });
         }
 
         // §4.2 lines.
@@ -967,8 +961,7 @@ impl Layout {
             let lc = line_cross.get(li).copied().unwrap_or(0.0);
             let lb = line_baseline.get(li).copied().unwrap_or(0.0);
             let n = line.len();
-            let used: f32 = line.iter().map(|&i| items.get(i).map_or(0.0, |it| it.main + it.m_before + it.m_after)).sum::<f32>()
-                + st.gap * n.saturating_sub(1) as f32;
+            let used: f32 = line.iter().map(|&i| items.get(i).map_or(0.0, |it| it.main + it.m_before + it.m_after)).sum::<f32>() + st.gap * n.saturating_sub(1) as f32;
             let free = if matches!(main_c, Constraint::Exact(_)) { (main_bound - used).max(0.0) } else { 0.0 };
             let (mut pos, between) = match (st.justify, n) {
                 (Justify::Start, _) | (Justify::Between, 1) => (0.0, 0.0),
@@ -995,11 +988,7 @@ impl Layout {
                     AlignItems::Baseline => (it.c_before, it.cross),
                 };
                 let main_pos = pos + it.m_before;
-                let (x, y, w, h) = if row {
-                    (main_pos, cross_pos + cross_off, it.main, cross_size)
-                } else {
-                    (cross_pos + cross_off, main_pos, cross_size, it.main)
-                };
+                let (x, y, w, h) = if row { (main_pos, cross_pos + cross_off, it.main, cross_size) } else { (cross_pos + cross_off, main_pos, cross_size, it.main) };
                 if first_baseline.is_none() && !it.virtual_ {
                     first_baseline = Some(y + it.baseline);
                 }
@@ -1027,7 +1016,11 @@ impl Layout {
     /// Measure with `(main, cross)` constraints expressed for a `row` or a
     /// `column` parent.
     fn measure_axes(&mut self, f: &mut Env<'_>, ix: NodeIx, row: bool, main: Constraint, cross: Constraint) -> Metrics {
-        if row { self.measure(f, ix, main, cross) } else { self.measure(f, ix, cross, main) }
+        if row {
+            self.measure(f, ix, main, cross)
+        } else {
+            self.measure(f, ix, cross, main)
+        }
     }
 
     fn hyp_main(&mut self, f: &mut Env<'_>, c: NodeIx, cst: Style, main_c: Constraint, cross_c: Constraint, row: bool) -> f32 {
@@ -1040,7 +1033,11 @@ impl Layout {
         }
         let margins = if row { cst.margin.horizontal() } else { cst.margin.vertical() };
         let m = self.measure_axes(f, c, row, main_c.loosen().shrink(margins), cross_c.loosen());
-        if row { m.w } else { m.h }
+        if row {
+            m.w
+        } else {
+            m.h
+        }
     }
 
     /// §5, and the absolute children of any container when `absolute_only`.

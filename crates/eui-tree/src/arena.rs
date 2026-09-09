@@ -240,4 +240,3 @@ impl Arena {
         Ok(depth)
     }
 }
-

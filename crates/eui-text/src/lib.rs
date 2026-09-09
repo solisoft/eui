@@ -25,9 +25,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use cosmic_text::{
-    fontdb, Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent, Weight,
-};
+use cosmic_text::{fontdb, Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent, Weight};
 use eui_layout::{FontSpec, TextMeasurer, TextMetrics};
 use eui_proto::{FontFamily, FontWeight};
 
@@ -263,6 +261,18 @@ impl TextEngine {
         buffer.set_text(&mut self.fonts, text, attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut self.fonts, false);
 
+        // cosmic-text reports a glyph's byte range relative to its *buffer
+        // line*, so on multi-line text every line starts again at zero. A
+        // caret, a selection and a `spans` prop are all expressed against
+        // the whole string, so the line's own offset is added back here and
+        // `Glyph::start` means what its documentation says.
+        let mut line_base = Vec::with_capacity(16);
+        let mut at = 0usize;
+        for line in text.split('\n') {
+            line_base.push(at);
+            at = at.saturating_add(line.len()).saturating_add(1);
+        }
+
         let mut glyphs = Vec::new();
         let mut width = 0.0f32;
         let mut lines = 0u32;
@@ -276,6 +286,7 @@ impl TextEngine {
             if baseline.is_none() {
                 baseline = Some(run.line_y - run.line_top);
             }
+            let base = line_base.get(run.line_i).copied().unwrap_or(0);
             for g in run.glyphs.iter() {
                 glyphs.push(Glyph {
                     x: g.x,
@@ -283,8 +294,8 @@ impl TextEngine {
                     w: g.w,
                     size: g.font_size,
                     key: GlyphKey { font: g.font_id, glyph: g.glyph_id, size_bits: g.font_size.to_bits() },
-                    start: g.start,
-                    end: g.end,
+                    start: base.saturating_add(g.start),
+                    end: base.saturating_add(g.end),
                 });
             }
         }
@@ -300,15 +311,7 @@ impl TextEngine {
             baseline = probe.layout_runs().next().map(|run| run.line_y - run.line_top);
         }
         let lines = lines.max(1);
-        Shaped {
-            metrics: TextMetrics {
-                width,
-                height: lines as f32 * line_height,
-                baseline: baseline.unwrap_or(size * 0.8),
-                lines,
-            },
-            glyphs,
-        }
+        Shaped { metrics: TextMetrics { width, height: lines as f32 * line_height, baseline: baseline.unwrap_or(size * 0.8), lines }, glyphs }
     }
 
     /// Rasterise a glyph at a device scale (`2.0` for a 2× display).
@@ -322,14 +325,7 @@ impl TextEngine {
             SwashContent::Color => true,
             SwashContent::SubpixelMask => false,
         };
-        Some(GlyphImage {
-            left: image.placement.left,
-            top: image.placement.top,
-            width: image.placement.width,
-            height: image.placement.height,
-            color,
-            data: image.data.clone(),
-        })
+        Some(GlyphImage { left: image.placement.left, top: image.placement.top, width: image.placement.width, height: image.placement.height, color, data: image.data.clone() })
     }
 }
 

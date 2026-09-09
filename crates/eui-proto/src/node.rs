@@ -6,10 +6,7 @@
 //! bounds check rather than the call stack.
 
 use crate::error::{DecodeError, Result};
-use crate::limits::{
-    HASH_BYTES, MAX_CHILDREN, MAX_HANDLERS, MAX_INLINE_STR, MAX_NODES, MAX_PROPS, MAX_TREE_DEPTH,
-    MAX_VALUE_DEPTH, MAX_VALUE_LIST,
-};
+use crate::limits::{HASH_BYTES, MAX_CHILDREN, MAX_HANDLERS, MAX_INLINE_STR, MAX_NODES, MAX_PROPS, MAX_TREE_DEPTH, MAX_VALUE_DEPTH, MAX_VALUE_LIST};
 use crate::reader::Reader;
 use crate::style::ColorRef;
 use crate::writer::Writer;
@@ -269,9 +266,7 @@ impl Value {
             0x03 => Ok(Self::Float(r.f64()?)),
             0x04 => Ok(Self::Atom(r.varint32()?)),
             0x05 => Ok(Self::Str(r.str(MAX_INLINE_STR, "inline string")?.to_owned())),
-            0x06 => {
-                Ok(Self::Asset(r.array::<HASH_BYTES>()?))
-            }
+            0x06 => Ok(Self::Asset(r.array::<HASH_BYTES>()?)),
             0x07 => Ok(Self::Color(ColorRef(r.u16()?))),
             0x08 => {
                 let count = r.varint32_max(MAX_VALUE_LIST, "value list length")?;
@@ -346,10 +341,7 @@ impl Handler {
         match r.u8()? {
             0x00 => Ok(Self::Server(r.varint32()?)),
             0x01 => Ok(Self::Local(r.varint32()?)),
-            0x02 => Ok(Self::LocalThenServer {
-                chunk: r.varint32()?,
-                name: r.varint32()?,
-            }),
+            0x02 => Ok(Self::LocalThenServer { chunk: r.varint32()?, name: r.varint32()? }),
             _ => Err(DecodeError::UnknownTag("Handler")),
         }
     }
@@ -416,17 +408,13 @@ impl Subtree {
     /// The properties of `node`.
     pub fn props_of(&self, node: &FlatNode) -> &[(u32, Value)] {
         let (start, len) = node.props;
-        self.props
-            .get(start as usize..(start as usize).saturating_add(len as usize))
-            .unwrap_or(&[])
+        self.props.get(start as usize..(start as usize).saturating_add(len as usize)).unwrap_or(&[])
     }
 
     /// The handlers of `node`.
     pub fn handlers_of(&self, node: &FlatNode) -> &[(EventKind, Handler)] {
         let (start, len) = node.handlers;
-        self.handlers
-            .get(start as usize..(start as usize).saturating_add(len as usize))
-            .unwrap_or(&[])
+        self.handlers.get(start as usize..(start as usize).saturating_add(len as usize)).unwrap_or(&[])
     }
 
     /// Decode one subtree.
@@ -518,16 +506,7 @@ impl Subtree {
             return Err(DecodeError::NotALeaf);
         }
 
-        self.nodes.push(FlatNode {
-            kind,
-            id,
-            style,
-            key,
-            text,
-            props: (props_start, props_len),
-            handlers: (handlers_start, handlers_len),
-            child_count,
-        });
+        self.nodes.push(FlatNode { kind, id, style, key, text, props: (props_start, props_len), handlers: (handlers_start, handlers_len), child_count });
         Ok(child_count)
     }
 
@@ -551,10 +530,7 @@ impl Subtree {
                 flags |= 0x08;
             }
 
-            w.u8(node.kind.to_u8())
-                .u8(flags)
-                .varint32(node.id)
-                .varint32(node.style);
+            w.u8(node.kind.to_u8()).u8(flags).varint32(node.id).varint32(node.style);
 
             if flags & 0x01 != 0 {
                 w.varint32(node.key);

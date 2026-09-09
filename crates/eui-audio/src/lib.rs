@@ -142,19 +142,11 @@ pub fn decode(bytes: &[u8], hint: Option<&str>) -> Result<Sound, AudioError> {
         let h = h.rsplit('/').next().unwrap_or(h).trim_start_matches('.');
         probe_hint.with_extension(h);
     }
-    let probed = symphonia::default::get_probe()
-        .format(&probe_hint, stream, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| AudioError::Unsupported(e.to_string()))?;
+    let probed = symphonia::default::get_probe().format(&probe_hint, stream, &FormatOptions::default(), &MetadataOptions::default()).map_err(|e| AudioError::Unsupported(e.to_string()))?;
     let mut format = probed.format;
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-        .ok_or(AudioError::NoTrack)?;
+    let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL).ok_or(AudioError::NoTrack)?;
     let track_id = track.id;
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| AudioError::Unsupported(e.to_string()))?;
+    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).map_err(|e| AudioError::Unsupported(e.to_string()))?;
 
     let mut samples: Vec<f32> = Vec::new();
     let mut rate = track.codec_params.sample_rate.unwrap_or(44_100);

@@ -70,9 +70,14 @@ acceptance of a rotation the pinned key signed, and garbage.
 ## 8. Painting — `crates/eui-render/tests/render.rs`
 
 One quad per box and per glyph; scissor runs for scroll containers; device
-snapping at 2×; shadows; canvas paths; and, where a GPU adapter exists,
-pixels read back from an off-screen target for the clear colour, a filled
-box, a clipped scroll and a canvas line.
+snapping at 2×; shadows; canvas paths; the backdrop a `blur` asks for — that
+a frame without one asks for none, that the region is the blurred rects
+grown by three standard deviations and no more, and that two radii are two
+chains; and, where a GPU adapter exists, pixels read back from an off-screen
+target for the clear colour, a filled box, a clipped scroll, a canvas line,
+and a frosted pane carrying each half of a seam into the other — both when
+it covers the whole frame and when it covers a part of it, which is what
+pins the backdrop's origin.
 
 ## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
 

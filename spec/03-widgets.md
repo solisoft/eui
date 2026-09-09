@@ -45,7 +45,10 @@ decode failure in every build.
 Everything paints as a rounded rectangle. For a node with style `s`:
 
 1. If `s.bg` is not none, fill the border box with it, corners rounded by
-   `s.radius`, at `s.opacity`.
+   `s.radius`, at `s.opacity`. If `s.blur` is non-zero, the fill goes over
+   the node's blurred **backdrop** (§2.1) rather than over what the target
+   holds — so one node is both the frost and the tint — and the border box
+   is filled even when `s.bg` *is* none: clear glass is still glass.
 2. If any `s.border_width` is non-zero and `s.border_color` is not none,
    stroke the inside of the border box with it.
 3. `text` paints its glyphs in `s.fg`, or the nearest ancestor's `fg`, or
@@ -76,6 +79,28 @@ rectangle offset by the scale's `y`, grown by its `blur` on every side, with
 coverage falling from opaque at the border box's edge to nothing at the
 grown edge, at the scale's opacity. `canvas` paths (§1.1) are part of
 version 1.
+
+### 2.1 The backdrop
+
+A node's **backdrop** is the frame as it stood when the first blurred node
+of that frame was about to be painted — including that node's own shadow,
+which is painted before its background. Every blurred node in a frame shares
+that one backdrop, so two frosted panels that overlap both show what is
+under the pair rather than one showing through the other. One snapshot is
+taken however many nodes ask, and a frame in which none does is the single
+pass it always was.
+
+`s.blur` is the standard deviation of a Gaussian, in device-independent
+pixels, as CSS `blur()` is. A client MAY approximate the Gaussian — as it
+already approximates a shadow's (§2) — and a reference client does, by
+convolving a reduced copy: the reduction is chosen so that the kernel's
+width in samples stays about the same whatever radius was asked for, which
+is what keeps a scrim over the whole window affordable. A radius beyond
+about 85 device pixels MAY blur no further.
+
+The backdrop is what the client itself painted. Nothing behind the window is
+read, and nothing is reported back: a blur is no more a readback than a
+shadow is (00 §"What EUI deliberately refuses").
 
 ## 5. Transitions
 

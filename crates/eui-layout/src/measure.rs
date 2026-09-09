@@ -78,11 +78,6 @@ impl TextMeasurer for Monospace {
             lines.truncate(usize::from(line_clamp));
         }
         let n = lines.len().max(1) as u32;
-        TextMetrics {
-            width: lines.iter().copied().fold(0.0, f32::max),
-            height: n as f32 * font.line_height,
-            baseline: font.size * 0.8,
-            lines: n,
-        }
+        TextMetrics { width: lines.iter().copied().fold(0.0, f32::max), height: n as f32 * font.line_height, baseline: font.size * 0.8, lines: n }
     }
 }

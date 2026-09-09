@@ -100,16 +100,7 @@ fn a_pointer_move_handler_follows_the_press_off_the_node() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
     d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box,
-        id: 1,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 0),
-        handlers: (0, 3),
-        child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 3), child_count: 0 });
     tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
     tree.handlers.push((EventKind::PointerDown, Handler::Server(ATOM_INC)));
     tree.handlers.push((EventKind::PointerUp, Handler::Server(ATOM_INC)));
@@ -145,16 +136,7 @@ fn a_captured_pointer_move_is_emitted_while_layout_is_owed() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
     d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box,
-        id: 1,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 0),
-        handlers: (0, 2),
-        child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
     tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
     tree.handlers.push((EventKind::PointerDown, Handler::Server(ATOM_INC)));
     d.handle_frame(Frame::Batch(Batch {
@@ -171,10 +153,7 @@ fn a_captured_pointer_move_is_emitted_while_layout_is_owed() {
     let _ = d.input(Input::PointerDown(0));
     d.handle_frame(Frame::Batch(Batch {
         seq: 2,
-        ops: vec![
-            Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(20), padding: [1, 0, 0, 0], ..Default::default() } },
-            Op::SetStyle { node: 1, style: 2 },
-        ],
+        ops: vec![Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(20), padding: [1, 0, 0, 0], ..Default::default() } }, Op::SetStyle { node: 1, style: 2 }],
     }));
     assert!(d.input(Input::PointerMove(r.x + 40.0, r.y + r.h / 2.0)).is_empty(), "captured moves stay local");
     let out = d.input(Input::PointerUp(0));
@@ -386,7 +365,6 @@ fn insecure_urls_are_refused_outside_debug_loopback() {
     assert!(check_url("ws://127.0.0.1:1/_eui/session").is_err());
 }
 
-
 #[test]
 fn a_local_handler_updates_the_tree_without_a_round_trip() {
     use eui_vm::Asm;
@@ -546,9 +524,7 @@ fn the_focus_ring_is_painted_for_keyboard_and_server_focus_only() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
     d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
     d.handle_frame(Frame::Batch(form_batch()));
-    let ring_around = |list: &eui_render::DrawList, r: eui_layout::Rect| {
-        list.quads.iter().any(|q| q.params[1] == 2.0 && q.rect == [r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0])
-    };
+    let ring_around = |list: &eui_render::DrawList, r: eui_layout::Rect| list.quads.iter().any(|q| q.params[1] == 2.0 && q.rect == [r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0]);
     let (x, y) = centre(&mut d, 2);
     let field = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
     // Pointer focus: no ring.
@@ -588,7 +564,8 @@ fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
     d.tick(t0);
     let accent = box_fill(&d.paint(400, 300));
     // Restyle the button: danger background, `base` motion (180 ms).
-    let danger = StyleRecord { display: Display::Row, padding: [3; 4], bg: ColorRef::role(Role::DangerBase.id()), fg: ColorRef::role(Role::AccentOn.id()), radius: 2, transition: 2, ..Default::default() };
+    let danger =
+        StyleRecord { display: Display::Row, padding: [3; 4], bg: ColorRef::role(Role::DangerBase.id()), fg: ColorRef::role(Role::AccentOn.id()), radius: 2, transition: 2, ..Default::default() };
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: danger }, Op::SetStyle { node: 3, style: 3 }] }));
     assert!(d.animating());
     assert_eq!(d.next_frame_at(), Some(t0), "a frame is due at once");
@@ -1011,29 +988,36 @@ fn a_local_then_server_chunks_effects_are_provisional_until_the_answer() {
 }
 
 #[test]
-fn a_spinning_node_turns_its_quads_and_keeps_frames_coming() {
+fn a_spinning_node_marks_its_quads_and_keeps_frames_coming() {
     use std::time::{Duration, Instant};
     let mut d = welcomed();
     let spin = StyleRecord { width: Dim::Px(20), height: Dim::Px(20), bg: ColorRef::role(Role::AccentBase.id()), animation: 1, ..Default::default() };
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
-    let ops = vec![
-        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
-        Op::DefStyle { id: 11, record: spin },
-        Op::Mount(tree),
-    ];
+    let ops = vec![Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::DefStyle { id: 11, record: spin }, Op::Mount(tree)];
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
     let t0 = Instant::now();
     d.tick(t0 + Duration::from_millis(300));
     let list = d.paint(400, 300);
     assert!(list.wants_frame);
     assert!(d.next_frame_at().is_some(), "frames keep coming while it spins");
-    let q = list.quads.iter().find(|q| q.params[2] == 0.0).unwrap();
-    assert!(q.extra[0] != 0.0, "turned: {q:?}");
-    // Its centre stayed put: the box turns about itself.
+    // Nothing else is owed, so this frame may simply be drawn again.
+    assert!(list.spin_only, "a spin on its own is the window's to repeat");
+    let q = list.quads.iter().find(|q| q.rect[2] == 20.0).expect("the spinning box");
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
+    let flags = q.params[2] as u32;
+    assert!(flags & eui_render::SPINNING != 0, "marked for the vertex stage: {q:?}");
+    assert_eq!(q.extra[0], 0.0, "the angle is the shader's, not the list's");
+    // Its centre stayed put: the box turns about itself, so it is its own
+    // spin centre and the offset the shader turns is zero.
     let r = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
     assert!((q.rect[0] + q.rect[2] / 2.0 - (r.x + r.w / 2.0)).abs() < 0.01);
+    assert!(q.spin[0].abs() < 0.01 && q.spin[1].abs() < 0.01, "offset from its own centre is nothing: {:?}", q.spin);
+    // The whole point: the clock does not reach the list, so the window can
+    // draw this one again instead of asking for another.
+    d.tick(t0 + Duration::from_millis(900));
+    assert_eq!(d.paint(400, 300), list, "half a revolution later, the same list");
 }
 
 /// A 100 px list of ten rows of two heights (22 and 40, alternating) with
@@ -1045,7 +1029,16 @@ fn list_of_rows(d: &mut Driver) -> eui_tree::NodeIx {
     tree.props.push((ATOM_ITEM_H, Value::Int(22)));
     for i in 0..10u32 {
         let tall = i % 2 == 1;
-        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (tall as u32 * (tree.props.len() as u32), tall as u32), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode {
+            kind: NodeKind::Text,
+            id: 10 + i,
+            style: 0,
+            key: 0,
+            text: Some(TextRef::Inline(format!("row {i}"))),
+            props: (tall as u32 * (tree.props.len() as u32), tall as u32),
+            handlers: (0, 0),
+            child_count: 0,
+        });
         if tall {
             tree.props.push((ATOM_ITEM_H, Value::Int(40)));
         }
@@ -1140,7 +1133,10 @@ fn the_cursor_follows_what_the_pointer_is_over() {
     let _ = d.paint(400, 300);
     assert_eq!(d.cursor(), Cursor::Default);
     // A `cursor` style wins over the handler's hand.
-    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: StyleRecord { cursor: Cursor::Grab, padding: [3; 4], ..Default::default() } }, Op::SetStyle { node: 3, style: 3 }] }));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 2,
+        ops: vec![Op::DefStyle { id: 3, record: StyleRecord { cursor: Cursor::Grab, padding: [3; 4], ..Default::default() } }, Op::SetStyle { node: 3, style: 3 }],
+    }));
     let (x, y) = centre(&mut d, 4);
     d.input(Input::PointerMove(x, y));
     let _ = d.paint(400, 300);
@@ -1409,15 +1405,10 @@ fn a_session_that_ends_replaces_the_tree_with_the_reason() {
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("the application".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
-    let ops = vec![
-        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
-        Op::Mount(tree),
-    ];
+    let ops = vec![Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)];
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
     let _ = d.paint(400, 300);
-    let texts = |d: &Driver| -> Vec<String> {
-        d.session().root().map_or_else(Vec::new, |root| d.session().preorder(root).filter_map(|ix| d.session().text_of(ix).map(str::to_owned)).collect())
-    };
+    let texts = |d: &Driver| -> Vec<String> { d.session().root().map_or_else(Vec::new, |root| d.session().preorder(root).filter_map(|ix| d.session().text_of(ix).map(str::to_owned)).collect()) };
     assert!(texts(&d).iter().any(|t| t == "the application"), "the server's tree is what is drawn");
 
     // The server gives up on a view it cannot encode.
@@ -1605,10 +1596,7 @@ fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
     assert!(!d.video_playing(), "it stopped at the end");
     assert_eq!(d.video_position_ms(2), Some(200), "on the last frame");
     // Looping keeps it going and never ends.
-    d.handle_frame(Frame::Batch(Batch {
-        seq: 3,
-        ops: vec![Op::SetProp { node: 2, prop: A_LOOP, value: Value::Bool(true) }, Op::SetProp { node: 2, prop: A_PLAYING, value: Value::Bool(true) }],
-    }));
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetProp { node: 2, prop: A_LOOP, value: Value::Bool(true) }, Op::SetProp { node: 2, prop: A_PLAYING, value: Value::Bool(true) }] }));
     d.tick(t0 + Duration::from_millis(500));
     let _ = d.paint(400, 300);
     d.tick(t0 + Duration::from_millis(1_100));

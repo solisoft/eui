@@ -104,6 +104,10 @@ pub struct App {
     audio: Option<crate::audio::Output>,
     /// Frames the audio thread produced, for this loop to send.
     audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
+    /// When this window started, so the renderer can be handed a monotonic
+    /// clock in seconds. `spin` and the backdrop want elapsed time, not a
+    /// wall clock, and the driver's own epoch is in the worker process.
+    epoch: std::time::Instant,
 }
 
 impl App {
@@ -134,6 +138,7 @@ impl App {
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audio: None,
             audio_rx: None,
+            epoch: std::time::Instant::now(),
         }
     }
 
@@ -339,9 +344,13 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         let format = gpu.config.format;
-        self.backend.with_atlases(|atlas, images| gpu.renderer.render(&view, format, (w, h), &list, atlas, images));
+        let now = self.epoch.elapsed().as_secs_f32();
+        let target = eui_render::Target { view: &view, format, size: (w, h), now };
+        self.backend.with_atlases(|atlas, images| gpu.renderer.render(target, &list, atlas, images));
         frame.present();
-        crate::driver::trace(|| format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len()));
+        crate::driver::trace(|| {
+            format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len())
+        });
         // A scroll that landed during this paint reports its offset now.
         self.send(landed);
         // Hover settles at paint; so does what the pointer is over.
@@ -397,10 +406,7 @@ impl ApplicationHandler<Wake> for App {
         // AccessKit adapter must exist before the window is first shown, and
         // macOS enforces that with a panic where AT-SPI merely tolerates it;
         // and a window shown before its first frame is a flash of nothing.
-        let attrs = Window::default_attributes()
-            .with_title(self.title.clone())
-            .with_visible(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        let attrs = Window::default_attributes().with_title(self.title.clone()).with_visible(false).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         // The Wayland app id, so a compositor can match rules and a taskbar
         // an icon; on X11 the same two strings are the WM_CLASS.
         #[cfg(target_os = "linux")]
@@ -533,7 +539,9 @@ impl ApplicationHandler<Wake> for App {
                 eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
                 self.backend.grant(granted);
             }
-            Err(e) if self.url.starts_with("ws://") => eprintln!("eui: {e}; continuing on the debug loopback without a manifest"),
+            Err(e) if self.url.starts_with("ws://") => {
+                eprintln!("eui: {e}; continuing on the debug loopback without a manifest")
+            }
             Err(e) => {
                 eprintln!("eui: {e}; refusing to connect");
                 event_loop.exit();

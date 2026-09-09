@@ -33,6 +33,7 @@ doc/         the documentation site, itself a Soli app
 www/         the public site, itself a Soli app
 xtask/       `bench` measures the budgets; `conform` runs every vector of spec/09
 deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
+rustfmt.toml one formatting, enforced; 200 columns, not rustfmt's default 100
 ```
 
 `doc/docs/eui/status.md` says, crate by crate, what is built and tested,
@@ -42,6 +43,7 @@ sandbox on macOS and Windows.
 ## Try it
 
 ```sh
+cargo fmt --all                                          # not optional: CI and `conform` both check it
 cargo test                                               # 210 tests; pixel tests need any GPU adapter
 cargo test -p eui-proto --test size_budget -- --nocapture # the wire numbers
 cargo clippy --all-targets                               # must be silent

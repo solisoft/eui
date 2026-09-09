@@ -164,14 +164,9 @@ fn shrink_respects_min_width_and_freezes() {
 
 #[test]
 fn justify_variants() {
-    for (justify, x1, x2) in [
-        (Justify::Start, 0.0, 100.0),
-        (Justify::Center, 300.0, 400.0),
-        (Justify::End, 600.0, 700.0),
-        (Justify::Between, 0.0, 700.0),
-        (Justify::Around, 150.0, 550.0),
-        (Justify::Evenly, 200.0, 500.0),
-    ] {
+    for (justify, x1, x2) in
+        [(Justify::Start, 0.0, 100.0), (Justify::Center, 300.0, 400.0), (Justify::End, 600.0, 700.0), (Justify::Between, 0.0, 700.0), (Justify::Around, 150.0, 550.0), (Justify::Evenly, 200.0, 500.0)]
+    {
         let mut b = B::default();
         let c = b.style(StyleRecord { justify, ..row() });
         let w = b.style(StyleRecord { width: px(100), ..st() });

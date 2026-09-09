@@ -149,6 +149,7 @@ unknown colour role.
 | `pad`, `margin`, `border` | Edges, below |
 | `bg`, `fg`, `border_color` | A colour, below |
 | `radius`, `shadow`, `opacity`, `z` | 0–255 |
+| `blur` | 0–255 — the node shows what is behind it through a Gaussian this wide, in px, and `bg` tints the result |
 | `font` | `sans` · `mono` |
 | `size` | A text-scale index, 0–255 |
 | `weight` | `regular` · `medium` · `semibold` · `bold` |
@@ -186,6 +187,19 @@ border.subtle  border.default  border.strong   focus.ring
 
 A literal is right for a brand mark or a chart series, and wrong for a
 surface.
+
+**Frosted glass.** `blur` makes a node show its backdrop — everything painted
+under it — through a Gaussian, with `bg` composited over the result, so one
+node is both the frost and the tint:
+
+```
+{"k": "overlay", "s": {"display": "stack", "justify": "center",
+                       "align": "center", "blur": 16, "bg": "#00000073"}}
+```
+
+Every blurred node in a frame shares one backdrop: the frame as it stood
+when the first of them was painted. Two frosted panels that overlap both
+show what is under the pair, not one through the other.
 
 ## Events
 

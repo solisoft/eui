@@ -24,11 +24,7 @@ struct Row {
 }
 
 fn rss_kb() -> u64 {
-    std::fs::read_to_string("/proc/self/statm")
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-        .map(|pages| pages * 4)
-        .unwrap_or(0)
+    std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map(|pages| pages * 4).unwrap_or(0)
 }
 
 /// The 10 000-row table as a batch, keyed rows, item_height prop.
@@ -49,7 +45,13 @@ fn table_batch(rows: u32) -> Batch {
             let text = match c {
                 0 => format!("FA-{i:05}"),
                 1 => format!("Client {} SARL", i % 37),
-                2 => if i % 3 == 0 { "Paid".into() } else { "Open".into() },
+                2 => {
+                    if i % 3 == 0 {
+                        "Paid".into()
+                    } else {
+                        "Open".into()
+                    }
+                }
                 _ => format!("{} €", 100 + i * 37),
             };
             t.nodes.push(FlatNode { kind: NodeKind::Text, id, style: 4, key: 0, text: Some(TextRef::Inline(text)), props: (0, 0), handlers: (0, 0), child_count: 0 });
@@ -91,14 +93,31 @@ fn bench() -> Vec<Row> {
     let bytes = Frame::Batch(batch.clone()).encode();
     // ~9 B of structure per node (spec/10 §2) plus the cell text itself,
     // which averages 6–7 B per node here and is the data, not overhead.
-    rows.push(Row { what: "table-10k: mount batch, text included", value: format!("{:.1} KB ({:.1} B/node)", bytes.len() as f64 / 1024.0, bytes.len() as f64 / 50_002.0), budget: "< 18 B/node", ok: bytes.len() < 18 * 50_002 });
+    rows.push(Row {
+        what: "table-10k: mount batch, text included",
+        value: format!("{:.1} KB ({:.1} B/node)", bytes.len() as f64 / 1024.0, bytes.len() as f64 / 50_002.0),
+        budget: "< 18 B/node",
+        ok: bytes.len() < 18 * 50_002,
+    });
 
     // --- decoder: a ~4 KB batch, and the 10k one --------------------------
     let small = Frame::Batch(table_batch(60)).encode();
-    let t: Vec<Duration> = (0..200).map(|_| { let s = Instant::now(); let _ = Frame::decode(&small).unwrap(); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..200)
+        .map(|_| {
+            let s = Instant::now();
+            let _ = Frame::decode(&small).unwrap();
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: format!("decode {:.1} KB batch (median)", small.len() as f64 / 1024.0).leak(), value: format!("{d:?}"), budget: "< 50 µs", ok: d < Duration::from_micros(50) });
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); let _ = Frame::decode(&bytes).unwrap(); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            let _ = Frame::decode(&bytes).unwrap();
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: "decode table-10k batch (median)", value: format!("{d:?}"), budget: "< 20 ms", ok: d < Duration::from_millis(20) });
 
@@ -113,26 +132,74 @@ fn bench() -> Vec<Row> {
     let theme = Theme::default().resolve(Viewer::default());
     let mut mono = Monospace::default();
     let mut layout = Layout::new();
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); layout.compute(&mut Env { session: &session, theme: &theme, text: &mut mono }, Size::new(800.0, 600.0)); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            layout.compute(&mut Env { session: &session, theme: &theme, text: &mut mono }, Size::new(800.0, 600.0));
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: "layout table-10k, virtualised (median)", value: format!("{d:?}"), budget: "< 5 ms", ok: d < Duration::from_millis(5) });
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); session.clear_all_dirty(); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            session.clear_all_dirty();
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: "clear_all_dirty, 50 002 nodes (median)", value: format!("{d:?}"), budget: "info", ok: true });
     let mut atlas = eui_render::Atlas::new();
     let mut text = eui_text::TextEngine::new();
     layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0));
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); let images = eui_render::ImageAtlas::new();
-        let _ = eui_render::paint(&mut eui_render::Scene { session: &session, layout: &layout, theme: &theme, text: &mut text, atlas: &mut atlas, images: &images, scale: 1.0, size: (800, 600), focus: None, overrides: &[], editing: None, now: 0.0, scrollbar_hot: None }); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            let images = eui_render::ImageAtlas::new();
+            let _ = eui_render::paint(&mut eui_render::Scene {
+                session: &session,
+                layout: &layout,
+                theme: &theme,
+                text: &mut text,
+                atlas: &mut atlas,
+                images: &images,
+                scale: 1.0,
+                size: (800, 600),
+                focus: None,
+                overrides: &[],
+                editing: None,
+                now: 0.0,
+                scrollbar_hot: None,
+            });
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: "paint only, table-10k, layout done (median)", value: format!("{d:?}"), budget: "info", ok: true });
-    let t: Vec<Duration> = (0..5).map(|_| { let s = Instant::now(); layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0)); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0));
+            s.elapsed()
+        })
+        .collect();
     let d = median(t);
     rows.push(Row { what: "layout only, real text engine, cached (median)", value: format!("{d:?}"), budget: "info", ok: true });
     let st = layout.stats();
-    rows.push(Row { what: "layout work per frame", value: format!("{} measures, {} memo hits, {} list placements, {} rows measured, {} virtual", st.measures, st.memo_hits, st.list_placements, st.rows_measured, st.rows_virtual), budget: "info", ok: true });
+    rows.push(Row {
+        what: "layout work per frame",
+        value: format!("{} measures, {} memo hits, {} list placements, {} rows measured, {} virtual", st.measures, st.memo_hits, st.list_placements, st.rows_measured, st.rows_virtual),
+        budget: "info",
+        ok: true,
+    });
     let after = rss_kb();
-    rows.push(Row { what: "RSS growth: session + layout, 10k rows", value: format!("{:.1} MB", (after.saturating_sub(before)) as f64 / 1024.0), budget: "< 45 MB", ok: after.saturating_sub(before) < 45 * 1024 });
+    rows.push(Row {
+        what: "RSS growth: session + layout, 10k rows",
+        value: format!("{:.1} MB", (after.saturating_sub(before)) as f64 / 1024.0),
+        budget: "< 45 MB",
+        ok: after.saturating_sub(before) < 45 * 1024,
+    });
 
     // --- the full client driver: real text engine, paint ------------------
     let before = rss_kb();
@@ -142,12 +209,24 @@ fn bench() -> Vec<Row> {
     let s = Instant::now();
     let list = driver.paint(800, 600);
     let first = s.elapsed();
-    let t: Vec<Duration> = (0..10).map(|_| { driver.input(Input::Wheel(0.0, 22.0)); let s = Instant::now(); let _ = driver.paint(800, 600); s.elapsed() }).collect();
+    let t: Vec<Duration> = (0..10)
+        .map(|_| {
+            driver.input(Input::Wheel(0.0, 22.0));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
     let scroll = median(t);
     let after = rss_kb();
     rows.push(Row { what: "driver: first paint of table-10k (shaping)", value: format!("{first:?}, {} quads", list.quads.len()), budget: "< 80 ms", ok: first < Duration::from_millis(80) });
     rows.push(Row { what: "driver: scroll step, layout + paint (median)", value: format!("{scroll:?}"), budget: "< 2 ms", ok: scroll < Duration::from_millis(2) });
-    rows.push(Row { what: "driver RSS growth, table-10k with real text", value: format!("{:.1} MB", after.saturating_sub(before) as f64 / 1024.0), budget: "< 45 MB", ok: after.saturating_sub(before) < 45 * 1024 });
+    rows.push(Row {
+        what: "driver RSS growth, table-10k with real text",
+        value: format!("{:.1} MB", after.saturating_sub(before) as f64 / 1024.0),
+        budget: "< 45 MB",
+        ok: after.saturating_sub(before) < 45 * 1024,
+    });
     rows.push(Row { what: "process RSS at the end", value: format!("{:.1} MB", rss_kb() as f64 / 1024.0), budget: "info", ok: true });
 
     rows.extend(through_a_worker(scroll));
@@ -205,7 +284,12 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
     rows.push(Row { what: "worker: scroll step, input + paint over the pipe (median)", value: format!("{step:?}"), budget: "< 2 ms", ok: step < Duration::from_millis(2) });
     rows.push(Row { what: "worker: of which the input round trip (median)", value: format!("{input:?}"), budget: "info", ok: true });
     rows.push(Row { what: "worker: what the boundary adds to a paint", value: format!("{:?}", paint.saturating_sub(in_process)), budget: "info", ok: true });
-    rows.push(Row { what: "worker: bytes over the pipe per scroll step", value: format!("{:.0} B out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0, (after.1 - before.1) as f64 / 10.0 / 1024.0), budget: "info", ok: true });
+    rows.push(Row {
+        what: "worker: bytes over the pipe per scroll step",
+        value: format!("{:.0} B out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0, (after.1 - before.1) as f64 / 10.0 / 1024.0),
+        budget: "info",
+        ok: true,
+    });
     rows
 }
 
@@ -214,7 +298,10 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
 /// to-end suite against a real server.
 fn conform() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let mut steps: Vec<Vec<&str>> = vec![vec!["test", "--workspace"], vec!["clippy", "--all-targets", "--", "-D", "warnings"]];
+    // Formatting first: it is the fastest check and the one most likely to
+    // be the only thing wrong, so failing on it costs a second rather than
+    // a full test run. `rustfmt.toml` at the root says what it means.
+    let mut steps: Vec<Vec<&str>> = vec![vec!["fmt", "--all", "--check"], vec!["test", "--workspace"], vec!["clippy", "--all-targets", "--", "-D", "warnings"]];
     if std::env::var_os("EUI_SOLI_BIN").is_some() {
         steps.push(vec!["test", "-p", "eui-client", "--test", "soli_e2e"]);
     } else {

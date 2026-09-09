@@ -2,13 +2,7 @@
 // the *decode path* must not panic on hostile input. A test harness is the one
 // place where a panic is the correct outcome — a test that panics is a test
 // that failed — so the strict set is lifted here and nowhere else.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 //! Byte-level vectors.
 //!
@@ -24,36 +18,13 @@ use eui_proto::*;
 #[test]
 fn spec_section_8_worked_example() {
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box,
-        id: 1,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 0),
-        handlers: (0, 0),
-        child_count: 1,
-    });
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Text,
-        id: 2,
-        style: 2,
-        key: 0,
-        text: Some(TextRef::Atom(1)),
-        props: (0, 0),
-        handlers: (0, 0),
-        child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Atom(1)), props: (0, 0), handlers: (0, 0), child_count: 0 });
 
     let column = StyleRecord { display: Display::Column, padding: [4; 4], bg: ColorRef::role(1), ..Default::default() };
     let label = StyleRecord { font_size: 3, fg: ColorRef::role(8), ..Default::default() };
 
-    let ops = vec![
-        Op::DefAtom { id: 1, value: "Hi".into() },
-        Op::DefStyle { id: 1, record: column },
-        Op::DefStyle { id: 2, record: label },
-        Op::Mount(tree),
-    ];
+    let ops = vec![Op::DefAtom { id: 1, value: "Hi".into() }, Op::DefStyle { id: 1, record: column }, Op::DefStyle { id: 2, record: label }, Op::Mount(tree)];
 
     let mut w = Writer::new();
     for op in &ops {
@@ -124,38 +95,34 @@ fn default_style_record_bytes() {
         0x00,                   // cursor: default
         0x00,                   // transition: none
         0x00,                   // animation: none
-        0x00, 0x00,             // reserved
+        0x00,                   // blur: none
+        0x00,                   // reserved
     ];
     assert_eq!(b.as_slice(), expected.as_slice());
+}
+
+/// The blur byte sits at offset 62, ahead of the one reserved byte left.
+#[test]
+fn a_blur_radius_rides_in_the_last_but_one_byte() {
+    let mut w = Writer::new();
+    StyleRecord { blur: 16, ..Default::default() }.encode(&mut w);
+    let b = w.into_vec();
+    assert_eq!(b.len(), 64);
+    assert_eq!(&b[62..], &[16, 0]);
 }
 
 /// Varints, pinned. LEB128 is easy to get subtly wrong in a second
 /// implementation, and a disagreement here corrupts everything downstream.
 #[test]
 fn varint_bytes() {
-    let cases: &[(u64, &[u8])] = &[
-        (0, &[0x00]),
-        (1, &[0x01]),
-        (127, &[0x7F]),
-        (128, &[0x80, 0x01]),
-        (300, &[0xAC, 0x02]),
-        (16_383, &[0xFF, 0x7F]),
-        (16_384, &[0x80, 0x80, 0x01]),
-    ];
+    let cases: &[(u64, &[u8])] = &[(0, &[0x00]), (1, &[0x01]), (127, &[0x7F]), (128, &[0x80, 0x01]), (300, &[0xAC, 0x02]), (16_383, &[0xFF, 0x7F]), (16_384, &[0x80, 0x80, 0x01])];
     for (value, bytes) in cases {
         let mut w = Writer::new();
         w.varint(*value);
         assert_eq!(w.as_slice(), *bytes, "varint {value}");
     }
 
-    let signed: &[(i64, &[u8])] = &[
-        (0, &[0x00]),
-        (-1, &[0x01]),
-        (1, &[0x02]),
-        (-2, &[0x03]),
-        (63, &[0x7E]),
-        (-64, &[0x7F]),
-    ];
+    let signed: &[(i64, &[u8])] = &[(0, &[0x00]), (-1, &[0x01]), (1, &[0x02]), (-2, &[0x03]), (63, &[0x7E]), (-64, &[0x7F])];
     for (value, bytes) in signed {
         let mut w = Writer::new();
         w.svarint(*value);
@@ -168,10 +135,7 @@ fn varint_bytes() {
 fn frame_envelope_bytes() {
     assert_eq!(Frame::Resync.encode(), vec![0x09, 0x00]);
     assert_eq!(Frame::Ack { seq: 300 }.encode(), vec![0x05, 0x02, 0xAC, 0x02]);
-    assert_eq!(
-        Frame::Ping([1, 2, 3, 4, 5, 6, 7, 8]).encode(),
-        vec![0x06, 0x08, 1, 2, 3, 4, 5, 6, 7, 8]
-    );
+    assert_eq!(Frame::Ping([1, 2, 3, 4, 5, 6, 7, 8]).encode(), vec![0x06, 0x08, 1, 2, 3, 4, 5, 6, 7, 8]);
 }
 
 /// Colour references: the top bit picks role space or literal space.

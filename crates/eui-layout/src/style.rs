@@ -139,12 +139,7 @@ impl Style {
             max_height: Length::from_dim(r.max_height, theme),
             padding: edges(r.padding),
             margin: edges(r.margin),
-            border: Edges {
-                t: f32::from(r.border_width[0]),
-                r: f32::from(r.border_width[1]),
-                b: f32::from(r.border_width[2]),
-                l: f32::from(r.border_width[3]),
-            },
+            border: Edges { t: f32::from(r.border_width[0]), r: f32::from(r.border_width[1]), b: f32::from(r.border_width[2]), l: f32::from(r.border_width[3]) },
             z: r.z,
             scroll_both: r.overflow == eui_proto::Overflow::Scroll,
             font: FontSpec { family: r.font_family, weight: r.font_weight, size, line_height },

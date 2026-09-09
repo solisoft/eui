@@ -89,14 +89,7 @@ fn frames_are_composed_the_way_the_format_says() {
             over[i..i + 4].copy_from_slice(&[0, 0, 255, 255]);
         }
     }
-    let bytes = gif(
-        4,
-        4,
-        vec![
-            (std::mem::take(&mut red), 5, gif::DisposalMethod::Keep),
-            (std::mem::take(&mut over), 5, gif::DisposalMethod::Keep),
-        ],
-    );
+    let bytes = gif(4, 4, vec![(std::mem::take(&mut red), 5, gif::DisposalMethod::Keep), (std::mem::take(&mut over), 5, gif::DisposalMethod::Keep)]);
     let movie = decode(&bytes, Some("gif")).unwrap();
     assert_eq!(movie.frames().len(), 2);
     // The second frame kept the red where the blue does not cover.
@@ -105,12 +98,7 @@ fn frames_are_composed_the_way_the_format_says() {
 }
 
 fn two_frame_movie() -> Movie {
-    Movie::new(
-        1,
-        1,
-        vec![Frame { rgba: vec![1, 2, 3, 255], delay_ms: 100 }, Frame { rgba: vec![4, 5, 6, 255], delay_ms: 100 }],
-    )
-    .unwrap()
+    Movie::new(1, 1, vec![Frame { rgba: vec![1, 2, 3, 255], delay_ms: 100 }, Frame { rgba: vec![4, 5, 6, 255], delay_ms: 100 }]).unwrap()
 }
 
 #[test]

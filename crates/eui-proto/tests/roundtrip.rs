@@ -2,13 +2,7 @@
 // the *decode path* must not panic on hostile input. A test harness is the one
 // place where a panic is the correct outcome — a test that panics is a test
 // that failed — so the strict set is lifted here and nowhere else.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 //! Encode → decode → compare, for every construct in the wire format.
 //!
@@ -19,16 +13,7 @@
 use eui_proto::*;
 
 fn node(kind: NodeKind, id: u32, children: u32) -> FlatNode {
-    FlatNode {
-        kind,
-        id,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 0),
-        handlers: (0, 0),
-        child_count: children,
-    }
+    FlatNode { kind, id, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: children }
 }
 
 fn roundtrip(frame: &Frame) {
@@ -41,14 +26,7 @@ fn roundtrip(frame: &Frame) {
 fn every_frame_kind() {
     roundtrip(&Frame::Hello(Hello {
         version: PROTOCOL_VERSION,
-        viewport: Viewport {
-            width: 1280,
-            height: 800,
-            scale: 200,
-            mode: ThemeMode::Dark,
-            density: Density::Compact,
-            font_scale: 125,
-        },
+        viewport: Viewport { width: 1280, height: 800, scale: 200, mode: ThemeMode::Dark, density: Density::Compact, font_scale: 125 },
         granted: caps::CLIPBOARD_WRITE | caps::NOTIFICATIONS,
     }));
     roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16] }));
@@ -58,12 +36,7 @@ fn every_frame_kind() {
     roundtrip(&Frame::Error { code: 42, message: "nope".into() });
     roundtrip(&Frame::Resync);
     roundtrip(&Frame::Viewport(Viewport::default()));
-    roundtrip(&Frame::Event(EventFrame {
-        node: 9,
-        event: EventKind::Click,
-        name: 3,
-        payload: Value::Null,
-    }));
+    roundtrip(&Frame::Event(EventFrame { node: 9, event: EventKind::Click, name: 3, payload: Value::Null }));
 }
 
 #[test]
@@ -85,11 +58,7 @@ fn every_op() {
         Op::InsertChild { parent: 1, index: 0, subtree: tree },
         Op::RemoveChild { parent: 1, index: 2, count: 3 },
         Op::MoveChild { parent: 1, from: 5, to: 0 },
-        Op::SetHandler {
-            node: 1,
-            event: EventKind::Click,
-            handler: Handler::LocalThenServer { chunk: 1, name: 2 },
-        },
+        Op::SetHandler { node: 1, event: EventKind::Click, handler: Handler::LocalThenServer { chunk: 1, name: 2 } },
         Op::ClearHandler { node: 1, event: EventKind::Blur },
         Op::Focus { node: 1 },
         Op::ScrollTo { node: 1, x: -120, y: 4096 },
@@ -112,11 +81,7 @@ fn every_value_variant() {
         Value::Color(ColorRef::literal(3)),
         Value::List(vec![Value::Int(1), Value::List(vec![Value::Null])]),
     ];
-    let ops = values
-        .into_iter()
-        .enumerate()
-        .map(|(i, value)| Op::SetProp { node: 1, prop: i as u32 + 1, value })
-        .collect();
+    let ops = values.into_iter().enumerate().map(|(i, value)| Op::SetProp { node: 1, prop: i as u32 + 1, value }).collect();
     roundtrip(&Frame::Batch(Batch { seq: 2, ops }));
 }
 
@@ -166,6 +131,7 @@ fn full_style_record_survives() {
         cursor: Cursor::NotAllowed,
         transition: 2,
         animation: 1,
+        blur: 24,
     };
     let mut w = Writer::new();
     record.encode(&mut w);
@@ -194,38 +160,11 @@ fn nested_tree_shape_survives() {
 #[test]
 fn props_and_handlers_keep_their_owners() {
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box,
-        id: 1,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 1),
-        handlers: (0, 0),
-        child_count: 2,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
     tree.props.push((10, Value::Bool(true)));
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Text,
-        id: 2,
-        style: 2,
-        key: 77,
-        text: Some(TextRef::Atom(5)),
-        props: (1, 0),
-        handlers: (0, 1),
-        child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 77, text: Some(TextRef::Atom(5)), props: (1, 0), handlers: (0, 1), child_count: 0 });
     tree.handlers.push((EventKind::Click, Handler::Local(1)));
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Text,
-        id: 3,
-        style: 2,
-        key: 78,
-        text: Some(TextRef::Inline("x".into())),
-        props: (1, 2),
-        handlers: (1, 0),
-        child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 3, style: 2, key: 78, text: Some(TextRef::Inline("x".into())), props: (1, 2), handlers: (1, 0), child_count: 0 });
     tree.props.push((11, Value::Int(1)));
     tree.props.push((12, Value::Null));
 

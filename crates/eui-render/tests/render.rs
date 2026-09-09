@@ -44,7 +44,21 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
-    paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale, size: (w, h), focus: None, overrides: &[], editing: None, now: 0.0, scrollbar_hot: None })
+    paint(&mut Scene {
+        session: &fx.session,
+        layout: &fx.layout,
+        theme: &fx.theme,
+        text: &mut fx.text,
+        atlas: &mut fx.atlas,
+        images: &fx.images,
+        scale,
+        size: (w, h),
+        focus: None,
+        overrides: &[],
+        editing: None,
+        now: 0.0,
+        scrollbar_hot: None,
+    })
 }
 
 fn gpu() -> Option<Renderer> {
@@ -84,7 +98,7 @@ fn paint_emits_one_quad_per_filled_box_and_one_per_glyph() {
     assert_eq!(list.quads[0].params[2] as u32, 0);
     assert_eq!(list.quads[1].params[2] as u32, TEXTURED);
     assert_eq!(list.quads[2].params[2] as u32, TEXTURED);
-    assert_eq!(list.runs, vec![(0, 0, 3)]);
+    assert_eq!(list.runs, vec![Run { clip: 0, chain: 0, first: 0, count: 3 }]);
     assert_eq!(list.clips, vec![[0, 0, 200, 100]]);
     assert_eq!(list.clear, linear(fx.theme.color(Role::SurfaceBase)));
     assert_eq!(fx.atlas.len(), 2);
@@ -109,7 +123,7 @@ fn scroll_containers_open_a_scissor_run_and_cull_what_is_outside() {
     let thumb = list.quads.last().unwrap();
     assert_eq!(thumb.rect[2], SCROLLBAR_WIDTH - 2.0);
     assert_eq!(thumb.rect[3], 24.0, "200 px of content in 50 px: the 24 px minimum");
-    assert!(list.runs.iter().take(list.runs.len() - 1).all(|r| r.0 == 1));
+    assert!(list.runs.iter().take(list.runs.len() - 1).all(|r| r.clip == 1));
 }
 
 #[test]
@@ -150,7 +164,7 @@ fn clear_colour_is_the_surface_role() {
     let mut fx = fixture(vec![col], vec![node(NodeKind::Box, 1, 1, 0)], vec![], &[], 64.0, 64.0);
     let list = draw(&mut fx, 64, 64, 1.0);
     let target = r.offscreen(64, 64);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     assert_eq!(px.len(), 64 * 64 * 4);
     let want = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -166,7 +180,7 @@ fn a_filled_box_lands_where_layout_put_it_with_its_role_colour() {
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
     let list = draw(&mut fx, 100, 100, 1.0);
     let target = r.offscreen(100, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -197,7 +211,7 @@ fn rounded_corners_and_borders_render() {
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 80.0, 80.0);
     let list = draw(&mut fx, 80, 80, 1.0);
     let target = r.offscreen(80, 80);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -217,7 +231,7 @@ fn text_puts_ink_inside_its_rect_and_nowhere_else() {
     let list = draw(&mut fx, 200, 100, 1.0);
     assert!(list.quads.iter().all(|q| q.params[2] as u32 == TEXTURED), "only glyph quads");
     let target = r.offscreen(200, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     let rect = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
@@ -252,7 +266,7 @@ fn scroll_clips_at_the_pixel_level() {
     let mut fx = fixture(vec![col, sc, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Scroll, 2, 2, 1), node(NodeKind::Box, 3, 3, 0)], vec![], &[], 50.0, 100.0);
     let list = draw(&mut fx, 50, 100, 1.0);
     let target = r.offscreen(50, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let danger = rgba_of(fx.theme.color(Role::DangerBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -272,7 +286,7 @@ fn stack_paints_in_z_order() {
     let mut fx = fixture(vec![stack, low, high], vec![node(NodeKind::Box, 1, 1, 2), node(NodeKind::Box, 2, 3, 0), node(NodeKind::Box, 3, 2, 0)], vec![], &[], 40.0, 40.0);
     let list = draw(&mut fx, 40, 40, 1.0);
     let target = r.offscreen(40, 40);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     assert!(close(pixel(&px, 40, 20, 20), rgba_of(fx.theme.color(Role::SuccessBase)), 2));
 }
@@ -307,7 +321,7 @@ fn an_image_paints_its_pixels() {
     let list = draw(&mut fx, 100, 100, 1.0);
     assert_eq!(list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED_RGBA).count(), 1);
     let target = r.offscreen(100, 100);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     // Centre of the image (12+16, 12+16): white. Corner (12, 12): the surface shows through.
@@ -376,7 +390,7 @@ fn a_canvas_line_lands_on_its_pixels() {
     let mut fx = canvas_fixture(paths, 100.0, 50.0);
     let list = draw(&mut fx, 100, 50, 1.0);
     let target = r.offscreen(100, 50);
-    r.render_offscreen(&target, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -405,6 +419,192 @@ fn a_shadow_is_a_grown_black_quad_painted_before_its_box() {
     assert_eq!(list.quads[1].rect, [r.x, r.y, r.w, r.h]);
 }
 
+// ------------------------------------------------------------------ blur
+
+/// Two halves, one red one blue, under a pane that may or may not frost
+/// them. `blur` of zero is the ordinary single-pass frame, which is what
+/// the blurred one is judged against.
+fn seam(blur: u8) -> (Fx, DrawList) {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let halves = StyleRecord { display: Display::Row, width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let half = |role: Role| StyleRecord { bg: ColorRef::role(role.id()), width: Dim::Px(20), height: Dim::Px(20), ..Default::default() };
+    let pane = StyleRecord { blur, width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let mut fx = fixture(
+        vec![root, halves, half(Role::DangerBase), half(Role::InfoBase), pane],
+        vec![node(NodeKind::Box, 1, 1, 2), node(NodeKind::Box, 2, 2, 2), node(NodeKind::Box, 3, 3, 0), node(NodeKind::Box, 4, 4, 0), node(NodeKind::Box, 5, 5, 0)],
+        vec![],
+        &[],
+        40.0,
+        20.0,
+    );
+    let list = draw(&mut fx, 40, 20, 1.0);
+    (fx, list)
+}
+
+#[test]
+fn a_frame_with_no_blur_asks_for_no_backdrop() {
+    let (_, list) = seam(0);
+    assert_eq!(list.backdrop, None, "the ordinary frame stays one pass");
+    assert!(list.quads.iter().all(|q| q.params[2] as u32 & BLURRED == 0));
+}
+
+#[test]
+fn a_blur_names_the_backdrop_its_quad_will_sample() {
+    let (_, list) = seam(4);
+    let b = list.backdrop.expect("a blurred node asks for a backdrop");
+    assert_eq!(b.sigmas, vec![4.0], "one radius, one chain");
+    // Everything before the pane is the backdrop, and the pane is not
+    // behind itself: the two halves are quads 0 and 1.
+    assert_eq!(b.first, 2);
+    // The region wanted the pane grown by three standard deviations and got
+    // the framebuffer, which is all there was to give.
+    assert_eq!(b.rect, [0, 0, 40, 20]);
+    let pane = &list.quads[2];
+    assert_eq!(pane.params[2] as u32 & BLURRED, BLURRED, "the pane samples it");
+    assert_eq!(pane.extra[2], 4.0, "at the standard deviation it asked for");
+    // One radius is chain 0, which is also what a run with nothing blurred
+    // in it carries, so a frame like this never has to split a run: the
+    // fragment reads the binding or ignores it, and the picture is the same.
+    assert_eq!(list.runs.len(), 1);
+    assert_eq!(list.runs[0].chain, 0);
+}
+
+/// Two radii are two chains, and a run binds one blur — so here the runs do
+/// have to split, and each pane has to end up on its own.
+#[test]
+fn two_radii_are_two_chains_on_runs_of_their_own() {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let pane = |blur: u8| StyleRecord { blur, width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let mut fx = fixture(vec![root, pane(4), pane(9)], vec![node(NodeKind::Box, 1, 1, 2), node(NodeKind::Box, 2, 2, 0), node(NodeKind::Box, 3, 3, 0)], vec![], &[], 40.0, 20.0);
+    let list = draw(&mut fx, 40, 20, 1.0);
+    let b = list.backdrop.clone().expect("a backdrop");
+    assert_eq!(b.sigmas, vec![4.0, 9.0], "one chain per distinct radius");
+    // Both panes share the one backdrop: it was taken before the first of
+    // them, so the second does not see the first (03 §2.1).
+    assert_eq!(b.first, 0);
+    let chains: Vec<u32> = list.runs.iter().map(|r| r.chain).collect();
+    assert_eq!(chains, vec![0, 1], "the second pane's run binds the second chain");
+    assert!(list.runs.iter().all(|r| r.count == 1));
+}
+
+/// The one that fails if any pass of the chain is skipped: with no blur the
+/// seam is a step from one role to the other, and with it each side has to
+/// have taken on some of the other.
+#[test]
+fn a_blurred_pane_carries_each_half_across_the_seam() {
+    let Some(mut r) = gpu() else { return };
+    let shot = |r: &mut Renderer, blur: u8| {
+        let (mut fx, list) = seam(blur);
+        let target = r.offscreen(40, 20);
+        r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()
+    };
+    let sharp = shot(&mut r, 0);
+    let frosted = shot(&mut r, 4);
+    let red = rgba_of(fx_role(Role::DangerBase));
+    let blue = rgba_of(fx_role(Role::InfoBase));
+
+    // The sharp frame is the step it always was.
+    assert!(close(pixel(&sharp, 40, 17, 10), red, 2), "left of the seam is red");
+    assert!(close(pixel(&sharp, 40, 22, 10), blue, 2), "right of the seam is blue");
+
+    // The frosted one has carried each half into the other. Which channel
+    // moved does not matter; that both sides moved towards the other does.
+    let d = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).map(|(x, y)| i32::from(*x) - i32::from(y)).map(i32::abs).sum::<i32>();
+    let left = pixel(&frosted, 40, 17, 10);
+    let right = pixel(&frosted, 40, 22, 10);
+    assert!(d(left, red) > 8, "left of the seam took on the blue: {left:?} was {red:?}");
+    assert!(d(right, blue) > 8, "right of the seam took on the red: {right:?} was {blue:?}");
+    assert!(d(left, right) < d(red, blue), "and the two are closer than the roles are");
+
+    // Far from the seam the blur has nothing to mix in, so the colour
+    // survives: a chain that smeared everything would fail here.
+    assert!(close(pixel(&frosted, 40, 2, 10), red, 12), "the far left is still red: {:?}", pixel(&frosted, 40, 2, 10));
+    assert!(close(pixel(&frosted, 40, 37, 10), blue, 12), "the far right is still blue");
+}
+
+/// The snapshot is a sub-rect of the frame, so the fragment stage has to map
+/// its own position into that rect rather than into the framebuffer. Get the
+/// origin wrong and the pane shows a piece of the page from somewhere else —
+/// which the seam test above cannot catch, because there the region *is* the
+/// whole frame.
+#[test]
+fn a_pane_smaller_than_the_frame_frosts_what_is_actually_behind_it() {
+    let Some(mut r) = gpu() else { return };
+    let stack = StyleRecord { display: Display::Stack, width: Dim::Px(80), height: Dim::Px(20), ..Default::default() };
+    let row = StyleRecord { display: Display::Row, width: Dim::Px(80), height: Dim::Px(20), ..Default::default() };
+    let half = |role: Role| StyleRecord { bg: ColorRef::role(role.id()), width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
+    let gap = StyleRecord { width: Dim::Px(30), height: Dim::Px(20), ..Default::default() };
+    let pane = StyleRecord { width: Dim::Px(20), height: Dim::Px(20), blur: 3, ..Default::default() };
+    let mut fx = fixture(
+        vec![stack, row, half(Role::DangerBase), half(Role::InfoBase), row, gap, pane],
+        vec![
+            node(NodeKind::Box, 1, 1, 2),
+            node(NodeKind::Box, 2, 2, 2),
+            node(NodeKind::Box, 3, 3, 0),
+            node(NodeKind::Box, 4, 4, 0),
+            node(NodeKind::Box, 5, 5, 2),
+            node(NodeKind::Box, 6, 6, 0),
+            node(NodeKind::Box, 7, 7, 0),
+        ],
+        vec![],
+        &[],
+        80.0,
+        20.0,
+    );
+    let list = draw(&mut fx, 80, 20, 1.0);
+    let b = list.backdrop.as_ref().expect("a backdrop");
+    // The pane sits at x 30..50; three standard deviations is nine px, and
+    // the top and bottom clip to the frame.
+    assert_eq!(b.rect, [21, 0, 38, 20], "a sub-rect, not the framebuffer");
+
+    let target = r.offscreen(80, 20);
+    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let red = rgba_of(fx_role(Role::DangerBase));
+    let blue = rgba_of(fx_role(Role::InfoBase));
+    let at = |x| pixel(&px, 80, x, 10);
+
+    // Outside the pane the page is untouched: the blur is confined to the
+    // node that asked for it.
+    assert!(close(at(25), red, 2), "left of the pane {:?}", at(25));
+    assert!(close(at(55), blue, 2), "right of the pane {:?}", at(55));
+    // Inside it, and away from the seam, the colour still has to be the one
+    // that is actually there — which is what an origin off by 21 px breaks.
+    assert!(close(at(32), red, 5), "inside the pane, left of the seam {:?}", at(32));
+    assert!(close(at(47), blue, 5), "inside the pane, right of the seam {:?}", at(47));
+    // And on the seam, half of each.
+    let mid = at(40);
+    for c in 0..3 {
+        let (lo, hi) = (red[c].min(blue[c]), red[c].max(blue[c]));
+        assert!(mid[c] > lo && mid[c] < hi, "channel {c}: {mid:?} not between {red:?} and {blue:?}");
+    }
+}
+
+fn fx_role(role: Role) -> u32 {
+    Theme::default().resolve(Viewer::default()).color(role)
+}
+
+/// The snapshot is the region that asked for it, not the framebuffer. This
+/// is the whole memory argument in `10-budgets.md`: a small frosted node in
+/// a big window costs a small texture, and a 4K frame does not quietly
+/// allocate 33 MB because someone frosted a tooltip.
+#[test]
+fn the_backdrop_is_only_as_big_as_the_blur_reaches() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    // No `bg` at all: clear glass is still glass, and still worth a quad.
+    let glass = StyleRecord { width: Dim::Px(40), height: Dim::Px(20), blur: 6, ..Default::default() };
+    let mut fx = fixture(vec![col, glass], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 400.0, 300.0);
+    let r = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
+    let list = draw(&mut fx, 400, 300, 1.0);
+    assert_eq!(list.quads.len(), 1, "a blurred node is painted even with no bg: {list:#?}");
+    let b = list.backdrop.as_ref().expect("a blur asks for a backdrop");
+    // Three standard deviations on every side, past which a Gaussian stops
+    // mattering; clipped to the frame, which is why the near edges are 0.
+    assert_eq!(b.rect, [0, 0, (r.x + r.w + 18.0) as u32, (r.y + r.h + 18.0) as u32]);
+    assert!(b.rect[2] < 400 && b.rect[3] < 300, "not the whole framebuffer: {:?}", b.rect);
+}
+
 #[test]
 fn overrides_replace_a_nodes_colours_for_the_frame() {
     let col = StyleRecord { display: Display::Column, ..Default::default() };
@@ -413,7 +613,21 @@ fn overrides_replace_a_nodes_colours_for_the_frame() {
     let ix = fx.session.lookup(2).unwrap();
     let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5 };
     let overrides = [(ix, mid)];
-    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &overrides, editing: None, now: 0.0, scrollbar_hot: None });
+    let list = paint(&mut Scene {
+        session: &fx.session,
+        layout: &fx.layout,
+        theme: &fx.theme,
+        text: &mut fx.text,
+        atlas: &mut fx.atlas,
+        images: &fx.images,
+        scale: 1.0,
+        size: (200, 100),
+        focus: None,
+        overrides: &overrides,
+        editing: None,
+        now: 0.0,
+        scrollbar_hot: None,
+    });
     assert_eq!(list.quads[0].fill, [0.5, 0.25, 0.125, 1.0]);
     assert_eq!(list.quads[0].params[3], 0.5);
 }
@@ -427,7 +641,21 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
     let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
     let ix = fx.session.lookup(2).unwrap();
     let editing = Some(Editing { node: ix, start: 1, end: 3, caret: 3, scroll_x: 4.0 });
-    let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing, now: 0.0, scrollbar_hot: None });
+    let list = paint(&mut Scene {
+        session: &fx.session,
+        layout: &fx.layout,
+        theme: &fx.theme,
+        text: &mut fx.text,
+        atlas: &mut fx.atlas,
+        images: &fx.images,
+        scale: 1.0,
+        size: (200, 100),
+        focus: None,
+        overrides: &[],
+        editing,
+        now: 0.0,
+        scrollbar_hot: None,
+    });
     let boxes: Vec<&Quad> = list.quads.iter().filter(|q| q.params[2] == 0.0).collect();
     assert_eq!(boxes.len(), 2, "one selection rect, one caret: {list:#?}");
     let mut accent = linear(fx.theme.color(Role::AccentBase));
@@ -487,7 +715,21 @@ fn a_tall_field_centres_its_text_and_caret() {
         let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
         let ix = fx.session.lookup(2).unwrap();
         let editing = Some(Editing { node: ix, start: 0, end: 0, caret: 5, scroll_x: 0.0 });
-        let list = paint(&mut Scene { session: &fx.session, layout: &fx.layout, theme: &fx.theme, text: &mut fx.text, atlas: &mut fx.atlas, images: &fx.images, scale: 1.0, size: (200, 100), focus: None, overrides: &[], editing, now: 0.0, scrollbar_hot: None });
+        let list = paint(&mut Scene {
+            session: &fx.session,
+            layout: &fx.layout,
+            theme: &fx.theme,
+            text: &mut fx.text,
+            atlas: &mut fx.atlas,
+            images: &fx.images,
+            scale: 1.0,
+            size: (200, 100),
+            focus: None,
+            overrides: &[],
+            editing,
+            now: 0.0,
+            scrollbar_hot: None,
+        });
         let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).expect("caret");
         let glyph = list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).expect("glyph");
         (caret.rect[1], glyph.rect[1])
@@ -526,7 +768,7 @@ fn a_bgra_target_draws_the_same_picture_with_its_channels_swapped() {
         view_formats: &[],
     });
     let view = tex.create_view(&Default::default());
-    r.render(&view, wgpu::TextureFormat::Bgra8UnormSrgb, (100, 100), &list, &mut fx.atlas, &mut fx.images);
+    r.render(Target { view: &view, format: wgpu::TextureFormat::Bgra8UnormSrgb, size: (100, 100), now: 0.0 }, &list, &mut fx.atlas, &mut fx.images);
 
     let px = read_texture(&mut r, &tex, 100, 100);
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
@@ -562,4 +804,79 @@ fn read_texture(r: &mut Renderer, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8
         out.extend_from_slice(&mapped[start..start + (w * 4) as usize]);
     }
     out
+}
+
+// 03 §5 `spin`. The angle is not in the draw list: the vertex stage takes
+// it from the clock in the uniforms. That is what lets the window redraw a
+// spinning frame without repainting — so the property worth pinning is that
+// the list does not depend on the clock at all, and that the picture still
+// does.
+fn spinning_bar() -> (Fx, DrawList) {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    // A 40 x 10 bar, so a quarter turn about its own centre is unmistakable.
+    let bar = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(10), animation: 1, ..Default::default() };
+    let mut fx = fixture(vec![col, bar], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    (fx, list)
+}
+
+#[test]
+fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let bar = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(10), animation: 1, ..Default::default() };
+    let nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)];
+    let at = |now: f32| {
+        let mut fx = fixture(vec![col, bar], nodes.clone(), vec![], &[], 100.0, 100.0);
+        paint(&mut Scene {
+            session: &fx.session,
+            layout: &fx.layout,
+            theme: &fx.theme,
+            text: &mut fx.text,
+            atlas: &mut fx.atlas,
+            images: &fx.images,
+            scale: 1.0,
+            size: (100, 100),
+            focus: None,
+            overrides: &[],
+            editing: None,
+            now,
+            scrollbar_hot: None,
+        })
+    };
+    let a = at(0.0);
+    let b = at(0.31);
+    let c = at(97.5);
+    assert_eq!(a, b, "the clock must not reach the draw list");
+    assert_eq!(a, c, "not even most of two minutes later");
+    assert!(a.wants_frame, "a spinning node still asks for the next frame");
+    let bar_quad = a.quads.iter().find(|q| q.rect[2] == 40.0).expect("the bar");
+    assert!(u32::try_from(bar_quad.params[2] as i64).is_ok_and(|f| f & SPINNING != 0), "and it is marked for the vertex stage");
+}
+
+#[test]
+fn the_clock_turns_a_spinning_node_a_quarter_of_the_way_round() {
+    let Some(mut r) = gpu() else { return };
+    let (mut fx, list) = spinning_bar();
+    // One revolution per 1.2 s, so 0.3 s is a right angle: the horizontal
+    // bar stands up, about a centre that does not move.
+    let shot = |r: &mut Renderer, fx: &mut Fx, now: f32| {
+        let target = r.offscreen(100, 100);
+        r.render_offscreen(&target, now, &list, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()
+    };
+    let flat = shot(&mut r, &mut fx, 0.0);
+    let upright = shot(&mut r, &mut fx, 0.3);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // The bar is 40 x 10 at the origin, so its centre is (20, 5).
+    let (cx, cy) = (20, 5);
+    // Lying down: far along x is bar, far along y is not.
+    assert!(close(pixel(&flat, 100, cx + 15, cy), accent, 2), "flat, along x: {:?}", pixel(&flat, 100, cx + 15, cy));
+    assert!(close(pixel(&flat, 100, cx, cy + 15), surface, 2), "flat, along y: {:?}", pixel(&flat, 100, cx, cy + 15));
+    // Stood up: the other way about, and the same list drew both.
+    assert!(close(pixel(&upright, 100, cx, cy + 15), accent, 2), "upright, along y: {:?}", pixel(&upright, 100, cx, cy + 15));
+    assert!(close(pixel(&upright, 100, cx + 15, cy), surface, 2), "upright, along x: {:?}", pixel(&upright, 100, cx + 15, cy));
+    // The centre is on either way: a spin turns a node, it does not move it.
+    assert!(close(pixel(&flat, 100, cx, cy), accent, 2));
+    assert!(close(pixel(&upright, 100, cx, cy), accent, 2));
 }

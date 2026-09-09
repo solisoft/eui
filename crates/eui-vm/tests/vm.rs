@@ -96,11 +96,15 @@ fn branches_and_comparison() {
     let big = 10;
     let small = 11;
     let chunk = Asm::new(2)
-        .load(COUNT).push_int(3).op(0x17)
+        .load(COUNT)
+        .push_int(3)
+        .op(0x17)
         .jump(0x21, 7) // over: push_str big (2) + set_text (2) + jump (3) = 7
-        .push_str(big).set_text(VALUE_NODE)
+        .push_str(big)
+        .set_text(VALUE_NODE)
         .jump(0x20, 4) // over: push_str small (2) + set_text (2)
-        .push_str(small).set_text(VALUE_NODE)
+        .push_str(small)
+        .set_text(VALUE_NODE)
         .ret();
     let chunk = Chunk::verify(&chunk).unwrap();
     let mut m = Mem::default();
@@ -118,9 +122,18 @@ fn branches_and_comparison() {
 fn strings_bools_and_props() {
     let a = 20;
     let chunk = Asm::new(3)
-        .push_str(a).load(COUNT).op(0x1A).op(0x1B).set_text(1) // "n=" + count
-        .push_bool(true).op(0x14).set_prop(1, 5) // prop 5 = !true
-        .push_int(2).push_int(2).op(0x15).store(COUNT) // count = (2 == 2)
+        .push_str(a)
+        .load(COUNT)
+        .op(0x1A)
+        .op(0x1B)
+        .set_text(1) // "n=" + count
+        .push_bool(true)
+        .op(0x14)
+        .set_prop(1, 5) // prop 5 = !true
+        .push_int(2)
+        .push_int(2)
+        .op(0x15)
+        .store(COUNT) // count = (2 == 2)
         .ret();
     let chunk = Chunk::verify(&chunk).unwrap();
     let mut m = Mem::default();

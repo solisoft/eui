@@ -579,6 +579,8 @@ def gallery_defaults(state)
     "page": 1,
     "seg": "Day",
     "sheet": false,
+    "dialog": "",
+    "dialog_said": "",
     "tree_open": ["root"],
     "select_open": false,
     "select_value": "Medium",
@@ -726,6 +728,14 @@ def gallery(event_data)
     "grid_key" => gallery_grid_key(state, params),
     "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
     "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    # Which dialog is up, and what the last one was answered with. The
+    # answer is kept so the gallery can show that the choice arrived
+    # somewhere, rather than the dialog just vanishing.
+    "ask_alert" => set_key(state, "dialog", "alert"),
+    "ask_confirm" => set_key(state, "dialog", "confirm"),
+    "dialog_ok" => set_key(set_key(state, "dialog", ""), "dialog_said", "confirmed"),
+    "dialog_cancel" => set_key(set_key(state, "dialog", ""), "dialog_said", "cancelled"),
+    "dialog_close" => set_key(set_key(state, "dialog", ""), "dialog_said", "acknowledged"),
     _ => state,
   }
 end
@@ -767,32 +777,69 @@ def gallery_controls(state)
   )
 end
 
-# The same 32-pixel avatar three times, as the three formats a picture may
+# One photograph, encoded three ways — the three formats a picture may
 # arrive in (03 §1). The client tells them apart by their first bytes; the
-# server only ever sends a hash.
-def gallery_pictures
-  row(
-    {
-      "gap": 3,
-      "align": "center",
-      "wrap": "wrap"
-    },
+# server only ever sends a hash. Showing the same image three times is the
+# point: identical output, and the byte counts underneath are the whole
+# argument for choosing between them.
+def gallery_picture_card(label, src, weight, wide)
+  column(
+    {"gap": 1, "grow": 1, "basis": wide ? 200 : "100%", "min_width": 160},
     [
-      avatar("public/images/avatar.png", 32),
-      avatar("public/images/avatar.jpg", 32),
-      avatar("public/images/avatar.webp", 32),
-      muted("PNG · JPEG · WebP")
+      {
+        "k": "image",
+        "p": {"src": src},
+        "s": {"width": "100%", "height": 132, "radius": 2, "overflow": "clip"}
+      },
+      row({"gap": 2, "align": "center"}, [
+        text(label, {"weight": "semibold", "size": 1, "grow": 1}),
+        muted(weight)
+      ])
     ]
   )
 end
 
+def gallery_pictures(wide)
+  column({"gap": 2}, [
+    row(
+      {"gap": 3, "wrap": "wrap", "align": "start"},
+      [
+        gallery_picture_card("PNG", "public/images/formats/sample.png", "472 KB", wide),
+        gallery_picture_card("JPEG", "public/images/formats/sample.jpg", "72 KB", wide),
+        gallery_picture_card("WebP", "public/images/formats/sample.webp", "60 KB", wide)
+      ]
+    ),
+    muted("The same photograph, decoded from three formats by the client.")
+  ])
+end
+
+# The viewer, with the editor's tokeniser doing the colouring: one text
+# node carrying a `spans` prop, so the code stays a single run and its
+# lines stay level with the gutter counting them.
+def gallery_code_viewer
+  source = "# A greeting, twice over.\ndef hello(name)\n  puts(\"Hello, \" + name)\nend\n\ndef world\n  puts(\"World\")\n  42\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()"
+  code_viewer(source, {"line_numbers": true, "spans": code_spans(source)})
+end
+
 def gallery_media(state)
   kind = state["media_tab"] ?? "Sound"
+  w = (state["viewport"] ?? {})["width"] ?? 1280
+  wide = bp_min(w, "md")
   body = gallery_sound(state)
   body = gallery_video(state) if kind == "Video"
+  # On a wide viewport the title and the picker share a line, because the
+  # picker is short and the line would otherwise be mostly empty; narrow,
+  # they stack so neither has to shrink.
+  head = wide ? row(
+    {"gap": 3, "align": "center"},
+    [text("Media", {"weight": "bold", "grow": 1}), segmented(["Sound", "Video"], kind, "media_tab")]
+  ) : column(
+    {"gap": 2},
+    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab")]
+  )
   card(
     {"gap": 3, "width": "100%"},
-    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab"), body, gallery_pictures()]
+    [head, body, divider(), gallery_pictures(wide)]
   )
 end
 
@@ -1023,16 +1070,24 @@ def gallery_view(raw_state)
         accordion(sections, open, "toggle"),
         code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
         h2("Code Viewer:"),
-        code_viewer(
-          "def hello(name)\n  puts(\"Hello, \" + name)\nend\n\ndef world\n  puts(\"World\")\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()",
-          {"line_numbers": true}
-        )
+        gallery_code_viewer()
       ]
     ),
     column(
       {"gap": 3, "width": wide ? 240 : "100%"},
       [
         card({"gap": 2}, [h2("Tree"), tree_view(tree, tree_open, "tree", 0)]),
+        card({"gap": 2}, [
+          h2("Dialogs"),
+          muted("A question, and a statement."),
+          row({"gap": 2, "wrap": "wrap"}, [
+            danger_button("Delete…", "ask_confirm"),
+            secondary_button("Save…", "ask_alert")
+          ]),
+          # The answer, so the choice is visibly received rather than the
+          # dialog merely disappearing.
+          (state["dialog_said"] ?? "") == "" ? muted("No answer yet.") : muted("You " + state["dialog_said"] + " it.")
+        ]),
         menu(["Rename", "Duplicate", "Delete"], "noop"),
         tooltip("A tooltip")
       ]
@@ -1120,6 +1175,22 @@ def gallery_view(raw_state)
     page,
     sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")])
   ] : [page]
+  # A dialog is the topmost layer: it goes on after the sheet, so opening
+  # one over the other still leaves the question on top.
+  asking = state["dialog"] ?? ""
+  layers = layers.concat([confirm(
+    "Delete this invoice?",
+    "It and its lines go. Nothing here is real, so nothing is lost.",
+    "dialog_ok",
+    "dialog_cancel",
+    {"ok": "Delete", "danger": true}
+  )]) if asking == "confirm"
+  layers = layers.concat([alert(
+    "Saved",
+    "The sheet is written. This one has nothing to decide, so it has one button.",
+    "dialog_close",
+    {"ok": "Got it"}
+  )]) if asking == "alert"
   stack({"gap": 0}, layers)
 end
 
@@ -1361,8 +1432,16 @@ def feed_view(state)
   live = posts.length() > 0
   count = live ? posts.length() : (state["count"] ?? 10)
   window = state["window"] ?? [0, 0]
-  first = window[0]
-  last = window[1] < count ? window[1] : count - 1
+  # The client asks for the rows in view plus two viewports either side, and
+  # only once the scroll has been still (04 §7.1). Answering with more than
+  # it asked for is runway that costs nothing to hold: a fling that outruns
+  # its own request lands on cards instead of the sunken placeholder. A few
+  # dozen extra cards is the order §7.1 already budgets for.
+  runway = 30
+  first = window[0] - runway
+  first = 0 if first < 0
+  last = window[1] + runway
+  last = count - 1 if last > count - 1
   feed_prune(first, last)
   sound = state["sound"] ?? -1
   moving = state["moving"] ?? -1

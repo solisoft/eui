@@ -201,7 +201,11 @@ impl Chunk {
                     let rel = i64::from(i16::from_le_bytes(r.array::<2>().map_err(trunc)?));
                     let next = r.position().saturating_sub(code_start) as i64;
                     raw_jumps.push((code.len(), next.saturating_add(rel)));
-                    if op == 0x20 { Instr::Jump(usize::MAX) } else { Instr::JumpIfFalse(usize::MAX) }
+                    if op == 0x20 {
+                        Instr::Jump(usize::MAX)
+                    } else {
+                        Instr::JumpIfFalse(usize::MAX)
+                    }
                 }
                 0x30 => Instr::SetText(r.varint32().map_err(trunc)?),
                 0x31 => {

@@ -128,38 +128,19 @@ pub struct Viewport {
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self {
-            width: 0,
-            height: 0,
-            scale: 100,
-            mode: ThemeMode::default(),
-            density: Density::default(),
-            font_scale: 100,
-        }
+        Self { width: 0, height: 0, scale: 100, mode: ThemeMode::default(), density: Density::default(), font_scale: 100 }
     }
 }
 
 impl Viewport {
     /// Decode.
     pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
-        Ok(Self {
-            width: r.varint32()?,
-            height: r.varint32()?,
-            scale: r.u16()?,
-            mode: ThemeMode::from_u8(r.u8()?)?,
-            density: Density::from_u8(r.u8()?)?,
-            font_scale: r.u16()?,
-        })
+        Ok(Self { width: r.varint32()?, height: r.varint32()?, scale: r.u16()?, mode: ThemeMode::from_u8(r.u8()?)?, density: Density::from_u8(r.u8()?)?, font_scale: r.u16()? })
     }
 
     /// Encode.
     pub fn encode(&self, w: &mut Writer) {
-        w.varint32(self.width)
-            .varint32(self.height)
-            .u16(self.scale)
-            .u8(self.mode as u8)
-            .u8(self.density as u8)
-            .u16(self.font_scale);
+        w.varint32(self.width).varint32(self.height).u16(self.scale).u8(self.mode as u8).u8(self.density as u8).u16(self.font_scale);
     }
 }
 
@@ -261,12 +242,7 @@ impl Frame {
                 Self::Welcome(Welcome { version, session: p.array::<16>()? })
             }
             0x03 => Self::Batch(Batch::decode(&mut p)?),
-            0x04 => Self::Event(EventFrame {
-                node: p.varint32()?,
-                event: EventKind::from_u8(p.u8()?)?,
-                name: p.varint32()?,
-                payload: Value::decode(&mut p)?,
-            }),
+            0x04 => Self::Event(EventFrame { node: p.varint32()?, event: EventKind::from_u8(p.u8()?)?, name: p.varint32()?, payload: Value::decode(&mut p)? }),
             0x05 => Self::Ack { seq: p.varint()? },
             0x06 | 0x07 => {
                 let nonce = p.array::<8>()?;
@@ -276,10 +252,7 @@ impl Frame {
                     Self::Pong(nonce)
                 }
             }
-            0x08 => Self::Error {
-                code: p.varint32()?,
-                message: p.str(MAX_INLINE_STR, "error message")?.to_owned(),
-            },
+            0x08 => Self::Error { code: p.varint32()?, message: p.str(MAX_INLINE_STR, "error message")?.to_owned() },
             0x09 => Self::Resync,
             0x0A => Self::Viewport(Viewport::decode(&mut p)?),
             _ => return Err(DecodeError::UnknownTag("frame kind")),

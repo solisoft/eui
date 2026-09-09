@@ -4,16 +4,7 @@
 pub const SPACE: [f32; 13] = [0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0, 96.0];
 
 /// `text` entries as `(size, line height)`, index 0–7, px.
-pub const TEXT: [(f32, f32); 8] = [
-    (11.0, 16.0),
-    (13.0, 18.0),
-    (15.0, 22.0),
-    (17.0, 24.0),
-    (20.0, 28.0),
-    (24.0, 32.0),
-    (30.0, 38.0),
-    (38.0, 46.0),
-];
+pub const TEXT: [(f32, f32); 8] = [(11.0, 16.0), (13.0, 18.0), (15.0, 22.0), (17.0, 24.0), (20.0, 28.0), (24.0, 32.0), (30.0, 38.0), (38.0, 46.0)];
 
 /// `shadow` entries as `(y offset, blur, opacity)`, index 0–3.
 pub const SHADOW: [(f32, f32, f32); 4] = [(0.0, 0.0, 0.0), (1.0, 2.0, 0.12), (4.0, 12.0, 0.16), (12.0, 32.0, 0.24)];
@@ -37,7 +28,11 @@ pub const RADIUS_LEN: usize = 5;
 /// motion that starts from rest and ends at rest, like a keyboard scroll.
 pub fn ease_in_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
-    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
 }
 
 /// The motion easing curve of 05 §4, `cubic-bezier(0.2, 0, 0, 1)`, as

@@ -77,7 +77,9 @@ fn pump(driver: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receive
                     let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
                     if std::env::var("EUI_SOLI_TRACE").is_ok() {
                         match &frame {
-                            Frame::Batch(b) => eprintln!("TRACE server -> batch seq={} ops={:?}", b.seq, b.ops.iter().map(|o| format!("{o:?}").chars().take(60).collect::<String>()).collect::<Vec<_>>()),
+                            Frame::Batch(b) => {
+                                eprintln!("TRACE server -> batch seq={} ops={:?}", b.seq, b.ops.iter().map(|o| format!("{o:?}").chars().take(60).collect::<String>()).collect::<Vec<_>>())
+                            }
                             other => eprintln!("TRACE server -> {other:?}"),
                         }
                     }
@@ -777,11 +779,7 @@ fn the_editor_types_into_its_own_source() {
     assert!(all.iter().any(|t| t.ends_with(" lines")), "a line count: {all:?}");
 
     // One box takes the keyboard; a click anywhere in the buffer focuses it.
-    let keyed = d
-        .session()
-        .preorder(root(&d))
-        .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
-        .expect("the buffer takes the keyboard");
+    let keyed = d.session().preorder(root(&d)).find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some()).expect("the buffer takes the keyboard");
     let r = d.layout().rect(keyed).expect("laid out");
     let seq = d.session().last_seq().unwrap();
     d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + 8.0));
@@ -828,11 +826,7 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
     }
     // The grid is one node: clicking it puts the cursor where the pointer
     // is and takes the keyboard.
-    let grid = d
-        .session()
-        .preorder(root(&d))
-        .find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some())
-        .expect("the pattern takes the keyboard");
+    let grid = d.session().preorder(root(&d)).find(|ix| d.session().handler(*ix, eui_proto::EventKind::KeyDown).is_some()).expect("the pattern takes the keyboard");
     // Just past the row-number gutter, on the first line under the channel
     // headings: the note column of the first channel.
     let _ = d.paint(1000, 800);
@@ -923,10 +917,7 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
     d.tick(Instant::now());
     let _ = d.paint(1000, 800);
     let reports = d.take_pending();
-    assert!(
-        reports.iter().any(|f| matches!(f, Frame::Event(e) if e.event == eui_proto::EventKind::TimeUpdate)),
-        "a second of sound reports its position: {reports:?}"
-    );
+    assert!(reports.iter().any(|f| matches!(f, Frame::Event(e) if e.event == eui_proto::EventKind::TimeUpdate)), "a second of sound reports its position: {reports:?}");
     for f in reports {
         conn.tx.send(f.encode()).unwrap();
     }
@@ -1341,12 +1332,7 @@ fn feed_cards_are_numbered_and_carry_their_media() {
     settle(&mut d, &conn, &mut clock);
     // The numbers on screen: #1, #2, #3 … in order, one per row placed.
     let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
-    let numbers: Vec<u32> = d
-        .session()
-        .preorder(root(&d))
-        .filter_map(|ix| d.session().text_of(ix))
-        .filter_map(|t| t.strip_prefix('#').and_then(|n| n.parse::<u32>().ok()))
-        .collect();
+    let numbers: Vec<u32> = d.session().preorder(root(&d)).filter_map(|ix| d.session().text_of(ix)).filter_map(|t| t.strip_prefix('#').and_then(|n| n.parse::<u32>().ok())).collect();
     assert!(numbers.len() >= 5, "{numbers:?}");
     assert_eq!(numbers, (1..=numbers.len() as u32).collect::<Vec<_>>(), "consecutive, none missing, none twice");
     let rows = d.layout().placed_rows(feed).unwrap();
@@ -1438,9 +1424,7 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
     assert!(d.video_position_ms(id).is_some_and(|ms| ms > 300), "it advanced: {:?}", d.video_position_ms(id));
     // The server draws the clock from what the client reported, so it
     // follows within a round trip.
-    let clocks = |d: &Driver| -> Vec<String> {
-        d.session().preorder(root(d)).filter_map(|ix| d.session().text_of(ix)).filter(|t| t.contains(" / ")).map(str::to_owned).collect()
-    };
+    let clocks = |d: &Driver| -> Vec<String> { d.session().preorder(root(d)).filter_map(|ix| d.session().text_of(ix)).filter(|t| t.contains(" / ")).map(str::to_owned).collect() };
     while clocks(&d).iter().all(|t| t.starts_with("0:00 /")) {
         assert!(Instant::now() < deadline, "the clock never moved: {:?}", clocks(&d));
         turn(&mut d, &conn, &mut clock, 200);
@@ -1509,13 +1493,7 @@ fn a_node_that_asks_to_be_woken_is_woken_without_anyone_doing_anything() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "clock", 400.0, 300.0);
     let _ = d.paint(400, 300);
-    let ticks = |d: &Driver| -> i64 {
-        d.session()
-            .preorder(root(d))
-            .filter_map(|ix| d.session().text_of(ix).and_then(|t| t.parse::<i64>().ok()))
-            .next()
-            .unwrap_or(-1)
-    };
+    let ticks = |d: &Driver| -> i64 { d.session().preorder(root(d)).filter_map(|ix| d.session().text_of(ix).and_then(|t| t.parse::<i64>().ok())).next().unwrap_or(-1) };
     assert_eq!(ticks(&d), 0, "it starts at nothing");
     // Nothing is clicked, nothing is typed: only the clock runs. The
     // client owes a frame while a wake is pending, so painting when it

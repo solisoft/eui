@@ -236,9 +236,7 @@ impl Dim {
             1 => Ok(Self::Px(value)),
             2 => Ok(Self::Percent(value)),
             3 => Ok(Self::Fr(value)),
-            4 => u8::try_from(value)
-                .map(Self::Space)
-                .map_err(|_| DecodeError::IllegalValue("space index above 255")),
+            4 => u8::try_from(value).map(Self::Space).map_err(|_| DecodeError::IllegalValue("space index above 255")),
             _ => Err(DecodeError::UnknownTag("Dim")),
         }
     }
@@ -372,6 +370,9 @@ pub struct StyleRecord {
     /// `0` none, `1` spin: the node's painting turns about its centre, one
     /// revolution every 1.2 s, for as long as it is on screen (03 §5).
     pub animation: u8,
+    /// Backdrop blur: the standard deviation, in device-independent px, of
+    /// the Gaussian the node sees its backdrop through; `0` is none (03 §2).
+    pub blur: u8,
 }
 
 impl Default for StyleRecord {
@@ -416,6 +417,7 @@ impl Default for StyleRecord {
             cursor: Cursor::Default,
             transition: 0,
             animation: 0,
+            blur: 0,
         }
     }
 }
@@ -463,6 +465,7 @@ impl StyleRecord {
             cursor: Cursor::from_u8(f.u8()?)?,
             transition: f.u8()?,
             animation: f.u8()?,
+            blur: f.u8()?,
         };
         if out.transition > 3 {
             return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
@@ -474,11 +477,11 @@ impl StyleRecord {
         if out.text_decoration & !0b11 != 0 {
             return Err(DecodeError::IllegalValue("text_decoration has unknown bits"));
         }
-        // The reserved tail is where a future field will go. Accepting garbage
-        // there today would make that future field unusable, because some
-        // deployed server would already be putting something else in it.
-        if f.array::<2>()? != [0; 2] {
-            return Err(DecodeError::IllegalValue("reserved bytes must be zero"));
+        // One byte of the tail is left. Accepting garbage there today would
+        // make that last field unusable, because some deployed server would
+        // already be putting something else in it.
+        if f.array::<1>()? != [0; 1] {
+            return Err(DecodeError::IllegalValue("the reserved byte must be zero"));
         }
         f.finish()?;
         Ok(out)
@@ -486,23 +489,8 @@ impl StyleRecord {
 
     /// Encode exactly [`STYLE_RECORD_BYTES`] bytes.
     pub fn encode(&self, w: &mut Writer) {
-        w.u8(self.display.to_u8())
-            .u8(self.wrap.to_u8())
-            .u8(self.justify.to_u8())
-            .u8(self.align_items.to_u8())
-            .u8(self.align_self.to_u8())
-            .u8(self.grow)
-            .u8(self.shrink)
-            .u8(self.gap);
-        for d in [
-            self.basis,
-            self.width,
-            self.height,
-            self.min_width,
-            self.min_height,
-            self.max_width,
-            self.max_height,
-        ] {
+        w.u8(self.display.to_u8()).u8(self.wrap.to_u8()).u8(self.justify.to_u8()).u8(self.align_items.to_u8()).u8(self.align_self.to_u8()).u8(self.grow).u8(self.shrink).u8(self.gap);
+        for d in [self.basis, self.width, self.height, self.min_width, self.min_height, self.max_width, self.max_height] {
             d.encode(w);
         }
         w.raw(&self.padding)
@@ -526,7 +514,7 @@ impl StyleRecord {
             .u8(self.cursor.to_u8())
             .u8(self.transition)
             .u8(self.animation)
-            .raw(&[0; 2]);
+            .u8(self.blur)
+            .raw(&[0; 1]);
     }
 }
-

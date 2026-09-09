@@ -204,9 +204,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<Image, AssetError> {
 /// True for bytes that name a format the client decodes at all, whatever
 /// this build carries: what tells a picture from a sound or a font.
 pub fn looks_like_image(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"\x89PNG")
-        || bytes.starts_with(&[0xff, 0xd8, 0xff])
-        || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+    bytes.starts_with(b"\x89PNG") || bytes.starts_with(&[0xff, 0xd8, 0xff]) || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
 }
 
 /// Decode a JPEG. Baseline and progressive, greyscale or colour; the
@@ -215,10 +213,7 @@ pub fn looks_like_image(bytes: &[u8]) -> bool {
 pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, AssetError> {
     use zune_jpeg::zune_core::colorspace::ColorSpace;
     use zune_jpeg::zune_core::options::DecoderOptions;
-    let options = DecoderOptions::default()
-        .jpeg_set_out_colorspace(ColorSpace::RGB)
-        .set_max_width(MAX_IMAGE_EDGE as usize)
-        .set_max_height(MAX_IMAGE_EDGE as usize);
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB).set_max_width(MAX_IMAGE_EDGE as usize).set_max_height(MAX_IMAGE_EDGE as usize);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
     let rgb = decoder.decode().map_err(|e| AssetError::Decode(e.to_string()))?;
     let (w, h) = decoder.dimensions().ok_or_else(|| AssetError::Decode("no dimensions".to_string()))?;

@@ -472,3 +472,30 @@ def editor_view(raw_state)
     ]
   )
 end
+
+# ---------------------------------------------------------- spans for a viewer
+# The editor gives every token its own `text` node. A read-only viewer wants
+# the opposite — one node, so its lines stay locked to a gutter beside it —
+# so the same tokeniser is rendered instead as a `spans` prop: flat triples
+# of [start byte, length, colour] over the whole source, which the client
+# reads to colour glyph by glyph.
+#
+# Offsets are counted in characters, which is the same as bytes only while
+# the source is ASCII. Code that is not would need `bytesize` per token.
+def code_spans(source)
+  spans = []
+  at = 0
+  for line in source.split("\n")
+    for tok in ed_tokens(line)
+      size = tok["t"].length()
+      # `plain` is what the node's own colour already is, so a span for it
+      # would be several thousand triples that change nothing.
+      spans = spans.concat([at, size, ed_colour(tok["k"])]) unless tok["k"] == "plain"
+      at = at + size
+    end
+    # The newline `split` removed still occupies a byte in the source the
+    # client shaped, so the next line starts one further on.
+    at = at + 1
+  end
+  spans
+end

@@ -12,7 +12,10 @@
 //!   target, and can read an off-screen target back — so the renderer is
 //!   tested by looking at pixels, on a machine with no display.
 //!
-//! Not yet: shadows, canvas paths.
+//! The one exception to the single pass is a `blur` (03 §2), which has to
+//! see what is under it: such a frame snapshots its backdrop, reduces and
+//! convolves it, and only then draws itself. A frame with no blurred node
+//! in it — every frame of most applications — never leaves the path above.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -28,5 +31,5 @@ pub mod gpu;
 pub mod paint;
 
 pub use atlas::{Atlas, ImageAtlas, Region};
-pub use gpu::{Offscreen, RenderError, Renderer, FORMAT};
-pub use paint::{colors_of, linear, paint, resolve_color, scrollbar_thumb, Colors, DrawList, Editing, Quad, Scene, SCROLLBAR_WIDTH, TEXTURED, TEXTURED_RGBA};
+pub use gpu::{Offscreen, RenderError, Renderer, Target, FORMAT};
+pub use paint::{colors_of, linear, paint, resolve_color, scrollbar_thumb, Backdrop, Colors, DrawList, Editing, Quad, Run, Scene, BLURRED, SCROLLBAR_WIDTH, SPINNING, TEXTURED, TEXTURED_RGBA};

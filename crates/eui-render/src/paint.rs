@@ -6,9 +6,9 @@
 
 use eui_layout::{Layout, Rect, Style};
 use eui_proto::{ColorRef, Display, NodeKind, Value};
+use eui_text::TextEngine;
 use eui_theme::{Resolved, Role};
 use eui_tree::{Node, NodeIx, Session};
-use eui_text::TextEngine;
 
 use crate::atlas::{Atlas, ImageAtlas};
 
@@ -16,6 +16,14 @@ use crate::atlas::{Atlas, ImageAtlas};
 pub const TEXTURED: u32 = 1;
 /// Flag bit: sample the image atlas for colour and alpha.
 pub const TEXTURED_RGBA: u32 = 2;
+/// Flag bit: fill over the frame's blurred backdrop rather than over what
+/// happens to be in the target (03 §2).
+pub const BLURRED: u32 = 4;
+/// Flag bit: the quad belongs to a spinning node (03 §5), and the vertex
+/// stage turns it from the clock in the uniforms. The draw list therefore
+/// does not change from one spin frame to the next, which is what lets the
+/// window redraw one without repainting anything.
+pub const SPINNING: u32 = 8;
 
 /// The caret and selection of the focused editable node, as byte offsets
 /// into the text the node shows, plus how far the text is scrolled left to
@@ -62,9 +70,51 @@ pub struct Quad {
     pub stroke: [f32; 4],
     /// Atlas `u0, v0, u1, v1`.
     pub uv: [f32; 4],
-    /// `angle` in radians about the rect's centre (a canvas segment), then
-    /// three spare floats.
+    /// `angle` in radians about the rect's centre (a canvas segment), the
+    /// shadow's blur, the backdrop's standard deviation in device px, then
+    /// one spare float.
     pub extra: [f32; 4],
+    /// Where this quad's centre sits relative to the centre of the spinning
+    /// node it belongs to, device px, when `SPINNING` is set; zero
+    /// otherwise. The vertex stage turns the offset and adds it back, so
+    /// the node's centre never has to be sent: it is this quad's centre
+    /// minus this offset. Two spare floats follow.
+    pub spin: [f32; 4],
+}
+
+/// One `draw` call: a span of instances, the scissor rect they are clipped
+/// to, and the blurred backdrop they may sample.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Run {
+    /// Index into [`DrawList::clips`].
+    pub clip: u32,
+    /// Index into [`Backdrop::sigmas`] — which blur this run's quads see
+    /// their backdrop through. `0` for a run with no blurred quad in it,
+    /// which binds a blur no fragment then samples.
+    pub chain: u32,
+    /// First instance.
+    pub first: u32,
+    /// How many instances.
+    pub count: u32,
+}
+
+/// What the frame's blurred quads see behind them (03 §2).
+///
+/// One snapshot serves them all: the frame as it stood when the first of
+/// them was about to be painted. Two frosted panels that overlap therefore
+/// both show what is under the pair, not one through the other.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Backdrop {
+    /// The region to snapshot, device pixels, `x, y, w, h`, already clipped
+    /// to the framebuffer. It is the union of the blurred rects grown by
+    /// three standard deviations, which is where a Gaussian stops mattering.
+    pub rect: [u32; 4],
+    /// The first instance that may sample it: `quads[..first]` *is* the
+    /// backdrop, and nothing in it is blurred.
+    pub first: u32,
+    /// One standard deviation in device pixels per blur, in the order the
+    /// radii were first met. A [`Run`]'s `chain` indexes this.
+    pub sigmas: Vec<f32>,
 }
 
 /// A frame's worth of quads, in paint order, grouped by scissor rect.
@@ -72,8 +122,8 @@ pub struct Quad {
 pub struct DrawList {
     /// Instances in paint order.
     pub quads: Vec<Quad>,
-    /// `(clip index, first quad, quad count)` runs, in order.
-    pub runs: Vec<(u32, u32, u32)>,
+    /// Runs, in order.
+    pub runs: Vec<Run>,
     /// Scissor rects in device pixels, `x, y, w, h`.
     pub clips: Vec<[u32; 4]>,
     /// The clear colour, linear RGBA.
@@ -81,6 +131,15 @@ pub struct DrawList {
     /// Something on screen animates by itself (a `spin`): the next frame
     /// is due at once rather than when an input arrives.
     pub wants_frame: bool,
+    /// Set by the driver when a `spin` is the *only* reason another frame
+    /// is due — no transition, no scroll, no timer, nothing dirty. The
+    /// angle lives in the vertex stage, so such a frame draws this very
+    /// list again with nothing but the clock moved on, and the window may
+    /// redraw it without asking the driver for anything.
+    pub spin_only: bool,
+    /// Set when some node wears a `blur`: the extra passes the frame needs
+    /// before its own. `None` is the ordinary single-pass frame.
+    pub backdrop: Option<Backdrop>,
 }
 
 /// Inputs to one paint.
@@ -119,8 +178,10 @@ pub struct Scene<'a> {
 pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let mut list = DrawList { clear: linear(scene.theme.color(Role::SurfaceBase)), ..Default::default() };
     list.clips.push([0, 0, scene.size.0, scene.size.1]);
-    let Some(root) = scene.session.root() else { return list };
-    let mut p = Painter { scene, list, clip: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false };
+    let Some(root) = scene.session.root() else {
+        return list;
+    };
+    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -132,6 +193,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
         p.node(top);
     }
     p.close_run();
+    p.settle_backdrop();
     p.list
 }
 
@@ -139,6 +201,8 @@ struct Painter<'s, 'a> {
     scene: &'s mut Scene<'a>,
     list: DrawList,
     clip: u32,
+    /// Which blur the quads being pushed now sample; `0` is none.
+    chain: u32,
     run_start: u32,
     inherited_fg: Vec<[f32; 4]>,
     /// Overlays met during the walk, kept for the top layer.
@@ -146,13 +210,17 @@ struct Painter<'s, 'a> {
     /// True once the top layer is being painted, so the overlays in it
     /// are drawn instead of deferred again.
     in_top: bool,
+    /// The backdrop being accumulated, once some node has asked for one:
+    /// the region as `x0, y0, x1, y1` in device pixels, the first blurred
+    /// instance, and the standard deviations met.
+    blur: Option<([f32; 4], u32, Vec<f32>)>,
 }
 
 impl Painter<'_, '_> {
     fn close_run(&mut self) {
         let end = self.list.quads.len() as u32;
         if end > self.run_start {
-            self.list.runs.push((self.clip, self.run_start, end - self.run_start));
+            self.list.runs.push(Run { clip: self.clip, chain: self.chain, first: self.run_start, count: end - self.run_start });
             self.run_start = end;
         }
     }
@@ -162,6 +230,61 @@ impl Painter<'_, '_> {
             self.close_run();
             self.clip = clip;
         }
+    }
+
+    /// Draws that follow sample blur `chain`. A run binds one blur, so a
+    /// change of chain ends the run exactly as a change of scissor does.
+    fn set_chain(&mut self, chain: u32) {
+        if chain != self.chain {
+            self.close_run();
+            self.chain = chain;
+        }
+    }
+
+    /// Register a node's blur: grow the region it needs snapshotted, and
+    /// find (or add) the chain for its standard deviation. Returns the
+    /// chain index to bind while its quad is drawn.
+    ///
+    /// The region is grown by three standard deviations, past which a
+    /// Gaussian contributes less than half a per cent and the clamped
+    /// sampler's edge repeat is not visible.
+    fn note_blur(&mut self, sigma: f32, dev: [f32; 4]) -> u32 {
+        let reach = sigma * 3.0;
+        let (x0, y0) = (dev[0] - reach, dev[1] - reach);
+        let (x1, y1) = (dev[0] + dev[2] + reach, dev[1] + dev[3] + reach);
+        let first = self.list.quads.len() as u32;
+        let (rect, _, sigmas) = self.blur.get_or_insert(([x0, y0, x1, y1], first, Vec::new()));
+        rect[0] = rect[0].min(x0);
+        rect[1] = rect[1].min(y0);
+        rect[2] = rect[2].max(x1);
+        rect[3] = rect[3].max(y1);
+        match sigmas.iter().position(|s| *s == sigma) {
+            Some(i) => i as u32,
+            None => {
+                sigmas.push(sigma);
+                (sigmas.len() - 1) as u32
+            }
+        }
+    }
+
+    /// Turn the accumulated region into the frame's [`Backdrop`], clipped to
+    /// the framebuffer. A region that falls entirely outside it leaves the
+    /// frame single-pass, and the quads that asked keep their flag over a
+    /// blur of nothing — which is what a node off screen deserves.
+    fn settle_backdrop(&mut self) {
+        let Some((r, first, sigmas)) = self.blur.take() else {
+            return;
+        };
+        let (w, h) = (self.scene.size.0 as f32, self.scene.size.1 as f32);
+        let x0 = r[0].max(0.0).min(w);
+        let y0 = r[1].max(0.0).min(h);
+        let x1 = r[2].max(0.0).min(w);
+        let y1 = r[3].max(0.0).min(h);
+        let rect = [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32];
+        if rect[2] == 0 || rect[3] == 0 {
+            return;
+        }
+        self.list.backdrop = Some(Backdrop { rect, first, sigmas });
     }
 
     fn color(&self, c: ColorRef, inherit: Option<[f32; 4]>) -> Option<[f32; 4]> {
@@ -178,7 +301,9 @@ impl Painter<'_, '_> {
     }
 
     fn visible(&self, rect: [f32; 4]) -> bool {
-        let Some(c) = self.list.clips.get(self.clip as usize) else { return false };
+        let Some(c) = self.list.clips.get(self.clip as usize) else {
+            return false;
+        };
         let (cx, cy, cw, ch) = (c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32);
         rect[0] < cx + cw && rect[0] + rect[2] > cx && rect[1] < cy + ch && rect[1] + rect[3] > cy
     }
@@ -192,7 +317,9 @@ impl Painter<'_, '_> {
     }
 
     fn node(&mut self, ix: NodeIx) {
-        let Some(rect) = self.scene.layout.rect(ix) else { return };
+        let Some(rect) = self.scene.layout.rect(ix) else {
+            return;
+        };
         // An overlay met in the flow is not painted here; it is put by for
         // the top layer, which paints it whole.
         if !self.in_top && self.scene.session.node(ix).is_some_and(|n| n.kind == NodeKind::Overlay) {
@@ -204,18 +331,21 @@ impl Painter<'_, '_> {
         self.node_inner(ix, rect);
         if spinning {
             // Spec 03 §5 `spin`: everything painted for the node turns about
-            // its centre, one revolution per 1.2 s; the vertex stage rotates
-            // each quad about its own centre, so each centre is moved too.
+            // its centre, one revolution per 1.2 s. The angle is not applied
+            // here. Baking it made every frame a different draw list, so a
+            // spinner repainted the whole tree and pushed it across the
+            // worker pipe sixty times a second to move eighteen pixels. What
+            // is recorded instead is where each quad sits relative to the
+            // node's centre; the vertex stage turns it from the clock, and
+            // the list comes out identical frame after frame.
             let dev = self.device(rect);
             let (cx, cy) = (dev[0] + dev[2] / 2.0, dev[1] + dev[3] / 2.0);
-            let angle = (self.scene.now % 1.2) / 1.2 * std::f32::consts::TAU;
-            let (sa, ca) = angle.sin_cos();
             for q in self.list.quads.iter_mut().skip(first) {
-                let (qx, qy) = (q.rect[0] + q.rect[2] / 2.0 - cx, q.rect[1] + q.rect[3] / 2.0 - cy);
-                let (rx, ry) = (qx * ca - qy * sa, qx * sa + qy * ca);
-                q.rect[0] = cx + rx - q.rect[2] / 2.0;
-                q.rect[1] = cy + ry - q.rect[3] / 2.0;
-                q.extra[0] += angle;
+                q.spin[0] = q.rect[0] + q.rect[2] / 2.0 - cx;
+                q.spin[1] = q.rect[1] + q.rect[3] / 2.0 - cy;
+                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
+                let flags = q.params[2] as u32 | SPINNING;
+                q.params[2] = flags as f32;
             }
             self.list.wants_frame = true;
         }
@@ -254,6 +384,7 @@ impl Painter<'_, '_> {
                 stroke: [0.0; 4],
                 uv: [0.0; 4],
                 extra: [0.0, blur, 0.0, 0.0],
+                spin: [0.0; 4],
             });
         }
 
@@ -265,29 +396,48 @@ impl Painter<'_, '_> {
         let uniform = b.t == b.r && b.r == b.b && b.b == b.l;
         let border_w = b.t.max(b.r).max(b.b).max(b.l) * scale;
         let stroke = if border_w > 0.0 { over.map_or_else(|| self.color(record.border_color, None), |c| c.border) } else { None };
+        // 03 §2: a `blur` shows the backdrop through the border box, and the
+        // background is composited over that. It is therefore worth a quad
+        // even when `bg` is none — a pane of clear frosted glass.
+        let sigma = f32::from(record.blur) * scale;
+        let frosted = sigma > 0.0 && dev[2] > 0.0 && dev[3] > 0.0 && self.visible(dev);
+        let (chain, flags) = if frosted { (self.note_blur(sigma, dev), BLURRED as f32) } else { (0, 0.0) };
         if uniform {
-            if fill.is_some() || stroke.is_some() {
+            if fill.is_some() || stroke.is_some() || frosted {
+                self.set_chain(chain);
                 self.push(Quad {
                     rect: dev,
-                    params: [radius, if stroke.is_some() { border_w } else { 0.0 }, 0.0, opacity],
+                    params: [radius, if stroke.is_some() { border_w } else { 0.0 }, flags, opacity],
                     fill: fill.unwrap_or([0.0; 4]),
                     stroke: stroke.unwrap_or([0.0; 4]),
                     uv: [0.0; 4],
-                extra: [0.0; 4],
+                    extra: [0.0, 0.0, sigma, 0.0],
+                    spin: [0.0; 4],
                 });
+                self.set_chain(0);
             }
         } else {
-            if let Some(fill) = fill {
-                self.push(Quad { rect: dev, params: [radius, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+            if fill.is_some() || frosted {
+                self.set_chain(chain);
+                self.push(Quad { rect: dev, params: [radius, 0.0, flags, opacity], fill: fill.unwrap_or([0.0; 4]), stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0, 0.0, sigma, 0.0], spin: [0.0; 4] });
+                self.set_chain(0);
             }
             if let Some(stroke) = stroke {
                 let [x, y, w, h] = dev;
-                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] };
+                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] };
                 let (t, r, bo, l) = ((b.t * scale).round(), (b.r * scale).round(), (b.b * scale).round(), (b.l * scale).round());
-                if t > 0.0 { self.push(edge([x, y, w, t])); }
-                if bo > 0.0 { self.push(edge([x, y + h - bo, w, bo])); }
-                if l > 0.0 { self.push(edge([x, y, l, h])); }
-                if r > 0.0 { self.push(edge([x + w - r, y, r, h])); }
+                if t > 0.0 {
+                    self.push(edge([x, y, w, t]));
+                }
+                if bo > 0.0 {
+                    self.push(edge([x, y + h - bo, w, bo]));
+                }
+                if l > 0.0 {
+                    self.push(edge([x, y, l, h]));
+                }
+                if r > 0.0 {
+                    self.push(edge([x + w - r, y, r, h]));
+                }
             }
         }
 
@@ -301,7 +451,8 @@ impl Painter<'_, '_> {
                 fill: [0.0; 4],
                 stroke: linear(self.scene.theme.color(Role::FocusRing)),
                 uv: [0.0; 4],
-            extra: [0.0; 4],
+                extra: [0.0; 4],
+                spin: [0.0; 4],
             });
         }
 
@@ -329,12 +480,21 @@ impl Painter<'_, '_> {
                         fill: [1.0, 1.0, 1.0, 1.0],
                         stroke: [0.0; 4],
                         uv: [rx / n, ry / n, (rx + rw) / n, (ry + rh) / n],
-                    extra: [0.0; 4],
+                        extra: [0.0; 4],
+                        spin: [0.0; 4],
                     });
                 }
             }
             NodeKind::Divider => {
-                let mut q = Quad { rect: dev, params: [0.0, 0.0, 0.0, opacity], fill: self.color(record.bg, None).unwrap_or_else(|| linear(self.scene.theme.color(Role::BorderDefault))), stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] };
+                let mut q = Quad {
+                    rect: dev,
+                    params: [0.0, 0.0, 0.0, opacity],
+                    fill: self.color(record.bg, None).unwrap_or_else(|| linear(self.scene.theme.color(Role::BorderDefault))),
+                    stroke: [0.0; 4],
+                    uv: [0.0; 4],
+                    extra: [0.0; 4],
+                    spin: [0.0; 4],
+                };
                 q.rect[3] = q.rect[3].max(1.0);
                 self.push(q);
             }
@@ -383,8 +543,12 @@ impl Painter<'_, '_> {
     /// where the rows are rather than nothing.
     fn placeholders(&mut self, ix: NodeIx, rect: Rect, style: &Style, opacity: f32) {
         let layout = self.scene.layout;
-        let (Some(tops), Some(placed)) = (layout.row_tops(ix), layout.placed_rows(ix)) else { return };
-        let Some(node) = self.scene.session.node(ix) else { return };
+        let (Some(tops), Some(placed)) = (layout.row_tops(ix), layout.placed_rows(ix)) else {
+            return;
+        };
+        let Some(node) = self.scene.session.node(ix) else {
+            return;
+        };
         let sy = node.scroll.1 as f32;
         let (x0, y0) = (rect.x + style.border.l + style.padding.l, rect.y + style.border.t + style.padding.t);
         let inner_w = (rect.w - style.inset_h()).max(0.0);
@@ -405,7 +569,7 @@ impl Painter<'_, '_> {
             let h = tops.get(row + 1).copied().unwrap_or(top) - top;
             let r = Rect::new(x0 + inset, y0 + top - sy + inset / 2.0, (inner_w - 2.0 * inset).max(0.0), (h - inset).max(0.0));
             let q = self.device(r);
-            self.push(Quad { rect: q, params: [radius * self.scene.scale, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+            self.push(Quad { rect: q, params: [radius * self.scene.scale, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
         }
     }
 
@@ -413,7 +577,9 @@ impl Painter<'_, '_> {
     /// its right edge — as long as view ÷ content, never under 24 px —
     /// painted after its children so it sits on top of them.
     fn scrollbar(&mut self, ix: NodeIx, rect: Rect, opacity: f32) {
-        let Some(mut t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else { return };
+        let Some(mut t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else {
+            return;
+        };
         let hot = self.scene.scrollbar_hot == Some(ix);
         let mut color = linear(self.scene.theme.color(if hot { Role::TextDefault } else { Role::TextMuted }));
         color[3] *= if hot { 0.7 } else { 0.45 };
@@ -423,11 +589,13 @@ impl Painter<'_, '_> {
             t.w += 2.0;
         }
         let q = self.device(t);
-        self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+        self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
-        let Some(text) = self.scene.session.text_of(ix) else { return };
+        let Some(text) = self.scene.session.text_of(ix) else {
+            return;
+        };
         let max_w = (rect.w - style.inset_h()).max(0.0);
         let shaped = self.scene.text.shape(text, style.font, Some(max_w), style.line_clamp);
         let scale = self.scene.scale;
@@ -465,14 +633,14 @@ impl Painter<'_, '_> {
                 }
                 for (y, x0, x1) in lines {
                     let r = self.device(Rect::new(origin_x + x0, origin_y + y - above, x1 - x0, above + below));
-                    self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                    self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
                 }
             }
             let (cx, cy) = shaped.caret(e.caret);
             let x = ((origin_x + cx) * scale).round();
             let y0 = ((origin_y + cy - above) * scale).round();
             let y1 = ((origin_y + cy + below) * scale).round();
-            self.push(Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+            self.push(Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
         }
         // Per-glyph colour, for syntax highlighting: the `spans` prop, a flat
         // list of `[start byte, length, colour]` triples.
@@ -482,7 +650,7 @@ impl Painter<'_, '_> {
             .atom_id("spans")
             .and_then(|atom| self.scene.session.node(ix).and_then(|n| n.prop(atom)))
             .and_then(|prop| match prop {
-                Value::List(list) => Some(spans_of(list)),
+                Value::List(list) => Some(spans_of(list, |v| self.path_color(v))),
                 _ => None,
             })
             .unwrap_or_default();
@@ -492,10 +660,10 @@ impl Painter<'_, '_> {
         // cursor only ever moves forward: O(glyphs + spans), not the product.
         let mut cursor = 0usize;
         for g in &shaped.glyphs {
-            let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else { continue };
-            let fill = span_at(&spans, &mut cursor, g.start)
-                .and_then(|c| resolve_color(self.scene.session, self.scene.theme, c))
-                .unwrap_or(fg);
+            let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else {
+                continue;
+            };
+            let fill = span_at(&spans, &mut cursor, g.start).unwrap_or(fg);
             let gx = ((origin_x + g.x) * scale).round() + region.left as f32;
             let gy = ((origin_y + g.y) * scale).round() - region.top as f32;
             let (rx, ry, rw, rh) = (region.x as f32, region.y as f32, region.w as f32, region.h as f32);
@@ -506,6 +674,7 @@ impl Painter<'_, '_> {
                 stroke: [0.0; 4],
                 uv: [rx / atlas_size, ry / atlas_size, (rx + rw) / atlas_size, (ry + rh) / atlas_size],
                 extra: [0.0; 4],
+                spin: [0.0; 4],
             });
         }
         if editing.is_some() {
@@ -521,8 +690,12 @@ impl Painter<'_, '_> {
     /// strip per device column, an arc is a fan of capsules.
     fn canvas(&mut self, node: &Node, rect: Rect, style: &Style, opacity: f32) {
         let session: &Session = self.scene.session;
-        let Some(atom) = session.atom_id("paths") else { return };
-        let Some(Value::List(paths)) = node.prop(atom) else { return };
+        let Some(atom) = session.atom_id("paths") else {
+            return;
+        };
+        let Some(Value::List(paths)) = node.prop(atom) else {
+            return;
+        };
         let scale = self.scene.scale;
         let dev = self.device(rect);
         let saved = self.clip;
@@ -533,8 +706,12 @@ impl Painter<'_, '_> {
         let (ox, oy) = (cx0 * scale, cy0 * scale);
         for path in paths {
             let Value::List(p) = path else { continue };
-            let Some(Value::Int(kind)) = p.first() else { continue };
-            let Some(color) = p.get(1).and_then(|c| self.path_color(c)) else { continue };
+            let Some(Value::Int(kind)) = p.first() else {
+                continue;
+            };
+            let Some(color) = p.get(1).and_then(|c| self.path_color(c)) else {
+                continue;
+            };
             let n: Vec<f32> = p.iter().skip(2).filter_map(num).collect();
             let at = |i: usize| n.get(i).copied().unwrap_or(0.0);
             let pt = |i: usize| (ox + at(i) * scale, oy + at(i + 1) * scale);
@@ -547,7 +724,7 @@ impl Painter<'_, '_> {
                 }
                 1 => {
                     let q = self.device(Rect::new(cx0 + at(0), cy0 + at(1), at(2), at(3)));
-                    self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                    self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
                 }
                 2 => {
                     let base = oy + at(0) * scale;
@@ -559,7 +736,15 @@ impl Painter<'_, '_> {
                         let mut x = x0.ceil();
                         while x <= x1.floor() {
                             let y = y0 + (y1 - y0) * (x - x0) / (x1 - x0);
-                            self.push(Quad { rect: [x, y.min(base), 1.0, (base - y).abs()], params: [0.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                            self.push(Quad {
+                                rect: [x, y.min(base), 1.0, (base - y).abs()],
+                                params: [0.0, 0.0, 0.0, opacity],
+                                fill: color,
+                                stroke: [0.0; 4],
+                                uv: [0.0; 4],
+                                extra: [0.0; 4],
+                                spin: [0.0; 4],
+                            });
                             x += 1.0;
                         }
                     }
@@ -567,7 +752,7 @@ impl Painter<'_, '_> {
                 3 => {
                     let (cx, cy) = pt(0);
                     let r = at(2) * scale;
-                    self.push(Quad { rect: [cx - r, cy - r, 2.0 * r, 2.0 * r], params: [r, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4] });
+                    self.push(Quad { rect: [cx - r, cy - r, 2.0 * r, 2.0 * r], params: [r, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
                 }
                 4 => {
                     let w = at(0) * scale;
@@ -605,6 +790,7 @@ impl Painter<'_, '_> {
             stroke: [0.0; 4],
             uv: [0.0; 4],
             extra: [angle, 0.0, 0.0, 0.0],
+            spin: [0.0; 4],
         });
     }
 
@@ -640,14 +826,20 @@ fn num(v: &Value) -> Option<f32> {
 /// [`span_at`] walks them on that promise. A ragged tail or a triple of the
 /// wrong shape is dropped rather than rejected, because a malformed prop
 /// should cost the highlighting, not the text.
-fn spans_of(list: &[Value]) -> Vec<(usize, usize, ColorRef)> {
+/// The colour of each triple is resolved by `colour`, which is the same
+/// reader a `canvas` path uses — a `Color`, a role id, a role name, or a
+/// `#rrggbb`. A server writing Soli has only the name, so requiring the
+/// wire's `Color` here made the prop unreachable from the language that
+/// produces it.
+fn spans_of<F>(list: &[Value], mut colour: F) -> Vec<(usize, usize, [f32; 4])>
+where
+    F: FnMut(&Value) -> Option<[f32; 4]>,
+{
     list.chunks_exact(3)
         .filter_map(|c| match (c.first(), c.get(1), c.get(2)) {
-            (Some(Value::Int(start)), Some(Value::Int(len)), Some(Value::Color(colour)))
-                if *start >= 0 && *len >= 0 =>
-            {
+            (Some(Value::Int(start)), Some(Value::Int(len)), Some(v)) if *start >= 0 && *len >= 0 => {
                 let start = *start as usize;
-                Some((start, start.saturating_add(*len as usize), *colour))
+                Some((start, start.saturating_add(*len as usize), colour(v)?))
             }
             _ => None,
         })
@@ -659,7 +851,7 @@ fn spans_of(list: &[Value]) -> Vec<(usize, usize, ColorRef)> {
 /// `cursor` is carried between calls and only moves forward, so walking a
 /// run of glyphs in text order costs one pass over the spans rather than a
 /// search per glyph.
-fn span_at(spans: &[(usize, usize, ColorRef)], cursor: &mut usize, at: usize) -> Option<ColorRef> {
+fn span_at(spans: &[(usize, usize, [f32; 4])], cursor: &mut usize, at: usize) -> Option<[f32; 4]> {
     while spans.get(*cursor).is_some_and(|s| s.1 <= at) {
         *cursor = cursor.saturating_add(1);
     }
@@ -726,41 +918,64 @@ pub fn linear(rgba: u32) -> [f32; 4] {
 mod tests {
     use super::*;
 
+    /// Stands in for the painter's colour reader. Distinguishes the forms a
+    /// server may write — the wire's own `Color`, and the role *name*, which
+    /// is all a Soli server has to hand.
+    fn colour(v: &Value) -> Option<[f32; 4]> {
+        match v {
+            Value::Color(c) => Some([f32::from(c.index()), 0.0, 0.0, 1.0]),
+            Value::Str(s) if s == "accent.base" => Some([9.0, 0.0, 0.0, 1.0]),
+            _ => None,
+        }
+    }
+
     fn span(start: i64, len: i64, role: u16) -> [Value; 3] {
         [Value::Int(start), Value::Int(len), Value::Color(ColorRef::role(role))]
+    }
+
+    fn tone(role: u16) -> [f32; 4] {
+        [f32::from(role), 0.0, 0.0, 1.0]
     }
 
     #[test]
     fn spans_parse_into_byte_ranges() {
         let list: Vec<Value> = [span(0, 5, 1), span(10, 5, 2)].concat();
-        assert_eq!(spans_of(&list), [(0, 5, ColorRef::role(1)), (10, 15, ColorRef::role(2))]);
+        assert_eq!(spans_of(&list, colour), [(0, 5, tone(1)), (10, 15, tone(2))]);
+    }
+
+    #[test]
+    fn a_colour_may_be_named_rather_than_encoded() {
+        // The reason the prop was unreachable from Soli: a server writing the
+        // language has the role's name, not the wire's `Color`.
+        let list = vec![Value::Int(0), Value::Int(4), Value::Str("accent.base".into())];
+        assert_eq!(spans_of(&list, colour), [(0, 4, tone(9))]);
     }
 
     #[test]
     fn a_malformed_prop_costs_the_highlighting_not_the_text() {
-        // A ragged tail, a wrong-typed member and a negative offset each drop
+        // A ragged tail, an unreadable colour and a negative offset each drop
         // their own triple; the well-formed ones still stand.
         let mut list: Vec<Value> = span(0, 5, 1).into();
         list.extend(span(-4, 5, 2));
-        list.extend([Value::Int(20), Value::Str("five".into()), Value::Color(ColorRef::role(3))]);
+        list.extend([Value::Int(20), Value::Int(5), Value::Str("no such role".into())]);
         list.extend(span(30, 5, 4));
         list.push(Value::Int(40)); // ragged tail
-        assert_eq!(spans_of(&list), [(0, 5, ColorRef::role(1)), (30, 35, ColorRef::role(4))]);
+        assert_eq!(spans_of(&list, colour), [(0, 5, tone(1)), (30, 35, tone(4))]);
     }
 
     #[test]
     fn the_cursor_pairs_glyphs_with_spans_in_one_pass() {
-        let spans = spans_of(&[span(0, 5, 1), span(10, 5, 2), span(20, 5, 3)].concat());
+        let spans = spans_of(&[span(0, 5, 1), span(10, 5, 2), span(20, 5, 3)].concat(), colour);
         let mut cursor = 0;
         let got: Vec<_> = [0, 3, 7, 12, 22].iter().map(|at| span_at(&spans, &mut cursor, *at)).collect();
         assert_eq!(
             got,
             [
-                Some(ColorRef::role(1)), // inside the first span
-                Some(ColorRef::role(1)), // still inside it
-                None,                    // in the gap between spans
-                Some(ColorRef::role(2)), // the cursor advanced past the first
-                Some(ColorRef::role(3)),
+                Some(tone(1)), // inside the first span
+                Some(tone(1)), // still inside it
+                None,          // in the gap between spans
+                Some(tone(2)), // the cursor advanced past the first
+                Some(tone(3)),
             ]
         );
         // Every span was passed exactly once: the walk is O(glyphs + spans).

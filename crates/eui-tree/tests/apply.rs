@@ -2,13 +2,7 @@
 //!
 //! Tests may panic; that is how they fail. The strict lint set exists for the
 //! apply path, not for the harness.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 use eui_proto::*;
 use eui_tree::{dirty, ApplyError as E, Limits, Session, Table};
@@ -29,15 +23,7 @@ fn leaf(id: u32) -> Subtree {
 
 /// box(1) [ box(2) [ text(3) "Hi" ], text(4) "atom 1" ]
 fn sample() -> Subtree {
-    Subtree {
-        nodes: vec![
-            flat(NodeKind::Box, 1, 1, 2),
-            flat(NodeKind::Box, 2, 0, 1),
-            text_node(3, TextRef::Inline("Hi".into())),
-            text_node(4, TextRef::Atom(1)),
-        ],
-        ..Default::default()
-    }
+    Subtree { nodes: vec![flat(NodeKind::Box, 1, 1, 2), flat(NodeKind::Box, 2, 0, 1), text_node(3, TextRef::Inline("Hi".into())), text_node(4, TextRef::Atom(1))], ..Default::default() }
 }
 
 fn defs() -> Vec<Op> {
@@ -122,10 +108,7 @@ fn tables_define_once() {
     assert_eq!(one(&mut s, 2, Op::DefAtom { id: 1, value: "x".into() }), Err(E::Redefined(Table::Atom, 1)));
     let mut s = Session::new();
     s.apply(&Batch { seq: 1, ops: defs() }).unwrap();
-    assert_eq!(
-        one(&mut s, 2, Op::DefStyle { id: 1, record: StyleRecord::default() }),
-        Err(E::Redefined(Table::Style, 1))
-    );
+    assert_eq!(one(&mut s, 2, Op::DefStyle { id: 1, record: StyleRecord::default() }), Err(E::Redefined(Table::Style, 1)));
 }
 
 #[test]
@@ -160,10 +143,7 @@ fn forward_references_are_rejected() {
     assert_eq!(one(&mut s, 1, Op::DefStyle { id: 1, record }), Err(E::Undefined(Table::Color, 3)));
 
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::SetHandler { node: 1, event: EventKind::Click, handler: Handler::Local(4) }),
-        Err(E::Undefined(Table::Chunk, 4))
-    );
+    assert_eq!(one(&mut s, 2, Op::SetHandler { node: 1, event: EventKind::Click, handler: Handler::Local(4) }), Err(E::Undefined(Table::Chunk, 4)));
 }
 
 #[test]
@@ -268,30 +248,15 @@ fn reversing_fifty_keyed_rows_is_moves() {
 #[test]
 fn child_index_bounds() {
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::InsertChild { parent: 1, index: 3, subtree: leaf(9) }),
-        Err(E::ChildIndexOutOfRange { parent: 1, index: 3, len: 2 })
-    );
+    assert_eq!(one(&mut s, 2, Op::InsertChild { parent: 1, index: 3, subtree: leaf(9) }), Err(E::ChildIndexOutOfRange { parent: 1, index: 3, len: 2 }));
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::RemoveChild { parent: 1, index: 1, count: 2 }),
-        Err(E::ChildIndexOutOfRange { parent: 1, index: 3, len: 2 })
-    );
+    assert_eq!(one(&mut s, 2, Op::RemoveChild { parent: 1, index: 1, count: 2 }), Err(E::ChildIndexOutOfRange { parent: 1, index: 3, len: 2 }));
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::MoveChild { parent: 1, from: 2, to: 0 }),
-        Err(E::ChildIndexOutOfRange { parent: 1, index: 2, len: 2 })
-    );
+    assert_eq!(one(&mut s, 2, Op::MoveChild { parent: 1, from: 2, to: 0 }), Err(E::ChildIndexOutOfRange { parent: 1, index: 2, len: 2 }));
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::MoveChild { parent: 1, from: 0, to: 2 }),
-        Err(E::ChildIndexOutOfRange { parent: 1, index: 2, len: 2 })
-    );
+    assert_eq!(one(&mut s, 2, Op::MoveChild { parent: 1, from: 0, to: 2 }), Err(E::ChildIndexOutOfRange { parent: 1, index: 2, len: 2 }));
     let mut s = mounted();
-    assert_eq!(
-        one(&mut s, 2, Op::RemoveChild { parent: 1, index: u32::MAX, count: 1 }),
-        Err(E::ChildIndexOutOfRange { parent: 1, index: u32::MAX, len: 2 })
-    );
+    assert_eq!(one(&mut s, 2, Op::RemoveChild { parent: 1, index: u32::MAX, count: 1 }), Err(E::ChildIndexOutOfRange { parent: 1, index: u32::MAX, len: 2 }));
 }
 
 #[test]
@@ -442,11 +407,7 @@ fn a_decoded_frame_applies() {
     tree.nodes.push(text_node(2, TextRef::Atom(1)));
     let frame = Frame::Batch(Batch {
         seq: 1,
-        ops: vec![
-            Op::DefAtom { id: 1, value: "Hi".into() },
-            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
-            Op::Mount(tree),
-        ],
+        ops: vec![Op::DefAtom { id: 1, value: "Hi".into() }, Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)],
     });
     let bytes = frame.encode();
     let Frame::Batch(batch) = Frame::decode(&bytes).unwrap() else { panic!("not a batch") };
@@ -477,13 +438,19 @@ fn random_op_streams_keep_the_arena_consistent() {
         for seq in 2..60u64 {
             let target = [1u32, 2, 3, 4, next_id.saturating_sub(1), 500][(next() % 6) as usize];
             let op = match next() % 9 {
-                0 => { next_id += 1; Op::InsertChild { parent: target, index: (next() % 4) as u32, subtree: leaf(next_id) } }
+                0 => {
+                    next_id += 1;
+                    Op::InsertChild { parent: target, index: (next() % 4) as u32, subtree: leaf(next_id) }
+                }
                 1 => Op::RemoveChild { parent: target, index: (next() % 3) as u32, count: (next() % 3) as u32 },
                 2 => Op::MoveChild { parent: target, from: (next() % 4) as u32, to: (next() % 4) as u32 },
                 3 => Op::SetText { node: target, text: TextRef::Atom(1) },
                 4 => Op::SetStyle { node: target, style: (next() % 2) as u32 },
                 5 => Op::Focus { node: target },
-                6 => { next_id += 1; Op::Replace { node: target, subtree: leaf(next_id) } }
+                6 => {
+                    next_id += 1;
+                    Op::Replace { node: target, subtree: leaf(next_id) }
+                }
                 7 => Op::SetHandler { node: target, event: EventKind::Click, handler: Handler::Server(2) },
                 _ => Op::ScrollTo { node: target, x: 1, y: 1 },
             };

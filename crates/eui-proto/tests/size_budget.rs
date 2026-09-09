@@ -2,13 +2,7 @@
 // the *decode path* must not panic on hostile input. A test harness is the one
 // place where a panic is the correct outcome — a test that panics is a test
 // that failed — so the strict set is lifted here and nowhere else.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 //! What the encoding actually costs, measured rather than asserted.
 //!
@@ -24,12 +18,7 @@ const HEADERS: [&str; 4] = ["Référence", "Client", "Statut", "Montant"];
 
 /// Cell text for row `i`, close to what an invoice list really holds.
 fn cells(i: usize) -> [String; 4] {
-    [
-        format!("FA-2026-{:04}", i + 1),
-        format!("Client {:02} SARL", i % 37),
-        (if i % 3 == 0 { "Payée" } else { "En attente" }).to_string(),
-        format!("{}, {:02} €", 100 + i * 37, i % 100),
-    ]
+    [format!("FA-2026-{:04}", i + 1), format!("Client {:02} SARL", i % 37), (if i % 3 == 0 { "Payée" } else { "En attente" }).to_string(), format!("{}, {:02} €", 100 + i * 37, i % 100)]
 }
 
 /// The EUI batch: six shared style records, the column headers interned, and
@@ -66,28 +55,10 @@ fn build_eui(intern_status: bool) -> (Vec<u8>, usize) {
     };
 
     fn boxed(id: u32, style: u32, children: u32) -> FlatNode {
-        FlatNode {
-            kind: NodeKind::Box,
-            id,
-            style,
-            key: 0,
-            text: None,
-            props: (0, 0),
-            handlers: (0, 0),
-            child_count: children,
-        }
+        FlatNode { kind: NodeKind::Box, id, style, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: children }
     }
     fn text(id: u32, style: u32, key: u32, text: TextRef) -> FlatNode {
-        FlatNode {
-            kind: NodeKind::Text,
-            id,
-            style,
-            key,
-            text: Some(text),
-            props: (0, 0),
-            handlers: (0, 0),
-            child_count: 0,
-        }
+        FlatNode { kind: NodeKind::Text, id, style, key, text: Some(text), props: (0, 0), handlers: (0, 0), child_count: 0 }
     }
 
     // root ─ header row ─ 50 keyed rows
@@ -104,11 +75,7 @@ fn build_eui(intern_status: bool) -> (Vec<u8>, usize) {
         for (c, cell) in cells(r).into_iter().enumerate() {
             text_bytes += cell.len();
             // Column 2 is the status; it repeats, so it earns an atom.
-            let content = if intern_status && c == 2 {
-                TextRef::Atom(if r % 3 == 0 { 5 } else { 6 })
-            } else {
-                TextRef::Inline(cell)
-            };
+            let content = if intern_status && c == 2 { TextRef::Atom(if r % 3 == 0 { 5 } else { 6 }) } else { TextRef::Inline(cell) };
             tree.nodes.push(text(id(), 6, 0, content));
         }
     }
@@ -188,14 +155,7 @@ fn eui_overhead_ratio(html: usize, eui: usize) -> f64 {
 
 #[test]
 fn a_single_cell_update_is_tiny() {
-    let frame = Frame::Batch(Batch {
-        seq: 2,
-        ops: vec![Op::SetText {
-            node: 141,
-            text: TextRef::Inline("1 984, 42 €".into()),
-        }],
-    })
-    .encode();
+    let frame = Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 141, text: TextRef::Inline("1 984, 42 €".into()) }] }).encode();
 
     println!("\n  one-cell update: {} B (12 B of which are the new text)\n", frame.len());
     assert!(frame.len() < 40, "one-cell update is {} B, budget is 40 B", frame.len());
@@ -205,9 +165,7 @@ fn a_single_cell_update_is_tiny() {
 fn re_sorting_a_keyed_table_moves_rather_than_rebuilds() {
     // Reversing 50 keyed rows: 49 moves — always the last row to position i —
     // and no subtree ever re-sent.
-    let ops = (0..49u32)
-        .map(|i| Op::MoveChild { parent: 1, from: 49, to: i })
-        .collect();
+    let ops = (0..49u32).map(|i| Op::MoveChild { parent: 1, from: 49, to: i }).collect();
     let frame = Frame::Batch(Batch { seq: 3, ops }).encode();
 
     let (full, _) = build_eui(false);

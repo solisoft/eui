@@ -546,10 +546,42 @@ def dialog(title, body_children, actions)
       "display": "stack",
       "justify": "center",
       "align": "center",
-      "bg": "#00000066"
+      # The page behind is put out of play twice over: blurred, so nothing
+      # on it is legible enough to invite a click, and dimmed, so the panel
+      # is plainly the brighter thing. The blur does most of the work, which
+      # is why the scrim is a third lighter than it was when it did all of
+      # it — the page should still read as present, just out of reach.
+      "blur": 16,
+      "bg": "#00000073"
     },
     "c": [panel]
   }
+end
+
+# An alert: one thing to say and nothing to decide, so one button. The
+# handler fires on the button, not on the backdrop — a dialog that closes
+# when the pointer slips is a dialog that loses what it was asking.
+#
+# `opts`: {"ok": "Got it"}
+def alert(title, message, on_close, opts)
+  opts = opts ?? {}
+  dialog(title, [text(message, {})], [button(opts["ok"] ?? "OK", on_close)])
+end
+
+# A confirm: a question with two answers. The affirmative sits last, where
+# the eye ends up, and wears `danger` when it destroys something — the
+# button should say what it will do before the sentence above it is read.
+#
+# `opts`: {"ok": "Delete", "cancel": "Keep", "danger": true}
+def confirm(title, message, on_confirm, on_cancel, opts)
+  opts = opts ?? {}
+  ok_label = opts["ok"] ?? "Confirm"
+  destructive = opts["danger"] ?? false
+  ok = destructive ? danger_button(ok_label, on_confirm) : button(ok_label, on_confirm)
+  dialog(title, [text(message, {})], [
+    secondary_button(opts["cancel"] ?? "Cancel", on_cancel),
+    ok
+  ])
 end
 
 def field(label, value, on_change)
@@ -1280,7 +1312,11 @@ def sheet(side, children)
       "display": "row",
       "justify": side == "left" ? "start" : "end",
       "align": "stretch",
-      "bg": "#00000066"
+      # Lighter than a dialog's, and blurred less: a sheet is somewhere you
+      # went, not a question you have to answer, and the page it slid over
+      # should stay recognisable behind it.
+      "blur": 10,
+      "bg": "#00000047"
     },
     "c": [panel]
   }
@@ -1425,18 +1461,18 @@ def code_viewer(code, opts)
     "size": 1,
     "text_align": "end",
     "fg": "text.muted",
-    "pad": [0, 1, 0, 1]
+    "pad": [0, 2, 0, 2]
   }
 
   # Wrap code text if large (>2KB) to use interning. `if` is a statement
   # in Soli, not an expression, so the choice is a ternary.
   code_text_node = code.length() > 2000 ? text_interned(code, code_style) : text(code, code_style)
 
-  # Apply syntax highlighting spans if provided.
-  unless opts["spans"].nil?
-    code_text_node["p"] = code_text_node["p"] ?? {}
-    code_text_node["p"]["spans"] = opts["spans"]
-  end
+  # Apply syntax highlighting spans if provided. Assigned in one step
+  # through `merge`: a nested `node["p"]["spans"] = …` writes into whatever
+  # `node["p"]` evaluates to, which is not necessarily the hash still held
+  # by the node.
+  code_text_node["p"] = (code_text_node["p"] ?? {}).merge({"spans": opts["spans"]}) unless opts["spans"].nil?
 
   gutter_box = {
     "k": "box",
@@ -1458,7 +1494,12 @@ def code_viewer(code, opts)
     "s": {
       "display": "column",
       "overflow": "scroll",
-      "grow": 1
+      "grow": 1,
+      # The code needs air on its left or the first character sits against
+      # the gutter and the two columns read as one. The padding goes on the
+      # scroller, not the text: padding the text node would move the run
+      # the spans are measured against.
+      "pad": [0, 0, 0, 3]
     },
     "c": [code_text_node]
   }
@@ -1469,13 +1510,16 @@ def code_viewer(code, opts)
     show_numbers ? [gutter_box, code_scroll] : [code_scroll]
   )
 
-  # Outer scroll allows vertical scrolling of the entire viewer.
+  # The outer scroll takes the height of the code, up to a ceiling it then
+  # scrolls within. It deliberately does not `grow`: a viewer that fills
+  # whatever column it is dropped into leaves a field of empty sunken
+  # background under a short file, which reads as a bug rather than a box.
   outer_scroll = scroll(
     {
       "radius": 2,
       "bg": "surface.sunken",
       "pad": 1,
-      "grow": 1
+      "max_height": opts["max_height"] ?? 320
     },
     [content_row]
   )

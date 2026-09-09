@@ -2,13 +2,7 @@
 // the *decode path* must not panic on hostile input. A test harness is the one
 // place where a panic is the correct outcome — a test that panics is a test
 // that failed — so the strict set is lifted here and nowhere else.
-#![allow(
-    clippy::indexing_slicing,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 //! Rejection cases.
 //!
@@ -230,45 +224,28 @@ fn unknown_node_kinds_are_rejected() {
 #[test]
 fn reserved_node_flags_are_rejected() {
     for bit in [0x10u8, 0x20, 0x40, 0x80] {
-        assert_eq!(
-            subtree_err(&[0x01, bit, 0x01, 0x01, 0x00]),
-            E::IllegalValue("reserved node flags set"),
-            "flag {bit:#04x}"
-        );
+        assert_eq!(subtree_err(&[0x01, bit, 0x01, 0x01, 0x00]), E::IllegalValue("reserved node flags set"), "flag {bit:#04x}");
     }
 }
 
 #[test]
 fn zero_node_id_in_a_subtree_is_rejected() {
-    assert_eq!(
-        subtree_err(&[0x01, 0x00, 0x00, 0x01, 0x00]),
-        E::IllegalValue("node id must be non-zero")
-    );
+    assert_eq!(subtree_err(&[0x01, 0x00, 0x00, 0x01, 0x00]), E::IllegalValue("node id must be non-zero"));
 }
 
 #[test]
 fn leaf_kinds_may_not_have_children() {
     for kind in [0x02u8, 0x04, 0x0A, 0x0B] {
-        assert_eq!(
-            subtree_err(&[kind, 0x00, 0x01, 0x01, /*children*/ 0x01]),
-            E::NotALeaf,
-            "kind {kind:#04x}"
-        );
+        assert_eq!(subtree_err(&[kind, 0x00, 0x01, 0x01, /*children*/ 0x01]), E::NotALeaf, "kind {kind:#04x}");
     }
 }
 
 #[test]
 fn inert_kinds_may_not_carry_content() {
     // spacer with text
-    assert_eq!(
-        subtree_err(&[0x0A, 0x02, 0x01, 0x01, 0x00, 0x01, 0x00]),
-        E::IllegalValue("inert node kind carries content")
-    );
+    assert_eq!(subtree_err(&[0x0A, 0x02, 0x01, 0x01, 0x00, 0x01, 0x00]), E::IllegalValue("inert node kind carries content"));
     // divider with a handler
-    assert_eq!(
-        subtree_err(&[0x0B, 0x08, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00]),
-        E::IllegalValue("inert node kind carries content")
-    );
+    assert_eq!(subtree_err(&[0x0B, 0x08, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x00]), E::IllegalValue("inert node kind carries content"));
 }
 
 #[test]
@@ -311,10 +288,7 @@ fn a_promised_child_that_never_arrives_is_rejected() {
 
 #[test]
 fn unknown_textref_tag_is_rejected() {
-    assert_eq!(
-        subtree_err(&[0x02, 0x02, 0x01, 0x01, /*textref tag*/ 0x09]),
-        E::UnknownTag("TextRef")
-    );
+    assert_eq!(subtree_err(&[0x02, 0x02, 0x01, 0x01, /*textref tag*/ 0x09]), E::UnknownTag("TextRef"));
 }
 
 #[test]
@@ -409,16 +383,18 @@ fn an_unknown_animation_is_rejected() {
 }
 
 #[test]
-fn non_zero_reserved_bytes_are_rejected() {
-    for i in 0..2 {
-        let mut raw = style_bytes();
-        raw[62 + i] = 1;
-        assert_eq!(
-            StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(),
-            E::IllegalValue("reserved bytes must be zero"),
-            "reserved byte {i}"
-        );
-    }
+fn a_non_zero_reserved_byte_is_rejected() {
+    // Offset 62 is `blur` now and takes any value; 63 is the last byte left.
+    let mut raw = style_bytes();
+    raw[63] = 1;
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(), E::IllegalValue("the reserved byte must be zero"));
+}
+
+#[test]
+fn any_blur_radius_is_accepted() {
+    let mut raw = style_bytes();
+    raw[62] = 255;
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).map(|s| s.blur), Ok(255));
 }
 
 #[test]
@@ -433,10 +409,7 @@ fn malformed_dims_are_rejected() {
 #[test]
 fn a_truncated_style_record_is_rejected() {
     let raw = style_bytes();
-    assert_eq!(
-        StyleRecord::decode(&mut Reader::new(&raw[..STYLE_RECORD_BYTES - 1])).unwrap_err(),
-        E::Truncated
-    );
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw[..STYLE_RECORD_BYTES - 1])).unwrap_err(), E::Truncated);
 }
 
 // ------------------------------------------------------------- hostile bulk
@@ -477,35 +450,9 @@ fn arbitrary_bytes_never_panic() {
 #[test]
 fn corrupted_valid_frames_never_panic() {
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box,
-        id: 1,
-        style: 1,
-        key: 0,
-        text: None,
-        props: (0, 0),
-        handlers: (0, 0),
-        child_count: 1,
-    });
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Text,
-        id: 2,
-        style: 2,
-        key: 0,
-        text: Some(TextRef::Inline("hello".into())),
-        props: (0, 0),
-        handlers: (0, 0),
-        child_count: 0,
-    });
-    let good = Frame::Batch(Batch {
-        seq: 1,
-        ops: vec![
-            Op::DefAtom { id: 1, value: "label".into() },
-            Op::DefStyle { id: 1, record: StyleRecord::default() },
-            Op::Mount(tree),
-        ],
-    })
-    .encode();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("hello".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let good = Frame::Batch(Batch { seq: 1, ops: vec![Op::DefAtom { id: 1, value: "label".into() }, Op::DefStyle { id: 1, record: StyleRecord::default() }, Op::Mount(tree)] }).encode();
 
     let mut state = 0x9E37_79B9_7F4A_7C15u64;
     let mut next = move || {

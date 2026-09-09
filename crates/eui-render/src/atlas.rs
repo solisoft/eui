@@ -193,7 +193,6 @@ fn image_is_some_and_large(img: &Option<GlyphImage>) -> bool {
     img.as_ref().is_some_and(|i| i.width > 0 && i.height > 0)
 }
 
-
 /// Decoded images packed into one RGBA8 texture, shelf-packed like the glyph
 /// atlas. An image is uploaded once and referenced by content hash.
 #[derive(Debug)]

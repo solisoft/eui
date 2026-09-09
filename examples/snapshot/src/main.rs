@@ -7,7 +7,6 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
-
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, ThemeMode, Welcome};
 use eui_render::Renderer;
@@ -55,13 +54,12 @@ fn main() {
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&target, &list, atlas, images);
+        renderer.render_offscreen(&target, 0.0, &list, atlas, images);
         let px = renderer.read_back(&target).expect("read back");
         std::fs::write(format!("{out}/{name}.rgba"), &px).unwrap();
         println!("{name} {dw} {dh} quads={} mount_bytes={wire}", list.quads.len());
     }
 }
-
 
 /// Render a component served by a running Soli, in both modes.
 fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
@@ -130,19 +128,25 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         if let Ok(labels) = std::env::var("SNAPSHOT_CLICK") {
             for label in labels.split(';').map(str::trim).filter(|l| !l.is_empty()) {
                 let _ = driver.paint(dw, dh);
-                let Some(root) = driver.session().root() else { break };
+                let Some(root) = driver.session().root() else {
+                    break;
+                };
                 let Some(mut ix) = driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(label)) else {
                     eprintln!("snapshot: nothing reads {label:?}");
                     continue;
                 };
                 while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
-                    let Some(up) = driver.session().node(ix).map(|n| n.parent) else { break };
+                    let Some(up) = driver.session().node(ix).map(|n| n.parent) else {
+                        break;
+                    };
                     if up == ix {
                         break;
                     }
                     ix = up;
                 }
-                let Some(r) = driver.layout().rect(ix) else { continue };
+                let Some(r) = driver.layout().rect(ix) else {
+                    continue;
+                };
                 driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
                 driver.input(Input::PointerDown(0));
                 for f in driver.input(Input::PointerUp(0)) {
@@ -195,7 +199,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&target, &list, atlas, images);
+        renderer.render_offscreen(&target, 0.0, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {
@@ -210,7 +214,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     let list = driver.paint(dw, dh);
                     let painted = t.elapsed();
                     let (atlas, images) = driver.atlases_mut();
-                    renderer.render_offscreen(&target, &list, atlas, images);
+                    renderer.render_offscreen(&target, 0.0, &list, atlas, images);
                     let _ = renderer.read_back(&target);
                     println!("frame {i}: layout+paint {:.2} ms, render+readback {:.2} ms, {} quads", painted.as_secs_f64() * 1e3, (t.elapsed() - painted).as_secs_f64() * 1e3, list.quads.len());
                 }

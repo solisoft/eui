@@ -20,13 +20,13 @@
 //! to this crate and unversioned: both ends are always the same binary.
 
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eui_proto::{Frame, ThemeMode};
-use eui_render::{Atlas, DrawList, ImageAtlas, Quad};
+use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run};
 
 use crate::a11y::{AccessNode, AccessRole, AccessSnapshot};
 use crate::assets::Hash;
@@ -601,12 +601,14 @@ fn put_list(w: &mut W, list: &DrawList) {
         w.f4(q.stroke);
         w.f4(q.uv);
         w.f4(q.extra);
+        w.f4(q.spin);
     }
     w.u32(u32::try_from(list.runs.len()).unwrap_or(u32::MAX));
-    for (c, a, b) in &list.runs {
-        w.u32(*c);
-        w.u32(*a);
-        w.u32(*b);
+    for r in &list.runs {
+        w.u32(r.clip);
+        w.u32(r.chain);
+        w.u32(r.first);
+        w.u32(r.count);
     }
     w.u32(u32::try_from(list.clips.len()).unwrap_or(u32::MAX));
     for c in &list.clips {
@@ -616,18 +618,35 @@ fn put_list(w: &mut W, list: &DrawList) {
     }
     w.f4(list.clear);
     w.bool(list.wants_frame);
+    w.bool(list.spin_only);
+    match &list.backdrop {
+        None => w.u32(0),
+        Some(b) => {
+            // The count doubles as the tag: a backdrop always has at least
+            // one standard deviation in it, or `paint` would not have made
+            // one.
+            w.u32(u32::try_from(b.sigmas.len()).unwrap_or(u32::MAX));
+            for v in b.rect {
+                w.u32(v);
+            }
+            w.u32(b.first);
+            for s in &b.sigmas {
+                w.f32(*s);
+            }
+        }
+    }
 }
 
 fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     let n = r.u32()? as usize;
     let mut quads = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
-        quads.push(Quad { rect: r.f4()?, params: r.f4()?, fill: r.f4()?, stroke: r.f4()?, uv: r.f4()?, extra: r.f4()? });
+        quads.push(Quad { rect: r.f4()?, params: r.f4()?, fill: r.f4()?, stroke: r.f4()?, uv: r.f4()?, extra: r.f4()?, spin: r.f4()? });
     }
     let n = r.u32()? as usize;
     let mut runs = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
-        runs.push((r.u32()?, r.u32()?, r.u32()?));
+        runs.push(Run { clip: r.u32()?, chain: r.u32()?, first: r.u32()?, count: r.u32()? });
     }
     let n = r.u32()? as usize;
     let mut clips = Vec::with_capacity(n.min(1 << 16));
@@ -636,7 +655,20 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     }
     let clear = r.f4()?;
     let wants_frame = r.bool()?;
-    Ok(DrawList { quads, runs, clips, clear, wants_frame })
+    let spin_only = r.bool()?;
+    let n = r.u32()? as usize;
+    let backdrop = if n == 0 {
+        None
+    } else {
+        let rect = [r.u32()?, r.u32()?, r.u32()?, r.u32()?];
+        let first = r.u32()?;
+        let mut sigmas = Vec::with_capacity(n.min(1 << 8));
+        for _ in 0..n {
+            sigmas.push(r.f32()?);
+        }
+        Some(Backdrop { rect, first, sigmas })
+    };
+    Ok(DrawList { quads, runs, clips, clear, wants_frame, spin_only, backdrop })
 }
 
 fn put_access(w: &mut W, s: &AccessSnapshot) {
@@ -917,6 +949,33 @@ pub struct Worker {
     /// framing included. What the process boundary costs is a number the
     /// budgets ask for (10 §1), and only this side can count it.
     traffic: (u64, u64),
+    /// The last `Paint` reply, when the driver said a `spin` was the only
+    /// thing owed. While that holds, the next `Paint` is answered from here
+    /// and the pipe is not touched: the list cannot have changed, because
+    /// the only thing that moves is a clock the vertex stage reads. Any
+    /// other request clears it -- a request is the one way the tree can
+    /// come to paint differently, and every one of them passes through
+    /// [`Worker::call`].
+    spin_reply: Option<Reply>,
+}
+
+/// The reply to hand back for the *next* paint, when this one may simply be
+/// drawn again: a spin-only list, with everything that happens once taken
+/// out of it. Frames bound for the server, a clipboard hand-off, an IME
+/// rect and the atlas rows are all answers to something that already
+/// happened, and replaying them would say it twice. What is left is the
+/// list, that a redraw is wanted, and when.
+fn spin_repeat(reply: &Reply) -> Option<Reply> {
+    let Payload::Paint { list, .. } = &reply.payload else {
+        return None;
+    };
+    if !list.spin_only || reply.status.closed.is_some() {
+        return None;
+    }
+    Some(Reply {
+        status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, ..Status::default() },
+        payload: Payload::Paint { list: list.clone(), glyphs: None, images: None },
+    })
 }
 
 impl std::fmt::Debug for Worker {
@@ -939,7 +998,7 @@ impl Worker {
         let mut child = cmd.spawn().map_err(|e| format!("cannot start the worker {}: {e}", program.display()))?;
         let input = child.stdin.take().ok_or("worker has no stdin")?;
         let output = child.stdout.take().ok_or("worker has no stdout")?;
-        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0) };
+        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0), spin_reply: None };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
             Some(Payload::Sandbox(s)) => Ok((worker, s)),
@@ -952,6 +1011,20 @@ impl Worker {
     pub fn call(&mut self, request: &Request) -> Option<Reply> {
         if self.dead.is_some() {
             return None;
+        }
+        // A repeat of a paint the driver called spin-only: the same list,
+        // drawn again with the clock moved on. Nothing crosses the pipe and
+        // the driver is not woken, so a spinner costs a draw and no more.
+        if matches!(request, Request::Paint(..)) {
+            if let Some(reply) = self.spin_reply.clone() {
+                self.status = reply.status.clone();
+                self.due = Some(Instant::now());
+                crate::driver::trace(|| "paint: from the spin cache, the pipe untouched".to_owned());
+                return Some(reply);
+            }
+        } else {
+            // Anything else may change what the tree paints.
+            self.spin_reply = None;
         }
         let encoded = request.encode();
         let result = write_message(&mut self.input, &encoded).and_then(|()| read_message(&mut self.output, MAX_REPLY));
@@ -966,6 +1039,7 @@ impl Worker {
             Ok(reply) => {
                 self.status = reply.status.clone();
                 self.due = Some(Instant::now());
+                self.spin_reply = spin_repeat(&reply);
                 Some(reply)
             }
             Err(e) => {
@@ -1117,11 +1191,7 @@ impl Backend {
                     Ok(s) => format!("driver in worker {pid}: {s}"),
                     Err(e) => format!("driver in worker {pid}, unconfined: {e}"),
                 };
-                let backend = Backend::Remote {
-                    worker: Arc::new(Mutex::new(worker)),
-                    atlas: Arc::new(Mutex::new(Atlas::new())),
-                    images: Arc::new(Mutex::new(ImageAtlas::new())),
-                };
+                let backend = Backend::Remote { worker: Arc::new(Mutex::new(worker)), atlas: Arc::new(Mutex::new(Atlas::new())), images: Arc::new(Mutex::new(ImageAtlas::new())) };
                 (backend, how)
             }
             Err(e) => (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: {e}")),
@@ -1249,7 +1319,9 @@ impl Backend {
         }) {
             return out;
         }
-        let Backend::Remote { worker, atlas, images } = self else { return (DrawList::default(), Vec::new()) };
+        let Backend::Remote { worker, atlas, images } = self else {
+            return (DrawList::default(), Vec::new());
+        };
         let request = Request::Paint(w, h);
         let reply = match worker.lock() {
             Ok(mut worker) => worker.call(&request),
@@ -1282,7 +1354,9 @@ impl Backend {
                 f(a, i)
             }),
             Backend::Remote { atlas, images, .. } => {
-                let (Ok(mut a), Ok(mut i)) = (atlas.lock(), images.lock()) else { return None };
+                let (Ok(mut a), Ok(mut i)) = (atlas.lock(), images.lock()) else {
+                    return None;
+                };
                 Some(f(&mut a, &mut i))
             }
         }
@@ -1323,24 +1397,18 @@ impl Backend {
 
     /// Why the session ended, if it did.
     pub fn closed(&self) -> Option<String> {
-        self.with_local(|d| d.closed().map(ToString::to_string))
-            .or_else(|| self.with_worker(|w| w.status.closed.clone()))
-            .flatten()
+        self.with_local(|d| d.closed().map(ToString::to_string)).or_else(|| self.with_worker(|w| w.status.closed.clone())).flatten()
     }
 
     /// Where an input method's candidate window goes: `x, y, w, h` in
     /// logical px, if a field has focus.
     pub fn ime_area(&self) -> Option<[f32; 4]> {
-        self.with_local(|d| d.ime_area().map(|r| [r.x, r.y, r.w, r.h]))
-            .or_else(|| self.with_worker(|w| w.status.ime))
-            .flatten()
+        self.with_local(|d| d.ime_area().map(|r| [r.x, r.y, r.w, r.h])).or_else(|| self.with_worker(|w| w.status.ime)).flatten()
     }
 
     /// The pointer's shape over what it is on.
     pub fn cursor(&self) -> eui_proto::Cursor {
-        self.with_local(|d| d.cursor())
-            .or_else(|| self.with_worker(|w| eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default)))
-            .unwrap_or(eui_proto::Cursor::Default)
+        self.with_local(|d| d.cursor()).or_else(|| self.with_worker(|w| eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default))).unwrap_or(eui_proto::Cursor::Default)
     }
 
     /// Text the viewer copied since the last call.
@@ -1373,7 +1441,9 @@ impl Backend {
     /// Returns encoded frames to send.
     pub fn access_action(&mut self, id: u64, click: bool) -> Vec<Vec<u8>> {
         if let Some(out) = self.with_local(|d| {
-            let Some(ix) = d.node_for_accessibility(id) else { return Vec::new() };
+            let Some(ix) = d.node_for_accessibility(id) else {
+                return Vec::new();
+            };
             let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
             out.iter().map(Frame::encode).collect::<Vec<_>>()
         }) {
@@ -1441,11 +1511,69 @@ mod tests {
         }
     }
 
+    /// The window may draw a spin-only frame again, but it must not *do* it
+    /// again: the frames bound for the server, the clipboard hand-off, the
+    /// IME rect and the atlas rows all answer something that happened once.
+    #[test]
+    fn a_repeated_spin_frame_carries_the_list_and_nothing_that_happens_once() {
+        let list = |spin_only: bool| DrawList {
+            quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0] }],
+            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
+            clips: vec![[0, 0, 10, 10]],
+            clear: [0.5; 4],
+            wants_frame: true,
+            spin_only,
+            backdrop: None,
+        };
+        let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
+        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: l, glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8])) } };
+
+        let again = spin_repeat(&paint(list(true), status.clone())).expect("a spin-only paint may be repeated");
+        let Payload::Paint { list: kept, glyphs, images } = &again.payload else { panic!("still a paint") };
+        assert_eq!(kept, &list(true), "the list itself is what gets drawn again");
+        assert!(glyphs.is_none() && images.is_none(), "the atlas rows already landed");
+        assert!(again.status.outbound.is_empty(), "the server must not be told twice");
+        assert!(again.status.clipboard.is_none(), "nor the clipboard written twice");
+        assert!(again.status.ime.is_none());
+        assert!(again.status.needs_redraw, "but a redraw is still wanted");
+        assert_eq!(again.status.next_due_ms, Some(16), "and still due when it was");
+
+        assert!(spin_repeat(&paint(list(false), status.clone())).is_none(), "anything else owed and the driver must be asked");
+        let closed = Status { closed: Some("gone".into()), ..status };
+        assert!(spin_repeat(&paint(list(true), closed)).is_none(), "a closed session is not repeated");
+        assert!(spin_repeat(&Reply { status: Status::default(), payload: Payload::None }).is_none(), "and only a paint is");
+    }
+
     #[test]
     fn replies_round_trip() {
-        let status = Status { outbound: vec![vec![1], vec![2, 3]], needs_redraw: true, closed: Some("x".into()), ime: Some([1.0, 2.0, 3.0, 4.0]), clipboard: Some("c".into()), next_due_ms: Some(16), cursor: 1, audio: true, video: false };
-        let list = DrawList { quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4] }], runs: vec![(0, 0, 1)], clips: vec![[0, 0, 10, 10]], clear: [0.5; 4], wants_frame: true };
-        let snap = AccessSnapshot { nodes: vec![AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] }, AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] }], focus: 1, scale: 2.0 };
+        let status = Status {
+            outbound: vec![vec![1], vec![2, 3]],
+            needs_redraw: true,
+            closed: Some("x".into()),
+            ime: Some([1.0, 2.0, 3.0, 4.0]),
+            clipboard: Some("c".into()),
+            next_due_ms: Some(16),
+            cursor: 1,
+            audio: true,
+            video: false,
+        };
+        let list = DrawList {
+            quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4] }],
+            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
+            clips: vec![[0, 0, 10, 10]],
+            clear: [0.5; 4],
+            wants_frame: true,
+            spin_only: true,
+            backdrop: None,
+        };
+        let snap = AccessSnapshot {
+            nodes: vec![
+                AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] },
+                AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] },
+            ],
+            focus: 1,
+            scale: 2.0,
+        };
         let all = vec![
             Payload::None,
             Payload::Sandbox(Ok("ok".into())),

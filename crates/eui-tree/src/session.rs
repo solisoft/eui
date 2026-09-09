@@ -6,10 +6,7 @@
 //! resync, rebuild — so there is no need to snapshot the tree before every
 //! batch to be able to roll back.
 
-use eui_proto::{
-    limits as proto, Batch, ColorRef, EventKind, Handler, NodeKind, Op, StyleRecord, Subtree,
-    TextRef, Value,
-};
+use eui_proto::{limits as proto, Batch, ColorRef, EventKind, Handler, NodeKind, Op, StyleRecord, Subtree, TextRef, Value};
 
 use crate::arena::{dirty, Arena, Node, NodeIx};
 use crate::error::{ApplyError, Result, Table};
@@ -130,11 +127,7 @@ impl Session {
 
     /// The node's computed style; id 0 is the default record.
     pub fn style_of(&self, ix: NodeIx) -> StyleRecord {
-        self.arena
-            .get(ix)
-            .and_then(|n| self.styles.get(n.style))
-            .copied()
-            .unwrap_or_default()
+        self.arena.get(ix).and_then(|n| self.styles.get(n.style)).copied().unwrap_or_default()
     }
 
     /// The node's handler for `event`.
@@ -478,20 +471,11 @@ impl Session {
             Op::RemoveChild { parent, index, count } => {
                 let pix = self.find(*parent)?;
                 let len = self.arena.require(pix)?.children.len() as u32;
-                let end = index.checked_add(*count).ok_or(ApplyError::ChildIndexOutOfRange {
-                    parent: *parent,
-                    index: *index,
-                    len,
-                })?;
+                let end = index.checked_add(*count).ok_or(ApplyError::ChildIndexOutOfRange { parent: *parent, index: *index, len })?;
                 if end > len {
                     return Err(ApplyError::ChildIndexOutOfRange { parent: *parent, index: end, len });
                 }
-                let removed: Vec<NodeIx> = self
-                    .arena
-                    .require_mut(pix)?
-                    .children
-                    .drain(*index as usize..end as usize)
-                    .collect();
+                let removed: Vec<NodeIx> = self.arena.require_mut(pix)?.children.drain(*index as usize..end as usize).collect();
                 for ix in removed {
                     if self.focused_within(ix) {
                         self.focused = NodeIx::NONE;
@@ -553,12 +537,7 @@ impl Session {
                 self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
-            Op::DefAtom { .. }
-            | Op::DefStyle { .. }
-            | Op::DefColor { .. }
-            | Op::DefChunk { .. }
-            | Op::DefChunkBytes { .. }
-            | Op::Mount(_) => Err(ApplyError::Internal),
+            Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::Mount(_) => Err(ApplyError::Internal),
         }
     }
 
@@ -587,13 +566,7 @@ impl Session {
             self.root = root;
             return self.arena.mark_dirty(root);
         }
-        let position = self
-            .arena
-            .require(parent)?
-            .children
-            .iter()
-            .position(|c| *c == old)
-            .ok_or(ApplyError::Internal)?;
+        let position = self.arena.require(parent)?.children.iter().position(|c| *c == old).ok_or(ApplyError::Internal)?;
         self.arena.release(old)?;
         let depth = self.arena.depth(parent)?;
         let fresh = self.graft(subtree, parent, depth.saturating_add(1))?;

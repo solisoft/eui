@@ -13,6 +13,26 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Formatting is the one check that needs no toolchain beyond rustfmt and no
+  # platform at all, so it runs on Linux and reports in under a minute —
+  # ahead of the macOS runners, which queue for ten on a busy day.
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      # rustfmt.toml at the root says what "formatted" means; this only asks
+      # whether the tree already is. `cargo xtask conform` runs the same
+      # check first, so it fails here only if that was skipped.
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
   build-matrix:
     name: Build EUI Client
     runs-on: ${{ matrix.os }}
