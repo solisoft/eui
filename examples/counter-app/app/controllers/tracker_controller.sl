@@ -32,9 +32,27 @@ TRACKER_CHANNELS = 8
 # middle of the pattern and scrolls the rows past it, which is also why a
 # tracker never needs a scrollbar.
 TRACKER_VISIBLE = 23
-# 11 025 Hz, eight bits: what a tracker sounded like on the hardware this
-# one is dressed as, and half the samples to mix in an interpreter.
-TRACKER_RATE = 11025
+# What the mixer renders at. The rate is the whole cost of a render — one
+# closure call per sample per voice, so mix time is linear in it — and the
+# depth is nearly free, so the modes trade one against the other and say
+# so on the status line rather than picking for you.
+TRACKER_MODES = [
+  {
+    "name": "11k · 8-bit",
+    "rate": 11025,
+    "bits": 8
+  },
+  {
+    "name": "22k · 16-bit",
+    "rate": 22050,
+    "bits": 16
+  },
+  {
+    "name": "44k · 16-bit",
+    "rate": 44100,
+    "bits": 16
+  }
+]
 
 TRACKER_NOTE_NAMES = [
   "C-",
@@ -235,6 +253,7 @@ def tracker_defaults(state)
     "took": 0,
     "status": "Ready.",
     "skin": "modern",
+    "mode": 1,
     "viewport": {
       "width": 1280,
       "height": 800,
@@ -287,9 +306,13 @@ def tracker_freq_mhz(note)
   TRACKER_BASE_MHZ[note % 12] * TRACKER_OCTAVE_MUL[octave]
 end
 
-def tracker_step(note)
+def tracker_mode(state)
+  TRACKER_MODES[state["mode"] ?? 1] ?? TRACKER_MODES[0]
+end
+
+def tracker_step(note, rate)
   # phase units per sample: freq × 65536 / rate, in millihertz throughout.
-  int(tracker_freq_mhz(note) * 65536 / (TRACKER_RATE * 1000))
+  int(tracker_freq_mhz(note) * 65536 / (rate * 1000))
 end
 
 def tracker_wave_at(wave, phase, i)
@@ -351,15 +374,38 @@ def tracker_le(n, width)
   [n % 256, int(n / 256) % 256, int(n / 65536) % 256, int(n / 16777216) % 256]
 end
 
-def tracker_wav_header(count)
+def tracker_wav_header(count, rate, bits)
   riff = [82, 73, 70, 70]
   wave = [87, 65, 86, 69]
   fmt = [102, 109, 116, 32]
   data = [100, 97, 116, 97]
+  block = int(bits / 8)
   head = riff.concat(tracker_le(36 + count, 4), wave, fmt, tracker_le(16, 4))
-  head = head.concat(tracker_le(1, 2), tracker_le(1, 2), tracker_le(TRACKER_RATE, 4))
-  head = head.concat(tracker_le(TRACKER_RATE, 4), tracker_le(1, 2), tracker_le(8, 2))
+  head = head.concat(tracker_le(1, 2), tracker_le(1, 2), tracker_le(rate, 4))
+  head = head.concat(tracker_le(rate * block, 4), tracker_le(block, 2), tracker_le(bits, 2))
   head.concat(data, tracker_le(count, 4))
+end
+
+# Eight bits go out unsigned, sixteen signed and little-endian: what a
+# `.wav` means by each, and the only place the depth shows up at all.
+def tracker_pack(mixed, peak, bits)
+  if bits == 8
+    return mixed.map(fn(v) {
+      out = 128 + int(v * 120 / peak)
+      out = 255 if out > 255
+      out = 0 if out < 0
+      out
+    })
+  end
+
+  pairs = mixed.map(fn(v) {
+    out = int(v * 30000 / peak)
+    out = 32767 if out > 32767
+    out = 0 - 32767 if out < 0 - 32767
+    out = out + 65536 if out < 0;
+    [out % 256, int(out / 256) % 256]
+  })
+  pairs.flatten()
 end
 
 # The pattern, rendered. Voices survive across rows — a note rings until
@@ -369,7 +415,9 @@ def tracker_render(state)
   started = DateTime.microtime()
   cells = state["cells"]
   instruments = state["instruments"]
-  count = int(TRACKER_RATE * tracker_row_ms(state) / 1000)
+  mode = tracker_mode(state)
+  rate = mode["rate"]
+  count = int(rate * tracker_row_ms(state) / 1000)
   voices = range(0, TRACKER_CHANNELS).map(fn(c) { nil })
   mixed = []
   index = 0
@@ -383,7 +431,7 @@ def tracker_render(state)
         instrument = instruments[cell["i"] - 1] ?? instruments[0]
         voices[chan] = {
           "wave": instrument["wave"],
-          "step": tracker_step(note),
+          "step": tracker_step(note, rate),
           "vol": cell["v"] > 0 ? cell["v"] : instrument["vol"],
           "phase": 0,
           "age": 0
@@ -413,19 +461,15 @@ def tracker_render(state)
     peak = v if v > peak
     peak = 0 - v if 0 - v > peak
   end
-  bytes = mixed.map(fn(v) {
-    out = 128 + int(v * 120 / peak)
-    out = 255 if out > 255
-    out = 0 if out < 0
-    out
-  })
+  bytes = tracker_pack(mixed, peak, mode["bits"])
   mkdir_p("public/tracker") rescue nil
-  file_write_bytes("public/tracker/song.wav", tracker_wav_header(bytes.length()).concat(bytes))
+  file_write_bytes("public/tracker/song.wav", tracker_wav_header(bytes.length(), rate, mode["bits"]).concat(bytes))
   ms = int((DateTime.microtime() - started) / 1000)
   {
     "path": "public/tracker/song.wav",
     "ms": ms,
-    "samples": bytes.length()
+    "samples": mixed.length(),
+    "mode": mode["name"]
   }
 end
 
@@ -565,7 +609,8 @@ TRACKER_GUTTER_W = 34
 def tracker_fingerprint(state)
   notes = state["cells"].map(fn(c) { str(c["n"]) + ":" + str(c["i"]) + ":" + str(c["v"]) })
   shapes = state["instruments"].map(fn(i) { str(i["wave"]) + ":" + str(i["vol"]) })
-  str(state["bpm"]) + "/" + str(state["speed"]) + "/" + notes.join(",") + "/" + shapes.join(",")
+  str(state["bpm"]) + "/" + str(state["speed"]) + "/" + str(state["mode"]) + "/" + notes.join(",") + "/"
+  + shapes.join(",")
 end
 
 def tracker_play(state)
@@ -585,7 +630,9 @@ def tracker_play(state)
   state["playing"] = true
   state["at"] = 0
   state["seek"] = 0
-  state["status"] = "Playing — " + str(answer["samples"]) + " samples mixed in " + str(answer["ms"]) + " ms"
+  state["status"] = "Playing " + answer["mode"] + " — " + str(answer["samples"]) + " samples mixed in "
+  + str(answer["ms"])
+  + " ms"
   state
 end
 
@@ -628,6 +675,7 @@ def tracker(event_data)
     "octave" => tracker_octave(state, props["by"] ?? 0),
     "edit" => set_key(state, "edit", !state["edit"]),
     "skin" => set_key(state, "skin", state["skin"] == "retro" ? "modern" : "retro"),
+    "mode" => set_key(state, "mode", (state["mode"] + 1) % TRACKER_MODES.length()),
     "bpm" => set_key(state, "bpm", state["bpm"] + props["by"] < 32 ? 32 : state["bpm"] + props["by"]),
     "speed" => set_key(state, "speed", state["speed"] + props["by"] < 1 ? 1 : state["speed"] + props["by"]),
     "wave" => tracker_set_wave(state, props["id"]),
@@ -864,7 +912,8 @@ def tracker_top(state, skin)
       tracker_button(skin, "Play", "play", {}, state["playing"]),
       tracker_button(skin, "Stop", "stop", {}, false),
       tracker_button(skin, state["edit"] ? "Edit ON" : "Edit off", "edit", {}, state["edit"]),
-      tracker_button(skin, skin["modern"] ? "Retro skin" : "Modern skin", "skin", {}, false)
+      tracker_button(skin, skin["modern"] ? "Retro skin" : "Modern skin", "skin", {}, false),
+      tracker_button(skin, "Sound " + tracker_mode(state)["name"], "mode", {}, false)
     ]
   )
   numbers = row(
