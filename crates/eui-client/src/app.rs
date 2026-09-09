@@ -491,7 +491,13 @@ impl ApplicationHandler<Wake> for App {
         self.gpu = Some(Gpu { surface, config, renderer });
         // Everything the first frame needs is in place, and any assistive
         // technology has already registered: it is safe to be seen.
+        //
+        // Ask for that first frame explicitly. A window that was visible at
+        // creation is told to redraw as it maps; one shown later is not, and
+        // on Wayland it simply maps blank and stays blank until some
+        // unrelated event happens to ask for a frame.
         window.set_visible(true);
+        window.request_redraw();
         self.window = Some(window);
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
