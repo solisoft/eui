@@ -402,6 +402,11 @@ pub struct Driver {
     /// The `position` prop each audio node last carried: a seek happens
     /// when the value changes, not on every render.
     audio_at: HashMap<u32, i64>,
+    /// The asset each sounding node was loaded from. A node keeps its id
+    /// when its `src` changes — a tracker renders a new wav into the same
+    /// node — and without this the mixer would go on playing the first
+    /// sound it was ever given.
+    audio_src: HashMap<u32, Hash>,
     /// The tree changed, so the audio nodes must be looked at again.
     audio_dirty: bool,
     /// When `time_update` was last sent, for the rate limit of 03 §7.
@@ -478,6 +483,7 @@ impl Driver {
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
             audio_at: HashMap::new(),
+            audio_src: HashMap::new(),
             video_at: HashMap::new(),
             audio_dirty: false,
             audio_reported: None,
@@ -1773,7 +1779,7 @@ impl Driver {
                 // A node that handles keys is not activated by `Enter` or
                 // `Space`: it asked for the keys, and in a tracker `Space`
                 // is what starts the song, not a click on the pattern.
-                "Enter" | " " if !editable && self.session.node(f).is_none_or(|n| n.handler(EventKind::KeyDown).is_none()) => {
+                "Enter" | " " if !editable && self.session.node(f).map_or(true, |n| n.handler(EventKind::KeyDown).is_none()) => {
                     out.extend(self.activate(f));
                 }
                 _ => {}
@@ -2178,6 +2184,7 @@ impl Driver {
         let Some(root) = self.session.root() else {
             self.mixer.retain(&[]);
             self.audio_at.clear();
+            self.audio_src.clear();
             return;
         };
         let atom = |name: &str| self.session.atom_id(name);
@@ -2209,14 +2216,22 @@ impl Driver {
         }
         self.mixer.retain(&live);
         self.audio_at.retain(|id, _| live.contains(id));
+        self.audio_src.retain(|id, _| live.contains(id));
         for (id, hash, control, position) in work {
-            if !self.mixer.has(id) {
+            // Load when the node is new to the mixer, and again when it is
+            // pointed at a different asset: same node, another sound.
+            if !self.mixer.has(id) || self.audio_src.get(&id) != Some(&hash) {
                 match self.sound(&hash) {
                     Some(sound) => {
                         if !self.mixer.load(id, sound) {
                             trace(|| format!("audio: node {id} refused, {} sources already", self.mixer.len()));
                             continue;
                         }
+                        self.audio_src.insert(id, hash);
+                        // A new sound starts at its own beginning; the
+                        // position the tree carries is applied below only
+                        // when it changed, which a fresh source has not.
+                        self.audio_at.remove(&id);
                     }
                     // Not fetched yet, or it failed: the node stays silent.
                     None => continue,

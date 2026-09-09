@@ -894,6 +894,11 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
                 Incoming::Closed(e) => panic!("{e}"),
                 Incoming::Asset(hash, Ok(bytes)) => {
                     assert!(bytes.starts_with(b"RIFF"), "the server mixed a wav");
+                    // The pattern is 7.68 s at 22 kHz, sixteen bits: a third
+                    // of a megabyte. The placeholder the node carries before
+                    // the first render is a 70 kB chime, and a client that
+                    // kept playing it would look exactly like a working one.
+                    assert!(bytes.len() > 200_000, "the mix, not the chime: {} bytes", bytes.len());
                     d.asset_ready(hash, bytes);
                 }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),

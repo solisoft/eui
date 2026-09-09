@@ -1376,8 +1376,24 @@ fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
     let _ = d.paint(400, 300);
     d.fill_audio(&mut out, 1, 8_000);
     assert!(out.iter().take(20).any(|s| *s > 0.1), "playing again from 5 ms: {:?}", &out[..4]);
+    // A node pointed at another asset plays the other asset. The mixer
+    // is keyed by node, so a tracker rendering a new wav into the same
+    // node used to go on playing the first sound it was ever given.
+    let second: [u8; 32] = [9; 32];
+    d.handle_frame(Frame::Batch(Batch { seq: 6, ops: vec![Op::SetProp { node: 2, prop: A_SRC, value: Value::Asset(second) }] }));
+    let _ = d.paint(400, 300);
+    assert!(d.pending_assets().contains(&second), "the new hash is wanted");
+    // Twice the length, a quarter of the level: nothing of the first tone
+    // could pass for it.
+    d.asset_ready(second, wav_bytes(&[2_000i16; 160], 8_000));
+    let _ = d.paint(400, 300);
+    d.handle_frame(Frame::Batch(Batch { seq: 7, ops: vec![Op::SetProp { node: 2, prop: A_VOLUME, value: Value::Int(100) }] }));
+    let _ = d.paint(400, 300);
+    d.fill_audio(&mut out, 1, 8_000);
+    assert!(out.iter().all(|s| (*s - 0.061).abs() < 0.01), "the second sound, from its start: {:?}", &out[..4]);
+
     // The tree owns the sound: drop the node and the mixer forgets it.
-    d.handle_frame(Frame::Batch(Batch { seq: 6, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }] }));
+    d.handle_frame(Frame::Batch(Batch { seq: 8, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }] }));
     let _ = d.paint(400, 300);
     assert!(!d.audio_playing(), "no node, no sound");
     d.fill_audio(&mut out, 1, 8_000);
