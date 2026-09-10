@@ -341,6 +341,14 @@ struct LoopStats {
     /// Window events delivered, by kind. A loop that parks properly and
     /// wakes anyway is being handed something; this says what.
     wevents: [u64; 6],
+    /// Time spent inside `about_to_wait` itself, summed.
+    ///
+    /// A loop that passes a hundred thousand times a second is either doing
+    /// a hundred thousand small pieces of our work or being woken a hundred
+    /// thousand times for none of it, and those want opposite fixes. This
+    /// is the number that tells them apart: against the wall-clock second
+    /// beside it, it says what share of the core is this crate's.
+    body_us: u64,
     /// Every `WaitUntil` delta added up, so the *mean* sleep asked for can
     /// be read off. The minimum alone is a trap: one pass landing on the
     /// deadline makes a loop that sleeps properly look like one that never
@@ -368,6 +376,7 @@ impl LoopStats {
             shortest_from: "-",
             retry_won: 0,
             wevents: [0; 6],
+            body_us: 0,
             total_us: 0,
         })
     }
@@ -2332,6 +2341,7 @@ impl ApplicationHandler<Wake> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = std::time::Instant::now();
+        let body = self.loop_stats.is_some().then(std::time::Instant::now);
         if let Some(stats) = &mut self.loop_stats {
             stats.passes = stats.passes.saturating_add(1);
             let elapsed = now.saturating_duration_since(stats.since);
@@ -2341,7 +2351,7 @@ impl ApplicationHandler<Wake> for App {
                 let events: String = WEVENT_NAMES.iter().zip(stats.wevents.iter()).filter(|(_, n)| **n > 0).map(|(name, n)| format!(" {n} {name}")).collect();
                 let shortest = if stats.shortest_us == u64::MAX { "-".to_owned() } else { format!("{}us", stats.shortest_us) };
                 eprintln!(
-                    "eui loop: {} passes, {} frames in {:.2}s{}; parked {} on Wait / {} on WaitUntil, soonest {} from {}, retry won {}; window events:{}; mean sleep asked {}us",
+                    "eui loop: {} passes, {} frames in {:.2}s{}; parked {} on Wait / {} on WaitUntil, soonest {} from {}, retry won {}; window events:{}; mean sleep asked {}us; {:.1} ms of the second spent in about_to_wait",
                     stats.passes,
                     frames.saturating_sub(stats.frames_at),
                     elapsed.as_secs_f32(),
@@ -2352,10 +2362,23 @@ impl ApplicationHandler<Wake> for App {
                     stats.shortest_from,
                     stats.retry_won,
                     if events.is_empty() { " none".to_owned() } else { events },
-                    stats.total_us.checked_div(stats.untils).unwrap_or(0)
+                    stats.total_us.checked_div(stats.untils).unwrap_or(0),
+                    stats.body_us as f64 / 1000.0
                 );
-                *stats =
-                    LoopStats { since: now, passes: 0, frames_at: frames, wakes: [0; 6], waits: 0, untils: 0, shortest_us: u64::MAX, shortest_from: "-", retry_won: 0, wevents: [0; 6], total_us: 0 };
+                *stats = LoopStats {
+                    since: now,
+                    passes: 0,
+                    frames_at: frames,
+                    wakes: [0; 6],
+                    waits: 0,
+                    untils: 0,
+                    shortest_us: u64::MAX,
+                    shortest_from: "-",
+                    retry_won: 0,
+                    wevents: [0; 6],
+                    body_us: 0,
+                    total_us: 0,
+                };
             }
         }
         // Dialogs the last events asked for, and the bytes they moved.
@@ -2413,6 +2436,9 @@ impl ApplicationHandler<Wake> for App {
             // No thread to keep it: the old behaviour, which at least
             // animates, rather than a window that freezes.
             None => event_loop.set_control_flow(idle_or_deadline(due, now)),
+        }
+        if let (Some(stats), Some(body)) = (&mut self.loop_stats, body) {
+            stats.body_us = stats.body_us.saturating_add(u64::try_from(body.elapsed().as_micros()).unwrap_or(0));
         }
     }
 }
