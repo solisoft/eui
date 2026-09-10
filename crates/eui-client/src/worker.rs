@@ -162,6 +162,11 @@ pub enum Request {
     },
     /// Change the grant before the session opens.
     Grant(u32),
+    /// End the session with a reason, and show it. The window uses this
+    /// where it refuses to open one at all — a manifest that did not check
+    /// out — so that the reason is on the glass and not only on a stderr
+    /// that a phone does not have.
+    Close(String),
     /// The opening frame, encoded.
     Hello,
     /// A frame from the server, as received.
@@ -303,6 +308,10 @@ impl Request {
                 w.u32(*id);
                 w.str(why);
             }
+            Request::Close(why) => {
+                w.u8(19);
+                w.str(why);
+            }
             Request::Saving { token, name } => {
                 w.u8(18);
                 w.u32(*token);
@@ -362,6 +371,7 @@ impl Request {
             16 => Request::UploadChunk { id: r.u32()?, bytes: r.bytes()?.to_vec(), last: r.bool()? },
             17 => Request::UploadFailed(r.u32()?, r.str()?),
             18 => Request::Saving { token: r.u32()?, name: r.str()? },
+            19 => Request::Close(r.str()?),
             _ => return Err("unknown request"),
         };
         r.done()?;
@@ -1061,6 +1071,10 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
             (Some(d), request) => {
                 let payload = match request {
                     Request::Config { .. } => Payload::None,
+                    Request::Close(why) => {
+                        d.close(why);
+                        Payload::None
+                    }
                     Request::Grant(g) => {
                         d.grant(g);
                         Payload::None
@@ -1651,6 +1665,20 @@ impl Backend {
             Backend::Local(d) => AudioTap::Local(Arc::clone(d)),
             Backend::Remote { worker, .. } => AudioTap::Remote(Arc::clone(worker)),
         }
+    }
+
+    /// End the session with a reason, and show it.
+    ///
+    /// For a session the window refuses to open — a manifest that did not
+    /// verify — this is what puts the reason where somebody can read it.
+    /// The tab used to keep its silence and an empty page, which on a
+    /// desktop merely sent you to the terminal and on a phone left nothing
+    /// at all: a blank window that knew exactly what was wrong.
+    pub fn close(&mut self, why: String) {
+        self.with_local(|d| d.close(why.clone()));
+        self.with_worker(|w| {
+            w.call(&Request::Close(why));
+        });
     }
 
     /// Change the grant before the session opens.

@@ -2199,3 +2199,27 @@ fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
     assert_eq!(d.next_frame_at(), None, "nothing is due once the viewport has gone");
     assert!(!d.tick(after + Duration::from_millis(1)), "the window sleeps");
 }
+
+/// A session the window refuses to open must say why *on the glass*.
+///
+/// It used to say it on stderr and leave an empty page. On a desktop that
+/// sends somebody to a terminal; on a phone there is no terminal, and the
+/// window is simply blank while the client knows exactly what is wrong —
+/// which is how an afternoon goes on a simulator with an untrusted
+/// certificate.
+#[test]
+fn a_refused_session_puts_its_reason_where_it_can_be_read() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.close("manifest: the signature does not verify".into());
+    let _ = d.paint(400, 300);
+
+    // The page the driver builds for a stopped session: a heading, and the
+    // reason under it. Both are found by reading the tree back, because
+    // what matters is that a person could read them, not that a field was
+    // set somewhere.
+    let session = d.session();
+    let root = session.root().expect("the stopped page is mounted");
+    let text: Vec<String> = session.preorder(root).filter_map(|ix| session.text_of(ix).map(ToOwned::to_owned)).collect();
+    assert!(text.iter().any(|t| t == "The application stopped"), "no heading: {text:?}");
+    assert!(text.iter().any(|t| t.contains("the signature does not verify")), "the reason is not on the page: {text:?}");
+}

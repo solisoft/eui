@@ -551,7 +551,14 @@ impl Tab {
                 // The tab stays, with no connection in it: in a shell the
                 // tab is where a person looks for the reason, and losing
                 // it would only leave a gap in the strip.
+                //
+                // And the reason goes *into* it. This used to say its piece
+                // on stderr and leave a blank page, which on a desktop sends
+                // somebody to a terminal and on a phone leaves them nothing
+                // at all — a window that knew exactly what was wrong and
+                // showed an empty rectangle. There is no stderr on a phone.
                 eprintln!("eui: {e}; refusing to connect");
+                tab.backend.close(refusal(&e));
                 return tab;
             }
         }
@@ -749,6 +756,24 @@ impl Tab {
     fn close(self, why: &str) {
         crate::driver::trace(|| format!("tab closed: {why}"));
         drop(self);
+    }
+}
+
+/// What to put on the glass when a session is refused: the reason, and
+/// where it is worth saying, the way out of it.
+///
+/// A certificate the client does not know is the one refusal a person is
+/// likely to hit on purpose — a private CA, a `mkcert` name, a staging box
+/// — and it is the one where the answer is a single environment variable
+/// they cannot be expected to guess. The platform trust store carries it on
+/// a desktop; on a phone there is no such store to read, so the name of the
+/// flag has to be in the message.
+fn refusal(why: &str) -> String {
+    let cert = why.contains("certificate") || why.contains("UnknownIssuer") || why.contains("CaUsedAsEndEntity");
+    if cert {
+        format!("{why}\n\nThe certificate is signed by an authority this client does not know. EUI_CA_FILE=<pem> adds one — a mkcert root is at `$(mkcert -CAROOT)/rootCA.pem`. A phone has no platform trust store to read, so it must be named.")
+    } else {
+        why.to_owned()
     }
 }
 
