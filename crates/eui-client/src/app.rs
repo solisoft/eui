@@ -117,6 +117,9 @@ struct Tab {
     /// What the strip calls it: the manifest's name, or the last path
     /// segment until the manifest arrives.
     title: String,
+    /// This session has sent a frame, so the address is one that answers.
+    /// Only then is it worth offering again on a blank page.
+    answered: bool,
     /// What the address bar says about the origin.
     trust: crate::chrome::Trust,
 }
@@ -214,6 +217,7 @@ impl Tab {
             audio: None,
             audio_rx: None,
             ime_area: None,
+            answered: false,
             trust: crate::chrome::Trust::Unverified,
         };
 
@@ -284,7 +288,10 @@ impl Tab {
                 match msg {
                     // Decoded by the driver, wherever it runs: the window
                     // never reads a frame.
-                    Incoming::Message(bytes) => frames.push(bytes),
+                    Incoming::Message(bytes) => {
+                        self.answered = true;
+                        frames.push(bytes);
+                    }
                     Incoming::Closed(e) => {
                         closed = Some(e.to_string());
                         break;
@@ -491,7 +498,11 @@ impl Shell {
 
         let textures = gpu_shared.renderer.session();
         let (logical_w, logical_h) = (size.width as f32 / scale, size.height as f32 / scale);
-        let mut chrome = chrome.then(|| (crate::chrome::Chrome::new(logical_w, logical_h, scale), textures));
+        let mut chrome = chrome.then(|| {
+            let mut c = crate::chrome::Chrome::new(logical_w, logical_h, scale);
+            c.set_recents(crate::recent::load());
+            (c, textures)
+        });
 
         let mut shell = Self {
             window,
@@ -752,9 +763,23 @@ impl Shell {
     fn pump(&mut self) {
         let active = self.active;
         let mut redraw = false;
+        let mut remember = None;
         for (i, t) in self.tabs.iter_mut().enumerate() {
+            let before = t.answered;
             let wants = t.pump();
             redraw |= wants && i == active;
+            // The first frame of a session is what makes its address worth
+            // keeping: it answered. An address that was merely typed, or
+            // one whose connection failed, is not offered again.
+            if !before && t.answered {
+                remember = Some((t.url.clone(), t.title.clone()));
+            }
+        }
+        if let Some((url, name)) = remember {
+            let list = crate::recent::remember(&url, &name);
+            if let Some((c, _)) = &mut self.chrome {
+                c.set_recents(list);
+            }
         }
         if redraw {
             self.window.request_redraw();

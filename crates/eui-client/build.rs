@@ -14,11 +14,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-changed=build.rs");
-    let id = std::env::var("GITHUB_SHA")
-        .ok()
-        .map(|sha| sha.chars().take(7).collect::<String>())
-        .or_else(git_short_sha)
-        .unwrap_or_else(|| "unknown".to_owned());
+    let id = std::env::var("GITHUB_SHA").ok().map(|sha| sha.chars().take(7).collect::<String>()).or_else(git_short_sha).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=EUI_BUILD={id}");
 }
 

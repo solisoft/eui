@@ -85,6 +85,8 @@ pub struct Chrome {
     /// True while the active tab has no application, so the chrome owns the
     /// whole window and there is no address row.
     blank: bool,
+    /// Applications worth offering on a blank page, newest first.
+    recents: Vec<crate::recent::Recent>,
     /// The batch number, which has to rise.
     seq: u64,
     /// The atom and the style catalogue have been sent. They are sent once
@@ -112,13 +114,22 @@ const BLANK_MARK_TEXT: u32 = 13;
 const BLANK_HEAD: u32 = 14;
 const BLANK_SUB: u32 = 15;
 const BLANK_FIELD: u32 = 16;
+/// The recent list on the blank page. Eight ids to a row, of which five are
+/// used: the row, its sigil box, the letter in it, the name and the host. A
+/// stride that only just fits is a collision waiting for the next label —
+/// at four, the first row's host *was* the second row's box.
+const RECENT_BASE: u32 = 200;
+const RECENT_STRIDE: u32 = 8;
+/// How many of a row's ids answer a click: all of them, so the sigil and
+/// either label open the same application as the row.
+const RECENT_PARTS: u32 = 5;
 const TAB_BASE: u32 = 100;
 const TAB_STRIDE: u32 = 8;
 
 impl Chrome {
     /// A chrome for a window of `w × h` at `scale`.
     pub fn new(w: f32, h: f32, scale: f32) -> Self {
-        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, seq: 0, defined: false }
+        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, recents: Vec::new(), seq: 0, defined: false }
     }
 
     /// Where the application's viewport starts, in device-independent px.
@@ -216,6 +227,12 @@ impl Chrome {
             }
         }
         out
+    }
+
+    /// The applications the blank page offers. Kept here rather than read
+    /// from disk on each rebuild, which happens on every tab switch.
+    pub fn set_recents(&mut self, recents: Vec<crate::recent::Recent>) {
+        self.recents = recents;
     }
 
     /// Put the address bar into editing and select what is there.
@@ -376,26 +393,26 @@ impl Chrome {
             border_color: role(Role::BorderSubtle.id()),
             ..Default::default()
         });
-        let mut field_style = |border: Role| {
-            b.style(StyleRecord {
-                display: Display::Row,
-                align_items: AlignItems::Center,
-                height: Dim::Px(28),
-                grow: 1,
-                gap: 2,
-                padding: [0, 3, 0, 3],
-                radius: 2,
-                bg: sunken,
-                border_width: [1, 1, 1, 1],
-                border_color: role(border.id()),
-                cursor: eui_proto::Cursor::Text,
-                overflow: Overflow::Clip,
-                ..Default::default()
-            })
-        };
-        let s_field_idle = field_style(Role::BorderSubtle);
-        let s_field_on = field_style(Role::FocusRing);
-        let s_field = if editing { s_field_on } else { s_field_idle };
+        // One style, edited or not. Focus is not this box's to draw: 03 §3
+        // has the painter put a two-pixel ring around whatever holds it,
+        // outside the border box. Colouring this border `FocusRing` as well
+        // drew a second blue rectangle just inside the first — two nested
+        // outlines with the text wedged between them.
+        let s_field = b.style(StyleRecord {
+            display: Display::Row,
+            align_items: AlignItems::Center,
+            height: Dim::Px(28),
+            grow: 1,
+            gap: 2,
+            padding: [0, 3, 0, 3],
+            radius: 2,
+            bg: sunken,
+            border_width: [1; 4],
+            border_color: role(Role::BorderSubtle.id()),
+            cursor: eui_proto::Cursor::Text,
+            overflow: Overflow::Clip,
+            ..Default::default()
+        });
         let s_chip_text = b.style(StyleRecord { font_size: 0, font_weight: FontWeight::Bold, ..Default::default() });
         let mut chip_style = |tone: Role| {
             b.style(StyleRecord {
@@ -414,7 +431,13 @@ impl Chrome {
         let s_chip_bad = chip_style(Role::DangerBase);
         let s_origin = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: text, line_clamp: 1, ..Default::default() });
         let s_path = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: muted, grow: 1, shrink: 1, basis: Dim::Px(0), line_clamp: 1, ..Default::default() });
-        let s_input = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: text, grow: 1, ..Default::default() });
+        // Inset by two pixels on every side, and shorter than the row it
+        // sits in, so that the focus ring 03 §3 draws *outside* this box has
+        // somewhere to land. Flush against the field, the ring fell under
+        // the field's own `overflow: clip` and survived only as its two
+        // vertical edges — a pair of blue bars with the address between
+        // them, and no sign of what they belonged to.
+        let s_input = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: text, grow: 1, height: Dim::Px(20), margin: [1, 1, 1, 1], ..Default::default() });
 
         // ------------------------------------------------------- the tree
         //
@@ -511,13 +534,42 @@ impl Chrome {
                 ..Default::default()
             })
         };
+        let s_recents = b.style(StyleRecord { display: Display::Column, gap: 1, width: Dim::Px(520), max_width: Dim::Percent(10000), ..Default::default() });
+        let s_recent = b.style(StyleRecord {
+            display: Display::Row,
+            align_items: AlignItems::Center,
+            gap: 3,
+            height: Dim::Px(40),
+            padding: [0, 3, 0, 3],
+            radius: 2,
+            bg: role(Role::SurfaceRaised.id()),
+            border_width: [1; 4],
+            border_color: role(Role::BorderSubtle.id()),
+            cursor: eui_proto::Cursor::Pointer,
+            overflow: Overflow::Clip,
+            ..Default::default()
+        });
+        let s_recent_name = b.style(StyleRecord { font_size: 1, fg: text, line_clamp: 1, ..Default::default() });
+        let s_recent_where = b.style(StyleRecord {
+            font_size: 0,
+            font_family: eui_proto::FontFamily::Mono,
+            fg: muted,
+            grow: 1,
+            shrink: 1,
+            basis: Dim::Px(0),
+            line_clamp: 1,
+            text_align: TextAlign::End,
+            ..Default::default()
+        });
+
         // The application's own area. It draws nothing — the application's
         // list is composited over it — but it has to be in the tree so the
         // strip and the row are the height they are.
         let s_hole = b.style(StyleRecord { grow: 1, ..Default::default() });
 
         if self.blank {
-            b.open(NodeKind::Box, CONTENT, s_blank, 4);
+            let shown = self.recents.len().min(crate::recent::KEEP);
+            b.open(NodeKind::Box, CONTENT, s_blank, 4 + u32::from(shown > 0));
             b.open(NodeKind::Box, BLANK_MARK, s_mark, 1);
             b.text(BLANK_MARK_TEXT, s_mark_text, "EUI");
             b.close();
@@ -525,6 +577,29 @@ impl Chrome {
             b.text(BLANK_SUB, s_sub, "Type an address and press Enter.");
             b.change();
             b.text_node(NodeKind::Input, BLANK_FIELD, s_big, Some(""));
+            if shown > 0 {
+                b.open(NodeKind::Box, RECENT_BASE - 1, s_recents, shown as u32);
+                for (i, r) in self.recents.iter().take(shown).enumerate() {
+                    let id = RECENT_BASE + (i as u32) * RECENT_STRIDE;
+                    let open = Action::Open(r.url.clone());
+                    for n in 0..RECENT_PARTS {
+                        self.actions.insert(id + n, open.clone());
+                    }
+                    let (origin, _) = split_origin_str(&r.url);
+                    b.click();
+                    b.open(NodeKind::Box, id, s_recent, 3);
+                    let letter = r.name.chars().next().unwrap_or('*').to_uppercase().to_string();
+                    b.open(NodeKind::Box, id + 1, s_sigils.get(tint_index(origin)).copied().unwrap_or(s_sigil_off), 1);
+                    b.text(id + 2, s_sigil_text, &letter);
+                    b.close();
+                    b.text(id + 3, s_recent_name, if r.name.is_empty() { origin } else { &r.name });
+                    // The host, muted, so two applications of the same name
+                    // on different machines are told apart.
+                    b.text(id + 4, s_recent_where, origin.trim_start_matches("wss://").trim_start_matches("ws://"));
+                    b.close();
+                }
+                b.close();
+            }
             b.close();
         } else {
             let Some(t) = tabs.get(active) else { return };
@@ -538,7 +613,12 @@ impl Chrome {
             self.actions.insert(ORIGIN, Action::EditAddress);
             self.actions.insert(PATH, Action::EditAddress);
             b.click();
-            b.open(NodeKind::Box, FIELD, s_field, if editing { 1 } else { 2 + u32::from(chip.is_some()) });
+            b.open(NodeKind::Box, FIELD, s_field, u32::from(chip.is_some()) + if editing { 1 } else { 2 });
+            if let Some((label, s)) = chip {
+                b.open(NodeKind::Box, CHIP, s, 1);
+                b.text(CHIP_TEXT, s_chip_text, label);
+                b.close();
+            }
             if editing {
                 let mut url = String::with_capacity(t.origin.len() + t.path.len());
                 url.push_str(t.origin);
@@ -547,11 +627,6 @@ impl Chrome {
                 b.submit();
                 b.text_node(NodeKind::Input, INPUT, s_input, Some(&url));
             } else {
-                if let Some((label, s)) = chip {
-                    b.open(NodeKind::Box, CHIP, s, 1);
-                    b.text(CHIP_TEXT, s_chip_text, label);
-                    b.close();
-                }
                 // The origin is legible and the path is muted: the origin
                 // is the half of the address a publisher key was pinned to.
                 b.click();
@@ -587,6 +662,15 @@ impl Chrome {
         if let Some(ix) = want.and_then(|id| self.driver.session().lookup(id)) {
             let _ = self.driver.focus_node(ix);
         }
+    }
+}
+
+/// The origin half of a URL, for a sigil's colour and a fallback label.
+fn split_origin_str(url: &str) -> (&str, &str) {
+    let after = url.find("//").map_or(0, |i| i + 2);
+    match url.get(after..).and_then(|rest| rest.find('/')) {
+        Some(i) => url.split_at(after + i),
+        None => (url, ""),
     }
 }
 

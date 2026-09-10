@@ -33,9 +33,18 @@ fn main() {
         let mut chrome = Chrome::new(w, h, scale);
         chrome.set_desktop_theme(Some(mode), Vec::new());
         if blank {
+            chrome.set_recents(
+                [("Vitrine", "wss://vitrine.solisoft.net/_eui/session/gallery"), ("Needle", "wss://needle.solisoft.net/_eui/session/music"), ("Feedx", "ws://127.0.0.1:5090/_eui/session/feed")]
+                    .iter()
+                    .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })
+                    .collect(),
+            );
             chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
         } else {
             let views: Vec<TabView<'_>> = tabs.iter().map(|(t, o, p, tr)| TabView { title: t, origin: o, path: p, trust: Some(*tr) }).collect();
+            if std::env::var("CHROME_EDIT").is_ok() {
+                chrome.edit_address();
+            }
             chrome.rebuild(&views, 0);
         }
         let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);

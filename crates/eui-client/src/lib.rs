@@ -26,6 +26,7 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod chrome;
+pub mod recent;
 
 /// Which build this is: the short commit it was made from, `+` when the
 /// tree it was made from had uncommitted changes, `unknown` when there was
