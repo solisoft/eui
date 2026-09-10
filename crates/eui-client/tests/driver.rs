@@ -1054,18 +1054,25 @@ fn a_hit_during_a_glide_finds_the_moved_row() {
     d.input(Input::PointerMove(50.0, 10.0));
     let _ = d.paint(400, 300);
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(10), "row 0 at rest");
-    d.input(Input::WheelStep(0.0, 1.0));
+    // A page down from rest rather than a wheel notch: it glides over
+    // motion.slow, 320 ms, and a hover settles on the input that carries
+    // it -- against the driver's clock, which an input takes from the
+    // wall. So the wall has to be part way through the glide when the
+    // pointer moves, and a hundred milliseconds is a window a loaded
+    // machine can miss.
+    press(&mut d, "PageDown");
     let _ = d.paint(400, 300);
-    // Part way through the glide the pointer moves. An input stamps the
-    // driver's clock with the wall's, so the wall has to move: the frames
-    // between were the same list, and no paint refreshed anything.
-    std::thread::sleep(Duration::from_millis(50));
+    assert!(d.animating(), "the page down glides");
+    std::thread::sleep(Duration::from_millis(120));
     d.input(Input::PointerMove(50.0, 11.0));
-    let _ = d.paint(400, 300);
+    // The delta the layout holds now is the one that hit test just used:
+    // the hover refreshed it from the clock before asking.
     let scroll = d.session().lookup(2).unwrap();
-    let dy = d.layout().glide(scroll).expect("gliding").delta.1;
+    let dy = d.layout().glide(scroll).expect("still gliding").delta.1;
     let shown = 100.0 - dy; // the offset on screen
-    assert!(shown > 20.0 && shown < 100.0, "part way: {shown}");
+    assert!(shown > 11.0 && shown < 100.0, "part way, and past the first row: {shown}");
+    // Which is neither where it started (row 0 under the pointer) nor
+    // where it lands (row 5): the hit follows what is drawn.
     let expected = 10 + ((11.0 + shown) / 22.0).floor() as u32;
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
 }
