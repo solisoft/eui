@@ -684,6 +684,11 @@ impl Shell {
                 }
                 self.rebuild_chrome();
             }
+            A::Reload => {
+                if let Some(url) = self.tabs.get(self.active).map(|t| t.url.clone()) {
+                    self.open_url(url, renderer);
+                }
+            }
             A::Open(url) => {
                 if let Some((c, _)) = &mut self.chrome {
                     c.leave_address();

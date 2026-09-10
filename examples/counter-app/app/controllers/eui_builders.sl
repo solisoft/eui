@@ -859,7 +859,14 @@ def dialog(title, body_children, actions, opts = {})
       "justify": "center",
       "align": "center",
       "blur": 16,
-      "bg": "#00000073"
+      "bg": "#00000073",
+      # 03 §5: an `enter` fades the scrim in and frosts the blur in with it,
+      # from a radius of zero, over the `transition` duration. Without it the
+      # page went from sharp to fully frosted between two frames, which reads
+      # as a flash rather than as something arriving. `slow` is the longest
+      # the motion scale offers -- 320 ms.
+      "animation": "enter",
+      "transition": opts["transition"] ?? "slow"
     },
     # `modal` keeps Tab inside the dialog, and puts it there when it opens:
     # a server cannot do either, because it does not own Tab. `keys` claims

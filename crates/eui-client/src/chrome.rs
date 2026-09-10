@@ -44,6 +44,8 @@ pub enum Action {
     EditAddress,
     /// The address bar was committed: open this in the active tab.
     Open(String),
+    /// Open the active tab's address again, from nothing.
+    Reload,
     /// Leave the address bar and show the address again. Enter on an
     /// unchanged address produces this and nothing else: the driver emits
     /// `Change` only when the text actually moved, so without this a person
@@ -101,6 +103,8 @@ const ROOT: u32 = 1;
 const STRIP: u32 = 2;
 const PLUS: u32 = 3;
 const PLUS_TEXT: u32 = 17;
+const RELOAD: u32 = 18;
+const RELOAD_TEXT: u32 = 19;
 const ADDR: u32 = 4;
 const FIELD: u32 = 5;
 const CHIP: u32 = 6;
@@ -534,6 +538,18 @@ impl Chrome {
                 ..Default::default()
             })
         };
+        let s_reload = b.style(StyleRecord {
+            width: Dim::Px(28),
+            height: Dim::Px(28),
+            display: Display::Row,
+            justify: Justify::Center,
+            align_items: AlignItems::Center,
+            radius: 2,
+            fg: muted,
+            cursor: eui_proto::Cursor::Pointer,
+            ..Default::default()
+        });
+        let s_reload_text = b.style(StyleRecord { font_size: 2, ..Default::default() });
         let s_recents = b.style(StyleRecord { display: Display::Column, gap: 1, width: Dim::Px(520), max_width: Dim::Percent(10000), ..Default::default() });
         let s_recent = b.style(StyleRecord {
             display: Display::Row,
@@ -607,7 +623,7 @@ impl Chrome {
             b.close();
         } else {
             let Some(t) = tabs.get(active) else { return };
-            b.open(NodeKind::Box, ADDR, s_addr, 1);
+            b.open(NodeKind::Box, ADDR, s_addr, 2);
             let chip = t.trust.map(|tr| match tr {
                 Trust::Pinned => ("pinned", s_chip_ok),
                 Trust::Local => ("local", s_chip_local),
@@ -638,6 +654,16 @@ impl Chrome {
                 b.click();
                 b.text(PATH, s_path, t.path);
             }
+            b.close();
+            // Reload: the address opened again from nothing — a fresh
+            // worker, a fresh connection, a fresh tree. A server that was
+            // restarted, or a view that failed to render once, leaves
+            // nothing else to try.
+            self.actions.insert(RELOAD, Action::Reload);
+            self.actions.insert(RELOAD_TEXT, Action::Reload);
+            b.click();
+            b.open(NodeKind::Box, RELOAD, s_reload, 1);
+            b.text(RELOAD_TEXT, s_reload_text, "\u{21bb}");
             b.close();
             b.close();
 
