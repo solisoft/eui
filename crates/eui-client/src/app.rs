@@ -104,6 +104,14 @@ pub struct App {
     audio: Option<crate::audio::Output>,
     /// Frames the audio thread produced, for this loop to send.
     audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
+    /// The cookie this session presents, if a host set one. Held here
+    /// rather than in a process global: two sessions in one process must
+    /// not present each other's.
+    cookie: Option<String>,
+    /// This session's server is embedded in this process, so `ws://` on
+    /// loopback is trusted (08 §1). Per session, not per process: an
+    /// embedded session must not vouch for the network sessions beside it.
+    host_loopback: bool,
     /// When this window started, so the renderer can be handed a monotonic
     /// clock in seconds. `spin` and the backdrop want elapsed time, not a
     /// wall clock, and the driver's own epoch is in the worker process.
@@ -113,10 +121,6 @@ pub struct App {
 impl App {
     /// Build for a session URL.
     pub fn new(launch: Launch, proxy: EventLoopProxy<Wake>) -> Self {
-        if launch.host_loopback {
-            transport::allow_host_loopback();
-        }
-        transport::set_session_cookie(launch.cookie);
         Self {
             url: launch.url,
             title: launch.title,
@@ -138,6 +142,8 @@ impl App {
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             audio: None,
             audio_rx: None,
+            cookie: launch.cookie,
+            host_loopback: launch.host_loopback,
             epoch: std::time::Instant::now(),
         }
     }
@@ -531,7 +537,7 @@ impl ApplicationHandler<Wake> for App {
         // debug loopback of 08 §1 may go on without one.
         match crate::assets::origin_for(&self.url).map_err(|e| e.to_string()).and_then(|origin| {
             let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
-            crate::manifest::check(&origin, &pins).map_err(|e| e.to_string())
+            crate::manifest::check(&origin, &pins, self.cookie.as_deref()).map_err(|e| e.to_string())
         }) {
             Ok(m) => {
                 let granted = m.capabilities & self.allowed;
@@ -550,7 +556,7 @@ impl ApplicationHandler<Wake> for App {
         }
         let hello = self.backend.hello();
         let proxy = self.proxy.clone();
-        match transport::connect(&self.url, hello, move || {
+        match transport::connect(&self.url, hello, self.cookie.clone(), self.host_loopback, move || {
             let _ = proxy.send_event(Wake::Transport);
         }) {
             Ok(c) => self.conn = Some(c),

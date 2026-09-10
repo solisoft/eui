@@ -62,8 +62,8 @@ pub fn pins_dir() -> Option<PathBuf> {
 }
 
 /// Fetch `/.well-known/eui` from `origin` and run [`verify`] against `pins`.
-pub fn check(origin: &str, pins: &Path) -> Result<Manifest, ManifestError> {
-    let bytes = assets::get(origin, "/.well-known/eui", "application/vnd.eui.manifest").map_err(ManifestError::Fetch)?;
+pub fn check(origin: &str, pins: &Path, cookie: Option<&str>) -> Result<Manifest, ManifestError> {
+    let bytes = assets::get(origin, "/.well-known/eui", "application/vnd.eui.manifest", cookie).map_err(ManifestError::Fetch)?;
     verify(&bytes, pins)
 }
 

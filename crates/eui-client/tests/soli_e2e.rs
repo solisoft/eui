@@ -127,7 +127,7 @@ fn the_counter_runs_end_to_end_against_soli() {
 
     let mut driver = Driver::new(420.0, 260.0, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
-    let conn = connect(&url, driver.hello().encode(), move || {
+    let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .expect("connect to soli");
@@ -190,7 +190,7 @@ fn open(port: u16, component: &str, w: f32, h: f32) -> (Driver, eui_client::Conn
     let url = format!("ws://127.0.0.1:{port}/_eui/session/{component}");
     let mut driver = Driver::new(w, h, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
-    let conn = connect(&url, driver.hello().encode(), move || {
+    let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .expect("connect to soli");
@@ -232,7 +232,7 @@ fn todo_toggles_by_prop_and_keeps_keyed_rows() {
     let pending = d.pending_assets();
     assert_eq!(pending.len(), 1, "one image, asked for once");
     let hash = pending[0];
-    let bytes = eui_client::assets::fetch(&conn.origin, &hash).expect("soli serves the asset");
+    let bytes = eui_client::assets::fetch(&conn.origin, &hash, None).expect("soli serves the asset");
     assert!(bytes.starts_with(b"\x89PNG"));
     assert_eq!(bytes.len(), 164, "the avatar file, byte for byte");
     d.asset_ready(hash, bytes);
@@ -243,7 +243,7 @@ fn todo_toggles_by_prop_and_keeps_keyed_rows() {
     let r = d.layout().rect(avatar).unwrap();
     assert_eq!((r.w, r.h), (32.0, 32.0));
     // A wrong hash is refused by the server with a 404, not served.
-    assert!(eui_client::assets::fetch(&conn.origin, &[0u8; 32]).is_err());
+    assert!(eui_client::assets::fetch(&conn.origin, &[0u8; 32], None).is_err());
 
     // The third row's checkbox: the rows column is the root's third child.
     let rows = d.session().children(root(&d))[2];
@@ -327,7 +327,7 @@ fn probe_session_frames() {
     let url = format!("ws://127.0.0.1:{port}/_eui/session/{component}");
     let driver = Driver::new(420.0, 260.0, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
-    let conn = connect(&url, driver.hello().encode(), move || {
+    let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .unwrap();
@@ -572,16 +572,16 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     let origin = format!("http://127.0.0.1:{port}");
     let pins = std::env::temp_dir().join(format!("eui-e2e-pins-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&pins);
-    let m = eui_client::manifest::check(&origin, &pins).expect("a signed manifest");
+    let m = eui_client::manifest::check(&origin, &pins, None).expect("a signed manifest");
     assert_eq!(m.app_id, "counter-app", "the application folder's name");
     assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
     assert_eq!(m.entry, "/_eui/session");
     assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read"], "what config/routes.sl asked for");
     // Pinned: the same server is accepted again; a stranger's key is not.
-    assert!(eui_client::manifest::check(&origin, &pins).is_ok());
+    assert!(eui_client::manifest::check(&origin, &pins, None).is_ok());
     let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
     std::fs::write(&pin, [9u8; 32]).unwrap();
-    assert_eq!(eui_client::manifest::check(&origin, &pins).unwrap_err(), eui_client::manifest::ManifestError::KeyChanged);
+    assert_eq!(eui_client::manifest::check(&origin, &pins, None).unwrap_err(), eui_client::manifest::ManifestError::KeyChanged);
 }
 
 /// A desktop artifact built with `soli desktop build --eui gallery`, run
@@ -636,10 +636,9 @@ fn a_desktop_artifact_serves_its_component_behind_a_cookie_gate() {
         assert!(url.ends_with("/_eui/session/gallery"), "{url}");
         // Without the cookie the gate refuses the upgrade.
         std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
-        eui_client::transport::set_session_cookie(None);
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
         let mut d = Driver::new(1000.0, 900.0, 1.0, 0);
-        let conn = eui_client::transport::connect(&url, d.hello().encode(), move || {
+        let conn = eui_client::transport::connect(&url, d.hello().encode(), None, false, move || {
             let _ = wake_tx.send(());
         })
         .unwrap();
@@ -647,17 +646,17 @@ fn a_desktop_artifact_serves_its_component_behind_a_cookie_gate() {
             pump(&mut d, &conn, &wake_rx, |d| d.session().root().is_some());
         }));
         assert!(refused.is_err(), "the gate let a cookie-less client in");
-        // With it, the gallery mounts.
-        eui_client::transport::set_session_cookie(Some(cookie));
+        // With it, the gallery mounts. The cookie belongs to this
+        // connection, not to the process — which is what lets two sessions
+        // share one process without presenting each other's.
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
         let mut d = Driver::new(1000.0, 900.0, 1.0, 0);
-        let conn = eui_client::transport::connect(&url, d.hello().encode(), move || {
+        let conn = eui_client::transport::connect(&url, d.hello().encode(), Some(cookie), false, move || {
             let _ = wake_tx.send(());
         })
         .unwrap();
         pump(&mut d, &conn, &wake_rx, |d| d.session().root().is_some());
         assert!(texts(&d, root(&d)).iter().any(|t| t == "Nodes"));
-        eui_client::transport::set_session_cookie(None);
     });
     let _ = child.kill();
     let _ = child.wait();
@@ -1682,7 +1681,7 @@ fn a_view_that_cannot_be_encoded_ends_the_session_and_says_why() {
     let url = format!("ws://127.0.0.1:{port}/_eui/session/broken");
     let mut d = Driver::new(600.0, 400.0, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
-    let conn = connect(&url, d.hello().encode(), move || {
+    let conn = connect(&url, d.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .expect("connect to soli");

@@ -58,6 +58,10 @@ pub struct Connection {
     pub origin: String,
     in_tx: mpsc::Sender<Incoming>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// The cookie this session presents, `name=value`. Per connection, not
+    /// per process: with two sessions in one process a global would send
+    /// one application's loopback cookie to the other's origin.
+    cookie: Option<String>,
 }
 
 impl std::fmt::Debug for Connection {
@@ -73,39 +77,15 @@ impl Connection {
         let origin = self.origin.clone();
         let tx = self.in_tx.clone();
         let notify = std::sync::Arc::clone(&self.notify);
+        let cookie = self.cookie.clone();
         let _ = thread::Builder::new().name("eui-asset".into()).spawn(move || {
-            let result = crate::assets::fetch(&origin, &hash).map_err(|e| e.to_string());
+            let result = crate::assets::fetch(&origin, &hash, cookie.as_deref()).map_err(|e| e.to_string());
             let _ = tx.send(Incoming::Asset(hash, result));
             notify();
         });
     }
 }
 
-/// Set by an embedding host — a desktop artifact whose server and client
-/// are one process — to allow `ws://` on loopback in a release build.
-static HOST_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// A cookie an embedding host asks the client to present on every request,
-/// so the host's loopback gate lets the session through.
-static SESSION_COOKIE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// Spec 08 §1: `ws://` on loopback is acceptable when the client and the
-/// server are the same trusted process. Only a host that embeds this crate
-/// can say so; the `eui` binary never does.
-pub fn allow_host_loopback() {
-    HOST_LOOPBACK.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// The cookie to present, `name=value`, if a host set one.
-pub fn set_session_cookie(cookie: Option<String>) {
-    if let Ok(mut c) = SESSION_COOKIE.lock() {
-        *c = cookie;
-    }
-}
-
-/// See [`set_session_cookie`].
-pub fn session_cookie() -> Option<String> {
-    SESSION_COOKIE.lock().ok().and_then(|c| c.clone())
-}
 
 /// The TLS the client speaks, built once: **TLS 1.3 only** (spec 01 §1),
 /// verified against three sets of roots.
@@ -175,7 +155,12 @@ pub fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
 /// `EUI_ALLOW_INSECURE_LOOPBACK=1` is set — how the examples run, and how a
 /// developer uses the release client against a local Soli — or when an
 /// embedding host trusts its own process.
-pub fn check_url(url: &str) -> Result<(), TransportError> {
+/// `host_loopback` says this particular session's server is embedded in
+/// this process (spec 08 §1). It is a parameter rather than a process flag
+/// because one such session must not vouch for the others: with several
+/// sessions in one process a sticky global would turn `ws://` on for every
+/// session opened after the first embedded one.
+pub fn check_url(url: &str, host_loopback: bool) -> Result<(), TransportError> {
     if url.starts_with("wss://") {
         return Ok(());
     }
@@ -183,7 +168,7 @@ pub fn check_url(url: &str) -> Result<(), TransportError> {
     // Loopback only, and only when asked by name: a developer running a
     // local Soli should get to use the fast build of the client too.
     let asked = std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1");
-    let allowed = loopback && (HOST_LOOPBACK.load(std::sync::atomic::Ordering::SeqCst) || asked);
+    let allowed = loopback && (host_loopback || asked);
     if allowed && asked && !cfg!(debug_assertions) {
         eprintln!("eui: EUI_ALLOW_INSECURE_LOOPBACK=1 — plain ws:// on loopback, nothing is encrypted");
     }
@@ -196,8 +181,8 @@ pub fn check_url(url: &str) -> Result<(), TransportError> {
 
 /// Connect, spawning the socket's runtime on a background thread. `first` is
 /// sent as soon as the socket is open — the `Hello` frame.
-pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'static) -> Result<Connection, TransportError> {
-    check_url(url)?;
+pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback: bool, notify: impl Fn() + Send + Sync + 'static) -> Result<Connection, TransportError> {
+    check_url(url, host_loopback)?;
     let origin = crate::assets::origin_for(url).map_err(|e| TransportError::Connect(e.to_string()))?;
     let url = url.to_owned();
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
@@ -208,6 +193,7 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
     let notify = notify_for_thread.clone();
     let notify_thread = move || notify_for_thread();
     let ws_origin = origin.clone();
+    let upgrade_cookie = cookie.clone();
 
     thread::Builder::new()
         .name("eui-transport".into())
@@ -229,7 +215,7 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
                         // host itself: a cookie-bearing upgrade without one
                         // is what a cross-site pivot looks like, and the
                         // server refuses it (Soli SEC-046).
-                        if let Some(cookie) = session_cookie().and_then(|c| c.parse().ok()) {
+                        if let Some(cookie) = upgrade_cookie.as_ref().and_then(|c| c.parse().ok()) {
                             r.headers_mut().insert("Cookie", cookie);
                             if let Ok(o) = ws_origin.parse() {
                                 r.headers_mut().insert("Origin", o);
@@ -296,5 +282,5 @@ pub fn connect(url: &str, first: Vec<u8>, notify: impl Fn() + Send + Sync + 'sta
         })
         .map_err(|e| TransportError::Connect(e.to_string()))?;
 
-    Ok(Connection { tx: out_tx, rx: in_rx, origin, in_tx: in_tx_for_assets, notify })
+    Ok(Connection { tx: out_tx, rx: in_rx, origin, in_tx: in_tx_for_assets, notify, cookie })
 }

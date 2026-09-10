@@ -54,7 +54,7 @@ fn pump(backend: &mut Backend, conn: &eui_client::Connection, wake: &mpsc::Recei
 fn open(backend: &mut Backend, url: &str) -> (eui_client::Connection, mpsc::Receiver<()>) {
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let hello = backend.hello();
-    let conn = connect(url, hello, move || {
+    let conn = connect(url, hello, None, false, move || {
         let _ = wake_tx.send(());
     })
     .expect("connect");
@@ -87,7 +87,7 @@ fn the_counter_runs_through_a_worker_process() {
     let mut probe = Driver::new(320.0, 240.0, 1.0, 0);
     let (probe_conn, probe_wake) = {
         let (tx, rx) = mpsc::channel::<()>();
-        let c = connect(&url, probe.hello().encode(), move || {
+        let c = connect(&url, probe.hello().encode(), None, false, move || {
             let _ = tx.send(());
         })
         .unwrap();

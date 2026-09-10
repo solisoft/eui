@@ -61,7 +61,7 @@ fn the_counter_runs_end_to_end_over_a_real_socket() {
     let mut driver = Driver::new(400.0, 300.0, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let wake_tx = Arc::new(wake_tx);
-    let conn = connect(&url, driver.hello().encode(), move || {
+    let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .expect("connect");
@@ -119,7 +119,7 @@ fn a_forged_event_ends_the_session() {
     let url = start_server();
     let mut driver = Driver::new(400.0, 300.0, 1.0, 0);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
-    let conn = connect(&url, driver.hello().encode(), move || {
+    let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
     })
     .unwrap();

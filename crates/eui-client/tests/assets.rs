@@ -49,22 +49,22 @@ fn origins_derive_from_session_urls() {
 fn a_fetch_verifies_the_hash() {
     let body = b"hello, content addressing".to_vec();
     let origin = serve_once("200 OK", "", body.clone());
-    let got = assets::fetch(&origin, &hash_of(&body)).unwrap();
+    let got = assets::fetch(&origin, &hash_of(&body), None).unwrap();
     assert_eq!(got, body);
 
     // The same bytes under a different name are refused, not displayed.
     let origin = serve_once("200 OK", "", body.clone());
-    assert_eq!(assets::fetch(&origin, &hash_of(b"something else")), Err(AssetError::HashMismatch));
+    assert_eq!(assets::fetch(&origin, &hash_of(b"something else"), None), Err(AssetError::HashMismatch));
 }
 
 #[test]
 fn the_reader_is_strict() {
     let body = b"x".to_vec();
     let origin = serve_once("404 Not Found", "", body.clone());
-    assert!(matches!(assets::fetch(&origin, &hash_of(&body)), Err(AssetError::Http(_))));
+    assert!(matches!(assets::fetch(&origin, &hash_of(&body), None), Err(AssetError::Http(_))));
     let origin = serve_once("200 OK", "Transfer-Encoding: chunked\r\n", body.clone());
-    assert!(matches!(assets::fetch(&origin, &hash_of(&body)), Err(AssetError::Http(_))));
-    assert!(matches!(assets::fetch("http://127.0.0.1:1", &hash_of(&body)), Err(AssetError::Connect(_))));
+    assert!(matches!(assets::fetch(&origin, &hash_of(&body), None), Err(AssetError::Http(_))));
+    assert!(matches!(assets::fetch("http://127.0.0.1:1", &hash_of(&body), None), Err(AssetError::Connect(_))));
 }
 
 #[test]

@@ -357,12 +357,17 @@ fn wheel_over_a_fitted_list_scrolls_the_page() {
 
 #[test]
 fn insecure_urls_are_refused_outside_debug_loopback() {
-    assert!(check_url("wss://app.example/_eui/session").is_ok());
-    assert!(check_url("ws://app.example/_eui/session").is_err());
-    assert!(check_url("http://127.0.0.1/_eui/session").is_err());
+    assert!(check_url("wss://app.example/_eui/session", false).is_ok());
+    assert!(check_url("ws://app.example/_eui/session", false).is_err());
+    assert!(check_url("http://127.0.0.1/_eui/session", false).is_err());
     // Loopback over ws:// needs both a debug build and the explicit opt-in.
     std::env::remove_var("EUI_ALLOW_INSECURE_LOOPBACK");
-    assert!(check_url("ws://127.0.0.1:1/_eui/session").is_err());
+    assert!(check_url("ws://127.0.0.1:1/_eui/session", false).is_err());
+    // An embedded host vouches for its own session only. The trust is a
+    // parameter, so it cannot spill onto a network session opened beside it.
+    assert!(check_url("ws://127.0.0.1:1/_eui/session", true).is_ok());
+    assert!(check_url("ws://127.0.0.1:1/_eui/session", false).is_err());
+    assert!(check_url("ws://app.example/_eui/session", true).is_err());
 }
 
 #[test]

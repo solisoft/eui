@@ -74,15 +74,13 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     // SOLI_DESKTOP_NO_WINDOW=1 prints its session URL and the cookie its
     // loopback gate wants; without it the upgrade is refused, so a bundled
     // app could not be looked at at all.
-    if let Ok(cookie) = std::env::var("SNAPSHOT_COOKIE") {
-        eui_client::transport::set_session_cookie(Some(cookie));
-    }
+    let cookie = std::env::var("SNAPSHOT_COOKIE").ok();
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
     for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {
         let mut driver = Driver::new(w, h, scale, 0);
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
-        let conn = connect(url, driver.hello().encode(), move || {
+        let conn = connect(url, driver.hello().encode(), cookie.clone(), false, move || {
             let _ = wake_tx.send(());
         })
         .expect("connect");
