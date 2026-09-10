@@ -162,10 +162,27 @@ pub struct Target<'a> {
     pub view: &'a wgpu::TextureView,
     /// The format that view was created with.
     pub format: wgpu::TextureFormat,
-    /// Its size in device pixels.
+    /// The size of the rectangle this list is drawn into, in device pixels.
+    /// The list is laid out as if that rectangle were the whole window: its
+    /// own origin is (0, 0) whatever `origin` below says.
     pub size: (u32, u32),
+    /// Where that rectangle sits in the view, in device pixels. `(0, 0)` for
+    /// a list that owns the whole window — which is every list until a shell
+    /// draws its chrome above an application.
+    pub origin: (u32, u32),
+    /// Clear the rectangle to the list's own background first, or draw over
+    /// what is already there. The first list of a frame clears; one
+    /// composited on top of it does not.
+    pub clear: bool,
     /// Seconds since the window started.
     pub now: f32,
+}
+
+impl<'a> Target<'a> {
+    /// A target that is the whole view: no offset, and it clears.
+    pub fn whole(view: &'a wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), now: f32) -> Self {
+        Self { view, format, size, origin: (0, 0), clear: true, now }
+    }
 }
 
 /// An off-screen target that can be read back.
@@ -550,7 +567,7 @@ impl Renderer {
 
     /// Draw a list into a target.
     pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
-        let Target { view, format, size, now } = target;
+        let Target { view, format, size, origin, clear, now } = target;
         self.sync_atlas(tex, atlas, images);
         if list.quads.len() > self.instance_cap {
             self.instance_cap = list.quads.len().next_power_of_two();
@@ -595,12 +612,28 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: f64::from(c[0]), g: f64::from(c[1]), b: f64::from(c[2]), a: f64::from(c[3]) }), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: if clear {
+                            wgpu::LoadOp::Clear(wgpu::Color { r: f64::from(c[0]), g: f64::from(c[1]), b: f64::from(c[2]), a: f64::from(c[3]) })
+                        } else {
+                            // A list drawn over one already in the target:
+                            // keep what is there and paint into our own
+                            // rectangle. A `Clear` here would wipe the whole
+                            // view, chrome included — `LoadOp` has no notion
+                            // of a sub-rect, which is what the scissor below
+                            // is for.
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // The list drew itself as though it owned a window of `size`;
+            // the viewport puts that window where it belongs in the view.
+            pass.set_viewport(origin.0 as f32, origin.1 as f32, size.0 as f32, size.1 as f32, 0.0, 1.0);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
@@ -619,7 +652,10 @@ impl Renderer {
                     pass.set_bind_group(2, outs.get(run.chain as usize).unwrap_or(&self.blur_none), &[]);
                     bound = run.chain;
                 }
-                pass.set_scissor_rect(r[0], r[1], w, h);
+                // Scissors are in the view's own pixels, not the
+                // viewport's, so this is the one place the origin has to be
+                // added back on.
+                pass.set_scissor_rect(origin.0.saturating_add(r[0]), origin.1.saturating_add(r[1]), w, h);
                 pass.draw(0..6, run.first..run.first.saturating_add(run.count));
             }
         }
@@ -783,7 +819,7 @@ impl Renderer {
     /// Draw into an off-screen target.
     pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         let view = target.texture.create_view(&Default::default());
-        self.render(tex, Target { view: &view, format: FORMAT, size: (target.width, target.height), now }, list, atlas, images);
+        self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now), list, atlas, images);
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

@@ -779,7 +779,7 @@ fn a_bgra_target_draws_the_same_picture_with_its_channels_swapped() {
         view_formats: &[],
     });
     let view = tex.create_view(&Default::default());
-    r.render(&mut st, Target { view: &view, format: wgpu::TextureFormat::Bgra8UnormSrgb, size: (100, 100), now: 0.0 }, &list, &mut fx.atlas, &mut fx.images);
+    r.render(&mut st, Target::whole(&view, wgpu::TextureFormat::Bgra8UnormSrgb, (100, 100), 0.0), &list, &mut fx.atlas, &mut fx.images);
 
     let px = read_texture(&mut r, &tex, 100, 100);
     let accent = rgba_of(fx.theme.color(Role::AccentBase));

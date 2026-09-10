@@ -1,10 +1,16 @@
-//! `eui <wss://host/_eui/session/app>... [--allow cap,cap]` — open one EUI
-//! application per URL. `--allow` names the capabilities of spec 01 §2.1 the
-//! person grants if an application asks for them; nothing is granted
-//! otherwise, and the same grant covers every URL on the line.
+//! `eui [<wss://host/_eui/session/app>...] [--allow cap,cap]`.
 //!
-//! Several URLs share one process: one GPU device, one set of pipelines,
-//! one runtime. Each still gets its own window and its own confined worker.
+//! With no address, the shell: one window with a tab strip and an empty tab
+//! to type into, where every application opened gets a tab beside the
+//! others. With addresses, one chromeless window each — which is what an
+//! embedding host gets, and what a packaged desktop application is.
+//!
+//! `--allow` names the capabilities of spec 01 §2.1 the person grants if an
+//! application asks for them; nothing is granted otherwise, and the same
+//! grant covers every address on the line.
+//!
+//! Either way it is one process: one GPU device, one set of pipelines, one
+//! runtime. Each application still gets its own confined worker.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,11 +37,11 @@ fn main() {
             urls.push(a.clone());
         }
     }
-    if urls.is_empty() {
-        usage();
-    }
-    let launches = urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect();
-    if let Err(e) = eui_client::app::launch_all(launches) {
+    // No address: open the shell — one window with a tab strip, and an
+    // empty tab to type into. With addresses, one chromeless window each,
+    // which is what it has always done and what an embedding host gets.
+    let result = if urls.is_empty() { eui_client::app::shell() } else { eui_client::app::launch_all(urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect()) };
+    if let Err(e) = result {
         eprintln!("eui: {e}");
         std::process::exit(1);
     }

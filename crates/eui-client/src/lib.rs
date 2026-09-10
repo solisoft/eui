@@ -25,6 +25,7 @@ pub mod a11y;
 pub mod app;
 pub mod assets;
 pub mod audio;
+pub mod chrome;
 pub mod desktop_theme;
 pub mod driver;
 pub mod manifest;
