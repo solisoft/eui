@@ -72,6 +72,23 @@ pub struct Renderer {
     /// or not.
     blur_none: wgpu::BindGroup,
     adapter_name: String,
+    /// `EUI_GPU_TRACE=1` on an adapter that can: the main pass is
+    /// bracketed by timestamps, resolved into a buffer that is read back
+    /// the frame after, never waited on.
+    timing: Option<Timing>,
+}
+
+/// The timestamp query and the two buffers it is read through.
+struct Timing {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+    /// Nanoseconds per timestamp tick.
+    period: f32,
+    /// A frame's timestamps are in `read`, waiting to be mapped.
+    pending: bool,
+    /// The last frame's main pass, milliseconds, once it was read.
+    last_ms: Option<f32>,
 }
 
 /// The textures one window owns. Everything else in `Renderer` is shared by
@@ -237,7 +254,7 @@ fn spin_phase(now: f64) -> f32 {
 /// What one `render` cost the queue: the numbers the trace prints and the
 /// budgets of 10 §1 are checked against. A frame that draws the last list
 /// again uploads nothing, and this is where that shows.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct RenderStats {
     /// Instances in the list.
     pub quads: usize,
@@ -255,6 +272,10 @@ pub struct RenderStats {
     /// The list's serial matched what the buffer holds, so no instance
     /// bytes were written.
     pub upload_skipped: bool,
+    /// The main pass of the frame before this one on the GPU, in
+    /// milliseconds, when the renderer was asked to time it
+    /// (`EUI_GPU_TRACE=1`) and the adapter can.
+    pub gpu_ms: Option<f32>,
 }
 
 /// An off-screen target that can be read back.
@@ -269,19 +290,34 @@ impl Renderer {
     /// A renderer with no window: adapter chosen without a surface, so this
     /// works on a headless machine as long as any adapter exists.
     pub fn new_headless() -> Result<Self, RenderError> {
+        Self::new_headless_timed(std::env::var("EUI_GPU_TRACE").as_deref() == Ok("1"))
+    }
+
+    /// [`Self::new_headless`], timing the GPU or not as asked rather than
+    /// as the environment says.
+    pub fn new_headless_timed(timed: bool) -> Result<Self, RenderError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..Default::default() });
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::LowPower, compatible_surface: None, force_fallback_adapter: false }))
                 .ok_or(RenderError::NoAdapter)?;
-        Self::with_adapter(&adapter)
+        Self::with_adapter_timed(&adapter, timed)
     }
 
     /// A renderer on an adapter the caller chose (for a window surface).
+    /// `EUI_GPU_TRACE=1` asks for the GPU's own timing of each frame.
     pub fn with_adapter(adapter: &wgpu::Adapter) -> Result<Self, RenderError> {
+        Self::with_adapter_timed(adapter, std::env::var("EUI_GPU_TRACE").as_deref() == Ok("1"))
+    }
+
+    /// [`Self::with_adapter`], timing the GPU or not as asked.
+    pub fn with_adapter_timed(adapter: &wgpu::Adapter, timed: bool) -> Result<Self, RenderError> {
+        // Timestamps only when asked, and only where they exist: a feature
+        // asked for and absent is no device at all.
+        let timed = timed && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("eui"),
-                required_features: wgpu::Features::empty(),
+                required_features: if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
                 // Downlevel limits cap textures at 2048 px, which a
                 // high-DPI window exceeds on its first frame. Ask for the
                 // ordinary defaults, trimmed to what the adapter has.
@@ -409,6 +445,20 @@ impl Renderer {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
         });
 
+        let timing = timed.then(|| Timing {
+            set: device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("frame timing"), ty: wgpu::QueryType::Timestamp, count: 2 }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("timing resolve"),
+                size: 16,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            read: device.create_buffer(&wgpu::BufferDescriptor { label: Some("timing read"), size: 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false }),
+            period: queue.get_timestamp_period(),
+            pending: false,
+            last_ms: None,
+        });
+
         Ok(Self {
             device,
             queue,
@@ -429,6 +479,7 @@ impl Renderer {
             blur_sampler,
             blur_none,
             adapter_name: adapter.get_info().name,
+            timing,
         })
     }
 
@@ -694,6 +745,7 @@ impl Renderer {
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
         self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3]], clock, list)));
+        stats.gpu_ms = self.read_timing();
         let Some(pipeline) = self.pipelines.get(&format) else {
             return stats;
         };
@@ -701,6 +753,8 @@ impl Renderer {
         let c = list.clear;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("eui frame") });
         {
+            let timestamp_writes =
+                self.timing.as_ref().filter(|t| !t.pending).map(|t| wgpu::RenderPassTimestampWrites { query_set: &t.set, beginning_of_pass_write_index: Some(0), end_of_pass_write_index: Some(1) });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("eui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -722,7 +776,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes,
                 occlusion_query_set: None,
             });
             // The list drew itself as though it owned a window of `size`;
@@ -753,10 +807,52 @@ impl Renderer {
                 pass.draw(0..6, run.first..run.first.saturating_add(run.count));
             }
         }
+        if let Some(t) = self.timing.as_mut().filter(|t| !t.pending) {
+            encoder.resolve_query_set(&t.set, 0..2, &t.resolve, 0);
+            encoder.copy_buffer_to_buffer(&t.resolve, 0, &t.read, 0, 16);
+            t.pending = true;
+        }
         self.queue.submit([encoder.finish()]);
         stats.passes += 1;
         stats.submits += 1;
         stats
+    }
+
+    /// The timestamps of the frame before, if they have landed: asked for
+    /// without waiting, so a frame that is still on the GPU costs nothing
+    /// here and is read the frame after. The last figure read is what a
+    /// frame reports until the next one lands.
+    fn read_timing(&mut self) -> Option<f32> {
+        let t = self.timing.as_mut()?;
+        if t.pending {
+            let slice = t.read.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            self.device.poll(wgpu::Maintain::Poll);
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    let stamps: [u64; 2] = {
+                        let data = slice.get_mapped_range();
+                        let words: &[u64] = bytemuck::cast_slice(&data);
+                        [words.first().copied().unwrap_or(0), words.get(1).copied().unwrap_or(0)]
+                    };
+                    t.read.unmap();
+                    t.pending = false;
+                    #[expect(clippy::cast_precision_loss, reason = "a frame's worth of ticks fits a float's mantissa")]
+                    let ns = stamps[1].saturating_sub(stamps[0]) as f32 * t.period;
+                    t.last_ms = Some(ns / 1e6);
+                }
+                Ok(Err(_)) => {
+                    t.read.unmap();
+                    t.pending = false;
+                }
+                // Still on the GPU: leave it mapped-pending, ask again next frame.
+                Err(_) => {}
+            }
+        }
+        t.last_ms
     }
 
     /// Everything a blurred frame needs before its own pass: the frame as it

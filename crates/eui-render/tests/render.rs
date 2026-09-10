@@ -761,6 +761,34 @@ fn a_glide_moves_a_quad_by_its_eased_offset() {
     assert!(mid.abs_diff(want) <= 1, "halfway along the curve: at {mid}, wanted {want}");
 }
 
+/// Asked to, the renderer times its main pass on the GPU and reports the
+/// frame before's figure -- read without waiting, so a frame never stalls
+/// on it.
+#[test]
+fn a_timed_renderer_reports_the_previous_frames_gpu_time() {
+    let Ok(mut r) = Renderer::new_headless_timed(true) else { return };
+    let mut st = r.session();
+    let (mut fx, list) = spinning_bar();
+    let target = r.offscreen(100, 100);
+    let first = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    assert_eq!(first.gpu_ms, None, "nothing to report on the first frame");
+    // Wait for the GPU, as a test may and a frame must not, then ask again.
+    let _ = r.read_back(&target);
+    let mut reported = None;
+    for _ in 0..5 {
+        let st2 = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+        if let Some(ms) = st2.gpu_ms {
+            reported = Some(ms);
+            break;
+        }
+        let _ = r.read_back(&target);
+    }
+    // An adapter without timestamps reports nothing, and that is allowed.
+    if let Some(ms) = reported {
+        assert!((0.0..1000.0).contains(&ms), "a frame's worth: {ms} ms");
+    }
+}
+
 /// An entrance starts from no opacity: the quad is not there at age zero
 /// and is on its way at half time, along the entrance's own curve.
 #[test]

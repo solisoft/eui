@@ -839,12 +839,13 @@ impl Shell {
                 stats.instance_bytes += st.instance_bytes;
                 stats.atlas_bytes += st.atlas_bytes;
                 stats.upload_skipped &= st.upload_skipped;
+                stats.gpu_ms = st.gpu_ms.or(stats.gpu_ms);
             }
         }
         frame.present();
         crate::driver::trace(|| {
             format!(
-                "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}",
+                "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}{}",
                 painted.as_secs_f64() * 1e3,
                 t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3,
                 stats.quads,
@@ -853,7 +854,8 @@ impl Shell {
                 stats.submits,
                 stats.instance_bytes,
                 stats.atlas_bytes,
-                if stats.upload_skipped { " (the same lists again)" } else { "" }
+                if stats.upload_skipped { " (the same lists again)" } else { "" },
+                stats.gpu_ms.map_or(String::new(), |ms| format!(", gpu {ms:.2} ms"))
             )
         });
 
