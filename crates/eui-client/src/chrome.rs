@@ -700,7 +700,7 @@ impl Chrome {
 ///
 /// The manifest's name is the *server's* name, and one server serves many:
 /// a Soli application with a gallery, a feed and a music view answers
-/// `counter-app` for all three, so a list of them read `counter-app` three
+/// `demo-app` for all three, so a list of them read `demo-app` three
 /// times over. The component is the half that differs.
 pub fn component_of(url: &str) -> &str {
     let (_, path) = split_origin_str(url);

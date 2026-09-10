@@ -175,7 +175,7 @@
                 returns a tree, as plain data. Soli interns the atoms and the styles
                 once per session, diffs the tree against the one this client already
                 has, and sends the patches. This is the counter from
-                <code>examples/counter-app</code>, quoted whole.
+                <code>examples/demo-app</code>, quoted whole.
             </p>
 
             <div class="pair">

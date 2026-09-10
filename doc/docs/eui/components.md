@@ -1,7 +1,7 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/counter-app/app/controllers/eui_builders.sl` — 150 functions, all of
+> `examples/demo-app/app/controllers/eui_builders.sl` — 150 functions, all of
 > them plain Soli, none of them native — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.

@@ -245,7 +245,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             <h2>All 150</h2>
             <p>
                 They live in one file &mdash;
-                <code>examples/counter-app/app/controllers/eui_builders.sl</code> &mdash;
+                <code>examples/demo-app/app/controllers/eui_builders.sl</code> &mdash;
                 and you are meant to copy it and change it. A widget is not a protocol
                 feature, and none of these had to ask permission to exist. Each one
                 below carries a call you can paste into a view.

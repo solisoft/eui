@@ -10,11 +10,11 @@ use eui_client::{Driver, Input};
 use eui_proto::*;
 use eui_theme::Role;
 
-const AVATAR: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.png");
+const AVATAR: &[u8] = include_bytes!("../../../examples/demo-app/public/images/avatar.png");
 /// The same 32×32 avatar as a JPEG (flattened onto its own blue, since a
 /// JPEG has no alpha) and as a lossless WebP (which keeps it).
-const AVATAR_JPEG: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.jpg");
-const AVATAR_WEBP: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.webp");
+const AVATAR_JPEG: &[u8] = include_bytes!("../../../examples/demo-app/public/images/avatar.jpg");
+const AVATAR_WEBP: &[u8] = include_bytes!("../../../examples/demo-app/public/images/avatar.webp");
 
 fn hash_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()

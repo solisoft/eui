@@ -23,7 +23,7 @@ describe("Samples", fn() {
 
   test("carries the measured numbers, not rounded ones", fn() {
     let body = res_body(get("/samples"))
-    # examples/counter-app: one pattern at 22 kHz, 16-bit
+    # examples/demo-app: one pattern at 22 kHz, 16-bit
     assert_contains(body, "169 344")
     # crates/eui-client/tests/soli_e2e.rs: ten thousand rows, five nodes each
     assert_contains(body, "50 014")

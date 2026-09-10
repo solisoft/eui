@@ -1,4 +1,4 @@
-//! The counter, served by Soli itself: `soli serve examples/counter-app` on a
+//! The counter, served by Soli itself: `soli serve examples/demo-app` on a
 //! binary built with `--features eui`, driven by the real transport and the
 //! real driver. Skipped unless `EUI_SOLI_BIN` points at such a binary.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
@@ -25,7 +25,7 @@ fn free_port() -> u16 {
 }
 
 fn start_soli(bin: &str) -> (Server, u16) {
-    let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/counter-app", env!("CARGO_MANIFEST_DIR")));
+    let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
     let port = free_port();
     // EUI_SOLI_LOG=path captures the server's stderr for a post-mortem.
     let stderr = match std::env::var("EUI_SOLI_LOG") {
@@ -38,7 +38,7 @@ fn start_soli(bin: &str) -> (Server, u16) {
         // machine happens to be configured for. Soli's `.env` loader only
         // fills a variable that is not already set, so setting these to
         // empty is how a test says "no account" over a developer's own
-        // `examples/counter-app/.env`.
+        // `examples/demo-app/.env`.
         .env("SPOTIFY_CLIENT_ID", "")
         .env("SPOTIFY_CLIENT_SECRET", "")
         .env("SPOTIFY_REFRESH_TOKEN", "")
@@ -573,7 +573,7 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     let pins = std::env::temp_dir().join(format!("eui-e2e-pins-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&pins);
     let m = eui_client::manifest::check(&origin, &pins, None).expect("a signed manifest");
-    assert_eq!(m.app_id, "counter-app", "the application folder's name");
+    assert_eq!(m.app_id, "demo-app", "the application folder's name");
     assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
     assert_eq!(m.entry, "/_eui/session");
     assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read"], "what config/routes.sl asked for");

@@ -1,6 +1,6 @@
 # Writing views
 
-> Built, and running: `examples/counter-app` is served by a `soli` compiled
+> Built, and running: `examples/demo-app` is served by a `soli` compiled
 > with `--features eui`, and `crates/eui-client/tests/soli_e2e.rs` clicks its
 > button through the real socket.
 

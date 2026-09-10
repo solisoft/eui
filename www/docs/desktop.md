@@ -260,7 +260,7 @@ A typical artifact is 70–80 MB, mostly the database binary (stored compressed,
 roughly a third of its size). It contains everything: runtime, application,
 database and reference data.
 
-Measured on 2026-09-07 for the EUI `counter-app` example, x86-64 Linux:
+Measured on 2026-09-07 for the EUI `demo-app` example, x86-64 Linux:
 
 | | runtime | artifact |
 |---|---:|---:|

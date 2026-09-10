@@ -265,7 +265,7 @@ impl Tab {
     ///
     /// The component, not the manifest's name: one server serves many, so a
     /// Soli application with a gallery, a feed and a music view answers
-    /// `counter-app` for all of them and three tabs of it would carry the
+    /// `demo-app` for all of them and three tabs of it would carry the
     /// same word three times. The name is the server's; the component is
     /// this session's.
     fn view(&self) -> crate::chrome::TabView<'_> {

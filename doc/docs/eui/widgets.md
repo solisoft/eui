@@ -2,7 +2,7 @@
 
 > The primitives are specified (`spec/03`) and painted. A hundred and fifty plain
 > Soli functions build the catalogue below in
-> `examples/counter-app/app/controllers/eui_builders.sl`, and a `gallery`
+> `examples/demo-app/app/controllers/eui_builders.sl`, and a `gallery`
 > component shows them together. Every signature is in
 > [Components](/docs/components); this page is the shape of the catalogue,
 > not its reference.

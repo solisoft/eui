@@ -25,7 +25,7 @@ crates/
              keyboard focus, editing, IME, AccessKit, transitions        [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
-  counter-app     counter, todo, a 10 000-row table and a gallery as a Soli
+  demo-app        counter, todo, a 10 000-row table and a gallery as a Soli
                   app; the catalogue (buttons to date pickers to charts) is
                   app/controllers/eui_builders.sl
   snapshot        render the counter, or any live Soli component, off-screen
@@ -57,7 +57,7 @@ cargo run -p counter-server                              # ws://127.0.0.1:5090
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
 
 # A Soli app (../lang built with --features eui), with a capability granted:
-../lang/target/debug/soli serve examples/counter-app --port 5011
+../lang/target/debug/soli serve examples/demo-app --port 5011
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read
 ```
 
@@ -87,7 +87,7 @@ counter through Soli:
 
 ```sh
 (cd ../lang && cargo build --features eui)
-../lang/target/debug/soli serve examples/counter-app --port 5011
+../lang/target/debug/soli serve examples/demo-app --port 5011
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/counter
 # or, headless:
 EUI_SOLI_BIN=../lang/target/debug/soli cargo test -p eui-client --test soli_e2e

@@ -441,7 +441,7 @@ class XController < Controller
     end
 
     told = "<p>Feedx is linked to your account. One step is left, and it is manual on purpose: this app has nowhere durable to keep a secret, so the token goes where the other two live.</p>"
-    told = told + "<p>Put this line in <b>examples/counter-app/.env</b> for the server you are reading this from, and in <b>~/.local/bin/feedx</b> just before <b>exec</b> for the installed app. Then start the feed again.</p>"
+    told = told + "<p>Put this line in <b>examples/demo-app/.env</b> for the server you are reading this from, and in <b>~/.local/bin/feedx</b> just before <b>exec</b> for the installed app. Then start the feed again.</p>"
     told = told + "<code>export X_REFRESH_TOKEN=" + refresh + "</code>"
     told = told + "<p>X hands back a new one every time this one is spent, so if the feed stops loading, come back here.</p>"
     {

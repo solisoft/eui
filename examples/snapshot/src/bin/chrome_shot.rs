@@ -35,9 +35,9 @@ fn main() {
         if blank {
             chrome.set_recents(
                 [
-                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/gallery"),
-                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/music"),
-                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/tracker"),
+                    ("demo-app", "wss://eui-data.solisoft.test/_eui/session/gallery"),
+                    ("demo-app", "wss://eui-data.solisoft.test/_eui/session/music"),
+                    ("demo-app", "wss://eui-data.solisoft.test/_eui/session/tracker"),
                 ]
                 .iter()
                 .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })

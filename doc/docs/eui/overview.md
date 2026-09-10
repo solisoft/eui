@@ -41,7 +41,7 @@ of interactions that must not cost a round trip.
 ## What it looks like
 
 A view is a Soli function: state in, a tree out, as plain data. This is the
-counter from `examples/counter-app`, with both buttons taking the round trip;
+counter from `examples/demo-app`, with both buttons taking the round trip;
 its real `+` answers locally first, which [writing views](/docs/views) shows.
 
 ```soli

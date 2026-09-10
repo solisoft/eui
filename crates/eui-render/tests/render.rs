@@ -379,7 +379,7 @@ fn stack_paints_in_z_order() {
 fn an_image_paints_its_pixels() {
     let Some(mut r) = gpu() else { return };
     let mut st = r.session();
-    const AVATAR: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.png");
+    const AVATAR: &[u8] = include_bytes!("../../../examples/demo-app/public/images/avatar.png");
     // Decode by hand here to keep eui-render free of the png crate: the
     // avatar's centre 8×8 is white and its corners are transparent, which is
     // all this test needs — so build the RGBA from that knowledge.
