@@ -577,70 +577,6 @@ def gallery_grid_key(state, params)
   state
 end
 
-def gallery_defaults(state)
-  base = {
-    "tab": "Overview",
-    "open": "a",
-    "page": 1,
-    "seg": "Day",
-    "sheet": false,
-    "dialog": "",
-    "dialog_said": "",
-    # Which lazy regions are revealed. A list, so one key serves every
-    # region in the view rather than each growing its own flag.
-    "shown": [],
-    "tree_open": ["root"],
-    "select_open": false,
-    "select_value": "Medium",
-    "slider": 40,
-    "slider_drag": false,
-    "split_x": 380,
-    "split_x_drag": false,
-    "split_y": 500,
-    "split_y_drag": false,
-    "media_tab": "Sound",
-    "cal_month": "2026-09",
-    "cal_date": "",
-    "dt_month": "2026-09",
-    "dt_date": "2026-09-06",
-    "dt_time": "09:30",
-    "dt_hour_open": false,
-    "dt_min_open": false,
-    "range_month": "2026-09",
-    "range_start": "",
-    "range_end": "",
-    "sound": false,
-    "video": false,
-    "video_at": 0,
-    "video_seek": 0,
-    "grid_rows": gallery_invoices(),
-    "grid_row": "",
-    "grid_col": "",
-    "grid_edit": false,
-    "grid_sort": "",
-    "grid_dir": "asc",
-    "grid_menu": false,
-    # The editor card's buffer. Every key of the state has to be declared
-    # here or `gallery_defaults` drops it on the next round trip, which for
-    # an editor means every keystroke.
-    "ed": {},
-    "doc_window": [0, 24],
-    "devbar": true,
-    "viewport": {
-      "width": 1280,
-      "height": 800,
-      "scale": 1.0,
-      "mode": "light",
-      "density": "cozy",
-      "font_scale": 1.0
-    }
-  }
-  for key in base.keys()
-    base[key] = state[key] unless state[key].nil?
-  end
-  base
-end
-
 def set_key(state, key, value)
   state[key] = value
   state
@@ -670,19 +606,6 @@ def set_slider(state, params)
   state
 end
 
-def set_dt_part(state, which, value)
-  bits = (state["dt_time"] ?? "00:00").split(":")
-  h = bits[0]
-  m = "00"
-  m = bits[1] if bits.length() > 1
-  h = value if which == "hour"
-  m = value if which == "min"
-  state["dt_time"] = h + ":" + m
-  state["dt_hour_open"] = false
-  state["dt_min_open"] = false
-  state
-end
-
 def pick_range(state, iso)
   if state["range_start"].blank? || state["range_end"].present?
     state["range_start"] = iso
@@ -696,121 +619,10 @@ def pick_range(state, iso)
   state
 end
 
-def gallery(event_data)
-  event = event_data["event"]
-  params = event_data["params"]
-  props = params["props"] ?? {}
-  state = gallery_defaults(event_data["state"] ?? {})
-  match event {
-    "tab" => set_key(state, "tab", props["tab"]),
-    "toggle" => set_key(state, "open", props["id"] == state["open"] ? "" : props["id"]),
-    "page" => set_key(state, "page", props["page"]),
-    "seg" => set_key(state, "seg", props["option"]),
-    "sheet" => set_key(state, "sheet", !state["sheet"]),
-    "tree" => set_key(state, "tree_open", toggle_id(state["tree_open"], props["id"])),
-    "select_toggle" => set_key(state, "select_open", !state["select_open"]),
-    "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
-    "slider" => set_slider(state, params),
-    "split_x" => split_event(state, params, "split_x", "row", gallery_split_extent(state), 160, 200, 6),
-    "split_y" => split_event(state, params, "split_y", "column", 260, 70, 70, 6),
-    "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
-    "video" => set_key(
-      set_key(state, "video", !(state["video"] ?? false)),
-      "video_at",
-      state["video"] ?? false ? state["video_at"] : 0
-    ),
-    "video_time" => set_key(state, "video_at", params["payload"][0]),
-    "video_done" => set_key(set_key(state, "video", false), "video_at", 1440),
-    "video_scrub" => set_key(
-      set_key(state, "video_seek", int(params["payload"][0] * 1440 / 200)),
-      "video_at",
-      int(params["payload"][0] * 1440 / 200)
-    ),
-    "sound_ended" => set_key(state, "sound", false),
-    "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
-    "cal_pick" => set_key(state, "cal_date", props["date"]),
-    "dt_nav" => set_key(state, "dt_month", month_shift(state["dt_month"], props["delta"])),
-    "dt_pick" => set_key(state, "dt_date", props["date"]),
-    "dt_hour_toggle" => set_key(
-      set_key(state, "dt_hour_open", !(state["dt_hour_open"] ?? false)),
-      "dt_min_open",
-      false
-    ),
-    "dt_min_toggle" => set_key(set_key(state, "dt_min_open", !(state["dt_min_open"] ?? false)), "dt_hour_open", false),
-    "dt_hour" => set_dt_part(state, "hour", props["value"]),
-    "dt_min" => set_dt_part(state, "min", props["value"]),
-    "range_nav" => set_key(state, "range_month", month_shift(state["range_month"], props["delta"])),
-    "range_pick" => pick_range(state, props["date"]),
-    "media_tab" => set_key(set_key(set_key(state, "media_tab", props["option"]), "sound", false), "video", false),
-    "grid_select" => gallery_grid_select(state, params),
-    "grid_change" => gallery_grid_change(state, params),
-    "grid_sort" => gallery_grid_sort(state, props["col"]),
-    "grid_key" => gallery_grid_key(state, params),
-    "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
-    "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
-    # The editor card. The `ed_*` functions are the editor component's, and
-    # they take a state and give one back, so the gallery keeps the buffer
-    # under one key of its own and hands it over for each keystroke.
-    "ed_key" => set_key(state, "ed", ed_key(gallery_editor_state(state), params["payload"][0], params["payload"][1])),
-    "ed_click" => set_key(state, "ed", ed_click(gallery_editor_state(state), params)),
-    "ed_reload" => set_key(state, "ed", gallery_editor_reset(state)),
-    # Which dialog is up, and what the last one was answered with. The
-    # answer is kept so the gallery can show that the choice arrived
-    # somewhere, rather than the dialog just vanishing.
-    # Any node can reveal or hide a lazy region by carrying its id; the
-    # regions do not each need an event of their own.
-    "lazy_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], props["id"])),
-    "lazy_close" => set_key(state, "shown", (state["shown"] ?? []).filter(fn(x) { x != props["id"] })),
-    # The docs list asked for a window of rows (04 §7.1); the view builds
-    # those and no others.
-    "doc_window" => set_key(state, "doc_window", params["payload"]),
-    # The dev bar's own tag hides it for the session; there is no way back
-    # short of reconnecting, which is what a bar that is in the way wants.
-    "dev_bar_toggle" => set_key(state, "devbar", false),
-    "ask_alert" => set_key(state, "dialog", "alert"),
-    "ask_confirm" => set_key(state, "dialog", "confirm"),
-    "dialog_ok" => set_key(set_key(state, "dialog", ""), "dialog_said", "confirmed"),
-    "dialog_cancel" => set_key(set_key(state, "dialog", ""), "dialog_said", "cancelled"),
-    "dialog_close" => set_key(set_key(state, "dialog", ""), "dialog_said", "acknowledged"),
-    _ => state,
-  }
-end
-
 def toggle_id(ids, id)
   return ids.filter(fn(x) { x != id }) if ids.includes?(id)
 
   ids.concat([id])
-end
-
-def gallery_controls(state)
-  card(
-    {"gap": 3, "width": "100%"},
-    [
-      text("Controls", {"weight": "bold"}),
-      row(
-        {
-          "gap": 6,
-          "wrap": "wrap",
-          "align": "start",
-          "width": "100%"
-        },
-        [
-          column({"gap": 2}, [
-            text("Select", {"weight": "bold"}),
-            select(["Small", "Medium", "Large"], state["select_value"], state["select_open"], "select_toggle", "select_pick")
-          ]),
-          column(
-            {"gap": 2, "grow": 1},
-            [
-              text("Slider", {"weight": "bold"}),
-              keyed("gallery_slider", slider(state["slider"], 0, 100, "slider")),
-              keyed("gallery_slider_value", muted("Value " + str(state["slider"])))
-            ]
-          )
-        ]
-      )
-    ]
-  )
 end
 
 # One photograph, encoded three ways — the three formats a picture may
@@ -853,7 +665,7 @@ end
 # node carrying a `spans` prop, so the code stays a single run and its
 # lines stay level with the gutter counting them.
 def gallery_code_viewer
-  source = "# A greeting, twice over.\ndef hello(name)\n  puts(\"Hello, \" + name)\nend\n\ndef world\n  puts(\"World\")\n  42\nend\n\nhello(\"Alice\")\nhello(\"Bob\")\nworld()"
+  source = "# Revenue, as this company counts it: invoiced lines, less credit\n# notes, in the period the invoice was issued in — not the order.\ndef revenue(period)\n  lines = Invoice.issued_in(period).lines()\n  net = lines.sum(fn(l) { l.qty * l.unit })\n  net - credit_notes(period)\nend\n\ndef credit_notes(period)\n  CreditNote.issued_in(period).sum(fn(c) { c.total })\nend\n\nrevenue(\"2026-09\")"
   code_viewer(source, {"line_numbers": true, "spans": code_spans(source)})
 end
 
@@ -867,7 +679,7 @@ end
 # card that could rewrite the application it is in would be a different kind
 # of demonstration.
 def gallery_editor_lines
-  sample = "# Type in me. Every keystroke is a round trip: the client sends\n# `key_down`, the server edits the buffer and sends back the line\n# that changed and the cursor that moved. Nothing here is a text\n# widget — the gutter, the colours and the caret are the view's.\ndef greet(name)\n  return \"Hello, stranger\" if name == \"\"\n\n  \"Hello, \" + name\nend\n\ngreet(\"Ada\")"
+  sample = "# The rule every quote is priced by. Type in it: every keystroke is\n# a round trip — the client sends `key_down`, the server edits the\n# buffer and sends back the line that changed and the cursor that\n# moved. Nothing here is a text widget: the gutter, the colours and\n# the caret are the view's, and the highlighting happened on the server.\ndef price(quote)\n  base = quote.part.list_price * quote.qty\n  quote.tier == \"Gold\" ? base * 0.88 : base\nend\n\nreprice(all)"
   sample.split("\n")
 end
 
@@ -911,11 +723,20 @@ def gallery_editor(state)
       {"key": "ed_key", "click": "ed_click", "reload": "ed_reload", "lines": 12, "clean": "unchanged"}
     )]
   }
-  card({"gap": 3, "width": "100%"}, [text("Code Editor", {"weight": "bold"}), frame])
+  card(
+    {"gap": 3, "width": "100%"},
+    [
+      row(
+        {"gap": 3, "align": "center", "width": "100%"},
+        [text("Pricing rule", {"weight": "bold", "grow": 1}), badge("runs on every quote", "info")]
+      ),
+      frame
+    ]
+  )
 end
 
 def gallery_markdown
-  doc = "## Widgets\n\nEverything is composed from the **16 primitive kinds**. A widget is a\nfunction returning a hash — there is no registry and nothing to install.\n\n| Kind | Leaf | Note |\n|---|---|---|\n| `box` | no | arranges children |\n| `text` | yes | one run, one style |\n| `scroll` | no | clips and offers scrolling |\n\n- A `list` virtualises: only the visible window is laid out.\n- An `overlay` paints in the top layer, clipped by the window alone.\n\n> The set is closed. Adding a kind is a protocol version bump.\n\n```\nrouter_eui(\"gallery\", \"live#gallery\", \"live#gallery_view\")\n```\n"
+  doc = "## Month end, in nine steps\n\nThe close is **the fourth working day**. Nothing below is automatic; the\nchecklist is the record that somebody did it.\n\n| Step | Owner | Cut-off |\n|---|---|---|\n| Post the last goods receipt | Warehouse | D-1, 18:00 |\n| Reconcile stock movements | Nightly job | D, 03:00 |\n| Issue outstanding invoices | Billing | D, 12:00 |\n\n- A period that is reopened is reported to the auditor, every time.\n- Rebates are accrued against the quarter, not the month they land in.\n\n> Anything unreconciled at D+2 goes to the controller, not into the close.\n\n```\nsoli jobs run close --period 2026-09\n```\n"
   card({"gap": 3}, [markdown(doc, {})])
 end
 
@@ -963,95 +784,6 @@ def gallery_doc(state)
       "c": [text("Close", {"weight": "semibold"})]
     }],
     {"width": doc_width}
-  )
-end
-
-def gallery_media(state)
-  kind = state["media_tab"] ?? "Sound"
-  w = (state["viewport"] ?? {})["width"] ?? 1280
-  wide = bp_min(w, "md")
-  body = gallery_sound(state)
-  body = gallery_video(state) if kind == "Video"
-  # On a wide viewport the title and the picker share a line, because the
-  # picker is short and the line would otherwise be mostly empty; narrow,
-  # they stack so neither has to shrink.
-  head = wide ? row(
-    {"gap": 3, "align": "center"},
-    [text("Media", {"weight": "bold", "grow": 1}), segmented(["Sound", "Video"], kind, "media_tab")]
-  ) : column(
-    {"gap": 2},
-    [text("Media", {"weight": "bold"}), segmented(["Sound", "Video"], kind, "media_tab")]
-  )
-  card(
-    {"gap": 3, "width": "100%"},
-    [head, body, divider(), gallery_pictures(wide)]
-  )
-end
-
-def gallery_calendar(state)
-  w = (state["viewport"] ?? {})["width"] ?? 1280
-  cols = 1
-  cols = 2 if bp_min(w, "sm")
-  cols = 3 if bp_min(w, "md")
-  pickers = [
-    column(
-      {
-        "gap": 2,
-        "width": "100%",
-        "pad": [0, 4, 0, 4]
-      },
-      [text("Date", {"weight": "bold"}), date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")]
-    ),
-    column(
-      {
-        "gap": 2,
-        "width": "100%",
-        "pad": [0, 4, 0, 4]
-      },
-      [
-        text("DateTime", {"weight": "bold"}),
-        datetime_picker(
-          state["dt_month"],
-          state["dt_date"],
-          state["dt_time"],
-          state["dt_hour_open"] == true,
-          state["dt_min_open"] == true,
-          "dt_pick",
-          "dt_nav",
-          "dt_hour_toggle",
-          "dt_min_toggle",
-          "dt_hour",
-          "dt_min"
-        )
-      ]
-    ),
-    column(
-      {
-        "gap": 2,
-        "width": "100%",
-        "pad": [0, 4, 0, 4]
-      },
-      [
-        text("Range", {"weight": "bold"}),
-        date_range_picker(state["range_month"], state["range_start"], state["range_end"], "range_pick", "range_nav")
-      ]
-    )
-  ]
-  card(
-    {"gap": 3, "width": "100%"},
-    [
-      text("Calendar", {"weight": "bold"}),
-      {
-        "k": "box",
-        "s": {
-          "display": "grid",
-          "gap": 5,
-          "width": "100%"
-        },
-        "p": {"columns": cols},
-        "c": pickers
-      }
-    ]
   )
 end
 
@@ -1143,72 +875,6 @@ def gallery_split_detail(px)
   ])
 end
 
-def gallery_charts(state)
-  view = state["viewport"] ?? {}
-  w = view["width"] ?? 1280
-  density = view["density"] ?? "cozy"
-  cols = 1
-  cols = 2 if bp_min(w, "sm")
-  cols = 3 if bp_min(w, "md")
-  cols = 4 if bp_min(w, "lg")
-  # A canvas is drawn at the size the server picks, so the width has to be
-  # the one the layout will hand it: the window, less the page's padding,
-  # less the card's, less the gaps between the columns.
-  gap = space_px(4, density)
-  inner = w - 2 * space_px(bp_min(w, "md") ? 6 : 4, density) - 2 * space_px(5, density)
-  cw = int((inner - (cols - 1) * gap) / cols)
-  cw = 160 if cw < 160
-  ch = 140
-  series = [3, 5, 4, 8, 6, 9, 7]
-  # The `id` is what the hover handlers name their nodes by, so it has to be
-  # an identifier and it has to be unique in this tree.
-  plots = [
-    column({"gap": 2}, [text("Line", {"weight": "bold"}), chart_line("line", series, cw, ch)]),
-    column({"gap": 2}, [text("Area", {"weight": "bold"}), chart_area("area", [
-      2,
-      4,
-      3,
-      6,
-      5,
-      8,
-      9
-    ], cw, ch)]),
-    column({"gap": 2}, [text("Bars", {"weight": "bold"}), chart_bar("bars", [
-      4,
-      7,
-      3,
-      8,
-      5,
-      6
-    ], cw, ch)]),
-    column({"gap": 2}, [
-      text("Donut", {"weight": "bold"}),
-      chart_donut("mix", [
-        5,
-        3,
-        2,
-        1
-      ], ["Direct", "Search", "Social", "Mail"], ch, ch)
-    ])
-  ]
-  card(
-    {"gap": 3, "width": "100%"},
-    [
-      text("Charts", {"weight": "bold"}),
-      {
-        "k": "box",
-        "s": {
-          "display": "grid",
-          "gap": 4,
-          "width": "100%"
-        },
-        "p": {"columns": cols},
-        "c": plots
-      }
-    ]
-  )
-end
-
 # What sits beside the progress bar: a percentage, a spinner and three
 # labels. It refuses to shrink, so the row spends its narrowness on the
 # bar; if the labels still do not fit on one line they wrap among
@@ -1221,226 +887,1593 @@ def progress_legend
       "wrap": "wrap",
       "shrink": 0
     },
-    [muted("62 %"), spinner(), badge("beta", "warning"), chip("keyed", "", {}), chip("removable", "noop", {"id": 1})]
+    [
+      muted("62 %"),
+      spinner(),
+      badge("on track", "success"),
+      chip("Lyon", "", {}),
+      chip("excl. rebates", "chip_drop", {"key": "rebates"})
+    ]
   )
 end
 
-def gallery_view(raw_state)
-  state = gallery_defaults(raw_state ?? {})
-  tab = state["tab"]
-  open = state["open"]
-  page = state["page"]
-  seg = state["seg"]
-  sheet_open = state["sheet"]
-  tree_open = state["tree_open"]
-  w = (state["viewport"] ?? {})["width"] ?? 1280
-  wide = bp_min(w, "md")
-  invoices = card(
+# ---- Meridian Industrial ---------------------------------------------------
+#
+# The gallery is an application now. Every widget the catalogue has is still
+# on this page, but it is on it the way a working system would have it: six
+# sections behind a rail, a parts distributor's figures inside them, and forms
+# that judge what is typed into them. The data is `erp_data.sl`, and none of
+# it is real.
+#
+# Which section is up is `state["section"]` and nothing else. Navigation that
+# lived in the client would be navigation the server could not answer for —
+# no deep link, no permission check, and a back button that lies. One `scroll`
+# holds the active section; the rail and the top bar are outside it, so the
+# page moves under a header that stays.
+
+ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Reports", "Settings"]
+
+ERP_PER_PAGE = 7
+
+# The three shapes this page takes, decided once so that the view, the charts
+# and the split handler cannot disagree about them.
+def erp_layout(state)
+  view = state["viewport"] ?? {}
+  w = view["width"] ?? 1280
+  {
+    "w": w,
+    "density": view["density"] ?? "cozy",
+    "rail": bp_min(w, "lg"),
+    "wide": bp_min(w, "md"),
+    "roomy": bp_min(w, "sm")
+  }
+end
+
+# The width the content actually gets. A canvas is painted at the size the
+# *server* chose (04 §6), so every chart on this page is drawn against this
+# number — and the rail comes out of it, or every chart is 200 px too wide
+# the moment the window is big enough to show one.
+def erp_content_px(lay)
+  lay["rail"] ? lay["w"] - 201 : lay["w"]
+end
+
+# ---- The shell -------------------------------------------------------------
+
+def erp_topbar(state, lay)
+  section = state["section"] ?? "Dashboard"
+  account = popover(
+    icon_button("⋯", "acct_toggle", {}, {
+      "icon": "more_v",
+      "name": "Account",
+      "key": "erp_acct",
+      "expanded": state["acct_open"] == true
+    }),
+    [menu(["Profile", "Preferences", "Sign out"], "acct_pick")],
+    state["acct_open"] == true
+  )
+  crumbs = breadcrumb([{"label": "Meridian", "path": "Dashboard"}, {
+    "label": section,
+    "path": section
+  }], "nav")
+  # The menu button only appears where it is the *only* way to the sections.
+  # Above `sm` the navbar above already lists all six, and a hamburger next
+  # to a visible menu is furniture.
+  head = lay["roomy"] ? crumbs : row(
+    {"gap": 2, "align": "center", "shrink": 0},
+    [icon_button("≡", "nav_toggle", {}, {"icon": "menu", "name": "Sections", "key": "erp_nav"}), crumbs]
+  )
+  tail = [
+    segmented(["Day", "Week", "Month"], state["seg"], "seg"),
+    theme_toggle(),
+    account
+  ]
+  tail = [sized_input(state["search"] ?? "", "search", 200)].concat(tail) if lay["wide"]
+  toolbar([head, spacer()].concat(tail))
+end
+
+# The rail: where you are, what you can reach from here, and whose session
+# this is. The profile belongs at the bottom of it — an application people
+# sign into says who they are signed in as somewhere, and the top bar is
+# already carrying the section, the search and the period.
+#
+# `sidebar` still draws the links; it is stripped of its own surface and
+# border here because the rail around it now owns those, and a panel with
+# two borders down one edge is a panel with a seam in it.
+def erp_rail(state)
+  links = restyle(
+    sidebar(ERP_SECTIONS, state["section"], "nav"),
+    {"width": "100%", "bg": "none", "border": 0, "pad": 2}
+  )
+  column(
+    {
+      "gap": 0,
+      "width": 200,
+      "height": "100%",
+      "bg": "surface.raised",
+      "border": [0, 1, 0, 0],
+      "border_color": "border.subtle"
+    },
+    [
+      row(
+        {"gap": 2, "align": "center", "pad": [3, 3, 2, 3], "width": "100%"},
+        [initial_avatar("M", "accent.base", 24), text("Meridian", {"weight": "bold"})]
+      ),
+      links,
+      spacer(),
+      divider(),
+      erp_profile(state)
+    ]
+  )
+end
+
+# Who is signed in, and the one control that belongs beside them. The way
+# out is an icon and not a word: it sits on the baseline of the name it
+# belongs to, and a rail this narrow has no room for a second row of links.
+def erp_profile(state)
+  row(
+    {"gap": 2, "align": "center", "width": "100%", "pad": [3, 3, 3, 3]},
+    [
+      initial_avatar("C", "info.base", 28),
+      column(
+        {"gap": 0, "grow": 1},
+        [text("Camille Roy", {"weight": "semibold", "size": 1}), muted("Sales · Lyon")]
+      ),
+      icon_button("⇥", "sign_out", {}, {
+        "icon": "logout",
+        "name": "Sign out",
+        "key": "erp_signout",
+        "size": "sm"
+      })
+    ]
+  )
+end
+
+# The rail, or — narrow — a navbar with the sections in a drawer behind it.
+# The drawer is a layer, so it is composed by the view, not by the shell.
+def erp_shell(state, lay, page)
+  content = column({"gap": 0, "grow": 1, "height": "100%"}, [erp_topbar(state, lay), page])
+  return row(
+    {"gap": 0, "width": "100%", "height": "100%"},
+    [erp_rail(state), content]
+  ) if lay["rail"]
+
+  # Below `sm` the six section names cannot share a line and start breaking
+  # inside their own words, so the navbar goes and the menu button in the
+  # top bar — which is only drawn at this size — is the way to them.
+  return column({"gap": 0, "width": "100%", "height": "100%"}, [content]) unless lay["roomy"]
+
+  column(
+    {"gap": 0, "width": "100%", "height": "100%"},
+    [navbar("Meridian", ERP_SECTIONS, state["section"], "nav"), content]
+  )
+end
+
+# A card with a title, an optional aside, and a body — the shape nearly every
+# card on this page has, written once.
+def erp_card(title, aside, children)
+  head = row(
+    {"gap": 3, "align": "center", "width": "100%"},
+    [text(title, {"weight": "bold", "grow": 1})].concat(aside)
+  )
+  card({"gap": 3, "width": "100%"}, [head].concat(children))
+end
+
+# ---- Dashboard -------------------------------------------------------------
+
+def erp_dashboard(state, lay)
+  panels = [erp_activity_card(state), erp_pipeline_card(state)]
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_kpis(state, lay),
+      banner(
+        "Three invoices are past due and six parts are under their reorder point.",
+        "warning",
+        "Open the queue",
+        "sheet"
+      ),
+      erp_target(state, lay),
+      erp_charts(state, lay),
+      lay["wide"] ? row({"gap": 4, "align": "start", "width": "100%"}, panels) : column({"gap": 4, "width": "100%"}, panels),
+      erp_forecast(state, lay),
+      erp_release(state, lay)
+    ]
+  )
+end
+
+def erp_kpis(state, lay)
+  row(
+    {"gap": 3, "width": "100%", "wrap": "wrap"},
+    [
+      tile(200, stat("Revenue, month to date", "412 380 €", "+8.4 % on August")),
+      tile(200, stat("Orders", "1 284", "63 open · 9 late")),
+      tile(200, stat("Open invoices", "37", "128 940 € outstanding")),
+      tile(200, erp_margin_card())
+    ]
+  )
+end
+
+# The one KPI that is not a `stat`: it carries a tooltip, and `stat` takes
+# three strings rather than three nodes on purpose.
+def erp_margin_card
+  card(
+    {"gap": 1, "width": "100%"},
+    [
+      row({"gap": 2, "align": "center"}, [muted("Gross margin"), tooltip("Before rebates")]),
+      text("31.6 %", {"size": 6, "weight": "bold"}),
+      text("target 30.0 %", {"fg": "text.muted", "size": 0})
+    ]
+  )
+end
+
+def erp_target(state, lay)
+  bar = lay["wide"] ? row(
+    {"gap": 3, "align": "center", "width": "100%"},
+    [progress(0.62), progress_legend()]
+  ) : column({"gap": 2, "width": "100%"}, [progress(0.62), progress_legend()])
+  erp_card(
+    "Quarter target",
+    [muted("Q3 2026 · 2 480 000 €")],
+    [bar, divider(), stepper(["Quote", "Confirmed", "Picked", "Invoiced"], 2)]
+  )
+end
+
+def erp_activity_card(state)
+  rows = erp_activity().map(fn(entry) {
+    row(
+      {"gap": 3, "align": "center", "width": "100%"},
+      [
+        initial_avatar(entry["initial"], entry["tone"], 28),
+        column(
+          {"gap": 0, "grow": 1},
+          [text(entry["who"], {"weight": "semibold", "size": 1}), muted(entry["what"])]
+        ),
+        muted(entry["when"])
+      ]
+    )
+  })
+  card(
+    {"gap": 3, "width": "100%", "grow": 1, "basis": 340},
+    [row({"gap": 3, "align": "center"}, [
+      text("Today", {"weight": "bold", "grow": 1}),
+      badge("live", "success")
+    ])].concat(rows)
+  )
+end
+
+def erp_pipeline_card(state)
+  widths = [150, 60, 110]
+  stages = [
+    ["Quotes", "18", "84 200 €"],
+    ["Confirmed", "24", "301 450 €"],
+    ["Picked", "12", "96 800 €"],
+    ["Invoiced", "9", "42 110 €"]
+  ]
+  body = stages.map(fn(stage) { table_row("pl-" + stage[0], stage, widths) })
+  card(
+    {"gap": 3, "width": "100%", "grow": 1, "basis": 340},
+    [
+      text("Pipeline", {"weight": "bold"}),
+      table_header(["Stage", "Orders", "Value"], widths)
+    ].concat(body)
+  )
+end
+
+# Nothing of the forecast exists until it is asked for: `lazy` does not call
+# the thunk, so the skeletons cost three boxes and the figures cost nothing.
+def erp_forecast(state, lay)
+  shown = state["shown"] ?? []
+  running = shown.includes?("forecast")
+  placeholder = column(
+    {"gap": 2, "width": "100%"},
+    [skeleton(320, 12), skeleton(280, 12), skeleton(300, 12)]
+  )
+  erp_card(
+    "Forecast",
+    [secondary_button(running ? "Clear" : "Run forecast", "forecast_toggle")],
+    [lazy("forecast", shown, placeholder, fn() { erp_forecast_body(state, lay) })]
+  )
+end
+
+def erp_forecast_body(state, lay)
+  cells = [
+    stat("October", "438 000 €", "+6.2 %"),
+    stat("November", "451 500 €", "+3.1 %"),
+    stat("December", "402 900 €", "−10.8 %")
+  ]
+  column(
     {"gap": 3, "width": "100%"},
     [
-      text("Grid", {"weight": "bold"}),
+      lay["roomy"] ? row({"gap": 3, "width": "100%"}, cells) : column({"gap": 3, "width": "100%"}, cells),
+      muted("Seasonal model, fitted on 36 months. Nothing here is advice.")
+    ]
+  )
+end
+
+# The release note, and the two media nodes. They draw nothing and play
+# nothing until they are asked to, which is why a page can carry them.
+def erp_release(state, lay)
+  media = [gallery_video(state), gallery_sound(state)]
+  erp_card(
+    "Release 24.3",
+    [badge("new", "info")],
+    [
+      muted("Stock counts reconcile nightly. The walkthrough is ninety seconds."),
+      lay["wide"] ? row({"gap": 5, "align": "start"}, media) : column({"gap": 4}, media)
+    ]
+  )
+end
+
+# ---- Orders ----------------------------------------------------------------
+
+def erp_orders_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_filters(state, lay),
+      erp_orders_card(state, lay),
+      erp_order_detail(state, lay),
+      erp_invoices_card(state, lay)
+    ]
+  )
+end
+
+# Which orders survive the filter bar. Pure, so the count under the table and
+# the rows in it cannot disagree.
+def erp_orders_rows(state)
+  rows = erp_orders(63)
+  needle = (state["search"] ?? "").strip().downcase()
+  rows = rows.filter(fn(o) {
+    o["ref"].downcase().includes?(needle) || o["customer"].downcase().includes?(needle)
+  }) unless needle == ""
+  status = state["select_value"] ?? "Any status"
+  rows = rows.filter(fn(o) { o["status"] == status }) unless status == "Any status"
+  rows = rows.filter(fn(o) { o["status"] != "Invoiced" }) if state["unpaid"] == true
+  erp_sorted(rows, state["sort_by"] ?? "Due date")
+end
+
+def erp_sorted(rows, by)
+  return grid_sort_rows(rows, "total", "desc") if by == "Amount"
+  return grid_sort_rows(rows, "customer", "asc") if by == "Customer"
+
+  grid_sort_rows(rows, "due", "asc")
+end
+
+def erp_page_of(rows, page)
+  first = (page - 1) * ERP_PER_PAGE
+  last = first + ERP_PER_PAGE
+  last = rows.length() if last > rows.length()
+  return [] if first >= last
+
+  range(first, last).map(fn(i) { rows[i] })
+end
+
+def erp_pages(rows)
+  pages = int((rows.length() + ERP_PER_PAGE - 1) / ERP_PER_PAGE)
+  pages < 1 ? 1 : pages
+end
+
+# The filter bar. Every control here owns one key of the state and nothing
+# else, which is why the chips underneath can be built from the state alone.
+def erp_filters(state, lay)
+  controls = [
+    column(
+      {"gap": 1},
+      [
+        muted("Status"),
+        select(
+          ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"],
+          state["select_value"],
+          state["select_open"],
+          "select_toggle",
+          "select_pick"
+        )
+      ]
+    ),
+    column(
+      {"gap": 1, "width": 240},
+      [date_range_field({
+        "label": "Delivery window",
+        "start": state["range_start"],
+        "finish": state["range_end"],
+        "month": state["range_month"],
+        "open": state["range_open"] == true,
+        "on_toggle": "range_toggle",
+        "on_pick": "range_pick",
+        "on_nav": "range_nav",
+        "placeholder": "Any day",
+        "hint": "Two clicks: a start, then an end"
+      })]
+    ),
+    column(
+      {"gap": 1},
+      [
+        muted("Sort by"),
+        radio_group(
+          ["Due date", "Amount", "Customer"],
+          state["sort_by"],
+          "sort_pick",
+          {"name": "ordersort", "direction": "row", "label": "Sort orders by"}
+        )
+      ]
+    ),
+    column(
+      {"gap": 2},
+      [
+        checkbox("Only unpaid", state["unpaid"] == true, "unpaid", {"id": "unpaid"}),
+        switch("Group by customer", state["group"] == true, "group", {"id": "group"})
+      ]
+    )
+  ]
+  card(
+    {"gap": 3, "width": "100%"},
+    [
+      row({"gap": 5, "align": "start", "wrap": "wrap", "width": "100%"}, controls),
+      divider(),
+      row({"gap": 2, "align": "center", "wrap": "wrap"}, erp_filter_chips(state))
+    ]
+  )
+end
+
+# What is currently narrowing the list, as chips. The ones that can be
+# dropped carry the key they would clear; "63 orders" cannot be dropped, so
+# it has no ×.
+def erp_filter_chips(state)
+  chips = [chip(str(erp_orders_rows(state).length()) + " matching", "", {})]
+  status = state["select_value"] ?? "Any status"
+  chips = chips.concat([chip(status, "chip_drop", {"key": "select_value"})]) unless status == "Any status"
+  chips = chips.concat([chip("unpaid only", "chip_drop", {"key": "unpaid"})]) if state["unpaid"] == true
+  chips = chips.concat([chip("grouped", "chip_drop", {"key": "group"})]) if state["group"] == true
+  chips = chips.concat([chip("“" + state["search"] + "”", "chip_drop", {"key": "search"})]) unless (state["search"] ?? "") == ""
+  window = state["range_start"] ?? ""
+  chips = chips.concat([chip(window + " →", "chip_drop", {"key": "range"})]) unless window == ""
+  chips
+end
+
+def erp_order_widths(lay)
+  return [110, 190, 110, 110, 100] if lay["rail"]
+  return [110, 170, 110, 100] if lay["wide"]
+
+  [110, 110]
+end
+
+def erp_order_labels(lay)
+  return ["Order", "Customer", "Status", "Due", "Amount"] if lay["rail"]
+  return ["Order", "Customer", "Status", "Amount"] if lay["wide"]
+
+  ["Order", "Amount"]
+end
+
+def erp_order_values(order, lay)
+  return [order["ref"], order["customer"], order["status"], order["due"], order["amount"]] if lay["rail"]
+  return [order["ref"], order["customer"], order["status"], order["amount"]] if lay["wide"]
+
+  [order["ref"], order["amount"]]
+end
+
+# A table row is a plain row of text; making one answer the pointer is three
+# keys on the node it already returns, and keeps the widths and the hairline
+# the header agreed on.
+def erp_order_row(order, state, lay)
+  line = table_row(order["ref"], erp_order_values(order, lay), erp_order_widths(lay))
+  line["on"] = {"click": "order_pick"}
+  line["p"] = {"ref": order["ref"]}
+  line["s"]["cursor"] = "pointer"
+  line["s"]["bg"] = "info.subtle" if state["order_sel"] == order["ref"]
+  line
+end
+
+def erp_orders_card(state, lay)
+  rows = erp_orders_rows(state)
+  pages = erp_pages(rows)
+  page = state["page"] ?? 1
+  page = pages if page > pages
+  body = erp_page_of(rows, page).map(fn(order) { erp_order_row(order, state, lay) })
+  table = rows.length() == 0 ? empty_state(
+    "Nothing matches",
+    "No order answers those filters. Clear them to see all sixty-three.",
+    "Clear filters",
+    "clear_filters"
+  ) : column(
+    {"gap": 0, "width": "100%"},
+    [table_header(erp_order_labels(lay), erp_order_widths(lay))].concat(body)
+  )
+  erp_card(
+    "Orders",
+    [
+      loading_button("Export", "export", "export"),
+      button("New order", "order_new")
+    ],
+    [table, row({"gap": 3, "align": "center", "justify": "center"}, [pagination(page, pages, "page")])]
+  )
+end
+
+# What one order is made of, and the menu that acts on it. The menu is a
+# `popover` rather than a dialog because it is a list of verbs, not a
+# question — and it is the server that says whether it is down.
+def erp_order_detail(state, lay)
+  ref = state["order_sel"] ?? ""
+  return card({"gap": 2, "width": "100%"}, [
+    muted("Pick an order above to see its lines.")
+  ]) if ref == ""
+
+  widths = lay["wide"] ? [110, 170, 70, 100, 110] : [110, 110]
+  labels = lay["wide"] ? ["SKU", "Part", "Qty", "Unit", "Total"] : ["SKU", "Total"]
+  lines = erp_lines(ref).map(fn(line) {
+    values = lay["wide"] ? [line["sku"], line["part"], line["qty"], line["unit"], line["total"]] : [line["sku"], line["total"]]
+    table_row(line["id"], values, widths)
+  })
+  actions = popover(
+    icon_button("⋯", "row_menu", {"ref": ref}, {
+      "icon": "more_h",
+      "name": "Order actions",
+      "key": "erp_row_menu",
+      "expanded": state["order_menu"] == true
+    }),
+    [menu(["Duplicate", "Print", "Delete"], "row_action")],
+    state["order_menu"] == true
+  )
+  erp_card(ref, [badge("Confirmed", "info"), actions], [table_header(labels, widths)].concat(lines))
+end
+
+# The invoices, in a grid that sorts by moving keyed rows and edits a cell
+# in place. Eight of them: the point is the machinery, not the volume.
+def erp_invoices_card(state, lay)
+  erp_card(
+    "Invoices",
+    [muted(gallery_grid_caption(state))],
+    [
       data_grid(
-        gallery_grid_visible_columns(w),
+        gallery_grid_visible_columns(lay["w"]),
         state["grid_rows"],
-        state["grid_row"].present? ? {
-          "row": state["grid_row"],
-          "col": state["grid_col"]
-        } : {},
+        state["grid_row"].present? ? {"row": state["grid_row"], "col": state["grid_col"]} : {},
         state["grid_edit"] == true ? {
           "row": state["grid_row"],
           "col": state["grid_col"],
           "open": state["grid_menu"]
         } : {},
-        state["grid_sort"].present? ? {
-          "col": state["grid_sort"],
-          "dir": state["grid_dir"]
-        } : {},
+        state["grid_sort"].present? ? {"col": state["grid_sort"], "dir": state["grid_dir"]} : {},
         "grid_select",
         "grid_sort",
         "grid_change",
         "grid_key"
       ),
-      muted(gallery_grid_caption(state)),
-      muted("bp " + bp(w))
+      muted("Click a cell to select it, again to edit it. " + bp(lay["w"]) + " viewport.")
     ]
   )
-  sections = [
-    {
-      "id": "a",
-      "title": "What is EUI?",
-      "body": "A protocol for interfaces without a document engine."
-    },
-    {
-      "id": "b",
-      "title": "Why no CSS?",
-      "body": "Styles are resolved on the server; the client looks them up."
-    },
-    {
-      "id": "c",
-      "title": "Is it secure?",
-      "body": "Deny by default, no code from the network, quotas everywhere."
-    }
+end
+
+# The new order, in a sheet: every typed field the catalogue has, doing the
+# job it was written for. Nothing is saved anywhere — "Create" raises a
+# toast and closes, which is exactly as much as a demonstration should do.
+def erp_new_order(state)
+  tried = state["nf_tried"] == true
+  fields = [
+    text_field("Reference", state["nf_ref"], "nf_ref", {
+      "required": true,
+      "submitted": tried,
+      "hint": "Yours, or leave it for the sequence"
+    }),
+    text_field("Customer", state["nf_customer"], "nf_customer", {"required": true, "submitted": tried}),
+    email_field("Contact", state["nf_email"], "nf_email", {
+      "required": true,
+      "submitted": tried,
+      "hint": "The confirmation goes here"
+    }),
+    number_field("Quantity", state["nf_qty"], "nf_qty", {
+      "min": 1,
+      "max": 999,
+      "step": 5,
+      "on_step": "nf_qty_step",
+      "hint": "Pallets, not pieces"
+    }),
+    date_field({
+      "label": "Delivery date",
+      "value": state["nf_date"],
+      "month": state["nf_date_month"],
+      "open": state["nf_date_open"] == true,
+      "on_toggle": "nf_date_toggle",
+      "on_pick": "nf_date_pick",
+      "on_nav": "nf_date_nav",
+      "hint": "Working days only, in theory"
+    }),
+    datetime_field({
+      "label": "Pickup slot",
+      "value": state["nf_slot"],
+      "time": state["nf_slot_time"],
+      "month": state["nf_slot_month"],
+      "open": state["nf_slot_open"] == true,
+      "hour_open": state["nf_slot_hour_open"] == true,
+      "min_open": state["nf_slot_min_open"] == true,
+      "on_toggle": "nf_slot_toggle",
+      "on_pick": "nf_slot_pick",
+      "on_nav": "nf_slot_nav",
+      "on_hour_toggle": "nf_slot_hour_toggle",
+      "on_min_toggle": "nf_slot_min_toggle",
+      "on_hour": "nf_slot_hour",
+      "on_min": "nf_slot_min"
+    }),
+    textarea_field("Notes", state["nf_notes"], "nf_notes", {
+      "rows": 3,
+      "hint": "Anything the warehouse should read"
+    })
   ]
-  tree = [{
-    "id": "root",
-    "label": "app",
-    "children": [
+  sheet(
+    "right",
+    [
+      h2("New order"),
+      muted("Nothing here is written anywhere."),
+      form(fields, "Create", "order_create")
+    ],
+    {"label": "New order", "on_close": "order_close"}
+  )
+end
+
+# ---- Customers -------------------------------------------------------------
+
+def erp_customers_section(state, lay)
+  return column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [erp_customer_split(state, lay)]
+  ) if lay["wide"]
+
+  # Narrow: the list *or* the detail, because a split pane at 500 px is two
+  # columns of nothing.
+  column(
+    {"gap": 3, "width": "100%"},
+    [(state["cust_sel"] ?? "") == "" ? erp_customer_list(state, 0) : erp_customer_detail(state, lay, 0)]
+  )
+end
+
+def erp_customer_split(state, lay)
+  extent = gallery_split_extent(state)
+  erp_card("Customers", [muted("14 accounts · 3 owners")], [split_pane({
+    "key": "gsplit",
+    "dir": "row",
+    "size": extent,
+    "cross": 560,
+    "fraction": state["split_x"],
+    "min_a": 220,
+    "min_b": 260,
+    "on_drag": "split_x",
+    "dragging": state["split_x_drag"],
+    "label": "Resize the account list",
+    "a": fn(px) { erp_customer_list(state, px) },
+    "b": fn(px) { erp_customer_detail(state, lay, px) }
+  })])
+end
+
+def erp_customer_list(state, px)
+  selected = state["cust_sel"] ?? ""
+  rows = erp_customers().map(fn(one) {
+    line = row(
       {
-        "id": "ctl",
-        "label": "controllers",
-        "children": [{
-          "id": "live",
-          "label": "live_controller.sl",
-          "children": []
-        }]
+        "gap": 3,
+        "align": "center",
+        "width": "100%",
+        "pad": [1, 3, 1, 3],
+        "radius": 1,
+        "cursor": "pointer",
+        "bg": one["id"] == selected ? "info.subtle" : "none"
       },
-      {
-        "id": "views",
-        "label": "views",
-        "children": []
-      }
-    ]
-  }]
-  structure = [
-    column(
-      {"gap": 3, "grow": 1},
       [
-        accordion(sections, open, "toggle"),
-        code_block("router_eui(gallery, live#gallery, live#gallery_view)  # config/routes.sl"),
-        h2("Code Viewer:"),
-        gallery_code_viewer(),
-        gallery_editor(state)
+        initial_avatar(one["initial"], one["tone"], 24),
+        column(
+          {"gap": 0, "grow": 1},
+          [text(one["name"], {"weight": "semibold", "size": 1}), muted(one["city"] + " · " + one["country"])]
+        ),
+        badge(one["tier"], one["tier"] == "Gold" ? "warning" : (one["tier"] == "Silver" ? "info" : "success"))
+      ]
+    )
+    line["on"] = {"click": "cust_pick"}
+    line["p"] = {"id": one["id"]}
+    keyed("cu:" + one["id"], line)
+  })
+  column({"gap": 1, "width": "100%", "pad": [2, 0, 2, 0], "height": px > 0 ? 560 : "auto"}, [scroll({"grow": 1}, [column({"gap": 1, "width": "100%"}, rows)])])
+end
+
+def erp_customer_detail(state, lay, px)
+  one = erp_customer(state["cust_sel"] ?? "C-101")
+  tab = state["cust_tab"] ?? "Profile"
+  body = erp_customer_profile(state, one, lay)
+  body = erp_customer_invoices(state, one, lay) if tab == "Invoices"
+  body = erp_customer_notes(state, one) if tab == "Notes"
+  column(
+    {"gap": 3, "width": "100%", "pad": [2, 3, 2, 3], "height": px > 0 ? 560 : "auto"},
+    [
+      row(
+        {"gap": 3, "align": "center", "width": "100%"},
+        [
+          initial_avatar(one["initial"], one["tone"], 36),
+          column(
+            {"gap": 0, "grow": 1},
+            [text(one["name"], {"weight": "bold", "size": 3}), muted(one["owner"] + " · since " + one["since"])]
+          ),
+          badge(one["terms"], "info")
+        ]
+      ),
+      tabs(["Profile", "Invoices", "Notes"], tab, "cust_tab"),
+      scroll({"grow": 1}, [body])
+    ]
+  )
+end
+
+def erp_customer_profile(state, one, lay)
+  cells = [
+    stat("Open balance", erp_money(one["open"]), "on " + one["terms"]),
+    stat("Orders", str(4 + erp_customer_index(one["id"])), "this quarter"),
+    stat("Tier", one["tier"], "since " + one["since"])
+  ]
+  column(
+    {"gap": 4, "width": "100%"},
+    [
+      lay["roomy"] ? row({"gap": 3, "width": "100%"}, cells) : column({"gap": 3, "width": "100%"}, cells),
+      accordion(
+        [
+          {
+            "id": "a",
+            "title": "Contacts",
+            "body": one["owner"] + " owns this account. Billing goes to accounts@" + one["id"].downcase() + ".test."
+          },
+          {
+            "id": "b",
+            "title": "Addresses",
+            "body": "Invoices to " + one["city"] + "; deliveries to whichever plant the line names."
+          },
+          {
+            "id": "c",
+            "title": "Payment terms",
+            "body": one["terms"] + ", reviewed each January. Over the limit, orders need a release."
+          }
+        ],
+        state["open"],
+        "toggle"
+      ),
+      column({"gap": 2, "width": "100%"}, [
+        text("Sites", {"weight": "semibold"}),
+        tree_view(erp_sites(one), state["tree_open"], "tree", 0)
+      ])
+    ]
+  )
+end
+
+def erp_customer_invoices(state, one, lay)
+  widths = [110, 110, 110]
+  rows = range(0, 5).map(fn(i) {
+    table_row(
+      one["id"] + "-i" + str(i),
+      ["FA-" + str(1200 + erp_customer_index(one["id"]) * 5 + i), erp_day(i * 11), erp_money(400 + i * 317)],
+      widths
+    )
+  })
+  column(
+    {"gap": 0, "width": "100%"},
+    [table_header(["Invoice", "Issued", "Amount"], widths)].concat(rows)
+  )
+end
+
+def erp_customer_notes(state, one)
+  column(
+    {"gap": 3, "width": "100%"},
+    [
+      textarea_field("Account notes", state["cust_notes"], "cust_notes", {
+        "rows": 5,
+        "hint": "Kept for this session and nowhere else"
+      }),
+      muted("Last edited by " + one["owner"] + ".")
+    ]
+  )
+end
+
+# ---- Inventory -------------------------------------------------------------
+
+def erp_inventory_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [erp_stock_card(state, lay), erp_reorder_card(state, lay), erp_shortages_card(state, lay)]
+  )
+end
+
+# Ten thousand parts, of which the client is sent about thirty.
+#
+# A plain `list` would put all ten thousand in the tree — six nodes a row,
+# sixty thousand ops — and a single batch may carry 65 535 (02 §6). So this
+# is a *windowed* list (04 §7.1): the server says how many rows there are and
+# how tall each is, sends the ones in view, and is told — as `inv_window` —
+# when the view moves. Scrolling the ledger costs a window of rows however
+# long the catalogue is, which is the whole argument for the kind.
+ERP_STOCK_COUNT = 10000
+
+ERP_ROW_PX = 22
+
+# One height per row, built once: the list needs every row's height to know
+# how far it scrolls, and ten thousand identical numbers is still ten
+# thousand numbers to rebuild on each event.
+ERP_STOCK_HEIGHTS = {}
+
+def erp_stock_heights
+  cached = ERP_STOCK_HEIGHTS["all"]
+  return cached unless cached.nil?
+
+  heights = range(0, ERP_STOCK_COUNT).map(fn(i) { ERP_ROW_PX })
+  ERP_STOCK_HEIGHTS["all"] = heights
+  heights
+end
+
+def erp_stock_card(state, lay)
+  widths = lay["wide"] ? [110, 170, 110, 90, 90] : [110, 90]
+  labels = lay["wide"] ? ["SKU", "Part", "Warehouse", "On hand", "Price"] : ["SKU", "On hand"]
+  window = state["inv_window"] ?? [0, 24]
+  first = window[0] ?? 0
+  last = window[1] ?? 24
+  last = ERP_STOCK_COUNT - 1 if last > ERP_STOCK_COUNT - 1
+  rows = first > last ? [] : range(first, last + 1).map(fn(i) {
+    part = erp_product(i)
+    values = lay["wide"] ? [
+      part["sku"],
+      part["name"],
+      part["warehouse"],
+      str(part["on_hand"]),
+      part["price"]
+    ] : [part["sku"], str(part["on_hand"])]
+    {
+      "k": "box",
+      "s": {"display": "column", "width": "100%"},
+      "p": {"row": i},
+      "c": [table_row(part["id"], values, widths)]
+    }
+  })
+  erp_card(
+    "Stock ledger",
+    [badge("10 000 parts", "info")],
+    [
+      table_header(labels, widths),
+      list_window(
+        {"height": 400, "width": "100%"},
+        ERP_ROW_PX,
+        ERP_STOCK_COUNT,
+        erp_stock_heights(),
+        rows,
+        "inv_window"
+      )
+    ]
+  )
+end
+
+def erp_reorder_card(state, lay)
+  fields = [
+    text_field("SKU", state["inv_sku"], "inv_sku", {"hint": "AX-0001 … AX-9999", "width": 200}),
+    number_field("Quantity", state["inv_qty"], "inv_qty", {
+      "min": 0,
+      "max": 999,
+      "step": 25,
+      "on_step": "inv_qty_step",
+      "width": 220
+    }),
+    column(
+      {"gap": 1},
+      [
+        muted("Warehouse"),
+        select_sized(
+          ERP_WAREHOUSES,
+          state["inv_wh"],
+          state["inv_wh_open"] == true,
+          "inv_wh_toggle",
+          "inv_wh_pick",
+          160,
+          false
+        )
+      ]
+    ),
+    column({"gap": 1, "width": 220}, [date_field({
+      "label": "Wanted by",
+      "value": state["inv_date"],
+      "month": state["inv_date_month"],
+      "open": state["inv_date_open"] == true,
+      "on_toggle": "inv_date_toggle",
+      "on_pick": "inv_date_pick",
+      "on_nav": "inv_date_nav",
+      "placeholder": "Next delivery"
+    })])
+  ]
+  erp_card(
+    "Raise a purchase order",
+    [],
+    [
+      row({"gap": 4, "align": "start", "wrap": "wrap", "width": "100%"}, fields),
+      row({"gap": 2, "justify": "end", "width": "100%"}, [button("Send to supplier", "inv_send")])
+    ]
+  )
+end
+
+# What is short, as a bar each: the figure that matters is how far under the
+# line it is, and a number cannot show that at a glance.
+def erp_shortages_card(state, lay)
+  short = erp_products(60).filter(fn(part) { part["short"] })
+  rows = range(0, short.length() > 6 ? 6 : short.length()).map(fn(i) {
+    part = short[i]
+    row(
+      {"gap": 3, "align": "center", "width": "100%"},
+      [
+        column(
+          {"gap": 0, "width": 170},
+          [
+            text(part["name"], {"size": 1, "weight": "semibold"}),
+            row(
+              {"gap": 2, "align": "center"},
+              [text_link(part["sku"], "inv_pick", {"sku": part["sku"]}), muted(part["warehouse"])]
+            )
+          ]
+        ),
+        progress(part["on_hand"] * 1.0 / part["reorder"]),
+        muted(str(part["on_hand"]) + " / " + str(part["reorder"])),
+        badge(part["on_hand"] * 2 < part["reorder"] ? "critical" : "low", part["on_hand"] * 2 < part["reorder"] ? "danger" : "warning")
+      ]
+    )
+  })
+  erp_card(
+    "Under the reorder point",
+    [muted(str(rows.length()) + " of " + str(short.length()) + " · first sixty SKUs")],
+    rows
+  )
+end
+
+# ---- Reports ---------------------------------------------------------------
+
+def erp_reports_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_month_end(state, lay),
+      erp_schedule_card(state, lay),
+      gallery_markdown(),
+      erp_query_card(state)
+    ]
+  )
+end
+
+def erp_month_end(state, lay)
+  erp_card(
+    "Month end",
+    [badge("4 of 9 done", "warning")],
+    [
+      muted("The checklist below is the same document the handbook holds; the handbook is six hundred lines and is not read until it is opened."),
+      row(
+        {"gap": 2, "wrap": "wrap"},
+        [
+          {
+            "k": "box",
+            "s": {
+              "display": "row",
+              "justify": "center",
+              "align": "center",
+              "pad": [2, 4, 2, 4],
+              "bg": "surface.raised",
+              "border": 1,
+              "border_color": "border.default",
+              "radius": 2,
+              "cursor": "pointer"
+            },
+            "p": {"id": "doc"},
+            "on": {"click": "lazy_toggle"},
+            "c": [text("Open the handbook", {"weight": "semibold", "size": 1})]
+          },
+          secondary_button("Email the pack", "ask_alert"),
+          danger_button("Reopen the period…", "ask_confirm")
+        ]
+      ),
+      (state["dialog_said"] ?? "") == "" ? muted("No answer yet.") : muted("You " + state["dialog_said"] + " it.")
+    ]
+  )
+end
+
+# The inline pickers. The same three the fields on the other sections open in
+# a panel — same state, same handlers, drawn in the page instead of over it,
+# which is what a scheduling screen wants and a form does not.
+def erp_schedule_card(state, lay)
+  cols = 1
+  cols = 2 if lay["roomy"]
+  cols = 3 if lay["wide"]
+  pickers = [
+    column(
+      {"gap": 2, "width": "100%", "pad": [0, 4, 0, 4]},
+      [
+        text("Close date", {"weight": "bold"}),
+        date_picker(state["cal_month"], state["cal_date"], "cal_pick", "cal_nav")
       ]
     ),
     column(
-      {"gap": 3, "width": wide ? 240 : "100%"},
+      {"gap": 2, "width": "100%", "pad": [0, 4, 0, 4]},
       [
-        card({"gap": 2}, [h2("Tree"), tree_view(tree, tree_open, "tree", 0)]),
-        card({"gap": 2}, [
-          h2("Dialogs"),
-          muted("A question, and a statement."),
-          row({"gap": 2, "wrap": "wrap"}, [
-            danger_button("Delete…", "ask_confirm"),
-            secondary_button("Save…", "ask_alert")
-          ]),
-          # The document is 630 lines of markdown. Nothing of it exists
-          # until this is clicked.
-          {
-            "k": "box",
-            "s": {"display": "row", "justify": "center", "align": "center", "pad": [2, 4, 2, 4], "bg": "surface.raised", "border": 1, "border_color": "border.default", "radius": 2, "cursor": "pointer"},
-            "p": {"id": "doc"},
-            "on": {"click": "lazy_toggle"},
-            "c": [text("Read the docs", {"weight": "semibold", "size": 1})]
-          },
-          # The answer, so the choice is visibly received rather than the
-          # dialog merely disappearing.
-          (state["dialog_said"] ?? "") == "" ? muted("No answer yet.") : muted("You " + state["dialog_said"] + " it.")
-        ]),
-        menu(["Rename", "Duplicate", "Delete"], "noop"),
-        tooltip("A tooltip")
+        text("Stock count", {"weight": "bold"}),
+        datetime_picker(
+          state["dt_month"],
+          state["dt_date"],
+          state["dt_time"],
+          state["dt_hour_open"] == true,
+          state["dt_min_open"] == true,
+          "dt_pick",
+          "dt_nav",
+          "dt_hour_toggle",
+          "dt_min_toggle",
+          "dt_hour",
+          "dt_min"
+        )
+      ]
+    ),
+    column(
+      {"gap": 2, "width": "100%", "pad": [0, 4, 0, 4]},
+      [
+        text("Reporting period", {"weight": "bold"}),
+        date_range_picker(state["range_month"], state["range_start"], state["range_end"], "range_pick", "range_nav")
       ]
     )
   ]
-  page_content = column(
-    {"gap": wide ? 5 : 3, "pad": wide ? 6 : 4},
+  erp_card("Schedule", [], [{
+    "k": "box",
+    "s": {"display": "grid", "gap": 5, "width": "100%"},
+    "p": {"columns": cols},
+    "c": pickers
+  }])
+end
+
+def erp_query_card(state)
+  erp_card(
+    "How the revenue figure is got",
+    [muted("app/models/revenue.sl")],
     [
-      gallery_markdown(),
-      navbar("EUI", ["Overview", "Inputs", "Data"], tab, "tab"),
-      tabs(["Overview", "Inputs", "Data"], tab, "tab"),
-      row(
-        {
-          "gap": 3,
-          "width": "100%",
-          "wrap": "wrap"
-        },
-        [
-          tile(200, stat("Nodes", "14", "primitives")),
-          tile(200, stat("Roles", "28", "colours")),
-          tile(200, stat("Tests", "181", "and counting"))
-        ]
-      ),
-      banner("This gallery is served by Soli and drawn by EUI.", "info", "Open sheet", "sheet"),
-      wide ? row(
-        {
-          "gap": 3,
-          "align": "center",
-          "width": "100%"
-        },
-        [progress(0.62), progress_legend()]
-      ) : column(
-        {"gap": 2, "width": "100%"},
-        [progress(0.62), progress_legend()]
-      ),
-      row(
-        {
-          "gap": 3,
-          "align": "center",
-          "wrap": "wrap"
-        },
-        [
-          segmented(["Day", "Week", "Month"], seg, "seg"),
-          pagination(page, 9, "page"),
-          breadcrumb([{"label": "app", "path": "/"}, {
-            "label": "gallery",
-            "path": "/gallery"
-          }], "noop")
-        ]
-      ),
-      stepper(["Spec", "Client", "Soli", "Ship"], 2),
-      gallery_controls(state),
-      gallery_media(state),
-      gallery_calendar(state),
-      invoices,
-      gallery_split(state),
-      gallery_charts(state),
-      wide ? row(
-        {"gap": 4, "align": "start"},
-        structure
-      ) : column({"gap": 4}, structure),
-      empty_state(
-        "Nothing here yet",
-        "Filters that match nothing land here. Clear them to see everything.",
-        "Noted",
-        "noop"
-      ),
-      form([field("Name", "", "noop"), field("Email", "", "noop")], "Save", "noop"),
-      skeleton(320, 12)
+      code_block("soli jobs run close --period 2026-09    # what the nightly close calls"),
+      gallery_code_viewer()
     ]
   )
-  # None of the three shrinks, so a narrow window moves them onto
-  # lines of their own rather than breaking their words.
+end
 
-  # Three tiles that wrap on their own: a line holds as many as fit at
-  # 200 px each and they share the remainder, so the last one never
-  # leaves a hole behind it.
+# ---- Settings --------------------------------------------------------------
 
-  # The bar takes the room the legend does not want: the legend never
-  # shrinks, so "62 %" keeps its two words on one line, and below md
-  # the bar goes above it instead of squeezing it.
+def erp_settings_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_company_card(state, lay),
+      erp_preferences_card(state, lay),
+      gallery_editor(state),
+      erp_diagnostics_card(state, lay)
+    ]
+  )
+end
 
-  # The page scrolls as a whole, like a browser's viewport would; the sheet
-  # is a layer above it.
-  page = scroll({}, [page_content])
-  layers = sheet_open ? [
-    page,
-    sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")], {
-      "label": "A sheet",
-      "on_close": "sheet"
+# Every one-line field the catalogue has, in the one place an application
+# would put them: the form nobody fills in twice.
+def erp_company_card(state, lay)
+  left = [
+    text_field("Legal name", state["co_name"], "co_name", {"required": true}),
+    email_field("Billing address", state["co_email"], "co_email", {
+      "required": true,
+      "hint": "Where invoices are sent"
+    }),
+    number_field("VAT rate", state["co_vat"], "co_vat", {
+      "min": 0,
+      "max": 30,
+      "step": 1,
+      "on_step": "co_vat_step",
+      "hint": "Per cent, 0 to 30"
     })
-  ] : [page]
-  # A dialog is the topmost layer: it goes on after the sheet, so opening
-  # one over the other still leaves the question on top.
+  ]
+  right = [
+    date_field({
+      "label": "Fiscal year starts",
+      "value": state["co_start"],
+      "month": state["co_start_month"],
+      "open": state["co_start_open"] == true,
+      "on_toggle": "co_start_toggle",
+      "on_pick": "co_start_pick",
+      "on_nav": "co_start_nav",
+      "placeholder": "Pick a day"
+    }),
+    textarea_field("Invoice footer", state["co_footer"], "co_footer", {
+      "rows": 4,
+      "hint": "Printed under every total"
+    })
+  ]
+  body = lay["wide"] ? row(
+    {"gap": 5, "align": "start", "width": "100%"},
+    [column({"gap": 4, "grow": 1, "basis": 280}, left), column({"gap": 4, "grow": 1, "basis": 280}, right)]
+  ) : column({"gap": 4, "width": "100%"}, left.concat(right))
+  erp_card(
+    "Company",
+    [muted("Meridian Industrial SAS")],
+    [body, row({"gap": 2, "justify": "end", "width": "100%"}, [button("Save", "save")])]
+  )
+end
+
+def erp_preferences_card(state, lay)
+  left = column(
+    {"gap": 3, "grow": 1, "basis": 260},
+    [
+      column(
+        {"gap": 1},
+        [
+          muted("Currency"),
+          radio_group(
+            ["Euro", "Pound", "Dollar"],
+            state["currency"],
+            "currency_pick",
+            {"name": "currency", "label": "Reporting currency"}
+          )
+        ]
+      ),
+      checkbox("Weekly digest", state["digest"] == true, "digest", {"id": "digest"}),
+      switch("Email me on low stock", state["notify"] == true, "notify", {"id": "notify"})
+    ]
+  )
+  # The slider's key is the one the client looks for: it updates the caption
+  # locally, without a round trip, and the atom it looks up is this name.
+  right = column(
+    {"gap": 2, "grow": 1, "basis": 260},
+    [
+      muted("Low stock threshold"),
+      keyed("gallery_slider", slider(state["slider"], 0, 100, "slider")),
+      keyed("gallery_slider_value", muted("Value " + str(state["slider"])))
+    ]
+  )
+  erp_card(
+    "Preferences",
+    [],
+    [lay["wide"] ? row({"gap": 5, "align": "start", "width": "100%"}, [left, right]) : column({"gap": 4, "width": "100%"}, [left, right])]
+  )
+end
+
+def erp_diagnostics_card(state, lay)
+  erp_card(
+    "Attachment formats",
+    [muted("what the client decodes")],
+    [
+      muted("The same photograph, encoded three ways. The client tells them apart by their first bytes; the server only ever sends a hash."),
+      gallery_pictures(lay["wide"])
+    ]
+  )
+end
+
+# ---- The week, in four charts ----------------------------------------------
+#
+# A canvas is drawn at the size the server picked, so the width here has to
+# be the one the layout will hand it: the content width (the window less the
+# rail), less the page's padding, less the card's, less the gaps between the
+# columns. The four series live in `erp_data.sl`.
+def erp_charts(state, lay)
+  cols = 1
+  cols = 2 if lay["roomy"]
+  cols = 3 if lay["wide"]
+  cols = 4 if lay["rail"]
+  gap = space_px(4, lay["density"])
+  inner = erp_content_px(lay) - 2 * space_px(lay["wide"] ? 6 : 4, lay["density"]) - 2 * space_px(5, lay["density"])
+  cw = int((inner - (cols - 1) * gap) / cols)
+  cw = 160 if cw < 160
+  ch = 140
+  series = erp_revenue()
+  plots = [
+    column({"gap": 2}, [text("Revenue", {"weight": "bold"}), chart_line("line", series["line"], cw, ch)]),
+    column({"gap": 2}, [text("Cash", {"weight": "bold"}), chart_area("area", series["area"], cw, ch)]),
+    column({"gap": 2}, [text("Orders", {"weight": "bold"}), chart_bar("bars", series["bars"], cw, ch)]),
+    column(
+      {"gap": 2},
+      [text("By channel", {"weight": "bold"}), chart_donut("mix", series["mix"], erp_mix_labels(), ch, ch)]
+    )
+  ]
+  erp_card("This week", [muted("hover a chart")], [{
+    "k": "box",
+    "s": {"display": "grid", "gap": 4, "width": "100%"},
+    "p": {"columns": cols},
+    "c": plots
+  }])
+end
+
+# ---- What the handler answers ----------------------------------------------
+
+# The date fields all answer the same three events, so one function answers
+# them for every field: a new picker costs a line in the view and nothing
+# here. `name` is the state key holding the value; `name + "_open"` and
+# `name + "_month"` are the two beside it.
+ERP_PICKERS = ["nf_date", "nf_slot", "inv_date", "co_start"]
+
+def erp_picker_name(event)
+  found = ""
+  i = 0
+  while i < ERP_PICKERS.length()
+    name = ERP_PICKERS[i]
+    found = name if event == name + "_toggle" || event == name + "_pick" || event == name + "_nav"
+    i = i + 1
+  end
+  found
+end
+
+def erp_picker(state, name, event, props)
+  return set_key(state, name + "_open", !(state[name + "_open"] ?? false)) if event == name + "_toggle"
+  return set_key(state, name + "_month", month_shift(state[name + "_month"], props["delta"])) if event == name + "_nav"
+
+  # A picked day closes the panel. A range does not — it has a second end to
+  # collect — which is why `range_pick` is not one of these.
+  set_key(set_key(state, name, props["date"]), name + "_open", false)
+end
+
+# A field's `change` carries the whole value, once, when the field is left.
+def erp_field(state, key, params)
+  set_key(state, key, params["payload"])
+end
+
+def erp_step(state, key, props, o)
+  set_key(state, key, number_stepped(state[key], props["delta"], o))
+end
+
+def erp_say(state, message)
+  set_key(set_key(state, "toast", message), "toast_tone", "success")
+end
+
+# The clock of a datetime field: two selects, so the value cannot be
+# anything but HH:MM, and picking either closes both.
+def erp_set_time(state, name, which, value)
+  bits = (state[name + "_time"] ?? "00:00").split(":")
+  h = bits[0]
+  m = "00"
+  m = bits[1] if bits.length() > 1
+  h = value if which == "hour"
+  m = value if which == "min"
+  state[name + "_time"] = h + ":" + m
+  state[name + "_hour_open"] = false
+  state[name + "_min_open"] = false
+  state
+end
+
+# Dropping one chip clears one filter, and the chip carries which.
+def erp_drop_filter(state, key)
+  return set_key(set_key(state, "range_start", ""), "range_end", "") if key == "range"
+  return set_key(state, key, false) if key == "unpaid" || key == "group"
+  return set_key(state, "select_value", "Any status") if key == "select_value"
+
+  set_key(state, key, "")
+end
+
+def erp_clear_filters(state)
+  state = set_key(state, "select_value", "Any status")
+  state = set_key(state, "unpaid", false)
+  state = set_key(state, "group", false)
+  state = set_key(state, "search", "")
+  state = set_key(state, "range_start", "")
+  state = set_key(state, "range_end", "")
+  set_key(state, "page", 1)
+end
+
+# ---- The state -------------------------------------------------------------
+#
+# Composed per section rather than as one long literal, because a key that is
+# not declared here is dropped on the next round trip — including, for an
+# editor, on every keystroke — and a list of eighty in one place is a list
+# nobody checks against the section that owns them.
+
+def erp_chrome_defaults
+  {
+    "section": "Dashboard",
+    "nav_open": false,
+    "acct_open": false,
+    "search": "",
+    "seg": "Week",
+    "sheet": false,
+    "toast": "",
+    "toast_tone": "success",
+    "dialog": "",
+    "dialog_said": "",
+    "shown": [],
+    "doc_window": [0, 24],
+    "devbar": true,
+    "sound": false,
+    "video": false,
+    "video_at": 0,
+    "video_seek": 0,
+    "viewport": {
+      "width": 1280,
+      "height": 800,
+      "scale": 1.0,
+      "mode": "light",
+      "density": "cozy",
+      "font_scale": 1.0
+    }
+  }
+end
+
+def erp_orders_defaults
+  {
+    "page": 1,
+    "select_open": false,
+    "select_value": "Any status",
+    "sort_by": "Due date",
+    "unpaid": false,
+    "group": false,
+    "order_sel": "",
+    "order_menu": false,
+    "range_month": "2026-09",
+    "range_start": "",
+    "range_end": "",
+    "range_open": false,
+    "nf_open": false,
+    "nf_tried": false,
+    "nf_ref": "",
+    "nf_customer": "",
+    "nf_email": "",
+    "nf_qty": "20",
+    "nf_notes": "",
+    "nf_date": "",
+    "nf_date_open": false,
+    "nf_date_month": "2026-09",
+    "nf_slot": "2026-09-18",
+    "nf_slot_time": "09:30",
+    "nf_slot_open": false,
+    "nf_slot_month": "2026-09",
+    "nf_slot_hour_open": false,
+    "nf_slot_min_open": false,
+    "grid_rows": gallery_invoices(),
+    "grid_row": "",
+    "grid_col": "",
+    "grid_edit": false,
+    "grid_sort": "",
+    "grid_dir": "asc",
+    "grid_menu": false
+  }
+end
+
+def erp_customers_defaults
+  {
+    "cust_sel": "C-101",
+    "cust_tab": "Profile",
+    "cust_notes": "",
+    "open": "a",
+    "tree_open": ["C-101"],
+    "split_x": 380,
+    "split_x_drag": false,
+    "split_y": 500,
+    "split_y_drag": false
+  }
+end
+
+def erp_inventory_defaults
+  {
+    "inv_sku": "",
+    "inv_qty": "100",
+    "inv_wh": "Lyon",
+    "inv_wh_open": false,
+    "inv_date": "",
+    "inv_date_open": false,
+    "inv_date_month": "2026-09",
+    "inv_window": [0, 24]
+  }
+end
+
+def erp_reports_defaults
+  {
+    "cal_month": "2026-09",
+    "cal_date": "",
+    "dt_month": "2026-09",
+    "dt_date": "2026-09-06",
+    "dt_time": "09:30",
+    "dt_hour_open": false,
+    "dt_min_open": false
+  }
+end
+
+def erp_settings_defaults
+  {
+    "co_name": "Meridian Industrial SAS",
+    "co_email": "billing@meridian.test",
+    "co_vat": "20",
+    "co_footer": "Meridian Industrial SAS · 14 rue des Docks, Lyon · VAT FR-88-402-113",
+    "co_start": "2026-01-01",
+    "co_start_open": false,
+    "co_start_month": "2026-01",
+    "currency": "Euro",
+    "digest": true,
+    "notify": false,
+    "slider": 40,
+    "slider_drag": false,
+    # The editor's buffer. Seeded on the first look rather than here, so the
+    # sample is split once a session and not once an event.
+    "ed": {}
+  }
+end
+
+def gallery_defaults(state)
+  base = erp_chrome_defaults()
+    .merge(erp_orders_defaults())
+    .merge(erp_customers_defaults())
+    .merge(erp_inventory_defaults())
+    .merge(erp_reports_defaults())
+    .merge(erp_settings_defaults())
+  for key in base.keys()
+    base[key] = state[key] unless state[key].nil?
+  end
+  base
+end
+
+def gallery(event_data)
+  event = event_data["event"]
+  params = event_data["params"]
+  props = params["props"] ?? {}
+  state = gallery_defaults(event_data["state"] ?? {})
+  picker = erp_picker_name(event)
+  return erp_picker(state, picker, event, props) unless picker == ""
+
+  match event {
+    # The shell.
+    "nav" => set_key(set_key(state, "section", props["path"]), "nav_open", false),
+    "nav_toggle" => set_key(state, "nav_open", !(state["nav_open"] ?? false)),
+    "acct_toggle" => set_key(state, "acct_open", !(state["acct_open"] ?? false)),
+    "acct_pick" => erp_say(set_key(state, "acct_open", false), props["item"] + " — not in a demonstration"),
+    "sign_out" => erp_say(set_key(state, "acct_open", false), "Signed out. Not really: there is nothing to sign out of."),
+    "search" => set_key(erp_field(state, "search", params), "page", 1),
+    "seg" => set_key(state, "seg", props["option"]),
+    "sheet" => set_key(state, "sheet", !state["sheet"]),
+    "toast_done" => set_key(state, "toast", ""),
+    # The dashboard.
+    "forecast_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], "forecast")),
+    "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
+    "video" => set_key(
+      set_key(state, "video", !(state["video"] ?? false)),
+      "video_at",
+      state["video"] ?? false ? state["video_at"] : 0
+    ),
+    "video_time" => set_key(state, "video_at", params["payload"][0]),
+    "video_done" => set_key(set_key(state, "video", false), "video_at", 1440),
+    "video_scrub" => set_key(
+      set_key(state, "video_seek", int(params["payload"][0] * 1440 / 200)),
+      "video_at",
+      int(params["payload"][0] * 1440 / 200)
+    ),
+    "sound_ended" => set_key(state, "sound", false),
+    # Orders: the filter bar owns one key each, so the chips can be built
+    # from the state alone and dropping one is a single assignment.
+    "select_toggle" => set_key(state, "select_open", !state["select_open"]),
+    "select_pick" => set_key(set_key(set_key(state, "select_value", props["value"]), "select_open", false), "page", 1),
+    "sort_pick" => set_key(state, "sort_by", props["value"]),
+    "unpaid" => set_key(set_key(state, "unpaid", !(state["unpaid"] ?? false)), "page", 1),
+    "group" => set_key(state, "group", !(state["group"] ?? false)),
+    "chip_drop" => set_key(erp_drop_filter(state, props["key"]), "page", 1),
+    "clear_filters" => erp_clear_filters(state),
+    "page" => set_key(state, "page", props["page"]),
+    "order_pick" => set_key(set_key(state, "order_sel", props["ref"]), "order_menu", false),
+    "row_menu" => set_key(state, "order_menu", !(state["order_menu"] ?? false)),
+    "row_action" => erp_say(set_key(state, "order_menu", false), props["item"] + " " + (state["order_sel"] ?? "")),
+    "export" => erp_say(state, "Sixty-three orders exported"),
+    "range_toggle" => set_key(state, "range_open", !(state["range_open"] ?? false)),
+    "range_nav" => set_key(state, "range_month", month_shift(state["range_month"], props["delta"])),
+    "range_pick" => set_key(pick_range(state, props["date"]), "page", 1),
+    # The new order.
+    "order_new" => set_key(set_key(state, "nf_open", true), "nf_tried", false),
+    "order_close" => set_key(state, "nf_open", false),
+    "order_create" => erp_create_order(state),
+    "nf_ref" => erp_field(state, "nf_ref", params),
+    "nf_customer" => erp_field(state, "nf_customer", params),
+    "nf_email" => erp_field(state, "nf_email", params),
+    "nf_qty" => erp_field(state, "nf_qty", params),
+    "nf_qty_step" => erp_step(state, "nf_qty", props, {"min": 1, "max": 999, "step": 5}),
+    "nf_notes" => erp_field(state, "nf_notes", params),
+    "nf_slot_hour_toggle" => set_key(
+      set_key(state, "nf_slot_hour_open", !(state["nf_slot_hour_open"] ?? false)),
+      "nf_slot_min_open",
+      false
+    ),
+    "nf_slot_min_toggle" => set_key(
+      set_key(state, "nf_slot_min_open", !(state["nf_slot_min_open"] ?? false)),
+      "nf_slot_hour_open",
+      false
+    ),
+    "nf_slot_hour" => erp_set_time(state, "nf_slot", "hour", props["value"]),
+    "nf_slot_min" => erp_set_time(state, "nf_slot", "min", props["value"]),
+    # Customers.
+    "cust_pick" => set_key(state, "cust_sel", props["id"]),
+    "cust_tab" => set_key(state, "cust_tab", props["tab"]),
+    "cust_notes" => erp_field(state, "cust_notes", params),
+    "toggle" => set_key(state, "open", props["id"] == state["open"] ? "" : props["id"]),
+    "tree" => set_key(state, "tree_open", toggle_id(state["tree_open"], props["id"])),
+    "split_x" => split_event(state, params, "split_x", "row", gallery_split_extent(state), 220, 260, 6),
+    "split_y" => split_event(state, params, "split_y", "column", 260, 70, 70, 6),
+    # Inventory.
+    "inv_sku" => erp_field(state, "inv_sku", params),
+    "inv_qty" => erp_field(state, "inv_qty", params),
+    "inv_qty_step" => erp_step(state, "inv_qty", props, {"min": 0, "max": 999, "step": 25}),
+    "inv_wh_toggle" => set_key(state, "inv_wh_open", !(state["inv_wh_open"] ?? false)),
+    "inv_wh_pick" => set_key(set_key(state, "inv_wh", props["value"]), "inv_wh_open", false),
+    "inv_send" => erp_say(state, "Purchase order sent to " + (state["inv_wh"] ?? "")),
+    "inv_window" => set_key(state, "inv_window", params["payload"]),
+    "inv_pick" => set_key(state, "inv_sku", props["sku"]),
+    # Reports: the inline pickers, and the handbook.
+    "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
+    "cal_pick" => set_key(state, "cal_date", props["date"]),
+    "dt_nav" => set_key(state, "dt_month", month_shift(state["dt_month"], props["delta"])),
+    "dt_pick" => set_key(state, "dt_date", props["date"]),
+    "dt_hour_toggle" => set_key(
+      set_key(state, "dt_hour_open", !(state["dt_hour_open"] ?? false)),
+      "dt_min_open",
+      false
+    ),
+    "dt_min_toggle" => set_key(set_key(state, "dt_min_open", !(state["dt_min_open"] ?? false)), "dt_hour_open", false),
+    "dt_hour" => erp_set_time(state, "dt", "hour", props["value"]),
+    "dt_min" => erp_set_time(state, "dt", "min", props["value"]),
+    "lazy_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], props["id"])),
+    "lazy_close" => set_key(state, "shown", (state["shown"] ?? []).filter(fn(x) { x != props["id"] })),
+    "doc_window" => set_key(state, "doc_window", params["payload"]),
+    # Settings.
+    "co_name" => erp_field(state, "co_name", params),
+    "co_email" => erp_field(state, "co_email", params),
+    "co_vat" => erp_field(state, "co_vat", params),
+    "co_vat_step" => erp_step(state, "co_vat", props, {"min": 0, "max": 30, "step": 1}),
+    "co_footer" => erp_field(state, "co_footer", params),
+    "currency_pick" => set_key(state, "currency", props["value"]),
+    "digest" => set_key(state, "digest", !(state["digest"] ?? false)),
+    "notify" => set_key(state, "notify", !(state["notify"] ?? false)),
+    "slider" => set_slider(state, params),
+    "save" => erp_say(state, "Company details saved"),
+    # The grid, the editor, the dialogs and the dev bar.
+    "grid_select" => gallery_grid_select(state, params),
+    "grid_change" => gallery_grid_change(state, params),
+    "grid_sort" => gallery_grid_sort(state, props["col"]),
+    "grid_key" => gallery_grid_key(state, params),
+    "ed_key" => set_key(state, "ed", ed_key(gallery_editor_state(state), params["payload"][0], params["payload"][1])),
+    "ed_click" => set_key(state, "ed", ed_click(gallery_editor_state(state), params)),
+    "ed_reload" => set_key(state, "ed", gallery_editor_reset(state)),
+    "ask_alert" => set_key(state, "dialog", "alert"),
+    "ask_confirm" => set_key(state, "dialog", "confirm"),
+    "dialog_ok" => set_key(set_key(state, "dialog", ""), "dialog_said", "confirmed"),
+    "dialog_cancel" => set_key(set_key(state, "dialog", ""), "dialog_said", "cancelled"),
+    "dialog_close" => set_key(set_key(state, "dialog", ""), "dialog_said", "acknowledged"),
+    "dev_bar_toggle" => set_key(state, "devbar", false),
+    "connect" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    "viewport" => set_key(state, "viewport", params["viewport"] ?? state["viewport"]),
+    _ => state,
+  }
+end
+
+# ---- The page --------------------------------------------------------------
+#
+# One scroller holds the section that is up; everything above it — the rail,
+# the top bar — is outside, so the page moves under a header that stays. The
+# layers over it are in the order they have to be looked at: the drawer and
+# the sheet, then the new order, then a question, then the handbook, then
+# what the last click did, and last the dev bar.
+def gallery_view(raw_state)
+  state = gallery_defaults(raw_state ?? {})
+  lay = erp_layout(state)
+  section = state["section"] ?? "Dashboard"
+  body = erp_dashboard(state, lay)
+  body = erp_orders_section(state, lay) if section == "Orders"
+  body = erp_customers_section(state, lay) if section == "Customers"
+  body = erp_inventory_section(state, lay) if section == "Inventory"
+  body = erp_reports_section(state, lay) if section == "Reports"
+  body = erp_settings_section(state, lay) if section == "Settings"
+  page = scroll(
+    {"grow": 1},
+    [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])]
+  )
+  layers = [erp_shell(state, lay, page)]
+  layers = layers.concat([drawer(
+    [
+      h2("Meridian"),
+      restyle(sidebar(ERP_SECTIONS, section, "nav"), {"width": "100%", "bg": "none", "border": 0, "pad": 0}),
+      spacer(),
+      erp_profile(state),
+      button("Close", "nav_toggle")
+    ],
+    {"label": "Sections", "on_close": "nav_toggle"}
+  )]) if state["nav_open"] == true && !lay["rail"]
+  layers = layers.concat([erp_queue_sheet(state)]) if state["sheet"] == true
+  layers = layers.concat([erp_new_order(state)]) if state["nf_open"] == true
   asking = state["dialog"] ?? ""
   layers = layers.concat([confirm(
-    "Delete this invoice?",
-    "It and its lines go. Nothing here is real, so nothing is lost.",
+    "Reopen September?",
+    "The period is closed and its invoices are numbered. Nothing here is real, so nothing is lost.",
     "dialog_ok",
     "dialog_cancel",
-    {"ok": "Delete", "danger": true}
+    {"ok": "Reopen", "danger": true}
   )]) if asking == "confirm"
-  # The documentation modal. `lazy` means the file is neither read nor
-  # parsed while this is closed — the thunk is not called at all — so the
-  # page behind pays nothing for a modal nobody has opened.
+  # The handbook is neither read nor parsed while it is closed: `lazy` does
+  # not call the thunk, so the page behind pays nothing for it.
   layers = layers.concat([lazy(
     "doc",
     state["shown"],
@@ -1448,17 +2481,78 @@ def gallery_view(raw_state)
     fn() { gallery_doc(state) }
   )])
   layers = layers.concat([alert(
-    "Saved",
-    "The sheet is written. This one has nothing to decide, so it has one button.",
+    "Sent",
+    "The pack is on its way to the four people who ask for it every month.",
     "dialog_close",
-    {"ok": "Got it"}
+    {"ok": "Good"}
   )]) if asking == "alert"
-  # Last, so it is over every layer: an overlay is in the top layer anyway,
-  # and this way it is over the dialogs too. Outside `--dev` it is a node
-  # with `display: none` and nothing else, which is the point of asking the
-  # server rather than the view.
+  layers = layers.concat([erp_toast(state)]) unless (state["toast"] ?? "") == ""
   layers = layers.concat([dev_bar(eui_stats(), state["devbar"] ?? true)])
   stack({"gap": 0}, layers)
+end
+
+# What the last action did, in the top corner, until it is clicked away. A
+# toast that dismissed itself would need a clock the server does not have.
+#
+# The overlay is as tall as the toast and no taller. An overlay given the
+# window's height is a sheet of glass over the whole page: it is in the top
+# layer, so every click lands on *it* and the application underneath stops
+# answering. The dev bar has always been placed this way; this follows it.
+# Creating asks the fields the same questions they ask themselves. Nothing
+# stops a client sending `order_create` with an empty form — the sheet's
+# buttons are a courtesy, not a gate — so the handler decides, and a form
+# that does not pass comes back with `nf_tried` set and says why.
+def erp_create_order(state)
+  ok = (state["nf_ref"] ?? "").strip() != ""
+  ok = false if (state["nf_customer"] ?? "").strip() == ""
+  ok = false unless email_valid?(state["nf_email"])
+  return set_key(state, "nf_tried", true) unless ok
+
+  erp_say(
+    set_key(set_key(state, "nf_open", false), "nf_tried", false),
+    "Order raised for " + (state["nf_customer"] ?? "")
+  )
+end
+
+def erp_toast(state)
+  note = toast(state["toast"], state["toast_tone"] ?? "success")
+  # It goes on its own. `wake` is 06 §1.1: the node asks to be woken in so
+  # many milliseconds and the client obliges, which is the only clock in
+  # this protocol — the server has none, and a toast that waited for a
+  # click would still be sitting there tomorrow. Clicking it is the
+  # shortcut, not the mechanism.
+  note["p"] = (note["p"] ?? {}).merge({"wake": 3200})
+  note["on"] = {"click": "toast_done", "wake": "toast_done"}
+  note["s"]["cursor"] = "pointer"
+  {
+    "k": "overlay",
+    "s": {
+      "position": "absolute",
+      "align": "start",
+      "justify": "end",
+      "pad": 6,
+      "width": "100%"
+    },
+    "c": [note]
+  }
+end
+
+# The queue the banner opens: what is late, and nothing else.
+def erp_queue_sheet(state)
+  widths = [110, 150, 110]
+  late = erp_orders(63).filter(fn(order) { order["status"] == "Late" })
+  rows = range(0, late.length() > 6 ? 6 : late.length()).map(fn(i) {
+    table_row("late-" + late[i]["ref"], [late[i]["ref"], late[i]["customer"], late[i]["amount"]], widths)
+  })
+  sheet(
+    "right",
+    [
+      h2("Past due"),
+      text("Nine orders are past their promised date.", {"fg": "text.muted"}),
+      table_header(["Order", "Customer", "Amount"], widths)
+    ].concat(rows).concat([button("Close", "sheet")]),
+    {"label": "Past due", "on_close": "sheet"}
+  )
 end
 
 # ---------------------------------------------------------------- feed

@@ -1245,6 +1245,23 @@ footer a:hover {
     background: var(--paper);
 }
 
+.w-radio {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    border: 2px solid var(--blue);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.w-radio i {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--blue);
+}
+
 .w-check {
     display: inline-flex;
     align-items: center;
@@ -1538,6 +1555,27 @@ footer a:hover {
     font-size: 0.74rem;
     color: var(--ink-soft);
     min-width: 88px;
+}
+
+/* A field that has been told it is wrong: the border carries it, and the
+   line under it says what. Both are drawn here the way the catalogue draws
+   them, so this page is a picture of the widget and not of a mock-up. */
+.g-in.tall {
+    min-height: 2.6rem;
+    align-items: flex-start;
+    min-width: 180px;
+}
+
+.g-in.bad {
+    border-color: var(--rose);
+}
+
+.g-m.err {
+    color: var(--rose);
+}
+
+.g-t.lnk {
+    color: var(--blue);
 }
 
 .g-cur {

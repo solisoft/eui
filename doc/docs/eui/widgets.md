@@ -1,6 +1,6 @@
 # Widget catalogue
 
-> The primitives are specified (`spec/03`) and painted. A hundred and fifty plain
+> The primitives are specified (`spec/03`) and painted. A hundred and eighty-two plain
 > Soli functions build the catalogue below in
 > `examples/demo-app/app/controllers/eui_builders.sl`, and a `gallery`
 > component shows them together. `soli new <app> --eui` starts an
