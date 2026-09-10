@@ -348,8 +348,9 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     // after everything, clipped by the window and by nothing else, so a
     // dialog inside a card and a popover inside a scroller are both whole.
     p.in_top = true;
-    while let Some(top) = p.deferred.first().copied() {
-        p.deferred.remove(0);
+    let mut next = 0;
+    while let Some(top) = p.deferred.get(next).copied() {
+        next += 1;
         p.set_clip(0);
         p.node(top);
     }
@@ -607,9 +608,10 @@ impl Painter<'_, '_> {
             self.deferred.push(ix);
             return;
         }
-        let spinning = self.scene.session.style_of(ix).animation == 1;
+        let record = self.scene.session.style_of(ix);
+        let spinning = record.animation == 1;
         let first = self.list.quads.len();
-        self.node_inner(ix, rect);
+        self.node_inner(ix, rect, &record);
         if spinning {
             // Spec 03 §5 `spin`: everything painted for the node turns about
             // its centre, one revolution per 1.2 s. The angle is not applied
@@ -632,7 +634,7 @@ impl Painter<'_, '_> {
         }
     }
 
-    fn node_inner(&mut self, ix: NodeIx, rect: Rect) {
+    fn node_inner(&mut self, ix: NodeIx, rect: Rect, record: &eui_proto::StyleRecord) {
         // Cull before resolving a style or touching text: a virtualised list
         // has thousands of rows with rects and no business being painted.
         // Only a scroll container may hold visible content outside its own
@@ -642,11 +644,12 @@ impl Painter<'_, '_> {
         }
         let session: &Session = self.scene.session;
         let Some(node) = session.node(ix) else { return };
-        let style = Style::resolve(&session.style_of(ix), self.scene.theme);
+        // The layout resolved this style id already; a 10 000-row table has
+        // four of them.
+        let style = self.scene.layout.style_for_id(node.style).unwrap_or_else(|| Style::resolve(record, self.scene.theme));
         if style.display == Display::None {
             return;
         }
-        let record = self.scene.session.style_of(ix);
         let scale = self.scene.scale;
         // A transition on this node (03 §5). Its quads carry both ends and
         // the vertex stage moves between them -- unless it has to be baked,
@@ -859,10 +862,19 @@ impl Painter<'_, '_> {
                 self.set_clip(self.list.clips.len() as u32 - 1);
             }
             if style.display == Display::Stack {
-                let mut children: Vec<NodeIx> = node.children.clone();
-                children.sort_by_key(|c| session.style_of(*c).z);
-                for c in children {
-                    self.node(c);
+                // In z order: copied and sorted only when they are not
+                // already, which they almost always are.
+                let z = |c: &NodeIx| session.style_of(*c).z;
+                if node.children.iter().zip(node.children.iter().skip(1)).all(|(a, b)| z(a) <= z(b)) {
+                    for &c in &node.children {
+                        self.node(c);
+                    }
+                } else {
+                    let mut children: Vec<NodeIx> = node.children.clone();
+                    children.sort_by_key(z);
+                    for c in children {
+                        self.node(c);
+                    }
                 }
             } else {
                 for &c in &node.children {
@@ -1017,7 +1029,8 @@ impl Painter<'_, '_> {
         let spans = self
             .scene
             .session
-            .atom_id("spans")
+            .atoms()
+            .spans
             .and_then(|atom| self.scene.session.node(ix).and_then(|n| n.prop(atom)))
             .and_then(|prop| match prop {
                 Value::List(list) => Some(spans_of(list, |v| self.path_color(v))),
@@ -1064,7 +1077,7 @@ impl Painter<'_, '_> {
     /// strip per device column, an arc is a fan of capsules.
     fn canvas(&mut self, node: &Node, rect: Rect, style: &Style, opacity: f32) {
         let session: &Session = self.scene.session;
-        let Some(atom) = session.atom_id("paths") else {
+        let Some(atom) = session.atoms().paths else {
             return;
         };
         let Some(Value::List(paths)) = node.prop(atom) else {

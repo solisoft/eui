@@ -40,6 +40,17 @@ pub struct Session {
     /// Only those: a mount is the whole tree, and a list that recorded all
     /// of it would hand the client a hundred thousand indices to discard.
     entrances: Vec<NodeIx>,
+    /// The `audio` and `video` nodes in the tree, in the order they were
+    /// grafted: what the client's players are told to agree with (03 §7,
+    /// §8), kept here so agreeing is a look at these rather than a walk of
+    /// fifty thousand rows after every batch.
+    media: Vec<NodeIx>,
+    /// The nodes with a `wake` handler (06 §1.1), likewise.
+    wakers: Vec<NodeIx>,
+    /// The atom ids of the names the client reads per node — `spans`,
+    /// `paths`, `row` — so a painter asks a struct rather than hashes a
+    /// string per node per frame.
+    known: WellKnown,
     /// `(node, previous style id)` for every style change since the last
     /// [`Session::take_style_changes`]: what a client transitions from.
     style_changes: Vec<(NodeIx, u32)>,
@@ -83,6 +94,9 @@ impl Session {
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
             entrances: Vec::new(),
+            media: Vec::new(),
+            wakers: Vec::new(),
+            known: WellKnown::default(),
             style_changes: Vec::new(),
             local_styles: std::collections::HashMap::new(),
             restored_local: false,
@@ -152,6 +166,29 @@ impl Session {
         self.atom_ids.get(value).copied()
     }
 
+    /// The atom ids of the names the client reads per node, as far as the
+    /// server has defined them.
+    pub fn atoms(&self) -> &WellKnown {
+        &self.known
+    }
+
+    /// The `audio` and `video` nodes in the tree (03 §7, §8).
+    pub fn media(&self) -> &[NodeIx] {
+        &self.media
+    }
+
+    /// The nodes with a `wake` handler (06 §1.1).
+    pub fn wakers(&self) -> &[NodeIx] {
+        &self.wakers
+    }
+
+    /// Forget the nodes that were released.
+    fn prune_sets(&mut self) {
+        let arena = &self.arena;
+        self.media.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+        self.wakers.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+    }
+
     /// A style record.
     pub fn style(&self, id: u32) -> Option<&StyleRecord> {
         self.styles.get(id)
@@ -192,20 +229,21 @@ impl Session {
 
     /// Point a node at a style id from a local handler. The id must exist;
     /// a chunk cannot invent styles, only pick among the session's.
-    pub fn set_style_local(&mut self, ix: NodeIx, style: u32) -> bool {
+    pub fn set_style_local(&mut self, ix: NodeIx, style: u32) -> Option<bool> {
         if style != 0 && self.styles.get(style).is_none() {
-            return false;
+            return None;
         }
-        match self.arena.get_mut(ix) {
-            Some(n) => {
-                let old = n.style;
-                n.style = style;
-                self.local_styles.entry(ix).or_insert(old);
-                self.style_changes.push((ix, old));
-                self.arena.mark_dirty(ix).is_ok()
-            }
-            None => false,
-        }
+        let old = self.arena.get(ix)?.style;
+        // A restyle that only recolours -- a hover, mostly -- owes a
+        // repaint and not a layout: nothing the node measures changed.
+        let record = |id: u32| if id == 0 { Some(StyleRecord::default()) } else { self.styles.get(id).copied() };
+        let paint_only = matches!((record(old), record(style)), (Some(a), Some(b)) if same_layout(&a, &b));
+        let n = self.arena.get_mut(ix)?;
+        n.style = style;
+        self.local_styles.entry(ix).or_insert(old);
+        self.style_changes.push((ix, old));
+        let marked = if paint_only { self.arena.mark_painted(ix) } else { self.arena.mark_dirty(ix) };
+        marked.ok().map(|()| paint_only)
     }
 
     /// Set any node's prop from a local handler; `false` for an unknown node.
@@ -398,6 +436,7 @@ impl Session {
                 }
                 self.atoms.define(*id, value.clone())?;
                 self.atom_ids.entry(value.clone()).or_insert(*id);
+                self.known.note(*id, value);
                 self.atom_bytes = total;
                 Ok(())
             }
@@ -493,6 +532,7 @@ impl Session {
                         self.focused = NodeIx::NONE;
                     }
                     self.arena.release(ix)?;
+                    self.prune_sets();
                 }
                 self.arena.mark_dirty(pix)
             }
@@ -528,11 +568,17 @@ impl Session {
                         n.handlers.push((*event, *handler));
                     }
                 }
+                if *event == EventKind::Wake && !self.wakers.contains(&ix) {
+                    self.wakers.push(ix);
+                }
                 Ok(())
             }
             Op::ClearHandler { node, event } => {
                 let ix = self.find(*node)?;
                 self.arena.require_mut(ix)?.handlers.retain(|(e, _)| e != event);
+                if *event == EventKind::Wake {
+                    self.wakers.retain(|w| *w != ix);
+                }
                 Ok(())
             }
             Op::Focus { node } => {
@@ -556,6 +602,7 @@ impl Session {
     fn mount(&mut self, subtree: &Subtree) -> Result<()> {
         if self.root.is_some() {
             self.arena.release(self.root)?;
+            self.prune_sets();
             self.root = NodeIx::NONE;
         }
         self.focused = NodeIx::NONE;
@@ -573,6 +620,7 @@ impl Session {
         }
         if parent.is_none() {
             self.arena.release(old)?;
+            self.prune_sets();
             self.root = NodeIx::NONE;
             let root = self.graft(subtree, NodeIx::NONE, 1)?;
             self.root = root;
@@ -580,6 +628,7 @@ impl Session {
         }
         let position = self.arena.require(parent)?.children.iter().position(|c| *c == old).ok_or(ApplyError::Internal)?;
         self.arena.release(old)?;
+        self.prune_sets();
         let depth = self.arena.depth(parent)?;
         let fresh = self.graft(subtree, parent, depth.saturating_add(1))?;
         let siblings = &mut self.arena.require_mut(parent)?.children;
@@ -655,6 +704,12 @@ impl Session {
             // place an entrance can be noticed.
             if flat.style != 0 && self.styles.get(flat.style).is_some_and(|r| r.animation == eui_proto::ANIMATION_ENTER) {
                 self.entrances.push(ix);
+            }
+            if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {
+                self.media.push(ix);
+            }
+            if subtree.handlers_of(flat).iter().any(|(e, _)| *e == EventKind::Wake) {
+                self.wakers.push(ix);
             }
             if let Some(top) = open.last_mut() {
                 self.arena.require_mut(top.0)?.children.push(ix);
@@ -749,4 +804,79 @@ impl Iterator for Preorder<'_> {
         self.stack.extend(children.iter().rev().copied());
         Some(ix)
     }
+}
+
+/// The atom ids of the names the client reads per node, as far as the
+/// server has defined them: a painter asking for a text node's `spans`
+/// three thousand times a frame asks a field, not a hash table.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WellKnown {
+    /// Per-glyph colour spans on a text node.
+    pub spans: Option<u32>,
+    /// A canvas node's paths.
+    pub paths: Option<u32>,
+    /// A grid's column count.
+    pub columns: Option<u32>,
+    /// A windowed list child's row.
+    pub row: Option<u32>,
+    /// A virtualised list's row height.
+    pub item_height: Option<u32>,
+    /// A windowed list's row count.
+    pub count: Option<u32>,
+    /// A windowed list's row heights.
+    pub heights: Option<u32>,
+    /// A node's wake period.
+    pub wake: Option<u32>,
+    /// A media node's asset.
+    pub src: Option<u32>,
+    /// Whether it plays.
+    pub playing: Option<u32>,
+    /// Whether it loops.
+    pub loop_: Option<u32>,
+    /// Where it is.
+    pub position: Option<u32>,
+    /// How loud.
+    pub volume: Option<u32>,
+}
+
+impl WellKnown {
+    fn note(&mut self, id: u32, value: &str) {
+        let slot = match value {
+            "spans" => &mut self.spans,
+            "paths" => &mut self.paths,
+            "columns" => &mut self.columns,
+            "row" => &mut self.row,
+            "item_height" => &mut self.item_height,
+            "count" => &mut self.count,
+            "heights" => &mut self.heights,
+            "wake" => &mut self.wake,
+            "src" => &mut self.src,
+            "playing" => &mut self.playing,
+            "loop" => &mut self.loop_,
+            "position" => &mut self.position,
+            "volume" => &mut self.volume,
+            _ => return,
+        };
+        slot.get_or_insert(id);
+    }
+}
+
+/// Whether two records lay out alike: everything but what only the
+/// painter reads -- colours, radius, shadow, opacity, blur, cursor, and
+/// how a change is animated.
+pub fn same_layout(a: &StyleRecord, b: &StyleRecord) -> bool {
+    let painted_like_a = StyleRecord {
+        bg: a.bg,
+        fg: a.fg,
+        border_color: a.border_color,
+        radius: a.radius,
+        shadow: a.shadow,
+        opacity: a.opacity,
+        blur: a.blur,
+        cursor: a.cursor,
+        transition: a.transition,
+        animation: a.animation,
+        ..*b
+    };
+    painted_like_a == *a
 }

@@ -1120,9 +1120,10 @@ impl Driver {
                 }
             }
         };
-        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, undo: provisional.then(Vec::new), mode: None };
+        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
+        let repaint = host.repaint;
         let emitted = host.emitted;
         let mode = host.mode;
         if let Some(undo) = host.undo {
@@ -1132,6 +1133,8 @@ impl Driver {
             self.audio_dirty = true;
             self.video_dirty = true;
             self.invalidate();
+        } else if repaint {
+            self.redraw = true;
         }
         // The viewer's choice, made through the application's own control:
         // never provisional, never undone by a batch.
@@ -2412,15 +2415,15 @@ impl Driver {
             return;
         }
         self.video_dirty = false;
-        let Some(root) = self.session.root() else {
+        if self.session.root().is_none() {
             self.players.clear();
             return;
-        };
-        let atom = |name: &str| self.session.atom_id(name);
-        let (a_src, a_playing, a_loop, a_position) = (atom("src"), atom("playing"), atom("loop"), atom("position"));
+        }
+        let known = *self.session.atoms();
+        let (a_src, a_playing, a_loop, a_position) = (known.src, known.playing, known.loop_, known.position);
         let mut live: Vec<u32> = Vec::new();
         let mut work: Vec<(u32, Hash, bool, bool, Option<i64>)> = Vec::new();
-        for ix in self.session.preorder(root) {
+        for ix in self.session.media().iter().copied() {
             let Some(node) = self.session.node(ix) else {
                 continue;
             };
@@ -2586,17 +2589,17 @@ impl Driver {
             return;
         }
         self.audio_dirty = false;
-        let Some(root) = self.session.root() else {
+        if self.session.root().is_none() {
             self.mixer.retain(&[]);
             self.audio_at.clear();
             self.audio_src.clear();
             return;
-        };
-        let atom = |name: &str| self.session.atom_id(name);
-        let (a_src, a_playing, a_volume, a_loop, a_position) = (atom("src"), atom("playing"), atom("volume"), atom("loop"), atom("position"));
+        }
+        let known = *self.session.atoms();
+        let (a_src, a_playing, a_volume, a_loop, a_position) = (known.src, known.playing, known.volume, known.loop_, known.position);
         let mut live: Vec<u32> = Vec::new();
         let mut work: Vec<(u32, Hash, Control, Option<i64>)> = Vec::new();
-        for ix in self.session.preorder(root) {
+        for ix in self.session.media().iter().copied() {
             let Some(node) = self.session.node(ix) else {
                 continue;
             };
@@ -2715,20 +2718,21 @@ impl Driver {
         if self.audio_reported.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(250)) {
             return Vec::new();
         }
-        let playing: Vec<u32> = self.session.root().map_or_else(Vec::new, |root| {
-            self.session
-                .preorder(root)
-                .filter_map(|ix| self.session.node(ix))
-                .filter(|n| n.kind == NodeKind::Audio && n.handler(EventKind::TimeUpdate).is_some())
-                .map(|n| n.id)
-                .filter(|id| self.mixer.playing(*id))
-                .collect()
-        });
+        let playing: Vec<u32> = self
+            .session
+            .media()
+            .iter()
+            .filter_map(|ix| self.session.node(*ix))
+            .filter(|n| n.kind == NodeKind::Audio && n.handler(EventKind::TimeUpdate).is_some())
+            .map(|n| n.id)
+            .filter(|id| self.mixer.playing(*id))
+            .collect();
         // The same for pictures: the node asks, the client answers.
-        let moving: Vec<(u32, u64, u64)> = self.session.root().map_or_else(Vec::new, |root| {
+        let moving: Vec<(u32, u64, u64)> = {
             self.session
-                .preorder(root)
-                .filter_map(|ix| self.session.node(ix))
+                .media()
+                .iter()
+                .filter_map(|ix| self.session.node(*ix))
                 .filter(|n| n.kind == NodeKind::Video && n.handler(EventKind::TimeUpdate).is_some())
                 .filter_map(|n| {
                     let (hash, player) = self.players.get(&n.id)?;
@@ -2736,7 +2740,7 @@ impl Driver {
                     player.playing.then(|| (n.id, player.position_ms(), movie.duration_ms()))
                 })
                 .collect()
-        });
+        };
         if playing.is_empty() && moving.is_empty() {
             return Vec::new();
         }
@@ -2801,19 +2805,20 @@ impl Driver {
     /// Walk the tree for the nodes that ask to be woken, keeping the phase
     /// of the ones already running.
     fn collect_wakes(&mut self) {
-        let Some(root) = self.session.root() else {
+        if self.session.root().is_none() {
             self.wakes.clear();
             return;
-        };
-        let Some(atom) = self.session.atom_id("wake") else {
+        }
+        let Some(atom) = self.session.atoms().wake else {
             self.wakes.clear();
             return;
         };
         let now = self.now;
         let asked: Vec<(u32, Duration)> = self
             .session
-            .preorder(root)
-            .filter_map(|ix| self.session.node(ix))
+            .wakers()
+            .iter()
+            .filter_map(|ix| self.session.node(*ix))
             .filter(|n| n.handler(EventKind::Wake).is_some())
             .filter_map(|n| match n.prop(atom) {
                 Some(Value::Int(ms)) if *ms > 0 => Some((n.id, Duration::from_millis((*ms as u64).max(MIN_WAKE_MS)))),
@@ -2937,7 +2942,11 @@ impl Driver {
 struct SessionHost<'a> {
     session: &'a mut Session,
     emitted: Vec<u32>,
+    /// Something the layout reads changed.
     touched: bool,
+    /// Something only the painter reads changed -- a hover lit a node --
+    /// so a repaint is owed and no layout is.
+    repaint: bool,
     /// What to put back if the server's answer does not confirm it: the
     /// effects of a `LocalThenServer` chunk are provisional (07 §6).
     undo: Option<Vec<Undo>>,
@@ -3010,11 +3019,20 @@ impl eui_vm::Host for SessionHost<'_> {
         let Some(ix) = self.session.lookup_key(key) else {
             return false;
         };
-        self.touched = true;
         if let Some(undo) = &mut self.undo {
             undo.push(Undo::Style(ix, self.session.node(ix).map_or(0, |n| n.style)));
         }
-        self.session.set_style_local(ix, style)
+        match self.session.set_style_local(ix, style) {
+            Some(true) => {
+                self.repaint = true;
+                true
+            }
+            Some(false) => {
+                self.touched = true;
+                true
+            }
+            None => false,
+        }
     }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);

@@ -463,3 +463,53 @@ fn random_op_streams_keep_the_arena_consistent() {
         }
     }
 }
+
+/// A local restyle that only recolours -- a hover, mostly -- owes a
+/// repaint and not a layout: the node is marked painted, not changed.
+#[test]
+fn a_colour_only_restyle_is_a_repaint_not_a_layout() {
+    let mut s = mounted();
+    let base = StyleRecord { width: Dim::Px(40), bg: ColorRef::role(1), ..Default::default() };
+    let lit = StyleRecord { bg: ColorRef::role(2), ..base };
+    let wider = StyleRecord { width: Dim::Px(60), ..base };
+    one(&mut s, 2, Op::DefStyle { id: 7, record: base }).unwrap();
+    one(&mut s, 3, Op::DefStyle { id: 8, record: lit }).unwrap();
+    one(&mut s, 4, Op::DefStyle { id: 9, record: wider }).unwrap();
+    one(&mut s, 5, Op::SetStyle { node: 2, style: 7 }).unwrap();
+    s.clear_all_dirty();
+    let ix = s.lookup(2).unwrap();
+    assert_eq!(s.set_style_local(ix, 8), Some(true), "a lit node paints differently and measures the same");
+    assert_eq!(s.node(ix).unwrap().dirty & (dirty::PAINT | dirty::SELF), dirty::PAINT);
+    assert_eq!(s.set_style_local(ix, 9), Some(false), "a wider one lays out again");
+    assert_ne!(s.node(ix).unwrap().dirty & dirty::SELF, 0);
+    assert_eq!(s.set_style_local(ix, 99), None, "an unknown style is refused");
+    assert!(eui_tree::same_layout(&base, &lit));
+    assert!(!eui_tree::same_layout(&base, &wider));
+}
+
+/// The media nodes and the wakers are kept as nodes come and go, so the
+/// client's players and clocks are found without a walk.
+#[test]
+fn media_and_wakers_are_kept_as_nodes_come_and_go() {
+    let mut s = mounted();
+    let mut sub = Subtree::default();
+    sub.nodes.push(flat(NodeKind::Box, 50, 1, 2));
+    sub.nodes.push(flat(NodeKind::Audio, 51, 0, 0));
+    sub.nodes.push(flat(NodeKind::Video, 52, 0, 0));
+    sub.nodes[2].handlers = (0, 1);
+    sub.handlers.push((EventKind::Wake, Handler::Server(1)));
+    one(&mut s, 2, Op::InsertChild { parent: 1, index: 0, subtree: sub }).unwrap();
+    let ids = |v: &[eui_tree::NodeIx], s: &Session| v.iter().map(|ix| s.node(*ix).unwrap().id).collect::<Vec<_>>();
+    assert_eq!(ids(s.media(), &s), vec![51, 52]);
+    assert_eq!(ids(s.wakers(), &s), vec![52]);
+    one(&mut s, 3, Op::SetHandler { node: 51, event: EventKind::Wake, handler: Handler::Server(1) }).unwrap();
+    assert_eq!(ids(s.wakers(), &s), vec![52, 51]);
+    one(&mut s, 4, Op::ClearHandler { node: 52, event: EventKind::Wake }).unwrap();
+    assert_eq!(ids(s.wakers(), &s), vec![51]);
+    one(&mut s, 5, Op::RemoveChild { parent: 1, index: 0, count: 1 }).unwrap();
+    assert!(s.media().is_empty() && s.wakers().is_empty(), "gone with the subtree");
+    // A well-known atom is a field once defined.
+    assert_eq!(s.atoms().spans, None);
+    one(&mut s, 6, Op::DefAtom { id: 40, value: "spans".into() }).unwrap();
+    assert_eq!(s.atoms().spans, Some(40));
+}

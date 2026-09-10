@@ -119,6 +119,13 @@ pub struct Layout {
     /// glide lands, the renderer slides it there, and hit-testing asks
     /// where it is on screen meanwhile.
     glides: HashMap<NodeIx, Glide>,
+    /// Every `overlay` laid out this frame, in tree order — which is paint
+    /// order — so the top layer is a list and not a walk of the tree.
+    overlays: Vec<NodeIx>,
+    /// For each virtualised list, the children placed this frame, in row
+    /// order: what a hit has to look at, rather than ten thousand rows
+    /// with no rect.
+    placed_ix: HashMap<NodeIx, Vec<NodeIx>>,
 }
 
 /// A scroll in flight, as the layout knows it (§7).
@@ -187,6 +194,8 @@ impl Layout {
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
         self.placed_rows.clear();
+        self.placed_ix.clear();
+        self.overlays.clear();
         // Row tops survive a frame the list did not change in — a scroll is
         // not such a change (`dirty::SCROLL`). An index reused by another
         // node carries a different id, and the rest of what they were
@@ -351,10 +360,9 @@ impl Layout {
         let whole = Rect::new(f32::MIN / 2.0, f32::MIN / 2.0, f32::MAX, f32::MAX);
         // An `overlay` paints in the top layer, above everything and
         // clipped by nothing (03 §2.4), so it is asked first and asked
-        // outside whatever would have clipped it.
-        let mut tops = Vec::new();
-        self.overlays(s, root, &mut tops);
-        for top in tops.iter().rev() {
+        // outside whatever would have clipped it. The layout listed them
+        // as it went.
+        for top in self.overlays.iter().rev() {
             if let Some(hit) = self.hit_in(s, *top, x, y, whole) {
                 return Some(hit);
             }
@@ -362,15 +370,10 @@ impl Layout {
         self.hit_in(s, root, x, y, whole)
     }
 
-    /// Every `overlay` in the tree, in paint order.
-    fn overlays(&self, s: &Session, ix: NodeIx, out: &mut Vec<NodeIx>) {
-        let Some(node) = s.node(ix) else { return };
-        if node.kind == NodeKind::Overlay && ix != s.root().unwrap_or(ix) {
-            out.push(ix);
-        }
-        for c in node.children.clone() {
-            self.overlays(s, c, out);
-        }
+    /// The style resolved this frame for a style id, for a painter that
+    /// would otherwise resolve it again per node.
+    pub fn style_for_id(&self, style_id: u32) -> Option<Style> {
+        self.by_style_id.get(&style_id).copied()
     }
 
     fn hit_in(&self, s: &Session, ix: NodeIx, x: f32, y: f32, clip: Rect) -> Option<NodeIx> {
@@ -390,11 +393,20 @@ impl Layout {
             _ => (x, y, inner_clip),
         };
         // Topmost first: later children paint over earlier ones, higher z
-        // paints over lower.
-        let mut order: Vec<NodeIx> = node.children.clone();
-        if node.kind == NodeKind::Box && self.style_of(s, ix).map(|st| st.display) == Some(Display::Stack) {
-            order.sort_by_key(|c| self.style_of(s, *c).map(|st| st.z).unwrap_or(0));
-        }
+        // paints over lower. A virtualised list is asked about the rows it
+        // placed, not the thousands it did not; only a stack needs its
+        // children sorted, and only then are they copied.
+        let sorted: Vec<NodeIx>;
+        let order: &[NodeIx] = if let Some(placed) = self.placed_ix.get(&ix) {
+            placed
+        } else if node.kind == NodeKind::Box && self.style_of(s, ix).map(|st| st.display) == Some(Display::Stack) {
+            let mut o = node.children.clone();
+            o.sort_by_key(|c| self.style_of(s, *c).map(|st| st.z).unwrap_or(0));
+            sorted = o;
+            &sorted
+        } else {
+            &node.children
+        };
         for child in order.iter().rev() {
             // Overlays were asked first, in the top layer.
             if s.node(*child).is_some_and(|n| n.kind == NodeKind::Overlay) {
@@ -579,6 +591,9 @@ impl Layout {
         }
         let Some(node) = f.session.node(ix) else { return };
         let kind = node.kind;
+        if kind == NodeKind::Overlay && f.session.root() != Some(ix) {
+            self.overlays.push(ix);
+        }
         let (sx, sy) = node.scroll;
         let inner_w = Constraint::Exact((w - st.inset_h()).max(0.0));
         let inner_h = Constraint::Exact((h - st.inset_v()).max(0.0));
@@ -830,6 +845,7 @@ impl Layout {
         } else {
             children.iter().enumerate().take(last.saturating_add(1)).skip(first).map(|(i, &c)| (i, c)).collect()
         };
+        self.placed_ix.insert(ix, rows.iter().map(|(_, c)| *c).collect());
         let mut placed = Vec::with_capacity(window);
         let mut first_baseline = None;
         for (i, c) in rows {

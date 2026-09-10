@@ -258,6 +258,18 @@ fn motion_rows(driver: &mut Driver) -> Vec<Row> {
         .collect();
     let d = median(t);
     rows.push(Row { what: "driver: repeated frame, nothing changed (median)", value: format!("{d:?}"), budget: "< 50 µs", ok: d < Duration::from_micros(50) });
+    // A pointer over the table: the hit test through ten thousand rows,
+    // and the hover's paint.
+    let t: Vec<Duration> = (0..10)
+        .map(|i| {
+            let s = Instant::now();
+            driver.input(Input::PointerMove(100.0, 100.0 + i as f32));
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "driver: hover frame, table-10k (median)", value: format!("{d:?}"), budget: "< 0.3 ms", ok: d < Duration::from_micros(300) });
     // A colour transition on one row: the first paint starts it, the
     // frames after it are what the transition costs.
     let fade = StyleRecord { display: Display::Row, gap: 4, padding: [1, 3, 1, 3], bg: ColorRef::role(eui_theme::Role::AccentBase.id()), transition: 3, ..Default::default() };

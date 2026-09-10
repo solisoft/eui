@@ -30,4 +30,4 @@ pub use arena::{dirty, Node, NodeIx};
 pub use error::{ApplyError, Result, Table};
 pub use eui_proto::Batch;
 pub use limits::Limits;
-pub use session::{Chunk, Preorder, Session};
+pub use session::{same_layout, Chunk, Preorder, Session, WellKnown};

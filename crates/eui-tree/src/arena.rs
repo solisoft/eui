@@ -56,6 +56,11 @@ pub mod dirty {
     /// list is scrolled. Kept apart from [`SELF`] so a scroll can leave
     /// that work standing.
     pub const SCROLL: u8 = 4;
+    /// Only this node's colours changed — a hover lit it — so nothing it
+    /// or anything under it *measures* did, and no layout is owed: a
+    /// repaint is. Kept apart from [`SELF`] so a hover can leave the
+    /// layout standing.
+    pub const PAINT: u8 = 8;
 }
 
 /// One node.
@@ -212,6 +217,12 @@ impl Arena {
     /// node itself is not marked as having changed.
     pub(crate) fn mark_scrolled(&mut self, ix: NodeIx) -> Result<()> {
         self.mark(ix, dirty::SCROLL)
+    }
+
+    /// [`Self::mark_dirty`] with [`dirty::PAINT`] instead: the node paints
+    /// differently and measures the same.
+    pub(crate) fn mark_painted(&mut self, ix: NodeIx) -> Result<()> {
+        self.mark(ix, dirty::PAINT)
     }
 
     fn mark(&mut self, ix: NodeIx, bit: u8) -> Result<()> {
