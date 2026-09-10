@@ -111,7 +111,7 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           mv dist/eui dist/eui-${{ matrix.arch }}-macos
-          ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI-Demo com.soli.eui-demo dist
+          ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI com.soli.eui dist
 
       # One archive per platform, named for what is in it. Windows gets a
       # zip because that is what a Windows machine can open without being
@@ -139,8 +139,8 @@ jobs:
           path: |
             dist/eui-*.tar.gz
             dist/eui-*-windows.zip
-            dist/EUI-Demo*.dmg
-            dist/EUI-Demo*.zip
+            dist/EUI*.dmg
+            dist/EUI*.zip
           retention-days: 30
 
   build-vitrine:

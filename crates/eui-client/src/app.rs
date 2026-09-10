@@ -1070,10 +1070,33 @@ impl Shell {
                 }
                 // Ctrl+V / ⌘V: the person's own clipboard into the field they
                 // are editing. The window reads it; the driver never can.
+                //
+                // The address bar is a field like any other. It was excluded
+                // here, which made the one field a person meets before any
+                // application has loaded the one field they could not paste
+                // an address into.
+                //
+                // Whether a paste lands is the driver's to say: it drops
+                // one that reaches no editable field, and never reports
+                // it. The window used to decide instead, by asking
+                // whether an input method had somewhere to sit -- which
+                // wants the focused field to have a box *this frame*, so
+                // a field focused but not laid out refused the paste with
+                // no way of knowing why.
                 #[cfg(feature = "clipboard")]
-                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") && !to_chrome && self.tabs.get(self.active).is_some_and(|t| t.backend.ime_area().is_some()) {
-                    if let Some(text) = self.clipboard().and_then(|c| c.get_text().ok()) {
-                        self.send_to_tab(Input::Paste(text));
+                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") {
+                    let text = self.clipboard().and_then(|c| c.get_text().ok());
+                    crate::driver::trace(|| {
+                        format!("paste: modifiers {:04b}, {} chars, to the {}", self.modifiers, text.as_ref().map_or(0, String::len), if to_chrome { "address bar" } else { "page" })
+                    });
+                    if let Some(text) = text {
+                        if to_chrome {
+                            if !self.chrome_input(Input::Paste(text), renderer) {
+                                return false;
+                            }
+                        } else {
+                            self.send_to_tab(Input::Paste(text));
+                        }
                     }
                 }
                 let i = Input::Key { key: name, modifiers: self.modifiers, down };
