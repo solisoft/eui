@@ -55,6 +55,21 @@ Use the provided build script:
 # - dist/eui-demo-*.zip (archive)
 ```
 
+#### What the DMG looks like
+
+`scripts/wrap-macos-app.sh` does not hand over a folder with one app in it.
+It stages the volume with a symlink to `/Applications` beside the app, draws
+a backdrop for the window (`scripts/dmg-background.js`, at both 1x and 2x),
+and then scripts Finder into laying the window out: 640x400, no toolbar,
+128pt icons, the app on the left and Applications on the right with the
+backdrop's chevrons running between them. Opening the image shows the drag
+that installs it.
+
+Only the layout is scripted through Finder, and only that part is allowed to
+fail: a machine that withholds automation permission still gets a DMG, just
+an undressed one. The `/Applications` symlink is staged before any of that,
+so the drag target is there either way.
+
 ### Run the App
 
 ```bash
