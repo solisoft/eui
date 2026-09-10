@@ -85,8 +85,12 @@ struct Timing {
     read: wgpu::Buffer,
     /// Nanoseconds per timestamp tick.
     period: f32,
-    /// A frame's timestamps are in `read`, waiting to be mapped.
-    pending: bool,
+    /// A map of `read` was asked for and has not come back. The buffer is
+    /// the GPU's until it does: it must not be written, and the map must
+    /// not be asked for again -- asking twice for a mapping that is
+    /// already outstanding panics wgpu on one backend and takes the
+    /// process down on another.
+    waiting: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// The last frame's main pass, milliseconds, once it was read.
     last_ms: Option<f32>,
 }
@@ -455,7 +459,7 @@ impl Renderer {
             }),
             read: device.create_buffer(&wgpu::BufferDescriptor { label: Some("timing read"), size: 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false }),
             period: queue.get_timestamp_period(),
-            pending: false,
+            waiting: None,
             last_ms: None,
         });
 
@@ -759,8 +763,11 @@ impl Renderer {
         let c = list.clear;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("eui frame") });
         {
-            let timestamp_writes =
-                self.timing.as_ref().filter(|t| !t.pending).map(|t| wgpu::RenderPassTimestampWrites { query_set: &t.set, beginning_of_pass_write_index: Some(0), end_of_pass_write_index: Some(1) });
+            let timestamp_writes = self.timing.as_ref().filter(|t| t.waiting.is_none()).map(|t| wgpu::RenderPassTimestampWrites {
+                query_set: &t.set,
+                beginning_of_pass_write_index: Some(0),
+                end_of_pass_write_index: Some(1),
+            });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("eui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -813,12 +820,21 @@ impl Renderer {
                 pass.draw(0..6, run.first..run.first.saturating_add(run.count));
             }
         }
-        if let Some(t) = self.timing.as_mut().filter(|t| !t.pending) {
+        let timed = self.timing.as_ref().is_some_and(|t| t.waiting.is_none());
+        if let Some(t) = self.timing.as_mut().filter(|_| timed) {
             encoder.resolve_query_set(&t.set, 0..2, &t.resolve, 0);
             encoder.copy_buffer_to_buffer(&t.resolve, 0, &t.read, 0, 16);
-            t.pending = true;
         }
         self.queue.submit([encoder.finish()]);
+        // Asked for once, after the submit that fills the buffer, and read
+        // whenever it comes back -- never waited on by the frame.
+        if let Some(t) = self.timing.as_mut().filter(|_| timed) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            t.read.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            t.waiting = Some(rx);
+        }
         stats.passes += 1;
         stats.submits += 1;
         stats
@@ -829,34 +845,31 @@ impl Renderer {
     /// here and is read the frame after. The last figure read is what a
     /// frame reports until the next one lands.
     fn read_timing(&mut self) -> Option<f32> {
-        let t = self.timing.as_mut()?;
-        if t.pending {
-            let slice = t.read.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| {
-                let _ = tx.send(r);
-            });
+        // Nudge the queue only while something is owed; the mapping itself
+        // was asked for once, when the frame that wrote the timestamps was
+        // submitted, and asking again is what must never happen.
+        if self.timing.as_ref()?.waiting.is_some() {
             self.device.poll(wgpu::Maintain::Poll);
-            match rx.try_recv() {
-                Ok(Ok(())) => {
-                    let stamps: [u64; 2] = {
-                        let data = slice.get_mapped_range();
-                        let words: &[u64] = bytemuck::cast_slice(&data);
-                        [words.first().copied().unwrap_or(0), words.get(1).copied().unwrap_or(0)]
-                    };
-                    t.read.unmap();
-                    t.pending = false;
-                    #[expect(clippy::cast_precision_loss, reason = "a frame's worth of ticks fits a float's mantissa")]
-                    let ns = stamps[1].saturating_sub(stamps[0]) as f32 * t.period;
-                    t.last_ms = Some(ns / 1e6);
-                }
-                Ok(Err(_)) => {
-                    t.read.unmap();
-                    t.pending = false;
-                }
-                // Still on the GPU: leave it mapped-pending, ask again next frame.
-                Err(_) => {}
+        }
+        let t = self.timing.as_mut()?;
+        match t.waiting.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(Ok(())) => {
+                let stamps: [u64; 2] = {
+                    let data = t.read.slice(..).get_mapped_range();
+                    let words: &[u64] = bytemuck::cast_slice(&data);
+                    [words.first().copied().unwrap_or(0), words.get(1).copied().unwrap_or(0)]
+                };
+                t.read.unmap();
+                t.waiting = None;
+                #[expect(clippy::cast_precision_loss, reason = "a frame's worth of ticks fits a float's mantissa")]
+                let ns = stamps[1].saturating_sub(stamps[0]) as f32 * t.period;
+                t.last_ms = Some(ns / 1e6);
             }
+            // The mapping failed: nothing was mapped, so nothing is
+            // unmapped, and the next frame may write the buffer again.
+            Some(Err(_)) => t.waiting = None,
+            // Still on the GPU. Leave it alone until it is not.
+            None => {}
         }
         t.last_ms
     }
