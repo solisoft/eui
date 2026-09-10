@@ -31,6 +31,10 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod chrome;
+/// Where an iOS process starts, and the one thing UIKit will only tell an
+/// application about itself: the container it may write in.
+#[cfg(target_os = "ios")]
+pub mod ios;
 pub mod recent;
 
 /// Which build this is: the short commit it was made from, `+` when the

@@ -174,6 +174,11 @@ The first contact is followed like this:
    call arriving, the application going to the background. Whatever was
    pressed receives `pointer_up`; no `click` follows and no fling.
 
+Nothing here is particular to one platform. Android delivers contacts
+through `MotionEvent` and iOS through `touchesBegan`/`Moved`/`Ended`/
+`Cancelled`; both arrive as the four phases above, and the rules that follow
+are the client's, not the platform's.
+
 At the end of every gesture the client MUST clear hover, emitting
 `pointer_leave` where one is due. A finger leaves nothing under the pointer,
 and a node lit on `pointer_enter` would otherwise stay lit with nothing left

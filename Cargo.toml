@@ -12,6 +12,7 @@ members = [
     "crates/eui-vm",
     "crates/eui-client",
     "crates/eui-android",
+    "crates/eui-ios",
     "examples/counter-server",
     "examples/snapshot",
     "xtask",

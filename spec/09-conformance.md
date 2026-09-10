@@ -19,8 +19,11 @@ Two profiles:
   patches rather than re-mounts.
 
 The harness also builds `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`,
-`eui-text` and `eui-vm` for `aarch64-linux-android` where that target's
-standard library is installed, and skips it with a note where it is not.
+`eui-text` and `eui-vm` for `aarch64-linux-android` and `aarch64-apple-ios`
+where those targets' standard libraries are installed, and skips each with a
+note where it is not. Both, because they fail differently: one catches a
+`cfg` written for Unix that Android happens to satisfy, the other one
+written for Apple that a Mac satisfies and a device does not.
 This is not a vector and nothing conforms by passing it. It is there because
 those six crates carry no `cfg` for any platform and the claim is worth
 keeping true: a client for a phone, or for anything else, starts by taking

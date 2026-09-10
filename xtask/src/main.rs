@@ -461,11 +461,11 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
 /// Spec 09: every conformance vector in the workspace, then — when
 /// `EUI_SOLI_BIN` points at a Soli built with the `eui` feature — the end-
 /// to-end suite against a real server.
-/// Whether this machine has the Android standard library for the 64-bit
-/// target. Asked of `rustc` rather than `rustup`, because the answer is a
-/// directory either way and not everyone installs Rust through rustup.
-fn android_std_installed() -> bool {
-    let Ok(out) = std::process::Command::new("rustc").args(["--print", "target-libdir", "--target", "aarch64-linux-android"]).output() else {
+/// Whether this machine has the standard library for `target`. Asked of
+/// `rustc` rather than `rustup`, because the answer is a directory either
+/// way and not everyone installs Rust through rustup.
+fn std_installed(target: &str) -> bool {
+    let Ok(out) = std::process::Command::new("rustc").args(["--print", "target-libdir", "--target", target]).output() else {
         return false;
     };
     out.status.success() && std::path::Path::new(String::from_utf8_lossy(&out.stdout).trim()).is_dir()
@@ -482,15 +482,24 @@ fn conform() {
     // into the layout engine or the text shaper is caught here rather than
     // by whoever next picks up a phone.
     //
-    // Only the crates that touch no C: `ring` and `blake3` want the NDK's
-    // clang, which a machine may not have and CI does not. Skipped rather
-    // than failed where the standard library for the target is not
-    // installed — this is a check that the code is portable, not a demand
-    // that everyone carry an Android toolchain.
-    if android_std_installed() {
-        steps.push(vec!["check", "--target", "aarch64-linux-android", "-p", "eui-proto", "-p", "eui-tree", "-p", "eui-theme", "-p", "eui-layout", "-p", "eui-text", "-p", "eui-vm"]);
-    } else {
-        eprintln!("note: no aarch64-linux-android standard library — skipping the portable-core cross-check (`rustup target add aarch64-linux-android`)");
+    // Both phones, because they fail differently: one would catch a `cfg`
+    // written for Unix that Android happens to satisfy, the other one
+    // written for Apple that a Mac satisfies and a device does not.
+    //
+    // Only the crates that touch no C: `ring` and `blake3` want a toolchain
+    // for the target, which a machine may not have and CI does not. Skipped
+    // rather than failed where the standard library is not installed — this
+    // is a check that the code is portable, not a demand that everyone
+    // carry two phone toolchains.
+    const CORE: [&str; 12] = ["-p", "eui-proto", "-p", "eui-tree", "-p", "eui-theme", "-p", "eui-layout", "-p", "eui-text", "-p", "eui-vm"];
+    for target in ["aarch64-linux-android", "aarch64-apple-ios"] {
+        if std_installed(target) {
+            let mut args = vec!["check", "--target", target];
+            args.extend_from_slice(&CORE);
+            steps.push(args);
+        } else {
+            eprintln!("note: no {target} standard library — skipping that portable-core cross-check (`rustup target add {target}`)");
+        }
     }
     if std::env::var_os("EUI_SOLI_BIN").is_some() {
         steps.push(vec!["test", "-p", "eui-client", "--test", "soli_e2e"]);
