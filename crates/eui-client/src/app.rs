@@ -808,16 +808,14 @@ impl Shell {
         // The chrome first, clearing the whole window; then the application
         // over the part of it below the chrome, which is why the second
         // list must not clear.
-        let mut quads = 0;
+        let mut stats = eui_render::RenderStats::default();
         if let (Some(list), Some((chrome, tex))) = (chrome_list, self.chrome.as_mut()) {
-            quads += list.quads.len();
             let target = eui_render::Target::whole(&view, format, (w, h), now);
             let (atlas, images) = chrome.atlases_mut();
-            renderer.render(tex, target, &list, atlas, images);
+            stats = renderer.render(tex, target, &list, atlas, images);
         }
         let mut landed = Vec::new();
         if let Some(((list, l), tab)) = app {
-            quads += list.quads.len();
             let target = eui_render::Target {
                 view: &view,
                 format,
@@ -831,11 +829,30 @@ impl Shell {
             };
             landed = l;
             let tex = &mut tab.textures;
-            tab.backend.with_atlases(|atlas, images| renderer.render(tex, target, &list, atlas, images));
+            if let Some(st) = tab.backend.with_atlases(|atlas, images| renderer.render(tex, target, &list, atlas, images)) {
+                stats.quads += st.quads;
+                stats.runs += st.runs;
+                stats.passes += st.passes;
+                stats.submits += st.submits;
+                stats.instance_bytes += st.instance_bytes;
+                stats.atlas_bytes += st.atlas_bytes;
+                stats.upload_skipped &= st.upload_skipped;
+            }
         }
         frame.present();
         crate::driver::trace(|| {
-            format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {quads} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3)
+            format!(
+                "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}",
+                painted.as_secs_f64() * 1e3,
+                t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3,
+                stats.quads,
+                stats.runs,
+                stats.passes,
+                stats.submits,
+                stats.instance_bytes,
+                stats.atlas_bytes,
+                if stats.upload_skipped { " (the same lists again)" } else { "" }
+            )
         });
 
         if let Some(t) = self.tabs.get_mut(self.active) {

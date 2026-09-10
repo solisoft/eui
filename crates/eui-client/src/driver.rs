@@ -239,6 +239,36 @@ impl Anim {
     }
 }
 
+/// The last list painted, and for how long it may be drawn again.
+#[derive(Debug, Clone)]
+struct Cached {
+    list: Arc<DrawList>,
+    /// When it was painted: the list's own clock starts here, and the
+    /// window measures its age from it.
+    painted_at: Instant,
+    /// The last moment the list is right — the end of the last animation
+    /// in it, or the next timer — `None` while nothing is owed at all.
+    until: Option<Instant>,
+    /// How often the window should draw it meanwhile: a transition's
+    /// sixty a second, a spin's thirty, or nothing at rest.
+    cadence: Option<Duration>,
+}
+
+/// A serial for each paint, so a list can say which paint it came from and
+/// the renderer can tell the same list from a new one that looks alike.
+/// Process-wide, seeded from the clock: a worker and the window that draws
+/// its chrome each number their own lists, and neither must collide with
+/// the other in a buffer that only remembers a number.
+fn next_serial() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SERIAL: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
+    let counter = SERIAL.get_or_init(|| {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        AtomicU64::new(u64::try_from(nanos & 0xFFFF_FFFF).unwrap_or(0) << 32)
+    });
+    counter.fetch_add(1, Ordering::Relaxed).saturating_add(1)
+}
+
 /// `EUI_TRACE=1`: a line on stderr for the events a screen shows and a
 /// test cannot — focus, caret placement, scrolls.
 pub fn trace(line: impl FnOnce() -> String) {
@@ -372,16 +402,25 @@ pub struct Driver {
     windows: HashMap<u32, (u32, u32)>,
     /// When a moving scroll last asked for rows it had outrun.
     outrun_at: Option<Instant>,
-    /// The last list painted, when a `spin` was the only thing owed: the
-    /// next frame is the same list with the clock moved on, and the vertex
-    /// stage moves the clock (03 §5), so the tree need not be walked again.
-    spin_list: Option<DrawList>,
+    /// The last list painted, while it may be drawn again: everything
+    /// that moves in it moves in the vertex stage from the clock (03 §5),
+    /// so the tree need not be walked to produce the same quads. A list at
+    /// rest is the same list until something reaches the driver; one with
+    /// a spin in it, until a timer or a scroll is owed.
+    cached: Option<Cached>,
     /// Something reached the driver since the last paint — an input, a
     /// frame, an asset, a theme — that could change what the tree paints.
-    /// The spin clock is not that: `tick` leaves it alone.
+    /// The clock is not that: `tick` leaves it alone.
     touched: bool,
-    /// Frames answered from `spin_list`, for the trace and the tests.
+    /// Frames answered from `cached`, for the trace and the tests.
     spin_repeats: u64,
+    /// Layouts computed, for the trace and the tests: a frame that draws
+    /// the last list again, or moves a scroll in the vertex stage, does
+    /// not add to it.
+    relayouts: u64,
+    /// The text engine's counters at the last paint, so the trace can say
+    /// what this frame did rather than what the session has.
+    last_text_stats: eui_text::Stats,
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
@@ -495,9 +534,11 @@ impl Driver {
             desktop_mode: None,
             windows: HashMap::new(),
             outrun_at: None,
-            spin_list: None,
+            cached: None,
             touched: true,
             spin_repeats: 0,
+            relayouts: 0,
+            last_text_stats: eui_text::Stats::default(),
             scroll_touched: None,
             movies: HashMap::new(),
             players: HashMap::new(),
@@ -853,6 +894,7 @@ impl Driver {
             let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes };
             self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
             self.layout_valid = true;
+            self.relayouts = self.relayouts.saturating_add(1);
         }
     }
 
@@ -2080,7 +2122,7 @@ impl Driver {
 
     /// Lay out if needed and produce this frame's draw list for a
     /// `w × h` device-pixel target. Clears the redraw flag.
-    pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
+    pub fn paint(&mut self, device_w: u32, device_h: u32) -> Arc<DrawList> {
         // A frame owed to a spin alone, with nothing having reached the
         // driver since the last one, is the last list again: the vertex
         // stage turns the node from the clock the window passes it (03 §5),
@@ -2089,11 +2131,20 @@ impl Driver {
         // this is what keeps a spinner from costing a layout and a paint
         // thirty times a second.
         if !self.touched {
-            if let Some(list) = &self.spin_list {
-                self.redraw = false;
-                self.next_due = Some(self.now + SPIN_FRAME);
-                self.spin_repeats = self.spin_repeats.saturating_add(1);
-                return list.clone();
+            if let Some(c) = &self.cached {
+                if c.until.map_or(true, |u| self.now < u) {
+                    self.redraw = false;
+                    // Due at its cadence, and no later than the list runs
+                    // out: the settle, the timer or the report it is
+                    // waiting on is a real paint's to make.
+                    self.next_due = match (c.cadence, c.until) {
+                        (Some(cadence), Some(until)) => Some((self.now + cadence).min(until)),
+                        (Some(cadence), None) => Some(self.now + cadence),
+                        (None, until) => until,
+                    };
+                    self.spin_repeats = self.spin_repeats.saturating_add(1);
+                    return Arc::clone(&c.list);
+                }
             }
         }
         self.show_stopped();
@@ -2180,17 +2231,23 @@ impl Driver {
             self.next_due = Some(now + SPIN_FRAME);
         }
         self.session.clear_all_dirty();
+        let text_stats = self.text.stats();
         trace(|| {
             let st = self.layout.stats();
+            let layout =
+                if relaid { format!("layout {layout_ms:.1} ms ({} measures, {} memo hits, {} rows measured)", st.measures, st.memo_hits, st.rows_measured) } else { "layout cached".to_owned() };
+            let was = self.last_text_stats;
             format!(
-                "paint: layout {layout_ms:.1} ms (relaid {relaid}, {} measures, {} memo hits, {} rows measured), paint {:.1} ms, text cache misses {}",
-                st.measures,
-                st.memo_hits,
-                st.rows_measured,
+                "paint: {layout}, paint {:.1} ms, {} quads, text this frame: {} hits, {} misses, {} reused, {} evicted",
                 t_layout.elapsed().as_secs_f64() * 1e3 - layout_ms,
-                self.text.stats().misses
+                list.quads.len(),
+                text_stats.hits.saturating_sub(was.hits),
+                text_stats.misses.saturating_sub(was.misses),
+                text_stats.reused.saturating_sub(was.reused),
+                text_stats.evictions.saturating_sub(was.evictions),
             )
         });
+        self.last_text_stats = text_stats;
         // A finished transition painted its final colours this frame.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
@@ -2214,17 +2271,32 @@ impl Driver {
         };
         let wake_due = self.wakes.iter().map(|(_, _, at)| *at).min();
         let others = [settle_due, self.video_due, self.viewport_due, wake_due];
-        // A spin is the only thing owed when nothing else is: no transition
-        // to interpolate, no scroll to carry, no timer about to fire. The
-        // angle is not in the list -- the vertex stage takes it from the
-        // clock -- so the next frame is this list again, and the window can
-        // draw it without asking for it. Anything it sends the driver puts
-        // an end to that, because it may change what the tree paints.
-        list.spin_only = list.wants_frame && self.anims.is_empty() && self.scroll_anim.is_none() && others.iter().all(Option::is_none);
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
-        self.spin_list = if list.spin_only { Some(list.clone()) } else { None };
+        // What this list cannot say for itself. A transition is still
+        // interpolated here, frame by frame, and a scroll in flight moves
+        // the offset the layout bakes in: either one makes the next frame a
+        // different list. Otherwise the list is the frame until the next
+        // timer -- a spin's angle is not in it, the vertex stage takes that
+        // from the clock -- so the window can draw it again without asking
+        // for it, at the spin's cadence or not at all. Anything that
+        // reaches the driver puts an end to that, because it may change
+        // what the tree paints.
+        let cpu_owed = !self.anims.is_empty() || self.scroll_anim.is_some() || list.cpu_bound;
+        // A sound or a picture playing reports its position four times a
+        // second (03 §7, §8), from a paint: the list holds until the next
+        // report, whenever the window next draws it, and no frame is asked
+        // for on its account -- that would be a wake-up a playing tab did
+        // not have before.
+        let report_due = (!self.mixer.is_empty() || !self.players.is_empty()).then(|| self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)));
+        let until = others.into_iter().flatten().chain(report_due).min();
+        let cadence = list.wants_frame.then_some(SPIN_FRAME);
+        list.gpu_only = !cpu_owed;
+        list.repeat_until_ms = until.map_or(u32::MAX, |u| u32::try_from(u.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX));
+        list.serial = next_serial();
+        let list = Arc::new(list);
+        self.cached = (!cpu_owed).then(|| Cached { list: Arc::clone(&list), painted_at: now, until, cadence });
         self.touched = false;
         list
     }
@@ -2717,10 +2789,22 @@ impl Driver {
         out
     }
 
-    /// How many frames were answered from the last spin-only list rather
-    /// than painted.
+    /// How many frames were answered from the last list rather than
+    /// painted.
     pub fn spin_repeats(&self) -> u64 {
         self.spin_repeats
+    }
+
+    /// How many layouts were computed so far.
+    pub fn relayouts(&self) -> u64 {
+        self.relayouts
+    }
+
+    /// How old the list last handed out is, in seconds: its own clock
+    /// starts at the paint that produced it, and the vertex stage animates
+    /// from there (03 §5). Zero until something was painted.
+    pub fn list_age(&self, now: Instant) -> f32 {
+        self.cached.as_ref().map_or(0.0, |c| now.saturating_duration_since(c.painted_at).as_secs_f32())
     }
 
     /// Frames a paint produced — a scroll that landed reports its offset —

@@ -53,8 +53,6 @@ pub struct Renderer {
     uniforms: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
-    instances: wgpu::Buffer,
-    instance_cap: usize,
     /// Everything the backdrop blur needs. It is built once and then sits
     /// idle: a frame with no `blur` in it touches none of this, and the
     /// off-screen textures below are not allocated until one does.
@@ -90,6 +88,17 @@ pub struct Renderer {
 /// blurred region. Shared, two windows of different sizes would take turns
 /// missing `Blur::key` and reallocate every texture, every frame.
 pub struct SessionTextures {
+    /// The instance buffer the session's lists are uploaded into, and how
+    /// many quads it holds. Per session for the reason that matters most
+    /// to the budget: a list drawn again — a spinner, a transition the
+    /// vertex stage interpolates — is the same bytes, and a buffer that
+    /// still holds them need not be written. One buffer behind the chrome
+    /// and the application would be overwritten by each in turn every
+    /// frame, and neither could ever skip.
+    instances: wgpu::Buffer,
+    instance_cap: usize,
+    /// The serial of the list in `instances`, zero when none is.
+    uploaded: u64,
     atlas_tex: wgpu::Texture,
     img_tex: wgpu::Texture,
     /// The image texture's edge: 1 until a picture is packed, then
@@ -183,6 +192,29 @@ impl<'a> Target<'a> {
     pub fn whole(view: &'a wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), now: f32) -> Self {
         Self { view, format, size, origin: (0, 0), clear: true, now }
     }
+}
+
+/// What one `render` cost the queue: the numbers the trace prints and the
+/// budgets of 10 §1 are checked against. A frame that draws the last list
+/// again uploads nothing, and this is where that shows.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RenderStats {
+    /// Instances in the list.
+    pub quads: usize,
+    /// Draw calls.
+    pub runs: usize,
+    /// Render passes encoded, the backdrop's included.
+    pub passes: usize,
+    /// Queue submissions.
+    pub submits: usize,
+    /// Bytes written to the instance buffer; zero when the list was
+    /// already there.
+    pub instance_bytes: usize,
+    /// Bytes written to the glyph and image textures.
+    pub atlas_bytes: usize,
+    /// The list's serial matched what the buffer holds, so no instance
+    /// bytes were written.
+    pub upload_skipped: bool,
 }
 
 /// An off-screen target that can be read back.
@@ -337,14 +369,6 @@ impl Renderer {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
         });
 
-        let instance_cap = 4096;
-        let instances = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("instances"),
-            size: (instance_cap * std::mem::size_of::<Quad>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Ok(Self {
             device,
             queue,
@@ -354,8 +378,6 @@ impl Renderer {
             uniforms,
             uniform_bind,
             atlas_layout,
-            instances,
-            instance_cap,
             blur_shader,
             blur_params_layout,
             blur_src_layout,
@@ -445,7 +467,18 @@ impl Renderer {
     pub fn session(&self) -> SessionTextures {
         let atlas_size = Atlas::INITIAL;
         let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas_size, 1);
-        SessionTextures { atlas_tex, img_tex, img_size: 1, atlas_bind, atlas_size, blur: None }
+        let instance_cap = 4096;
+        let instances = Self::make_instances(&self.device, instance_cap);
+        SessionTextures { instances, instance_cap, uploaded: 0, atlas_tex, img_tex, img_size: 1, atlas_bind, atlas_size, blur: None }
+    }
+
+    fn make_instances(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("instances"),
+            size: (cap * std::mem::size_of::<Quad>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
     }
 
     /// The adapter's name, for diagnostics.
@@ -465,7 +498,8 @@ impl Renderer {
 
     /// Upload the atlases if they changed, growing the glyph texture with
     /// its atlas.
-    fn sync_atlas(&self, tex: &mut SessionTextures, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    fn sync_atlas(&self, tex: &mut SessionTextures, atlas: &mut Atlas, images: &mut ImageAtlas) -> usize {
+        let mut bytes = 0;
         // The image texture is made full size the first time a picture is
         // actually packed, and never before.
         let want_img = if images.is_empty() { tex.img_size } else { ImageAtlas::SIZE };
@@ -481,24 +515,29 @@ impl Renderer {
         // Only the rows that changed cross to the GPU: a few glyph rows
         // per frame of new text, not a megabyte.
         if let Some((y0, y1)) = images.dirty_rows() {
+            let rows = images.rows(y0, y1);
+            bytes += rows.len();
             self.queue.write_texture(
                 wgpu::ImageCopyTexture { texture: &tex.img_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
-                images.rows(y0, y1),
+                rows,
                 wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(y1 - y0) },
                 wgpu::Extent3d { width: images.size(), height: y1 - y0, depth_or_array_layers: 1 },
             );
             images.mark_clean();
         }
         let Some((y0, y1)) = atlas.dirty_rows() else {
-            return;
+            return bytes;
         };
+        let rows = atlas.rows(y0, y1);
+        bytes += rows.len();
         self.queue.write_texture(
             wgpu::ImageCopyTexture { texture: &tex.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
-            atlas.rows(y0, y1),
+            rows,
             wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(y1 - y0) },
             wgpu::Extent3d { width: atlas.size(), height: y1 - y0, depth_or_array_layers: 1 },
         );
         atlas.mark_clean();
+        bytes
     }
 
     /// The two blur pipelines for a target format, built the first time a
@@ -565,28 +604,36 @@ impl Renderer {
         tex.blur = Some(Blur { key, snap, chains });
     }
 
-    /// Draw a list into a target.
-    pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    /// Draw a list into a target. Returns what the frame cost the GPU's
+    /// queue, for the trace and the budgets (10 §1).
+    pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
         let Target { view, format, size, origin, clear, now } = target;
-        self.sync_atlas(tex, atlas, images);
-        if list.quads.len() > self.instance_cap {
-            self.instance_cap = list.quads.len().next_power_of_two();
-            self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("instances"),
-                size: (self.instance_cap * std::mem::size_of::<Quad>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        let mut stats = RenderStats { quads: list.quads.len(), runs: list.runs.len(), ..RenderStats::default() };
+        stats.atlas_bytes = self.sync_atlas(tex, atlas, images);
+        // The same list as last time — a spinner, a transition the vertex
+        // stage interpolates — is already in the buffer. The clock below
+        // is what moves; the instances do not.
+        let same = list.serial != 0 && tex.uploaded == list.serial;
+        if list.quads.len() > tex.instance_cap {
+            tex.instance_cap = list.quads.len().next_power_of_two();
+            tex.instances = Self::make_instances(&self.device, tex.instance_cap);
+            tex.uploaded = 0;
         }
-        if !list.quads.is_empty() {
-            self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&list.quads));
+        if same {
+            stats.upload_skipped = true;
+        } else {
+            if !list.quads.is_empty() {
+                self.queue.write_buffer(&tex.instances, 0, bytemuck::cast_slice(&list.quads));
+                stats.instance_bytes = std::mem::size_of_val(list.quads.as_slice());
+            }
+            tex.uploaded = list.serial;
         }
 
         // Built (or found) before the encoder, so the pass below can hold it
         // alongside the immutable borrows of the buffers it also needs.
         self.pipeline_for(format);
         if !self.pipelines.contains_key(&format) {
-            return;
+            return stats;
         }
 
         // 03 §2: a frame with a `blur` in it snapshots what is behind the
@@ -595,13 +642,19 @@ impl Renderer {
         // reaches none of this and stays the single pass it always was.
         let backdrop = list.backdrop.as_ref().filter(|b| !b.sigmas.is_empty());
         let outs = match backdrop {
-            Some(b) => self.render_backdrop(tex, format, now, list, b),
+            Some(b) => {
+                // One snapshot pass, then a reduce and two Gaussian passes
+                // per distinct radius, in a submit of their own.
+                stats.passes += 1 + 3 * b.sigmas.len();
+                stats.submits += 1;
+                self.render_backdrop(tex, format, now, list, b)
+            }
             None => Vec::new(),
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
         self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3], now, 0.0, 0.0, 0.0]));
         let Some(pipeline) = self.pipelines.get(&format) else {
-            return;
+            return stats;
         };
 
         let c = list.clear;
@@ -637,7 +690,7 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
-            pass.set_vertex_buffer(0, self.instances.slice(..));
+            pass.set_vertex_buffer(0, tex.instances.slice(..));
             let mut bound = u32::MAX;
             for run in &list.runs {
                 let Some(r) = list.clips.get(run.clip as usize) else {
@@ -660,6 +713,9 @@ impl Renderer {
             }
         }
         self.queue.submit([encoder.finish()]);
+        stats.passes += 1;
+        stats.submits += 1;
+        stats
     }
 
     /// Everything a blurred frame needs before its own pass: the frame as it
@@ -744,7 +800,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
             pass.set_bind_group(2, &self.blur_none, &[]);
-            pass.set_vertex_buffer(0, self.instances.slice(..));
+            pass.set_vertex_buffer(0, tex.instances.slice(..));
             for run in &list.runs {
                 // Only what was painted before the first blurred quad is the
                 // backdrop; the rest of the frame is not behind itself.
@@ -817,9 +873,9 @@ impl Renderer {
     }
 
     /// Draw into an off-screen target.
-    pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
         let view = target.texture.create_view(&Default::default());
-        self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now), list, atlas, images);
+        self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now), list, atlas, images)
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

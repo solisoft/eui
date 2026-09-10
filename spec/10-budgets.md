@@ -63,8 +63,9 @@ table, x86-64 Linux, 2026-09-08:
 | bytes over the pipe per scroll step | — | 27 B out, 47.1 KB back |
 
 Two round trips a frame — the input, then the paint — are most of the
-difference, and the draw list is 96 bytes a quad, sent in the shape the
-renderer uploads. The rest is layout and paint, which the boundary does
+difference, and the draw list is 112 bytes a quad, sent in the shape the
+renderer uploads (the gallery is about 760 quads, its documentation dialog
+about 3 900). The rest is layout and paint, which the boundary does
 not change; the in-process figure is steady and the worker's is not,
 because it includes two process wake-ups. Both sides are inside the 2 ms
 budget, and folding an input into the paint that follows it would make it

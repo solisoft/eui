@@ -134,12 +134,26 @@ pub struct DrawList {
     /// Something on screen animates by itself (a `spin`): the next frame
     /// is due at once rather than when an input arrives.
     pub wants_frame: bool,
-    /// Set by the driver when a `spin` is the *only* reason another frame
-    /// is due — no transition, no scroll, no timer, nothing dirty. The
-    /// angle lives in the vertex stage, so such a frame draws this very
-    /// list again with nothing but the clock moved on, and the window may
-    /// redraw it without asking the driver for anything.
-    pub spin_only: bool,
+    /// Set by the driver when everything that moves in this list moves in
+    /// the vertex stage — a `spin`, and nothing else owed: no transition
+    /// interpolated on the CPU, no scroll to carry, no timer about to
+    /// fire, nothing dirty. Such a frame draws this very list again with
+    /// nothing but the clock moved on, and the window may redraw it
+    /// without asking the driver for anything, until `repeat_until_ms`.
+    pub gpu_only: bool,
+    /// How long after this paint the list may be repeated, in
+    /// milliseconds; `u32::MAX` for as long as nothing reaches the driver.
+    /// Meaningful when `gpu_only` is set.
+    pub repeat_until_ms: u32,
+    /// Which paint this list came from: two lists with the same serial are
+    /// the same list, and the renderer need not upload the second. Zero is
+    /// no serial — a list built by hand, uploaded whenever it is drawn.
+    pub serial: u64,
+    /// Some quad had to be interpolated on the CPU after all — two
+    /// timelines met on one node — so this list is right for this frame
+    /// only. Not sent over the pipe: the driver reads it before handing
+    /// the list on.
+    pub cpu_bound: bool,
     /// Set when some node wears a `blur`: the extra passes the frame needs
     /// before its own. `None` is the ordinary single-pass frame.
     pub backdrop: Option<Backdrop>,

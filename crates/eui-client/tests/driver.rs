@@ -575,8 +575,12 @@ fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
     assert!(d.animating());
     assert_eq!(d.next_frame_at(), Some(t0), "a frame is due at once");
     // At t0 the button still wears its old colour.
-    let at_start = box_fill(&d.paint(400, 300));
+    let start_list = d.paint(400, 300);
+    let at_start = box_fill(&start_list);
     assert_eq!(at_start, accent);
+    // The colours between are interpolated here, frame by frame, so the
+    // next frame is another list: this one is not the window's to repeat.
+    assert!(!start_list.gpu_only, "a transition frame is not drawn again as it is");
     assert_eq!(d.next_frame_at(), Some(t0 + Duration::from_millis(16)));
     // Halfway: somewhere between, and a frame is due when asked at that time.
     assert!(!d.tick(t0 + Duration::from_millis(5)), "not due yet");
@@ -1119,7 +1123,9 @@ fn a_spinning_node_marks_its_quads_and_keeps_frames_coming() {
     assert!(list.wants_frame);
     assert!(d.next_frame_at().is_some(), "frames keep coming while it spins");
     // Nothing else is owed, so this frame may simply be drawn again.
-    assert!(list.spin_only, "a spin on its own is the window's to repeat");
+    assert!(list.gpu_only, "a spin on its own is the window's to repeat");
+    assert_eq!(list.repeat_until_ms, u32::MAX, "for as long as nothing reaches the driver");
+    assert_ne!(list.serial, 0, "and the renderer can tell it is the same list");
     let q = list.quads.iter().find(|q| q.rect[2] == 20.0).expect("the spinning box");
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
     let flags = q.params[2] as u32;
@@ -1151,6 +1157,37 @@ fn a_spinning_node_marks_its_quads_and_keeps_frames_coming() {
     d.tick(t0 + Duration::from_millis(980));
     let _ = d.paint(400, 300);
     assert_eq!(d.spin_repeats(), 2, "and the repeat resumes once nothing has happened");
+}
+
+/// A list with nothing moving in it is the frame until something reaches
+/// the driver: an expose, a chrome repainted beside an animating
+/// application, a window asked to draw for any reason of its own gets the
+/// last list back and no tree walk.
+#[test]
+fn a_list_at_rest_is_the_same_list_until_something_reaches_the_driver() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let first = d.paint(400, 300);
+    assert!(!first.wants_frame && first.gpu_only, "nothing moves, nothing is owed");
+    assert_eq!(first.repeat_until_ms, u32::MAX, "so it holds until told otherwise");
+    assert_eq!(d.next_frame_at(), None, "and no frame is due");
+    let laid = d.relayouts();
+    assert!(!d.tick(t0 + Duration::from_secs(5)));
+    let again = d.paint(400, 300);
+    assert!(Arc::ptr_eq(&first, &again), "the very same list, not a copy of it");
+    assert_eq!(d.spin_repeats(), 1, "answered, not painted");
+    assert_eq!(d.relayouts(), laid, "and not laid out either");
+    assert_eq!(d.next_frame_at(), None, "still nothing due: a rest list has no cadence");
+    // An input may change what the tree paints, so the next paint is real
+    // -- and a new list, whatever it looks like.
+    d.input(Input::PointerMove(1.0, 1.0));
+    let after = d.paint(400, 300);
+    assert!(!Arc::ptr_eq(&first, &after));
+    assert_ne!(after.serial, first.serial, "the renderer is told it is another list");
+    assert_eq!(d.spin_repeats(), 1);
 }
 
 /// A 100 px list of ten rows of two heights (22 and 40, alternating) with

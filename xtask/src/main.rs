@@ -221,6 +221,7 @@ fn bench() -> Vec<Row> {
     let after = rss_kb();
     rows.push(Row { what: "driver: first paint of table-10k (shaping)", value: format!("{first:?}, {} quads", list.quads.len()), budget: "< 80 ms", ok: first < Duration::from_millis(80) });
     rows.push(Row { what: "driver: scroll step, layout + paint (median)", value: format!("{scroll:?}"), budget: "< 2 ms", ok: scroll < Duration::from_millis(2) });
+    rows.extend(motion_rows(&mut driver));
     rows.push(Row {
         what: "driver RSS growth, table-10k with real text",
         value: format!("{:.1} MB", after.saturating_sub(before) as f64 / 1024.0),
@@ -231,6 +232,92 @@ fn bench() -> Vec<Row> {
 
     rows.extend(through_a_worker(scroll));
 
+    rows
+}
+
+/// The frames an animation costs the driver, on the table above (10 §1).
+///
+/// Each is measured as the window would ask for it: a real paint, then
+/// paints at the animation's cadence with nothing else reaching the
+/// driver. What the vertex stage animates from the clock is the last list
+/// handed back; what is still interpolated here is a walk of the tree.
+fn motion_rows(driver: &mut Driver) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let t0 = Instant::now();
+    driver.tick(t0);
+    let _ = driver.paint(800, 600);
+    // Nothing changed: an expose, or the chrome beside an animating tab.
+    let t: Vec<Duration> = (1..=10)
+        .map(|i| {
+            driver.tick(t0 + Duration::from_millis(16 * i));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "driver: repeated frame, nothing changed (median)", value: format!("{d:?}"), budget: "< 50 µs", ok: d < Duration::from_micros(50) });
+    // A colour transition on one row: the first paint starts it, the
+    // frames after it are what the transition costs.
+    let fade = StyleRecord { display: Display::Row, gap: 4, padding: [1, 3, 1, 3], bg: ColorRef::role(eui_theme::Role::AccentBase.id()), transition: 3, ..Default::default() };
+    driver.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 5, record: fade }, Op::SetStyle { node: 3, style: 5 }] }));
+    let t1 = t0 + Duration::from_millis(200);
+    driver.tick(t1);
+    let _ = driver.paint(800, 600);
+    let laid = driver.relayouts();
+    let t: Vec<Duration> = (1..=10)
+        .map(|i| {
+            driver.tick(t1 + Duration::from_millis(16 * i));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "driver: transition frame (median)", value: format!("{d:?}, {} relayouts", driver.relayouts() - laid), budget: "< 0.2 ms", ok: d < Duration::from_micros(200) });
+    // A wheel notch glides for `motion[0]`, 100 ms: the frames of the
+    // glide. An input stamps the driver's clock with the wall's, so the
+    // ticks here are the wall's too.
+    let t2 = Instant::now();
+    driver.tick(t2);
+    let _ = driver.paint(800, 600);
+    driver.input(Input::PointerMove(100.0, 100.0));
+    driver.input(Input::WheelStep(0.0, 3.0));
+    let _ = driver.paint(800, 600);
+    assert!(driver.animating(), "the notch glides");
+    let laid = driver.relayouts();
+    let t: Vec<Duration> = (1..=5)
+        .map(|i| {
+            driver.tick(t2 + Duration::from_millis(16 * i));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    assert!(driver.animating(), "and is still gliding after five frames");
+    let d = median(t);
+    // A glide is still a layout a frame: the scroll offset is baked into
+    // the rects. The scroll-step budget holds until it moves to the vertex
+    // stage, when a glide frame becomes the last list again.
+    rows.push(Row {
+        what: "driver: glide frame (median of 5)",
+        value: format!("{d:?}, {} relayouts", driver.relayouts() - laid),
+        budget: "< 2 ms (< 0.2 ms once a glide is the GPU's)",
+        ok: d < Duration::from_millis(2),
+    });
+    // The chrome: a session like any other, painted every frame beside an
+    // application that animates. At rest it must cost nothing.
+    let mut chrome = eui_client::chrome::Chrome::new(800.0, 600.0, 1.0);
+    let _ = chrome.paint(800, 600);
+    let t: Vec<Duration> = (0..10)
+        .map(|_| {
+            let s = Instant::now();
+            let _ = chrome.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "chrome: repeated paint, nothing changed (median)", value: format!("{d:?}"), budget: "< 50 µs", ok: d < Duration::from_micros(50) });
     rows
 }
 
@@ -289,6 +376,24 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
         value: format!("{:.0} B out, {:.1} KB back", (after.0 - before.0) as f64 / 10.0, (after.1 - before.1) as f64 / 10.0 / 1024.0),
         budget: "info",
         ok: true,
+    });
+    // At rest, a paint the window asks for again is answered on this side
+    // of the pipe.
+    let _ = backend.paint(800, 600);
+    let before = backend.traffic().unwrap_or_default();
+    let mut paints = Vec::new();
+    for _ in 0..10 {
+        let s = Instant::now();
+        let _ = backend.paint(800, 600);
+        paints.push(s.elapsed());
+    }
+    let after = backend.traffic().unwrap_or_default();
+    let repeat = median(paints);
+    rows.push(Row {
+        what: "worker: repeated frame, nothing changed",
+        value: format!("{repeat:?}, {} B over the pipe", (after.0 - before.0 + after.1 - before.1) / 10),
+        budget: "< 50 µs, 0 B",
+        ok: repeat < Duration::from_micros(50) && after == before,
     });
     rows
 }

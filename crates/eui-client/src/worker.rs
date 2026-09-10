@@ -421,8 +421,8 @@ pub enum Payload {
     /// since the last paint — `(edge length, y0, y1, bytes)` for the glyph
     /// atlas, which grows, `(y0, y1, bytes)` for the image atlas.
     Paint {
-        /// The frame.
-        list: DrawList,
+        /// The frame. Shared, so a reply drawn again is not copied again.
+        list: Arc<DrawList>,
         /// Coverage rows.
         glyphs: Option<(u32, u32, u32, Vec<u8>)>,
         /// RGBA rows.
@@ -573,7 +573,7 @@ impl Reply {
                 let list = get_list(&mut r)?;
                 let glyphs = if r.bool()? { Some((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
                 let images = if r.bool()? { Some((r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
-                Payload::Paint { list, glyphs, images }
+                Payload::Paint { list: Arc::new(list), glyphs, images }
             }
             5 => Payload::Tick(r.bool()?),
             6 => Payload::Access(get_access(&mut r)?),
@@ -618,7 +618,9 @@ fn put_list(w: &mut W, list: &DrawList) {
     }
     w.f4(list.clear);
     w.bool(list.wants_frame);
-    w.bool(list.spin_only);
+    w.bool(list.gpu_only);
+    w.u32(list.repeat_until_ms);
+    w.u64(list.serial);
     match &list.backdrop {
         None => w.u32(0),
         Some(b) => {
@@ -655,7 +657,9 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     }
     let clear = r.f4()?;
     let wants_frame = r.bool()?;
-    let spin_only = r.bool()?;
+    let gpu_only = r.bool()?;
+    let repeat_until_ms = r.u32()?;
+    let serial = r.u64()?;
     let n = r.u32()? as usize;
     let backdrop = if n == 0 {
         None
@@ -668,7 +672,7 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
         }
         Some(Backdrop { rect, first, sigmas })
     };
-    Ok(DrawList { quads, runs, clips, clear, wants_frame, spin_only, backdrop })
+    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, backdrop })
 }
 
 fn put_access(w: &mut W, s: &AccessSnapshot) {
@@ -789,6 +793,10 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                     }
                     Request::PendingAssets => Payload::Assets(d.pending_assets()),
                     Request::Paint(w, h) => {
+                        // The window answers ticks itself while it draws
+                        // the last list again, so the clock here has to be
+                        // moved on before the paint that ends that.
+                        d.tick(Instant::now());
                         let list = d.paint(w, h);
                         let (atlas, images) = d.atlases_mut();
                         let glyphs = atlas.dirty_rows().map(|(y0, y1)| {
@@ -949,33 +957,73 @@ pub struct Worker {
     /// framing included. What the process boundary costs is a number the
     /// budgets ask for (10 §1), and only this side can count it.
     traffic: (u64, u64),
-    /// The last `Paint` reply, when the driver said a `spin` was the only
-    /// thing owed. While that holds, the next `Paint` is answered from here
-    /// and the pipe is not touched: the list cannot have changed, because
-    /// the only thing that moves is a clock the vertex stage reads. Any
-    /// other request clears it -- a request is the one way the tree can
-    /// come to paint differently, and every one of them passes through
-    /// [`Worker::call`].
-    spin_reply: Option<Reply>,
+    /// The last `Paint` reply, while the driver said the list may be
+    /// drawn again. While that holds, the next `Paint` is answered from
+    /// here and the pipe is not touched: the list cannot have changed,
+    /// because the only thing that moves is a clock the vertex stage
+    /// reads. Any request but a tick clears it -- a request is the one way
+    /// the tree can come to paint differently, and every one of them
+    /// passes through [`Worker::call`]. A tick is a clock, and while the
+    /// list is repeated the window keeps that clock itself.
+    repeat: Option<Repeat>,
+    /// When a list with a new serial last arrived: its own clock starts
+    /// there, and the window measures its age from it.
+    received: Instant,
 }
 
-/// The reply to hand back for the *next* paint, when this one may simply be
-/// drawn again: a spin-only list, with everything that happens once taken
-/// out of it. Frames bound for the server, a clipboard hand-off, an IME
-/// rect and the atlas rows are all answers to something that already
-/// happened, and replaying them would say it twice. What is left is the
-/// list, that a redraw is wanted, and when.
-fn spin_repeat(reply: &Reply) -> Option<Reply> {
-    let Payload::Paint { list, .. } = &reply.payload else {
-        return None;
-    };
-    if !list.spin_only || reply.status.closed.is_some() {
-        return None;
+/// A `Paint` reply the window may hand back for the next paint, with
+/// everything that happens once taken out of it: frames bound for the
+/// server, a clipboard hand-off, an IME rect and the atlas rows are all
+/// answers to something that already happened, and replaying them would
+/// say it twice. What is left is the list, that a redraw is wanted, and
+/// when.
+#[derive(Debug, Clone, PartialEq)]
+struct Repeat {
+    reply: Reply,
+    /// The last moment the list is right; `None` for as long as nothing
+    /// reaches the driver.
+    until: Option<Instant>,
+}
+
+impl Repeat {
+    /// What a paint reply leaves behind for the paints after it, if the
+    /// driver said it may be drawn again.
+    fn of(reply: &Reply, received: Instant) -> Option<Self> {
+        let Payload::Paint { list, .. } = &reply.payload else {
+            return None;
+        };
+        if !list.gpu_only || reply.status.closed.is_some() {
+            return None;
+        }
+        let until = (list.repeat_until_ms != u32::MAX).then(|| received + Duration::from_millis(u64::from(list.repeat_until_ms)));
+        let reply = Reply {
+            status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, ..Status::default() },
+            payload: Payload::Paint { list: Arc::clone(list), glyphs: None, images: None },
+        };
+        Some(Self { reply, until })
     }
-    Some(Reply {
-        status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, ..Status::default() },
-        payload: Payload::Paint { list: list.clone(), glyphs: None, images: None },
-    })
+
+    /// The reply for a paint at `now`, unless the list has run out.
+    fn answer(&self, now: Instant) -> Option<Reply> {
+        let left = match self.until {
+            Some(u) if now >= u => return None,
+            Some(u) => Some(u.saturating_duration_since(now)),
+            None => None,
+        };
+        let mut reply = self.reply.clone();
+        // Due at its cadence, and no later than the list runs out.
+        if let Some(left) = left {
+            let left = u32::try_from(left.as_millis()).unwrap_or(u32::MAX);
+            reply.status.next_due_ms = Some(reply.status.next_due_ms.map_or(left, |ms| ms.min(left)));
+        }
+        Some(reply)
+    }
+
+    /// Whether the window can answer `request` from this, or the driver
+    /// must be asked and the list forgotten.
+    fn survives(request: &Request) -> bool {
+        matches!(request, Request::Paint(..) | Request::Tick)
+    }
 }
 
 impl std::fmt::Debug for Worker {
@@ -998,7 +1046,8 @@ impl Worker {
         let mut child = cmd.spawn().map_err(|e| format!("cannot start the worker {}: {e}", program.display()))?;
         let input = child.stdin.take().ok_or("worker has no stdin")?;
         let output = child.stdout.take().ok_or("worker has no stdout")?;
-        let mut worker = Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0), spin_reply: None };
+        let mut worker =
+            Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0), repeat: None, received: Instant::now() };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
             Some(Payload::Sandbox(s)) => Ok((worker, s)),
@@ -1012,19 +1061,21 @@ impl Worker {
         if self.dead.is_some() {
             return None;
         }
-        // A repeat of a paint the driver called spin-only: the same list,
-        // drawn again with the clock moved on. Nothing crosses the pipe and
-        // the driver is not woken, so a spinner costs a draw and no more.
+        // A repeat of a paint the driver said may be drawn again: the same
+        // list, with the clock moved on. Nothing crosses the pipe and the
+        // driver is not woken, so a spinner costs a draw and no more.
         if matches!(request, Request::Paint(..)) {
-            if let Some(reply) = self.spin_reply.clone() {
+            let now = Instant::now();
+            if let Some(reply) = self.repeat.as_ref().and_then(|r| r.answer(now)) {
                 self.status = reply.status.clone();
-                self.due = Some(Instant::now());
-                crate::driver::trace(|| "paint: from the spin cache, the pipe untouched".to_owned());
+                self.due = Some(now);
+                crate::driver::trace(|| "paint: the last list again, the pipe untouched".to_owned());
                 return Some(reply);
             }
-        } else {
+        }
+        if !Repeat::survives(request) {
             // Anything else may change what the tree paints.
-            self.spin_reply = None;
+            self.repeat = None;
         }
         let encoded = request.encode();
         let result = write_message(&mut self.input, &encoded).and_then(|()| read_message(&mut self.output, MAX_REPLY));
@@ -1037,9 +1088,13 @@ impl Worker {
         });
         match result {
             Ok(reply) => {
+                let now = Instant::now();
                 self.status = reply.status.clone();
-                self.due = Some(Instant::now());
-                self.spin_reply = spin_repeat(&reply);
+                self.due = Some(now);
+                if let Payload::Paint { .. } = reply.payload {
+                    self.received = now;
+                    self.repeat = Repeat::of(&reply, now);
+                }
                 Some(reply)
             }
             Err(e) => {
@@ -1312,7 +1367,7 @@ impl Backend {
     /// Lay out and paint for a `w × h` device-pixel target. Returns the
     /// draw list and the encoded frames a scroll landing during the paint
     /// emitted, to send after drawing.
-    pub fn paint(&mut self, w: u32, h: u32) -> (DrawList, Vec<Vec<u8>>) {
+    pub fn paint(&mut self, w: u32, h: u32) -> (Arc<DrawList>, Vec<Vec<u8>>) {
         if let Some(out) = self.with_local(|d| {
             let list = d.paint(w, h);
             (list, d.take_pending().iter().map(Frame::encode).collect::<Vec<_>>())
@@ -1320,7 +1375,7 @@ impl Backend {
             return out;
         }
         let Backend::Remote { worker, atlas, images } = self else {
-            return (DrawList::default(), Vec::new());
+            return (Arc::new(DrawList::default()), Vec::new());
         };
         let request = Request::Paint(w, h);
         let reply = match worker.lock() {
@@ -1342,8 +1397,17 @@ impl Backend {
                 }
                 (list, status.outbound)
             }
-            _ => (DrawList::default(), Vec::new()),
+            _ => (Arc::new(DrawList::default()), Vec::new()),
         }
+    }
+
+    /// How old the list last handed out is, in seconds — its own clock,
+    /// which the vertex stage animates from (03 §5).
+    pub fn list_age(&self, now: Instant) -> f32 {
+        if let Some(age) = self.with_local(|d| d.list_age(now)) {
+            return age;
+        }
+        self.with_worker(|w| now.saturating_duration_since(w.received).as_secs_f32()).unwrap_or(0.0)
     }
 
     /// The atlases the last draw list refers to, for the renderer's upload.
@@ -1370,8 +1434,15 @@ impl Backend {
         self.with_worker(|w| {
             // Nothing can be due before the worker said something would be:
             // skip the round trip at rest.
-            if w.status.next_due_ms.is_none() {
+            let Some(ms) = w.status.next_due_ms else {
                 return false;
+            };
+            // While the last list is being drawn again the clock is the
+            // window's to keep: the driver would only say what the reply
+            // already did, and the round trip is the one cost a repeated
+            // frame has left.
+            if w.repeat.as_ref().is_some_and(|r| r.until.map_or(true, |u| now < u)) {
+                return w.due.is_some_and(|d| now >= d + Duration::from_millis(u64::from(ms)));
             }
             matches!(w.call(&Request::Tick).map(|r| r.payload), Some(Payload::Tick(true)))
         })
@@ -1511,37 +1582,59 @@ mod tests {
         }
     }
 
-    /// The window may draw a spin-only frame again, but it must not *do* it
+    /// The window may draw a repeatable frame again, but it must not *do* it
     /// again: the frames bound for the server, the clipboard hand-off, the
     /// IME rect and the atlas rows all answer something that happened once.
     #[test]
-    fn a_repeated_spin_frame_carries_the_list_and_nothing_that_happens_once() {
-        let list = |spin_only: bool| DrawList {
+    fn a_repeated_frame_carries_the_list_and_nothing_that_happens_once() {
+        let list = |gpu_only: bool| DrawList {
             quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0] }],
             runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
             wants_frame: true,
-            spin_only,
+            gpu_only,
+            repeat_until_ms: u32::MAX,
+            serial: 7,
+            cpu_bound: false,
             backdrop: None,
         };
         let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
-        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: l, glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8])) } };
+        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: Arc::new(l), glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8])) } };
+        let t0 = Instant::now();
 
-        let again = spin_repeat(&paint(list(true), status.clone())).expect("a spin-only paint may be repeated");
+        let repeat = Repeat::of(&paint(list(true), status.clone()), t0).expect("a list the driver said may be drawn again");
+        let again = repeat.answer(t0 + Duration::from_millis(5)).expect("and it is, for as long as nothing reaches the driver");
         let Payload::Paint { list: kept, glyphs, images } = &again.payload else { panic!("still a paint") };
-        assert_eq!(kept, &list(true), "the list itself is what gets drawn again");
+        assert_eq!(**kept, list(true), "the list itself is what gets drawn again");
         assert!(glyphs.is_none() && images.is_none(), "the atlas rows already landed");
         assert!(again.status.outbound.is_empty(), "the server must not be told twice");
         assert!(again.status.clipboard.is_none(), "nor the clipboard written twice");
         assert!(again.status.ime.is_none());
         assert!(again.status.needs_redraw, "but a redraw is still wanted");
         assert_eq!(again.status.next_due_ms, Some(16), "and still due when it was");
+        assert!(repeat.answer(t0 + Duration::from_secs(3600)).is_some(), "an hour on, still the same list: nothing has reached the driver");
 
-        assert!(spin_repeat(&paint(list(false), status.clone())).is_none(), "anything else owed and the driver must be asked");
-        let closed = Status { closed: Some("gone".into()), ..status };
-        assert!(spin_repeat(&paint(list(true), closed)).is_none(), "a closed session is not repeated");
-        assert!(spin_repeat(&Reply { status: Status::default(), payload: Payload::None }).is_none(), "and only a paint is");
+        assert!(Repeat::of(&paint(list(false), status.clone()), t0).is_none(), "anything else owed and the driver must be asked");
+        let closed = Status { closed: Some("gone".into()), ..status.clone() };
+        assert!(Repeat::of(&paint(list(true), closed), t0).is_none(), "a closed session is not repeated");
+        assert!(Repeat::of(&Reply { status: Status::default(), payload: Payload::None }, t0).is_none(), "and only a paint is");
+
+        // A tick is the clock, which the window keeps itself while it
+        // repeats; anything else may change what the tree paints.
+        assert!(Repeat::survives(&Request::Tick), "a tick does not evict the list");
+        assert!(Repeat::survives(&Request::Paint(1, 1)));
+        assert!(!Repeat::survives(&Request::Input(Input::PointerMove(1.0, 1.0))), "an input does");
+        assert!(!Repeat::survives(&Request::Frame(vec![])), "so does a frame");
+
+        // A list with a timer in it runs out: due no later than that, and
+        // then the driver is asked.
+        let timed = DrawList { repeat_until_ms: 100, ..list(true) };
+        let repeat = Repeat::of(&paint(timed, status), t0).expect("repeatable until the timer");
+        assert_eq!(repeat.until, Some(t0 + Duration::from_millis(100)));
+        let late = repeat.answer(t0 + Duration::from_millis(90)).expect("still on");
+        assert_eq!(late.status.next_due_ms, Some(10), "due when the list runs out, not a cadence later");
+        assert!(repeat.answer(t0 + Duration::from_millis(100)).is_none(), "and then it is the driver's turn");
     }
 
     #[test]
@@ -1563,7 +1656,10 @@ mod tests {
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
             wants_frame: true,
-            spin_only: true,
+            gpu_only: true,
+            repeat_until_ms: 250,
+            serial: 0x1234_5678_9abc,
+            cpu_bound: false,
             backdrop: None,
         };
         let snap = AccessSnapshot {
@@ -1580,7 +1676,7 @@ mod tests {
             Payload::Sandbox(Err("no".into())),
             Payload::Hello(vec![1, 2]),
             Payload::Assets(vec![[1; 32], [2; 32]]),
-            Payload::Paint { list, glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8192])) },
+            Payload::Paint { list: Arc::new(list), glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8192])) },
             Payload::Tick(true),
             Payload::Access(snap),
             Payload::Pcm(vec![0.0, 0.25, -0.5, 1.0]),

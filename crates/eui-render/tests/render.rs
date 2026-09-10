@@ -864,6 +864,34 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
     assert!(u32::try_from(bar_quad.params[2] as i64).is_ok_and(|f| f & SPINNING != 0), "and it is marked for the vertex stage");
 }
 
+/// A list drawn again is already in the instance buffer: the serial says
+/// so, and the renderer writes nothing. A list without one -- built by
+/// hand, as here and in the snapshot tool -- is uploaded every time.
+#[test]
+fn the_same_serial_is_not_uploaded_twice() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let target = r.offscreen(100, 100);
+    let unnumbered = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    assert!(!unnumbered.upload_skipped && unnumbered.instance_bytes > 0, "no serial: uploaded, {unnumbered:?}");
+    let unnumbered = r.render_offscreen(&mut st, &target, 0.1, &list, &mut fx.atlas, &mut fx.images);
+    assert!(!unnumbered.upload_skipped, "and uploaded again, since nothing says it is the same list");
+    list.serial = 42;
+    let first = r.render_offscreen(&mut st, &target, 0.2, &list, &mut fx.atlas, &mut fx.images);
+    assert!(!first.upload_skipped && first.instance_bytes == list.quads.len() * std::mem::size_of::<eui_render::Quad>(), "{first:?}");
+    let again = r.render_offscreen(&mut st, &target, 0.3, &list, &mut fx.atlas, &mut fx.images);
+    assert!(again.upload_skipped && again.instance_bytes == 0, "the same list: the clock moved, the buffer did not, {again:?}");
+    assert_eq!((again.quads, again.runs, again.passes, again.submits), (first.quads, first.runs, 1, 1), "but it is drawn");
+    list.serial = 43;
+    let next = r.render_offscreen(&mut st, &target, 0.4, &list, &mut fx.atlas, &mut fx.images);
+    assert!(!next.upload_skipped, "another serial is another list, alike or not");
+    // Another session's buffer knows nothing of this one.
+    let mut other = r.session();
+    let elsewhere = r.render_offscreen(&mut other, &target, 0.5, &list, &mut fx.atlas, &mut fx.images);
+    assert!(!elsewhere.upload_skipped);
+}
+
 #[test]
 fn the_clock_turns_a_spinning_node_a_quarter_of_the_way_round() {
     let Some(mut r) = gpu() else { return };

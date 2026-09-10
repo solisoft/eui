@@ -148,8 +148,10 @@ of: a `canvas` arc that spins. The client wakes for frames only while a
 spinning node is painted, and those frames are cheap by construction: the
 angle is the vertex stage's, from a clock the window hands it, so a frame
 owed to a spin alone is the previous draw list drawn again — nothing is
-laid out and nothing is painted — at thirty a second, which is 12° a
-frame. A client MAY hold it still (reduced motion).
+laid out, nothing is painted, nothing is uploaded — at thirty a second,
+which is 12° a frame. The same holds of a list with nothing moving in it
+at all: it is the frame until something reaches the client, however often
+a window asks to draw it. A client MAY hold a spin still (reduced motion).
 
 ### 1.1 `canvas` paths
 

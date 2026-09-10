@@ -65,7 +65,7 @@ fn open(backend: &mut Backend, url: &str) -> (eui_client::Connection, mpsc::Rece
 /// the value does (the digits share a width, so it is the atlas
 /// coordinates that differ). Two paints that differ mean a batch landed.
 fn quads(backend: &mut Backend) -> Vec<eui_render::Quad> {
-    backend.paint(320, 240).0.quads
+    backend.paint(320, 240).0.quads.clone()
 }
 
 #[test]

@@ -31,5 +31,5 @@ pub mod gpu;
 pub mod paint;
 
 pub use atlas::{Atlas, ImageAtlas, Region};
-pub use gpu::{Offscreen, RenderError, Renderer, SessionTextures, Target, FORMAT};
+pub use gpu::{Offscreen, RenderError, RenderStats, Renderer, SessionTextures, Target, FORMAT};
 pub use paint::{colors_of, linear, paint, resolve_color, scrollbar_thumb, Backdrop, Colors, DrawList, Editing, Quad, Run, Scene, BLURRED, SCROLLBAR_WIDTH, SPINNING, TEXTURED, TEXTURED_RGBA};
