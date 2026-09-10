@@ -63,14 +63,26 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
     })
 }
 
-fn gpu() -> Option<Renderer> {
-    match Renderer::new_headless() {
-        Ok(r) => Some(r),
+/// One device for every pixel test in this file, taken in turn.
+///
+/// A `Renderer` is a GPU device, and twenty of them at once -- one per
+/// test, on the threads the harness runs them from -- is a great deal to
+/// ask of a software adapter: the Windows runner answered by taking the
+/// test process down with an access violation, about one run in four.
+/// Production has one device per process, so the tests may too, and the
+/// lock makes them queue for it rather than race.
+fn gpu() -> Option<std::sync::MutexGuard<'static, Renderer>> {
+    static SHARED: std::sync::OnceLock<Option<std::sync::Mutex<Renderer>>> = std::sync::OnceLock::new();
+    let shared = SHARED.get_or_init(|| match Renderer::new_headless() {
+        Ok(r) => Some(std::sync::Mutex::new(r)),
         Err(e) => {
-            eprintln!("no GPU adapter ({e}); skipping pixel test");
+            eprintln!("no GPU adapter ({e}); skipping the pixel tests");
             None
         }
-    }
+    });
+    // A test that fails while holding it poisons the lock; the next one
+    // still wants the device, and a fresh session's textures are its own.
+    shared.as_ref().map(|m| m.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 fn pixel(px: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
@@ -832,6 +844,9 @@ fn a_glide_moves_a_quad_by_its_eased_offset() {
 /// on it.
 #[test]
 fn a_timed_renderer_reports_the_previous_frames_gpu_time() {
+    // Its own device, since the shared one asked for no timestamps -- but
+    // taken while holding the shared lock, so the two never overlap.
+    let _queue = gpu();
     let Ok(mut r) = Renderer::new_headless_timed(true) else { return };
     let mut st = r.session();
     let (mut fx, list) = spinning_bar();
