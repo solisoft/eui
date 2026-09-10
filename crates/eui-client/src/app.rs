@@ -2399,22 +2399,53 @@ impl ApplicationHandler<Wake> for App {
                 None => stats.waits = stats.waits.saturating_add(1),
             }
         }
-        // `Wait` sleeps; `WaitUntil` does not (see `Timer`). So the loop
-        // always parks on the one that works, and the deadline goes to the
-        // thread that keeps it.
+        // The deadline goes to the thread that keeps it (see `Timer`); what
+        // the loop parks on is `idle_flow`, which is not the same answer on
+        // every platform.
         match &mut self.timer {
             Some(timer) => {
                 timer.arm(due);
-                event_loop.set_control_flow(ControlFlow::Wait);
+                event_loop.set_control_flow(idle_flow(now));
             }
             // No thread to keep it: the old behaviour, which at least
             // animates, rather than a window that freezes.
             None => event_loop.set_control_flow(match due {
                 Some(at) => ControlFlow::WaitUntil(at),
-                None => ControlFlow::Wait,
+                None => idle_flow(now),
             }),
         }
     }
+}
+
+/// How to park the loop with nothing due — and the two platforms disagree
+/// about which control flow can be trusted to sleep, in opposite
+/// directions, which took a day and a counter to establish.
+///
+/// **Everywhere but Apple**, `Wait` sleeps and `WaitUntil` does not:
+/// measured, a deadline a whole second out spun the loop 125 000 times a
+/// second, and `Wait` went silent on the instant. That is why the deadline
+/// is kept on a thread of ours at all.
+///
+/// **On macOS and iOS it is the other way round.** winit parks its
+/// run-loop timer by setting that timer's fire date to `f64::MAX` — a
+/// timer it creates with a hundred-nanosecond repeating interval, to mimic
+/// polling — and CFRunLoop's timeout arithmetic does not survive a date
+/// that absurd. The loop stops sleeping: measured on an idle window with no
+/// session, no animation and no events at all, a hundred thousand passes a
+/// second and a whole core. A finite deadline, however far away, is an
+/// ordinary fire date and keeps the arithmetic sane.
+///
+/// Ten minutes, then, rather than for ever. It costs one wake-up an idle
+/// ten minutes on the platforms that need it, and nothing anywhere else.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn idle_flow(now: std::time::Instant) -> ControlFlow {
+    ControlFlow::WaitUntil(now + std::time::Duration::from_secs(600))
+}
+
+/// See the Apple half above: here `Wait` is the one that sleeps.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn idle_flow(_now: std::time::Instant) -> ControlFlow {
+    ControlFlow::Wait
 }
 
 // Only the Wayland/X11 window attributes are threaded through this, so on
