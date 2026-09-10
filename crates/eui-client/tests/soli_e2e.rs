@@ -1051,21 +1051,25 @@ fn a_wheel_scroll_into_unloaded_rows_asks_for_them_and_gets_cards() {
     let feed = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)).unwrap();
     let sy = d.session().node(feed).unwrap().scroll.1;
     assert!(sy > 20_000, "scrolled to {sy}");
-    // Right away: nothing asked, placeholders painted.
+    // Right away: placeholders painted, and -- the view having outrun
+    // every row it holds -- the rows around it asked for at once rather
+    // than when it stops (04 §7.1), so a drag sees cards, not placeholders.
     d.tick(clock);
     let list = d.paint(700, 900);
-    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "not while moving");
+    let asked = d.take_pending();
+    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "outran its rows: {asked:?}");
     let sunken = eui_render::linear(d.theme_color(eui_theme::Role::SurfaceSunken));
     assert!(list.quads.iter().any(|q| q.fill == sunken && q.rect[3] > 50.0), "placeholders where the cards will be");
-    // Settled: the window is asked for, the cards come, and they are laid out.
-    clock += Duration::from_millis(200);
-    d.tick(clock);
-    let _ = d.paint(700, 900);
-    let asked = d.take_pending();
-    assert!(asked.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "{asked:?}");
     for f in asked {
         conn.tx.send(f.encode()).unwrap();
     }
+    // Settled: nothing new to ask -- the window it wants is the one it
+    // asked for -- and the cards come and are laid out.
+    clock += Duration::from_millis(200);
+    d.tick(clock);
+    let _ = d.paint(700, 900);
+    let again = d.take_pending();
+    assert!(again.iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::Window)), "asked once, not again on settling: {again:?}");
     let row = d.session().atom_id("row").unwrap();
     let (first, last) = d.layout().row_window(feed, sy as f32).unwrap();
     pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).and_then(|n| n.prop(row)) == Some(&eui_proto::Value::Int(i64::from(first + 5)))));
