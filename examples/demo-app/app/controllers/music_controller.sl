@@ -191,6 +191,90 @@ def needle_mark
   ])
 end
 
+# The mark, turning. A record on the platter is the loading indicator a music
+# player ought to have, and `spin` (03 §5) costs one style byte and no layout:
+# the vertex stage turns what is already painted, and the window wakes for
+# frames only while such a node is on screen.
+#
+# The tick matters. A ring is symmetric, so a spinning one looks perfectly
+# still — the motion has to have something to show.
+def needle_loader(size)
+  k = size / 22.0
+  half = size / 2.0
+  {
+    "k": "canvas",
+    "s": {
+      "width": size,
+      "height": size,
+      "animation": "spin",
+      "shrink": 0
+    },
+    "p": {"paths": [
+      # A record: the platter, its label, and the spindle hole through it.
+      [3, "surface.sunken", half, half, 8.0 * k],
+      [3, "accent.base", half, half, 3.2 * k],
+      [3, "surface.base", half, half, 1.0 * k],
+      # And the arc that shows it turning. A ring would not: a symmetric
+      # shape spinning looks perfectly still, so the motion needs an end.
+      [4, "accent.base", 1.8 * k, half, half, 10.0 * k, 0, 4.71]
+    ]}
+  }
+end
+
+# The same shape as the boot pane, for the wait a search costs.
+def needle_asking_pane(state)
+  pane = column(
+    {
+      "gap": 4,
+      "pad": [8, 4, 8, 4],
+      "align": "center",
+      "justify": "center",
+      "grow": 1
+    },
+    [
+      needle_loader(44),
+      text(
+        "Looking for " + (state["typed"] ?? ""),
+        {"size": 3, "weight": "semibold", "fg": "text.default", "text_align": "center"}
+      )
+    ]
+  )
+  pane["p"] = {"role": "status", "label": "Searching", "live": "polite", "busy": true}
+  pane
+end
+
+# What the window shows between its first paint and its first wake.
+#
+# The wake prop and its handler are the whole mechanism: one event arrives,
+# `needle_boot` does the slow work, and clearing `booting` takes the node —
+# and so the clock — out of the next tree.
+def needle_booting(state)
+  pane = column(
+    {
+      "gap": 5,
+      "pad": [8, 4, 8, 4],
+      "align": "center",
+      "justify": "center",
+      "grow": 1
+    },
+    [
+      needle_loader(56),
+      column({"gap": 2, "align": "center", "max_width": 420}, [
+        text(
+          needle_configured() ? "Reaching the catalogue" : "Warming up",
+          {"size": 4, "weight": "semibold", "fg": "text.default", "text_align": "center"}
+        ),
+        text(
+          needle_configured() ? "Asking for a handful of records, and for a speaker to play them on. It only happens once." : "No catalogue is configured, so this is a generated one. A moment.",
+          {"size": 2, "fg": "text.muted", "text_align": "center"}
+        )
+      ])
+    ]
+  )
+  pane["p"] = {"role": "status", "label": "Loading", "live": "polite", "busy": true}
+  pane
+end
+
 def needle_glass(tone)
   canvas(16, 16, [ [4, tone, 1.7, 7, 7, 5, 0, 6.28], [
     0,
@@ -950,6 +1034,12 @@ def needle_defaults(state)
   # window opens (`needle_fresh`), empty when there is no catalogue to
   # ask.
   state["fresh"] = state["fresh"] ?? []
+  # True between the first render and the first wake, which is the only
+  # window in which this application has not yet asked the catalogue
+  # anything.
+  state["booting"] = state["booting"] ?? false
+  # True between asking for a search and the wake that performs it.
+  state["asking"] = state["asking"] ?? false
   state["devices"] = state["devices"] ?? []
   state["device"] = state["device"] ?? ""
   state["device_name"] = state["device_name"] ?? ""
@@ -963,10 +1053,51 @@ end
 # The window opened: take its size, and ask once for the records the
 # welcome page shows. One call and, the first time, eight pictures; the
 # view itself never reaches the network.
+# `connect` *is* the first render: the window has nothing on it until this
+# returns. Fetching here — a search per pick, plus the device list, plus
+# possibly spawning a speaker — meant several seconds of no window at all,
+# and no way to tell a slow catalogue from an application that had not
+# started. So `connect` does no network. It puts the chrome on the screen,
+# says it is loading, and asks to be woken; `needle_boot` does the work on
+# the first wake and takes the clock away with it.
 def needle_open(state, viewport)
   state["viewport"] = viewport ?? state["viewport"]
-  state["fresh"] = needle_fresh()
+  state["booting"] = true
+  state
+end
+
+# The one wake the boot asks for. Everything slow lives here, and clearing
+# `booting` is what removes the waking node from the next tree — 06 §1.1:
+# a clock stops when the prop or the handler goes, and nothing else stops it.
+# The one wake the shell asks for, and the only handler either wait needs.
+#
+# It lives on the shell rather than on the loading pane, and that is the whole
+# trick. A wake keeps ticking while the handler it woke is still running, so
+# by the time the tree that removes the waiting node reaches the client there
+# are several more events already in flight — and an event naming a node the
+# new tree no longer offers is one an older server ends the session over. The
+# shell is in every tree this application ever renders, so a late wake always
+# names something real, and lands here, and finds nothing to do.
+def needle_tick(state)
+  return needle_boot(state) if state["booting"]
+  return needle_find(state) if state["asking"]
+
+  state
+end
+
+def needle_boot(state)
+  # A wake repeats. It is a clock, not a promise, and it keeps ticking while
+  # the handler it woke is still running — so a boot that takes three seconds
+  # is asked for thirty times before the tree that removes the waking node
+  # gets anywhere near the client. Every one of those must be free, or the
+  # application fetches its catalogue thirty times and the last few arrive
+  # naming a node the new tree no longer has.
+  return state unless state["booting"]
+
+  state["booting"] = false
   needle_ensure_speaker(state)
+  state["fresh"] = needle_fresh()
+  state
 end
 
 def needle_set(state, key, value)
@@ -983,7 +1114,24 @@ def needle_layout(state)
   }
 end
 
+# A search is a round trip to the catalogue, and the window used to sit on the
+# last frame throughout it — indistinguishable from one that had stopped
+# answering. Same road as the boot: record what was asked, paint that, and
+# let the wake do the asking.
+def needle_asking(state, q)
+  state["typed"] = q
+  return needle_set(state, "error", "") if q == ""
+
+  state["asking"] = true
+  state["pane"] = "results"
+  state
+end
+
 def needle_find(state)
+  # The same repeat, for the same reason: see `needle_boot`.
+  return state unless state["asking"]
+
+  state["asking"] = false
   q = state["typed"]
   return needle_set(state, "error", "") if q == ""
 
@@ -1289,10 +1437,12 @@ def music(event_data)
   state = needle_defaults(event_data["state"] ?? {})
   match event {
     "connect" => needle_open(state, params["viewport"]),
+    "tick" => needle_tick(state),
     "viewport" => needle_set(state, "viewport", params["viewport"]),
     "typed" => needle_set(state, "typed", params["payload"]),
-    "find" => needle_find(state),
-    "suggest" => needle_find(needle_set(state, "typed", props["q"])),
+    "find" => needle_asking(state, state["typed"]),
+    "suggest" => needle_asking(state, props["q"]),
+
     "open_album" => needle_open_album(state, props["id"]),
     "open_artist" => needle_open_artist(state, props["id"]),
     "results" => needle_set(state, "pane", state["query"] == "" ? "welcome" : "results"),
@@ -2494,6 +2644,8 @@ end
 # The rail earns its place once a search has run; before that the welcome
 # has the whole width, and on a narrow window the two take turns.
 def needle_panes(state, layout)
+  return [needle_booting(state)] if state["booting"]
+  return [needle_asking_pane(state)] if state["asking"]
   return [needle_detail(state, layout)] if state["pane"] == "welcome"
   return [needle_rail(state, layout)] if layout["single"] && state["pane"] == "results"
   return [needle_detail(state, layout)] if layout["single"]
@@ -2510,7 +2662,7 @@ def music_view(raw_state)
   state = needle_defaults(raw_state)
   layout = needle_layout(state)
   panes = needle_panes(state, layout)
-  column(
+  shell = column(
     {
       "gap": 2,
       "bg": "surface.base",
@@ -2532,6 +2684,11 @@ def music_view(raw_state)
       needle_bar(state, layout)
     ]
   )
+  # The handler is here for the life of the session; only the prop comes and
+  # goes, and a clock stops when either does (06 §1.1).
+  shell["on"] = {"wake": "tick"}
+  shell["p"] = {"wake": 100} if state["booting"] || state["asking"]
+  shell
 end
 # `min_height: 0`: the row holds scrollers, and without it its
 # automatic minimum (04 §4.3) would be the whole page's height.
