@@ -86,7 +86,6 @@ impl Connection {
     }
 }
 
-
 /// The TLS the client speaks, built once: **TLS 1.3 only** (spec 01 §1),
 /// verified against three sets of roots.
 ///

@@ -53,13 +53,6 @@ pub struct Renderer {
     uniforms: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
     atlas_layout: wgpu::BindGroupLayout,
-    atlas_tex: wgpu::Texture,
-    img_tex: wgpu::Texture,
-    /// The image texture's edge: 1 until a picture is packed, then
-    /// `ImageAtlas::SIZE`. Kept so the grow is done once.
-    img_size: u32,
-    atlas_bind: wgpu::BindGroup,
-    atlas_size: u32,
     instances: wgpu::Buffer,
     instance_cap: usize,
     /// Everything the backdrop blur needs. It is built once and then sits
@@ -80,10 +73,39 @@ pub struct Renderer {
     /// pipeline's layout has to be satisfied whether a fragment reads it
     /// or not.
     blur_none: wgpu::BindGroup,
+    adapter_name: String,
+}
+
+/// The textures one window owns. Everything else in `Renderer` is shared by
+/// every window on the device — pipelines, layouts, shaders, the queue —
+/// but these are per session and have to stay that way.
+///
+/// The glyph and image textures because a worker picks its own uv
+/// coordinates: they are four floats in a quad, unchecked on the frame path
+/// (`paint.rs`). One texture behind two sessions would let a hostile worker
+/// sample the other application's rendered text. One texture each costs a
+/// little memory and closes that without a per-quad check.
+///
+/// The blur textures for a duller reason: they are sized to the window's
+/// blurred region. Shared, two windows of different sizes would take turns
+/// missing `Blur::key` and reallocate every texture, every frame.
+pub struct SessionTextures {
+    atlas_tex: wgpu::Texture,
+    img_tex: wgpu::Texture,
+    /// The image texture's edge: 1 until a picture is packed, then
+    /// `ImageAtlas::SIZE`. Kept so the grow is done once.
+    img_size: u32,
+    atlas_bind: wgpu::BindGroup,
+    atlas_size: u32,
     /// The working textures, kept for as long as the next frame wants the
     /// same ones and dropped when a frame stops asking.
     blur: Option<Blur>,
-    adapter_name: String,
+}
+
+impl fmt::Debug for SessionTextures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionTextures").field("atlas", &self.atlas_size).field("images", &self.img_size).finish()
+    }
 }
 
 /// The off-screen textures a blurred frame works in.
@@ -126,7 +148,7 @@ const BLUR_STRIDE: u64 = 256;
 
 impl fmt::Debug for Renderer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Renderer").field("adapter", &self.adapter_name).field("atlas", &self.atlas_size).finish()
+        f.debug_struct("Renderer").field("adapter", &self.adapter_name).finish()
     }
 }
 
@@ -306,9 +328,6 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let atlas_size = Atlas::INITIAL;
-        let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&device, &atlas_layout, atlas_size, 1);
-
         Ok(Self {
             device,
             queue,
@@ -318,11 +337,6 @@ impl Renderer {
             uniforms,
             uniform_bind,
             atlas_layout,
-            atlas_tex,
-            img_tex,
-            img_size: 1,
-            atlas_bind,
-            atlas_size,
             instances,
             instance_cap,
             blur_shader,
@@ -335,7 +349,6 @@ impl Renderer {
             blur_params_bind,
             blur_sampler,
             blur_none,
-            blur: None,
             adapter_name: adapter.get_info().name,
         })
     }
@@ -409,6 +422,15 @@ impl Renderer {
         (tex, img, bind)
     }
 
+    /// The textures for one more window on this device. A session holds
+    /// this for as long as its window lives and hands it back to every
+    /// `render` call; the renderer itself keeps no window's textures.
+    pub fn session(&self) -> SessionTextures {
+        let atlas_size = Atlas::INITIAL;
+        let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas_size, 1);
+        SessionTextures { atlas_tex, img_tex, img_size: 1, atlas_bind, atlas_size, blur: None }
+    }
+
     /// The adapter's name, for diagnostics.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
@@ -426,24 +448,24 @@ impl Renderer {
 
     /// Upload the atlases if they changed, growing the glyph texture with
     /// its atlas.
-    fn sync_atlas(&mut self, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    fn sync_atlas(&self, tex: &mut SessionTextures, atlas: &mut Atlas, images: &mut ImageAtlas) {
         // The image texture is made full size the first time a picture is
         // actually packed, and never before.
-        let want_img = if images.is_empty() { self.img_size } else { ImageAtlas::SIZE };
-        if atlas.size() != self.atlas_size || want_img != self.img_size {
-            let (tex, img, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size(), want_img);
-            self.img_size = want_img;
-            self.atlas_tex = tex;
-            self.img_tex = img;
-            self.atlas_bind = bind;
-            self.atlas_size = atlas.size();
+        let want_img = if images.is_empty() { tex.img_size } else { ImageAtlas::SIZE };
+        if atlas.size() != tex.atlas_size || want_img != tex.img_size {
+            let (glyphs, img, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size(), want_img);
+            tex.img_size = want_img;
+            tex.atlas_tex = glyphs;
+            tex.img_tex = img;
+            tex.atlas_bind = bind;
+            tex.atlas_size = atlas.size();
             images.mark_dirty_all();
         }
         // Only the rows that changed cross to the GPU: a few glyph rows
         // per frame of new text, not a megabyte.
         if let Some((y0, y1)) = images.dirty_rows() {
             self.queue.write_texture(
-                wgpu::ImageCopyTexture { texture: &self.img_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+                wgpu::ImageCopyTexture { texture: &tex.img_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
                 images.rows(y0, y1),
                 wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(y1 - y0) },
                 wgpu::Extent3d { width: images.size(), height: y1 - y0, depth_or_array_layers: 1 },
@@ -454,7 +476,7 @@ impl Renderer {
             return;
         };
         self.queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &self.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyTexture { texture: &tex.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
             atlas.rows(y0, y1),
             wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(y1 - y0) },
             wgpu::Extent3d { width: atlas.size(), height: y1 - y0, depth_or_array_layers: 1 },
@@ -494,14 +516,14 @@ impl Renderer {
 
     /// The textures the frame's blurs work in, made afresh only when the
     /// region, the radii or the format have moved since the last frame.
-    fn blur_targets(&mut self, format: wgpu::TextureFormat, b: &Backdrop) {
+    fn blur_targets(&self, tex: &mut SessionTextures, format: wgpu::TextureFormat, b: &Backdrop) {
         let key = (format, b.rect, b.sigmas.iter().map(|s| reduce_factor(*s)).collect::<Vec<_>>());
-        if self.blur.as_ref().is_some_and(|x| x.key == key) {
+        if tex.blur.as_ref().is_some_and(|x| x.key == key) {
             return;
         }
         let (rw, rh) = (b.rect[2].max(1), b.rect[3].max(1));
         let device = &self.device;
-        let tex = |label: &str, w: u32, h: u32| {
+        let make = |label: &str, w: u32, h: u32| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
@@ -513,23 +535,23 @@ impl Renderer {
                 view_formats: &[],
             })
         };
-        let snap = tex("backdrop", rw, rh);
+        let snap = make("backdrop", rw, rh);
         let chains = b
             .sigmas
             .iter()
             .map(|sigma| {
                 let d = reduce_factor(*sigma);
                 let (w, h) = (rw / d, rh / d);
-                (d, tex("blur a", w, h), tex("blur b", w, h))
+                (d, make("blur a", w, h), make("blur b", w, h))
             })
             .collect();
-        self.blur = Some(Blur { key, snap, chains });
+        tex.blur = Some(Blur { key, snap, chains });
     }
 
     /// Draw a list into a target.
-    pub fn render(&mut self, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         let Target { view, format, size, now } = target;
-        self.sync_atlas(atlas, images);
+        self.sync_atlas(tex, atlas, images);
         if list.quads.len() > self.instance_cap {
             self.instance_cap = list.quads.len().next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -556,7 +578,7 @@ impl Renderer {
         // reaches none of this and stays the single pass it always was.
         let backdrop = list.backdrop.as_ref().filter(|b| !b.sigmas.is_empty());
         let outs = match backdrop {
-            Some(b) => self.render_backdrop(format, now, list, b),
+            Some(b) => self.render_backdrop(tex, format, now, list, b),
             None => Vec::new(),
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
@@ -581,7 +603,7 @@ impl Renderer {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
-            pass.set_bind_group(1, &self.atlas_bind, &[]);
+            pass.set_bind_group(1, &tex.atlas_bind, &[]);
             pass.set_vertex_buffer(0, self.instances.slice(..));
             let mut bound = u32::MAX;
             for run in &list.runs {
@@ -613,9 +635,9 @@ impl Renderer {
     /// the caller must write its own uniforms afterwards — a queue's writes
     /// and submits are ordered, and that ordering is what keeps the two
     /// passes reading different values out of one buffer.
-    fn render_backdrop(&mut self, format: wgpu::TextureFormat, now: f32, list: &DrawList, b: &Backdrop) -> Vec<wgpu::BindGroup> {
+    fn render_backdrop(&mut self, tex: &mut SessionTextures, format: wgpu::TextureFormat, now: f32, list: &DrawList, b: &Backdrop) -> Vec<wgpu::BindGroup> {
         self.blur_pipeline_for(format);
-        self.blur_targets(format, b);
+        self.blur_targets(tex, format, b);
         let need = BLUR_STRIDE * 3 * b.sigmas.len() as u64;
         if self.blur_params.size() < need {
             self.blur_params = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -633,7 +655,7 @@ impl Renderer {
                 }],
             });
         }
-        let (Some(blur), Some((reduce, gauss))) = (self.blur.as_ref(), self.blur_pipelines.get(&format)) else {
+        let (Some(blur), Some((reduce, gauss))) = (tex.blur.as_ref(), self.blur_pipelines.get(&format)) else {
             return Vec::new();
         };
         let (rx, ry) = (b.rect[0], b.rect[1]);
@@ -684,7 +706,7 @@ impl Renderer {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
-            pass.set_bind_group(1, &self.atlas_bind, &[]);
+            pass.set_bind_group(1, &tex.atlas_bind, &[]);
             pass.set_bind_group(2, &self.blur_none, &[]);
             pass.set_vertex_buffer(0, self.instances.slice(..));
             for run in &list.runs {
@@ -759,9 +781,9 @@ impl Renderer {
     }
 
     /// Draw into an off-screen target.
-    pub fn render_offscreen(&mut self, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
+    pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) {
         let view = target.texture.create_view(&Default::default());
-        self.render(Target { view: &view, format: FORMAT, size: (target.width, target.height), now }, list, atlas, images);
+        self.render(tex, Target { view: &view, format: FORMAT, size: (target.width, target.height), now }, list, atlas, images);
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

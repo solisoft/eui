@@ -29,6 +29,7 @@ fn main() {
     let (w, h, scale) = (420.0f32, 260.0f32, 2.0f32);
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
+    let mut textures = renderer.session();
     eprintln!("adapter: {}", renderer.adapter_name());
 
     for (name, mode, clicks) in [("light-0", ThemeMode::Light, 0), ("light-3", ThemeMode::Light, 3), ("dark-3", ThemeMode::Dark, 3)] {
@@ -57,7 +58,7 @@ fn main() {
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&target, 0.0, &list, atlas, images);
+        renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
         let px = renderer.read_back(&target).expect("read back");
         std::fs::write(format!("{out}/{name}.rgba"), &px).unwrap();
         println!("{name} {dw} {dh} quads={} mount_bytes={wire}", list.quads.len());
@@ -77,6 +78,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     let cookie = std::env::var("SNAPSHOT_COOKIE").ok();
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
+    let mut textures = renderer.session();
     for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {
         let mut driver = Driver::new(w, h, scale, 0);
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
@@ -233,7 +235,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&target, 0.0, &list, atlas, images);
+        renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {
@@ -248,7 +250,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     let list = driver.paint(dw, dh);
                     let painted = t.elapsed();
                     let (atlas, images) = driver.atlases_mut();
-                    renderer.render_offscreen(&target, 0.0, &list, atlas, images);
+                    renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
                     let _ = renderer.read_back(&target);
                     println!("frame {i}: layout+paint {:.2} ms, render+readback {:.2} ms, {} quads", painted.as_secs_f64() * 1e3, (t.elapsed() - painted).as_secs_f64() * 1e3, list.quads.len());
                 }

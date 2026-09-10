@@ -160,11 +160,12 @@ fn a_two_x_display_snaps_to_device_pixels() {
 #[test]
 fn clear_colour_is_the_surface_role() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, ..Default::default() };
     let mut fx = fixture(vec![col], vec![node(NodeKind::Box, 1, 1, 0)], vec![], &[], 64.0, 64.0);
     let list = draw(&mut fx, 64, 64, 1.0);
     let target = r.offscreen(64, 64);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     assert_eq!(px.len(), 64 * 64 * 4);
     let want = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -175,12 +176,13 @@ fn clear_colour_is_the_surface_role() {
 #[test]
 fn a_filled_box_lands_where_layout_put_it_with_its_role_colour() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [3; 4], ..Default::default() }; // 8 px
     let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
     let list = draw(&mut fx, 100, 100, 1.0);
     let target = r.offscreen(100, 100);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -197,6 +199,7 @@ fn a_filled_box_lands_where_layout_put_it_with_its_role_colour() {
 #[test]
 fn rounded_corners_and_borders_render() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
     // radius index 3 = lg = 12 px; border 2 px in the strong border role.
     let bg = StyleRecord {
@@ -211,7 +214,7 @@ fn rounded_corners_and_borders_render() {
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 80.0, 80.0);
     let list = draw(&mut fx, 80, 80, 1.0);
     let target = r.offscreen(80, 80);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -225,13 +228,14 @@ fn rounded_corners_and_borders_render() {
 #[test]
 fn text_puts_ink_inside_its_rect_and_nowhere_else() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [4; 4], ..Default::default() }; // 12 px
     let big = StyleRecord { font_size: 7, ..Default::default() }; // 38 px
     let mut fx = fixture(vec![col, big], vec![node(NodeKind::Box, 1, 1, 1), text(2, 2, "HHH")], vec![], &[], 200.0, 100.0);
     let list = draw(&mut fx, 200, 100, 1.0);
     assert!(list.quads.iter().all(|q| q.params[2] as u32 == TEXTURED), "only glyph quads");
     let target = r.offscreen(200, 100);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     let rect = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
@@ -260,13 +264,14 @@ fn text_puts_ink_inside_its_rect_and_nowhere_else() {
 #[test]
 fn scroll_clips_at_the_pixel_level() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, ..Default::default() };
     let sc = StyleRecord { display: Display::Column, height: Dim::Px(30), ..Default::default() };
     let bg = StyleRecord { bg: ColorRef::role(Role::DangerBase.id()), height: Dim::Px(100), ..Default::default() };
     let mut fx = fixture(vec![col, sc, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Scroll, 2, 2, 1), node(NodeKind::Box, 3, 3, 0)], vec![], &[], 50.0, 100.0);
     let list = draw(&mut fx, 50, 100, 1.0);
     let target = r.offscreen(50, 100);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let danger = rgba_of(fx.theme.color(Role::DangerBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -279,6 +284,7 @@ fn scroll_clips_at_the_pixel_level() {
 #[test]
 fn stack_paints_in_z_order() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let stack = StyleRecord { display: Display::Stack, ..Default::default() };
     let low = StyleRecord { bg: ColorRef::role(Role::DangerBase.id()), width: Dim::Px(40), height: Dim::Px(40), z: 0, ..Default::default() };
     let high = StyleRecord { bg: ColorRef::role(Role::SuccessBase.id()), width: Dim::Px(40), height: Dim::Px(40), z: 9, ..Default::default() };
@@ -286,7 +292,7 @@ fn stack_paints_in_z_order() {
     let mut fx = fixture(vec![stack, low, high], vec![node(NodeKind::Box, 1, 1, 2), node(NodeKind::Box, 2, 3, 0), node(NodeKind::Box, 3, 2, 0)], vec![], &[], 40.0, 40.0);
     let list = draw(&mut fx, 40, 40, 1.0);
     let target = r.offscreen(40, 40);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     assert!(close(pixel(&px, 40, 20, 20), rgba_of(fx.theme.color(Role::SuccessBase)), 2));
 }
@@ -294,6 +300,7 @@ fn stack_paints_in_z_order() {
 #[test]
 fn an_image_paints_its_pixels() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     const AVATAR: &[u8] = include_bytes!("../../../examples/counter-app/public/images/avatar.png");
     // Decode by hand here to keep eui-render free of the png crate: the
     // avatar's centre 8×8 is white and its corners are transparent, which is
@@ -321,7 +328,7 @@ fn an_image_paints_its_pixels() {
     let list = draw(&mut fx, 100, 100, 1.0);
     assert_eq!(list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED_RGBA).count(), 1);
     let target = r.offscreen(100, 100);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     // Centre of the image (12+16, 12+16): white. Corner (12, 12): the surface shows through.
@@ -385,12 +392,13 @@ fn canvas_paths_become_capsules_strips_circles_and_arcs() {
 #[test]
 fn a_canvas_line_lands_on_its_pixels() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let i = Value::Int;
     let paths = Value::List(vec![Value::List(vec![i(0), Value::Str("accent.base".into()), i(6), i(0), i(0), i(40), i(40)])]);
     let mut fx = canvas_fixture(paths, 100.0, 50.0);
     let list = draw(&mut fx, 100, 50, 1.0);
     let target = r.offscreen(100, 50);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
@@ -493,14 +501,15 @@ fn two_radii_are_two_chains_on_runs_of_their_own() {
 #[test]
 fn a_blurred_pane_carries_each_half_across_the_seam() {
     let Some(mut r) = gpu() else { return };
-    let shot = |r: &mut Renderer, blur: u8| {
+    let mut st = r.session();
+    let shot = |r: &mut Renderer, st: &mut SessionTextures, blur: u8| {
         let (mut fx, list) = seam(blur);
         let target = r.offscreen(40, 20);
-        r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+        r.render_offscreen(st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
         r.read_back(&target).unwrap()
     };
-    let sharp = shot(&mut r, 0);
-    let frosted = shot(&mut r, 4);
+    let sharp = shot(&mut r, &mut st, 0);
+    let frosted = shot(&mut r, &mut st, 4);
     let red = rgba_of(fx_role(Role::DangerBase));
     let blue = rgba_of(fx_role(Role::InfoBase));
 
@@ -531,6 +540,7 @@ fn a_blurred_pane_carries_each_half_across_the_seam() {
 #[test]
 fn a_pane_smaller_than_the_frame_frosts_what_is_actually_behind_it() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let stack = StyleRecord { display: Display::Stack, width: Dim::Px(80), height: Dim::Px(20), ..Default::default() };
     let row = StyleRecord { display: Display::Row, width: Dim::Px(80), height: Dim::Px(20), ..Default::default() };
     let half = |role: Role| StyleRecord { bg: ColorRef::role(role.id()), width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
@@ -559,7 +569,7 @@ fn a_pane_smaller_than_the_frame_frosts_what_is_actually_behind_it() {
     assert_eq!(b.rect, [21, 0, 38, 20], "a sub-rect, not the framebuffer");
 
     let target = r.offscreen(80, 20);
-    r.render_offscreen(&target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
     let px = r.read_back(&target).unwrap();
     let red = rgba_of(fx_role(Role::DangerBase));
     let blue = rgba_of(fx_role(Role::InfoBase));
@@ -751,6 +761,7 @@ fn a_tall_field_centres_its_text_and_caret() {
 #[test]
 fn a_bgra_target_draws_the_same_picture_with_its_channels_swapped() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [3; 4], ..Default::default() };
     let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(20), ..Default::default() };
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
@@ -768,7 +779,7 @@ fn a_bgra_target_draws_the_same_picture_with_its_channels_swapped() {
         view_formats: &[],
     });
     let view = tex.create_view(&Default::default());
-    r.render(Target { view: &view, format: wgpu::TextureFormat::Bgra8UnormSrgb, size: (100, 100), now: 0.0 }, &list, &mut fx.atlas, &mut fx.images);
+    r.render(&mut st, Target { view: &view, format: wgpu::TextureFormat::Bgra8UnormSrgb, size: (100, 100), now: 0.0 }, &list, &mut fx.atlas, &mut fx.images);
 
     let px = read_texture(&mut r, &tex, 100, 100);
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
@@ -856,16 +867,17 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
 #[test]
 fn the_clock_turns_a_spinning_node_a_quarter_of_the_way_round() {
     let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
     let (mut fx, list) = spinning_bar();
     // One revolution per 1.2 s, so 0.3 s is a right angle: the horizontal
     // bar stands up, about a centre that does not move.
-    let shot = |r: &mut Renderer, fx: &mut Fx, now: f32| {
+    let shot = |r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx, now: f32| {
         let target = r.offscreen(100, 100);
-        r.render_offscreen(&target, now, &list, &mut fx.atlas, &mut fx.images);
+        r.render_offscreen(st, &target, now, &list, &mut fx.atlas, &mut fx.images);
         r.read_back(&target).unwrap()
     };
-    let flat = shot(&mut r, &mut fx, 0.0);
-    let upright = shot(&mut r, &mut fx, 0.3);
+    let flat = shot(&mut r, &mut st, &mut fx, 0.0);
+    let upright = shot(&mut r, &mut st, &mut fx, 0.3);
     let accent = rgba_of(fx.theme.color(Role::AccentBase));
     let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
     // The bar is 40 x 10 at the origin, so its centre is (20, 5).
@@ -879,4 +891,41 @@ fn the_clock_turns_a_spinning_node_a_quarter_of_the_way_round() {
     // The centre is on either way: a spin turns a node, it does not move it.
     assert!(close(pixel(&flat, 100, cx, cy), accent, 2));
     assert!(close(pixel(&upright, 100, cx, cy), accent, 2));
+}
+
+// Two windows on one device: what the renderer shares between them and what
+// it must not. The glyph texture is the "must not" — a session uploads only
+// the atlas rows that changed since its own last frame, so if both windows
+// wrote into one texture the second would overwrite the first's glyphs and
+// the first would then draw whatever the second had left there. It has a
+// security half too (a worker picks its own uv, so one texture is one app
+// reading another's text), but this is the half a test can see.
+#[test]
+fn a_second_window_does_not_draw_over_the_first_windows_glyphs() {
+    let Some(mut r) = gpu() else { return };
+    let mut one = r.session();
+    let mut two = r.session();
+    let scene = |s: &str| {
+        let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+        fixture(vec![col], vec![node(NodeKind::Box, 1, 1, 1), text(2, 0, s)], vec![], &[], 120.0, 40.0)
+    };
+    let shot = |r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx| {
+        let list = draw(fx, 120, 40, 1.0);
+        let target = r.offscreen(120, 40);
+        r.render_offscreen(st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()
+    };
+
+    let mut a = scene("Wig");
+    let mut b = scene("Mox");
+    let first = shot(&mut r, &mut one, &mut a);
+    // The other window packs different glyphs at the same places in its own
+    // atlas, and uploads them.
+    let _ = shot(&mut r, &mut two, &mut b);
+    // Now the first window draws again. Its atlas has not changed, so it
+    // uploads nothing: everything it draws comes from the texture it left
+    // behind, which is exactly what a shared one would no longer hold.
+    let again = shot(&mut r, &mut one, &mut a);
+    assert_eq!(first, again, "the first window's text must survive the second window's frame");
+    assert!(first.chunks(4).any(|p| p[0] != first[0] || p[1] != first[1] || p[2] != first[2]), "the frame has to have drawn some text to be worth comparing");
 }

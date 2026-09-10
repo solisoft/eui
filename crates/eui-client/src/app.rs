@@ -46,6 +46,10 @@ struct Gpu {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     renderer: eui_render::Renderer,
+    /// The glyph, image and blur textures for this window. Separate from
+    /// the renderer because the renderer is what a second window would
+    /// share and these are what it must not.
+    textures: eui_render::SessionTextures,
 }
 
 /// How to open an application: what the `eui` binary parses from its
@@ -352,7 +356,8 @@ impl App {
         let format = gpu.config.format;
         let now = self.epoch.elapsed().as_secs_f32();
         let target = eui_render::Target { view: &view, format, size: (w, h), now };
-        self.backend.with_atlases(|atlas, images| gpu.renderer.render(target, &list, atlas, images));
+        let textures = &mut gpu.textures;
+        self.backend.with_atlases(|atlas, images| gpu.renderer.render(textures, target, &list, atlas, images));
         frame.present();
         crate::driver::trace(|| {
             format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len())
@@ -520,7 +525,8 @@ impl ApplicationHandler<Wake> for App {
                 }
             });
         }
-        self.gpu = Some(Gpu { surface, config, renderer });
+        let textures = renderer.session();
+        self.gpu = Some(Gpu { surface, config, renderer, textures });
         // Everything the first frame needs is in place, and any assistive
         // technology has already registered: it is safe to be seen.
         //
