@@ -210,7 +210,14 @@ impl Layout {
         // their ancestors keep theirs, and a scrolled frame re-measures the
         // rows entering the window and nothing else.
         self.generation = self.generation.wrapping_add(1);
-        self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty & (dirty::SELF | dirty::DESCENDANT) == 0));
+        // Only when something changed. The sweep asks the session about
+        // every entry it holds -- thirteen thousand of them on the gallery
+        // -- and a frame with nothing dirty has nothing to drop: a window
+        // being dragged wider re-lays-out constantly and dirties nothing,
+        // so this ran for nothing on every configure.
+        if f.session.is_dirty() {
+            self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty & (dirty::SELF | dirty::DESCENDANT) == 0));
+        }
         self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
         self.item_height_atom = f.session.atom_id("item_height");

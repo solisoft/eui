@@ -315,8 +315,11 @@ pub fn trace(line: impl FnOnce() -> String) {
 const SPIN_FRAME: Duration = Duration::from_millis(33);
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
 /// How long a drag waits for the server to answer its last move before
-/// sending another. A handler that answers nothing must not stop the drag.
-const DRAG_ANSWER_WAIT: Duration = Duration::from_millis(100);
+/// sending another. A server that answers paces the drag itself, so this
+/// is only for one that says nothing at all -- two frames, which is slow
+/// enough not to build a queue and quick enough that a hand cannot feel
+/// the wait.
+const DRAG_ANSWER_WAIT: Duration = Duration::from_millis(32);
 /// While a scroll is still moving, how often it may ask for rows it has
 /// outrun: often enough that a drag sees rows rather than placeholders,
 /// seldom enough that a drag is not a server render a frame.
@@ -670,6 +673,12 @@ impl Driver {
 
     /// Apply a frame from the server; returns frames to send back.
     pub fn handle_frame(&mut self, frame: Frame) -> Vec<Frame> {
+        // The server has spoken since the drag's last move, whatever it
+        // said, so the next may go. Waiting for a batch in particular
+        // would hold a drag whose move changed nothing the server draws --
+        // a bar already against its stop answers with silence, and the
+        // hand would feel it as a bar that will not move.
+        self.pointer.move_in_flight = None;
         self.touched = true;
         match frame {
             Frame::Welcome(w) => {
@@ -680,11 +689,7 @@ impl Driver {
                 self.welcomed = true;
                 Vec::new()
             }
-            Frame::Batch(batch) => {
-                // The answer to whatever was asked, a drag's move included.
-                self.pointer.move_in_flight = None;
-                self.apply(&batch)
-            }
+            Frame::Batch(batch) => self.apply(&batch),
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
             Frame::Error { code, message } => {
@@ -942,10 +947,20 @@ impl Driver {
         self.now = Instant::now();
         match input {
             Input::Resized(w, h, scale) => {
+                let rescaled = (self.scale - scale).abs() > f32::EPSILON;
                 self.size = Size::new(w, h);
                 self.scale = scale;
-                self.layout.invalidate_all();
-                self.paint_cache.clear();
+                // A new size is not new text. What a node measures depends
+                // on the constraints it was given, and those are in the
+                // memo's key, so a width that changed brings its own key
+                // and one that did not keeps its answer -- a window
+                // dragged wider re-measures what the width reaches and
+                // leaves the rest. A new *scale* is another matter: the
+                // glyphs are rasterised afresh, so nothing may be kept.
+                if rescaled {
+                    self.layout.invalidate_all();
+                    self.paint_cache.clear();
+                }
                 self.invalidate();
                 let now = Instant::now();
                 self.now = now;
@@ -1252,6 +1267,7 @@ impl Driver {
         if let Some(pressed) = self.pointer.pressed_on {
             if self.session.node(pressed).is_some() && self.target(pressed, EventKind::PointerMove).is_some() {
                 let p = self.point_payload(pressed, EventKind::PointerMove, x, y);
+                trace(|| format!("drag: captured move {x},{y} for node {:?}", self.session.node(pressed).map(|n| n.id)));
                 self.pointer.coalesced_move = Some((pressed, p));
                 self.redraw = true;
                 return Vec::new();
@@ -1374,10 +1390,12 @@ impl Driver {
         if self.pointer.coalesced_move.is_none() {
             return Vec::new();
         }
-        if self.pointer.move_in_flight.is_some_and(|at| self.now.saturating_duration_since(at) < DRAG_ANSWER_WAIT) {
+        if let Some(at) = self.pointer.move_in_flight.filter(|at| self.now.saturating_duration_since(*at) < DRAG_ANSWER_WAIT) {
+            trace(|| format!("drag: holding, {:?} since the last went unanswered", self.now.saturating_duration_since(at)));
             return Vec::new();
         }
         let out = self.flush_coalesced_move();
+        trace(|| format!("drag: {} move(s) sent this frame", out.len()));
         if !out.is_empty() {
             self.pointer.move_in_flight = Some(self.now);
             // The next frame is owed: the position it holds may be the one
@@ -1516,6 +1534,7 @@ impl Driver {
             }
         }
         self.pointer.pressed_on = Some(ix);
+        trace(|| format!("press on node {:?}, moves go to {:?}", self.session.node(ix).map(|n| n.id), self.target(ix, EventKind::PointerMove).and_then(|(t, _)| self.session.node(t)).map(|n| n.id)));
         // A new drag starts owing nothing, whatever the last one left.
         self.pointer.move_in_flight = None;
         // Focus moves to the nearest editable node on the path, else to the
