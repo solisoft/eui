@@ -2196,7 +2196,13 @@ impl Driver {
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
             None
         } else if self.scroll_anim.is_some() {
-            Some(now + Duration::from_millis(8))
+            // A glide at sixty, not a hundred and twenty-five. Every frame
+            // of it lays the page out again — the rows a windowed list
+            // shows move with the offset — and presents; on a display that
+            // refreshes at 120 Hz an 8 ms cadence asked for both twice as
+            // often as the eye needs, and a glide through the docs dialog
+            // was a fifth of a core on macOS.
+            Some(now + Duration::from_millis(16))
         } else if self.anims.is_empty() {
             // Only a spin: half the frames a transition gets. A revolution
             // is 1.2 s (03 §5), which is 12° a frame at thirty — smooth —

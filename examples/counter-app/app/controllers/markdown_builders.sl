@@ -421,12 +421,15 @@ end
 MD_DOC_ROWS = {}
 
 def md_doc_rows(path, width)
-  cached = MD_DOC_ROWS[path]
+  # Keyed by the width too: the guesses are for a width, and a window that
+  # was resized asks for the same document at another one.
+  doc_key = path + "@" + str(width)
+  cached = MD_DOC_ROWS[doc_key]
   return cached unless cached.nil?
 
   blocks = md_blocks(File.read(path))
   built = {"rows": blocks, "heights": blocks.map(fn(b) { md_guess_height(b, width) })}
-  MD_DOC_ROWS[path] = built
+  MD_DOC_ROWS[doc_key] = built
   built
 end
 

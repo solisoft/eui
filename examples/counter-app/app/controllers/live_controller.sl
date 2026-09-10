@@ -916,7 +916,20 @@ def gallery_doc(state)
   # for every block and lays out the ones in view, so opening a page costs
   # a window of blocks however long the page is. `doc_window` is what the
   # client last asked for; the rows it names are the only ones built.
-  doc = md_doc_rows("app/docs/components.md", 800)
+  # The dialog takes the window it is in: as wide as 860 when there is
+  # room, the window less a margin when there is not, and as tall as the
+  # window leaves once the title and the Close row have had theirs. The
+  # rows are guessed at the width they will be laid out in.
+  doc_vw = (state["viewport"] ?? {})["width"] ?? 1280
+  doc_vh = (state["viewport"] ?? {})["height"] ?? 800
+  doc_width = doc_vw - 32 < 860 ? doc_vw - 32 : 860
+  doc_width = 320 if doc_width < 320
+  doc_height = doc_vh - 200
+  doc_height = 240 if doc_height < 240
+  # And no taller than a page one can read: a dialog that took a tall
+  # window whole would be a wall of text with a Close button under it.
+  doc_height = 720 if doc_height > 720
+  doc = md_doc_rows("app/docs/components.md", doc_width - 60)
   doc_count = doc["rows"].length()
   doc_window = state["doc_window"] ?? [0, 24]
   doc_first = doc_window[0] ?? 0
@@ -930,7 +943,7 @@ def gallery_doc(state)
   })
   dialog(
     "EUI components",
-    [list_window({"grow": 1, "max_height": 560, "gap": 3}, 24, doc_count, doc["heights"], doc_rows, "doc_window")],
+    [list_window({"grow": 1, "max_height": doc_height, "gap": 3}, 24, doc_count, doc["heights"], doc_rows, "doc_window")],
     [{
       "k": "box",
       "s": {"display": "row", "justify": "center", "align": "center", "pad": [2, 4, 2, 4], "min_width": 44, "bg": "accent.base", "fg": "accent.on", "border": 1, "radius": 2, "cursor": "pointer"},
@@ -938,7 +951,7 @@ def gallery_doc(state)
       "on": {"click": "lazy_close"},
       "c": [text("Close", {"weight": "semibold"})]
     }],
-    {"width": 860}
+    {"width": doc_width}
   )
 end
 

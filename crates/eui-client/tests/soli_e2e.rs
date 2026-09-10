@@ -1249,7 +1249,10 @@ fn the_docs_dialog_is_a_window_of_blocks_that_scrolling_extends() {
             conn.tx.send(f.encode()).unwrap();
         }
     }
-    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    // Two requests may be in flight — the range the mount settled on, and
+    // the one the glide outran to — so wait for the rows, not for a seq.
+    let _ = seq;
+    pump(&mut d, &conn, &wake, |d| rows_of(d).iter().any(|r| *r > 24));
     let _ = d.paint(1000, 3_600);
     let later = rows_of(&d);
     assert!(later.iter().any(|r| *r > 24), "rows past the first window arrived: {later:?}");
