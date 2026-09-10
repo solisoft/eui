@@ -109,14 +109,6 @@ const ALLOWED: &[libc::c_long] = &[
     libc::SYS_rt_sigprocmask,
     libc::SYS_rt_sigaction,
     libc::SYS_sigaltstack,
-    // A signal delivered while the worker is blocked reading its pipe
-    // leaves the kernel to resume the read, and the way it resumes one is
-    // to re-enter it as `restart_syscall`. Nothing asks for this call --
-    // the kernel issues it -- and it can do nothing on its own: it resumes
-    // a call this filter already allowed, or it fails. Left out, the
-    // worker dies of SIGSYS whenever a signal happens to land in a read,
-    // which is seldom on a quiet machine and often on a loaded one.
-    libc::SYS_restart_syscall,
     libc::SYS_clock_gettime,
     libc::SYS_clock_getres,
     libc::SYS_clock_nanosleep,
@@ -134,6 +126,13 @@ const ALLOWED: &[libc::c_long] = &[
     // mimalloc (the allocator of a Soli-built host) asks which NUMA node
     // it is on when it maps a segment.
     libc::SYS_getcpu,
+    // How many processors the worker may run on. `warm_up` asks once
+    // before the filter closes so the answer is already in hand, but a
+    // thread pool that grows later asks again, and a glibc other than
+    // this machine's asks where this one does not. It reads the affinity
+    // mask and nothing else: it opens nothing, connects to nothing and
+    // starts nothing, which is what this sandbox is here to refuse.
+    libc::SYS_sched_getaffinity,
 ];
 
 // `libc::SYS_*` is a `c_long`: already `i64` on a 64-bit target, `i32` on a
