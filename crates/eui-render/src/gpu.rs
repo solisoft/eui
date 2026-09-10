@@ -616,17 +616,18 @@ impl Renderer {
             );
             images.mark_clean();
         }
-        let Some((y0, y1)) = atlas.dirty_rows() else {
-            return bytes;
-        };
-        let rows = atlas.rows(y0, y1);
-        bytes += rows.len();
-        self.queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &tex.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
-            rows,
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(y1 - y0) },
-            wgpu::Extent3d { width: atlas.size(), height: y1 - y0, depth_or_array_layers: 1 },
-        );
+        // Band by band: two glyphs on shelves far apart cost their rows,
+        // not the rows between.
+        for &(y0, y1) in atlas.dirty_bands() {
+            let rows = atlas.rows(y0, y1);
+            bytes += rows.len();
+            self.queue.write_texture(
+                wgpu::ImageCopyTexture { texture: &tex.atlas_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+                rows,
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(atlas.size()), rows_per_image: Some(y1 - y0) },
+                wgpu::Extent3d { width: atlas.size(), height: y1 - y0, depth_or_array_layers: 1 },
+            );
+        }
         atlas.mark_clean();
         bytes
     }

@@ -418,13 +418,13 @@ pub enum Payload {
     /// `PendingAssets`.
     Assets(Vec<Hash>),
     /// `Paint`: the draw list, and the rows of each atlas that changed
-    /// since the last paint — `(edge length, y0, y1, bytes)` for the glyph
-    /// atlas, which grows, `(y0, y1, bytes)` for the image atlas.
+    /// since the last paint — bands of `(edge length, y0, y1, bytes)` for
+    /// the glyph atlas, which grows, `(y0, y1, bytes)` for the image atlas.
     Paint {
         /// The frame. Shared, so a reply drawn again is not copied again.
         list: Arc<DrawList>,
         /// Coverage rows.
-        glyphs: Option<(u32, u32, u32, Vec<u8>)>,
+        glyphs: Vec<(u32, u32, u32, Vec<u8>)>,
         /// RGBA rows.
         images: Option<(u32, u32, Vec<u8>)>,
     },
@@ -502,15 +502,12 @@ impl Reply {
             Payload::Paint { list, glyphs, images } => {
                 w.u8(4);
                 put_list(&mut w, list);
-                match glyphs {
-                    Some((size, y0, y1, px)) => {
-                        w.bool(true);
-                        w.u32(*size);
-                        w.u32(*y0);
-                        w.u32(*y1);
-                        w.bytes(px);
-                    }
-                    None => w.bool(false),
+                w.u32(u32::try_from(glyphs.len()).unwrap_or(u32::MAX));
+                for (size, y0, y1, px) in glyphs {
+                    w.u32(*size);
+                    w.u32(*y0);
+                    w.u32(*y1);
+                    w.bytes(px);
                 }
                 match images {
                     Some((y0, y1, px)) => {
@@ -571,7 +568,11 @@ impl Reply {
             }
             4 => {
                 let list = get_list(&mut r)?;
-                let glyphs = if r.bool()? { Some((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
+                let n = r.u32()? as usize;
+                let mut glyphs = Vec::with_capacity(n.min(16));
+                for _ in 0..n {
+                    glyphs.push((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec()));
+                }
                 let images = if r.bool()? { Some((r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
                 Payload::Paint { list: Arc::new(list), glyphs, images }
             }
@@ -829,10 +830,8 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.tick(Instant::now());
                         let list = d.paint(w, h);
                         let (atlas, images) = d.atlases_mut();
-                        let glyphs = atlas.dirty_rows().map(|(y0, y1)| {
-                            atlas.mark_clean();
-                            (atlas.size(), y0, y1, atlas.rows(y0, y1).to_vec())
-                        });
+                        let glyphs: Vec<(u32, u32, u32, Vec<u8>)> = atlas.dirty_bands().iter().map(|&(y0, y1)| (atlas.size(), y0, y1, atlas.rows(y0, y1).to_vec())).collect();
+                        atlas.mark_clean();
                         let images = images.dirty_rows().map(|(y0, y1)| {
                             images.mark_clean();
                             (y0, y1, images.rows(y0, y1).to_vec())
@@ -1028,7 +1027,7 @@ impl Repeat {
         let until = (list.repeat_until_ms != u32::MAX).then(|| received + Duration::from_millis(u64::from(list.repeat_until_ms)));
         let reply = Reply {
             status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, ..Status::default() },
-            payload: Payload::Paint { list: Arc::clone(list), glyphs: None, images: None },
+            payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: None },
         };
         Some(Self { reply, until })
     }
@@ -1415,9 +1414,11 @@ impl Backend {
         match reply {
             Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rows } }) => {
                 // Only the rows that changed cross the pipe.
-                if let (Some((size, y0, y1, px)), Ok(mut a)) = (glyphs, atlas.lock()) {
-                    if !a.set_rows(size, y0, y1, &px) {
-                        eprintln!("eui: the worker sent glyph atlas rows of the wrong size");
+                if let Ok(mut a) = atlas.lock() {
+                    for (size, y0, y1, px) in glyphs {
+                        if !a.set_rows(size, y0, y1, &px) {
+                            eprintln!("eui: the worker sent glyph atlas rows of the wrong size");
+                        }
                     }
                 }
                 if let (Some((y0, y1, px)), Ok(mut i)) = (image_rows, images.lock()) {
@@ -1631,14 +1632,14 @@ mod tests {
             backdrop: None,
         };
         let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
-        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: Arc::new(l), glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8])) } };
+        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: Arc::new(l), glyphs: vec![(2, 1, 2, vec![0, 1])], images: Some((0, 1, vec![7; 8])) } };
         let t0 = Instant::now();
 
         let repeat = Repeat::of(&paint(list(true), status.clone()), t0).expect("a list the driver said may be drawn again");
         let again = repeat.answer(t0 + Duration::from_millis(5)).expect("and it is, for as long as nothing reaches the driver");
         let Payload::Paint { list: kept, glyphs, images } = &again.payload else { panic!("still a paint") };
         assert_eq!(**kept, list(true), "the list itself is what gets drawn again");
-        assert!(glyphs.is_none() && images.is_none(), "the atlas rows already landed");
+        assert!(glyphs.is_empty() && images.is_none(), "the atlas rows already landed");
         assert!(again.status.outbound.is_empty(), "the server must not be told twice");
         assert!(again.status.clipboard.is_none(), "nor the clipboard written twice");
         assert!(again.status.ime.is_none());
@@ -1708,7 +1709,7 @@ mod tests {
             Payload::Sandbox(Err("no".into())),
             Payload::Hello(vec![1, 2]),
             Payload::Assets(vec![[1; 32], [2; 32]]),
-            Payload::Paint { list: Arc::new(list), glyphs: Some((2, 1, 2, vec![0, 1])), images: Some((0, 1, vec![7; 8192])) },
+            Payload::Paint { list: Arc::new(list), glyphs: vec![(2, 1, 2, vec![0, 1]), (2, 0, 1, vec![3, 4])], images: Some((0, 1, vec![7; 8192])) },
             Payload::Tick(true),
             Payload::Access(snap),
             Payload::Pcm(vec![0.0, 0.25, -0.5, 1.0]),

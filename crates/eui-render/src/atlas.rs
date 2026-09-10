@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use eui_text::{GlyphImage, GlyphKey, TextEngine};
+use eui_text::{GlyphKey, GlyphRef, TextEngine};
 
 /// Where a glyph lives in the atlas, in texels, plus its placement.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,10 +29,12 @@ pub struct Atlas {
     shelves: Vec<(u32, u32, u32)>, // (y, height, next x)
     next_y: u32,
     map: HashMap<(GlyphKey, u32), Option<Region>>,
-    /// Rows `y0..y1` written since the last upload, `None` when clean. A
-    /// shelf packer only ever touches a band, and a band is what crosses
-    /// to the GPU — or to another process.
-    dirty: Option<(u32, u32)>,
+    /// Bands of rows `y0..y1` written since the last upload, empty when
+    /// clean. A shelf packer touches a shelf at a time, and two glyphs on
+    /// shelves far apart used to cost every row between them; a few bands
+    /// cost the rows they hold. Kept short: past [`Self::MAX_BANDS`] the
+    /// two nearest are merged.
+    dirty: Vec<(u32, u32)>,
 }
 
 impl Atlas {
@@ -44,8 +46,15 @@ impl Atlas {
         Self::with_size(Self::INITIAL)
     }
 
+    /// How many dirty bands are kept apart before the nearest two merge.
+    pub const MAX_BANDS: usize = 4;
+
+    /// A fresh atlas is clean: a texture is made blank, and so is the
+    /// bitmap of the process it is sent to, so nothing is owed until a
+    /// glyph is packed. Uploading a megabyte of nothing was the first
+    /// frame's largest write.
     fn with_size(size: u32) -> Self {
-        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Some((0, size)) }
+        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Vec::new() }
     }
 
     /// Take rows `y0..y1` of a `size × size` coverage bitmap: a window
@@ -62,7 +71,7 @@ impl Atlas {
             self.map.clear();
             self.shelves.clear();
             self.next_y = 0;
-            self.dirty = Some((0, size));
+            self.dirty.clear();
         }
         let start = (y0 as usize).saturating_mul(size as usize);
         if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
@@ -72,9 +81,18 @@ impl Atlas {
         true
     }
 
-    /// Rows written since the last upload, `y0..y1`; `None` when clean.
+    /// Rows written since the last upload, `y0..y1`, as one band from the
+    /// first to the last; `None` when clean. [`Self::dirty_bands`] is the
+    /// same without the rows between.
     pub fn dirty_rows(&self) -> Option<(u32, u32)> {
-        self.dirty
+        let lo = self.dirty.iter().map(|b| b.0).min()?;
+        let hi = self.dirty.iter().map(|b| b.1).max()?;
+        Some((lo, hi))
+    }
+
+    /// The bands of rows written since the last upload, in order.
+    pub fn dirty_bands(&self) -> &[(u32, u32)] {
+        &self.dirty
     }
 
     /// The bytes of rows `y0..y1`.
@@ -84,10 +102,36 @@ impl Atlas {
     }
 
     fn touch(&mut self, y0: u32, y1: u32) {
-        self.dirty = Some(match self.dirty {
-            Some((a, b)) => (a.min(y0), b.max(y1)),
-            None => (y0, y1),
-        });
+        if y0 >= y1 {
+            return;
+        }
+        // Into a band it meets or overlaps, else a band of its own; then
+        // neighbours that came to meet are joined.
+        match self.dirty.iter_mut().find(|b| y0 <= b.1 && y1 >= b.0) {
+            Some(b) => {
+                b.0 = b.0.min(y0);
+                b.1 = b.1.max(y1);
+            }
+            None => self.dirty.push((y0, y1)),
+        }
+        self.dirty.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(self.dirty.len());
+        for &(lo, hi) in &self.dirty {
+            match merged.last_mut() {
+                Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+                _ => merged.push((lo, hi)),
+            }
+        }
+        // Too many: the two with the least between them become one.
+        while merged.len() > Self::MAX_BANDS {
+            let gap = |i: usize| merged.get(i + 1).zip(merged.get(i)).map_or(u32::MAX, |(n, c)| n.0.saturating_sub(c.1));
+            let Some(i) = (0..merged.len() - 1).min_by_key(|i| gap(*i)) else { break };
+            let next = merged.remove(i + 1);
+            if let Some(cur) = merged.get_mut(i) {
+                cur.1 = cur.1.max(next.1);
+            }
+        }
+        self.dirty = merged;
     }
 
     /// Edge length in texels.
@@ -102,12 +146,12 @@ impl Atlas {
 
     /// True when the texture must be re-uploaded; cleared by [`Self::mark_clean`].
     pub fn is_dirty(&self) -> bool {
-        self.dirty.is_some()
+        !self.dirty.is_empty()
     }
 
     /// Acknowledge an upload.
     pub fn mark_clean(&mut self) {
-        self.dirty = None;
+        self.dirty.clear();
     }
 
     /// Glyphs currently packed.
@@ -128,9 +172,16 @@ impl Atlas {
         if let Some(r) = self.map.get(&k) {
             return *r;
         }
-        let image = text.rasterize(key, scale).filter(|i| i.width > 0 && i.height > 0 && !i.color);
-        let region = image.and_then(|img| self.pack(&img));
-        if region.is_none() && image_is_some_and_large(&text.rasterize(key, scale)) && self.size < Self::INITIAL * 2 {
+        // Rasterised once, and packed straight from the engine's bitmap.
+        // A colour glyph -- an emoji -- is not coverage and is not packed
+        // here; it must not make the atlas grow for nothing either.
+        let (region, could_fit) = text
+            .with_glyph(key, scale, |g| {
+                let drawable = g.width > 0 && g.height > 0 && !g.color;
+                (if drawable { self.pack(g) } else { None }, drawable)
+            })
+            .unwrap_or((None, false));
+        if region.is_none() && could_fit && self.size < Self::INITIAL * 2 {
             self.grow();
             return self.get(text, key, scale);
         }
@@ -138,7 +189,7 @@ impl Atlas {
         region
     }
 
-    fn pack(&mut self, img: &GlyphImage) -> Option<Region> {
+    fn pack(&mut self, img: GlyphRef<'_>) -> Option<Region> {
         // One texel of padding on every side stops bilinear bleed.
         let w = img.width.checked_add(2)?;
         let h = img.height.checked_add(2)?;
@@ -187,10 +238,6 @@ impl Default for Atlas {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn image_is_some_and_large(img: &Option<GlyphImage>) -> bool {
-    img.as_ref().is_some_and(|i| i.width > 0 && i.height > 0)
 }
 
 /// Decoded images packed into one RGBA8 texture, shelf-packed like the glyph
@@ -405,6 +452,26 @@ mod tests {
 
         // The same hash again is the cached region, not a second pack.
         assert_eq!(atlas.insert([7; 32], 8, 8, &rgba), region);
+    }
+
+    #[test]
+    fn a_fresh_atlas_is_clean_and_far_apart_writes_are_separate_bands() {
+        let mut atlas = Atlas::new();
+        assert_eq!(atlas.dirty_rows(), None, "nothing to upload until a glyph is packed");
+        assert!(!atlas.is_dirty());
+        atlas.touch(10, 20);
+        atlas.touch(900, 910);
+        assert_eq!(atlas.dirty_bands(), &[(10, 20), (900, 910)], "two bands, not the 900 rows between");
+        assert_eq!(atlas.dirty_rows(), Some((10, 910)), "as one band, for whoever still wants one");
+        atlas.touch(20, 25);
+        atlas.touch(905, 908);
+        assert_eq!(atlas.dirty_bands(), &[(10, 25), (900, 910)], "a write that meets a band joins it");
+        for y in [100, 300, 500, 700] {
+            atlas.touch(y, y + 4);
+        }
+        assert!(atlas.dirty_bands().len() <= Atlas::MAX_BANDS, "{:?}", atlas.dirty_bands());
+        atlas.mark_clean();
+        assert!(atlas.dirty_bands().is_empty());
     }
 
     #[test]

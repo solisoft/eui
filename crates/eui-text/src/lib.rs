@@ -110,6 +110,26 @@ pub struct GlyphKey {
 }
 
 /// A rasterised glyph.
+/// A rasterised glyph as the engine holds it, borrowed: what an atlas packs
+/// without a copy of the bitmap in between.
+#[derive(Debug, Clone, Copy)]
+pub struct GlyphRef<'a> {
+    /// Left bearing, px.
+    pub left: i32,
+    /// Top bearing, px.
+    pub top: i32,
+    /// Width, px.
+    pub width: u32,
+    /// Height, px.
+    pub height: u32,
+    /// A colour glyph (an emoji): RGBA rather than coverage.
+    pub color: bool,
+    /// Row-major coverage, or RGBA when `color`.
+    pub data: &'a [u8],
+}
+
+/// A rasterised glyph, owned: coverage, or RGBA when `color`, with its
+/// bearings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlyphImage {
     /// Horizontal offset from the glyph origin to the bitmap's left edge.
@@ -147,6 +167,8 @@ pub struct Stats {
     pub reused: u64,
     /// Runs evicted.
     pub evictions: u64,
+    /// Entries added to the cache: a miss, or a reuse under a new key.
+    pub inserted: u64,
 }
 
 /// Cache key. The text is represented by a 64-bit hash so a lookup allocates
@@ -169,6 +191,10 @@ pub struct TextEngine {
     swash: SwashCache,
     cache: HashMap<ShapeKey, (String, Arc<Shaped>)>,
     order: VecDeque<ShapeKey>,
+    /// The baseline an empty run takes, per font: the one a real glyph
+    /// gets in that font, probed once rather than once per empty field
+    /// per width.
+    probes: HashMap<(u8, u8, u32, u32), Option<f32>>,
     stats: Stats,
 }
 
@@ -199,7 +225,7 @@ impl TextEngine {
             db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
         }
         let fonts = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
-        Self { fonts, swash: SwashCache::new(), cache: HashMap::new(), order: VecDeque::new(), stats: Stats::default() }
+        Self { fonts, swash: SwashCache::new(), cache: HashMap::new(), order: VecDeque::new(), probes: HashMap::new(), stats: Stats::default() }
     }
 
     /// Load an additional face from bytes (a theme's `font_sans` asset, once
@@ -230,6 +256,11 @@ impl TextEngine {
     /// 4 400-node markdown page asked for 7 785 shapes before this and 4 6xx
     /// after; the difference was most of its layout time.
     pub fn shape(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> Arc<Shaped> {
+        // A width to the quarter pixel, rounded up: a run asked for at
+        // 100.0 and again at 100.1 as a flex reflow settles is one entry,
+        // not a miss of the whole cache. Shaped at that width too, so the
+        // key and the shape agree.
+        let max_width = max_width.map(quantise);
         let key = Self::key(text, font, max_width, line_clamp);
         if let Some(hit) = self.lookup(&key, text) {
             return hit;
@@ -273,8 +304,19 @@ impl TextEngine {
         Some(Arc::clone(hit))
     }
 
-    /// Keep a shape under a key, evicting the oldest entry when full.
+    /// Keep a shape under a key, evicting the oldest entry when full. A
+    /// key already held -- a collision's text, replaced -- is updated in
+    /// place: it keeps its place in the order, and the order keeps one
+    /// entry per key, so the oldest entry evicted is the oldest and not a
+    /// live one whose key was pushed twice.
     fn remember(&mut self, key: ShapeKey, text: &str, shaped: Arc<Shaped>) {
+        if let Some(slot) = self.cache.get_mut(&key) {
+            if slot.0 != text {
+                slot.0 = text.to_owned();
+            }
+            slot.1 = shaped;
+            return;
+        }
         if self.cache.len() >= CACHE_ENTRIES {
             if let Some(old) = self.order.pop_front() {
                 self.cache.remove(&old);
@@ -282,6 +324,7 @@ impl TextEngine {
             }
         }
         self.order.push_back(key);
+        self.stats.inserted = self.stats.inserted.saturating_add(1);
         self.cache.insert(key, (text.to_owned(), shaped));
     }
 
@@ -350,11 +393,18 @@ impl TextEngine {
         // in an empty field must sit where that glyph's would, so the
         // baseline is the one a real glyph gets in the same font.
         if glyphs.is_empty() {
-            let mut probe = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
-            probe.set_size(&mut self.fonts, max_width.filter(|w| w.is_finite() && *w >= 0.0).map(|w| w + 0.05), None);
-            probe.set_text(&mut self.fonts, "x", attrs, Shaping::Advanced);
-            probe.shape_until_scroll(&mut self.fonts, false);
-            baseline = probe.layout_runs().next().map(|run| run.line_y - run.line_top);
+            let probe_key = (font.family.to_u8(), font.weight.to_u8(), size.to_bits(), line_height.to_bits());
+            baseline = match self.probes.get(&probe_key) {
+                Some(b) => *b,
+                None => {
+                    let mut probe = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
+                    probe.set_text(&mut self.fonts, "x", attrs, Shaping::Advanced);
+                    probe.shape_until_scroll(&mut self.fonts, false);
+                    let b = probe.layout_runs().next().map(|run| run.line_y - run.line_top);
+                    self.probes.insert(probe_key, b);
+                    b
+                }
+            };
         }
         let lines = lines.max(1);
         Shaped { metrics: TextMetrics { width, height: lines as f32 * line_height, baseline: baseline.unwrap_or(size * 0.8), lines }, glyphs }
@@ -363,6 +413,12 @@ impl TextEngine {
     /// Rasterise a glyph at a device scale (`2.0` for a 2× display).
     /// `None` when the face has no image for it.
     pub fn rasterize(&mut self, key: GlyphKey, scale: f32) -> Option<GlyphImage> {
+        self.with_glyph(key, scale, |g| GlyphImage { left: g.left, top: g.top, width: g.width, height: g.height, color: g.color, data: g.data.to_vec() })
+    }
+
+    /// [`Self::rasterize`] without the copy: the bitmap is lent to `f`, as
+    /// an atlas packing it wants it. `None` when the face has no image.
+    pub fn with_glyph<T>(&mut self, key: GlyphKey, scale: f32, f: impl FnOnce(GlyphRef<'_>) -> T) -> Option<T> {
         let size = f32::from_bits(key.size_bits) * scale;
         let cache_key = CacheKey::new(key.font, key.glyph, size, (0.0, 0.0), cosmic_text::CacheKeyFlags::empty()).0;
         let image = self.swash.get_image(&mut self.fonts, cache_key).as_ref()?;
@@ -371,7 +427,17 @@ impl TextEngine {
             SwashContent::Color => true,
             SwashContent::SubpixelMask => false,
         };
-        Some(GlyphImage { left: image.placement.left, top: image.placement.top, width: image.placement.width, height: image.placement.height, color, data: image.data.clone() })
+        Some(f(GlyphRef { left: image.placement.left, top: image.placement.top, width: image.placement.width, height: image.placement.height, color, data: &image.data }))
+    }
+}
+
+/// A width to the quarter pixel, rounded up; anything that is not a width
+/// is left alone.
+fn quantise(w: f32) -> f32 {
+    if w.is_finite() && w >= 0.0 {
+        (w * 4.0).ceil() / 4.0
+    } else {
+        w
     }
 }
 

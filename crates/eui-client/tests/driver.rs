@@ -1019,7 +1019,9 @@ fn a_glide_frame_does_not_lay_out() {
     assert_eq!(d.relayouts(), laid + 1, "nothing was laid out for them");
     assert_eq!(d.spin_repeats(), 5);
     // The landing: a real paint, nothing gliding, the scroll reported.
-    d.tick(t0 + Duration::from_millis(120));
+    // Well past the glide's end -- the notch stamped the driver's clock
+    // with the wall's, which a busy machine may have moved on since t0.
+    d.tick(t0 + Duration::from_millis(500));
     let landed = d.paint(400, 300);
     assert!(landed.scrollers.is_empty());
     assert!(!d.animating());
