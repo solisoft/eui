@@ -1116,6 +1116,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eui-ios"
+version = "0.1.0"
+dependencies = [
+ "eui-client",
+]
+
+[[package]]
 name = "eui-layout"
 version = "0.1.0"
 dependencies = [

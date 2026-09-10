@@ -1,0 +1,27 @@
+[package]
+name = "eui-ios"
+description = "The EUI client as an iOS application: the static library Xcode links, and the header it calls through."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# iOS links Rust in as a static library rather than loading one: UIKit owns
+# the process and `UIApplicationMain` has to run before any of this does, so
+# the entry point is a function Xcode's own `main` calls, not a `main` of
+# ours. A `staticlib` on every target so that `cargo build --workspace` on a
+# desktop still builds it — where it compiles to nothing, because its one
+# source file is behind `cfg(target_os = "ios")`.
+[lib]
+name = "eui_ios"
+crate-type = ["staticlib"]
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# The three parts with no UIKit behind them are left out by name rather than
+# by accident: no file dialogs, no system clipboard, no accessibility
+# adapter. Pictures stay.
+eui-client = { path = "../eui-client", version = "0.1.0", default-features = false, features = ["jpeg", "webp"] }
+
+[lints]
+workspace = true

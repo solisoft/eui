@@ -882,14 +882,16 @@ implements it and the vectors that pin it:
   implemented; the signed manifest and key pinning are specified, not yet
   checked by the client.
 
-## Android: started, not finished
+## The phones: started, not finished
 
 The portable half of the client is portable in fact and not only in
 principle: `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`, `eui-text`
-and `eui-vm` cross-compile clean for `aarch64-linux-android` today, with no
-`cfg` between them and the desktop. That is the protocol, the session, the
-theme, the layout engine, the text shaper and the bytecode VM — and it needs
-no NDK to check, because none of it touches C.
+and `eui-vm` cross-compile clean for **`aarch64-linux-android` and
+`aarch64-apple-ios`** today, with no `cfg` between them and the desktop.
+That is the protocol, the session, the theme, the layout engine, the text
+shaper and the bytecode VM — and it needs neither an NDK nor Xcode to
+check, because none of it touches C. `conform` builds both and skips with a
+note where a target's standard library is missing.
 
 **Done, and tested where it can be tested here:**
 
@@ -905,11 +907,23 @@ no NDK to check, because none of it touches C.
   crash on return — and the finger on the glass is told the gesture ended.
 - **The soft keyboard.** The focus change that tells a desktop input method
   it is welcome raises and dismisses the Android keyboard.
-- **The entry point.** `crates/eui-android` is the shared object the
-  platform loads: `android_main` takes the activity, and the event loop is
-  built on its looper. `cargo apk build -p eui-android` reads the packaging
-  in its manifest; the session address is baked in at build time from
-  `EUI_ANDROID_URL`, because an APK is one application and not a browser.
+- **The entry points.** `crates/eui-android` is the shared object Android
+  loads: `android_main` takes the activity, and the event loop is built on
+  its looper. `cargo apk build -p eui-android` reads the packaging in its
+  manifest. `crates/eui-ios` is the static library Xcode links: iOS has no
+  `main` of ours, so `eui_start` is a function Xcode's own `main` calls once
+  `UIApplicationMain` is up. Either way the session address is baked in at
+  build time — `EUI_ANDROID_URL`, `EUI_IOS_URL` — because an application is
+  one application and not a browser.
+- **iOS asks least of the client**, because winit's UIKit backend already
+  speaks both dialects that mattered on Android. `touchesBegan/Moved/Ended/
+  Cancelled` arrive as `WindowEvent::Touch` with all four phases, so 06 §5
+  runs there unchanged — it was written for Android and needed nothing for
+  this. `set_ime_allowed` *is* `becomeFirstResponder`, so the focus change
+  that welcomes a desktop input method raises the iOS keyboard through the
+  same call, with no UIKit code of our own. And
+  `applicationDidBecomeActive`/`WillResignActive` are `Resumed`/`Suspended`,
+  which the surface already handles.
 - **Somewhere to write.** No `$HOME` and no XDG on Android, so the pin
   store and the recent list use the directory the platform gave the
   application. Without a pin store there is no trust on first use and so no
@@ -923,19 +937,36 @@ no NDK to check, because none of it touches C.
 
 **Not done, and the first of them is the real one:**
 
-- **The worker.** Android will not `exec` a second binary out of an
-  application's own storage, so the driver runs on a thread of the window's
-  process. `Backend::open` says so in as many words rather than looking
-  like a worker that failed to start. The application sandbox and SELinux
-  confine the *process*; nothing holds the frame decoder apart from the
-  renderer beside it, which is what 08 §10 is for. Seccomp on one thread
-  would confine its system calls and not its memory, and the memory is the
-  point — so it is not offered as a substitute. This is the piece that
-  makes Android a stage rather than a port.
-- **A build anyone can check.** `ring` and `blake3` want the NDK's clang,
-  so nothing above `eui-text` has been compiled for the target here, and no
-  APK has been built or run. The Rust is written and the packaging is
-  declared; neither has met a device.
+- **The worker, on both.** Android will not `exec` a second binary out of
+  an application's own storage; iOS has no `fork` and no `exec` at all —
+  not restricted, absent. So the driver runs on a thread of the window's
+  process, and `Backend::open` says so in as many words rather than looking
+  like a worker that failed to start. The application sandbox confines the
+  *process*; nothing holds the frame decoder apart from the renderer beside
+  it, which is what 08 §10 is for. Seccomp on one thread would confine its
+  system calls and not its memory, and the memory is the point — so it is
+  not offered as a substitute. This is the piece that makes a phone a stage
+  rather than a port, and iOS is the stricter of the two: Android at least
+  has an `isolatedProcess` service to argue about.
+- **A build anyone can check.** `ring` and `blake3` want a toolchain for
+  the target, so nothing above `eui-text` has been compiled for either
+  phone here, and no APK and no `.app` has been built or run. Every
+  platform-only path *is* type-checked, by compiling it for the host with
+  its `cfg` flipped — which is how an unreachable-code warning in the pin
+  store was caught before it reached a device — but that is not the same as
+  a build, and neither is a build the same as a device.
+- **iOS needs a Mac for everything after `cargo check`.** Xcode project,
+  Info.plist, code signing, a provisioning profile, a device. None of it
+  can be done from Linux, and none of it has been.
+- **App Store review is an open question, not a technical one.** Guideline
+  2.5.2 forbids an application downloading and executing code, and EUI's
+  local handlers are verified, metered bytecode that a server sends and the
+  client runs. Games ship Lua interpreters and pass; EUI's premise — that
+  the interface comes from the server — sits closer to the line. There is
+  an argument to make (the VM reaches no file, no socket and no capability
+  the manifest did not grant, and 07 is where that is enforced) but it is
+  an argument, and it is better made before the packaging than after a
+  rejection.
 - Multi-touch: pinch, rotate, two-finger pan. §5 follows one contact and
   says so.
 - The soft keyboard does not know what a field holds. The typed fields —
@@ -945,14 +976,16 @@ no NDK to check, because none of it touches C.
   shape for a phone. An APK built with `EUI_ANDROID_URL` is chromeless and
   right; one built without it opens the shell, which works and looks like a
   desktop.
-- The system back button, and safe-area insets around a notch.
+- The system back button on Android, and safe-area insets around a notch on
+  either. winit's `WindowExtIOS` exposes what iOS needs for the second —
+  the home indicator, the status bar, and which screen edges defer system
+  gestures — and none of it is called yet.
 - The platform trust store. `rustls-native-certs` finds nothing useful on
   Android, so the client falls back to the public roots and a development
   CA is not honoured — `EUI_CA_FILE` is the way in until it is.
 
 ## Not started
 
-- iOS (stage 3).
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.

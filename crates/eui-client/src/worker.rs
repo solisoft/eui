@@ -1573,26 +1573,29 @@ impl Backend {
         if std::env::var("EUI_SANDBOX").is_ok_and(|v| v == "0") {
             return (Backend::local(Driver::new(w, h, scale, granted)), "driver in this process (EUI_SANDBOX=0)".into());
         }
-        // Android does not allow an application to `exec` a binary out of
-        // its own storage (W^X, API 29 on), so there is no second process
-        // to put the driver in and no point discovering that by trying.
-        // The application sandbox and SELinux confine the process; what
-        // they do not do is hold the decoder apart from the renderer beside
-        // it, which is what 08 §10 is for. Said plainly rather than left to
-        // look like a worker that failed to start.
-        #[cfg(target_os = "android")]
+        // Neither phone will start a second binary: Android refuses to
+        // `exec` one out of an application's own storage (W^X, API 29 on),
+        // and iOS has no `fork` or `exec` at all. So there is no process to
+        // put the driver in, and no point discovering that by trying. The
+        // application sandbox confines the process; what it does not do is
+        // hold the decoder apart from the renderer beside it, which is what
+        // 08 §10 is for. Said plainly rather than left to look like a
+        // worker that failed to start.
+        #[cfg(no_subprocess)]
         {
-            return (
-                Backend::local(Driver::new(w, h, scale, granted)),
-                "driver in this process: Android has no second binary to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)".into(),
-            );
+            let why = if cfg!(target_os = "ios") {
+                "driver in this process: iOS has no second process to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)"
+            } else {
+                "driver in this process: Android has no second binary to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)"
+            };
+            return (Backend::local(Driver::new(w, h, scale, granted)), why.into());
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(no_subprocess))]
         let program = match std::env::current_exe() {
             Ok(p) => p,
             Err(e) => return (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: cannot find this binary ({e})")),
         };
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(no_subprocess))]
         Self::open_with(program, w, h, scale, granted)
     }
 

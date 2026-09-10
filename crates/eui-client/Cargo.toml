@@ -49,12 +49,12 @@ notify = { version = "7", default-features = false, features = ["macos_kqueue"] 
 cpal = "0.15"
 
 # Three parts that are a platform as much as a feature. Each rests on a
-# crate with nothing behind it on Android — there is no `rfd` backend for
-# the Android file picker, no `arboard` for its clipboard, and no AccessKit
-# adapter for TalkBack — so they are declared for every target but that one,
-# and `build.rs` turns the matching `has_*` cfg off there. See its
-# `platform_parts`.
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# crate with nothing behind it on a phone — no `rfd` backend for the Android
+# or iOS file picker, no `arboard` for either clipboard, and no AccessKit
+# adapter for TalkBack or VoiceOver — so they are declared for every target
+# but those two, and `build.rs` turns the matching `has_*` cfg off there.
+# See its `platform_parts`.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
 # assistive technology asks; `--no-default-features` builds without it.
 accesskit = { version = "0.25", optional = true }

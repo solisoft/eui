@@ -61,7 +61,7 @@ pub fn pins_dir() -> Option<PathBuf> {
 }
 
 /// The corner of the person's configuration this client keeps things in.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn config_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(d).join("eui"));
@@ -76,6 +76,12 @@ fn config_dir() -> Option<PathBuf> {
 #[cfg(target_os = "android")]
 fn config_dir() -> Option<PathBuf> {
     crate::android::data_dir()
+}
+
+/// The application's own container, under `Library/Application Support`.
+#[cfg(target_os = "ios")]
+fn config_dir() -> Option<PathBuf> {
+    crate::ios::data_dir()
 }
 
 /// Fetch `/.well-known/eui` from `origin` and run [`verify`] against `pins`.

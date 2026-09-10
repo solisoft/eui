@@ -23,10 +23,10 @@ fn main() {
 
 /// Three of the client's parts are a feature *and* a platform: the system
 /// clipboard, the platform file dialogs and the accessibility adapter each
-/// rest on a crate that has no Android behind it (`arboard`, `rfd`,
-/// `accesskit_winit`). Cargo can leave the crates out for that target —
-/// they are declared under a `cfg(not(target_os = "android"))` table — but
-/// a `#[cfg(feature = ...)]` in the source would go on compiling the code
+/// rest on a crate with no phone behind it (`arboard`, `rfd`,
+/// `accesskit_winit`). Cargo can leave the crates out for those targets —
+/// they are declared under a `cfg(not(any(android, ios)))` table — but a
+/// `#[cfg(feature = ...)]` in the source would go on compiling the code
 /// that calls them.
 ///
 /// So the source asks about `has_clipboard`, `has_files` and `has_a11y`
@@ -34,13 +34,25 @@ fn main() {
 /// on and the target has something to put behind it. On a desktop they
 /// follow the features exactly, which is why `--no-default-features` still
 /// means what it always did.
+///
+/// `no_subprocess` is the other one. Neither phone will start a second
+/// binary — Android refuses to `exec` one out of an application's own
+/// storage, and iOS has no `fork` or `exec` at all — so the confined worker
+/// of 08 §10 cannot exist there and the code that would try is not
+/// compiled. Asking about the capability rather than naming the two
+/// platforms at each site is what keeps the third one honest.
 fn platform_parts() {
-    let android = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let phone = os == "android" || os == "ios";
     for (feature, cfg) in [("A11Y", "has_a11y"), ("CLIPBOARD", "has_clipboard"), ("FILES", "has_files")] {
         println!("cargo:rustc-check-cfg=cfg({cfg})");
-        if !android && std::env::var_os(format!("CARGO_FEATURE_{feature}")).is_some() {
+        if !phone && std::env::var_os(format!("CARGO_FEATURE_{feature}")).is_some() {
             println!("cargo:rustc-cfg={cfg}");
         }
+    }
+    println!("cargo:rustc-check-cfg=cfg(no_subprocess)");
+    if phone {
+        println!("cargo:rustc-cfg=no_subprocess");
     }
 }
 

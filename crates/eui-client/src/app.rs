@@ -779,10 +779,10 @@ impl Shell {
         // and a window shown before its first frame is a flash of nothing.
         let attrs = Window::default_attributes().with_title(title).with_visible(false);
         // A desktop window opens at a readable size and is moved from
-        // there. An Android activity has exactly one window, already the
-        // size of the screen, and asking for 960x640 there is either
-        // ignored or — worse — honoured.
-        #[cfg(not(target_os = "android"))]
+        // there. A phone has exactly one window, already the size of the
+        // screen, and asking for 960x640 there is either ignored or —
+        // worse — honoured.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let attrs = match window_icon() {
             Some(icon) => attrs.with_window_icon(Some(icon)),
