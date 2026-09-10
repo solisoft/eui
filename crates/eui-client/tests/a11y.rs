@@ -5,7 +5,7 @@
 //! alone — a tree that declares nothing must still be exposed exactly as it
 //! was before any of this existed, and that test is what says so.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
-#![cfg(feature = "a11y")]
+#![cfg(has_a11y)]
 
 use eui_client::a11y::{AccessRole as Role, AccessSnapshot, Checked};
 use eui_client::{Driver, Input};

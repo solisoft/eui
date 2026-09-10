@@ -18,6 +18,14 @@ Two profiles:
 - A **server** MUST pass §2 and §6 for what it emits, and §9 (diff) if it
   patches rather than re-mounts.
 
+The harness also builds `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`,
+`eui-text` and `eui-vm` for `aarch64-linux-android` where that target's
+standard library is installed, and skips it with a note where it is not.
+This is not a vector and nothing conforms by passing it. It is there because
+those six crates carry no `cfg` for any platform and the claim is worth
+keeping true: a client for a phone, or for anything else, starts by taking
+them unchanged.
+
 ## 2. Wire format — `crates/eui-proto/tests`
 
 | File | Pins |
@@ -78,6 +86,22 @@ subtree, nesting so the innermost wins, and leaving an unmodal page alone;
 later batch; and `keys` letting a node take the arrows while `Enter` stays the
 press it stands for, sending it no key it did not name, and leaving a node
 without the prop hearing everything.
+
+### 7.6 Touch — `crates/eui-client/tests/touch.rs`
+
+06 §5: a tap reaching what it landed on, and still reaching it after five
+pixels of tremor; a stroke past the slop scrolling the view and never
+clicking the row it began on; the press given back before the view moves; a
+node that asked for moves taking the whole stroke while the view under it
+stays put; a second contact ignored while the first is live; a cancelled
+gesture releasing without a click and forgetting the contact; a finger still
+moving as it leaves carrying the view on, and a finger that stopped first
+not doing so; and a window that loses the input forgetting the finger that
+was on it, so the next one is a gesture and not a second contact.
+
+The tests are the driver's, not the window's — a contact becomes the pointer
+before any platform is involved — so they run everywhere and want no touch
+screen.
 
 ### 7.4 Files — `crates/eui-client/tests/files.rs`
 

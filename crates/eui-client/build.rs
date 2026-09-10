@@ -17,7 +17,31 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let id = std::env::var("GITHUB_SHA").ok().map(|sha| sha.chars().take(7).collect::<String>()).or_else(git_short_sha).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=EUI_BUILD={id}");
+    platform_parts();
     windows_icon();
+}
+
+/// Three of the client's parts are a feature *and* a platform: the system
+/// clipboard, the platform file dialogs and the accessibility adapter each
+/// rest on a crate that has no Android behind it (`arboard`, `rfd`,
+/// `accesskit_winit`). Cargo can leave the crates out for that target —
+/// they are declared under a `cfg(not(target_os = "android"))` table — but
+/// a `#[cfg(feature = ...)]` in the source would go on compiling the code
+/// that calls them.
+///
+/// So the source asks about `has_clipboard`, `has_files` and `has_a11y`
+/// rather than about the features, and those are set here: the feature is
+/// on and the target has something to put behind it. On a desktop they
+/// follow the features exactly, which is why `--no-default-features` still
+/// means what it always did.
+fn platform_parts() {
+    let android = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android");
+    for (feature, cfg) in [("A11Y", "has_a11y"), ("CLIPBOARD", "has_clipboard"), ("FILES", "has_files")] {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+        if !android && std::env::var_os(format!("CARGO_FEATURE_{feature}")).is_some() {
+            println!("cargo:rustc-cfg={cfg}");
+        }
+    }
 }
 
 /// The icon Windows draws for the file itself.

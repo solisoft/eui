@@ -23,7 +23,8 @@ crates/
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
   eui-client driver, WSS transport, manifest check, assets, winit,
              keyboard focus, editing, IME, AccessKit, transitions,
-             file dialogs, a session that survives its socket        [built]
+             file dialogs, touch, a session that survives its socket [built]
+  eui-android the shared object Android loads, and its packaging   [untested]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table and a gallery as a Soli
@@ -40,8 +41,8 @@ rustfmt.toml one formatting, enforced; 200 columns, not rustfmt's default 100
 ```
 
 `doc/docs/eui/status.md` says, crate by crate, what is built and tested,
-what is specified, and what is not started — mobile, and the worker
-sandbox on macOS and Windows.
+what is specified, and what is not started — iOS, the worker sandbox on
+macOS and Windows, and how far Android has got.
 
 ## Try it
 
@@ -65,6 +66,31 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090 --a
 ../lang/target/debug/soli serve examples/demo-app --port 5011
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read
 ```
+
+### Android
+
+The half of the client with no platform in it builds for a phone with no
+toolchain at all — no NDK, no SDK, nothing but rustup — and `conform` checks
+that it still does:
+
+```sh
+rustup target add aarch64-linux-android
+cargo check --target aarch64-linux-android     -p eui-proto -p eui-tree -p eui-theme -p eui-layout -p eui-text -p eui-vm
+```
+
+The package is `crates/eui-android`: the shared object the platform loads,
+plus its manifest. It wants the NDK, because `ring` and `blake3` compile C.
+An APK is one application and not a browser, so the address is baked in:
+
+```sh
+cargo install cargo-apk
+EUI_ANDROID_URL=wss://example.test/_eui/session/gallery     cargo apk build --release -p eui-android      # omit the URL for the shell
+```
+
+Nobody has run it on a device. `doc/docs/eui/status.md` says what is done,
+what is not, and which of the two matters — the driver runs in this process
+there, because Android will not `exec` a second binary out of an
+application's own storage, so spec 08 §10's confined worker does not exist.
 
 ## Where the design is written down
 

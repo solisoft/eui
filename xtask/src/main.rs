@@ -461,12 +461,37 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
 /// Spec 09: every conformance vector in the workspace, then — when
 /// `EUI_SOLI_BIN` points at a Soli built with the `eui` feature — the end-
 /// to-end suite against a real server.
+/// Whether this machine has the Android standard library for the 64-bit
+/// target. Asked of `rustc` rather than `rustup`, because the answer is a
+/// directory either way and not everyone installs Rust through rustup.
+fn android_std_installed() -> bool {
+    let Ok(out) = std::process::Command::new("rustc").args(["--print", "target-libdir", "--target", "aarch64-linux-android"]).output() else {
+        return false;
+    };
+    out.status.success() && std::path::Path::new(String::from_utf8_lossy(&out.stdout).trim()).is_dir()
+}
+
 fn conform() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // Formatting first: it is the fastest check and the one most likely to
     // be the only thing wrong, so failing on it costs a second rather than
     // a full test run. `rustfmt.toml` at the root says what it means.
     let mut steps: Vec<Vec<&str>> = vec![vec!["fmt", "--all", "--check"], vec!["test", "--workspace"], vec!["clippy", "--all-targets", "--", "-D", "warnings"]];
+    // The half of the client that has no platform in it must stay that way,
+    // and the only way to know is to build it for one. A `cfg` that creeps
+    // into the layout engine or the text shaper is caught here rather than
+    // by whoever next picks up a phone.
+    //
+    // Only the crates that touch no C: `ring` and `blake3` want the NDK's
+    // clang, which a machine may not have and CI does not. Skipped rather
+    // than failed where the standard library for the target is not
+    // installed — this is a check that the code is portable, not a demand
+    // that everyone carry an Android toolchain.
+    if android_std_installed() {
+        steps.push(vec!["check", "--target", "aarch64-linux-android", "-p", "eui-proto", "-p", "eui-tree", "-p", "eui-theme", "-p", "eui-layout", "-p", "eui-text", "-p", "eui-vm"]);
+    } else {
+        eprintln!("note: no aarch64-linux-android standard library — skipping the portable-core cross-check (`rustup target add aarch64-linux-android`)");
+    }
     if std::env::var_os("EUI_SOLI_BIN").is_some() {
         steps.push(vec!["test", "-p", "eui-client", "--test", "soli_e2e"]);
     } else {

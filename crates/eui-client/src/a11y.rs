@@ -545,7 +545,7 @@ impl AccessAtoms {
 /// The snapshot in AccessKit's terms, for the platform adapter. The window
 /// wraps the root and carries the display scale, so bounds stay in logical
 /// px like everything else in the client.
-#[cfg(feature = "a11y")]
+#[cfg(has_a11y)]
 pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
     use accesskit::{Action, Affine, Invalid, Live, Node, NodeId, Orientation, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
     let mut nodes: Vec<(NodeId, Node)> = Vec::with_capacity(snapshot.nodes.len());

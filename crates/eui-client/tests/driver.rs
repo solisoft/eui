@@ -822,7 +822,7 @@ fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
     assert_eq!(d.ime_area(), None);
 }
 
-#[cfg(feature = "a11y")]
+#[cfg(has_a11y)]
 #[test]
 fn the_accessibility_tree_names_buttons_fields_and_labels_and_follows_focus() {
     use eui_client::a11y::AccessRole as Role;
@@ -2157,4 +2157,38 @@ fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
     let _ = d.paint(400, 300);
     assert!(!d.video_playing());
     assert_eq!(d.video_position_ms(2), None);
+}
+
+/// A resize holds the `Viewport` frame back for 50 ms so that dragging a
+/// window's edge does not restyle the tree once per pixel. The frame that
+/// falls due at the end of that wait is, by then, a frame in which nothing
+/// has moved — so the paint takes the cached-list short cut. If that short
+/// cut returns without clearing what it was woken for, the driver goes on
+/// saying a frame is due, for ever, and the window redraws as fast as the
+/// platform will let it.
+#[test]
+fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    // The resize. Nothing is animating, so the only reason to wake is the
+    // viewport that is owed in 50 ms.
+    d.input(Input::Resized(380.0, 280.0, 1.0));
+    d.tick(t0 + Duration::from_millis(5));
+    let _ = d.paint(380, 280);
+    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Viewport(_))), "held back for the settle");
+    // The settle passes and the frame falls due.
+    let after = t0 + Duration::from_millis(60);
+    assert!(d.tick(after), "a frame is due: the viewport the resize owes");
+    let _ = d.paint(380, 280);
+    let sent = d.take_pending();
+    assert!(sent.iter().any(|f| matches!(f, Frame::Viewport(v) if v.width == 380)), "the viewport is sent: {sent:?}");
+    // And now nothing is owed. This is the assertion that matters: a due
+    // time left behind in the past is a redraw asked for on every pass of
+    // the event loop, which is one core, for ever, on a window nobody is
+    // touching.
+    assert_eq!(d.next_frame_at(), None, "nothing is due once the viewport has gone");
+    assert!(!d.tick(after + Duration::from_millis(1)), "the window sleeps");
 }

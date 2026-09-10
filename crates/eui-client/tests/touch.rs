@@ -1,0 +1,290 @@
+//! Spec 06 §5: one finger, reported as the pointer.
+//!
+//! The window has contacts and the protocol has a pointer, and the whole
+//! difference between a tap, a drag and a scroll is decided in the driver —
+//! on the near side of the tree, because whether a stroke belongs to the
+//! node under it depends on whether that node asked to hear moves.
+#![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
+
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+
+use eui_client::{Driver, Input};
+use eui_proto::*;
+use eui_theme::Role;
+
+const ATOM: u32 = 1;
+
+/// The scroller in every tree below, so a test can ask where the view is.
+const VIEW: u32 = 2;
+
+fn welcomed() -> Driver {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d
+}
+
+/// A button with a server `click`, on its own: the tree a tap is aimed at.
+fn button() -> Driver {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(ATOM)));
+    let ops = vec![
+        Op::DefAtom { id: ATOM, value: "pressed".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(200), height: Dim::Px(80), bg: ColorRef::role(Role::AccentBase.id()), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+    d
+}
+
+/// A 100 px scroller holding ten 22 px rows, each of them a button: every
+/// thing a stroke can be confused for, in one tree.
+fn scroller() -> Driver {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: VIEW, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 10 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(ATOM)));
+    for i in 0..10u32 {
+        // A scroll that starts on a button must not press it, which is what
+        // the slop is for.
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 10 + i, style: 12, key: 0, text: None, props: (0, 0), handlers: (1 + i, 1), child_count: 0 });
+        tree.handlers.push((EventKind::Click, Handler::Server(ATOM)));
+    }
+    let ops = vec![
+        Op::DefAtom { id: ATOM, value: "acted".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), width: Dim::Px(200), ..Default::default() } },
+        Op::DefStyle { id: 12, record: StyleRecord { height: Dim::Px(22), width: Dim::Px(200), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+    d
+}
+
+/// The same scroller, but the first row asked to hear `pointer_move`: a
+/// slider, as far as the finger is concerned. It takes the stroke, and the
+/// view it sits in never moves.
+fn slider() -> Driver {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: VIEW, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 12, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
+    tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM)));
+    tree.handlers.push((EventKind::PointerUp, Handler::Server(ATOM)));
+    // Tall enough that the scroller has somewhere to go, so "the view did
+    // not move" is a fact about the gesture and not about the layout.
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 13, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![
+        Op::DefAtom { id: ATOM, value: "slid".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), width: Dim::Px(200), ..Default::default() } },
+        Op::DefStyle { id: 12, record: StyleRecord { height: Dim::Px(40), width: Dim::Px(200), ..Default::default() } },
+        Op::DefStyle { id: 13, record: StyleRecord { height: Dim::Px(400), width: Dim::Px(200), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+    d
+}
+
+fn events(frames: &[Frame], kind: EventKind) -> Vec<u32> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == kind => Some(e.node),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where the view stands, in logical px from the top.
+fn offset(d: &Driver) -> i64 {
+    d.session().node(d.session().lookup(VIEW).unwrap()).unwrap().scroll.1
+}
+
+#[test]
+fn a_tap_is_a_press_and_a_release_on_what_it_landed_on() {
+    let mut d = button();
+    assert!(d.input(Input::TouchDown(1, 100.0, 40.0)).is_empty(), "no pointer_down handler to hear it");
+    let out = d.input(Input::TouchUp(1, 100.0, 40.0));
+    assert_eq!(events(&out, EventKind::Click), vec![1], "{out:?}");
+}
+
+#[test]
+fn a_tap_that_wobbles_within_the_slop_still_clicks_what_it_was_aimed_at() {
+    let mut d = button();
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    // Five pixels of hand tremor: under the eight-pixel slop, so the gesture
+    // is still a press and the release is taken where it landed.
+    d.input(Input::TouchMove(1, 103.0, 44.0));
+    let out = d.input(Input::TouchUp(1, 103.0, 44.0));
+    assert_eq!(events(&out, EventKind::Click), vec![1], "{out:?}");
+}
+
+#[test]
+fn a_finger_leaves_no_hover_behind_it() {
+    let mut d = button();
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    // Mid-gesture the pointer is on the button, and it says so: a hand
+    // cursor is what a node with a `click` handler asks for.
+    assert_eq!(d.cursor(), eui_proto::Cursor::Pointer);
+    d.input(Input::TouchUp(1, 100.0, 40.0));
+    // And once the finger is gone nothing is under the pointer. Without
+    // this, a tile lit on `pointer_enter` stays lit — a highlight no
+    // pointer will ever leave.
+    assert_eq!(d.cursor(), eui_proto::Cursor::Default, "the pointer is nowhere");
+}
+
+#[test]
+fn a_stroke_past_the_slop_scrolls_the_view_and_never_clicks_the_row() {
+    let mut d = scroller();
+    // Down on the first row, which is a button.
+    d.input(Input::TouchDown(1, 100.0, 10.0));
+    let mut clicks = Vec::new();
+    let mut y = 10.0;
+    // Up the glass by 60 px in six steps; the first crosses the slop.
+    for _ in 0..6 {
+        y -= 10.0;
+        clicks.extend(events(&d.input(Input::TouchMove(1, 100.0, y)), EventKind::Click));
+    }
+    clicks.extend(events(&d.input(Input::TouchUp(1, 100.0, y)), EventKind::Click));
+    assert!(clicks.is_empty(), "a scroll must not press the row it started on: {clicks:?}");
+    // The view followed the finger, and the eight pixels of slop are part
+    // of the stroke rather than swallowed by it — otherwise the view lags
+    // the finger by the slop for the whole gesture.
+    assert_eq!(offset(&d), 60, "60 px of stroke, 60 px of view");
+}
+
+#[test]
+fn the_press_a_scroll_began_with_is_given_back_before_the_view_moves() {
+    let mut d = slider();
+    // The first row here hears `pointer_up`, so the giving-back is visible.
+    // Down on it, then straight past the slop — but sideways, which the
+    // slider does not take, so the gesture is a scroll.
+    d.input(Input::TouchDown(1, 100.0, 20.0));
+    assert!(d.input(Input::TouchMove(1, 100.0, 60.0)).is_empty(), "06 §2: the move is held for the frame");
+    // It asked for moves, so it keeps the stroke: this is the drag case.
+    let _ = d.paint(400, 300);
+    assert_eq!(events(&d.take_pending(), EventKind::PointerMove), vec![3]);
+
+    // Now the same stroke on a row that asked for nothing.
+    let mut d = scroller();
+    d.input(Input::TouchDown(1, 100.0, 10.0));
+    let out = d.input(Input::TouchMove(1, 100.0, -10.0));
+    assert!(events(&out, EventKind::Click).is_empty(), "no click: {out:?}");
+    assert!(offset(&d) > 0, "and the view moved");
+}
+
+#[test]
+fn a_node_that_asked_for_moves_takes_the_stroke_and_the_view_stays_put() {
+    let mut d = slider();
+    d.input(Input::TouchDown(1, 100.0, 20.0));
+    // Straight down the glass, far past the slop. A finger here would
+    // scroll anything else; the node that asked for moves gets it instead.
+    // 06 §2: at most one `pointer_move` a frame, so the move is held until
+    // the paint that follows it and reported there.
+    assert!(d.input(Input::TouchMove(1, 100.0, 60.0)).is_empty());
+    let _ = d.paint(400, 300);
+    let sent = d.take_pending();
+    assert_eq!(events(&sent, EventKind::PointerMove), vec![3], "the slider hears the move: {sent:?}");
+    assert_eq!(offset(&d), 0, "and the view under it did not move");
+    let out = d.input(Input::TouchUp(1, 100.0, 60.0));
+    assert_eq!(events(&out, EventKind::PointerUp), vec![3], "{out:?}");
+    assert_eq!(offset(&d), 0, "a drag never flings");
+}
+
+#[test]
+fn a_second_finger_is_ignored_while_the_first_is_down() {
+    let mut d = scroller();
+    d.input(Input::TouchDown(1, 100.0, 10.0));
+    // A palm, or a second thumb. Version 1 has no gesture that wants two,
+    // and a stray contact must not move the view.
+    assert!(d.input(Input::TouchDown(2, 50.0, 90.0)).is_empty());
+    assert!(d.input(Input::TouchMove(2, 50.0, 10.0)).is_empty());
+    assert_eq!(offset(&d), 0, "the second contact moved nothing");
+    // The first finger still owns the gesture.
+    d.input(Input::TouchMove(1, 100.0, -30.0));
+    assert_eq!(offset(&d), 40);
+}
+
+#[test]
+fn a_cancelled_gesture_releases_the_press_without_clicking() {
+    let mut d = button();
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    let out = d.input(Input::TouchCancel(1));
+    assert!(events(&out, EventKind::Click).is_empty(), "{out:?}");
+    // And the contact is forgotten, so the finger that comes back starts a
+    // gesture rather than finishing the one the system took away.
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    let out = d.input(Input::TouchUp(1, 100.0, 40.0));
+    assert_eq!(events(&out, EventKind::Click), vec![1], "{out:?}");
+}
+
+#[test]
+fn a_finger_that_leaves_the_glass_still_moving_carries_the_view_on() {
+    let mut d = scroller();
+    d.input(Input::TouchDown(1, 100.0, 90.0));
+    // Six samples about a frame apart, 12 px each: roughly a logical pixel
+    // per millisecond, upward. The sleeps are what make this a fling rather
+    // than a drag — speed is distance over time, and a test that moves the
+    // finger instantly has lifted it from rest.
+    let mut y = 90.0;
+    for _ in 0..6 {
+        sleep(Duration::from_millis(12));
+        y -= 12.0;
+        d.input(Input::TouchMove(1, 100.0, y));
+    }
+    let at_lift = offset(&d);
+    let lifted = Instant::now();
+    d.input(Input::TouchUp(1, 100.0, y));
+    assert!(d.animating(), "the view is still moving after the finger left");
+    // It arrives rather than stopping: part-way at a third of the glide,
+    // and past where the finger let go by the end.
+    d.tick(lifted + Duration::from_millis(110));
+    let _ = d.paint(400, 300);
+    let mid = offset(&d);
+    d.tick(lifted + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    let landed = offset(&d);
+    assert!(landed > at_lift, "the fling carried it past {at_lift}: {landed}");
+    assert!(mid <= landed, "and it got there in order: {mid} then {landed}");
+    assert!(!d.animating(), "and it stopped");
+}
+
+#[test]
+fn a_finger_that_stops_before_it_lifts_does_not_fling() {
+    let mut d = scroller();
+    d.input(Input::TouchDown(1, 100.0, 90.0));
+    d.input(Input::TouchMove(1, 100.0, 50.0));
+    // Placed, moved, held, lifted. The last samples say it was moving, but
+    // the pause is the whole story: nothing should be thrown.
+    sleep(Duration::from_millis(120));
+    d.input(Input::TouchMove(1, 100.0, 50.0));
+    let settled = offset(&d);
+    d.input(Input::TouchUp(1, 100.0, 50.0));
+    assert!(!d.animating(), "a held finger throws nothing");
+    assert_eq!(offset(&d), settled);
+}
+
+#[test]
+fn a_window_that_loses_the_input_forgets_the_finger_on_it() {
+    let mut d = button();
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    // The application went to the background, or the window lost focus.
+    // The window never saw the contact's id and cannot name it, so this is
+    // how it says the gesture is over.
+    let out = d.input(Input::Unfocused);
+    assert!(events(&out, EventKind::Click).is_empty(), "{out:?}");
+    // The finger that comes back is a new gesture. Were the old contact
+    // still remembered, this `TouchDown` would be taken for a second finger
+    // and ignored — and the button would never work again.
+    d.input(Input::TouchDown(1, 100.0, 40.0));
+    let out = d.input(Input::TouchUp(1, 100.0, 40.0));
+    assert_eq!(events(&out, EventKind::Click), vec![1], "{out:?}");
+}

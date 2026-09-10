@@ -115,6 +115,17 @@ pub enum Input {
     /// Wheel notches, in lines: the driver turns each into a short eased
     /// scroll so a notched wheel reads as smoothly as a trackpad.
     WheelStep(f32, f32),
+    /// A finger landed at logical `(x, y)`. `id` names the contact; only
+    /// the first one on the glass is followed (spec 06 §5).
+    TouchDown(u64, f32, f32),
+    /// That finger moved to logical `(x, y)`.
+    TouchMove(u64, f32, f32),
+    /// That finger left the glass at logical `(x, y)`.
+    TouchUp(u64, f32, f32),
+    /// The window took the gesture away: a system edge swipe, a call
+    /// arriving, the app going to the background. Whatever the finger
+    /// pressed hears `pointer_up`, and no `click` follows it.
+    TouchCancel(u64),
     /// Committed text.
     Text(String),
     /// An input method's composition in progress: shown in the focused
@@ -193,6 +204,100 @@ struct Pointer {
     /// otherwise builds a queue, and the queue is what a hand feels when
     /// it stops and the thing it was dragging goes on moving.
     move_in_flight: Option<Instant>,
+}
+
+/// How far a finger may wander from where it landed and still be a press
+/// rather than a scroll, in logical pixels. Below this a tap that wobbles
+/// still clicks what it landed on; above it, the finger is carrying the
+/// view and the press it began with is taken back.
+const TOUCH_SLOP: f32 = 8.0;
+
+/// The time constant of a fling, in milliseconds. A finger that leaves the
+/// glass at `v` logical px/ms carries the view `v * TOUCH_FLING_TAU_MS`
+/// further, settling over three times that — the shape an exponential
+/// decay would draw, flattened into the eased glide the scroller already
+/// knows how to run (04 §7).
+const TOUCH_FLING_TAU_MS: f32 = 110.0;
+
+/// A finger that has been still for this long before it lifts is not
+/// flinging, whatever the last samples said: it was placed, moved, and
+/// held. Without this a stroke that ends in a pause throws the view.
+const TOUCH_STILL_MS: u128 = 80;
+
+/// The fastest fling honoured, in logical px/ms. A finger flicked off the
+/// edge of the glass can report an enormous last sample; the view should
+/// travel a long way, not an unbounded one.
+const TOUCH_MAX_SPEED: f32 = 6.0;
+
+/// What the finger turned out to be doing (spec 06 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TouchPhase {
+    /// Nothing on the glass.
+    #[default]
+    Off,
+    /// Down, and not yet either a press or a scroll: the node under it did
+    /// not ask for moves, and it has not wandered past the slop.
+    Undecided,
+    /// The node under it took the moves — a slider, a split bar, a
+    /// scrollbar thumb — so every move is the pointer's and none of it
+    /// scrolls.
+    Dragging,
+    /// It went past the slop without being taken: the finger carries the
+    /// view, and the press it began with has been given back.
+    Scrolling,
+}
+
+/// One finger, followed from the glass to the pointer (spec 06 §5).
+///
+/// The client reports contacts; the protocol has only a pointer. The
+/// translation cannot be done by the window, because whether a stroke is a
+/// press or a scroll depends on whether the node under it asked to hear
+/// moves — which only the driver knows. So it is done here, on the near
+/// side of the tree.
+#[derive(Debug, Default)]
+struct Touch {
+    /// The contact being followed. Later fingers are ignored while it
+    /// lasts: version 1 has no gesture that wants two.
+    id: Option<u64>,
+    /// Where it landed, in logical px — the slop is measured from here.
+    from: (f32, f32),
+    /// Where it last was, and when. The two a fling's speed comes from.
+    last: (f32, f32),
+    at: Option<Instant>,
+    /// Logical px per millisecond, smoothed towards the newest sample.
+    speed: (f32, f32),
+    phase: TouchPhase,
+}
+
+impl Touch {
+    /// Fold one sample into the smoothed speed. A stroke's fling is the
+    /// last few milliseconds of it, not its average, so the newest sample
+    /// carries most of the weight; a pause resets it to nothing.
+    fn sample(&mut self, x: f32, y: f32, now: Instant) {
+        if let Some(at) = self.at {
+            let ms = now.saturating_duration_since(at).as_millis();
+            if ms >= TOUCH_STILL_MS {
+                self.speed = (0.0, 0.0);
+            } else if ms > 0 {
+                let dt = ms as f32;
+                let v = ((x - self.last.0) / dt, (y - self.last.1) / dt);
+                self.speed = (self.speed.0 * 0.3 + v.0 * 0.7, self.speed.1 * 0.3 + v.1 * 0.7);
+            }
+        }
+        self.last = (x, y);
+        self.at = Some(now);
+    }
+
+    /// How far the finger is from where it landed.
+    fn wandered(&self, x: f32, y: f32) -> f32 {
+        let (dx, dy) = (x - self.from.0, y - self.from.1);
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// Forget the contact; the next `TouchDown` starts over.
+    fn end(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -485,6 +590,9 @@ pub struct Driver {
     size: Size,
     scale: f32,
     pointer: Pointer,
+    /// The finger being followed, when the window reports contacts rather
+    /// than a mouse (spec 06 §5).
+    touch: Touch,
     focused: Option<NodeIx>,
     /// Focus came from the keyboard or the server: draw the ring (spec 03 §3).
     focus_visible: bool,
@@ -660,6 +768,7 @@ impl Driver {
             size: Size::new(w, h),
             scale,
             pointer: Pointer::default(),
+            touch: Touch::default(),
             focused: None,
             focus_visible: false,
             anims: Vec::new(),
@@ -1164,6 +1273,10 @@ impl Driver {
             Input::PointerUp(button) => self.pointer_up(button),
             Input::Wheel(dx, dy) => self.wheel(dx, dy),
             Input::WheelStep(lines_x, lines_y) => self.wheel_step(lines_x, lines_y),
+            Input::TouchDown(id, x, y) => self.touch_down(id, x, y),
+            Input::TouchMove(id, x, y) => self.touch_move(id, x, y),
+            Input::TouchUp(id, x, y) => self.touch_up(id, x, y),
+            Input::TouchCancel(id) => self.touch_cancel(id),
             Input::Text(t) => self.text_input(&t),
             Input::ImePreedit(t) => {
                 self.preedit(t);
@@ -1177,6 +1290,12 @@ impl Driver {
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::PointerOut => self.clear_hover(),
             Input::Unfocused => {
+                // Whatever the window has lost the input to, it is not
+                // holding a finger any more. The contact is forgotten here
+                // rather than by a `TouchCancel`, because the window cannot
+                // name the contact it never saw an id for — it only knows
+                // that the input is gone.
+                self.touch.end();
                 let mut out = self.set_focus(None, false);
                 if let Some(pressed) = self.pointer.pressed_on.take() {
                     let (x, y) = (self.pointer.x, self.pointer.y);
@@ -1792,6 +1911,168 @@ impl Driver {
             }
         }
         out
+    }
+
+    // ---------------------------------------------------------- the finger
+
+    /// A finger landed. It is reported as the pointer arriving and pressing
+    /// (spec 06 §5), and what happens to the moves after that depends on
+    /// what it landed on: a node that asked to hear `pointer_move` — a
+    /// slider, a split bar — has taken a drag and keeps every move; a
+    /// scrollbar thumb likewise. Anything else leaves the gesture undecided
+    /// until the finger either lifts (a tap) or wanders past the slop (a
+    /// scroll).
+    ///
+    /// A second finger while one is down is ignored: version 1 has no
+    /// gesture that wants two, and a stray palm must not move the view.
+    fn touch_down(&mut self, id: u64, x: f32, y: f32) -> Vec<Frame> {
+        if self.touch.id.is_some() {
+            return Vec::new();
+        }
+        self.touch = Touch { id: Some(id), from: (x, y), last: (x, y), at: Some(self.now), speed: (0.0, 0.0), phase: TouchPhase::Undecided };
+        // The pointer arrives before it presses, so the press lands on the
+        // node under the finger and not on wherever the last one was.
+        let mut out = self.pointer_move(x, y);
+        out.extend(self.pointer_down(0));
+        // Taken as a drag, and by whom: the thumb is the client's own, the
+        // rest is whatever asked for moves.
+        let taken = self.pointer.dragging_thumb.is_some() || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some());
+        if taken {
+            self.touch.phase = TouchPhase::Dragging;
+        }
+        trace(|| format!("touch {id} down at {x},{y}: {:?}", self.touch.phase));
+        out
+    }
+
+    /// The finger moved. While the gesture is undecided the pointer is left
+    /// where it landed — a tap that wobbles five pixels should still click
+    /// what it was aimed at — and the move is only a measurement, until it
+    /// crosses the slop and becomes a scroll.
+    fn touch_move(&mut self, id: u64, x: f32, y: f32) -> Vec<Frame> {
+        if self.touch.id != Some(id) {
+            return Vec::new();
+        }
+        let (dx, dy) = (x - self.touch.last.0, y - self.touch.last.1);
+        self.touch.sample(x, y, self.now);
+        match self.touch.phase {
+            TouchPhase::Dragging => self.pointer_move(x, y),
+            TouchPhase::Scrolling => self.wheel(-dx, -dy),
+            TouchPhase::Undecided if self.touch.wandered(x, y) > TOUCH_SLOP => {
+                trace(|| format!("touch {id} became a scroll at {x},{y}"));
+                self.touch.phase = TouchPhase::Scrolling;
+                // The press is given back before the view moves: what it
+                // landed on hears `pointer_up` and no `click`, because
+                // none was meant. A button under a scrolling thumb must
+                // not fire when the thumb lifts.
+                let mut out = self.cancel_press();
+                // From where it landed, not from the last sample: the slop
+                // is part of the gesture, and swallowing it makes the view
+                // lag the finger by eight pixels for the whole stroke.
+                let (fx, fy) = (x - self.touch.from.0, y - self.touch.from.1);
+                out.extend(self.wheel(-fx, -fy));
+                out
+            }
+            TouchPhase::Undecided | TouchPhase::Off => Vec::new(),
+        }
+    }
+
+    /// The finger left the glass.
+    fn touch_up(&mut self, id: u64, x: f32, y: f32) -> Vec<Frame> {
+        if self.touch.id != Some(id) {
+            return Vec::new();
+        }
+        self.touch.sample(x, y, self.now);
+        let phase = self.touch.phase;
+        let speed = self.touch.speed;
+        let mut out = match phase {
+            // The drag ends where the finger did.
+            TouchPhase::Dragging => {
+                let mut out = self.pointer_move(x, y);
+                out.extend(self.pointer_up(0));
+                out
+            }
+            // A tap: the release is taken at the point it landed on, so
+            // press and release resolve to the same handler and a `click`
+            // follows even though the finger moved a little.
+            TouchPhase::Undecided => self.pointer_up(0),
+            // A stroke that was carrying the view: no press is outstanding,
+            // and the view goes on if the finger was still moving.
+            TouchPhase::Scrolling => self.fling(speed),
+            TouchPhase::Off => Vec::new(),
+        };
+        self.touch.end();
+        // A finger leaves no hover behind. Without this the node it lifted
+        // from stays lit, which on a touch screen is a highlight nothing
+        // will ever put out.
+        out.extend(self.clear_hover());
+        trace(|| format!("touch {id} up at {x},{y} after {phase:?}"));
+        out
+    }
+
+    /// The window took the gesture away. Whatever was pressed hears
+    /// `pointer_up`; nothing clicks, and nothing flings.
+    fn touch_cancel(&mut self, id: u64) -> Vec<Frame> {
+        if self.touch.id != Some(id) {
+            return Vec::new();
+        }
+        self.touch.end();
+        let mut out = self.cancel_press();
+        self.pointer.dragging_thumb = None;
+        out.extend(self.clear_hover());
+        out
+    }
+
+    /// End a press without a click. The node that took it hears
+    /// `pointer_up` — a button lit under the finger puts itself out — and
+    /// no `click` follows, because the finger turned out to be carrying the
+    /// view rather than pressing what it landed on.
+    fn cancel_press(&mut self) -> Vec<Frame> {
+        let Some(pressed) = self.pointer.pressed_on.take() else {
+            return Vec::new();
+        };
+        let mut out = self.flush_coalesced_move();
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        let payload = self.button_payload(pressed, EventKind::PointerUp, x, y, 0);
+        out.extend(self.emit(pressed, EventKind::PointerUp, payload));
+        out
+    }
+
+    /// A finger that leaves the glass still moving carries the view on.
+    ///
+    /// The speed it lifted at gives a distance — `speed * tau` — and the
+    /// glide the scroller already runs for a wheel notch (04 §7) does the
+    /// drawing, over three tau so that it arrives rather than stops. Below
+    /// a tenth of a pixel per millisecond there is nothing to carry: the
+    /// finger was placed and lifted, and the view stays where it was put.
+    fn fling(&mut self, speed: (f32, f32)) -> Vec<Frame> {
+        let clamp = |v: f32| v.clamp(-TOUCH_MAX_SPEED, TOUCH_MAX_SPEED);
+        let (vx, vy) = (clamp(speed.0), clamp(speed.1));
+        if vx.abs() < 0.1 && vy.abs() < 0.1 {
+            return Vec::new();
+        }
+        // The view travels against the finger, as it did during the stroke.
+        let (dx, dy) = (-vx * TOUCH_FLING_TAU_MS, -vy * TOUCH_FLING_TAU_MS);
+        let Some(scroller) = self.scroller_under_pointer_for(dx, dy) else {
+            return Vec::new();
+        };
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let view = self.layout.rect(scroller).unwrap_or_default();
+        let (max_x, max_y) = ((content.w - view.w).max(0.0), (content.h - view.h).max(0.0));
+        let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
+        let from = ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y));
+        let to = ((from.0 + dx).clamp(0.0, max_x), (from.1 + dy).clamp(0.0, max_y));
+        if (to.0 - from.0).abs() < 0.5 && (to.1 - from.1).abs() < 0.5 {
+            return Vec::new();
+        }
+        trace(|| format!("fling {vx:.2},{vy:.2} px/ms: {from:?} -> {to:?}"));
+        let ms = (TOUCH_FLING_TAU_MS * 3.0) as u64;
+        let gpu = self.glide_on_gpu(scroller, from, to);
+        // `smooth: false` — it is already moving when the finger lets go,
+        // so it eases out and never in.
+        self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(ms), gpu, armed: false });
+        self.next_due = Some(self.now);
+        self.redraw = true;
+        Vec::new()
     }
 
     /// Move focus to `new`, blurring (and committing) the old node. `visible`

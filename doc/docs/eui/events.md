@@ -62,6 +62,36 @@ too: click and drag, arrows (by word with Ctrl, extending with Shift), Home
 and End, Ctrl+A/C/X/V — a paste is the person's own act and arrives as
 typing. The application only ever sees `text_input` and `change`.
 
+## Touch
+
+A server cannot tell a finger from a mouse, and should not try. There is no
+touch event kind and none is reserved: the client resolves a contact into
+the pointer before anything is emitted, so the same tree works on a desktop
+and on a phone.
+
+One contact is followed at a time; a second is ignored while the first is
+live. What it becomes depends on what it landed on:
+
+- A node that asked to hear `pointer_move` — a slider, a split bar, a
+  scrollbar thumb — **takes** the stroke. Every move is a `pointer_move` at
+  the finger, the lift is a `pointer_up`, and the view does not scroll.
+- Anything else leaves it **undecided**, and the pointer stays where it
+  landed. Lift it and that is a tap: `pointer_up` and `click`, so a tap
+  that wobbles a few pixels still reaches what it was aimed at. Move it
+  past about eight logical pixels and that is a scroll.
+- On becoming a scroll, the press is **given back**: the node that took it
+  gets `pointer_up` and no `click`, so a button under a scrolling thumb
+  does not fire. The view then follows the finger, including the eight
+  pixels of slop, and a finger still moving when it leaves the glass
+  carries the view on.
+
+Every gesture ends with hover cleared, so a tile lit on `pointer_enter`
+hears `pointer_leave` — a finger leaves nothing behind it. Which is the
+other half of the point: `cursor` means nothing on a touch screen, and a
+control whose only affordance is hover has no touch behaviour. Give it one.
+
+The rules are normative in [spec 06 §5](https://github.com/solisoft/eui/blob/main/spec/06-events.md).
+
 ## What the client will not report
 
 By design, and stated so an application author does not go looking:

@@ -844,7 +844,9 @@ implements it and the vectors that pin it:
 - **Layout** (`04`) — `eui-layout`, goldens against a fixed-pitch measurer;
   §9 lists what version 1 leaves out.
 - **Theme** (`05`) — `eui-theme`, contrast enforced by construction.
-- **Events** (`06`) — `eui-client`, the driver tests.
+- **Events** (`06`) — `eui-client`, the driver tests. §5, touch, is new:
+  no event kind was added for it, because a contact becomes the pointer
+  before anything is emitted and a server cannot tell the two apart.
 - **Bytecode** (`07`) — `eui-vm`, verifier and fuel; Soli compiles `local`
   handlers to it.
 - **Security** (`08`) — each requirement naming where it is enforced.
@@ -854,9 +856,77 @@ implements it and the vectors that pin it:
   implemented; the signed manifest and key pinning are specified, not yet
   checked by the client.
 
+## Android: started, not finished
+
+The portable half of the client is portable in fact and not only in
+principle: `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`, `eui-text`
+and `eui-vm` cross-compile clean for `aarch64-linux-android` today, with no
+`cfg` between them and the desktop. That is the protocol, the session, the
+theme, the layout engine, the text shaper and the bytecode VM — and it needs
+no NDK to check, because none of it touches C.
+
+**Done, and tested where it can be tested here:**
+
+- **Touch** (`06` §5). One contact, followed into the pointer: a tap, a
+  drag when the node under the finger asked for moves, a scroll when it did
+  not, and a fling when the finger was still moving as it left. The press a
+  scroll began with is given back so no button fires under a thumb that was
+  only scrolling. Ten tests in `crates/eui-client/tests/touch.rs`; they run
+  on any machine, because this is the driver and not the window.
+- **Suspend and resume.** Android destroys the native window whenever the
+  application goes to the background. The surface is dropped on the way out
+  and made again on the way back — a surface still held at that point is a
+  crash on return — and the finger on the glass is told the gesture ended.
+- **The soft keyboard.** The focus change that tells a desktop input method
+  it is welcome raises and dismisses the Android keyboard.
+- **The entry point.** `crates/eui-android` is the shared object the
+  platform loads: `android_main` takes the activity, and the event loop is
+  built on its looper. `cargo apk build -p eui-android` reads the packaging
+  in its manifest; the session address is baked in at build time from
+  `EUI_ANDROID_URL`, because an APK is one application and not a browser.
+- **Somewhere to write.** No `$HOME` and no XDG on Android, so the pin
+  store and the recent list use the directory the platform gave the
+  application. Without a pin store there is no trust on first use and so no
+  session at all.
+- **The three parts that are a platform, not a feature.** There is no `rfd`
+  behind the Android file picker, no `arboard` behind its clipboard, no
+  AccessKit adapter behind TalkBack. Those crates are declared for every
+  target but Android, and `eui-client/build.rs` turns the matching `has_*`
+  cfg off there, so the code that calls them is not compiled rather than
+  compiled and broken.
+
+**Not done, and the first of them is the real one:**
+
+- **The worker.** Android will not `exec` a second binary out of an
+  application's own storage, so the driver runs on a thread of the window's
+  process. `Backend::open` says so in as many words rather than looking
+  like a worker that failed to start. The application sandbox and SELinux
+  confine the *process*; nothing holds the frame decoder apart from the
+  renderer beside it, which is what 08 §10 is for. Seccomp on one thread
+  would confine its system calls and not its memory, and the memory is the
+  point — so it is not offered as a substitute. This is the piece that
+  makes Android a stage rather than a port.
+- **A build anyone can check.** `ring` and `blake3` want the NDK's clang,
+  so nothing above `eui-text` has been compiled for the target here, and no
+  APK has been built or run. The Rust is written and the packaging is
+  declared; neither has met a device.
+- Multi-touch: pinch, rotate, two-finger pan. §5 follows one contact and
+  says so.
+- The soft keyboard does not know what a field holds. The typed fields —
+  `email_field`, `number_field`, `date_field` — should each raise a
+  different keypad, and nothing in the tree says which.
+- The shell (`chrome.rs`) is a tab strip and an address bar: the wrong
+  shape for a phone. An APK built with `EUI_ANDROID_URL` is chromeless and
+  right; one built without it opens the shell, which works and looks like a
+  desktop.
+- The system back button, and safe-area insets around a notch.
+- The platform trust store. `rustls-native-certs` finds nothing useful on
+  Android, so the client falls back to the public roots and a development
+  CA is not honoured — `EUI_CA_FILE` is the way in until it is.
+
 ## Not started
 
-- Android and iOS (stage 3).
+- iOS (stage 3).
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.
@@ -877,7 +947,9 @@ this project, and it is not hidden in a later milestone. The first stage
 delivered the protocol, the layout engine, a renderer, a working client and
 about fifteen widgets; the second added the rest of the catalogue, keyboard
 focus, input methods, transitions, shadows and charts; the third put the
-decoder in a confined process. Mobile comes after.
+decoder in a confined process. Mobile is the fourth, and it is where the
+third stops being free: the confined process it bought does not exist on
+Android, and saying that plainly is worth more than a fifteenth widget.
 
 ## The Soli integration is additive
 

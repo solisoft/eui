@@ -22,6 +22,11 @@
 // adapter is: only `a11y::to_update`, which speaks AccessKit, is behind
 // the feature. `--no-default-features` drops the adapter, not the wire.
 pub mod a11y;
+/// Where an Android process starts, and the three things the platform will
+/// only tell an `AndroidApp`: its data directory, its soft keyboard, and
+/// the looper the event loop has to be built on.
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod app;
 pub mod assets;
 pub mod audio;
