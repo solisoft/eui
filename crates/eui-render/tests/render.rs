@@ -55,6 +55,7 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
         size: (w, h),
         focus: None,
         anims: &[],
+        glides: &[],
         editing: None,
         now: 0.0,
         scrollbar_hot: None,
@@ -642,6 +643,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             size: (200, 100),
             focus: None,
             anims,
+            glides: &[],
             editing: None,
             now: 0.0,
             scrollbar_hot: None,
@@ -727,6 +729,38 @@ fn a_transition_renders_its_midway_colour_at_half_time() {
     }
 }
 
+/// 04 §7: a quad carried by a scroller is drawn on its way from where the
+/// glide began to where the layout put it, along the curve the record
+/// names, from the list's age.
+#[test]
+fn a_glide_moves_a_quad_by_its_eased_offset() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let slot = (1u32 << SCROLLER_SHIFT) as f32;
+    // A 10 px bar put at y = 40, gliding there from 40 px lower over a second.
+    list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: white, ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    list.scrollers = vec![Scroller { from: [0.0, 40.0], to: [0.0, 0.0], t0: 0.0, dur: 1.0, curve: 0, pad: 0 }];
+    let target = r.offscreen(100, 100);
+    // The first row of ink in column 30.
+    let mut top = |r: &mut Renderer, st: &mut SessionTextures, age: f32| -> Option<usize> {
+        r.render_offscreen_at(st, &target, 0.0, age, &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        (0..100).find(|y| px[(y * 100 + 30) * 4] > 128)
+    };
+    assert_eq!(top(&mut r, &mut st, 0.0), Some(80), "at the start, 40 px below where it was put");
+    assert_eq!(top(&mut r, &mut st, 2.0), Some(40), "past the end, where it was put");
+    let k = eui_theme::Curve::STANDARD.at(0.5);
+    let want = (40.0 + 40.0 * (1.0 - k)).round() as usize;
+    let mid = top(&mut r, &mut st, 0.5).expect("ink halfway");
+    assert!(mid.abs_diff(want) <= 1, "halfway along the curve: at {mid}, wanted {want}");
+}
+
 /// An entrance starts from no opacity: the quad is not there at age zero
 /// and is on its way at half time, along the entrance's own curve.
 #[test]
@@ -776,6 +810,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         size: (200, 100),
         focus: None,
         anims: &[],
+        glides: &[],
         editing,
         now: 0.0,
         scrollbar_hot: None,
@@ -850,6 +885,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             size: (200, 100),
             focus: None,
             anims: &[],
+            glides: &[],
             editing,
             now: 0.0,
             scrollbar_hot: None,
@@ -963,6 +999,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             size: (100, 100),
             focus: None,
             anims: &[],
+            glides: &[],
             editing: None,
             now,
             scrollbar_hot: None,

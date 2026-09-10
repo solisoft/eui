@@ -33,6 +33,15 @@ pub const ANIMATED: u32 = 16;
 /// The transition decelerates (an entrance) rather than easing along the
 /// theme's standard curve.
 pub const DECELERATE: u32 = 32;
+/// Bits 8-11 of the flags: which of the list's `scrollers` carries the
+/// quad — a scroll in flight (04 §7) the vertex stage moves from the
+/// offset the layout baked to the one on screen — or zero for none.
+pub const SCROLLER_SHIFT: u32 = 8;
+/// The mask those bits make.
+pub const SCROLLER_MASK: u32 = 15 << SCROLLER_SHIFT;
+/// How many scrollers a list can carry: fifteen slots, two per glide
+/// (the content and its thumb).
+pub const MAX_SCROLLERS: usize = 15;
 
 /// The caret and selection of the focused editable node, as byte offsets
 /// into the text the node shows, plus how far the text is scrolled left to
@@ -120,6 +129,45 @@ pub fn pack4(c: [f32; 4]) -> [u16; 4] {
 pub fn unpack4(p: [u16; 4]) -> [f32; 4] {
     let f = |v: u16| f32::from(v) / 65535.0;
     [f(p[0]), f(p[1]), f(p[2]), f(p[3])]
+}
+
+/// A scroll in flight, as the list carries it (04 §7): the device-pixel
+/// shift its quads start from and end at, and the clock. The layout baked
+/// the offset the glide lands on, so the shift ends at zero; the vertex
+/// stage eases from the list's age, and the list is the same list for the
+/// whole glide.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Scroller {
+    /// The shift at the start, device px.
+    pub from: [f32; 2],
+    /// The shift at the end: zero, the baked position.
+    pub to: [f32; 2],
+    /// When it began, seconds relative to the paint.
+    pub t0: f32,
+    /// How long it takes, seconds.
+    pub dur: f32,
+    /// `0` the theme's standard curve (a wheel notch, already in motion),
+    /// `2` the smooth one (a key press: from rest to rest).
+    pub curve: u32,
+    /// Padding.
+    pub pad: u32,
+}
+
+/// A scroll in flight, as the painter is told of it: which way the content
+/// stands from where the layout put it when the glide began, in logical
+/// px, and the clock.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glide {
+    /// Baked offset less the offset on screen at the start: the content
+    /// begins this far from where the layout put it.
+    pub from: (f32, f32),
+    /// When it began, seconds relative to this paint.
+    pub t0: f32,
+    /// How long it takes, seconds.
+    pub dur: f32,
+    /// From rest to rest (a key press) rather than easing out (a notch).
+    pub smooth: bool,
 }
 
 /// One running transition (03 §5), as the painter is told of it: where it
@@ -244,6 +292,9 @@ pub struct DrawList {
     /// only. Not sent over the pipe: the driver reads it before handing
     /// the list on.
     pub cpu_bound: bool,
+    /// The scrolls in flight this list carries (04 §7), by slot less one:
+    /// a quad's flags name the slot that moves it.
+    pub scrollers: Vec<Scroller>,
     /// Set when some node wears a `blur`: the extra passes the frame needs
     /// before its own. `None` is the ordinary single-pass frame.
     pub backdrop: Option<Backdrop>,
@@ -268,6 +319,9 @@ pub struct Scene<'a> {
     /// Nodes mid-transition (03 §5): where each is going, where it came
     /// from, and when, for the vertex stage to interpolate.
     pub anims: &'a [(NodeIx, GpuAnim)],
+    /// Scrollers mid-glide (04 §7): how far their content stands from
+    /// where the layout put it, and when, likewise.
+    pub glides: &'a [(NodeIx, Glide)],
     /// The field being edited: its caret and selection (03 §3).
     pub editing: Option<Editing>,
     /// Seconds on the client's clock, for `spin` (03 §5).
@@ -288,7 +342,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let Some(root) = scene.session.root() else {
         return list;
     };
-    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, blur: None };
+    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, slack: (0.0, 0.0), blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -330,6 +384,10 @@ struct Painter<'s, 'a> {
     /// timeline fold into one; on different timelines they cannot both be
     /// the vertex stage's, and the quads under them are baked instead.
     fade: Option<FadeCtx>,
+    /// Inside a scroller mid-glide: how far, in device px, its content may
+    /// move on screen from where the layout put it, so the cull keeps the
+    /// quads that will slide into view.
+    slack: (f32, f32),
     /// The backdrop being accumulated, once some node has asked for one:
     /// the region as `x0, y0, x1, y1` in device pixels, the first blurred
     /// instance, and the standard deviations met.
@@ -454,7 +512,32 @@ impl Painter<'_, '_> {
             return false;
         };
         let (cx, cy, cw, ch) = (c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32);
-        rect[0] < cx + cw && rect[0] + rect[2] > cx && rect[1] < cy + ch && rect[1] + rect[3] > cy
+        let (sx, sy) = self.slack;
+        rect[0] < cx + cw + sx && rect[0] + rect[2] > cx - sx && rect[1] < cy + ch + sy && rect[1] + rect[3] > cy - sy
+    }
+
+    /// Give a scroller mid-glide its slots: one for its content, one for
+    /// its thumb, which travels the other way. `None` when the list has
+    /// no room left, and the glide is painted where the layout put it.
+    fn note_glide(&mut self, g: Glide) -> Option<u32> {
+        if self.list.scrollers.len() + 2 > MAX_SCROLLERS {
+            return None;
+        }
+        let scale = self.scene.scale;
+        let curve = if g.smooth { 2 } else { 0 };
+        self.list.scrollers.push(Scroller { from: [g.from.0 * scale, g.from.1 * scale], to: [0.0; 2], t0: g.t0, dur: g.dur, curve, pad: 0 });
+        self.list.scrollers.push(Scroller { t0: g.t0, dur: g.dur, curve, ..Scroller::default() });
+        u32::try_from(self.list.scrollers.len() - 1).ok()
+    }
+
+    /// Mark every quad pushed since `first` as carried by `slot`.
+    fn carry(&mut self, first: usize, slot: u32) {
+        for q in self.list.quads.iter_mut().skip(first) {
+            let flags = flags_of(q);
+            if flags & SCROLLER_MASK == 0 {
+                q.params[2] = (flags | (slot << SCROLLER_SHIFT)) as f32;
+            }
+        }
     }
 
     /// Give a quad the node's own transition: the opacity it started
@@ -757,6 +840,18 @@ impl Painter<'_, '_> {
             }
             let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
             let saved = self.clip;
+            // 04 §7: a scroll in flight. The layout put the content where
+            // the glide lands; the vertex stage slides it there from where
+            // it was, so what is pushed here is the landing picture, with
+            // the cull loosened by the distance and every quad of it named
+            // to the slot that moves it.
+            let glide = if clips { self.scene.glides.iter().find(|(n, _)| *n == ix).map(|(_, g)| *g) } else { None };
+            let slot = glide.and_then(|g| self.note_glide(g));
+            let saved_slack = self.slack;
+            if let (Some(g), Some(_)) = (glide, slot) {
+                self.slack = ((g.from.0 * scale).abs(), (g.from.1 * scale).abs());
+            }
+            let first_carried = self.list.quads.len();
             if clips {
                 let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
                 let inner = intersect(parent, dev);
@@ -778,9 +873,13 @@ impl Painter<'_, '_> {
                 self.placeholders(ix, rect, &style, opacity);
             }
             self.fade = saved_fade;
+            if let Some(slot) = slot {
+                self.carry(first_carried, slot);
+            }
+            self.slack = saved_slack;
             if clips {
                 self.set_clip(saved);
-                self.scrollbar(ix, rect, opacity);
+                self.scrollbar(ix, rect, opacity, glide.zip(slot));
             }
         }
         self.own = saved_own;
@@ -800,6 +899,10 @@ impl Painter<'_, '_> {
             return;
         };
         let sy = node.scroll.1 as f32;
+        // Mid-glide the view passes over every row between where it was
+        // and where it lands: a placeholder for each of those it does not
+        // hold, not just the ones at the landing.
+        let (lo, hi) = self.scene.glides.iter().find(|(n, _)| *n == ix).map_or((sy, sy), |(_, g)| ((sy - g.from.1).min(sy), (sy - g.from.1).max(sy)));
         let (x0, y0) = (rect.x + style.border.l + style.padding.l, rect.y + style.border.t + style.padding.t);
         let inner_w = (rect.w - style.inset_h()).max(0.0);
         let view_h = rect.h;
@@ -807,10 +910,10 @@ impl Painter<'_, '_> {
         let radius = self.scene.theme.radius.get(2).copied().unwrap_or(6.0);
         let fill = linear(self.scene.theme.color(Role::SurfaceSunken));
         let n = tops.len().saturating_sub(1);
-        let first = tops.partition_point(|t| *t <= sy).saturating_sub(1);
+        let first = tops.partition_point(|t| *t <= lo).saturating_sub(1);
         for row in first..n {
             let top = tops.get(row).copied().unwrap_or(0.0);
-            if top - sy > view_h {
+            if top - hi > view_h {
                 break;
             }
             if placed.binary_search(&(row as u32)).is_ok() {
@@ -826,10 +929,20 @@ impl Painter<'_, '_> {
     /// Spec 03 §2: a scroller whose content overflows wears a thumb along
     /// its right edge — as long as view ÷ content, never under 24 px —
     /// painted after its children so it sits on top of them.
-    fn scrollbar(&mut self, ix: NodeIx, rect: Rect, opacity: f32) {
+    fn scrollbar(&mut self, ix: NodeIx, rect: Rect, opacity: f32, glide: Option<(Glide, u32)>) {
         let Some(mut t) = scrollbar_thumb(self.scene.session, self.scene.layout, ix, rect) else {
             return;
         };
+        // Mid-glide the thumb travels the other way from the content, by
+        // its own ratio: the slot after the content's carries it.
+        let first = self.list.quads.len();
+        let thumb_slot = glide.and_then(|(g, slot)| {
+            let landing = self.scene.session.node(ix)?.scroll.1 as f32;
+            let start = scrollbar_thumb_at(self.scene.session, self.scene.layout, ix, rect, landing - g.from.1)?;
+            let record = self.list.scrollers.get_mut(slot as usize)?;
+            record.from = [0.0, (start.y - t.y) * self.scene.scale];
+            Some(slot + 1)
+        });
         let hot = self.scene.scrollbar_hot == Some(ix);
         let mut color = linear(self.scene.theme.color(if hot { Role::TextDefault } else { Role::TextMuted }));
         color[3] *= if hot { 0.7 } else { 0.45 };
@@ -840,6 +953,9 @@ impl Painter<'_, '_> {
         }
         let q = self.device(t);
         self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
+        if let Some(slot) = thumb_slot {
+            self.carry(first, slot);
+        }
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
@@ -1154,11 +1270,16 @@ pub const SCROLLBAR_WIDTH: f32 = 8.0;
 /// The thumb of `ix`'s vertical scrollbar in window coordinates, or `None`
 /// when the content fits. Shared with the driver, which drags it.
 pub fn scrollbar_thumb(session: &Session, layout: &Layout, ix: NodeIx, rect: Rect) -> Option<Rect> {
+    let offset = session.node(ix)?.scroll.1 as f32;
+    scrollbar_thumb_at(session, layout, ix, rect, offset)
+}
+
+/// The thumb as it would sit at `offset` rather than at the node's own.
+fn scrollbar_thumb_at(_session: &Session, layout: &Layout, ix: NodeIx, rect: Rect, offset: f32) -> Option<Rect> {
     let content = layout.content_size(ix)?;
     if content.h <= rect.h + 0.5 || rect.h <= 0.0 {
         return None;
     }
-    let offset = session.node(ix)?.scroll.1 as f32;
     let max = (content.h - rect.h).max(1.0);
     let track = rect.h - 4.0;
     let len = (track * rect.h / content.h).max(24.0).min(track);

@@ -179,6 +179,19 @@ available height (and indefinite width when `overflow` is `scroll` on that
 axis), then clips to its own border box. Its scroll offset is clamped to
 `[0, content − viewport]` per axis after every layout.
 
+A scroll in flight — a wheel notch or a key press easing to its offset
+(03 §5's motion) — is laid out **once, at the offset it lands on**; the
+frames between draw that layout with the content slid, in the vertex
+stage, from where it was to where it was put, along the motion's curve
+from the list's own clock, so a frame owed to a glide alone is the
+previous draw list drawn again. The reference client tells its layout how
+far the content stands from where it was put meanwhile, so a hit mid-glide
+finds what is drawn under the point rather than what will be. A `scroll`
+event is emitted when it lands, as ever. A virtualised list holds the rows
+at both ends of the travel for the glide's one layout (§7.1), which is why
+a glide over more than two viewports of such a list moves its offset frame
+by frame instead.
+
 A `list` node is a `scroll` whose children are laid out at their content size
 in a column, with one addition: when the list carries an `item_height` prop
 (integer px), a child outside the visible range plus one viewport of margin on
@@ -207,6 +220,11 @@ the scrollbar and the row tops are exactly those of the full list — and
 those in view are painted as placeholders: a block in `surface.sunken`,
 inset by `space.2` and rounded `md`, so a scroll that outruns the server
 shows where the rows are rather than nothing.
+
+Mid-glide the window covers both ends of the travel — the rows in view
+where the glide began and where it lands, each with its margins — so the
+one layout a glide takes has rows to slide past, and the placeholders are
+painted for every row the view passes over.
 
 When the range of rows that intersects the viewport plus two viewports of
 margin on each side changes, and the scroll has been still for a moment

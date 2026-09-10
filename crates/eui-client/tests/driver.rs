@@ -943,11 +943,14 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     assert!(d.input(Input::WheelStep(0.0, 1.0)).is_empty());
     assert!(d.animating());
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
-    // Mid-way: the offset is somewhere between 0 and 100.
+    // Mid-way: the tree holds the landing, 100, and the layout knows the
+    // content stands somewhere short of it -- between 0 and 100 px below
+    // where it was put -- which is where the vertex stage draws it.
     d.tick(t0 + Duration::from_millis(60));
     let _ = d.paint(400, 300);
-    let (_, y) = d.session().node(scroll).unwrap().scroll;
-    assert!(y > 0 && y < 100, "{y}");
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 100), "laid out once, at the landing");
+    let dy = d.layout().glide(scroll).expect("gliding").delta.1;
+    assert!(dy > 0.0 && dy < 100.0, "{dy}");
     assert!(d.take_pending().is_empty(), "not landed yet");
     // Zero-valued pixel events between notches (a Magic Mouse) change nothing.
     assert!(d.input(Input::Wheel(0.0, 0.0)).is_empty());
@@ -962,6 +965,107 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     assert_eq!(landed.len(), 1, "one scroll event when it lands: {landed:?}");
     assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(120)])));
     assert_eq!(d.next_frame_at(), None);
+}
+
+/// 04 §7: a glide is one layout, at the landing, and then the same list
+/// drawn again with the vertex stage sliding the content into place. The
+/// list names the scroller and its thumb, and every quad in it that moves.
+#[test]
+fn a_glide_frame_does_not_lay_out() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 10 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(ATOM_INC)));
+    for i in 0..10 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    d.input(Input::PointerMove(50.0, 50.0));
+    d.input(Input::WheelStep(0.0, 1.0));
+    // The paint after the notch lays out once, at the landing.
+    let laid = d.relayouts();
+    let list = d.paint(400, 300);
+    assert_eq!(d.relayouts(), laid + 1, "one layout, at the landing");
+    assert_eq!(list.scrollers.len(), 2, "the content and its thumb");
+    let content = list.scrollers[0];
+    assert_eq!((content.from, content.to), ([0.0, 100.0], [0.0, 0.0]), "the content starts a notch below where it was put and slides up to it");
+    assert!((content.dur - 0.1).abs() < 1e-6 && content.t0 == 0.0 && content.curve == 0, "{content:?}");
+    let thumb = list.scrollers[1];
+    assert!(thumb.from[1] < 0.0 && thumb.to == [0.0, 0.0], "the thumb travels the other way: {thumb:?}");
+    let carried = |q: &eui_render::Quad| (q.params[2] as u32 & eui_render::SCROLLER_MASK) >> eui_render::SCROLLER_SHIFT;
+    let rows = list.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).count();
+    assert!(rows > 0);
+    assert!(list.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).all(|q| carried(q) == 1), "every glyph of the content is carried by slot one");
+    assert!(list.quads.iter().any(|q| carried(q) == 2), "and the thumb by slot two");
+    assert!(list.gpu_only, "so the frames of the glide are this list again");
+    assert_eq!(list.repeat_until_ms, 100);
+    // The frames between: the same list, no layout.
+    for i in 1..=5 {
+        d.tick(t0 + Duration::from_millis(16 * i));
+        let again = d.paint(400, 300);
+        assert!(Arc::ptr_eq(&list, &again), "frame {i} is the same list");
+    }
+    assert_eq!(d.relayouts(), laid + 1, "nothing was laid out for them");
+    assert_eq!(d.spin_repeats(), 5);
+    // The landing: a real paint, nothing gliding, the scroll reported.
+    d.tick(t0 + Duration::from_millis(120));
+    let landed = d.paint(400, 300);
+    assert!(landed.scrollers.is_empty());
+    assert!(!d.animating());
+    assert_eq!(d.relayouts(), laid + 1, "and no layout for the landing either: it was done at the start");
+    let out = d.take_pending();
+    assert!(matches!(&out[..], [Frame::Event(e)] if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(100)])), "{out:?}");
+}
+
+/// Mid-glide the pointer is over what is drawn, not over what the layout
+/// put where: the row on screen under the pointer is the hovered one.
+#[test]
+fn a_hit_during_a_glide_finds_the_moved_row() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 10 });
+    for i in 0..10 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    d.input(Input::PointerMove(50.0, 10.0));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(10), "row 0 at rest");
+    d.input(Input::WheelStep(0.0, 1.0));
+    let _ = d.paint(400, 300);
+    // Part way through the glide the pointer moves. An input stamps the
+    // driver's clock with the wall's, so the wall has to move: the frames
+    // between were the same list, and no paint refreshed anything.
+    std::thread::sleep(Duration::from_millis(50));
+    d.input(Input::PointerMove(50.0, 11.0));
+    let _ = d.paint(400, 300);
+    let scroll = d.session().lookup(2).unwrap();
+    let dy = d.layout().glide(scroll).expect("gliding").delta.1;
+    let shown = 100.0 - dy; // the offset on screen
+    assert!(shown > 20.0 && shown < 100.0, "part way: {shown}");
+    let expected = 10 + ((11.0 + shown) / 22.0).floor() as u32;
+    assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
 }
 
 #[test]
@@ -1311,8 +1415,10 @@ fn arrows_land_on_rows_and_page_keys_move_a_viewport() {
     assert!(d.animating());
     d.tick(t0 + Duration::from_millis(100));
     let _ = d.paint(400, 300);
-    let (_, mid) = d.session().node(list).unwrap().scroll;
-    assert!(mid > 0 && mid < 22, "mid-way at {mid}");
+    // The tree holds the landing; the content is drawn on its way there.
+    assert_eq!(d.session().node(list).unwrap().scroll, (0, 22), "laid out at the landing");
+    let mid = 22.0 - d.layout().glide(list).expect("gliding").delta.1;
+    assert!(mid > 0.0 && mid < 22.0, "mid-way at {mid}");
     settle(&mut d, &mut clock);
     assert_eq!(d.session().node(list).unwrap().scroll, (0, 22));
     assert!(!d.animating());

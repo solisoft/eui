@@ -19,7 +19,7 @@ pub mod geom;
 pub mod measure;
 pub mod style;
 
-pub use engine::{Env, Layout, Stats};
+pub use engine::{Env, Glide, Layout, Stats};
 pub use eui_tree::{NodeIx, Session};
 pub use geom::{Constraint, Rect, Size};
 pub use measure::{FontSpec, Monospace, TextMeasurer, TextMetrics};

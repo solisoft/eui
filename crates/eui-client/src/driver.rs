@@ -12,7 +12,7 @@ use eui_proto::{
     caps, AlignItems, Batch, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, StyleRecord, Subtree, TextAlign, TextRef,
     ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, GpuAnim, ImageAtlas, Scene, SCROLLBAR_WIDTH};
+use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -340,6 +340,14 @@ struct ScrollAnim {
     to: (f32, f32),
     start: Instant,
     duration: Duration,
+    /// The vertex stage carries it (04 §7): the layout is done once, at
+    /// the landing offset, and the frames between are the same list.
+    /// False for a glide too long for a virtualised list to hold both
+    /// ends of, which moves the offset frame by frame as every glide
+    /// once did.
+    gpu: bool,
+    /// The landing offset is in the tree and the layout knows the glide.
+    armed: bool,
 }
 
 impl ScrollAnim {
@@ -807,24 +815,67 @@ impl Driver {
         !self.anims.is_empty() || self.scroll_anim.is_some()
     }
 
-    /// Move a scroll animation to `now`: the offset it dictates goes into
-    /// the tree before layout. Returns the frames to send once it lands.
+    /// Whether a glide from `from` to `to` can be the vertex stage's (04
+    /// §7). A plain scroller lays out all its content, so any distance
+    /// can; a virtualised list materialises the rows at both ends of the
+    /// travel, so only a travel of a couple of viewports -- a notch, a
+    /// page -- can, and a jump to the end of ten thousand rows moves the
+    /// offset frame by frame instead.
+    fn glide_on_gpu(&self, scroller: NodeIx, from: (f32, f32), to: (f32, f32)) -> bool {
+        if self.layout.row_tops(scroller).is_none() {
+            return true;
+        }
+        let view_h = self.layout.rect(scroller).map_or(0.0, |r| r.h);
+        (to.1 - from.1).abs() <= 2.0 * view_h
+    }
+
+    /// Move a scroll animation to `now`. A glide the vertex stage carries
+    /// puts its landing offset into the tree once and tells the layout
+    /// how far the content stands from it; one it does not puts the
+    /// offset of the moment in, frame by frame. Returns the frames to
+    /// send once it lands.
     fn advance_scroll(&mut self) -> Vec<Frame> {
-        let Some(a) = self.scroll_anim else {
+        let Some(mut a) = self.scroll_anim else {
+            self.layout.clear_glides();
             return Vec::new();
         };
         if self.session.node(a.node).is_none() {
             self.scroll_anim = None;
+            self.layout.clear_glides();
             return Vec::new();
         }
-        let (x, y) = a.at(self.now);
-        self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
-        self.layout_valid = false;
-        self.scroll_touched = Some(self.now);
+        if !a.gpu {
+            let (x, y) = a.at(self.now);
+            self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
+            self.layout_valid = false;
+            self.scroll_touched = Some(self.now);
+            if a.done(self.now) {
+                self.scroll_anim = None;
+                let (nx, ny) = (a.to.0.round() as i64, a.to.1.round() as i64);
+                return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]));
+            }
+            return Vec::new();
+        }
+        let (bx, by) = (a.to.0.round(), a.to.1.round());
+        let (ax, ay) = a.at(self.now);
+        let delta = (bx - ax, by - ay);
+        if a.armed {
+            self.layout.set_glide_delta(a.node, delta);
+        } else {
+            // One layout, at the landing: a retarget mid-flight lands
+            // somewhere else and takes another.
+            self.session.set_scroll(a.node, bx as i64, by as i64);
+            self.layout.set_glide(a.node, a.from.1.min(a.to.1), a.from.1.max(a.to.1), delta);
+            self.layout_valid = false;
+            self.scroll_touched = Some(self.now);
+            a.armed = true;
+            self.scroll_anim = Some(a);
+        }
         if a.done(self.now) {
             self.scroll_anim = None;
-            let (nx, ny) = (a.to.0.round() as i64, a.to.1.round() as i64);
-            return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]));
+            self.layout.clear_glide(a.node);
+            self.scroll_touched = Some(self.now);
+            return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(bx as i64), Value::Int(by as i64)]));
         }
         Vec::new()
     }
@@ -1210,9 +1261,21 @@ impl Driver {
     }
 
     /// Enter, leave and move for the node under `(x, y)`, on a valid layout.
+    /// The node drawn under a point. Mid-glide the content is on its way
+    /// from where the layout put it (04 §7), and the frames between were
+    /// the same list -- no paint moved anything -- so the layout is told
+    /// where the content stands now before it is asked.
+    fn hit_now(&mut self, x: f32, y: f32) -> Option<NodeIx> {
+        if let Some(a) = self.scroll_anim.filter(|a| a.gpu && a.armed) {
+            let (ax, ay) = a.at(self.now);
+            self.layout.set_glide_delta(a.node, (a.to.0.round() - ax, a.to.1.round() - ay));
+        }
+        self.layout.hit(&self.session, x, y)
+    }
+
     fn hover(&mut self, x: f32, y: f32) -> Vec<Frame> {
         self.pointer.hover_pending = false;
-        let now = self.layout.hit(&self.session, x, y);
+        let now = self.hit_now(x, y);
         let strip = now.and_then(|hit| self.scroller_strip_at(hit, x));
         if strip != self.pointer.over_scrollbar {
             self.pointer.over_scrollbar = strip;
@@ -1335,7 +1398,7 @@ impl Driver {
     fn pointer_down(&mut self, button: u8) -> Vec<Frame> {
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
-        let Some(ix) = self.layout.hit(&self.session, x, y) else {
+        let Some(ix) = self.hit_now(x, y) else {
             return Vec::new();
         };
         // Spec 03 §2: the scrollbar strip belongs to the client. A press on
@@ -1392,7 +1455,7 @@ impl Driver {
         let mut out = self.flush_coalesced_move();
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
-        let hit = self.layout.hit(&self.session, x, y);
+        let hit = self.hit_now(x, y);
         let pressed = self.pointer.pressed_on.take();
         if let Some(ix) = hit {
             let payload = self.button_payload(ix, EventKind::PointerUp, x, y, button);
@@ -1527,7 +1590,7 @@ impl Driver {
             Some(o) if !self.layout_valid => Some(o),
             _ => {
                 self.ensure_layout();
-                self.layout.hit(&self.session, self.pointer.x, self.pointer.y)
+                self.hit_now(self.pointer.x, self.pointer.y)
             }
         }
     }
@@ -1688,7 +1751,8 @@ impl Driver {
         // momentum, easing out to the new row over motion.base like a wheel
         // notch, so a burst of presses reads as one continuous glide.
         let (smooth, ms) = if in_flight.is_some() { (false, self.resolved.motion.get(1).copied().unwrap_or(180)) } else { (true, self.resolved.motion.get(2).copied().unwrap_or(320)) };
-        self.scroll_anim = Some(ScrollAnim { smooth, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        let gpu = self.glide_on_gpu(scroller, from, to);
+        self.scroll_anim = Some(ScrollAnim { smooth, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)), gpu, armed: false });
         self.next_due = Some(self.now);
         self.redraw = true;
         Vec::new()
@@ -1800,7 +1864,8 @@ impl Driver {
             return Vec::new();
         }
         let ms = self.resolved.motion.first().copied().unwrap_or(100);
-        self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)) });
+        let gpu = self.glide_on_gpu(scroller, from, to);
+        self.scroll_anim = Some(ScrollAnim { smooth: false, node: scroller, from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)), gpu, armed: false });
         self.next_due = Some(self.now);
         self.redraw = true;
         Vec::new()
@@ -2235,6 +2300,18 @@ impl Driver {
         // this frame -- the record's own, with no clock on them.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         let anims: Vec<(NodeIx, GpuAnim)> = self.anims.iter().map(|(ix, a)| (*ix, a.to_gpu(now))).collect();
+        // A glide the vertex stage carries (04 §7): the content starts as
+        // far from where the layout put it as the landing is from where
+        // the glide began.
+        let glides: Vec<(NodeIx, Glide)> = self
+            .scroll_anim
+            .filter(|a| a.gpu && a.armed)
+            .map(|a| {
+                let from = (a.to.0.round() - a.from.0, a.to.1.round() - a.from.1);
+                (a.node, Glide { from, t0: -now.saturating_duration_since(a.start).as_secs_f32(), dur: a.duration.as_secs_f32(), smooth: a.smooth })
+            })
+            .into_iter()
+            .collect();
         let editing = self.editing();
         trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
         let mut list = paint(&mut Scene {
@@ -2248,6 +2325,7 @@ impl Driver {
             size: (device_w, device_h),
             focus: if self.focus_visible { self.focused } else { None },
             anims: &anims,
+            glides: &glides,
             editing,
             now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
@@ -2307,8 +2385,8 @@ impl Driver {
         // without asking for it, at the transition's cadence, the spin's,
         // or not at all. Anything that reaches the driver puts an end to
         // that, because it may change what the tree paints.
-        let cpu_owed = self.anims.iter().any(|(_, a)| !a.gpu()) || self.scroll_anim.is_some() || list.cpu_bound;
-        let motion_end = self.anims.iter().map(|(_, a)| a.start + a.duration).max();
+        let cpu_owed = self.anims.iter().any(|(_, a)| !a.gpu()) || self.scroll_anim.is_some_and(|a| !a.gpu) || list.cpu_bound;
+        let motion_end = self.anims.iter().map(|(_, a)| a.start + a.duration).chain(self.scroll_anim.map(|a| a.start + a.duration)).max();
         // A sound or a picture playing reports its position four times a
         // second (03 §7, §8), from a paint: the list holds until the next
         // report, whenever the window next draws it, and no frame is asked
@@ -2316,7 +2394,7 @@ impl Driver {
         // not have before.
         let report_due = (!self.mixer.is_empty() || !self.players.is_empty()).then(|| self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)));
         let until = others.into_iter().flatten().chain(report_due).chain(motion_end).min();
-        let cadence = if !self.anims.is_empty() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
+        let cadence = if !self.anims.is_empty() || self.scroll_anim.is_some() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
         list.gpu_only = !cpu_owed;
         list.repeat_until_ms = until.map_or(u32::MAX, |u| u32::try_from(u.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX));
         list.serial = next_serial();

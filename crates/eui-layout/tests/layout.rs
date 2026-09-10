@@ -531,6 +531,49 @@ fn a_scroll_keeps_the_row_tops_it_already_added_up() {
     assert_rect(&l, &s, rows[200], 0.0, 40.0, 800.0, 22.0);
 }
 
+/// §7: a scroller mid-glide is laid out once, at the landing. A
+/// virtualised list then holds the rows at both ends of the travel, so the
+/// renderer has rows to slide past; and a hit asks where the content is
+/// drawn, not where it was put.
+#[test]
+fn a_glide_widens_the_virtual_window_and_moves_the_hit() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let ls = b.style(StyleRecord { height: px(100), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let list_id = b.push(NodeKind::List, ls, 1000);
+    b.prop("item_height", Value::Int(20));
+    let rows: Vec<u32> = (0..1000).map(|i| b.text(t, &format!("row {i}"))).collect();
+    let mut s = b.session();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
+    let list = s.lookup(list_id).unwrap();
+
+    // Landing at 4 000, gliding from 3 800: rows around both are placed.
+    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    l.set_glide(list, 3_800.0, 4_000.0, (0.0, 200.0));
+    frame(&mut l, &s);
+    assert!(l.rect(s.lookup(rows[186]).unwrap()).is_some(), "a row a viewport above the start of the travel");
+    assert!(l.rect(s.lookup(rows[200]).unwrap()).is_some(), "the landing row");
+    assert!(l.rect(s.lookup(rows[190]).unwrap()).is_some(), "a row on the way");
+    assert!(l.rect(s.lookup(rows[150]).unwrap()).is_none(), "not the whole list");
+    // The content is drawn 200 px below where it was put: the point 10 px
+    // into the view is over the row put at −190, row 190 -- not row 200.
+    assert_eq!(l.hit(&s, 10.0, 10.0), s.lookup(rows[190]));
+    l.set_glide_delta(list, (0.0, 100.0));
+    assert_eq!(l.hit(&s, 10.0, 10.0), s.lookup(rows[195]));
+    l.clear_glide(list);
+    assert_eq!(l.hit(&s, 10.0, 10.0), s.lookup(rows[200]), "landed: what the layout put there");
+    // Without the glide the same layout holds only the rows around 4 000.
+    s.clear_all_dirty();
+    s.apply(&Batch { seq: 3, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    frame(&mut l, &s);
+    assert!(l.rect(s.lookup(rows[186]).unwrap()).is_none(), "a viewport above the start of the travel is out of the window at rest");
+}
+
 // ----------------------------------------------------------------- misc
 
 #[test]

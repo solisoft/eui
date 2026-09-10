@@ -115,6 +115,22 @@ pub struct Layout {
     /// on the next row — and what a scroll frame would otherwise rebuild
     /// from ten thousand rows to move a window by a few pixels.
     row_tops: HashMap<NodeIx, RowTops>,
+    /// Scrollers mid-glide (§7): the layout puts their content where the
+    /// glide lands, the renderer slides it there, and hit-testing asks
+    /// where it is on screen meanwhile.
+    glides: HashMap<NodeIx, Glide>,
+}
+
+/// A scroll in flight, as the layout knows it (§7).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glide {
+    /// The least offset the glide passes, content px.
+    pub lo: f32,
+    /// The greatest.
+    pub hi: f32,
+    /// Baked offset less the offset on screen now: where the content is
+    /// drawn, relative to where this layout put it.
+    pub delta: (f32, f32),
 }
 
 /// One virtualised list's row tops, kept across frames.
@@ -293,6 +309,36 @@ impl Layout {
         Some((first as u32, last as u32))
     }
 
+    /// §7: a scroller is gliding between `lo` and `hi`, and its content
+    /// stands `delta` from where the next layout puts it. A virtualised
+    /// list then materialises the rows at both ends of the travel, so one
+    /// layout serves the whole glide.
+    pub fn set_glide(&mut self, ix: NodeIx, lo: f32, hi: f32, delta: (f32, f32)) {
+        self.glides.insert(ix, Glide { lo, hi, delta });
+    }
+
+    /// Where a gliding scroller's content stands now, for hit-testing.
+    pub fn set_glide_delta(&mut self, ix: NodeIx, delta: (f32, f32)) {
+        if let Some(g) = self.glides.get_mut(&ix) {
+            g.delta = delta;
+        }
+    }
+
+    /// The glide has landed, or was overtaken.
+    pub fn clear_glide(&mut self, ix: NodeIx) {
+        self.glides.remove(&ix);
+    }
+
+    /// No scroller is gliding.
+    pub fn clear_glides(&mut self) {
+        self.glides.clear();
+    }
+
+    /// The glide on a scroller, if one is running.
+    pub fn glide(&self, ix: NodeIx) -> Option<Glide> {
+        self.glides.get(&ix).copied()
+    }
+
     /// A `scroll` or `list` node's content extent, for clamping offsets.
     pub fn content_size(&self, ix: NodeIx) -> Option<Size> {
         self.rect(ix).and_then(|_| self.content.get(ix.raw() as usize).copied())
@@ -335,6 +381,14 @@ impl Layout {
         if clips && !inner_clip.contains(x, y) {
             return None;
         }
+        // §7: a scroller mid-glide draws its content `delta` from where
+        // this layout put it, so its children are asked about the point
+        // moved back by as much -- and the clip with it, since the clip is
+        // where the content shows through, not where it was put.
+        let (cx, cy, child_clip) = match self.glides.get(&ix) {
+            Some(g) if clips => (x - g.delta.0, y - g.delta.1, Rect::new(inner_clip.x - g.delta.0, inner_clip.y - g.delta.1, inner_clip.w, inner_clip.h)),
+            _ => (x, y, inner_clip),
+        };
         // Topmost first: later children paint over earlier ones, higher z
         // paints over lower.
         let mut order: Vec<NodeIx> = node.children.clone();
@@ -346,7 +400,7 @@ impl Layout {
             if s.node(*child).is_some_and(|n| n.kind == NodeKind::Overlay) {
                 continue;
             }
-            if let Some(hit) = self.hit_in(s, *child, x, y, inner_clip) {
+            if let Some(hit) = self.hit_in(s, *child, cx, cy, child_clip) {
                 return Some(hit);
             }
         }
@@ -663,7 +717,11 @@ impl Layout {
             self.int_prop(f, ix, self.item_height_atom).filter(|h| *h > 0).map(|h| {
                 let sy = f.session.node(ix).map(|n| n.scroll.1).unwrap_or(0) as f32;
                 let vh = inner_h.bound().unwrap_or(self.viewport.h);
-                (h as f32, sy - vh, sy + 2.0 * vh)
+                // §7: mid-glide the window covers both ends of the travel.
+                match self.glides.get(&ix) {
+                    Some(g) => (h as f32, g.lo.min(sy) - vh, g.hi.max(sy) + 2.0 * vh),
+                    None => (h as f32, sy - vh, sy + 2.0 * vh),
+                }
             })
         } else {
             None

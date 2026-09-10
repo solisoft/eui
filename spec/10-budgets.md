@@ -66,9 +66,12 @@ Two round trips a frame — the input, then the paint — are most of the
 difference, and the draw list is 128 bytes a quad — 112 until the quad
 took on both ends of a transition (03 §5) — sent in the shape the
 renderer uploads (the gallery is about 760 quads, its documentation dialog
-about 3 900). A frame owed to a spin or a transition alone is not sent at
-all: the window draws the last list again, and answers the driver's ticks
-itself meanwhile. The rest is layout and paint, which the boundary does
+about 3 900). A frame owed to a spin, a transition or a glide alone is not
+sent at all: the window draws the last list again, and answers the
+driver's ticks itself meanwhile. `xtask bench` holds those frames to their
+budget: a repeated frame, a transition frame and a glide frame each under
+0.2 ms of driver time — they measure at tens of nanoseconds — and a glide
+with no layout after its first. The rest is layout and paint, which the boundary does
 not change; the in-process figure is steady and the worker's is not,
 because it includes two process wake-ups. Both sides are inside the 2 ms
 budget, and folding an input into the paint that follows it would make it

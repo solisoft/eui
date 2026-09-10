@@ -17,6 +17,11 @@ struct Uniforms {
     // transitioning node does not make the frame a different draw list.
     // Two spare.
     clock: vec4<f32>,
+    // The scrolls in flight (04 §7), two entries a slot from slot one: the
+    // shift the content starts from and ends at, device px, as xy and zw;
+    // then when it began relative to the list's clock, how long it takes,
+    // and its curve. Slot zero is no scroll, and is never read.
+    scroll: array<vec4<f32>, 32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
@@ -105,6 +110,15 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     // offset between the two, so the node's centre is this quad's centre
     // less that offset, and nothing has to be recomputed on the CPU.
     let flags = u32(inst.params.z);
+    // 04 §7: a quad in a scroller mid-glide. The layout put it where the
+    // glide lands; it is drawn on its way there, from the list's clock.
+    let slot = (flags >> 8u) & 15u;
+    if (slot != 0u) {
+        let d = u.scroll[slot * 2u];
+        let t = u.scroll[slot * 2u + 1u];
+        let k = ease((u.clock.x - t.x) / max(t.y, 1e-3), u32(t.z));
+        centre = centre + mix(d.xy, d.zw, k);
+    }
     if ((flags & SPINNING) != 0u) {
         let a = u.clock.y * TAU;
         let o = inst.spin.xy;

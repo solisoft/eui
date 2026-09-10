@@ -168,6 +168,7 @@ fn bench() -> Vec<Row> {
                 size: (800, 600),
                 focus: None,
                 anims: &[],
+                glides: &[],
                 editing: None,
                 now: 0.0,
                 scrollbar_hot: None,
@@ -296,15 +297,10 @@ fn motion_rows(driver: &mut Driver) -> Vec<Row> {
         .collect();
     assert!(driver.animating(), "and is still gliding after five frames");
     let d = median(t);
-    // A glide is still a layout a frame: the scroll offset is baked into
-    // the rects. The scroll-step budget holds until it moves to the vertex
-    // stage, when a glide frame becomes the last list again.
-    rows.push(Row {
-        what: "driver: glide frame (median of 5)",
-        value: format!("{d:?}, {} relayouts", driver.relayouts() - laid),
-        budget: "< 2 ms (< 0.2 ms once a glide is the GPU's)",
-        ok: d < Duration::from_millis(2),
-    });
+    // The layout was done once, at the landing; the frames of the glide
+    // are the same list, slid by the vertex stage.
+    let relaid = driver.relayouts() - laid;
+    rows.push(Row { what: "driver: glide frame (median of 5)", value: format!("{d:?}, {relaid} relayouts"), budget: "< 0.2 ms, no layout", ok: d < Duration::from_micros(200) && relaid == 0 });
     // The chrome: a session like any other, painted every frame beside an
     // application that animates. At rest it must cost nothing.
     let mut chrome = eui_client::chrome::Chrome::new(800.0, 600.0, 1.0);

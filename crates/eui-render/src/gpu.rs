@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::atlas::{Atlas, ImageAtlas};
-use crate::paint::{Backdrop, DrawList, Quad};
+use crate::paint::{Backdrop, DrawList, Quad, MAX_SCROLLERS};
 
 /// Why the renderer could not start or draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +147,25 @@ struct Blur {
 fn reduce_factor(sigma: f32) -> u32 {
     let k = (sigma / 2.5).max(1.0).log2().round().clamp(0.0, 4.0);
     1u32 << (k as u32)
+}
+
+/// The uniform block of `shader.wgsl`: three vec4 then thirty-two for the
+/// scrollers (two a slot, sixteen slots).
+const UNIFORMS_BYTES: u64 = 16 * (3 + 32);
+
+/// The uniform block as the shader reads it, from the frame's clock and
+/// the list's scrollers.
+fn uniforms(head: [f32; 8], clock: [f32; 4], list: &DrawList) -> Vec<f32> {
+    let mut u = Vec::with_capacity((UNIFORMS_BYTES / 4) as usize);
+    u.extend_from_slice(&head);
+    u.extend_from_slice(&clock);
+    // Slot zero is nothing, and is never read.
+    u.extend_from_slice(&[0.0; 8]);
+    for s in list.scrollers.iter().take(MAX_SCROLLERS) {
+        u.extend_from_slice(&[s.from[0], s.from[1], s.to[0], s.to[1], s.t0, s.dur, s.curve as f32, 0.0]);
+    }
+    u.resize((UNIFORMS_BYTES / 4) as usize, 0.0);
+    u
 }
 
 /// One `Params` in `blur.wgsl`, padded to a dynamic-offset stride.
@@ -339,8 +358,8 @@ impl Renderer {
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
-            // viewport, backdrop, clock.
-            size: 48,
+            // viewport, backdrop, clock, then the scrollers in flight.
+            size: UNIFORMS_BYTES,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -674,7 +693,7 @@ impl Renderer {
             None => Vec::new(),
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3], clock[0], clock[1], clock[2], clock[3]]));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3]], clock, list)));
         let Some(pipeline) = self.pipelines.get(&format) else {
             return stats;
         };
@@ -792,7 +811,7 @@ impl Renderer {
         self.queue.write_buffer(&self.blur_params, 0, bytemuck::cast_slice(&params));
         // The snapshot draws a sub-rect of the frame, so the vertex stage is
         // told where the target's own origin sits in it.
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0, clock[0], clock[1], clock[2], clock[3]]));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0], clock, list)));
 
         let src_bind = |t: &wgpu::Texture| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {

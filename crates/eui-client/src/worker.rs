@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eui_proto::{Frame, ThemeMode};
-use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run};
+use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller};
 
 use crate::a11y::{AccessNode, AccessRole, AccessSnapshot};
 use crate::assets::Hash;
@@ -622,6 +622,13 @@ fn put_list(w: &mut W, list: &DrawList) {
         }
     }
     w.f4(list.clear);
+    w.u32(u32::try_from(list.scrollers.len()).unwrap_or(u32::MAX));
+    for s in &list.scrollers {
+        w.f4([s.from[0], s.from[1], s.to[0], s.to[1]]);
+        w.f32(s.t0);
+        w.f32(s.dur);
+        w.u32(s.curve);
+    }
     w.bool(list.wants_frame);
     w.bool(list.gpu_only);
     w.u32(list.repeat_until_ms);
@@ -673,6 +680,12 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
         clips.push([r.u32()?, r.u32()?, r.u32()?, r.u32()?]);
     }
     let clear = r.f4()?;
+    let n = r.u32()? as usize;
+    let mut scrollers = Vec::with_capacity(n.min(1 << 8));
+    for _ in 0..n {
+        let [fx, fy, tx, ty] = r.f4()?;
+        scrollers.push(Scroller { from: [fx, fy], to: [tx, ty], t0: r.f32()?, dur: r.f32()?, curve: r.u32()?, pad: 0 });
+    }
     let wants_frame = r.bool()?;
     let gpu_only = r.bool()?;
     let repeat_until_ms = r.u32()?;
@@ -689,7 +702,7 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
         }
         Some(Backdrop { rect, first, sigmas })
     };
-    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, backdrop })
+    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, scrollers, backdrop })
 }
 
 fn put_access(w: &mut W, s: &AccessSnapshot) {
@@ -1614,6 +1627,7 @@ mod tests {
             repeat_until_ms: u32::MAX,
             serial: 7,
             cpu_bound: false,
+            scrollers: Vec::new(),
             backdrop: None,
         };
         let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
@@ -1677,6 +1691,7 @@ mod tests {
             repeat_until_ms: 250,
             serial: 0x1234_5678_9abc,
             cpu_bound: false,
+            scrollers: vec![Scroller { from: [0.0, -40.0], to: [0.0, 0.0], t0: -0.05, dur: 0.1, curve: 2, pad: 0 }],
             backdrop: None,
         };
         let snap = AccessSnapshot {
