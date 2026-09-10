@@ -1108,7 +1108,17 @@ def split_pane(o)
   # The move and the release belong to the container, not to the divider: that
   # is what makes the payload container-relative, and what lets the pointer
   # leave the divider mid-drag without the drag ending.
-  n["on"] = {"pointer_move": on_drag, "pointer_up": on_drag} unless on_drag.nil?
+  #
+  # But the move is listened for only *while a drag is in flight*. Bound
+  # unconditionally, every pointer move anywhere over the split was a server
+  # round trip -- a re-render per mouse position, which reads as a flicker
+  # under the pointer and as a flood of events in the dev bar, and which made
+  # the drag itself lag behind the hand. `pointer_down` on the divider is what
+  # turns `dragging` on, so the listener is there by the time the first move
+  # of a real drag arrives.
+  unless on_drag.nil?
+    n["on"] = o["dragging"] == true ? {"pointer_move": on_drag, "pointer_up": on_drag} : {"pointer_up": on_drag}
+  end
   n
 end
 
