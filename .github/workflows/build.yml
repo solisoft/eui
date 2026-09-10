@@ -309,18 +309,21 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           uname -a
-          sudo apt-get install -y --no-install-recommends strace
-          # In log mode the worker survives, which is how we know seccomp is
-          # what kills it — but a logged call goes to the audit subsystem,
-          # and a runner without auditd never puts it in dmesg. So: run it
-          # in killing mode under strace, and read the last call before the
-          # signal. `|| true` keeps the diagnosis out of the pass/fail.
-          strace -f -qq -o /tmp/worker.strace \
-            cargo test --release -p eui-client --test worker \
-            a_hostile_frame_ends_the_session_and_the_window_stands -- --exact || true
-          echo '--- the call before the signal ---'
-          grep -n "SIGSYS" /tmp/worker.strace | head -5 || true
-          grep -B12 "SIGSYS" /tmp/worker.strace | tail -40 || true
+          # A seccomp kill is an audit event, and an audit event needs
+          # something listening — which is what the strace attempt was
+          # working around, and why it found nothing: under ptrace an
+          # interrupted call is resumed by the tracer's own path, so the
+          # kill stops happening at all. Give the kernel a listener
+          # instead and it names the call itself. `-i` turns the number
+          # into a name; `|| true` keeps the diagnosis out of pass/fail.
+          sudo apt-get install -y --no-install-recommends auditd
+          sudo service auditd start || sudo systemctl start auditd || true
+          sudo auditctl -e 1 || true
+          cargo test --release -p eui-client --test worker || true
+          echo '--- what the kernel refused ---'
+          sudo ausearch -m SECCOMP -i 2>/dev/null | tail -40 || true
+          sudo grep -h "type=SECCOMP" /var/log/audit/audit.log 2>/dev/null | tail -20 || true
+          sudo dmesg 2>/dev/null | grep -i -E "seccomp|audit" | tail -20 || true
 
       # No GPU on a hosted runner, so the pixel tests skip themselves —
       # they say so and return rather than failing.
