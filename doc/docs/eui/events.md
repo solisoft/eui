@@ -16,11 +16,18 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x09` key up | `0x0A` text input | `0x0B` focus | `0x0C` blur |
 | `0x0D` change | `0x0E` submit | `0x0F` scroll | `0x10` resize |
 | `0x11` context menu | `0x12` drag start | `0x13` drag over | `0x14` drop |
-| `0x15` long press | | | |
+| `0x15` long press | `0x16` window | `0x17` ended | `0x18` time update |
+| `0x19` wake | `0x1A` file pick | `0x1B` file save | |
 
 `pointer move` and `scroll` are coalesced to one event per frame. A client that
 sends sixty pointer moves a second to a server across the Atlantic has misread
 the design; those belong in a [local handler](/docs/views).
+
+`file pick` carries the upload id, the file's **name** and its size — one per
+file the person chose, with the bytes following as `Upload` frames. `file
+save` carries the name they chose for what a node offers, and *is* the
+request for the bytes. Neither ever carries a path: which directory a file
+came from or went to is the person's business, and the client keeps it.
 
 ## What the server may believe
 

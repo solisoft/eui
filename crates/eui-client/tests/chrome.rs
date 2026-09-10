@@ -15,9 +15,9 @@ const H: f32 = 560.0;
 
 fn tabs() -> Vec<TabView<'static>> {
     vec![
-        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned) },
-        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned) },
-        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local) },
+        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None },
+        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned), link: None },
+        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local), link: None },
     ]
 }
 
@@ -61,7 +61,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
     // A tab with no application: the chrome owns the window below the
     // strip and gives its own field the focus, so the first keystroke is
     // already part of an address.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
     assert!(chrome.is_blank());
     assert!(!chrome.content_top().is_finite(), "no application has room in an empty tab");
 
@@ -77,7 +77,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
 #[test]
 fn an_empty_address_opens_nothing() {
     let mut chrome = Chrome::new(W, H, 1.0);
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
     let _ = chrome.input(Input::Text("   ".to_owned()));
     let out = chrome.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
     assert!(out.is_empty(), "whitespace is not an address");
@@ -168,6 +168,6 @@ fn the_keyboard_changes_hands_with_the_address_bar() {
     assert!(!chrome.holds_keys(), "leaving gives it back");
 
     // An empty tab always holds it: its page is the chrome's own.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
     assert!(chrome.holds_keys(), "an empty tab has no application to give it to");
 }

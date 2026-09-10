@@ -14,7 +14,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::driver::Input;
+#[cfg(feature = "files")]
+use crate::driver::FileWant;
+use crate::driver::{FileAsk, Input};
 use crate::transport::{self, Connection, Incoming};
 use crate::worker::Backend;
 
@@ -28,6 +30,8 @@ pub enum Wake {
     Theme,
     /// The audio thread has frames to send (a sound ended).
     Audio,
+    /// A file dialog answered, or a file being read has more bytes.
+    Files,
     /// The host asked the window to close (a signal, say).
     Exit,
     /// AccessKit has something for the window.
@@ -81,6 +85,107 @@ impl Launch {
     }
 }
 
+/// What a tab's socket is doing (spec 01 §4.1).
+///
+/// A socket that breaks is not an application that ended. The session lives
+/// on the server, the tree lives here, and between them a broken socket is
+/// a gap to be closed — so the client closes it, rather than leaving a
+/// window that looks alive and answers nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Link {
+    /// Talking.
+    Up,
+    /// A socket is open and has not spoken yet. `until` is when to stop
+    /// waiting for it: a server that accepts a connection and says nothing
+    /// is not one that is coming back on its own.
+    Trying {
+        /// When to give up on this attempt and try again.
+        until: std::time::Instant,
+    },
+    /// Nothing is open. `at` is when the next attempt is due.
+    Lost {
+        /// When to try again.
+        at: std::time::Instant,
+    },
+    /// Ended for a reason another socket cannot fix: the manifest was
+    /// refused, the server sent an `Error`, the tree was unusable.
+    Ended,
+}
+
+/// How long to wait before the `tries`-th attempt: 300 ms doubling to
+/// half a minute, and half a minute from then on.
+///
+/// The first gap is short because the common break is a wifi hop or a
+/// laptop lid, which is over before a person has finished looking at the
+/// window. The ceiling is there because the other common break is a server
+/// being deployed, and a client that hammers it while it comes up is part
+/// of the outage.
+fn backoff(tries: u32) -> std::time::Duration {
+    let ms = 300u64.saturating_mul(1u64 << tries.min(7));
+    std::time::Duration::from_millis(ms.min(30_000))
+}
+
+/// What a dialog thread answers with.
+#[derive(Debug)]
+#[cfg_attr(not(feature = "files"), allow(dead_code))]
+enum Dialog {
+    /// An open dialog: the ask it answers, and what was chosen with the
+    /// size of each.
+    Picked(u32, Vec<(std::path::PathBuf, u64)>),
+    /// A save dialog: the ask, and where the file goes.
+    Saving(u32, std::path::PathBuf),
+    /// Dismissed without choosing.
+    Dismissed(u32),
+}
+
+/// A file being read for an upload, on its own thread so a slow disk never
+/// holds a frame.
+struct Reading {
+    /// The upload id the driver minted.
+    id: u32,
+    /// Chunks, in order; `true` on the last.
+    rx: mpsc::Receiver<Result<(Vec<u8>, bool), String>>,
+}
+
+/// A file being written for a save. The handle is opened on the first
+/// chunk, so a save the server never answers leaves nothing behind.
+struct Writing {
+    /// Where the person said it goes.
+    path: std::path::PathBuf,
+    /// Open once bytes have arrived.
+    file: Option<std::fs::File>,
+}
+
+/// The tab's side of spec 03 §3.2: the dialogs the tree asked for, and the
+/// transfers they start.
+///
+/// The window does the filesystem, as it does the socket and the GPU: a
+/// worker cannot open a file and must not be able to. What crosses between
+/// them is a name, a size, and opaque bytes.
+struct Files {
+    /// Where dialog threads report.
+    tx: mpsc::Sender<Dialog>,
+    /// Where this tab collects them.
+    rx: mpsc::Receiver<Dialog>,
+    /// Files being read, by upload.
+    reading: Vec<Reading>,
+    /// Files being written, by the ask that chose the path.
+    writing: std::collections::HashMap<u32, Writing>,
+}
+
+impl Default for Files {
+    fn default() -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self { tx, rx, reading: Vec::new(), writing: std::collections::HashMap::new() }
+    }
+}
+
+impl std::fmt::Debug for Files {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Files").field("reading", &self.reading.len()).field("writing", &self.writing.len()).finish()
+    }
+}
+
 /// One application, and nothing of the window it happens to be shown in.
 ///
 /// This is the isolation boundary, and it is deliberately narrow. A tab has
@@ -122,6 +227,15 @@ struct Tab {
     answered: bool,
     /// What the address bar says about the origin.
     trust: crate::chrome::Trust,
+    /// What the socket is doing.
+    link: Link,
+    /// Sockets that broke or refused since the last one that spoke. It is
+    /// the backoff's exponent, and a frame arriving resets it.
+    tries: u32,
+    /// Dialogs and transfers.
+    files: Files,
+    /// The link word the chrome was last told about.
+    shown_link: Option<&'static str>,
 }
 
 /// One window: the surface, the chrome, and the applications in it.
@@ -167,6 +281,97 @@ struct Shell {
     /// When this window started, so the renderer can be handed a monotonic
     /// clock in seconds.
     epoch: std::time::Instant,
+}
+
+/// Append one chunk of a save to the file the person named, opening it on
+/// the first one. `Ok(true)` when the file is whole.
+///
+/// Anything that goes wrong takes the partial file with it — an abort from
+/// the server, a disk that filled, a directory that went away. Half an
+/// export is worse than none: it looks like a whole one until it is opened.
+fn append_write(slot: &mut Writing, flag: eui_proto::Chunked, bytes: &[u8]) -> Result<bool, String> {
+    use std::io::Write as _;
+    let fail = |slot: &mut Writing, why: String| {
+        drop(slot.file.take());
+        let _ = std::fs::remove_file(&slot.path);
+        Err(why)
+    };
+    if matches!(flag, eui_proto::Chunked::Abort) {
+        let why = String::from_utf8_lossy(bytes).into_owned();
+        return fail(slot, why);
+    }
+    if slot.file.is_none() {
+        match std::fs::File::create(&slot.path) {
+            Ok(f) => slot.file = Some(f),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let last = matches!(flag, eui_proto::Chunked::Last);
+    let wrote = match slot.file.as_mut() {
+        Some(f) => f.write_all(bytes).and_then(|()| if last { f.flush() } else { Ok(()) }),
+        None => Ok(()),
+    };
+    match wrote {
+        Ok(()) => Ok(last),
+        Err(e) => fail(slot, e.to_string()),
+    }
+}
+
+/// Read `path` into `tx` a chunk at a time, waking the loop for each. Stops
+/// on the first error, which the driver turns into an abort on the wire.
+fn read_chunks(path: &std::path::Path, tx: &mpsc::SyncSender<Result<(Vec<u8>, bool), String>>, wake: impl Fn()) {
+    use std::io::Read as _;
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.send(Err(e.to_string()));
+            wake();
+            return;
+        }
+    };
+    let mut buf = vec![0u8; eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES];
+    loop {
+        let n = match file.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string()));
+                wake();
+                return;
+            }
+        };
+        let last = n == 0;
+        let chunk = buf.get(..n).unwrap_or(&[]).to_vec();
+        if tx.send(Ok((chunk, last))).is_err() {
+            return;
+        }
+        wake();
+        if last {
+            return;
+        }
+    }
+}
+
+/// Read a file for an upload on its own thread, a chunk at a time.
+///
+/// The channel holds two chunks: the disk runs ahead of the socket by that
+/// much and no further, so a large attachment costs a fixed amount of
+/// memory however fast the disk is and however slow the network.
+fn start_reading(t: &mut Tab, id: u32, path: std::path::PathBuf, proxy: &EventLoopProxy<Wake>) {
+    let (tx, rx) = mpsc::sync_channel::<Result<(Vec<u8>, bool), String>>(2);
+    let proxy = proxy.clone();
+    let spawned = std::thread::Builder::new().name("eui-upload".into()).spawn(move || {
+        read_chunks(&path, &tx, || {
+            let _ = proxy.send_event(Wake::Files);
+        });
+    });
+    match spawned {
+        Ok(_) => t.files.reading.push(Reading { id, rx }),
+        Err(e) => {
+            eprintln!("eui: no thread to read the file: {e}");
+            let frames = t.backend.upload_failed(id, "no thread to read the file".into());
+            t.send(frames);
+        }
+    }
 }
 
 /// Split a session URL into the origin a publisher key is pinned to and
@@ -219,6 +424,10 @@ impl Tab {
             ime_area: None,
             answered: false,
             trust: crate::chrome::Trust::Unverified,
+            link: Link::Ended,
+            tries: 0,
+            files: Files::default(),
+            shown_link: None,
         };
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
@@ -240,6 +449,12 @@ impl Tab {
             }
             Err(e) if tab.url.starts_with("ws://") => {
                 eprintln!("eui: {e}; continuing on the debug loopback without a manifest");
+                // Without a manifest there is nothing to intersect, so what
+                // the person named on the command line is the whole of the
+                // grant. 08 §1 already lets this session go on without a
+                // signature; refusing the capabilities as well would leave
+                // a loopback server unable to ask for anything at all.
+                tab.backend.grant(tab.allowed);
                 tab.trust = crate::chrome::Trust::Local;
             }
             Err(e) => {
@@ -251,14 +466,69 @@ impl Tab {
             }
         }
 
-        let hello = tab.backend.hello();
-        match transport::connect(&tab.url, hello, tab.cookie.clone(), tab.host_loopback, move || {
-            let _ = proxy.send_event(Wake::Transport);
-        }) {
-            Ok(c) => tab.conn = Some(c),
-            Err(e) => eprintln!("eui: {e}"),
-        }
+        tab.dial(&proxy);
         tab
+    }
+
+    /// Open a socket for this tab's URL, with whatever the driver says the
+    /// opening frame is now — a fresh `Hello` on the first attempt, and one
+    /// offering the session back on every attempt after it (spec 01 §4.1).
+    fn dial(&mut self, proxy: &EventLoopProxy<Wake>) {
+        let hello = self.backend.hello();
+        let p = proxy.clone();
+        match transport::connect(&self.url, hello, self.cookie.clone(), self.host_loopback, move || {
+            let _ = p.send_event(Wake::Transport);
+        }) {
+            Ok(c) => {
+                self.conn = Some(c);
+                // Open is not talking. Until a frame arrives this is still
+                // an attempt, and one that stalls is one to make again.
+                self.link = Link::Trying { until: std::time::Instant::now() + std::time::Duration::from_secs(20) };
+            }
+            // A URL the client refuses is not a network fault: trying it
+            // again would refuse it again, in the same words, forever.
+            Err(e @ transport::TransportError::Insecure(_)) => {
+                eprintln!("eui: {e}");
+                self.link = Link::Ended;
+            }
+            Err(e) => {
+                eprintln!("eui: {e}");
+                self.lost();
+            }
+        }
+    }
+
+    /// The socket is gone: count the attempt and say when the next is due.
+    fn lost(&mut self) {
+        self.conn = None;
+        self.tries = self.tries.saturating_add(1);
+        let wait = backoff(self.tries.saturating_sub(1));
+        self.link = Link::Lost { at: std::time::Instant::now() + wait };
+        eprintln!("eui: trying again in {:.1}s", wait.as_secs_f32());
+    }
+
+    /// The word last shown for this tab's socket, so the chrome is rebuilt
+    /// when it changes and not once a frame.
+    fn link_changed(&mut self) -> bool {
+        let word = self.link_word();
+        if self.shown_link == word {
+            return false;
+        }
+        self.shown_link = word;
+        true
+    }
+
+    /// The word the address bar puts on the socket, if it needs one.
+    fn link_word(&self) -> Option<&'static str> {
+        match self.link {
+            Link::Up => None,
+            Link::Trying { .. } | Link::Lost { .. } => Some("reconnecting"),
+            // A tab that never had a session says nothing: the reason it
+            // has none is already in the tab, and "offline" over an
+            // address that was refused would name the wrong fault.
+            Link::Ended if self.answered => Some("offline"),
+            Link::Ended => None,
+        }
     }
 
     /// How the strip should show this tab.
@@ -272,7 +542,7 @@ impl Tab {
         let (origin, path) = split_origin(&self.url);
         let component = crate::chrome::component_of(&self.url);
         let title = if component.is_empty() { self.title.as_str() } else { component };
-        crate::chrome::TabView { title, origin, path, trust: Some(self.trust) }
+        crate::chrome::TabView { title, origin, path, trust: Some(self.trust), link: self.link_word() }
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {
@@ -298,6 +568,10 @@ impl Tab {
                     // never reads a frame.
                     Incoming::Message(bytes) => {
                         self.answered = true;
+                        // The socket spoke: this attempt worked, and the
+                        // next break starts its own backoff from the top.
+                        self.link = Link::Up;
+                        self.tries = 0;
                         frames.push(bytes);
                     }
                     Incoming::Closed(e) => {
@@ -319,12 +593,18 @@ impl Tab {
             }
         }
         if let Some(why) = closed {
-            eprintln!("eui: session ended: {why}");
-            self.conn = None;
+            // Spec 01 §4.1. The session is the server's; only the socket
+            // broke. Say so, and go and get it back.
+            eprintln!("eui: the connection went away: {why}");
+            self.lost();
         }
         if let Some(c) = self.backend.closed() {
+            // The session itself ended — a version, a refused tree, an
+            // `Error` from the server. Another socket would end the same
+            // way, so this one is not tried again.
             eprintln!("eui: closing: {c}");
             self.conn = None;
+            self.link = Link::Ended;
         }
         self.backend.needs_redraw()
     }
@@ -624,7 +904,7 @@ impl Shell {
         // An empty shell still shows one tab, so there is something to
         // click and something to type into.
         if views.is_empty() {
-            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None };
+            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None };
             chrome.rebuild(&[blank], 0);
         } else {
             chrome.rebuild(&views, self.active);
@@ -810,6 +1090,232 @@ impl Shell {
         }
         if redraw {
             self.window.request_redraw();
+        }
+    }
+
+    /// Spec 01 §4.1: sockets that broke, tried again when they are due.
+    ///
+    /// Returns the earliest moment this window wants to be woken for one of
+    /// them, so a window waiting on a server that is coming back up sleeps
+    /// until it is worth another attempt and not a millisecond less.
+    fn serve_links(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        let proxy = self.proxy.clone();
+        let mut due: Option<std::time::Instant> = None;
+        let mut changed = false;
+        for t in &mut self.tabs {
+            match t.link {
+                Link::Lost { at } if at <= now => {
+                    eprintln!("eui: reconnecting to {}", t.url);
+                    t.dial(&proxy);
+                }
+                // A socket that was accepted and then said nothing at all.
+                Link::Trying { until } if until <= now => {
+                    eprintln!("eui: {} accepted the connection and said nothing", t.url);
+                    t.lost();
+                }
+                _ => {}
+            }
+            if let Link::Lost { at } = t.link {
+                due = Some(due.map_or(at, |d: std::time::Instant| d.min(at)));
+            }
+            if let Link::Trying { until } = t.link {
+                due = Some(due.map_or(until, |d: std::time::Instant| d.min(until)));
+            }
+            changed |= t.link_changed();
+        }
+        if changed {
+            self.rebuild_chrome();
+            // A chromeless window has no address bar to put a word in, so
+            // the word goes where a window says everything else: its title.
+            if self.chrome.is_none() {
+                if let Some(t) = self.tabs.first() {
+                    let title = match t.link_word() {
+                        Some(word) => format!("{} — {word}", t.title),
+                        None => t.title.clone(),
+                    };
+                    self.window.set_title(&title);
+                }
+            }
+            self.window.request_redraw();
+        }
+        due
+    }
+
+    /// Spec 03 §3.2: the dialogs the tree asked for, the files they chose,
+    /// and the bytes moving either way.
+    fn serve_files(&mut self) {
+        let proxy = self.proxy.clone();
+        for i in 0..self.tabs.len() {
+            let asks = match self.tabs.get_mut(i) {
+                Some(t) => t.backend.take_file_asks(),
+                None => continue,
+            };
+            for ask in asks {
+                self.open_dialog(i, ask, &proxy);
+            }
+            // What the dialogs answered.
+            let mut answers = Vec::new();
+            if let Some(t) = self.tabs.get(i) {
+                while let Ok(d) = t.files.rx.try_recv() {
+                    answers.push(d);
+                }
+            }
+            for answer in answers {
+                self.dialog_answered(i, answer, &proxy);
+            }
+            // Bytes read for an upload, framed by the driver and sent.
+            self.pump_uploads(i);
+            // Bytes the server owes a save, put on disk.
+            self.pump_writes(i);
+        }
+    }
+
+    /// Open the platform's own dialog, on its own thread: a modal panel
+    /// must not stop the window drawing behind it, and a portal on Linux
+    /// can take a second to appear.
+    fn open_dialog(&mut self, i: usize, ask: FileAsk, proxy: &EventLoopProxy<Wake>) {
+        let Some(t) = self.tabs.get_mut(i) else { return };
+        let (token, tx, proxy) = (ask.token, t.files.tx.clone(), proxy.clone());
+        #[cfg(feature = "files")]
+        {
+            eprintln!(
+                "eui: node {} asked for {}",
+                ask.node,
+                match &ask.want {
+                    FileWant::Open { accept, multiple, max } => format!("a file to open (accept [{accept}], multiple {multiple}, at most {max} bytes)"),
+                    FileWant::Save { name } => format!("somewhere to save \"{name}\""),
+                }
+            );
+            let answer = move |d: Dialog| {
+                let _ = tx.send(d);
+                let _ = proxy.send_event(Wake::Files);
+            };
+            let spawned = std::thread::Builder::new().name("eui-dialog".into()).spawn(move || match ask.want {
+                FileWant::Open { accept, multiple, .. } => {
+                    let mut dialog = rfd::FileDialog::new();
+                    let exts: Vec<&str> = accept.split(',').map(str::trim).filter(|e| !e.is_empty()).collect();
+                    if !exts.is_empty() {
+                        dialog = dialog.add_filter("Accepted", &exts).add_filter("Every file", &["*"]);
+                    }
+                    let chosen = if multiple { dialog.pick_files() } else { dialog.pick_file().map(|p| vec![p]) };
+                    match chosen {
+                        Some(paths) if !paths.is_empty() => {
+                            let sized = paths
+                                .into_iter()
+                                .map(|p| {
+                                    let n = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                                    (p, n)
+                                })
+                                .collect();
+                            answer(Dialog::Picked(token, sized));
+                        }
+                        _ => answer(Dialog::Dismissed(token)),
+                    }
+                }
+                FileWant::Save { name } => match rfd::FileDialog::new().set_file_name(&name).save_file() {
+                    Some(path) => answer(Dialog::Saving(token, path)),
+                    None => answer(Dialog::Dismissed(token)),
+                },
+            });
+            if spawned.is_err() {
+                eprintln!("eui: no thread for the file dialog");
+                t.backend.dismissed(token);
+            }
+        }
+        #[cfg(not(feature = "files"))]
+        {
+            let _ = (tx, proxy, ask);
+            eprintln!("eui: this build has no file dialogs");
+            t.backend.dismissed(token);
+        }
+    }
+
+    /// A dialog came back.
+    fn dialog_answered(&mut self, i: usize, answer: Dialog, proxy: &EventLoopProxy<Wake>) {
+        let Some(t) = self.tabs.get_mut(i) else { return };
+        match answer {
+            Dialog::Dismissed(token) => t.backend.dismissed(token),
+            Dialog::Saving(token, path) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let out = t.backend.saving(token, name);
+                t.send(out);
+                t.files.writing.insert(token, Writing { path, file: None });
+            }
+            Dialog::Picked(token, files) => {
+                let named: Vec<(String, u64)> = files.iter().map(|(p, n)| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), *n)).collect();
+                let (ids, frames) = t.backend.picked(token, named);
+                t.send(frames);
+                // The driver refused the ones past the ceiling and said so
+                // on the wire; the window does not read them either.
+                for (id, (path, _)) in ids.into_iter().zip(files) {
+                    start_reading(t, id, path, proxy);
+                }
+            }
+        }
+    }
+
+    /// Chunks a reader thread has ready, framed by the driver and sent.
+    fn pump_uploads(&mut self, i: usize) {
+        let Some(t) = self.tabs.get_mut(i) else { return };
+        let mut out = Vec::new();
+        let mut done = Vec::new();
+        for r in &t.files.reading {
+            loop {
+                match r.rx.try_recv() {
+                    Ok(Ok((bytes, last))) => {
+                        out.push((r.id, bytes, last));
+                        if last {
+                            done.push(r.id);
+                            break;
+                        }
+                    }
+                    Ok(Err(why)) => {
+                        out.push((r.id, Vec::new(), false));
+                        out.pop();
+                        done.push(r.id);
+                        eprintln!("eui: reading the file for upload {}: {why}", r.id);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        done.push(r.id);
+                        break;
+                    }
+                }
+            }
+        }
+        for (id, bytes, last) in out {
+            let frames = t.backend.upload_chunk(id, bytes, last);
+            t.send(frames);
+        }
+        for id in &done {
+            // A reader that stopped without a last chunk failed; the
+            // driver knows whether the upload is still open and tells the
+            // server only if it is.
+            let frames = t.backend.upload_failed(*id, "the file could not be read to the end".into());
+            t.send(frames);
+        }
+        if let Some(t) = self.tabs.get_mut(i) {
+            t.files.reading.retain(|r| !done.contains(&r.id));
+        }
+    }
+
+    /// Bytes a save is owed, appended to the file the person named.
+    fn pump_writes(&mut self, i: usize) {
+        let Some(t) = self.tabs.get_mut(i) else { return };
+        for w in t.backend.take_writes() {
+            let Some(slot) = t.files.writing.get_mut(&w.token) else { continue };
+            match append_write(slot, w.flag, &w.bytes) {
+                Ok(false) => {}
+                Ok(true) => {
+                    eprintln!("eui: saved {}", slot.path.display());
+                    t.files.writing.remove(&w.token);
+                }
+                Err(why) => {
+                    eprintln!("eui: {} was not saved: {why}", slot.path.display());
+                    t.files.writing.remove(&w.token);
+                }
+            }
         }
     }
 
@@ -1390,6 +1896,10 @@ impl ApplicationHandler<Wake> for App {
             // an empty channel — cheaper than carrying an id would be.
             Wake::Transport => self.shells.values_mut().for_each(Shell::pump),
             Wake::Audio => self.shells.values_mut().for_each(|s| s.tabs.iter_mut().for_each(Tab::drain_audio)),
+            // A dialog answered or a chunk is ready. Both are collected in
+            // `about_to_wait`, which runs after this and after every other
+            // event the loop had waiting: the wake is the whole message.
+            Wake::Files => {}
             Wake::Theme => self.shells.values_mut().for_each(Shell::theme_wake),
             Wake::Exit => event_loop.exit(),
             #[cfg(feature = "a11y")]
@@ -1411,10 +1921,20 @@ impl ApplicationHandler<Wake> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = std::time::Instant::now();
+        // Dialogs the last events asked for, and the bytes they moved.
+        for s in self.shells.values_mut() {
+            s.serve_files();
+        }
+        // A socket that is due to be tried again.
+        let retry = self.shells.values_mut().filter_map(|s| s.serve_links(now)).min();
         // The earliest instant any window asked for. One that wants to
         // sleep does not hold the others back, and one that wants a frame
         // does not let them park.
         let due = self.shells.values_mut().filter_map(|s| s.park(now)).min();
+        let due = match (due, retry) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         event_loop.set_control_flow(match due {
             Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
@@ -1553,6 +2073,8 @@ fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     #[test]
@@ -1563,6 +2085,72 @@ mod tests {
         // blank icon and no error anywhere.
         let icon = window_icon();
         assert!(icon.is_some(), "assets/icon/png/eui-64.png did not decode into an icon");
+    }
+
+    /// 01 §4.1: short enough that a wifi hop is over before anyone looks
+    /// at the window, capped so a server coming back up is not hammered.
+    #[test]
+    fn the_backoff_starts_short_and_stops_at_half_a_minute() {
+        assert_eq!(backoff(0), std::time::Duration::from_millis(300));
+        assert_eq!(backoff(1), std::time::Duration::from_millis(600));
+        assert_eq!(backoff(4), std::time::Duration::from_millis(4800));
+        assert_eq!(backoff(7), std::time::Duration::from_secs(30));
+        assert_eq!(backoff(u32::MAX), std::time::Duration::from_secs(30), "and never grows past it");
+    }
+
+    /// Spec 03 §3.2: a save is created on its first chunk, not when the
+    /// path is chosen, and anything that goes wrong takes it away again.
+    #[test]
+    fn a_save_lands_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("eui-save-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("export.csv");
+        let _ = std::fs::remove_file(&path);
+
+        let mut slot = Writing { path: path.clone(), file: None };
+        assert!(!path.exists(), "nothing is written when the path is merely chosen");
+        assert_eq!(append_write(&mut slot, eui_proto::Chunked::More, b"a,b\n"), Ok(false));
+        assert!(path.exists(), "the first chunk creates it");
+        assert_eq!(append_write(&mut slot, eui_proto::Chunked::Last, b"1,2\n"), Ok(true));
+        assert_eq!(std::fs::read_to_string(&path).ok().as_deref(), Some("a,b\n1,2\n"));
+
+        // An abort halfway through leaves nothing behind: half an export
+        // looks like a whole one until it is opened.
+        let half = dir.join("half.csv");
+        let mut slot = Writing { path: half.clone(), file: None };
+        assert_eq!(append_write(&mut slot, eui_proto::Chunked::More, b"a,b\n"), Ok(false));
+        assert!(half.exists());
+        assert_eq!(append_write(&mut slot, eui_proto::Chunked::Abort, b"the query failed"), Err("the query failed".into()));
+        assert!(!half.exists(), "the partial file is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of a transfer: a file read into chunks that fit a
+    /// frame, ending with one that says so.
+    #[test]
+    fn a_file_is_read_in_chunks_and_the_last_one_says_so() {
+        let dir = std::env::temp_dir().join(format!("eui-read-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("rows.csv");
+        let big = vec![b'x'; eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES + 5];
+        std::fs::write(&path, &big).expect("write the file to read");
+
+        let (tx, rx) = mpsc::sync_channel(8);
+        read_chunks(&path, &tx, || {});
+        drop(tx);
+        let chunks: Vec<_> = rx.into_iter().collect();
+        assert_eq!(chunks.len(), 3, "two full chunks, then the tail");
+        assert_eq!(chunks[0], Ok((vec![b'x'; eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES], false)));
+        assert_eq!(chunks[1], Ok((vec![b'x'; 5], false)));
+        assert_eq!(chunks[2], Ok((Vec::new(), true)), "and an empty last one closes it");
+
+        // A file that is not there is an error, not a silent nothing: the
+        // driver turns it into an abort so the server stops waiting.
+        let (tx, rx) = mpsc::sync_channel(8);
+        read_chunks(&dir.join("gone.csv"), &tx, || {});
+        drop(tx);
+        assert!(matches!(rx.into_iter().next(), Some(Err(_))));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

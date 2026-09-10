@@ -75,6 +75,13 @@ pub struct TabView<'a> {
     pub path: &'a str,
     /// `None` for a tab with no application in it yet.
     pub trust: Option<Trust>,
+    /// What the socket is doing, when that is worth a word: `reconnecting`
+    /// while the client is getting the session back, `offline` once it has
+    /// given up. `None` while it is simply talking.
+    ///
+    /// Spec 01 §4: a window that stopped talking to its application must
+    /// not look like one that is merely idle.
+    pub link: Option<&'a str>,
 }
 
 /// The chrome: a driver, a tree, and what its node ids mean.
@@ -105,6 +112,8 @@ const PLUS: u32 = 3;
 const PLUS_TEXT: u32 = 17;
 const RELOAD: u32 = 18;
 const RELOAD_TEXT: u32 = 19;
+const LINK: u32 = 20;
+const LINK_TEXT: u32 = 21;
 const ADDR: u32 = 4;
 const FIELD: u32 = 5;
 const CHIP: u32 = 6;
@@ -633,10 +642,18 @@ impl Chrome {
             self.actions.insert(ORIGIN, Action::EditAddress);
             self.actions.insert(PATH, Action::EditAddress);
             b.click();
-            b.open(NodeKind::Box, FIELD, s_field, u32::from(chip.is_some()) + if editing { 1 } else { 2 });
+            b.open(NodeKind::Box, FIELD, s_field, u32::from(chip.is_some()) + u32::from(t.link.is_some()) + if editing { 1 } else { 2 });
             if let Some((label, s)) = chip {
                 b.open(NodeKind::Box, CHIP, s, 1);
                 b.text(CHIP_TEXT, s_chip_text, label);
+                b.close();
+            }
+            // The socket, when it is not simply up. It sits beside the
+            // trust chip because that is where a person already looks to
+            // ask what this address is doing.
+            if let Some(word) = t.link {
+                b.open(NodeKind::Box, LINK, s_chip_local, 1);
+                b.text(LINK_TEXT, s_chip_text, word);
                 b.close();
             }
             if editing {

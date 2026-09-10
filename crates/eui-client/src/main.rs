@@ -48,6 +48,6 @@ fn main() {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow camera,microphone,clipboard.read,clipboard.write,notifications,location,fs.pick]");
+    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow camera,microphone,clipboard.read,clipboard.write,notifications,location,fs.pick,fs.save]");
     std::process::exit(2);
 }

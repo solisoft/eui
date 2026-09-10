@@ -35,7 +35,7 @@ fn main() {
     for (name, mode, clicks) in [("light-0", ThemeMode::Light, 0), ("light-3", ThemeMode::Light, 3), ("dark-3", ThemeMode::Dark, 3)] {
         let mut driver = Driver::new(w, h, scale, 0);
         let mut counter = counter_server::Counter::default();
-        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
         let first = counter.first();
         let wire = Frame::Batch(first.clone()).encode().len();
         driver.handle_frame(Frame::Batch(first));

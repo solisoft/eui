@@ -22,8 +22,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 64 tests: 9 round-trip, 5 byte-level vectors, 3 size budgets, **46 rejection
-  cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
+- 78 tests: 9 round-trip, 6 byte-level vectors, 3 size budgets, 3 manifest,
+  **55 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
@@ -759,12 +759,85 @@ What this does not reach: roving focus and type-ahead, which a widget must
 still do over the wire at a round trip per arrow, and accelerators, which need
 the global key capture the specification still refuses.
 
+**Files, in and out (01 §6, 03 §3.2).** The protocol had no way to move a
+file in either direction, and no amount of catalogue work could add one: an
+asset is named by its content and is the same for everyone, which is exactly
+wrong for the invoice one person attaches and the export another asks for.
+So files travel in the session, as `Upload` (C→S) and `Blob` (S→C) frames —
+one shape, an id, a chunk index, a flag and at most 256 KiB.
+
+What opens either is a **prop and a person**. A node carrying `pick` or
+`save`, declaring a server handler for the event that answers it, opens the
+platform's dialog when someone activates it — a click, or `Enter`/`Space` on
+it — and only with `fs.pick` or `fs.save` granted. A tree that merely
+arrives opens nothing; neither does a batch, a `wake`, or a local chunk.
+There is no frame that opens a dialog.
+
+The dialogs are the platform's own, through `rfd` — the XDG portal on Linux
+rather than GTK — on their own thread, so a modal panel never stops the
+window drawing. The window does the filesystem, as it does the socket and
+the GPU: the worker cannot open a file and must not be able to, so what
+crosses the pipe is a name, a size, and opaque bytes. A file is read two
+chunks ahead of the socket and no further, so a large attachment costs the
+same memory whatever it weighs.
+
+The sharp edge is on the way in: a `Blob` for a node with no open save ends
+the session, because that is a server trying to write a file nobody offered
+it. A save's file is created on the first chunk, not when the path is
+chosen, and an aborted transfer takes the partial file with it. No path
+reaches a server, a dismissed dialog reaches nobody, and the ceilings are
+the client's — a node's `max` may only be lower.
+
+Eleven vectors in `crates/eui-client/tests/files.rs`, named in `spec/09`
+§7.4, the last of them running both gestures against the reference server
+over a real socket: the bytes of a picked file reach it, and the bytes it
+owes a save come back. `examples/counter-server` grew an "Attach a file…"
+and a "Save the count…" button, which is what that vector drives.
+
+**A socket that breaks is not an application that ended (01 §4.1).** Before
+this, `Incoming::Closed` printed a line to stderr and dropped the
+connection. A wifi hop, a VPN reconnect, a laptop lid or a proxy's idle
+timeout left a window standing there, looking alive, answering nothing —
+with a half-filled form in it.
+
+A session belongs to the server; the socket under it does not. `Hello` now
+offers the session back — the id the server named and the last batch the
+client applied — and `Welcome` answers whether it was taken. Resumed, the
+client keeps its tree, its tables, its focus and what was typed into it, and
+the server sends what it missed. Not resumed, the client discards all of it
+before the `Mount` that follows, and it believes that answer over its own
+memory: a tree kept against a server that has forgotten the session would
+answer clicks the server cannot place. Because a replay may repeat a batch
+that did land, a sequence already applied is acked again and ignored — a
+`SetText` survives being applied twice and an `InsertChild` does not.
+
+The client retries by itself: 300 ms, doubling to 30 s, and it says so
+meanwhile — a `reconnecting` chip beside the trust chip in the address bar,
+and in the title of a chromeless window. A session that ended for a reason
+another socket cannot fix — a refused manifest, an `Error` frame, a tree the
+client would not take — is not retried at all.
+
+`examples/counter-server` is the reference for the server half: sessions
+outlive their sockets by two minutes, the last 64 unacked batches are kept
+for a replay, and a resume is refused outright rather than half-served when
+either runs out. Six vectors in `crates/eui-client/tests/resume.rs`, named
+in `spec/09` §7.5; the last drops a real socket mid-session and opens
+another, and the tree is still standing with the count where it was.
+
+*The Soli side of both is not done.* `lang/` pins the protocol crate by
+revision, so nothing there has changed or broken: `src/serve/eui/` still
+speaks the older `Hello`/`Welcome`, has no `pick`/`save` in its tree
+builder, and does nothing with `Upload`. Taking these into Soli means
+bumping that rev, adding the two event names to `tree.rs`, routing upload
+chunks to a handler, giving a `file_save` handler a way to answer with
+bytes, and keeping a LiveView session alive across sockets.
+
 ## What the specification covers
 
 Every document in `spec/` is normative now, and each names the code that
 implements it and the vectors that pin it:
 
-- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 47 rejection
+- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 55 rejection
   cases. The last of the style record's reserved bytes became `transition`.
 - **Primitives, painting, focus, canvas paths, transitions** (`03`) —
   `eui-render` and `eui-client`.
@@ -787,6 +860,14 @@ implements it and the vectors that pin it:
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.
+- Files and session resume **on the Soli side**: the client and the
+  reference server do both, `lang/src/serve/eui/` does neither, and it
+  cannot until the pinned protocol revision moves.
+- Selecting text that is not in a field, and copying it. Selection and
+  `Ctrl+C` belong to `input` and `textarea`; a table cell, a label or a
+  `code_block` cannot be selected, which is a browser freebie people reach
+  for without thinking. Related: there is no find-in-page.
+- Printing, and anything that would produce a PDF.
 
 ## Scope, stated plainly
 

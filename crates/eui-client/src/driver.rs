@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 
 use eui_audio::Control;
 use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
+use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_UPLOAD_BYTES};
 use eui_proto::{
     caps, AlignItems, Batch, Chunked, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, Resume, StyleRecord, Subtree,
     TextAlign, TextRef, ThemeMode, Transfer, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_UPLOAD_BYTES};
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, PaintCache, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
@@ -2376,7 +2376,6 @@ impl Driver {
         let ly = y - (rect.y + style.border.t + style.padding.t);
         Some(shaped.byte_at(lx, ly).min(text.len()))
     }
-
 
     // -------------------------------------------------------------- files
 

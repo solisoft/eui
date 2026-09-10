@@ -125,7 +125,7 @@ fn the_store_asks_once_and_remembers_failures() {
 fn an_image_node_is_fetched_then_sized_then_painted() {
     let h = hash_of(AVATAR);
     let mut d = Driver::new(300.0, 200.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
     // No explicit size: the image takes its intrinsic size once fetched.

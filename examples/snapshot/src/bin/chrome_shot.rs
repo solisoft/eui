@@ -43,9 +43,9 @@ fn main() {
                 .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })
                 .collect(),
             );
-            chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
+            chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
         } else {
-            let views: Vec<TabView<'_>> = tabs.iter().map(|(t, o, p, tr)| TabView { title: t, origin: o, path: p, trust: Some(*tr) }).collect();
+            let views: Vec<TabView<'_>> = tabs.iter().map(|(t, o, p, tr)| TabView { title: t, origin: o, path: p, trust: Some(*tr), link: None }).collect();
             if std::env::var("CHROME_EDIT").is_ok() {
                 chrome.edit_address();
             }

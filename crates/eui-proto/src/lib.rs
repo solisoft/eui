@@ -79,7 +79,7 @@ pub mod style;
 pub mod writer;
 
 pub use error::{DecodeError, Result};
-pub use frame::{caps, Density, EventFrame, Frame, Hello, ThemeMode, Viewport, Welcome};
+pub use frame::{caps, Chunked, Density, EventFrame, Frame, Hello, Resume, ThemeMode, Transfer, Viewport, Welcome};
 pub use manifest::{Manifest, Rotation};
 pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};

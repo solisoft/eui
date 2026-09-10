@@ -452,6 +452,61 @@ fn arbitrary_bytes_never_panic() {
     }
 }
 
+// ------------------------------------------------- transfers and resume
+
+/// 01 §6: three flags, and nothing else. A fourth would be a receiver
+/// guessing at what a sender meant by bytes it has no rule for.
+#[test]
+fn an_unknown_transfer_flag_is_refused() {
+    let mut w = Writer::new();
+    w.varint32(1).varint32(0).u8(3).bytes(b"x");
+    assert!(matches!(frame_err(&framed(0x0B, w.as_slice())), E::UnknownTag("chunk flag")));
+}
+
+/// A chunk past the ceiling is refused before its bytes are copied.
+#[test]
+fn an_oversized_transfer_chunk_is_refused() {
+    let mut w = Writer::new();
+    w.varint32(1).varint32(0).u8(0).bytes(&vec![0u8; MAX_TRANSFER_CHUNK_BYTES + 1]);
+    assert!(matches!(frame_err(&framed(0x0C, w.as_slice())), E::LimitExceeded("transfer chunk")));
+}
+
+/// An abort carries a reason, not a payload: the ceiling is far lower.
+#[test]
+fn an_oversized_abort_reason_is_refused() {
+    let mut w = Writer::new();
+    w.varint32(1).varint32(0).u8(2).bytes(&vec![b'x'; MAX_ABORT_REASON + 1]);
+    assert!(matches!(frame_err(&framed(0x0B, w.as_slice())), E::LimitExceeded("transfer chunk")));
+}
+
+/// 01 §4.1: a `Hello` either offers a session or it does not.
+#[test]
+fn a_hello_with_an_unknown_resume_tag_is_refused() {
+    let mut w = Writer::new();
+    w.varint32(1);
+    Viewport::default().encode(&mut w);
+    w.varint32(0).u8(2);
+    assert!(matches!(frame_err(&framed(0x01, w.as_slice())), E::UnknownTag("resume")));
+}
+
+/// And a `Welcome` either resumed one or it did not.
+#[test]
+fn a_welcome_with_an_unknown_resumed_byte_is_refused() {
+    let mut w = Writer::new();
+    w.varint32(1).raw(&[0u8; 16]).u8(2);
+    assert!(matches!(frame_err(&framed(0x02, w.as_slice())), E::UnknownTag("resumed")));
+}
+
+/// A `Hello` that ends before its resume flag is truncated, not tolerated.
+#[test]
+fn a_hello_without_its_resume_flag_is_truncated() {
+    let mut w = Writer::new();
+    w.varint32(1);
+    Viewport::default().encode(&mut w);
+    w.varint32(0);
+    assert!(matches!(frame_err(&framed(0x01, w.as_slice())), E::Truncated));
+}
+
 /// The same, but seeded with well-formed prefixes so the fuzzer-ish input gets
 /// past the first tag byte and exercises the deeper paths.
 #[test]

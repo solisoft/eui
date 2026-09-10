@@ -510,7 +510,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
 
     // ---- Settings: the typed fields, and the slider the client captions.
     goto(&mut d, &conn, &wake, "Settings", "Legal name");
-    assert!(has(&d, "A tooltip") == false, "the tooltip belongs to the dashboard");
+    assert!(!has(&d, "A tooltip"), "the tooltip belongs to the dashboard");
     let value = within(&d, "Low stock threshold", "Value 40");
     let track = slider_track(&d, value);
     let _ = d.paint(1000, 2600);

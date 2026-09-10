@@ -30,7 +30,7 @@ use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller};
 
 use crate::a11y::{AccessNode, AccessRole, AccessSnapshot, AccessState, Checked};
 use crate::assets::Hash;
-use crate::driver::{Driver, Input};
+use crate::driver::{Driver, FileAsk, FileWant, FileWrite, Input};
 
 /// The argument that turns a binary into a worker.
 pub const WORKER_ARG: &str = "--eui-worker";
@@ -186,6 +186,34 @@ pub enum Request {
     /// The viewer's desktop palette (05 §5): its mode if it has one, and
     /// colours by role id. Empty means none: the theme's own colours.
     DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
+    /// The person chose files in the dialog `token` opened: name and size
+    /// each. The bytes follow as [`Request::UploadChunk`].
+    Picked {
+        /// The [`FileAsk::token`] the dialog was opened for.
+        token: u32,
+        /// What they chose, in the order the dialog gave them.
+        files: Vec<(String, u64)>,
+    },
+    /// A dialog was dismissed without choosing.
+    Dismissed(u32),
+    /// Bytes of an upload, in order.
+    UploadChunk {
+        /// The upload id the driver minted.
+        id: u32,
+        /// The next bytes of the file.
+        bytes: Vec<u8>,
+        /// Whether the file ends here.
+        last: bool,
+    },
+    /// The window could not read what was picked.
+    UploadFailed(u32, String),
+    /// The person chose where a save should go, and what it is called.
+    Saving {
+        /// The [`FileAsk::token`] the dialog was opened for.
+        token: u32,
+        /// The name they gave it.
+        name: String,
+    },
     /// Spec 03 §7: mix `frames` frames of `channels` samples at `rate`.
     /// The window's audio thread asks; nothing else does.
     Audio {
@@ -251,6 +279,35 @@ impl Request {
                 w.u8(*channels);
                 w.u32(*rate);
             }
+            Request::Picked { token, files } => {
+                w.u8(14);
+                w.u32(*token);
+                w.u32(u32::try_from(files.len()).unwrap_or(u32::MAX));
+                for (name, size) in files {
+                    w.str(name);
+                    w.u64(*size);
+                }
+            }
+            Request::Dismissed(token) => {
+                w.u8(15);
+                w.u32(*token);
+            }
+            Request::UploadChunk { id, bytes, last } => {
+                w.u8(16);
+                w.u32(*id);
+                w.bytes(bytes);
+                w.bool(*last);
+            }
+            Request::UploadFailed(id, why) => {
+                w.u8(17);
+                w.u32(*id);
+                w.str(why);
+            }
+            Request::Saving { token, name } => {
+                w.u8(18);
+                w.u32(*token);
+                w.str(name);
+            }
             Request::DesktopTheme(mode, colors) => {
                 w.u8(12);
                 w.u8(mode.map_or(255, |m| m as u8));
@@ -292,6 +349,19 @@ impl Request {
                 Request::DesktopTheme(mode, colors)
             }
             13 => Request::Audio { frames: r.u32()?, channels: r.u8()?, rate: r.u32()? },
+            14 => {
+                let token = r.u32()?;
+                let n = r.u32()? as usize;
+                let mut files = Vec::with_capacity(n.min(64));
+                for _ in 0..n {
+                    files.push((r.str()?, r.u64()?));
+                }
+                Request::Picked { token, files }
+            }
+            15 => Request::Dismissed(r.u32()?),
+            16 => Request::UploadChunk { id: r.u32()?, bytes: r.bytes()?.to_vec(), last: r.bool()? },
+            17 => Request::UploadFailed(r.u32()?, r.str()?),
+            18 => Request::Saving { token: r.u32()?, name: r.str()? },
             _ => return Err("unknown request"),
         };
         r.done()?;
@@ -404,6 +474,11 @@ pub struct Status {
     pub audio: bool,
     /// A picture is playing (03 §8).
     pub video: bool,
+    /// Dialogs the tree asked for and the window has not opened yet
+    /// (spec 03 §3.2).
+    pub files: Vec<FileAsk>,
+    /// Bytes a save is owed, for the window to put on disk.
+    pub writes: Vec<FileWrite>,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -434,6 +509,8 @@ pub enum Payload {
     Access(AccessSnapshot),
     /// `Audio`: interleaved `f32` frames, `channels` per frame.
     Pcm(Vec<f32>),
+    /// `Picked`: the upload id for each file, in the order they came.
+    Uploads(Vec<u32>),
 }
 
 /// One reply.
@@ -473,6 +550,29 @@ impl Reply {
         w.u8(s.cursor);
         w.bool(s.audio);
         w.bool(s.video);
+        w.u32(u32::try_from(s.files.len()).unwrap_or(u32::MAX));
+        for a in &s.files {
+            w.u32(a.token);
+            w.u32(a.node);
+            match &a.want {
+                FileWant::Open { accept, multiple, max } => {
+                    w.u8(0);
+                    w.str(accept);
+                    w.bool(*multiple);
+                    w.u64(*max);
+                }
+                FileWant::Save { name } => {
+                    w.u8(1);
+                    w.str(name);
+                }
+            }
+        }
+        w.u32(u32::try_from(s.writes.len()).unwrap_or(u32::MAX));
+        for f in &s.writes {
+            w.u32(f.token);
+            w.u8(f.flag as u8);
+            w.bytes(&f.bytes);
+        }
         match &self.payload {
             Payload::None => w.u8(0),
             Payload::Sandbox(r) => {
@@ -527,6 +627,13 @@ impl Reply {
                 w.u8(6);
                 put_access(&mut w, snap);
             }
+            Payload::Uploads(ids) => {
+                w.u8(8);
+                w.u32(u32::try_from(ids.len()).unwrap_or(u32::MAX));
+                for id in ids {
+                    w.u32(*id);
+                }
+            }
             Payload::Pcm(samples) => {
                 w.u8(7);
                 w.u32(u32::try_from(samples.len()).unwrap_or(u32::MAX));
@@ -553,7 +660,25 @@ impl Reply {
         let cursor = r.u8()?;
         let audio = r.bool()?;
         let video = r.bool()?;
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio, video };
+        let n = r.u32()? as usize;
+        let mut files = Vec::with_capacity(n.min(64));
+        for _ in 0..n {
+            let (token, node) = (r.u32()?, r.u32()?);
+            let want = match r.u8()? {
+                0 => FileWant::Open { accept: r.str()?, multiple: r.bool()?, max: r.u64()? },
+                1 => FileWant::Save { name: r.str()? },
+                _ => return Err("file ask"),
+            };
+            files.push(FileAsk { token, node, want });
+        }
+        let n = r.u32()? as usize;
+        let mut writes = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            let token = r.u32()?;
+            let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
+            writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
+        }
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio, video, files, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -578,6 +703,14 @@ impl Reply {
             }
             5 => Payload::Tick(r.bool()?),
             6 => Payload::Access(get_access(&mut r)?),
+            8 => {
+                let n = r.u32()? as usize;
+                let mut ids = Vec::with_capacity(n.min(64));
+                for _ in 0..n {
+                    ids.push(r.u32()?);
+                }
+                Payload::Uploads(ids)
+            }
             7 => {
                 let n = r.u32()? as usize;
                 let mut samples = Vec::with_capacity(n.min(1 << 20));
@@ -963,6 +1096,30 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.pending_mut().extend(out);
                         Payload::Pcm(pcm)
                     }
+                    Request::Picked { token, files } => {
+                        let (ids, out) = d.picked(token, files);
+                        d.pending_mut().extend(out);
+                        Payload::Uploads(ids)
+                    }
+                    Request::Dismissed(token) => {
+                        d.dialog_dismissed(token);
+                        Payload::None
+                    }
+                    Request::UploadChunk { id, bytes, last } => {
+                        let out = d.upload_chunk(id, &bytes, last);
+                        d.pending_mut().extend(out);
+                        Payload::None
+                    }
+                    Request::UploadFailed(id, why) => {
+                        let out = d.upload_failed(id, why);
+                        d.pending_mut().extend(out);
+                        Payload::None
+                    }
+                    Request::Saving { token, name } => {
+                        let out = d.saving(token, name);
+                        d.pending_mut().extend(out);
+                        Payload::None
+                    }
                     Request::DesktopTheme(mode, colors) => {
                         let colors = colors.into_iter().filter_map(|(id, c)| eui_theme::Role::from_id(id).ok().map(|r| (r, c))).collect();
                         let out = d.set_desktop_theme(mode, colors);
@@ -992,6 +1149,8 @@ fn status_of(d: &mut Driver) -> Status {
         cursor: d.cursor().to_u8(),
         audio: d.audio_playing(),
         video: d.video_playing(),
+        files: d.take_file_asks(),
+        writes: d.take_writes(),
     }
 }
 
@@ -1204,7 +1363,7 @@ impl Worker {
         if matches!(request, Request::Paint(..)) {
             let now = Instant::now();
             if let Some(reply) = self.repeat.as_ref().and_then(|r| r.answer(now)) {
-                self.status = reply.status.clone();
+                self.keep(reply.status.clone());
                 self.due = Some(now);
                 crate::driver::trace(|| "paint: the last list again, the pipe untouched".to_owned());
                 return Some(reply);
@@ -1226,7 +1385,7 @@ impl Worker {
         match result {
             Ok(reply) => {
                 let now = Instant::now();
-                self.status = reply.status.clone();
+                self.keep(reply.status.clone());
                 self.due = Some(now);
                 if let Payload::Paint { .. } = reply.payload {
                     self.received = now;
@@ -1257,6 +1416,27 @@ impl Worker {
                 None
             }
         }
+    }
+
+    /// The status after a reply, keeping what the window has not collected
+    /// yet. Everything else in a status is the driver's state now, and the
+    /// new answer replaces it; a dialog and a chunk of a file are *events*,
+    /// and a second call before the window looked must not drop them.
+    fn keep(&mut self, mut status: Status) {
+        if !self.status.files.is_empty() {
+            let mut files = std::mem::take(&mut self.status.files);
+            files.append(&mut status.files);
+            status.files = files;
+        }
+        if !self.status.writes.is_empty() {
+            let mut writes = std::mem::take(&mut self.status.writes);
+            writes.append(&mut status.writes);
+            status.writes = writes;
+        }
+        if status.clipboard.is_none() {
+            status.clipboard = self.status.clipboard.take();
+        }
+        self.status = status;
     }
 
     /// State after the last reply.
@@ -1626,6 +1806,77 @@ impl Backend {
         self.with_local(|d| d.take_clipboard()).or_else(|| self.with_worker(|w| w.status.clipboard.take())).flatten()
     }
 
+    /// Dialogs the tree asked for since the last call (spec 03 §3.2).
+    pub fn take_file_asks(&mut self) -> Vec<FileAsk> {
+        if let Some(asks) = self.with_local(|d| d.take_file_asks()) {
+            return asks;
+        }
+        self.with_worker(|w| std::mem::take(&mut w.status.files)).unwrap_or_default()
+    }
+
+    /// Bytes a save is owed, for the window to put on disk.
+    pub fn take_writes(&mut self) -> Vec<FileWrite> {
+        if let Some(writes) = self.with_local(|d| d.take_writes()) {
+            return writes;
+        }
+        self.with_worker(|w| std::mem::take(&mut w.status.writes)).unwrap_or_default()
+    }
+
+    /// The person chose files: an upload id each, and the frames that tell
+    /// the server what is coming.
+    pub fn picked(&mut self, token: u32, files: Vec<(String, u64)>) -> (Vec<u32>, Vec<Vec<u8>>) {
+        if let Some(out) = self.with_local(|d| {
+            let (ids, frames) = d.picked(token, files.clone());
+            (ids, frames.iter().map(Frame::encode).collect::<Vec<_>>())
+        }) {
+            return out;
+        }
+        match self.with_worker(|w| w.call(&Request::Picked { token, files })) {
+            Some(Some(reply)) => {
+                let ids = match reply.payload {
+                    Payload::Uploads(ids) => ids,
+                    _ => Vec::new(),
+                };
+                (ids, reply.status.outbound)
+            }
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
+    /// A dialog was dismissed without choosing.
+    pub fn dismissed(&mut self, token: u32) {
+        if self.with_local(|d| d.dialog_dismissed(token)).is_some() {
+            return;
+        }
+        self.with_worker(|w| {
+            w.call(&Request::Dismissed(token));
+        });
+    }
+
+    /// Bytes of an upload, framed for the wire.
+    pub fn upload_chunk(&mut self, id: u32, bytes: Vec<u8>, last: bool) -> Vec<Vec<u8>> {
+        if let Some(out) = self.with_local(|d| d.upload_chunk(id, &bytes, last).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
+        }
+        self.with_worker(|w| w.call(&Request::UploadChunk { id, bytes, last }).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// The window could not read what was picked.
+    pub fn upload_failed(&mut self, id: u32, why: String) -> Vec<Vec<u8>> {
+        if let Some(out) = self.with_local(|d| d.upload_failed(id, why.clone()).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
+        }
+        self.with_worker(|w| w.call(&Request::UploadFailed(id, why)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// The person chose where a save goes; the server is asked for it.
+    pub fn saving(&mut self, token: u32, name: String) -> Vec<Vec<u8>> {
+        if let Some(out) = self.with_local(|d| d.saving(token, name.clone()).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
+        }
+        self.with_worker(|w| w.call(&Request::Saving { token, name }).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
+    }
+
     /// The viewer's desktop palette (05 §5), or none. Returns encoded
     /// frames to send: the viewport, when the palette's mode differs.
     pub fn desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Vec<u8>> {
@@ -1819,6 +2070,11 @@ mod tests {
             cursor: 1,
             audio: true,
             video: false,
+            files: vec![
+                FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20 } },
+                FileAsk { token: 4, node: 10, want: FileWant::Save { name: "export.csv".into() } },
+            ],
+            writes: vec![FileWrite { token: 4, flag: eui_proto::Chunked::Last, bytes: vec![7, 7, 7] }],
         };
         let list = DrawList {
             quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8] }],

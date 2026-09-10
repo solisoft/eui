@@ -281,6 +281,58 @@ that asked for it, and focus is left alone so the surface can put it back. If
 nothing on the path asked, `Escape` drops focus, which is what it has always
 done.
 
+### 3.2 What a node may claim of the filesystem
+
+Two more props, for the two things a server cannot do at all: reach a file on
+the person's machine, and put one there.
+
+| Prop | Value | Means |
+|---|---|---|
+| `pick` | `Str accept`, or `List[Str accept, Int flags, Int max]` | activating this node opens the platform's open dialog |
+| `save` | `Str name` | activating this node opens the platform's save dialog |
+
+`accept` is a comma-separated list of extensions without dots (`"csv,pdf"`),
+empty for any file. `flags` bit 0 allows more than one file. `max` is the
+largest one file may be, in bytes, capped by
+[`10-budgets.md`](10-budgets.md) §5 and defaulting to it. `name` is the name
+to suggest, and a client MUST reduce it to its last path segment.
+
+A client opens a dialog when **all** of this holds, and never otherwise:
+
+1. the person **activated** the node — a primary click, or `Enter`/`Space`
+   with focus on it. A tree that merely arrives opens nothing, and neither
+   does a batch, a timer, or a local handler;
+2. the node carries the prop **and** a **server** handler for the event that
+   answers it — `file_pick` or `file_save`
+   ([`06-events.md`](06-events.md) §1). A local chunk cannot be given a file
+   or asked for one: both ends of a transfer are the server's;
+3. the matching capability — `fs.pick` or `fs.save` — was granted
+   ([`01-transport.md`](01-transport.md) §2.1). Without it there is no
+   dialog and no diagnostic the application can see.
+
+A node may carry a `click` handler as well; the click is dispatched as
+usual, so an application may show that something is happening. At most one
+dialog per node is open at a time.
+
+**What is picked.** Each file chosen gives one `file_pick` event carrying an
+upload id, the file's **name** — never its path — and its size; the bytes
+follow as `Upload` frames against that id
+([`01-transport.md`](01-transport.md) §6). A file past `max` is announced
+and then aborted, so the application can say why rather than leave the
+person watching nothing happen. A dismissed dialog is not an event: nothing
+happened.
+
+**What is saved.** The person choosing a place gives one `file_save` event
+carrying the name they chose. That event *is* the request: the bytes are
+owed, and arrive as `Blob` frames addressed to the node. Nothing is written
+until the first chunk arrives, so a save the server never answers leaves
+nothing behind, and an aborted one leaves nothing either — half an export is
+worse than none, because it looks like a whole one until it is opened.
+
+This is why a save costs a round trip rather than riding on an asset: the
+bytes are generated when the person asks for them, they are nobody else's,
+and no one who is not on this session can fetch them.
+
 ## 4. The catalogue contract
 
 The catalogue is a server-side library; the client knows nothing of it. A

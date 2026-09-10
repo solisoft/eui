@@ -28,8 +28,23 @@ fn every_frame_kind() {
         version: PROTOCOL_VERSION,
         viewport: Viewport { width: 1280, height: 800, scale: 200, mode: ThemeMode::Dark, density: Density::Compact, font_scale: 125 },
         granted: caps::CLIPBOARD_WRITE | caps::NOTIFICATIONS,
+        resume: None,
     }));
-    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16] }));
+    // The same frame on the socket after the first: the session it still
+    // holds a tree for, and the last batch it applied (01 §4.1).
+    roundtrip(&Frame::Hello(Hello {
+        version: PROTOCOL_VERSION,
+        viewport: Viewport::default(),
+        granted: caps::FS_PICK | caps::FS_SAVE,
+        resume: Some(Resume { session: [9; 16], acked: 4_294_967_297 }),
+    }));
+    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: false }));
+    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: true }));
+    // Both directions of a transfer (01 §6), and all three flags.
+    roundtrip(&Frame::Upload(Transfer { id: 3, seq: 0, flag: Chunked::More, bytes: vec![1, 2, 3] }));
+    roundtrip(&Frame::Upload(Transfer { id: 3, seq: 1, flag: Chunked::Last, bytes: Vec::new() }));
+    roundtrip(&Frame::Upload(Transfer { id: 3, seq: 0, flag: Chunked::Abort, bytes: b"too big".to_vec() }));
+    roundtrip(&Frame::Blob(Transfer { id: 11, seq: 7, flag: Chunked::Last, bytes: vec![0xEB; 4096] }));
     roundtrip(&Frame::Ack { seq: u64::MAX });
     roundtrip(&Frame::Ping([1, 2, 3, 4, 5, 6, 7, 8]));
     roundtrip(&Frame::Pong([0; 8]));
@@ -37,6 +52,8 @@ fn every_frame_kind() {
     roundtrip(&Frame::Resync);
     roundtrip(&Frame::Viewport(Viewport::default()));
     roundtrip(&Frame::Event(EventFrame { node: 9, event: EventKind::Click, name: 3, payload: Value::Null }));
+    roundtrip(&Frame::Event(EventFrame { node: 9, event: EventKind::FilePick, name: 3, payload: Value::List(vec![Value::Int(1), Value::Str("invoice.pdf".into()), Value::Int(90_112)]) }));
+    roundtrip(&Frame::Event(EventFrame { node: 9, event: EventKind::FileSave, name: 4, payload: Value::Str("export.csv".into()) }));
 }
 
 #[test]

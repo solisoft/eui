@@ -56,7 +56,7 @@ speculative compiler to confuse, because there is no compiler.
 - The decode path is clean under `clippy` with `indexing_slicing`, `panic`,
   `unwrap_used`, `expect_used` and `arithmetic_side_effects` denied. It cannot
   panic by construction, not merely by inspection.
-- 46 rejection cases, plus bulk tests that push 40 000 random and
+- 55 rejection cases, plus bulk tests that push 40 000 random and
   bit-flipped buffers through every entry point and require that none panic.
 - `eui-tree` applies the same discipline one layer up: a batch whose ops are
   well-formed but incoherent — an undefined atom, a duplicate node id, a
@@ -77,6 +77,30 @@ An application never sees a keystroke outside its own focused editable node.
 There is no global key capture, no clipboard read without a capability, and no
 pointer polling. The keylogger shape is not available, rather than being
 forbidden by policy.
+
+## The filesystem
+
+The client reads a file only when a person picked it in the platform's own
+dialog, and writes one only where a person just said. Everything else follows
+from those two sentences.
+
+A dialog opens on an **activation and nothing else** — a click, or
+`Enter`/`Space` on a focused node carrying `pick` or `save`, with a server
+handler for the answer and the capability granted. No frame opens one,
+because a frame is not a person. `fs.pick` and `fs.save` are separate, and
+neither implies the other: reading what someone chose and writing where they
+said are different powers.
+
+A `Blob` frame for a node with no open save **ends the session**. There is no
+benign reading of a server sending bytes for a file nobody offered it. The
+file itself is created on the first chunk rather than when the path is
+chosen, and an aborted transfer removes what it had written — half an export
+is worse than none, because it looks like a whole one until it is opened.
+
+No path ever reaches a server: a `file_pick` carries a name and a size, a
+`file_save` a name. A dismissed dialog is reported to nobody. And the bytes
+never enter the worker in the direction that would matter — the window
+reads and writes files, because the worker may not open one.
 
 ## Privacy by default
 

@@ -95,6 +95,8 @@ frame := kind:u8  len:varint  payload
 | `0x08` | `Error` | either |
 | `0x09` | `Resync` | client to server |
 | `0x0A` | `Viewport` | client to server |
+| `0x0B` | `Upload` | client to server |
+| `0x0C` | `Blob` | server to client |
 
 Any other kind is rejected. Unknown kinds are **not** reserved for forward
 compatibility: version negotiation in `Hello` and `Welcome` is the only
@@ -109,6 +111,54 @@ Batches carry a monotonically increasing sequence number and apply in order,
 all or nothing. If one fails — an op naming a node that does not exist, an atom
 id that was never defined — the client does not attempt partial application. It
 discards the tree, sends `Resync`, and waits for a fresh `Mount`.
+
+## When the socket breaks
+
+A session belongs to the server; the socket under it does not. A wifi hop, a
+VPN reconnect, a laptop lid and a proxy's idle timeout all end a socket while
+both ends are still willing, and an application that treated those as its own
+end would lose a half-filled form to a change of network.
+
+So a client whose socket closed without an `Error` opens another one — after
+300 ms, doubling to 30 s and no further — and says so meanwhile rather than
+leaving a window that looks alive and answers nothing. Its `Hello` offers the
+session back: the id the server named, and the last batch it applied. The
+server answers in `Welcome`:
+
+- **resumed** — the session is still here and nothing else is on it. The
+  client keeps its tree, its tables, its focus and what was typed into it,
+  and the server sends the batches it missed.
+- **not resumed** — a session that starts empty. A client holding a tree
+  discards it before the `Mount` that follows.
+
+The client believes that answer over its own memory: a tree kept against a
+server that has forgotten the session would answer clicks the server cannot
+place. Because a replay may repeat a batch the client already applied, a
+batch whose sequence has been applied is acked again and otherwise ignored —
+a `SetText` would survive being applied twice, an `InsertChild` would not.
+
+The reference server keeps a session for two minutes and the last 64 unacked
+batches, and refuses the resume rather than half-serving it when either runs
+out.
+
+## Files
+
+A file is not an asset. An asset is named by its content, is the same for
+everyone, and anything in between may serve it to anyone — exactly wrong for
+the invoice one person attached and the export another asked for. So files
+travel *in the session*: authenticated by it, scoped to it, gone with it, and
+cacheable by nothing.
+
+One shape, both directions: an id, a chunk index, a flag (more, last,
+aborted), and at most 256 KiB of bytes. `Upload` carries a file the person
+picked, against the id announced in the `file_pick` event that opened it.
+`Blob` carries what a node's `save` offers, addressed to that node — and a
+client refuses one for a node it has no open save for, because that is a
+server trying to write a file nobody offered it.
+
+What opens either is in [widgets](/docs/widgets): a `pick` or `save` prop, a
+handler for the event that answers it, the capability, and a person actually
+clicking.
 
 ## Idle
 

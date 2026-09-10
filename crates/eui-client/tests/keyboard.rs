@@ -56,7 +56,7 @@ fn page(props: Vec<(u32, Vec<(u32, Value)>)>, atoms: &[&str], keyed: Option<u32>
 
 fn driver(batch: Batch) -> Driver {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(batch));
     let _ = d.paint(400, 300);
     d

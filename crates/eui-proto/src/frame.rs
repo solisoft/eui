@@ -1,7 +1,7 @@
 //! Session frames (`spec/01-transport.md` §3).
 
 use crate::error::{DecodeError, Result};
-use crate::limits::{MAX_FRAME_BYTES, MAX_INLINE_STR};
+use crate::limits::{MAX_ABORT_REASON, MAX_FRAME_BYTES, MAX_INLINE_STR, MAX_TRANSFER_CHUNK_BYTES};
 use crate::node::{EventKind, Value};
 use crate::op::Batch;
 use crate::reader::Reader;
@@ -82,9 +82,11 @@ pub mod caps {
     pub const LOCATION: u32 = 1 << 5;
     /// Open a file the user picks.
     pub const FS_PICK: u32 = 1 << 6;
+    /// Write a file where the user says.
+    pub const FS_SAVE: u32 = 1 << 7;
 
     /// The names of 01 §2.1, in bit order.
-    pub const NAMES: [(&str, u32); 7] = [
+    pub const NAMES: [(&str, u32); 8] = [
         ("camera", CAMERA),
         ("microphone", MICROPHONE),
         ("clipboard.read", CLIPBOARD_READ),
@@ -92,6 +94,7 @@ pub mod caps {
         ("notifications", NOTIFICATIONS),
         ("location", LOCATION),
         ("fs.pick", FS_PICK),
+        ("fs.save", FS_SAVE),
     ];
 
     /// A capability by its name, `clipboard.read`.
@@ -103,8 +106,6 @@ pub mod caps {
     pub fn names(mask: u32) -> Vec<&'static str> {
         NAMES.iter().filter(|(_, bit)| mask & bit != 0).map(|(n, _)| *n).collect()
     }
-    /// Save to a file the user picks.
-    pub const FS_SAVE: u32 = 1 << 7;
     /// Every bit this protocol version defines.
     pub const ALL: u32 = 0xFF;
 }
@@ -144,6 +145,21 @@ impl Viewport {
     }
 }
 
+/// A session the client still holds a tree for, offered back to the server
+/// after the socket broke (spec 01 §4.1).
+///
+/// It is an offer, not a claim: the server decides whether the session is
+/// still there, and the client believes the answer rather than its own
+/// memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resume {
+    /// The session id the server sent in its `Welcome`.
+    pub session: [u8; 16],
+    /// The last batch sequence number this client applied and acked.
+    /// Everything after it is owed.
+    pub acked: u64,
+}
+
 /// The client's opening frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hello {
@@ -153,6 +169,9 @@ pub struct Hello {
     pub viewport: Viewport,
     /// Capabilities the user has granted this application.
     pub granted: u32,
+    /// A session this client is trying to pick up again, if this is not
+    /// its first socket.
+    pub resume: Option<Resume>,
 }
 
 /// The server's answer.
@@ -162,6 +181,75 @@ pub struct Welcome {
     pub version: u32,
     /// Opaque session identifier, 16 bytes.
     pub session: [u8; 16],
+    /// True when this is the session `Hello.resume` named and the server
+    /// still holds it: the client keeps its tree and the server owes it
+    /// every batch after `acked`. False — including for a first `Hello` —
+    /// means a session that starts empty, and a client with a tree from
+    /// before MUST discard it.
+    pub resumed: bool,
+}
+
+/// What one chunk of a transfer says about the chunks after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Chunked {
+    /// More follow.
+    More = 0,
+    /// The last one; the transfer is whole.
+    Last = 1,
+    /// The transfer ended early. `bytes` is a UTF-8 reason, not content,
+    /// and whatever arrived before it MUST be discarded.
+    Abort = 2,
+}
+
+impl Chunked {
+    /// Decode.
+    pub const fn from_u8(v: u8) -> Result<Self> {
+        match v {
+            0 => Ok(Self::More),
+            1 => Ok(Self::Last),
+            2 => Ok(Self::Abort),
+            _ => Err(DecodeError::UnknownTag("chunk flag")),
+        }
+    }
+}
+
+/// One chunk of a file moving in either direction (spec 01 §6).
+///
+/// Files do not travel as assets: an asset is named by its content and is
+/// the same for everyone, which is exactly wrong for the invoice one person
+/// attached and the export another asked for. A transfer is part of the
+/// session, so it is authenticated by it, ends with it, and is never
+/// cacheable by anything in between.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transfer {
+    /// For an `Upload`, the id the client minted for this file. For a
+    /// `Blob`, the node whose `save` the person answered.
+    pub id: u32,
+    /// Chunk index, from 0, contiguous. A receiver MUST reject a gap.
+    pub seq: u32,
+    /// Whether more follow.
+    pub flag: Chunked,
+    /// The chunk, at most [`MAX_TRANSFER_CHUNK_BYTES`]; on `Abort`, a
+    /// reason of at most [`MAX_ABORT_REASON`] bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl Transfer {
+    /// Decode.
+    pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let id = r.varint32()?;
+        let seq = r.varint32()?;
+        let flag = Chunked::from_u8(r.u8()?)?;
+        let max = if matches!(flag, Chunked::Abort) { MAX_ABORT_REASON } else { MAX_TRANSFER_CHUNK_BYTES };
+        let bytes = r.bytes(max, "transfer chunk")?.to_vec();
+        Ok(Self { id, seq, flag, bytes })
+    }
+
+    /// Encode.
+    pub fn encode(&self, w: &mut Writer) {
+        w.varint32(self.id).varint32(self.seq).u8(self.flag as u8).bytes(&self.bytes);
+    }
 }
 
 /// A client-originated event.
@@ -208,6 +296,10 @@ pub enum Frame {
     Resync,
     /// C→S: presentation state changed.
     Viewport(Viewport),
+    /// C→S: a chunk of a file the person picked (spec 03 §3.2).
+    Upload(Transfer),
+    /// S→C: a chunk of what a node's `save` offers (spec 03 §3.2).
+    Blob(Transfer),
 }
 
 impl Frame {
@@ -235,11 +327,22 @@ impl Frame {
                 if granted & !caps::ALL != 0 {
                     return Err(DecodeError::IllegalValue("unknown capability bit"));
                 }
-                Self::Hello(Hello { version, viewport, granted })
+                let resume = match p.u8()? {
+                    0 => None,
+                    1 => Some(Resume { session: p.array::<16>()?, acked: p.varint()? }),
+                    _ => return Err(DecodeError::UnknownTag("resume")),
+                };
+                Self::Hello(Hello { version, viewport, granted, resume })
             }
             0x02 => {
                 let version = p.varint32()?;
-                Self::Welcome(Welcome { version, session: p.array::<16>()? })
+                let session = p.array::<16>()?;
+                let resumed = match p.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(DecodeError::UnknownTag("resumed")),
+                };
+                Self::Welcome(Welcome { version, session, resumed })
             }
             0x03 => Self::Batch(Batch::decode(&mut p)?),
             0x04 => Self::Event(EventFrame { node: p.varint32()?, event: EventKind::from_u8(p.u8()?)?, name: p.varint32()?, payload: Value::decode(&mut p)? }),
@@ -255,6 +358,8 @@ impl Frame {
             0x08 => Self::Error { code: p.varint32()?, message: p.str(MAX_INLINE_STR, "error message")?.to_owned() },
             0x09 => Self::Resync,
             0x0A => Self::Viewport(Viewport::decode(&mut p)?),
+            0x0B => Self::Upload(Transfer::decode(&mut p)?),
+            0x0C => Self::Blob(Transfer::decode(&mut p)?),
             _ => return Err(DecodeError::UnknownTag("frame kind")),
         };
         p.finish()?;
@@ -269,10 +374,18 @@ impl Frame {
                 body.varint32(h.version);
                 h.viewport.encode(&mut body);
                 body.varint32(h.granted);
+                match &h.resume {
+                    Some(r) => {
+                        body.u8(1).raw(&r.session).varint(r.acked);
+                    }
+                    None => {
+                        body.u8(0);
+                    }
+                }
                 0x01
             }
             Self::Welcome(v) => {
-                body.varint32(v.version).raw(&v.session);
+                body.varint32(v.version).raw(&v.session).u8(u8::from(v.resumed));
                 0x02
             }
             Self::Batch(b) => {
@@ -304,6 +417,14 @@ impl Frame {
             Self::Viewport(v) => {
                 v.encode(&mut body);
                 0x0A
+            }
+            Self::Upload(t) => {
+                t.encode(&mut body);
+                0x0B
+            }
+            Self::Blob(t) => {
+                t.encode(&mut body);
+                0x0C
             }
         };
 

@@ -200,6 +200,26 @@ The §2 figure is structure; a real mount carries the cells too. The
 text, of which about 9 are structure and the rest the data itself. Budget:
 18 B per node.
 
+## 5. Files
+
+| Measure | Budget |
+|---|---|
+| One transfer chunk | 256 KiB |
+| One upload, ceiling | 64 MiB — a node's `pick` may ask for less |
+| One upload, default | 16 MiB, when `pick` names no ceiling |
+| One save | 256 MiB, whatever the server sends |
+| Abort reason | 256 B |
+| Memory held while a file uploads | two chunks, whatever the file weighs |
+| Dialogs open per node | 1 |
+
+The upload ceiling is the client's; the tree's is whatever `max` says, and
+it may only be lower. The save ceiling exists because the person chose where
+a file goes and not how much of their disk it may take.
+
+Nothing here is a stream: a transfer belongs to its session and does not
+survive it, and the memory it costs is fixed by the chunk size rather than
+by the file — the disk runs two chunks ahead of the socket and no further.
+
 ## Sound
 
 | Measure | Budget |

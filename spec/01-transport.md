@@ -71,7 +71,7 @@ Strings are at most 256 bytes. The signature is Ed25519 over the record
 encoded with fields 0–9 only (`field_count` 10), which a decoder can rebuild
 exactly because the order is fixed. Capability names and bits: `camera` 1,
 `microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
-16, `location` 32, `fs.pick` 64.
+16, `location` 32, `fs.pick` 64, `fs.save` 128.
 
 A client MUST verify the signature before acting on any other field, and
 MUST refuse a server whose protocol range excludes its own version. On first
@@ -126,8 +126,8 @@ trailing bytes are an error, not padding.
 
 | kind | Name | Direction | Payload |
 |---|---|---|---|
-| `0x01` | `Hello` | C→S | protocol version, viewport, theme mode, density, font scale, granted capabilities |
-| `0x02` | `Welcome` | S→C | negotiated version, session id, initial quotas |
+| `0x01` | `Hello` | C→S | protocol version, viewport, theme mode, density, font scale, granted capabilities, and a session offered back (§4.1) |
+| `0x02` | `Welcome` | S→C | negotiated version, session id, whether the offered session was resumed (§4.1) |
 | `0x03` | `Batch` | S→C | a sequence of ops (§02 wire format) |
 | `0x04` | `Event` | C→S | node id, event kind, payload |
 | `0x05` | `Ack` | C→S | last applied batch sequence number |
@@ -136,6 +136,8 @@ trailing bytes are an error, not padding.
 | `0x08` | `Error` | both | code:varint, message: atom or inline UTF-8 |
 | `0x09` | `Resync` | C→S | client state is unrecoverable; send a full `Mount` |
 | `0x0A` | `Viewport` | C→S | size, scale factor, theme mode, density, font scale changed |
+| `0x0B` | `Upload` | C→S | a chunk of a file the person picked (§6) |
+| `0x0C` | `Blob` | S→C | a chunk of what a node's `save` offers (§6) |
 
 Any other `kind` MUST be rejected. Unknown kinds are not reserved for
 forward compatibility; version negotiation in `Hello`/`Welcome` is the only
@@ -169,6 +171,57 @@ Whatever ends a session, the client SHOULD **show** the reason rather than
 leave the last frame standing: a window that stopped talking to its
 application must not look like one that is merely idle.
 
+### 4.1 Resuming a session
+
+A session belongs to the server. The socket under it does not: a wifi hop, a
+VPN reconnect, a laptop lid and a proxy's idle timeout all end a socket
+while both ends are still willing. A client that treated those as the end of
+the application would lose a half-filled form to a change of network, which
+is not a property anyone would choose.
+
+So a client whose socket closed without an `Error` **SHOULD** open another
+one, and it MUST NOT tear its tree down before it knows what the server
+says. The reference client waits 300 ms, doubling to 30 s and no further,
+and shows that it is doing so (§4).
+
+`Hello` carries the offer:
+
+```
+resume := 0x00                       -- nothing; a first socket
+        | 0x01 session:16  acked:varint
+```
+
+`acked` is the highest batch sequence the client has applied. The server
+answers in `Welcome`:
+
+- **`resumed = 1`** — the session named is still here, nothing else is on
+  it, and the server can still send everything after `acked`. The session
+  id MUST be the one the client offered. The client keeps its tree, its
+  tables, its focus and what was typed into it; the server then sends the
+  batches after `acked`, in order, and the session goes on.
+- **`resumed = 0`** — a session that starts empty, whether or not one was
+  offered. A client that was holding a tree MUST discard it, along with its
+  tables and everything keyed to them, before it applies the `Mount` that
+  follows. This is also every first `Hello`'s answer.
+
+A client MUST believe that answer over its own memory: a tree kept against a
+server that has forgotten the session would answer clicks the server cannot
+place. A `Welcome` with `resumed = 1` naming a session the client did not
+offer is a protocol error.
+
+A server decides for itself how long a session outlives its socket and how
+many batches it can replay; both are quotas like any other. The reference
+server keeps a session for two minutes and the last 64 unacked batches, and
+refuses the resume — rather than half-serving it — when either runs out.
+A session id is a bearer credential for the whole session: it MUST come
+from a CSPRNG, and it MUST NOT be handed to a second socket while a first
+is still on it.
+
+Because a batch already applied may be replayed, a client MUST ignore a
+batch whose sequence it has already applied, and ack it again. Ops are not
+all idempotent — a `SetText` is, an `InsertChild` is not — so this is the
+receiver's job, not the sender's.
+
 ## 5. Idle behaviour
 
 `Ping` is sent by whichever side has been silent for 30 s. A client MUST NOT
@@ -182,3 +235,41 @@ carrying a `wake` prop and a `wake` handler ([`06-events.md`](06-events.md)
 §1.1) is woken on its period, within the bounds that section sets. It is not a
 poll the client invented; it is the only way a view can watch something the
 client cannot see, and it stops with the prop.
+
+## 6. Files
+
+A file is not an asset. An asset is named by its content, is the same for
+everyone, and may be served to anyone by anything in between (§2.2) — which
+is exactly wrong for the invoice one person attached and the export another
+asked for. Files travel **in the session**, so they are authenticated by it,
+scoped to it, end with it, and are cacheable by nothing.
+
+Both directions use one shape:
+
+```
+transfer := id:varint  seq:varint  flag:u8  bytes:len-prefixed
+flag     := 0x00 more | 0x01 last | 0x02 aborted
+```
+
+`seq` counts from 0 and MUST be contiguous; a receiver MUST reject a gap. On
+`aborted`, `bytes` is a UTF-8 reason of at most 256 bytes, not content, and
+everything already received MUST be discarded. `bytes` is at most 256 KiB,
+so a transfer interleaves with everything else the session is doing rather
+than filling a frame with a file.
+
+**`Upload` (C→S)** carries a file the person picked. `id` is the upload id
+the client minted and named in the `file_pick` event that opened it
+([`06-events.md`](06-events.md) §1); the metadata is in that event and never
+repeated here. A server MUST NOT accept an `Upload` for an id it has not
+seen announced, and a client MUST NOT send one for a `pick` the person did
+not answer.
+
+**`Blob` (S→C)** carries what a node's `save` offers. `id` is the **node**
+whose `save` the person answered — there is exactly one such transfer per
+node at a time. A client MUST refuse a `Blob` for a node it has no open
+save for: that is a server trying to write a file nobody offered it, and it
+ends the session ([`08-security.md`](08-security.md) §7.1).
+
+The ceilings are in [`10-budgets.md`](10-budgets.md) §5. Nothing here is a
+stream in the general sense: there is no seeking, no resumption of a
+transfer across sockets, and a transfer whose session ends is gone.

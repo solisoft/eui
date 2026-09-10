@@ -51,17 +51,22 @@ accesskit_winit = { version = "0.34", optional = true }
 arboard = { version = "3", optional = true, default-features = false, features = ["wayland-data-control"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 cpal = "0.15"
+# The platform's own file dialogs, for spec 03 §3.2. On Linux this is the
+# XDG portal rather than GTK, so a client in a sandbox asks the desktop for
+# a file the way everything else does.
+rfd = { version = "0.17.2", optional = true }
 # The audio device belongs to the window, like the GPU: the worker cannot
 # open one, and must not (08 §10).
 
 [features]
-default = ["a11y", "clipboard", "jpeg", "webp"]
+default = ["a11y", "clipboard", "files", "jpeg", "webp"]
 a11y = ["dep:accesskit", "dep:accesskit_winit"]
 clipboard = ["dep:arboard"]
 # The two other pictures the web has. PNG is always decoded; these are
 # separable because they are bytes in the binary and 10 §1 counts them.
 jpeg = ["dep:zune-jpeg"]
 webp = ["dep:image-webp"]
+files = ["dep:rfd"]
 
 [dev-dependencies]
 eui-render = { path = "../eui-render", version = "0.1.0" }

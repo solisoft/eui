@@ -24,9 +24,16 @@ Two profiles:
 |---|---|
 | `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
-| `reject.rs` | 47 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, reserved bits, oversized lists, depth |
+| `reject.rs` | 55 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, reserved bits, oversized lists, depth |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
+
+`roundtrip.rs` and `vectors.rs` cover 01 §4.1 and §6 as well: a `Hello` that
+offers a session back, a `Welcome` that resumed one, and a transfer in each
+direction with each of its three flags, byte for byte. `reject.rs` refuses an
+unknown transfer flag, an oversized chunk, an oversized abort reason, an
+unknown resume tag, an unknown `resumed` byte, and a `Hello` that ends
+before its resume flag.
 
 ## 3. Tree — `crates/eui-tree/tests`
 
@@ -71,6 +78,31 @@ subtree, nesting so the innermost wins, and leaving an unmodal page alone;
 later batch; and `keys` letting a node take the arrows while `Enter` stays the
 press it stands for, sending it no key it did not name, and leaving a node
 without the prop hearing everything.
+
+### 7.4 Files — `crates/eui-client/tests/files.rs`
+
+Spec 03 §3.2 and 01 §6, eleven vectors. A click on a node carrying `pick`
+asking the window for a dialog with the accept list, multiplicity and
+ceiling the tree declared; **nothing opening** without the capability, and
+nothing opening for a tree that merely arrived; what was picked becoming one
+`file_pick` naming the file and not its path, then chunks that fit a frame;
+a file past the ceiling announced and aborted, and accepting no bytes after
+it; a dismissed dialog reported to nobody and its token spent; a save
+becoming a `file_save` and the server's `Blob` frames becoming writes for
+the window; a `Blob` for a save nobody asked for **ending the session**; and
+a `Blob` out of order losing the save without ending it. The last vector
+runs the two gestures against the reference server over a real socket: the
+bytes of a picked file reach it, and the bytes it owes a save come back.
+
+### 7.5 Resuming — `crates/eui-client/tests/resume.rs`
+
+Spec 01 §4.1, six vectors. A first `Hello` offering nothing and a later one
+offering the session and the last batch applied; a `Welcome` that did not
+resume taking the tree, the tables and the acked sequence with it; a
+`resumed` naming a session the client never offered ending it; a batch
+already applied being acked again and **not applied again**. The last drops
+a real socket mid-session and opens another: the tree is still standing, the
+count is where it was, and the session goes on.
 
 ### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
 

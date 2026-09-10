@@ -40,6 +40,8 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x17` | `ended` | `Null`, a sound or a picture reached its end (spec 03 §7, §8) | |
 | `0x18` | `time_update` | `List[Int position_ms, Int duration_ms]` | at most 10/s |
 | `0x19` | `wake` | `Null`, the node's `wake` interval elapsed (§1.1) | every `wake` ms, at most 10/s |
+| `0x1A` | `file_pick` | `List[Int upload, Str name, Int size]`, one per file the person chose (spec 03 §3.2); the bytes follow as `Upload` frames | |
+| `0x1B` | `file_save` | `Str`, the name the person chose; the bytes are owed as `Blob` frames (spec 03 §3.2) | |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -107,6 +109,11 @@ to wake, and it costs what it asked for.
   node arrive as the `click` they stand for, at the node's centre.
 - Pointer position while the window is unfocused or the pointer is outside it.
 - Clipboard contents without the `clipboard.read` capability.
+- Any path on the filesystem. A `file_pick` reports the file's name and a
+  `file_save` the name chosen for it; which directory either came from is
+  the person's business, and the client keeps it. Nor is a dismissed dialog
+  reported: an application learns that a person opened a dialog and thought
+  better of it only if it was told, and it is not told.
 - Anything about the machine beyond the `Viewport` frame.
 
 ## 4. Server-side validation

@@ -148,6 +148,12 @@ pub enum EventKind {
     /// The node asked to be woken and its `wake` interval elapsed
     /// (spec 06 §1.1). The only event no one did.
     Wake = 0x19,
+    /// The person chose a file for this node's `pick` (spec 03 §3.2). The
+    /// bytes follow as `Upload` frames.
+    FilePick = 0x1A,
+    /// The person chose where to put what this node's `save` offers
+    /// (spec 03 §3.2). The bytes are owed as `Blob` frames.
+    FileSave = 0x1B,
 }
 
 impl EventKind {
@@ -179,6 +185,8 @@ impl EventKind {
             0x17 => Ok(Self::Ended),
             0x18 => Ok(Self::TimeUpdate),
             0x19 => Ok(Self::Wake),
+            0x1A => Ok(Self::FilePick),
+            0x1B => Ok(Self::FileSave),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

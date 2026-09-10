@@ -97,6 +97,36 @@ Compressed video (H.264 and friends) is still out. Taking it would mean
 shipping a codec or calling the platform's decoder, and neither fits in the
 worker as it stands.
 
+## Files: two props, and a person's hand
+
+A server cannot reach a file on someone's machine, and cannot put one there.
+Two props say what a node would like to do about that, and the client decides
+whether anything happens.
+
+| Prop | Value | Means |
+|---|---|---|
+| `pick` | `"csv,pdf"`, or `[accept, flags, max]` | activating this node opens the platform's open dialog |
+| `save` | `"export.csv"` | activating this node opens the platform's save dialog |
+
+A dialog opens only when **all** of this holds: the person *activated* the
+node — a click, or `Enter`/`Space` on it; the node also declares a **server**
+handler for the event that answers (`file_pick`, `file_save`); and the
+capability behind it — `fs.pick` or `fs.save` — was granted. A tree that
+merely arrives opens nothing, and neither does a batch, a timer or a local
+handler. There is no frame that opens a dialog, because a frame is not a
+person.
+
+What comes back is ordinary: one `file_pick` event per file, naming it and
+its size, with the bytes following as `Upload` frames; or one `file_save`
+naming what the person called it, which *is* the request for the bytes — the
+server answers it with `Blob` frames, and the client writes them where the
+person said. Nothing is written until the first chunk arrives, so a save the
+server never answers leaves nothing behind.
+
+An export therefore costs a round trip rather than riding on an asset, and
+that is the point: the bytes are generated when someone asks for them, they
+are nobody else's, and no one off this session can fetch them.
+
 ## How a button is a box
 
 ```soli

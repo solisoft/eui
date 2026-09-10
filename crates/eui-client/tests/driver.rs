@@ -36,7 +36,7 @@ fn counter_batch() -> Batch {
 
 fn welcomed() -> Driver {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
     let out = d.handle_frame(Frame::Batch(counter_batch()));
     assert_eq!(out, vec![Frame::Ack { seq: 1 }]);
     d
@@ -98,7 +98,7 @@ fn press_and_release_on_different_targets_is_not_a_click() {
 #[test]
 fn a_pointer_move_handler_follows_the_press_off_the_node() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 3), child_count: 0 });
     tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
@@ -138,7 +138,7 @@ fn a_pointer_move_handler_follows_the_press_off_the_node() {
 #[test]
 fn a_captured_pointer_move_is_emitted_while_layout_is_owed() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
     tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
@@ -210,7 +210,7 @@ fn a_client_only_frame_from_the_server_is_a_protocol_error() {
 #[test]
 fn an_unusable_version_is_refused() {
     let mut d = Driver::new(100.0, 100.0, 1.0, 0);
-    let out = d.handle_frame(Frame::Welcome(Welcome { version: 9, session: [0; 16] }));
+    let out = d.handle_frame(Frame::Welcome(Welcome { version: 9, session: [0; 16], resumed: false }));
     assert!(matches!(out.as_slice(), [Frame::Error { code: 100, .. }]));
     assert_eq!(d.closed(), Some(&Close::Version(9)));
 }
@@ -237,7 +237,7 @@ fn resize_and_mode_changes_report_the_viewport_and_relayout() {
 #[test]
 fn typing_into_a_field_edits_locally_and_commits_on_enter() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("ab".into())), props: (0, 0), handlers: (0, 2), child_count: 0 });
@@ -283,7 +283,7 @@ fn typing_into_a_field_edits_locally_and_commits_on_enter() {
 #[test]
 fn wheel_over_a_list_scrolls_it_and_reports_the_offset() {
     let mut d = Driver::new(200.0, 100.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::List, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 100 });
     tree.props.push((ATOM_ITEM_H, Value::Int(20)));
@@ -325,7 +325,7 @@ fn wheel_over_a_fitted_list_scrolls_the_page() {
     // is the scroller that can still move. This is the data-grid-in-a-gallery
     // case — eight rows in a 256 px list, inside a page `scroll`.
     let mut d = Driver::new(200.0, 80.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let page = StyleRecord { display: Display::Column, height: Dim::Px(80), ..Default::default() };
     let col = StyleRecord { display: Display::Column, ..Default::default() };
     let list = StyleRecord { display: Display::Column, height: Dim::Px(40), ..Default::default() };
@@ -366,7 +366,7 @@ fn wheel_over_an_open_select_scrolls_its_options_not_the_page() {
     // find that scroller — it used to find the page's, so the options went by
     // underneath and the ones off the bottom could not be reached at all.
     let mut d = Driver::new(200.0, 100.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let page = StyleRecord { display: Display::Column, ..Default::default() };
     let col = StyleRecord { display: Display::Column, ..Default::default() };
     let stack = StyleRecord { display: Display::Stack, ..Default::default() };
@@ -432,7 +432,7 @@ fn insecure_urls_are_refused_outside_debug_loopback() {
 fn a_local_handler_updates_the_tree_without_a_round_trip() {
     use eui_vm::Asm;
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     // Root carries the state; node 2 shows it; node 3 is a local button.
     const COUNT: u32 = 1;
     const INC: u32 = 2;
@@ -486,7 +486,7 @@ fn a_local_handler_updates_the_tree_without_a_round_trip() {
 #[test]
 fn a_chunk_that_fails_verification_is_inert_and_sends_nothing() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
     tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: 1 }));
@@ -541,7 +541,7 @@ fn tab(d: &mut Driver, shift: bool) -> Vec<Frame> {
 #[test]
 fn tab_walks_editable_and_activatable_nodes_in_document_order_and_wraps() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     // Nothing focused: Tab lands on the first focusable, and is never reported.
     assert!(tab(&mut d, false).is_empty());
@@ -564,7 +564,7 @@ fn tab_walks_editable_and_activatable_nodes_in_document_order_and_wraps() {
 #[test]
 fn enter_and_space_click_the_focused_button_at_its_centre() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     tab(&mut d, false);
     tab(&mut d, false);
@@ -585,7 +585,7 @@ fn enter_and_space_click_the_focused_button_at_its_centre() {
 #[test]
 fn the_focus_ring_is_painted_for_keyboard_and_server_focus_only() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     let ring_around = |list: &eui_render::DrawList, r: eui_layout::Rect| list.quads.iter().any(|q| q.params[1] == 2.0 && q.rect == [r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0]);
     let (x, y) = centre(&mut d, 2);
@@ -794,7 +794,7 @@ fn a_style_change_without_a_transition_is_immediate() {
 #[test]
 fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     assert_eq!(d.ime_area(), None, "nothing focused: no input method");
     tab(&mut d, false);
@@ -827,7 +827,7 @@ fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
 fn the_accessibility_tree_names_buttons_fields_and_labels_and_follows_focus() {
     use eui_client::a11y::AccessRole as Role;
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     let _ = d.paint(400, 300);
     let tree = d.access_snapshot();
@@ -863,7 +863,7 @@ fn field_text(d: &Driver) -> String {
 #[test]
 fn the_caret_selection_and_clipboard_belong_to_the_client() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     tab(&mut d, false); // the field, value "a", caret at the end
     d.input(Input::Text("bc".into()));
@@ -913,7 +913,7 @@ fn the_caret_selection_and_clipboard_belong_to_the_client() {
 #[test]
 fn a_click_places_the_caret_and_a_drag_selects() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     d.handle_frame(Frame::Batch(form_batch()));
     tab(&mut d, false);
     d.input(Input::Text("hello".into()));
@@ -942,7 +942,7 @@ fn a_click_places_the_caret_and_a_drag_selects() {
 fn a_click_lands_the_caret_on_the_glyph_under_the_pointer() {
     for scale in [1.0f32, 1.5, 2.0] {
         let mut d = Driver::new(400.0, 300.0, scale, 0);
-        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
         d.handle_frame(Frame::Batch(form_batch()));
         tab(&mut d, false);
         key(&mut d, "a", 2);
@@ -1411,7 +1411,7 @@ fn a_local_then_server_chunks_effects_are_provisional_until_the_answer() {
         ],
     };
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
     let (x, y) = centre(&mut d, 3);
     d.input(Input::PointerMove(x, y));
@@ -1683,7 +1683,7 @@ fn the_cursor_follows_what_the_pointer_is_over() {
     assert_eq!(d.cursor(), Cursor::Grab);
     // An editable node is a beam.
     let mut f = Driver::new(400.0, 300.0, 1.0, 0);
-    f.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    f.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     f.handle_frame(Frame::Batch(form_batch()));
     let (x, y) = centre(&mut f, 2);
     f.input(Input::PointerMove(x, y));
@@ -1695,7 +1695,7 @@ fn the_cursor_follows_what_the_pointer_is_over() {
 fn a_local_handler_can_switch_the_viewers_palette() {
     use eui_vm::Asm;
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     const TOGGLE: u32 = 1;
     let chunk = Asm::new(1).push_str(TOGGLE).set_mode().ret();
     let mut tree = Subtree::default();

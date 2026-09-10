@@ -62,7 +62,7 @@ it.
   rejected unknown discriminants, rejected trailing bytes, every limit
   checked before allocation, iterative tree decoding. *Enforced: `eui-proto`,
   under `clippy::indexing_slicing`, `panic`, `unwrap_used`, `expect_used`,
-  `arithmetic_side_effects` as errors; 46 rejection tests; 40 000 hostile
+  `arithmetic_side_effects` as errors; 55 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
 - A batch that is well-formed but incoherent — undefined atom, duplicate
   node, index past the end — is refused before anything is placed, and the
@@ -86,6 +86,48 @@ exhaust itself. *Enforced: `eui-proto::limits`, `eui-tree::Limits`, `eui-vm`.*
   application read: the window inserts the text and the application sees
   it as typing, exactly what a browser does. *Enforced: the driver has no
   clipboard access at all; the window reads it only on that key.*
+
+### 7.1 The filesystem
+
+The client reads a file only when a person picked it in the platform's own
+dialog, and writes one only where a person just said. Everything else about
+this feature follows from those two sentences.
+
+- A dialog opens on an **activation and nothing else**: a primary click, or
+  `Enter`/`Space` on a focused node, on a node carrying `pick` or `save`
+  with a server handler for the answering event and the capability granted
+  (spec 03 §3.2). A tree that merely arrives opens nothing; neither does a
+  batch, a `wake`, or a local chunk. There is no frame that opens a dialog,
+  because a frame is not a person. *Enforced: `Driver::offer_files`, called
+  from the click and activate paths alone.*
+- `fs.pick` and `fs.save` are separate capabilities, and neither is implied
+  by the other: reading what someone chose and writing where they said are
+  different powers. *Enforced: `Driver::offer_files`.*
+- A **`Blob` for a node with no open save ends the session** — that is a
+  server attempting to write a file nobody offered it, and there is no
+  benign reading of it. A file is created on the first chunk, not when the
+  path is chosen, and an aborted transfer removes what it had written.
+  *Enforced: `Driver::blob`, `Shell::pump_writes`.*
+- No path ever reaches a server: a `file_pick` carries a name and a size, a
+  `file_save` a name (spec 06 §3). A dismissed dialog is reported to nobody.
+  *Enforced: `Driver::picked`, `Driver::saving`, both through `basename`.*
+- A file's bytes never enter the worker in the direction that would matter:
+  the window reads and writes files, because the worker cannot open one and
+  must not be able to (§10). What crosses the pipe is a name, a size, and
+  opaque bytes.
+- The ceilings are the client's, not the tree's: a node may ask for less
+  than [`10-budgets.md`](10-budgets.md) §5 allows and never for more, and
+  the driver enforces what it framed rather than trusting the size a
+  dialog reported. *Enforced: `Driver::upload_chunk`, `Driver::blob`.*
+
+### 7.2 Resuming a session
+
+A session id is a bearer credential: whoever holds it can pick the session
+up. It MUST come from a CSPRNG, MUST NOT be logged, and MUST NOT be handed
+to a second socket while a first is still on it — two windows on one tree
+is a session hijack whichever way it happens. The client believes the
+server's `resumed` answer over its own memory (01 §4.1), so a server that
+has forgotten a session cannot be made to act on a tree it no longer has.
 
 ## 8. Privacy
 

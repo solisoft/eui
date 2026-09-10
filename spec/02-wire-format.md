@@ -359,4 +359,4 @@ The measured comparison on a realistic table is in
 Byte-level vectors — this example, the default `StyleRecord`, varints, frame
 envelopes — are pinned in `crates/eui-proto/tests/vectors.rs`, so a second
 implementation written from this document alone can check itself against the
-same numbers. 46 rejection cases live in `crates/eui-proto/tests/reject.rs`.
+same numbers. 55 rejection cases live in `crates/eui-proto/tests/reject.rs`.

@@ -213,7 +213,7 @@ fn bench() -> Vec<Row> {
     // --- the full client driver: real text engine, paint ------------------
     let before = rss_kb();
     let mut driver = Driver::new(800.0, 600.0, 1.0, 0);
-    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     driver.handle_frame(Frame::Batch(table_batch(10_000)));
     let s = Instant::now();
     let list = driver.paint(800, 600);
@@ -267,7 +267,7 @@ fn prose_batch() -> Batch {
 fn prose_rows() -> Vec<Row> {
     let mut rows = Vec::new();
     let mut driver = Driver::new(800.0, 600.0, 1.0, 0);
-    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
     driver.handle_frame(Frame::Batch(prose_batch()));
     let s = Instant::now();
     let list = driver.paint(800, 600);
@@ -406,7 +406,7 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
         rows.push(Row { what: "worker: no worker started, nothing to measure", value: "skipped".into(), budget: "info", ok: true });
         return rows;
     }
-    backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }).encode());
+    backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }).encode());
     backend.frame(Frame::Batch(table_batch(10_000)).encode());
     let s = Instant::now();
     let (list, _) = backend.paint(800, 600);

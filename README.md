@@ -22,7 +22,8 @@ crates/
   eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
   eui-client driver, WSS transport, manifest check, assets, winit,
-             keyboard focus, editing, IME, AccessKit, transitions        [built]
+             keyboard focus, editing, IME, AccessKit, transitions,
+             file dialogs, a session that survives its socket        [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table and a gallery as a Soli
@@ -54,9 +55,11 @@ cargo run -p xtask -- conform                            # spec/09: tests, clipp
 cargo deny check                                         # advisories and licences, exceptions in deny.toml
 cd doc && soli serve . --dev                             # the docs, on :5011
 
-# The counter, end to end, in a window:
+# The counter, end to end, in a window. It attaches a file and saves one, so
+# it wants the two capabilities; stop and restart the server under it and the
+# window gets its session back by itself (spec 01 §4.1).
 cargo run -p counter-server                              # ws://127.0.0.1:5090
-EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090 --allow fs.pick,fs.save
 
 # A Soli app (../lang built with --features eui), with a capability granted:
 ../lang/target/debug/soli serve examples/demo-app --port 5011
