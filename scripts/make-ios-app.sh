@@ -52,6 +52,20 @@ mkdir -p "$APP"
 cp "$BIN" "$APP/$APP_NAME"
 chmod +x "$APP/$APP_NAME"
 
+# The icons, which iOS will not draw without. There is no asset catalogue
+# here and none is needed for a home-screen icon: `CFBundleIconFiles` names
+# the files by their point size and iOS picks the @2x or @3x beside them.
+# They are full-bleed and opaque on purpose — see `ios_svg` in
+# `scripts/make-icons.py` — because iOS masks an icon into its own squircle
+# and composites what is left onto black.
+ICONS="$ROOT/assets/icon/ios"
+if [ -d "$ICONS" ]; then
+  cp "$ICONS"/AppIcon*.png "$APP/"
+  echo "make-ios-app: $(find "$ICONS" -name 'AppIcon*.png' | wc -l | tr -d ' ') icons"
+else
+  echo "make-ios-app: no icons at $ICONS — run scripts/make-icons.py" >&2
+fi
+
 # The minimum iOS will accept. `UILaunchScreen` is not decoration: without
 # a launch screen iOS letterboxes the app to a phone-sized box in the middle
 # of an iPad, and the window the client is handed is then the wrong size.
@@ -70,6 +84,32 @@ cat > "$APP/Info.plist" <<PLIST
   <key>LSRequiresIPhoneOS</key><true/>
   <key>MinimumOSVersion</key><string>13.0</string>
   <key>UILaunchScreen</key><dict/>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+        <string>AppIcon83.5x83.5</string>
+      </array>
+      <key>UIPrerenderedIcon</key><false/>
+    </dict>
+  </dict>
+  <key>CFBundleIcons~ipad</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+        <string>AppIcon83.5x83.5</string>
+      </array>
+      <key>UIPrerenderedIcon</key><false/>
+    </dict>
+  </dict>
   <key>CFBundleSupportedPlatforms</key><array><string>$PLATFORM</string></array>
   <key>UISupportedInterfaceOrientations</key>
   <array>

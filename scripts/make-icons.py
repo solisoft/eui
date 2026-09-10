@@ -28,6 +28,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -37,6 +38,10 @@ OUT = ROOT / "assets/icon"
 # Full bleed, for Linux and Windows and the window's own icon. macOS gets
 # its own canvas below.
 PNG_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
+# What iOS asks for on a home screen: 60pt at @2x and @3x for a phone, 76pt
+# and 83.5pt at @2x for the two iPads, and 1024 for the store. Named for the
+# point size because that is how `CFBundleIconFiles` resolves them.
+IOS_ICONS = {"AppIcon60x60@2x": 120, "AppIcon60x60@3x": 180, "AppIcon76x76@2x": 152, "AppIcon83.5x83.5@2x": 167, "AppIcon1024": 1024}
 
 # The ICO's entries. The two large ones go in as PNG — that is how a modern
 # .ico carries them, and an uncompressed 256 would be a quarter of a
@@ -92,6 +97,20 @@ def mac_svg(tmp: pathlib.Path) -> pathlib.Path:
     body = text[text.index(">", text.index("<svg")) + 1 : text.rindex("</svg>")]
     dst = tmp / "eui-macos.svg"
     dst.write_text(MAC_TEMPLATE.format(body=body))
+    return dst
+
+
+def ios_svg(tmp: pathlib.Path) -> pathlib.Path:
+    """The same mark, full bleed.
+
+    iOS masks an app icon into its own squircle and composites whatever is
+    left onto black, so the rounded corners this icon draws for every other
+    platform would show as a dark fringe *inside* that mask — the corner
+    rounded twice, once by us and once by the system, with black between.
+    Squaring off our own rounding is the whole difference."""
+    text = SRC.read_text().replace('width="1024" height="1024" rx="228" ry="228"', 'width="1024" height="1024"')
+    dst = tmp / "eui-ios.svg"
+    dst.write_text(text)
     return dst
 
 
@@ -231,6 +250,13 @@ def main() -> None:
     for size in PNG_SIZES:
         render(SRC, size, OUT / f"png/eui-{size}.png")
     print(f"make-icons: {len(PNG_SIZES)} PNGs in {OUT / 'png'}")
+
+    (OUT / "ios").mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as td:
+        flat = ios_svg(pathlib.Path(td))
+        for name, size in IOS_ICONS.items():
+            render(flat, size, OUT / f"ios/{name}.png")
+    print(f"make-icons: {len(IOS_ICONS)} iOS icons in {OUT / 'ios'}")
 
     ico = []
     for size in ICO_SIZES:

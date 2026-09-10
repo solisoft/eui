@@ -1438,15 +1438,44 @@ impl Shell {
                 let _ = c.set_text(text);
             }
         }
-        let (area, redraw) = match self.tabs.get(self.active) {
-            Some(t) => (t.backend.ime_area(), t.backend.needs_redraw()),
-            None => (None, false),
-        };
-        self.sync_ime(area, self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top()));
-        if redraw {
+        self.settle_ime();
+        if self.tabs.get(self.active).is_some_and(|t| t.backend.needs_redraw()) {
             self.window.request_redraw();
         }
         self.sync_cursor(false);
+    }
+
+    /// Where the keyboard belongs: the chrome's address bar when the chrome
+    /// holds the keys, else the focused field of the active tab, and the
+    /// offset its rectangle has to be read against.
+    ///
+    /// The chrome half of that was missing, and on a desktop nothing showed
+    /// it. A desktop has a keyboard whatever the window believes, so failing
+    /// to say "an input method is welcome here" costs a candidate window and
+    /// no more. A phone has no keyboard until the application asks for one,
+    /// so the same omission is a window nobody can type into — which is what
+    /// the shell was on a phone: an address bar, a tap, and nothing.
+    fn ime_target(&self) -> (Option<[f32; 4]>, f32) {
+        if self.chrome_has_keys() {
+            // The chrome draws at the top of the window in the window's own
+            // coordinates, so its rectangle needs no offset.
+            let area = self.chrome.as_ref().and_then(|(c, _)| c.ime_area());
+            return (area.map(|r| [r.x, r.y, r.w, r.h]), 0.0);
+        }
+        let area = self.tabs.get(self.active).and_then(|t| t.backend.ime_area());
+        (area, self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top()))
+    }
+
+    /// Make the platform agree with [`Self::ime_target`].
+    ///
+    /// Called once a pass of the loop rather than only when the transport
+    /// speaks. It used to hang off the pump, which meant a window with no
+    /// session — the shell — never reached it at all, and a focus change
+    /// that never left the client did not either. `sync_ime` returns at once
+    /// when nothing moved, so the cost of asking every pass is a comparison.
+    fn settle_ime(&mut self) {
+        let (area, top) = self.ime_target();
+        self.sync_ime(area, top);
     }
 
     /// An input method is welcome exactly while a field has focus, and its
@@ -2307,6 +2336,11 @@ impl ApplicationHandler<Wake> for App {
         // Dialogs the last events asked for, and the bytes they moved.
         for s in self.shells.values_mut() {
             s.serve_files();
+            // Where the keyboard belongs may have changed for a reason the
+            // transport never heard about — a tap into the address bar, a
+            // local handler moving focus. On a phone that is the difference
+            // between a keyboard and none.
+            s.settle_ime();
         }
         // A socket that is due to be tried again.
         let retry = self.shells.values_mut().filter_map(|s| s.serve_links(now)).min();
