@@ -176,7 +176,12 @@ fn the_sandbox_refuses_files_sockets_and_processes() {
     let none = run("none");
     let report = String::from_utf8_lossy(&none.stderr);
     assert!(none.status.success(), "{report}");
-    assert!(report.contains("landlock: files and sockets denied") && report.contains("seccomp"), "{report}");
+    // Landlock reports what the *kernel* would take: a build asking for a
+    // newer ABI than the kernel implements gets "partly enforced", which
+    // is an honest answer and not a failure. The behavioural half below is
+    // the real check either way; seccomp is not negotiable.
+    assert!(report.contains("landlock: files and sockets denied") || report.contains("landlock: partly enforced"), "{report}");
+    assert!(report.contains("seccomp"), "{report}");
     for what in ["fs", "net", "exec"] {
         let out = run(what);
         let err = String::from_utf8_lossy(&out.stderr);
