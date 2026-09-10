@@ -139,6 +139,9 @@ struct Shell {
     /// Which of them is shown and takes the input.
     active: usize,
     modifiers: u32,
+    /// A size the compositor asked for and this window has not drawn yet.
+    /// Only the last one matters: see the `Resized` arm.
+    pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
     /// Where the pointer last was, in the window's own logical pixels.
     pointer_at: Option<(f32, f32)>,
     /// Whether that was over the application rather than the chrome. Kept
@@ -494,6 +497,7 @@ impl Shell {
             tabs: Vec::new(),
             active: 0,
             modifiers: 0,
+            pending_resize: None,
             pointer_at: None,
             pointer_in_app: false,
             proxy,
@@ -794,8 +798,26 @@ impl Shell {
         }
     }
 
+    /// Take the size the window last settled at, if it moved since the
+    /// previous frame. One layout per frame drawn, however many configures
+    /// the compositor sent between them.
+    fn apply_resize(&mut self, renderer: &eui_render::Renderer) {
+        let Some(size) = self.pending_resize.take() else { return };
+        let scale = self.window.scale_factor() as f32;
+        self.config.width = size.width.max(1);
+        self.config.height = size.height.max(1);
+        self.surface.configure(renderer.device(), &self.config);
+        let (w, h) = (size.width as f32 / scale, size.height as f32 / scale);
+        if let Some((c, _)) = &mut self.chrome {
+            c.resized(w, h, scale);
+        }
+        let (cw, ch) = self.content_size();
+        self.send_to_tab(Input::Resized(cw, ch, scale));
+    }
+
     /// Draw the window: the chrome, then the active application over it.
     fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
+        self.apply_resize(renderer);
         let (w, h) = (self.config.width, self.config.height);
         if w == 0 || h == 0 {
             return;
@@ -945,16 +967,14 @@ impl Shell {
         match event {
             WindowEvent::CloseRequested => return false,
             WindowEvent::RedrawRequested => self.redraw(renderer),
+            // Kept, not acted on. A compositor sends a configure for every
+            // step of a drag — 73 a second, measured on Hyprland — and each
+            // one that is laid out before the next arrives is a whole tree
+            // walked for a picture nobody sees. Only the last size before a
+            // frame is real, so the work is moved to the frame.
             WindowEvent::Resized(size) => {
-                self.config.width = size.width.max(1);
-                self.config.height = size.height.max(1);
-                self.surface.configure(renderer.device(), &self.config);
-                let (w, h) = (size.width as f32 / scale, size.height as f32 / scale);
-                if let Some((c, _)) = &mut self.chrome {
-                    c.resized(w, h, scale);
-                }
-                let (cw, ch) = self.content_size();
-                self.send_to_tab(Input::Resized(cw, ch, scale));
+                self.pending_resize = Some(size);
+                self.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let size = self.window.inner_size();
