@@ -109,6 +109,14 @@ const ALLOWED: &[libc::c_long] = &[
     libc::SYS_rt_sigprocmask,
     libc::SYS_rt_sigaction,
     libc::SYS_sigaltstack,
+    // A signal delivered while the worker is blocked reading its pipe
+    // leaves the kernel to resume the read, and the way it resumes one is
+    // to re-enter it as `restart_syscall`. Nothing asks for this call --
+    // the kernel issues it -- and it can do nothing on its own: it resumes
+    // a call this filter already allowed, or it fails. Left out, the
+    // worker dies of SIGSYS whenever a signal happens to land in a read,
+    // which is seldom on a quiet machine and often on a loaded one.
+    libc::SYS_restart_syscall,
     libc::SYS_clock_gettime,
     libc::SYS_clock_getres,
     libc::SYS_clock_nanosleep,
