@@ -863,7 +863,10 @@ impl Painter<'_, '_> {
             let first_carried = self.list.quads.len();
             if clips {
                 let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
-                let inner = intersect(parent, dev);
+                // Loosened by the *ancestor's* glide, never by this node's
+                // own: a scroller's viewport has to stay tight or its
+                // content would spill out of it.
+                let inner = intersect(parent, loosen(dev, saved_slack));
                 self.list.clips.push(inner);
                 self.set_clip(self.list.clips.len() as u32 - 1);
             }
@@ -1016,7 +1019,7 @@ impl Painter<'_, '_> {
         let saved = self.clip;
         if editing.is_some() {
             let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
-            self.list.clips.push(intersect(parent, self.device(rect)));
+            self.list.clips.push(intersect(parent, loosen(self.device(rect), self.slack)));
             self.set_clip(self.list.clips.len() as u32 - 1);
         }
         let origin_x = rect.x + style.border.l + style.padding.l - editing.map_or(0.0, |e| e.scroll_x);
@@ -1128,7 +1131,7 @@ impl Painter<'_, '_> {
         let dev = self.device(rect);
         let saved = self.clip;
         let parent = self.list.clips.get(saved as usize).copied().unwrap_or([0, 0, 0, 0]);
-        self.list.clips.push(intersect(parent, dev));
+        self.list.clips.push(intersect(parent, loosen(dev, self.slack)));
         self.set_clip(self.list.clips.len() as u32 - 1);
         let (cx0, cy0) = (rect.x + style.border.l + style.padding.l, rect.y + style.border.t + style.padding.t);
         let (ox, oy) = (cx0 * scale, cy0 * scale);
@@ -1361,6 +1364,26 @@ fn bake(q: &mut Quad) {
     q.spin[2] = 0.0;
     q.spin[3] = 0.0;
     q.from = [0; 8];
+}
+
+/// Loosen a node's own clip by however far a glide still has to carry it.
+///
+/// 04 §7: the layout puts a gliding scroller's content where the glide
+/// *lands* and the vertex stage slides it there, so a node that clips its
+/// own contents intersects at the landing position while its quads are
+/// drawn in flight. For one near the edge of the scroller that
+/// intersection is empty — the scissor collapses, `render` skips the whole
+/// run, and the node blinks out for the length of the glide. A chart shows
+/// it worst because it fills its card edge to edge, so there is no slack
+/// of its own to hide the mismatch.
+///
+/// The same distance already loosens the cull (`visible`); this is the
+/// other half of it. Widening both ways covers where the node is now and
+/// where it is going, and the parent clip still bounds the result, so
+/// nothing escapes the scroller.
+fn loosen(dev: [f32; 4], slack: (f32, f32)) -> [f32; 4] {
+    let (sx, sy) = slack;
+    [dev[0] - sx, dev[1] - sy, dev[2] + 2.0 * sx, dev[3] + 2.0 * sy]
 }
 
 fn intersect(a: [u32; 4], b: [f32; 4]) -> [u32; 4] {
