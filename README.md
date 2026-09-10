@@ -64,8 +64,11 @@ under [releases](https://github.com/solisoft/eui/releases).
 The window carries the commit it was built from in its title, so a build
 from the wrong run can be told from the right one at a glance.
 
-The APK is signed with a debug key, which is what makes it installable
-without an account or a store. The iOS device build is **unsigned**, because
+The APK is signed with Android's own debug key — the conventional
+`~/.android/debug.keystore`, reused where it exists and minted where it does
+not — which is what makes it installable without an account or a store. A CI
+runner has none to reuse, so each rolling APK is signed afresh: if a device
+already has an older one, `adb uninstall org.eui.client` before installing. The iOS device build is **unsigned**, because
 no CI runner has an identity to sign with: give it one with
 `EUI_IOS_IDENTITY=... ./scripts/make-ios-app.sh device`, or let Xcode or
 `ios-deploy` sign it on the way to the phone. The simulator build needs
