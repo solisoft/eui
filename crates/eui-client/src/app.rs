@@ -45,11 +45,24 @@ impl From<accesskit_winit::Event> for Wake {
 struct Gpu {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    renderer: eui_render::Renderer,
     /// The glyph, image and blur textures for this window. Separate from
-    /// the renderer because the renderer is what a second window would
-    /// share and these are what it must not.
+    /// the renderer because the renderer is what the windows share and
+    /// these are what they must not.
     textures: eui_render::SessionTextures,
+}
+
+/// The GPU, once, for every window in the process.
+///
+/// A second window costs no adapter, no device, no pipelines and no naga
+/// output — which is most of what makes the first window's first pixel
+/// expensive. What it does cost is its own surface and its own textures,
+/// both of which are in `Gpu` above.
+struct Shared {
+    /// Kept because every later surface is created from it, and because a
+    /// surface must not outlive the instance it came from.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    renderer: eui_render::Renderer,
 }
 
 /// How to open an application: what the `eui` binary parses from its
@@ -134,7 +147,7 @@ impl Session {
     /// adapter, or if the manifest refused the origin. The caller decides
     /// what that means — for the only session it means give up, for the
     /// second of several it means carry on without it.
-    fn open(launch: Launch, event_loop: &ActiveEventLoop, proxy: EventLoopProxy<Wake>) -> Option<Self> {
+    fn open(launch: Launch, event_loop: &ActiveEventLoop, proxy: EventLoopProxy<Wake>, shared: &mut Option<Shared>) -> Option<Self> {
         // Born hidden, shown once the renderer exists. Two reasons: the
         // AccessKit adapter must exist before the window is first shown, and
         // macOS enforces that with a panic where AT-SPI merely tolerates it;
@@ -164,32 +177,56 @@ impl Session {
         // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
         // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
         // measured), for a backend the primary ones make unneeded.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
-        let surface = match instance.create_surface(Arc::clone(&window)) {
-            Ok(s) => s,
+        //
+        // Once per process, along with the adapter and the device: the
+        // second window's surface comes from the same instance and draws
+        // through the same renderer.
+        let make_surface = |instance: &wgpu::Instance| match instance.create_surface(Arc::clone(&window)) {
+            Ok(s) => Some(s),
             Err(e) => {
                 eprintln!("eui: cannot create a surface: {e}");
-                return None;
+                None
             }
         };
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }));
-        let Some(adapter) = adapter else {
-            eprintln!("eui: no GPU adapter");
+        let surface = match shared.as_ref() {
+            Some(g) => make_surface(&g.instance)?,
+            None => {
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
+                let surface = make_surface(&instance)?;
+                // The adapter is chosen for the first window's surface, so
+                // it is asked to be compatible with it.
+                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                }));
+                let Some(adapter) = adapter else {
+                    eprintln!("eui: no GPU adapter");
+                    return None;
+                };
+                let renderer = match eui_render::Renderer::with_adapter(&adapter) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("eui: {e}");
+                        return None;
+                    }
+                };
+                *shared = Some(Shared { instance, adapter, renderer });
+                surface
+            }
+        };
+        let gpu_shared = shared.as_mut()?;
+        // A later window is not asked about: it has to live on the adapter
+        // the first one settled. On one GPU that is always true; on a
+        // laptop with two it need not be, and configuring a surface the
+        // adapter does not support is a validation abort inside a callback
+        // that cannot unwind — so it is checked, not risked.
+        if !gpu_shared.adapter.is_surface_supported(&surface) {
+            eprintln!("eui: this window's surface is not supported by the adapter the first one chose; refusing to open it");
             return None;
-        };
-        let renderer = match eui_render::Renderer::with_adapter(&adapter) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("eui: {e}");
-                return None;
-            }
-        };
+        }
         let size = window.inner_size();
-        let caps = surface.get_capabilities(&adapter);
+        let caps = surface.get_capabilities(&gpu_shared.adapter);
         // A surface only takes a format it advertises, and configuring it with
         // any other is a validation error inside wgpu — which aborts, because
         // it happens in a callback that cannot unwind. Metal advertises BGRA
@@ -219,15 +256,15 @@ impl Session {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(renderer.device(), &config);
+        surface.configure(gpu_shared.renderer.device(), &config);
         let scale = window.scale_factor() as f32;
         // The driver — decoding, layout, the VM — in its own confined
         // process where the platform allows (08 §10); this process keeps
         // the window, the GPU and the network.
         let (backend, how) = Backend::open(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
         eprintln!("eui: {how}");
-        let textures = renderer.session();
-        let gpu = Gpu { surface, config, renderer, textures };
+        let textures = gpu_shared.renderer.session();
+        let gpu = Gpu { surface, config, textures };
         // Everything the first frame needs is in place, and any assistive
         // technology has already registered: it is safe to be seen.
         //
@@ -487,7 +524,7 @@ impl Session {
         }
     }
 
-    fn redraw(&mut self) {
+    fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
         let gpu = &mut self.gpu;
         let (w, h) = (gpu.config.width, gpu.config.height);
         if w == 0 || h == 0 {
@@ -499,7 +536,7 @@ impl Session {
         let frame = match gpu.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+                gpu.surface.configure(renderer.device(), &gpu.config);
                 return;
             }
             Err(e) => {
@@ -512,7 +549,7 @@ impl Session {
         let now = self.epoch.elapsed().as_secs_f32();
         let target = eui_render::Target { view: &view, format, size: (w, h), now };
         let textures = &mut gpu.textures;
-        self.backend.with_atlases(|atlas, images| gpu.renderer.render(textures, target, &list, atlas, images));
+        self.backend.with_atlases(|atlas, images| renderer.render(textures, target, &list, atlas, images));
         frame.present();
         crate::driver::trace(|| {
             format!("frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads", painted.as_secs_f64() * 1e3, t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3, list.quads.len())
@@ -569,20 +606,20 @@ impl Session {
 
     /// One event for this session's window. `false` when the window should
     /// close — which for the last session means the process is done.
-    fn event(&mut self, event: WindowEvent) -> bool {
+    fn event(&mut self, renderer: &mut eui_render::Renderer, event: WindowEvent) -> bool {
         #[cfg(feature = "a11y")]
         if let Some(a) = &mut self.access {
             a.process_event(&self.window, &event);
         }
         match event {
             WindowEvent::CloseRequested => return false,
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => self.redraw(renderer),
             WindowEvent::Resized(size) => {
                 let scale = self.window.scale_factor() as f32;
                 let gpu = &mut self.gpu;
                 gpu.config.width = size.width.max(1);
                 gpu.config.height = size.height.max(1);
-                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+                gpu.surface.configure(renderer.device(), &gpu.config);
                 self.input(Input::Resized(size.width as f32 / scale, size.height as f32 / scale, scale));
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -662,7 +699,7 @@ impl Session {
     /// Not left to the drop glue: that runs in field order, which puts the
     /// window first, and both of the steps below have to happen while it is
     /// still alive.
-    fn close(self) {
+    fn close(self, renderer: &eui_render::Renderer) {
         #[cfg(feature = "a11y")]
         let Session { window, gpu, access, .. } = self;
         #[cfg(not(feature = "a11y"))]
@@ -675,7 +712,7 @@ impl Session {
         // Dropping a surface with a frame still in flight is the classic
         // hang. Wait for the device to go idle, let the surface go, and only
         // then the window it was made from.
-        gpu.renderer.device().poll(wgpu::Maintain::Wait);
+        renderer.device().poll(wgpu::Maintain::Wait);
         drop(gpu);
         drop(window);
     }
@@ -726,6 +763,9 @@ impl Session {
 /// the device side moves up here.
 pub struct App {
     proxy: EventLoopProxy<Wake>,
+    /// The GPU, made by the first session to open and used by every one
+    /// after it. `None` until then, and on a machine with no adapter.
+    shared: Option<Shared>,
     /// Sessions asked for and not yet opened. `resumed` drains it; on the
     /// platforms that suspend and resume, a session already open is not
     /// opened twice.
@@ -734,16 +774,16 @@ pub struct App {
 }
 
 impl App {
-    /// Build for one session URL.
-    pub fn new(launch: Launch, proxy: EventLoopProxy<Wake>) -> Self {
-        Self { proxy, pending: vec![launch], sessions: std::collections::HashMap::new() }
+    /// Build for the sessions to open when the loop resumes.
+    pub fn new(launches: Vec<Launch>, proxy: EventLoopProxy<Wake>) -> Self {
+        Self { proxy, shared: None, pending: launches, sessions: std::collections::HashMap::new() }
     }
 
     /// One window closed. The last one takes the process with it: a client
     /// with no window is not something a person can get back to.
     fn close(&mut self, event_loop: &ActiveEventLoop, id: WindowId) {
-        if let Some(s) = self.sessions.remove(&id) {
-            s.close();
+        if let (Some(s), Some(g)) = (self.sessions.remove(&id), self.shared.as_ref()) {
+            s.close(&g.renderer);
         }
         if self.sessions.is_empty() {
             event_loop.exit();
@@ -753,9 +793,13 @@ impl App {
     /// Every session down, in order, on this thread — before anything in
     /// the process exits under a live GPU device.
     fn shutdown(&mut self) {
-        for (_, s) in self.sessions.drain() {
-            s.close();
+        if let Some(g) = &self.shared {
+            for (_, s) in self.sessions.drain() {
+                s.close(&g.renderer);
+            }
         }
+        // Every surface is gone; the device may follow.
+        self.shared = None;
     }
 }
 
@@ -763,7 +807,7 @@ impl ApplicationHandler<Wake> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         event_loop.set_control_flow(ControlFlow::Wait);
         for launch in std::mem::take(&mut self.pending) {
-            match Session::open(launch, event_loop, self.proxy.clone()) {
+            match Session::open(launch, event_loop, self.proxy.clone(), &mut self.shared) {
                 Some(s) => {
                     self.sessions.insert(s.window.id(), s);
                 }
@@ -797,8 +841,9 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let Some(shared) = self.shared.as_mut() else { return };
         let Some(session) = self.sessions.get_mut(&id) else { return };
-        if !session.event(event) {
+        if !session.event(&mut shared.renderer, event) {
             self.close(event_loop, id);
         }
     }
@@ -887,9 +932,25 @@ pub fn run(url: String, allowed: u32) -> Result<(), String> {
 /// Open a window on the session `launch` describes and run until it closes.
 /// Must be called on the main thread.
 pub fn launch(launch: Launch) -> Result<(), String> {
+    launch_all(vec![launch])
+}
+
+/// Open a window on each of `launches` and run until the last one closes.
+/// Must be called on the main thread.
+///
+/// They share this process: one event loop, one GPU device, one set of
+/// pipelines, one tokio runtime and one set of TLS roots. What they do not
+/// share is anything an application could reach — each keeps its own
+/// window, its own confined worker, its own connection and cookie, and its
+/// own textures.
+///
+/// A session that embeds its own server (`host_loopback`) should not be
+/// here: the trust it is given is its own, and a shared process would put
+/// it beside sessions that do not have it.
+pub fn launch_all(launches: Vec<Launch>) -> Result<(), String> {
     let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(launch, proxy.clone());
+    let mut app = App::new(launches, proxy.clone());
     // A signal handler can only store a flag; this thread turns the flag
     // into a wake, and stops when the loop is gone.
     WINDOW_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);

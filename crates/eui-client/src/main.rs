@@ -1,6 +1,10 @@
-//! `eui <wss://host/_eui/session/app> [--allow cap,cap]` — open an EUI
-//! application. `--allow` names the capabilities of spec 01 §2.1 the person
-//! grants if the application asks for them; nothing is granted otherwise.
+//! `eui <wss://host/_eui/session/app>... [--allow cap,cap]` — open one EUI
+//! application per URL. `--allow` names the capabilities of spec 01 §2.1 the
+//! person grants if an application asks for them; nothing is granted
+//! otherwise, and the same grant covers every URL on the line.
+//!
+//! Several URLs share one process: one GPU device, one set of pipelines,
+//! one runtime. Each still gets its own window and its own confined worker.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -8,7 +12,7 @@ fn main() {
     if let Some(code) = eui_client::worker::entry(&args) {
         std::process::exit(code);
     }
-    let mut url = None;
+    let mut urls: Vec<String> = Vec::new();
     let mut allowed = 0u32;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -23,20 +27,21 @@ fn main() {
                     }
                 }
             }
-        } else if url.is_none() {
-            url = Some(a.clone());
         } else {
-            usage();
+            urls.push(a.clone());
         }
     }
-    let Some(url) = url else { usage() };
-    if let Err(e) = eui_client::app::run(url, allowed) {
+    if urls.is_empty() {
+        usage();
+    }
+    let launches = urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect();
+    if let Err(e) = eui_client::app::launch_all(launches) {
         eprintln!("eui: {e}");
         std::process::exit(1);
     }
 }
 
 fn usage() -> ! {
-    eprintln!("usage: eui <wss://host/_eui/session/app> [--allow camera,microphone,clipboard.read,clipboard.write,notifications,location,fs.pick]");
+    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow camera,microphone,clipboard.read,clipboard.write,notifications,location,fs.pick]");
     std::process::exit(2);
 }
