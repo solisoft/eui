@@ -1,4 +1,4 @@
-name: Build macOS Demo Apps
+name: Build EUI
 
 on:
   push:
@@ -36,15 +36,41 @@ jobs:
   build-matrix:
     name: Build EUI Client
     runs-on: ${{ matrix.os }}
+    # One platform failing should not hide what the others would have said:
+    # a Windows link error and a macOS lint are different bugs, and waiting
+    # a round trip to see the second one costs a queued macOS runner.
     strategy:
+      fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            platform: linux
+            exe: eui
           # Apple Silicon only. Intel macOS is not a supported target.
           - os: macos-14
             target: aarch64-apple-darwin
             arch: aarch64
+            platform: macos
+            exe: eui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x86_64
+            platform: windows
+            exe: eui.exe
     steps:
       - uses: actions/checkout@v4
+
+      # What the client links against on Linux and nowhere else: ALSA for
+      # the audio device, xkbcommon and Wayland for winit. Vulkan is loaded
+      # at run time, so the GPU needs nothing here.
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -73,25 +99,46 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
+        shell: bash
         run: |
           echo "Building for target: ${{ matrix.target }}"
           cargo build --release -p eui-client --target ${{ matrix.target }} -v
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/eui dist/eui-${{ matrix.arch }}-macos
-          ls -lh dist/eui-${{ matrix.arch }}-macos
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/${{ matrix.exe }}"
+          ls -lh dist/
 
       - name: Wrap in a .app bundle, with a DMG beside it
-        run: ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI-Demo com.soli.eui-demo dist
+        if: matrix.platform == 'macos'
+        run: |
+          mv dist/eui dist/eui-${{ matrix.arch }}-macos
+          ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI-Demo com.soli.eui-demo dist
 
+      # One archive per platform, named for what is in it. Windows gets a
+      # zip because that is what a Windows machine can open without being
+      # told how.
       - name: Archive the bare binary
-        run: cd dist && tar -czf "eui-${{ matrix.arch }}-macos.tar.gz" "eui-${{ matrix.arch }}-macos"
+        shell: bash
+        run: |
+          cd dist
+          case "${{ matrix.platform }}" in
+            macos)
+              tar -czf "eui-${{ matrix.arch }}-macos.tar.gz" "eui-${{ matrix.arch }}-macos" ;;
+            linux)
+              mv eui "eui-${{ matrix.arch }}-linux"
+              tar -czf "eui-${{ matrix.arch }}-linux.tar.gz" "eui-${{ matrix.arch }}-linux" ;;
+            windows)
+              mv eui.exe "eui-${{ matrix.arch }}-windows.exe"
+              7z a "eui-${{ matrix.arch }}-windows.zip" "eui-${{ matrix.arch }}-windows.exe" ;;
+          esac
+          ls -lh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: eui-macos-${{ matrix.arch }}
+          name: eui-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             dist/eui-*.tar.gz
+            dist/eui-*-windows.zip
             dist/EUI-Demo*.dmg
             dist/EUI-Demo*.zip
           retention-days: 30
@@ -215,9 +262,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            eui-macos-*/*.tar.gz
-            eui-macos-*/*.dmg
-            eui-macos-*/*.zip
+            eui-*/*.tar.gz
+            eui-*/*.zip
+            eui-*/*.dmg
             vitrine-macos-*/*.dmg
             vitrine-macos-*/*.zip
           draft: false
@@ -227,12 +274,25 @@ jobs:
 
   test:
     name: Run Tests
-    runs-on: macos-14
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -240,8 +300,12 @@ jobs:
           path: ~/.cargo
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # No GPU on a hosted runner, so the pixel tests skip themselves —
+      # they say so and return rather than failing.
       - name: Run tests
         run: cargo test --release --verbose
 
+      # Each platform lints its own cfg'd code: the Linux-only sandbox is
+      # dead code on the other two, and clippy is what says so.
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
