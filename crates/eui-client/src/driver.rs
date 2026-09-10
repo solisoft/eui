@@ -1241,8 +1241,24 @@ impl Driver {
 
     /// Feed input; returns event frames to send.
     pub fn input(&mut self, input: Input) -> Vec<Frame> {
+        self.input_at(input, Instant::now())
+    }
+
+    /// [`Self::input`] with the clock named rather than read.
+    ///
+    /// A stroke is a shape in time — how far the finger went and how long it
+    /// took — so a test of one has to be able to say when each sample
+    /// happened. Sleeping between them instead makes the test a race with
+    /// the machine it runs on, and it is a race that loses: the fling test
+    /// did exactly that and went red on a loaded CI runner, where the sleeps
+    /// stretched past the pause that means a finger was held rather than
+    /// thrown.
+    ///
+    /// Nothing in the client calls this; `input` is what a window uses, and
+    /// it reads the wall clock as it always did.
+    pub fn input_at(&mut self, input: Input, now: Instant) -> Vec<Frame> {
         self.touched = true;
-        self.now = Instant::now();
+        self.now = now;
         match input {
             Input::Resized(w, h, scale) => {
                 let rescaled = (self.scale - scale).abs() > f32::EPSILON;
@@ -1260,8 +1276,9 @@ impl Driver {
                     self.paint_cache.clear();
                 }
                 self.invalidate();
-                let now = Instant::now();
-                self.now = now;
+                // The clock this input arrived on, not a fresh reading of
+                // the wall: `input_at` exists so that a test can say when.
+                let now = self.now;
                 let due = now + VIEWPORT_SETTLE;
                 self.viewport_due = Some(due);
                 self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));

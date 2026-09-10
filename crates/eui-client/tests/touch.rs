@@ -6,7 +6,6 @@
 //! node under it depends on whether that node asked to hear moves.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use eui_client::{Driver, Input};
@@ -229,20 +228,24 @@ fn a_cancelled_gesture_releases_the_press_without_clicking() {
 #[test]
 fn a_finger_that_leaves_the_glass_still_moving_carries_the_view_on() {
     let mut d = scroller();
-    d.input(Input::TouchDown(1, 100.0, 90.0));
-    // Six samples about a frame apart, 12 px each: roughly a logical pixel
-    // per millisecond, upward. The sleeps are what make this a fling rather
-    // than a drag — speed is distance over time, and a test that moves the
-    // finger instantly has lifted it from rest.
+    let t0 = Instant::now();
+    d.input_at(Input::TouchDown(1, 100.0, 90.0), t0);
+    // Six samples a frame apart, 12 px each: a logical pixel per
+    // millisecond, upward. The instants are handed over rather than slept
+    // through — a stroke is a shape in time, and sleeping for it makes the
+    // test a race with the machine, which is a race it loses on a loaded
+    // runner where the sleeps stretch past the pause that means the finger
+    // was held rather than thrown.
     let mut y = 90.0;
+    let mut at = t0;
     for _ in 0..6 {
-        sleep(Duration::from_millis(12));
+        at += Duration::from_millis(12);
         y -= 12.0;
-        d.input(Input::TouchMove(1, 100.0, y));
+        d.input_at(Input::TouchMove(1, 100.0, y), at);
     }
     let at_lift = offset(&d);
-    let lifted = Instant::now();
-    d.input(Input::TouchUp(1, 100.0, y));
+    let lifted = at + Duration::from_millis(12);
+    d.input_at(Input::TouchUp(1, 100.0, y), lifted);
     assert!(d.animating(), "the view is still moving after the finger left");
     // It arrives rather than stopping: part-way at a third of the glide,
     // and past where the finger let go by the end.
@@ -260,14 +263,15 @@ fn a_finger_that_leaves_the_glass_still_moving_carries_the_view_on() {
 #[test]
 fn a_finger_that_stops_before_it_lifts_does_not_fling() {
     let mut d = scroller();
-    d.input(Input::TouchDown(1, 100.0, 90.0));
-    d.input(Input::TouchMove(1, 100.0, 50.0));
+    let t0 = Instant::now();
+    d.input_at(Input::TouchDown(1, 100.0, 90.0), t0);
+    d.input_at(Input::TouchMove(1, 100.0, 50.0), t0 + Duration::from_millis(12));
     // Placed, moved, held, lifted. The last samples say it was moving, but
     // the pause is the whole story: nothing should be thrown.
-    sleep(Duration::from_millis(120));
-    d.input(Input::TouchMove(1, 100.0, 50.0));
+    let held = t0 + Duration::from_millis(140);
+    d.input_at(Input::TouchMove(1, 100.0, 50.0), held);
     let settled = offset(&d);
-    d.input(Input::TouchUp(1, 100.0, 50.0));
+    d.input_at(Input::TouchUp(1, 100.0, 50.0), held + Duration::from_millis(4));
     assert!(!d.animating(), "a held finger throws nothing");
     assert_eq!(offset(&d), settled);
 }
