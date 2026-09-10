@@ -229,17 +229,17 @@ fn a_glyph_range_indexes_the_whole_text_not_its_line() {
 #[test]
 fn the_cache_survives_sub_pixel_widths_and_keeps_one_entry_per_key() {
     let mut e = TextEngine::new();
-    let a = e.shape("settle", base(), Some(100.0), 0);
-    let b = e.shape("settle", base(), Some(100.1), 0);
+    let a = e.shape("settle", base(), Some(100.1), 0);
+    let b = e.shape("settle", base(), Some(100.2), 0);
     let c = e.shape("settle", base(), Some(100.24), 0);
     assert_eq!(e.stats().misses, 1, "one shape for the run");
-    assert_eq!(e.stats().inserted, 2, "the natural shape and one bounded entry: 100.0, 100.1 and 100.24 are one width");
+    assert_eq!(e.stats().inserted, 2, "the natural shape and one bounded entry: 100.1, 100.2 and 100.24 all round up to 100.25");
     assert_eq!(e.stats().hits, 2, "and the two after the first were hits");
     assert_eq!(*a, *b);
     assert_eq!(*a, *c);
     let _ = e.shape("settle", base(), Some(100.3), 0);
     assert_eq!(e.stats().inserted, 3, "a quarter pixel on is the next entry");
-    assert_eq!(e.stats().hits, 2);
+    assert_eq!(e.stats().hits, 3, "answered from the natural shape, which was a hit");
     // Empty runs: the baseline is the font's, found once.
     let first = e.shape("", base(), Some(50.0), 0);
     let again = e.shape("", base(), Some(70.0), 0);

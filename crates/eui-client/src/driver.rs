@@ -12,7 +12,7 @@ use eui_proto::{
     caps, AlignItems, Batch, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, StyleRecord, Subtree, TextAlign, TextRef,
     ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, Scene, SCROLLBAR_WIDTH};
+use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, PaintCache, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -451,6 +451,11 @@ pub struct Driver {
     /// The text engine's counters at the last paint, so the trace can say
     /// what this frame did rather than what the session has.
     last_text_stats: eui_text::Stats,
+    /// What text nodes painted last frame, for the ones that did not
+    /// change since.
+    paint_cache: PaintCache,
+    /// Its counters at the last paint, for the trace.
+    last_paint_stats: eui_render::PaintStats,
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
@@ -569,6 +574,8 @@ impl Driver {
             spin_repeats: 0,
             relayouts: 0,
             last_text_stats: eui_text::Stats::default(),
+            paint_cache: PaintCache::new(),
+            last_paint_stats: eui_render::PaintStats::default(),
             scroll_touched: None,
             movies: HashMap::new(),
             players: HashMap::new(),
@@ -924,6 +931,7 @@ impl Driver {
                 self.size = Size::new(w, h);
                 self.scale = scale;
                 self.layout.invalidate_all();
+                self.paint_cache.clear();
                 self.invalidate();
                 let now = Instant::now();
                 self.now = now;
@@ -1006,6 +1014,7 @@ impl Driver {
         // An image's intrinsic size just changed under nodes nothing marked
         // dirty: the memoised measures cannot be trusted.
         self.layout.invalidate_all();
+        self.paint_cache.clear();
         self.invalidate();
     }
 
@@ -1804,6 +1813,7 @@ impl Driver {
         self.viewer.mode = mode;
         self.resolve_theme();
         self.layout.invalidate_all();
+        self.paint_cache.clear();
         self.invalidate();
         vec![Frame::Viewport(self.viewport())]
     }
@@ -1827,6 +1837,7 @@ impl Driver {
         }
         self.resolve_theme();
         self.layout.invalidate_all();
+        self.paint_cache.clear();
         self.invalidate();
         if mode_changed {
             vec![Frame::Viewport(self.viewport())]
@@ -2329,6 +2340,7 @@ impl Driver {
             focus: if self.focus_visible { self.focused } else { None },
             anims: &anims,
             glides: &glides,
+            cache: &mut self.paint_cache,
             editing,
             now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
@@ -2343,17 +2355,22 @@ impl Driver {
             let layout =
                 if relaid { format!("layout {layout_ms:.1} ms ({} measures, {} memo hits, {} rows measured)", st.measures, st.memo_hits, st.rows_measured) } else { "layout cached".to_owned() };
             let was = self.last_text_stats;
+            let (pc, pw) = (self.paint_cache.stats(), self.last_paint_stats);
             format!(
-                "paint: {layout}, paint {:.1} ms, {} quads, text this frame: {} hits, {} misses, {} reused, {} evicted",
+                "paint: {layout}, paint {:.1} ms, {} quads, text this frame: {} hits, {} misses, {} reused, {} evicted; retained: {} as were, {} moved, {} rebuilt",
                 t_layout.elapsed().as_secs_f64() * 1e3 - layout_ms,
                 list.quads.len(),
                 text_stats.hits.saturating_sub(was.hits),
                 text_stats.misses.saturating_sub(was.misses),
                 text_stats.reused.saturating_sub(was.reused),
                 text_stats.evictions.saturating_sub(was.evictions),
+                pc.hits.saturating_sub(pw.hits),
+                pc.translated.saturating_sub(pw.translated),
+                pc.rebuilt.saturating_sub(pw.rebuilt),
             )
         });
         self.last_text_stats = text_stats;
+        self.last_paint_stats = self.paint_cache.stats();
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
             None
         } else if self.scroll_anim.is_some() {
@@ -2501,6 +2518,7 @@ impl Driver {
         self.movies.insert(*hash, decoded.clone());
         // A picture that just arrived changes what the layout measures.
         self.layout.invalidate_all();
+        self.paint_cache.clear();
         self.invalidate();
         decoded
     }

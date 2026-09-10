@@ -11,6 +11,7 @@ use eui_theme::{Resolved, Role};
 use eui_tree::{Node, NodeIx, Session};
 
 use crate::atlas::{Atlas, ImageAtlas};
+use crate::retained::{PaintCache, TextKey};
 
 /// Flag bit: sample the glyph atlas for alpha.
 pub const TEXTURED: u32 = 1;
@@ -322,6 +323,9 @@ pub struct Scene<'a> {
     /// Scrollers mid-glide (04 §7): how far their content stands from
     /// where the layout put it, and when, likewise.
     pub glides: &'a [(NodeIx, Glide)],
+    /// What text nodes painted last frame, for the ones that did not
+    /// change since.
+    pub cache: &'a mut PaintCache,
     /// The field being edited: its caret and selection (03 §3).
     pub editing: Option<Editing>,
     /// Seconds on the client's clock, for `spin` (03 §5).
@@ -342,6 +346,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let Some(root) = scene.session.root() else {
         return list;
     };
+    scene.cache.begin();
     let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, slack: (0.0, 0.0), blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
@@ -356,6 +361,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     }
     p.close_run();
     p.settle_backdrop();
+    p.scene.cache.end();
     p.list
 }
 
@@ -971,13 +977,41 @@ impl Painter<'_, '_> {
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
+        let Some(node) = self.scene.session.node(ix) else {
+            return;
+        };
         let Some(text) = self.scene.session.text_of(ix) else {
             return;
         };
-        let max_w = (rect.w - style.inset_h()).max(0.0);
-        let shaped = self.scene.text.shape(text, style.font, Some(max_w), style.line_clamp);
         let scale = self.scene.scale;
         let editing = self.scene.editing.filter(|e| e.node == ix);
+        // The quads of last frame, if this node did not change and paints
+        // under the same key: pushed as they were, or moved by the whole
+        // pixels its box moved by. A node mid-transition or being edited
+        // is built afresh: its quads carry more than the key says.
+        let dev = self.device(rect);
+        #[expect(clippy::cast_possible_truncation, reason = "device pixels, already rounded")]
+        let key = TextKey {
+            id: node.id,
+            style: node.style,
+            dev: [dev[0] as i32, dev[1] as i32, dev[2] as i32, dev[3] as i32],
+            fg: [fg[0].to_bits(), fg[1].to_bits(), fg[2].to_bits(), fg[3].to_bits()],
+            opacity: opacity.to_bits(),
+            scale: scale.to_bits(),
+            atlas: self.scene.atlas.generation(),
+        };
+        let retainable = self.own.is_none() && editing.is_none();
+        if retainable && node.dirty & (eui_tree::dirty::SELF | eui_tree::dirty::PAINT) == 0 {
+            if let Some(quads) = self.scene.cache.take(ix, &key) {
+                for &q in &quads {
+                    self.push(q);
+                }
+                self.scene.cache.restore(ix, quads);
+                return;
+            }
+        }
+        let max_w = (rect.w - style.inset_h()).max(0.0);
+        let shaped = self.scene.text.shape(text, style.font, Some(max_w), style.line_clamp);
         // An edited field clips to its box and scrolls its text to the caret.
         let saved = self.clip;
         if editing.is_some() {
@@ -1042,6 +1076,7 @@ impl Painter<'_, '_> {
         // The glyphs arrive in text order and the spans are sorted, so the
         // cursor only ever moves forward: O(glyphs + spans), not the product.
         let mut cursor = 0usize;
+        let mut built: Vec<Quad> = Vec::with_capacity(shaped.glyphs.len());
         for g in &shaped.glyphs {
             let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else {
                 continue;
@@ -1062,7 +1097,13 @@ impl Painter<'_, '_> {
             if let (Some(from), None) = (self.own.and_then(|o| o.fg_from), span) {
                 self.animate(&mut q, Some(from), None);
             }
+            built.push(q);
+        }
+        for &q in &built {
             self.push(q);
+        }
+        if retainable {
+            self.scene.cache.keep(ix, key, built);
         }
         if editing.is_some() {
             self.set_clip(saved);

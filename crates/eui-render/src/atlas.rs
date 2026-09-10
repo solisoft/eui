@@ -35,6 +35,10 @@ pub struct Atlas {
     /// cost the rows they hold. Kept short: past [`Self::MAX_BANDS`] the
     /// two nearest are merged.
     dirty: Vec<(u32, u32)>,
+    /// Bumped whenever every packed glyph moves or goes -- a grow, a new
+    /// size from the other side of a pipe -- so a quad built from a
+    /// region can tell it is stale.
+    generation: u32,
 }
 
 impl Atlas {
@@ -54,7 +58,13 @@ impl Atlas {
     /// glyph is packed. Uploading a megabyte of nothing was the first
     /// frame's largest write.
     fn with_size(size: u32) -> Self {
-        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Vec::new() }
+        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Vec::new(), generation: 0 }
+    }
+
+    /// Which arrangement of glyphs this is: a region taken under one
+    /// generation is wrong under the next.
+    pub fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Take rows `y0..y1` of a `size × size` coverage bitmap: a window
@@ -72,6 +82,7 @@ impl Atlas {
             self.shelves.clear();
             self.next_y = 0;
             self.dirty.clear();
+            self.generation = self.generation.wrapping_add(1);
         }
         let start = (y0 as usize).saturating_mul(size as usize);
         if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
@@ -230,7 +241,9 @@ impl Atlas {
     /// re-packed on demand.
     fn grow(&mut self) {
         let size = self.size.saturating_mul(2);
+        let generation = self.generation.wrapping_add(1);
         *self = Self::with_size(size);
+        self.generation = generation;
     }
 }
 

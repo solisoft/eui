@@ -13,6 +13,7 @@ use eui_client::worker::Backend;
 use eui_client::{Driver, Input};
 use eui_layout::{Env, Layout, Monospace, Size};
 use eui_proto::*;
+use eui_render::PaintCache;
 use eui_theme::{Theme, Viewer};
 use eui_tree::Session;
 
@@ -151,6 +152,11 @@ fn bench() -> Vec<Row> {
     let d = median(t);
     rows.push(Row { what: "clear_all_dirty, 50 002 nodes (median)", value: format!("{d:?}"), budget: "info", ok: true });
     let mut atlas = eui_render::Atlas::new();
+    // One cache across the frames, and the bits a driver clears after
+    // each paint cleared, so the row is a frame as a frame is painted:
+    // what did not change is what it was.
+    let mut cache = PaintCache::new();
+    session.clear_all_dirty();
     let mut text = eui_text::TextEngine::new();
     layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(800.0, 600.0));
     let t: Vec<Duration> = (0..5)
@@ -169,6 +175,7 @@ fn bench() -> Vec<Row> {
                 focus: None,
                 anims: &[],
                 glides: &[],
+                cache: &mut cache,
                 editing: None,
                 now: 0.0,
                 scrollbar_hot: None,

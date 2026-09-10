@@ -56,6 +56,7 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
         focus: None,
         anims: &[],
         glides: &[],
+        cache: &mut PaintCache::new(),
         editing: None,
         now: 0.0,
         scrollbar_hot: None,
@@ -644,6 +645,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             focus: None,
             anims,
             glides: &[],
+            cache: &mut PaintCache::new(),
             editing: None,
             now: 0.0,
             scrollbar_hot: None,
@@ -789,6 +791,74 @@ fn a_timed_renderer_reports_the_previous_frames_gpu_time() {
     }
 }
 
+/// A text node that did not change paints the quads it painted last
+/// frame; one whose box moved by whole pixels -- a scroll -- paints them
+/// moved; one that changed, or paints under another colour, is built
+/// afresh. The lists come out the same either way.
+#[test]
+fn retained_glyph_quads_are_replayed_until_the_node_changes() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let sc = StyleRecord { display: Display::Column, height: Dim::Px(60), ..Default::default() };
+    // The scroller's own style, recoloured: a restyle that lays out alike.
+    let lit = StyleRecord { fg: ColorRef::role(Role::AccentBase.id()), ..sc };
+    let nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Scroll, 2, 2, 3), text(3, 0, "first line"), text(4, 0, "second line"), text(5, 0, "third line")];
+    let mut fx = fixture(vec![col, sc, lit], nodes, vec![], &[], 200.0, 100.0);
+    let mut cache = PaintCache::new();
+    let draw = |fx: &mut Fx, cache: &mut PaintCache| {
+        paint(&mut Scene {
+            session: &fx.session,
+            layout: &fx.layout,
+            theme: &fx.theme,
+            text: &mut fx.text,
+            atlas: &mut fx.atlas,
+            images: &fx.images,
+            scale: 1.0,
+            size: (200, 100),
+            focus: None,
+            anims: &[],
+            glides: &[],
+            cache,
+            editing: None,
+            now: 0.0,
+            scrollbar_hot: None,
+        })
+    };
+    let relayout = |fx: &mut Fx| fx.layout.compute(&mut Env { session: &fx.session, theme: &fx.theme, text: &mut fx.text }, Size::new(200.0, 100.0));
+    let first = draw(&mut fx, &mut cache);
+    assert_eq!(cache.stats().rebuilt, 3, "three text nodes built");
+    fx.session.clear_all_dirty();
+    let again = draw(&mut fx, &mut cache);
+    assert_eq!(again, first, "the same list");
+    assert_eq!((cache.stats().hits, cache.stats().rebuilt), (3, 3), "from the cache, all three");
+    // A scroll (of five: the content is 66 px in a 60 px box): the same
+    // glyphs, moved.
+    let scroll = fx.session.lookup(2).unwrap();
+    fx.session.set_scroll(scroll, 0, 5);
+    relayout(&mut fx);
+    let scrolled = draw(&mut fx, &mut cache);
+    assert_eq!(cache.stats().translated, 3, "moved, not rebuilt");
+    let glyph_top = |l: &DrawList| l.quads.iter().filter(|q| q.params[2] as u32 & TEXTURED != 0).map(|q| q.rect[1]).fold(f32::MAX, f32::min);
+    assert_eq!(glyph_top(&scrolled), glyph_top(&first) - 5.0, "five pixels up");
+    fx.session.clear_all_dirty();
+    let mut fresh = PaintCache::new();
+    assert_eq!(draw(&mut fx, &mut fresh), scrolled, "and exactly what a cold paint gives");
+    // A change to one node rebuilds that node and no other.
+    let second = fx.session.lookup(4).unwrap();
+    assert!(fx.session.set_text_local(second, "second, changed".into()));
+    let changed = draw(&mut fx, &mut cache);
+    assert_eq!((cache.stats().hits, cache.stats().rebuilt), (5, 4), "two as they were, one afresh");
+    assert_ne!(changed, scrolled);
+    fx.session.clear_all_dirty();
+    // A colour from the parent is in the key: a restyle above rebuilds
+    // without a dirty bit on the text.
+    assert_eq!(fx.session.set_style_local(scroll, 3), Some(true));
+    fx.session.clear_all_dirty();
+    let _ = draw(&mut fx, &mut cache);
+    assert_eq!(cache.stats().rebuilt, 7, "all three, under the new colour");
+    // Nothing painted for a frame is dropped.
+    assert_eq!(cache.len(), 3);
+}
+
 /// An entrance starts from no opacity: the quad is not there at age zero
 /// and is on its way at half time, along the entrance's own curve.
 #[test]
@@ -839,6 +909,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         focus: None,
         anims: &[],
         glides: &[],
+        cache: &mut PaintCache::new(),
         editing,
         now: 0.0,
         scrollbar_hot: None,
@@ -914,6 +985,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             focus: None,
             anims: &[],
             glides: &[],
+            cache: &mut PaintCache::new(),
             editing,
             now: 0.0,
             scrollbar_hot: None,
@@ -1028,6 +1100,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             focus: None,
             anims: &[],
             glides: &[],
+            cache: &mut PaintCache::new(),
             editing: None,
             now,
             scrollbar_hot: None,
