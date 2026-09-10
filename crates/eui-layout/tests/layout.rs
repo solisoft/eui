@@ -394,6 +394,43 @@ fn a_popover_hangs_under_its_anchor_and_flips_when_the_window_is_short() {
     assert!(list.y >= 0.0, "and inside the window");
 }
 
+/// §5: a popover is measured against the window, not against the box it
+/// hangs off — so a `scroll` of sixty options in one is as tall as the
+/// window at most, and the options past that scroll inside the panel
+/// instead of sitting below the bottom edge where nothing can reach them.
+#[test]
+fn a_popover_taller_than_the_window_fits_inside_it_and_scrolls() {
+    let mut b = B::default();
+    let column = b.style(col());
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let box_h = b.style(StyleRecord { height: px(32), ..st() });
+    let panel = b.style(StyleRecord { position: Position::Absolute, margin: [2, 0, 0, 0], ..st() });
+    let list = b.style(col());
+    let t = b.style(st());
+    b.push(NodeKind::Box, column, 1);
+    b.push(NodeKind::Box, stack, 2);
+    let control = b.push(NodeKind::Box, box_h, 0);
+    let over = b.push(NodeKind::Overlay, panel, 1);
+    let options = b.push(NodeKind::Scroll, list, 20);
+    for _ in 0..20 {
+        b.text(t, "option");
+    }
+    let s = b.session();
+    // Twenty 22 px options are 440 px of content in a 300 px window.
+    let (l, _) = lay(&s, 400.0, 300.0);
+    let control = r(&l, &s, control);
+    let over = r(&l, &s, over);
+    let options = s.lookup(options).unwrap();
+    assert_eq!(l.content_size(options), Some(Size::new(54.0, 440.0)), "the options are all there to scroll to");
+    // The window less the 4 px gap the panel keeps from its anchor: the
+    // room the viewer has, which is what the scroller takes. Measured
+    // against the stack instead, the panel was its anchor's 32 px.
+    assert!((over.h - 296.0).abs() < 0.01, "the panel takes the window's room: {over:?}");
+    assert!(over.y >= 0.0 && over.y + over.h <= 300.01, "and sits inside it: {over:?}");
+    assert!(control.h < over.h, "not the height of the control it hangs off: {control:?}");
+    assert!((r(&l, &s, options.raw()).h - 296.0).abs() < 0.01, "the scroller is the panel's height, not its content's");
+}
+
 #[test]
 fn a_stack_stretches_auto_sized_children_on_both_axes() {
     // A page column layered under a sheet fills the window, not its content

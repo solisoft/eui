@@ -360,6 +360,60 @@ fn wheel_over_a_fitted_list_scrolls_the_page() {
 }
 
 #[test]
+fn wheel_over_an_open_select_scrolls_its_options_not_the_page() {
+    // 04 §5: an open select is a popover, and one with more options than the
+    // window has room for holds them in a `scroll`. The wheel over it has to
+    // find that scroller — it used to find the page's, so the options went by
+    // underneath and the ones off the bottom could not be reached at all.
+    let mut d = Driver::new(200.0, 100.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    let page = StyleRecord { display: Display::Column, ..Default::default() };
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let stack = StyleRecord { display: Display::Stack, ..Default::default() };
+    let anchor = StyleRecord { height: Dim::Px(20), ..Default::default() };
+    let panel = StyleRecord { display: Display::Column, position: Position::Absolute, ..Default::default() };
+    let option = StyleRecord { width: Dim::Px(120), height: Dim::Px(20), ..Default::default() };
+    let pad = StyleRecord { height: Dim::Px(400), ..Default::default() };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 4, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 5, style: 5, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 6, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 20 });
+    for i in 0..20 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 10 + i, style: 6, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 7, style: 7, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "scrolled".into() },
+            Op::DefStyle { id: 1, record: page },
+            Op::DefStyle { id: 2, record: col },
+            Op::DefStyle { id: 3, record: stack },
+            Op::DefStyle { id: 4, record: anchor },
+            Op::DefStyle { id: 5, record: panel },
+            Op::DefStyle { id: 6, record: option },
+            Op::DefStyle { id: 7, record: pad },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(200, 100);
+    // Twenty 20 px options are 400 px of list; the panel is the window's 100.
+    let over = d.session().lookup(5).unwrap();
+    let list = d.session().lookup(6).unwrap();
+    let r = d.layout().rect(over).unwrap();
+    assert!(r.h <= 100.0 && r.y + r.h <= 100.01, "the panel is inside the window: {r:?}");
+    assert_eq!(d.layout().content_size(list).map(|c| c.h), Some(400.0), "with every option in it");
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    d.input(Input::Wheel(0.0, 60.0));
+    assert_eq!(d.session().node(list).unwrap().scroll.1, 60, "the options moved");
+    assert_eq!(d.session().node(d.session().root().unwrap()).unwrap().scroll.1, 0, "the page behind did not");
+}
+
+#[test]
 fn insecure_urls_are_refused_outside_debug_loopback() {
     assert!(check_url("wss://app.example/_eui/session", false).is_ok());
     assert!(check_url("ws://app.example/_eui/session", false).is_err());
