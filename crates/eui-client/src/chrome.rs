@@ -44,6 +44,11 @@ pub enum Action {
     EditAddress,
     /// The address bar was committed: open this in the active tab.
     Open(String),
+    /// Leave the address bar and show the address again. Enter on an
+    /// unchanged address produces this and nothing else: the driver emits
+    /// `Change` only when the text actually moved, so without this a person
+    /// who clicked into the bar and changed their mind had no way out.
+    LeaveAddress,
 }
 
 /// How much the origin in the address bar is trusted (08 §1).
@@ -153,6 +158,12 @@ impl Chrome {
         self.driver.cursor()
     }
 
+    /// Text the address bar asked to put on the clipboard — a copy or a cut
+    /// out of it. The window owns the clipboard; a driver never touches it.
+    pub fn take_clipboard(&mut self) -> Option<String> {
+        self.driver.take_clipboard()
+    }
+
     /// Where an input method should sit, while the address bar is editing.
     pub fn ime_area(&self) -> Option<eui_layout::Rect> {
         self.driver.ime_area()
@@ -194,6 +205,8 @@ impl Chrome {
                         }
                     }
                 }
+                // Enter, after whatever `Change` had to say about the text.
+                EventKind::Submit if e.node == INPUT => out.push(Action::LeaveAddress),
                 EventKind::Click => {
                     if let Some(a) = self.actions.get(&e.node) {
                         out.push(a.clone());
@@ -208,6 +221,17 @@ impl Chrome {
     /// Put the address bar into editing and select what is there.
     pub fn edit_address(&mut self) {
         self.editing = true;
+    }
+
+    /// Leave the address bar, so the keyboard goes back to the application.
+    pub fn leave_address(&mut self) {
+        self.editing = false;
+    }
+
+    /// Whether the address bar holds the keyboard: it is being edited, or
+    /// this tab has no application and the page is the chrome's own.
+    pub fn holds_keys(&self) -> bool {
+        self.blank || self.editing
     }
 
     /// Rebuild the tree for this set of tabs.
@@ -520,6 +544,7 @@ impl Chrome {
                 url.push_str(t.origin);
                 url.push_str(t.path);
                 b.change();
+                b.submit();
                 b.text_node(NodeKind::Input, INPUT, s_input, Some(&url));
             } else {
                 if let Some((label, s)) = chip {
@@ -630,6 +655,14 @@ impl Builder {
     /// address bar did nothing at all.
     fn change(&mut self) {
         self.staged.push((EventKind::Change, Handler::Server(1)));
+    }
+
+    /// The next node pushed reports Enter. A driver emits an event only for
+    /// a node that carries a handler for it, so without this the `Submit`
+    /// that Enter produces never left the client — and Enter on an address
+    /// nobody had changed did nothing at all.
+    fn submit(&mut self) {
+        self.staged.push((EventKind::Submit, Handler::Server(1)));
     }
 
     fn push(&mut self, kind: NodeKind, id: u32, style: u32, text: Option<&str>, children: u32) -> usize {

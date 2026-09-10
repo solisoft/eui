@@ -201,7 +201,7 @@ impl Tab {
         // the window, the GPU and the network. One per tab: an application
         // that dies takes its own process with it and nothing else.
         let (backend, how) = Backend::open(w, h, scale, 0);
-        eprintln!("eui: {how}");
+        eprintln!("eui {}: {how}", crate::BUILD);
         let mut tab = Tab {
             title: name_from_url(&launch.url),
             url: launch.url,
@@ -374,7 +374,10 @@ impl Shell {
     /// applications later; without it, it is the one chromeless window
     /// `eui <url>` and an embedding host have always had.
     fn open(launches: Vec<Launch>, chrome: bool, event_loop: &ActiveEventLoop, proxy: EventLoopProxy<Wake>, shared: &mut Option<Shared>) -> Option<Self> {
-        let title = launches.first().map_or("EUI", |l| l.title.as_str()).to_owned();
+        // The build is in the title because a window cannot otherwise be
+        // told from one built an hour earlier, and a demo downloaded from
+        // the wrong run looks exactly like the right one.
+        let title = format!("{} — {}", launches.first().map_or("EUI", |l| l.title.as_str()), crate::BUILD);
         // Born hidden, shown once the renderer exists. Two reasons: the
         // AccessKit adapter must exist before the window is first shown, and
         // macOS enforces that with a panic where AT-SPI merely tolerates it;
@@ -656,7 +659,18 @@ impl Shell {
                 }
                 self.rebuild_chrome();
             }
-            A::Open(url) => self.open_url(url, renderer),
+            A::LeaveAddress => {
+                if let Some((c, _)) = &mut self.chrome {
+                    c.leave_address();
+                }
+                self.rebuild_chrome();
+            }
+            A::Open(url) => {
+                if let Some((c, _)) = &mut self.chrome {
+                    c.leave_address();
+                }
+                self.open_url(url, renderer);
+            }
         }
         true
     }
@@ -1012,6 +1026,13 @@ impl Shell {
                 let down = state == ElementState::Pressed;
                 let i = if down { Input::PointerDown(b) } else { Input::PointerUp(b) };
                 if self.pointer_in_app {
+                    // A press in the application takes the keyboard back
+                    // from the address bar, as clicking a page does.
+                    if down {
+                        if let Some((c, _)) = &mut self.chrome {
+                            c.leave_address();
+                        }
+                    }
                     self.send_to_tab(i);
                 } else {
                     return self.chrome_input(i, renderer);
@@ -1040,6 +1061,16 @@ impl Shell {
                     Key::Character(c) => c.to_string(),
                     _ => return true,
                 };
+                // Escape leaves the address bar and puts the address back,
+                // which is the only way out for someone who clicked into it
+                // and changed nothing.
+                if down && name == "Escape" && self.chrome.as_ref().is_some_and(|(c, _)| c.holds_keys()) && !self.showing_blank() {
+                    if let Some((c, _)) = &mut self.chrome {
+                        c.leave_address();
+                    }
+                    self.rebuild_chrome();
+                    return true;
+                }
                 // Ctrl+T, Ctrl+W: the shell's own, and never the
                 // application's — a page must not be able to eat them.
                 if down && self.chrome.is_some() && self.modifiers & 0b1010 != 0 {
@@ -1129,7 +1160,7 @@ impl Shell {
     /// Whether the keyboard belongs to the chrome: an empty tab, whose page
     /// is the chrome's own, or an address bar being edited.
     fn chrome_has_keys(&self) -> bool {
-        self.showing_blank() || self.tabs.is_empty()
+        self.tabs.is_empty() || self.chrome.as_ref().is_some_and(|(c, _)| c.holds_keys())
     }
 
     /// An input for the chrome, and whatever it turned out to mean.
@@ -1137,7 +1168,19 @@ impl Shell {
     fn chrome_input(&mut self, i: Input, renderer: &eui_render::Renderer) -> bool {
         let Some((c, _)) = &mut self.chrome else { return true };
         let actions = c.input(i);
-        if c.needs_redraw() {
+        let redraw = c.needs_redraw();
+        // A copy or a cut out of the address bar. The window owns the
+        // clipboard on both sides: the chrome asks, it never reaches it.
+        #[cfg(feature = "clipboard")]
+        {
+            let copied = c.take_clipboard();
+            if let Some(text) = copied {
+                if let Some(clip) = self.clipboard() {
+                    let _ = clip.set_text(text);
+                }
+            }
+        }
+        if redraw {
             self.window.request_redraw();
         }
         self.sync_cursor(true);

@@ -26,6 +26,12 @@ pub mod app;
 pub mod assets;
 pub mod audio;
 pub mod chrome;
+
+/// Which build this is: the short commit it was made from, `+` when the
+/// tree it was made from had uncommitted changes, `unknown` when there was
+/// no repository to ask. Shown in the window so a demo from the wrong run
+/// can be told from the right one at a glance.
+pub const BUILD: &str = env!("EUI_BUILD");
 pub mod desktop_theme;
 pub mod driver;
 pub mod manifest;

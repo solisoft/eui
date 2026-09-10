@@ -111,3 +111,63 @@ fn the_address_bar_shows_the_active_tabs_origin_and_switches_with_it() {
     chrome.rebuild(&t, 2);
     assert_eq!(click(&mut chrome, 400.0, 58.0), vec![Action::EditAddress]);
 }
+
+/// Clicking into the address bar, changing nothing, and pressing Enter has
+/// to give the keyboard back.
+///
+/// The driver emits `Change` only when the text actually moved, so an
+/// unchanged address produced no action at all: the bar stayed in editing,
+/// nothing happened, and there was no way out of it.
+#[test]
+fn enter_on_an_unchanged_address_leaves_the_bar() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    let t = tabs();
+    chrome.rebuild(&t, 0);
+    assert!(!chrome.holds_keys(), "a loaded tab leaves the keyboard to its application");
+
+    assert_eq!(click(&mut chrome, 400.0, 58.0), vec![Action::EditAddress]);
+    chrome.edit_address();
+    chrome.rebuild(&t, 0);
+    assert!(chrome.holds_keys(), "the bar being edited holds the keyboard");
+
+    // Enter with the address as it was.
+    let out = chrome.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
+    assert_eq!(out, vec![Action::LeaveAddress], "unchanged: leave, and open nothing");
+}
+
+/// Editing the address and pressing Enter opens the new one *and* leaves.
+#[test]
+fn a_changed_address_opens_and_then_leaves() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    let t = tabs();
+    chrome.edit_address();
+    chrome.rebuild(&t, 0);
+
+    let typed = "wss://elsewhere.example/_eui/session/x";
+    let _ = chrome.input(Input::Text(typed.to_owned()));
+    let out = chrome.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
+    assert!(out.iter().any(|a| matches!(a, Action::Open(_))), "the address is opened: {out:?}");
+    assert!(out.contains(&Action::LeaveAddress), "and the bar is left too: {out:?}");
+}
+
+/// The keyboard belongs to the application until the bar is entered, and
+/// again as soon as it is left.
+#[test]
+fn the_keyboard_changes_hands_with_the_address_bar() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    let t = tabs();
+    chrome.rebuild(&t, 0);
+    assert!(!chrome.holds_keys());
+
+    chrome.edit_address();
+    chrome.rebuild(&t, 0);
+    assert!(chrome.holds_keys(), "editing takes it");
+
+    chrome.leave_address();
+    chrome.rebuild(&t, 0);
+    assert!(!chrome.holds_keys(), "leaving gives it back");
+
+    // An empty tab always holds it: its page is the chrome's own.
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
+    assert!(chrome.holds_keys(), "an empty tab has no application to give it to");
+}
