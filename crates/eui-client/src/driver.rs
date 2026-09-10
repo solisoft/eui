@@ -1313,10 +1313,40 @@ impl Driver {
             }
         }
         if let Some(ix) = now {
-            let p = self.point_payload(ix, EventKind::PointerMove, x, y);
-            out.extend(self.emit(ix, EventKind::PointerMove, p));
+            // A node that asked to hear the pointer only while it is being
+            // dragged hears nothing on a bare hover. Everything else is
+            // unchanged: the handler stays in the tree, so no event ever
+            // arrives naming a handler the tree no longer offers.
+            if self.pointer.pressed_on.is_some() || !self.drag_only(ix) {
+                let p = self.point_payload(ix, EventKind::PointerMove, x, y);
+                out.extend(self.emit(ix, EventKind::PointerMove, p));
+            }
         }
         out
+    }
+
+    /// Whether the node that would *receive* a `pointer_move` from here
+    /// carries `drag_only` (06 §1): the move is for dragging it, not for
+    /// passing over it.
+    ///
+    /// The receiver, not the node under the pointer: an event travels up to
+    /// the nearest handler (06 §2), so the pointer is almost always over
+    /// some deep child of the node that declared the intent. Asking the
+    /// child was the first version of this, and it never matched.
+    ///
+    /// The alternative — taking the handler off the node while no drag is
+    /// in flight — looks equivalent and is not: an event already in flight
+    /// then names a handler the server has just removed, and every one of
+    /// them is refused. Measured on a split, that was 167 of 429 events
+    /// dropped and a drag that could not follow the hand.
+    fn drag_only(&self, from: NodeIx) -> bool {
+        let Some(atom) = self.session.atoms().drag_only else {
+            return false;
+        };
+        let Some((ix, _)) = self.target(from, EventKind::PointerMove) else {
+            return false;
+        };
+        self.session.node(ix).is_some_and(|n| n.props.iter().any(|(a, v)| *a == atom && matches!(v, Value::Bool(true))))
     }
 
     fn flush_coalesced_move(&mut self) -> Vec<Frame> {

@@ -829,6 +829,10 @@ pub struct WellKnown {
     pub heights: Option<u32>,
     /// A node's wake period.
     pub wake: Option<u32>,
+    /// A node that wants `pointer_move` only while a button is held: a
+    /// splitter, a slider, anything dragged. Without it a hover costs a
+    /// round trip per pointer position (06 §1).
+    pub drag_only: Option<u32>,
     /// A media node's asset.
     pub src: Option<u32>,
     /// Whether it plays.
@@ -853,6 +857,7 @@ impl WellKnown {
             "count" => &mut self.count,
             "heights" => &mut self.heights,
             "wake" => &mut self.wake,
+            "drag_only" => &mut self.drag_only,
             "src" => &mut self.src,
             "playing" => &mut self.playing,
             "loop" => &mut self.loop_,
