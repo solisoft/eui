@@ -219,8 +219,6 @@ struct Tab {
     audio: Option<crate::audio::Output>,
     /// Frames the audio thread produced, for the loop to send.
     audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
-    /// Where the input method was last pointed, while this tab was active.
-    ime_area: Option<[f32; 4]>,
     /// What the strip calls it: the manifest's name, or the last path
     /// segment until the manifest arrives.
     title: String,
@@ -279,6 +277,14 @@ struct Shell {
     clip: Option<arboard::Clipboard>,
     /// The pointer shape last handed to the window.
     cursor: eui_proto::Cursor,
+    /// Where the input method was last pointed, or `None` if the window was
+    /// last told no method is welcome.
+    ///
+    /// The window's, not the active tab's: the platform keeps one input
+    /// method state per window, and the chrome's address bar has no tab at
+    /// all. Kept on a tab, the shell — which has no tabs — could never
+    /// record what it had said, so every pass of the loop said it again.
+    ime_area: Option<[f32; 4]>,
     /// The desktop theme watcher, alive as long as the window.
     theme_watch: Option<Box<dyn std::any::Any + Send>>,
     /// The desktop palette last applied.
@@ -520,7 +526,6 @@ impl Tab {
             textures: renderer.session(),
             audio: None,
             audio_rx: None,
-            ime_area: None,
             answered: false,
             trust: crate::chrome::Trust::Unverified,
             link: Link::Ended,
@@ -958,6 +963,7 @@ impl Shell {
             #[cfg(has_clipboard)]
             clip: None,
             cursor: eui_proto::Cursor::Default,
+            ime_area: None,
             theme_watch: None,
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1517,7 +1523,7 @@ impl Shell {
     /// toggle is a protocol round trip with the input method, and inputs
     /// arrive hundreds of times a second.
     fn sync_ime(&mut self, area: Option<[f32; 4]>, top: f32) {
-        let had = self.tabs.get(self.active).and_then(|t| t.ime_area);
+        let had = self.ime_area;
         if area == had {
             return;
         }
@@ -1537,9 +1543,7 @@ impl Shell {
         // one that raises and dismisses it here.
         #[cfg(target_os = "android")]
         crate::android::soft_input(area.is_some());
-        if let Some(t) = self.tabs.get_mut(self.active) {
-            t.ime_area = area;
-        }
+        self.ime_area = area;
     }
 
     /// Take the size the window last settled at, if it moved since the
@@ -2459,19 +2463,17 @@ fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) ->
 /// 125 000 times a second while `Wait` went silent on the instant. That is
 /// why a deadline is kept on a thread of ours at all (see [`Timer`]).
 ///
-/// **On macOS this is not enough and the reason is not yet known.** An idle
-/// window there — no session, no animation, no frames, no events — passes
-/// through `about_to_wait` a hundred thousand times a second and costs a
-/// core. Both control flows do it: `WaitUntil` ten minutes out was tried on
-/// the strength of winit parking its own run-loop timer at `f64::MAX`, and
-/// spun exactly as `Wait` did. The accessibility adapter is not the cause
-/// either (`EUI_A11Y=0` changes nothing), and nothing this crate runs on
-/// that path touches the run loop: with no tabs, `about_to_wait` is a few
-/// channel polls and an early return.
-///
-/// So something else in the process signals the CFRunLoop, and `sample(1)`
-/// on a spinning window is what will name it. `EUI_LOOP_STATS=1` is how the
-/// above was established from a machine that has no macOS on it.
+/// An idle macOS window used to spin here too — a hundred thousand passes a
+/// second with no events at all — and the cause was not the control flow.
+/// The loop was waking itself: [`Shell::sync_ime`] kept what it had last
+/// told the platform on the *active tab*, while the shell's address bar
+/// reports an area with no tab to keep it on, so the comparison that should
+/// have returned at once never matched. Every pass called
+/// `set_ime_allowed`, every call signalled the CFRunLoop, and the signal
+/// woke the pass that made it. It went unfound for so long because both
+/// control flows spun identically and `EUI_A11Y=0` changed nothing, which
+/// pointed away from this crate — but the wake source was never the OS.
+/// That state now belongs to the window, where the platform keeps it.
 fn idle_flow(_now: std::time::Instant) -> ControlFlow {
     ControlFlow::Wait
 }
