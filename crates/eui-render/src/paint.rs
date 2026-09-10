@@ -848,7 +848,13 @@ impl Painter<'_, '_> {
                     });
                 }
             }
-            let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
+            // A scroller clips because it scrolls. Anything else clips
+            // because it said so: `overflow: clip` is in the protocol and
+            // was read nowhere -- the whole repository consulted
+            // `style.overflow` once, in the layout, and only to ask whether
+            // it was `Scroll`. A box that asked to be trimmed was not, and
+            // its content spilled over whatever came after it.
+            let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List) || record.overflow == eui_proto::Overflow::Clip;
             let saved = self.clip;
             // 04 §7: a scroll in flight. The layout put the content where
             // the glide lands; the vertex stage slides it there from where

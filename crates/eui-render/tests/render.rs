@@ -1305,3 +1305,29 @@ fn a_second_window_does_not_draw_over_the_first_windows_glyphs() {
     assert_eq!(first, again, "the first window's text must survive the second window's frame");
     assert!(first.chunks(4).any(|p| p[0] != first[0] || p[1] != first[1] || p[2] != first[2]), "the frame has to have drawn some text to be worth comparing");
 }
+
+/// `overflow: clip` is honoured by anything that asks for it, not only by
+/// the two node kinds that scroll.
+///
+/// It was in the protocol and read nowhere: the whole repository consulted
+/// `style.overflow` once, in the layout, and only to ask whether it was
+/// `Scroll`. A box that asked to be trimmed kept the clip of whatever
+/// contained it, and its content painted over what followed — in the
+/// gallery, one split panel spilling onto the card below it.
+#[test]
+fn a_box_that_asks_to_be_clipped_is_clipped() {
+    let root = StyleRecord { display: Display::Column, ..Default::default() };
+    let clipper = StyleRecord { display: Display::Column, width: Dim::Px(100), height: Dim::Px(40), overflow: Overflow::Clip, ..Default::default() };
+    let tall = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(100), height: Dim::Px(400), ..Default::default() };
+    let nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 1), node(NodeKind::Box, 3, 3, 0)];
+    let mut fx = fixture(vec![root, clipper, tall], nodes, vec![], &[], 200.0, 200.0);
+    let list = draw(&mut fx, 200, 200, 1.0);
+
+    // Clipping is a scissor, not a layout: the child keeps its 400 px. What
+    // has to be true is that the run carrying it is scissored to the 40 px
+    // its parent asked for, and not to the window.
+    let child = list.quads.iter().position(|q| q.rect[3] > 100.0).expect("the tall child");
+    let run = list.runs.iter().find(|r| child as u32 >= r.first && (child as u32) < r.first + r.count).expect("a run carrying it");
+    let clip = list.clips.get(run.clip as usize).copied().expect("its clip");
+    assert!(clip[3] <= 40, "the child must be trimmed to its parent's 40 px, not left at {} px", clip[3]);
+}
