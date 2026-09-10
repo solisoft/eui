@@ -14,7 +14,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-#[cfg(feature = "files")]
+#[cfg(has_files)]
 use crate::driver::FileWant;
 use crate::driver::{FileAsk, Input};
 use crate::transport::{self, Connection, Incoming};
@@ -35,11 +35,11 @@ pub enum Wake {
     /// The host asked the window to close (a signal, say).
     Exit,
     /// AccessKit has something for the window.
-    #[cfg(feature = "a11y")]
+    #[cfg(has_a11y)]
     Access(accesskit_winit::Event),
 }
 
-#[cfg(feature = "a11y")]
+#[cfg(has_a11y)]
 impl From<accesskit_winit::Event> for Wake {
     fn from(e: accesskit_winit::Event) -> Self {
         Wake::Access(e)
@@ -127,7 +127,7 @@ fn backoff(tries: u32) -> std::time::Duration {
 
 /// What a dialog thread answers with.
 #[derive(Debug)]
-#[cfg_attr(not(feature = "files"), allow(dead_code))]
+#[cfg_attr(not(has_files), allow(dead_code))]
 enum Dialog {
     /// An open dialog: the ask it answers, and what was chosen with the
     /// size of each.
@@ -245,7 +245,12 @@ struct Tab {
 /// one clipboard, one theme watcher, one pointer.
 struct Shell {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    /// `None` between a suspend and the resume that follows it. Android
+    /// destroys the native window when the application goes to the
+    /// background and hands back a new one when it returns, so the surface
+    /// is the window's, not the shell's, and it is made again each time.
+    /// On a desktop it is `Some` from `open` until the window closes.
+    surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
     /// The tab strip and address bar, and the textures they draw into.
     /// `None` for a window opened on a URL: `eui <url>` is one application
@@ -266,9 +271,9 @@ struct Shell {
     /// the other does not arrive as half a click in each.
     pointer_in_app: bool,
     proxy: EventLoopProxy<Wake>,
-    #[cfg(feature = "a11y")]
+    #[cfg(has_a11y)]
     access: Option<accesskit_winit::Adapter>,
-    #[cfg(feature = "clipboard")]
+    #[cfg(has_clipboard)]
     clip: Option<arboard::Clipboard>,
     /// The pointer shape last handed to the window.
     cursor: eui_proto::Cursor,
@@ -687,7 +692,13 @@ impl Shell {
         // AccessKit adapter must exist before the window is first shown, and
         // macOS enforces that with a panic where AT-SPI merely tolerates it;
         // and a window shown before its first frame is a flash of nothing.
-        let attrs = Window::default_attributes().with_title(title).with_visible(false).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        let attrs = Window::default_attributes().with_title(title).with_visible(false);
+        // A desktop window opens at a readable size and is moved from
+        // there. An Android activity has exactly one window, already the
+        // size of the screen, and asking for 960x640 there is either
+        // ignored or — worse — honoured.
+        #[cfg(not(target_os = "android"))]
+        let attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
         let attrs = match window_icon() {
             Some(icon) => attrs.with_window_icon(Some(icon)),
             None => attrs,
@@ -710,7 +721,7 @@ impl Shell {
 
         // Assistive technologies register before the window shows; the tree
         // itself is built only if one asks.
-        #[cfg(feature = "a11y")]
+        #[cfg(has_a11y)]
         let access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy.clone()));
 
         // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
@@ -808,7 +819,7 @@ impl Shell {
 
         let mut shell = Self {
             window,
-            surface,
+            surface: Some(surface),
             config,
             tabs: Vec::new(),
             active: 0,
@@ -817,9 +828,9 @@ impl Shell {
             pointer_at: None,
             pointer_in_app: false,
             proxy,
-            #[cfg(feature = "a11y")]
+            #[cfg(has_a11y)]
             access,
-            #[cfg(feature = "clipboard")]
+            #[cfg(has_clipboard)]
             clip: None,
             cursor: eui_proto::Cursor::Default,
             theme_watch: None,
@@ -1054,7 +1065,7 @@ impl Shell {
         });
     }
 
-    #[cfg(feature = "clipboard")]
+    #[cfg(has_clipboard)]
     fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
         if self.clip.is_none() {
             self.clip = arboard::Clipboard::new().ok();
@@ -1176,7 +1187,7 @@ impl Shell {
     fn open_dialog(&mut self, i: usize, ask: FileAsk, proxy: &EventLoopProxy<Wake>) {
         let Some(t) = self.tabs.get_mut(i) else { return };
         let (token, tx, proxy) = (ask.token, t.files.tx.clone(), proxy.clone());
-        #[cfg(feature = "files")]
+        #[cfg(has_files)]
         {
             eprintln!(
                 "eui: node {} asked for {}",
@@ -1222,7 +1233,7 @@ impl Shell {
                 t.backend.dismissed(token);
             }
         }
-        #[cfg(not(feature = "files"))]
+        #[cfg(not(has_files))]
         {
             let _ = (tx, proxy, ask);
             eprintln!("eui: this build has no file dialogs");
@@ -1329,7 +1340,7 @@ impl Shell {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let out = t.backend.input(i);
         t.send(out);
-        #[cfg(feature = "clipboard")]
+        #[cfg(has_clipboard)]
         if let Some(text) = t.backend.take_clipboard() {
             if let Some(c) = self.clipboard() {
                 let _ = c.set_text(text);
@@ -1365,6 +1376,12 @@ impl Shell {
             }
             None => self.window.set_ime_allowed(false),
         }
+        // Android has no input-method service to welcome: the keyboard is a
+        // window, and it goes up because the application asked. The change
+        // of focus that tells a desktop the method is welcome is the same
+        // one that raises and dismisses it here.
+        #[cfg(target_os = "android")]
+        crate::android::soft_input(area.is_some());
         if let Some(t) = self.tabs.get_mut(self.active) {
             t.ime_area = area;
         }
@@ -1378,7 +1395,9 @@ impl Shell {
         let scale = self.window.scale_factor() as f32;
         self.config.width = size.width.max(1);
         self.config.height = size.height.max(1);
-        self.surface.configure(renderer.device(), &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(renderer.device(), &self.config);
+        }
         let (w, h) = (size.width as f32 / scale, size.height as f32 / scale);
         if let Some((c, _)) = &mut self.chrome {
             c.resized(w, h, scale);
@@ -1404,10 +1423,14 @@ impl Shell {
         let app = if self.showing_blank() { None } else { self.tabs.get_mut(self.active).map(|t| (t.backend.paint(app_w, app_h.max(1)), t)) };
         let painted = t0.elapsed();
 
-        let frame = match self.surface.get_current_texture() {
+        // Suspended: the work above is thrown away rather than skipped,
+        // because the paint is what settles hover and hands the driver its
+        // clock. Only the picture has nowhere to go.
+        let Some(surface) = &self.surface else { return };
+        let frame = match surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(renderer.device(), &self.config);
+                surface.configure(renderer.device(), &self.config);
                 return;
             }
             Err(e) => {
@@ -1484,7 +1507,7 @@ impl Shell {
         self.sync_cursor(false);
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
-        #[cfg(feature = "a11y")]
+        #[cfg(has_a11y)]
         if let (Some(a), Some(t)) = (&mut self.access, self.tabs.get_mut(self.active)) {
             let backend = &mut t.backend;
             a.update_if_active(|| crate::a11y::to_update(&backend.access_tree()));
@@ -1493,7 +1516,7 @@ impl Shell {
 
     /// An assistive technology's request, turned into what a keyboard user
     /// could do: focus, or focus and press. It reaches the active tab only.
-    #[cfg(feature = "a11y")]
+    #[cfg(has_a11y)]
     fn access_event(&mut self, event: accesskit_winit::Event) {
         use accesskit_winit::WindowEvent as A;
         let active = self.active;
@@ -1530,7 +1553,7 @@ impl Shell {
 
     /// One event for this window. `false` when it should close.
     fn event(&mut self, renderer: &mut eui_render::Renderer, event: WindowEvent) -> bool {
-        #[cfg(feature = "a11y")]
+        #[cfg(has_a11y)]
         if let Some(a) = &mut self.access {
             a.process_event(&self.window, &event);
         }
@@ -1595,6 +1618,47 @@ impl Shell {
                 } else {
                     return self.chrome_input(i, renderer);
                 }
+            }
+            // Spec 06 §5: contacts become the pointer. The window decides
+            // only which half of itself the gesture belongs to; what it
+            // *is* — a tap, a drag, a scroll — is the driver's to work out,
+            // because it turns on whether the node under the finger asked
+            // to hear moves, and only the driver knows the tree.
+            WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase as P;
+                let (x, y) = (t.location.x as f32 / scale, t.location.y as f32 / scale);
+                // A gesture belongs for its whole length to the half it
+                // started in: a finger that begins on the tab strip and
+                // slides into the page is still pressing a tab.
+                if matches!(t.phase, P::Started) {
+                    self.pointer_in_app = y >= top;
+                    // A touch in the page takes the keyboard back from the
+                    // address bar, as a click does.
+                    if self.pointer_in_app {
+                        if let Some((c, _)) = &mut self.chrome {
+                            c.leave_address();
+                        }
+                    }
+                }
+                if !self.pointer_in_app {
+                    // The chrome has no gestures — a tab is pressed and
+                    // released — so the pointer events it already
+                    // understands are the whole of it.
+                    return match t.phase {
+                        P::Started => self.chrome_input(Input::PointerMove(x, y), renderer) && self.chrome_input(Input::PointerDown(0), renderer),
+                        P::Moved => self.chrome_input(Input::PointerMove(x, y), renderer),
+                        P::Ended => self.chrome_input(Input::PointerUp(0), renderer),
+                        P::Cancelled => true,
+                    };
+                }
+                self.pointer_at = Some((x, y));
+                let y = y - top;
+                self.send_to_tab(match t.phase {
+                    P::Started => Input::TouchDown(t.id, x, y),
+                    P::Moved => Input::TouchMove(t.id, x, y),
+                    P::Ended => Input::TouchUp(t.id, x, y),
+                    P::Cancelled => Input::TouchCancel(t.id),
+                });
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 crate::driver::trace(|| format!("raw wheel {delta:?}"));
@@ -1672,7 +1736,7 @@ impl Shell {
                 // wants the focused field to have a box *this frame*, so
                 // a field focused but not laid out refused the paste with
                 // no way of knowing why.
-                #[cfg(feature = "clipboard")]
+                #[cfg(has_clipboard)]
                 if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") {
                     let text = self.clipboard().and_then(|c| c.get_text().ok());
                     crate::driver::trace(|| {
@@ -1729,7 +1793,7 @@ impl Shell {
         let redraw = c.needs_redraw();
         // A copy or a cut out of the address bar. The window owns the
         // clipboard on both sides: the chrome asks, it never reaches it.
-        #[cfg(feature = "clipboard")]
+        #[cfg(has_clipboard)]
         {
             let copied = c.take_clipboard();
             if let Some(text) = copied {
@@ -1750,15 +1814,80 @@ impl Shell {
         true
     }
 
+    /// The platform took the native window away — Android does this every
+    /// time the application goes to the background. The surface it was
+    /// drawing into is gone with it, so it is dropped here rather than
+    /// discovered dead at the next frame, and the finger that was on the
+    /// glass is told the gesture ended: nothing else will ever say so.
+    fn suspend(&mut self, renderer: &eui_render::Renderer) {
+        if self.surface.is_none() {
+            return;
+        }
+        crate::driver::trace(|| "suspended: the surface goes".into());
+        // The input goes with the window: a finger on the glass will never
+        // be seen to lift, and a press left outstanding is a button that
+        // fires when the application comes back. `Unfocused` is the right
+        // word for it — the window cannot name the contact, only say that
+        // it no longer has the input.
+        self.send_to_tab(Input::Unfocused);
+        self.pointer_at = None;
+        self.pointer_in_app = false;
+        // A frame may still be in flight; the surface must not go under it.
+        renderer.device().poll(wgpu::Maintain::Wait);
+        self.surface = None;
+    }
+
+    /// The native window came back. A new surface is made from the same
+    /// instance and configured as the old one was, and the window is asked
+    /// to redraw: nothing else will ask, because from the application's
+    /// side nothing happened.
+    fn resume(&mut self, shared: &Shared) {
+        if self.surface.is_some() {
+            return;
+        }
+        let surface = match shared.instance.create_surface(Arc::clone(&self.window)) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("eui: cannot make the surface again after a suspend: {e}");
+                return;
+            }
+        };
+        if !shared.adapter.is_surface_supported(&surface) {
+            eprintln!("eui: the surface this window came back with is not supported by the adapter it opened on");
+            return;
+        }
+        // The window may have been resized, or turned, while it was away.
+        let size = self.window.inner_size();
+        self.config.width = size.width.max(1);
+        self.config.height = size.height.max(1);
+        // A new surface need not advertise the format the old one took.
+        let caps = surface.get_capabilities(&shared.adapter);
+        if !caps.formats.contains(&self.config.format) {
+            if let Some(f) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb).or_else(|| caps.formats.first().copied()) {
+                self.config.format = f;
+            }
+        }
+        surface.configure(shared.renderer.device(), &self.config);
+        self.surface = Some(surface);
+        let scale = self.window.scale_factor() as f32;
+        if let Some((c, _)) = &mut self.chrome {
+            c.resized(size.width as f32 / scale, size.height as f32 / scale, scale);
+        }
+        let (cw, ch) = self.content_size();
+        self.send_to_tab(Input::Resized(cw, ch, scale));
+        self.window.request_redraw();
+        crate::driver::trace(|| "resumed: a new surface".into());
+    }
+
     /// Take this window down, in the order the platforms insist on.
     ///
     /// Not left to the drop glue: that runs in field order, which puts the
     /// window first, and both of the steps below have to happen while it is
     /// still alive.
     fn close(self, renderer: &eui_render::Renderer) {
-        #[cfg(feature = "a11y")]
+        #[cfg(has_a11y)]
         let Shell { window, surface, tabs, access, .. } = self;
-        #[cfg(not(feature = "a11y"))]
+        #[cfg(not(has_a11y))]
         let Shell { window, surface, tabs, .. } = self;
         for t in tabs {
             t.close("the window closed");
@@ -1766,7 +1895,7 @@ impl Shell {
         // The adapter holds the window's platform handle and talks to it as
         // it goes; on macOS a window dropped first leaves it calling into a
         // dead view.
-        #[cfg(feature = "a11y")]
+        #[cfg(has_a11y)]
         drop(access);
         // Dropping a surface with a frame still in flight is the classic
         // hang. Wait for the device to go idle, let the surface go, and only
@@ -1873,6 +2002,15 @@ impl App {
 impl ApplicationHandler<Wake> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         event_loop.set_control_flow(ControlFlow::Wait);
+        // Android calls this again every time the application comes back
+        // from the background, with a new native window behind each of the
+        // ones already open. Their surfaces were dropped on the way out and
+        // are made again here, before any window that was still pending.
+        if let Some(shared) = self.shared.as_ref() {
+            for s in self.shells.values_mut() {
+                s.resume(shared);
+            }
+        }
         for (launches, chrome) in std::mem::take(&mut self.pending) {
             match Shell::open(launches, chrome, event_loop, self.proxy.clone(), &mut self.shared) {
                 Some(s) => {
@@ -1889,6 +2027,17 @@ impl ApplicationHandler<Wake> for App {
         }
     }
 
+    /// The platform is taking the native windows away. On a desktop this
+    /// never fires; on Android it fires whenever the application leaves the
+    /// foreground, and a surface still held at that point is a crash on the
+    /// way back.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        let Some(shared) = self.shared.as_ref() else { return };
+        for s in self.shells.values_mut() {
+            s.suspend(&shared.renderer);
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
         match event {
             // Which window the transport, the audio thread or the desktop
@@ -1902,7 +2051,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::Files => {}
             Wake::Theme => self.shells.values_mut().for_each(Shell::theme_wake),
             Wake::Exit => event_loop.exit(),
-            #[cfg(feature = "a11y")]
+            #[cfg(has_a11y)]
             Wake::Access(e) => {
                 if let Some(s) = self.shells.get_mut(&e.window_id) {
                     s.access_event(e);
@@ -2041,10 +2190,28 @@ pub fn launch_all(launches: Vec<Launch>) -> Result<(), String> {
     run_loop(move |proxy| App::new(launches, proxy))
 }
 
+/// The event loop this platform starts from.
+#[cfg(not(target_os = "android"))]
+fn build_event_loop() -> Result<EventLoop<Wake>, String> {
+    EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())
+}
+
+/// Android's loop is built on the activity's own looper, so it has to be
+/// handed the `AndroidApp` the platform gave `android_main`. Without one
+/// there is no loop to build and nothing sensible to do.
+#[cfg(target_os = "android")]
+fn build_event_loop() -> Result<EventLoop<Wake>, String> {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+    let app = crate::android::app().ok_or("the activity was never handed over: android_main must call eui_client::android::start first")?;
+    let mut builder = EventLoop::<Wake>::with_user_event();
+    builder.with_android_app(app);
+    builder.build().map_err(|e| e.to_string())
+}
+
 /// The event loop, whatever is going to run in it. Must be called on the
 /// main thread.
 fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), String> {
-    let event_loop = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
+    let event_loop = build_event_loop()?;
     let proxy = event_loop.create_proxy();
     let mut app = build(proxy.clone());
     // A signal handler can only store a flag; this thread turns the flag

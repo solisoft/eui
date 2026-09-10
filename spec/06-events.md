@@ -123,3 +123,63 @@ in the tree it last sent, it has a handler of that kind naming that atom, and
 the payload has the shape in §1. A failure is a protocol error and ends the
 session. A local handler's effect is advisory; the server re-derives state
 from its own model before anything is trusted.
+
+## 5. Touch
+
+A touch screen reports contacts; this protocol has a pointer and no contact
+of any kind. **No event kind in §1 is added for touch, and none is
+reserved.** A server cannot tell a finger from a mouse, and must not try:
+the same tree works on both because the client resolves the difference
+before anything is emitted.
+
+Resolving it is not the window's job either. Whether a stroke belongs to the
+node under it or to the view behind it turns on whether that node asked to
+hear `pointer_move` — which is a fact about the tree — so the client does
+this on the near side of the tree, next to hit-testing.
+
+A conforming client MUST follow **one** contact at a time. A second contact
+arriving while one is live is ignored until the first lifts: version 1 has
+no gesture that wants two, and a resting palm must not move the view.
+
+The first contact is followed like this:
+
+1. **Down.** The pointer moves to the contact and presses button `0`:
+   `pointer_move` then `pointer_down`, exactly as a mouse would.
+2. The gesture is then **taken** or **undecided**. It is taken if the node
+   the press landed on resolves a `pointer_move` handler, or if the press
+   took hold of a scrollbar thumb (spec 03 §2) — a slider, a split bar, a
+   drag of any kind. Otherwise it is undecided.
+3. **Taken**: every move is a `pointer_move` at the contact, coalesced by
+   §2 like any other, and the lift is a `pointer_up`. The view does not
+   scroll, and no fling follows.
+4. **Undecided**: moves report nothing and the pointer stays where it
+   landed, so a tap that wobbles still resolves to the node it was aimed
+   at. The gesture is decided by whichever comes first:
+   - the contact **lifts** — a tap: `pointer_up`, and `click` by the rule
+     in §2, since press and release resolve to the same handler;
+   - the contact passes the **slop**, a client-chosen distance from where
+     it landed which SHOULD be about 8 logical px — a scroll.
+5. **Scroll.** The press is given back before the view moves: the node that
+   took it receives `pointer_up` and **no `click` follows**, because none
+   was meant. The view then moves against the contact, by the whole
+   displacement from where it landed — the slop is part of the stroke, not
+   swallowed by it — and by each further delta after that, reported as
+   `scroll` under §2's coalescing.
+6. **Lift after a scroll.** A contact still moving when it leaves the glass
+   carries the view on, over a client-chosen decay. A contact that has been
+   still for a short time before it lifts does not: it was placed, moved
+   and held, and throwing the view then is a bug a person feels as the page
+   running away from them.
+7. **Cancel.** A platform may take a gesture away — a system edge swipe, a
+   call arriving, the application going to the background. Whatever was
+   pressed receives `pointer_up`; no `click` follows and no fling.
+
+At the end of every gesture the client MUST clear hover, emitting
+`pointer_leave` where one is due. A finger leaves nothing under the pointer,
+and a node lit on `pointer_enter` would otherwise stay lit with nothing left
+to put it out.
+
+`pointer_enter` and `pointer_leave` therefore bracket a tap rather than
+describing a resting pointer, and `cursor` (spec 03 §4) means nothing on a
+touch screen. An application whose only affordance is hover has no touch
+behaviour, and this specification does not invent one for it.

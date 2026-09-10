@@ -51,7 +51,15 @@ pub enum Incoming {
 /// A live connection: send bytes in, receive [`Incoming`] out.
 pub struct Connection {
     /// Outgoing messages.
-    pub tx: mpsc::Sender<Vec<u8>>,
+    ///
+    /// A tokio channel rather than a `std` one, because the far end of it
+    /// is inside the socket's runtime and has to *wait* on it. A `std`
+    /// receiver cannot be awaited, and the only way to read one from an
+    /// async task is to ask whether it has anything and go back to sleep —
+    /// which is a poll, at whatever interval is chosen, for as long as the
+    /// session lasts. `send` is not async on either, so nothing above this
+    /// line changes.
+    pub tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     /// Incoming messages; the receiver end belongs to the caller.
     pub rx: mpsc::Receiver<Incoming>,
     /// The HTTPS origin assets come from.
@@ -184,7 +192,7 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
     check_url(url, host_loopback)?;
     let origin = crate::assets::origin_for(url).map_err(|e| TransportError::Connect(e.to_string()))?;
     let url = url.to_owned();
-    let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (in_tx, in_rx) = mpsc::channel::<Incoming>();
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(notify);
     let in_tx_for_assets = in_tx.clone();
@@ -243,22 +251,26 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
                     notify();
                     return;
                 }
-                // Outgoing: poll the std channel without blocking the runtime.
+                // Outgoing: wait on the channel. This task sleeps until
+                // there is something to send and costs nothing until then,
+                // which is what an idle session should cost.
+                //
+                // It used to ask the channel whether it had anything and
+                // sleep 2 ms when it had not. That is five hundred wake-ups
+                // a second, per tab, for as long as a window is open —
+                // measured as the *only* thread with any cost at all in an
+                // idle client, 0.5 % of a core on Linux and far worse on a
+                // platform with coarser timers. An idle window should be
+                // asleep, not nearly asleep.
                 let sender = tokio::spawn(async move {
-                    loop {
-                        match out_rx.try_recv() {
-                            Ok(bytes) => {
-                                if sink.send(Message::Binary(bytes)).await.is_err() {
-                                    return;
-                                }
-                            }
-                            Err(mpsc::TryRecvError::Empty) => tokio::time::sleep(std::time::Duration::from_millis(2)).await,
-                            Err(mpsc::TryRecvError::Disconnected) => {
-                                let _ = sink.send(Message::Close(None)).await;
-                                return;
-                            }
+                    while let Some(bytes) = out_rx.recv().await {
+                        if sink.send(Message::Binary(bytes)).await.is_err() {
+                            return;
                         }
                     }
+                    // Every sender is gone: the session is over, and the
+                    // server is told rather than left to notice.
+                    let _ = sink.send(Message::Close(None)).await;
                 });
                 while let Some(msg) = stream.next().await {
                     let event = match msg {

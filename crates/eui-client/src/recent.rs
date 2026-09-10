@@ -32,6 +32,11 @@ fn path() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("EUI_RECENT_FILE") {
         return Some(PathBuf::from(d));
     }
+    // Android has neither XDG nor a home directory: the application's own
+    // sandbox is the only place it may write.
+    #[cfg(target_os = "android")]
+    let dir = crate::android::data_dir()?;
+    #[cfg(not(target_os = "android"))]
     let dir = if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
         PathBuf::from(d).join("eui")
     } else if let Some(d) = std::env::var_os("APPDATA") {

@@ -428,6 +428,28 @@ fn put_input(w: &mut W, i: &Input) {
         }
         Input::Unfocused => w.u8(12),
         Input::PointerOut => w.u8(13),
+        Input::TouchDown(id, x, y) => {
+            w.u8(14);
+            w.u64(*id);
+            w.f32(*x);
+            w.f32(*y);
+        }
+        Input::TouchMove(id, x, y) => {
+            w.u8(15);
+            w.u64(*id);
+            w.f32(*x);
+            w.f32(*y);
+        }
+        Input::TouchUp(id, x, y) => {
+            w.u8(16);
+            w.u64(*id);
+            w.f32(*x);
+            w.f32(*y);
+        }
+        Input::TouchCancel(id) => {
+            w.u8(17);
+            w.u64(*id);
+        }
     }
 }
 
@@ -447,6 +469,10 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         11 => Input::Mode(ThemeMode::from_u8(r.u8()?).map_err(|_| "theme mode")?),
         12 => Input::Unfocused,
         13 => Input::PointerOut,
+        14 => Input::TouchDown(r.u64()?, r.f32()?, r.f32()?),
+        15 => Input::TouchMove(r.u64()?, r.f32()?, r.f32()?),
+        16 => Input::TouchUp(r.u64()?, r.f32()?, r.f32()?),
+        17 => Input::TouchCancel(r.u64()?),
         _ => return Err("unknown input"),
     })
 }
@@ -1547,10 +1573,26 @@ impl Backend {
         if std::env::var("EUI_SANDBOX").is_ok_and(|v| v == "0") {
             return (Backend::local(Driver::new(w, h, scale, granted)), "driver in this process (EUI_SANDBOX=0)".into());
         }
+        // Android does not allow an application to `exec` a binary out of
+        // its own storage (W^X, API 29 on), so there is no second process
+        // to put the driver in and no point discovering that by trying.
+        // The application sandbox and SELinux confine the process; what
+        // they do not do is hold the decoder apart from the renderer beside
+        // it, which is what 08 §10 is for. Said plainly rather than left to
+        // look like a worker that failed to start.
+        #[cfg(target_os = "android")]
+        {
+            return (
+                Backend::local(Driver::new(w, h, scale, granted)),
+                "driver in this process: Android has no second binary to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)".into(),
+            );
+        }
+        #[cfg(not(target_os = "android"))]
         let program = match std::env::current_exe() {
             Ok(p) => p,
             Err(e) => return (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: cannot find this binary ({e})")),
         };
+        #[cfg(not(target_os = "android"))]
         Self::open_with(program, w, h, scale, granted)
     }
 

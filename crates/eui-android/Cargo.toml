@@ -1,0 +1,60 @@
+[package]
+name = "eui-android"
+description = "The EUI client as an Android application: the shared object the platform loads, and the packaging that carries it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# What Android loads is a shared object, not an executable: the platform
+# starts the process itself and calls into this library. It is a `cdylib`
+# on every target so that `cargo build --workspace` on a desktop still
+# builds it — where it compiles to nothing, because its one source file is
+# behind `cfg(target_os = "android")`.
+[lib]
+name = "eui"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The three parts that have no Android behind them are left out by name
+# rather than by accident: no platform file dialogs, no system clipboard,
+# no accessibility adapter. Pictures stay.
+eui-client = { path = "../eui-client", version = "0.1.0", default-features = false, features = ["jpeg", "webp"] }
+android-activity = { version = "0.6", features = ["native-activity"] }
+
+[lints]
+workspace = true
+
+# `cargo apk build --release -p eui-android` reads this. The address the
+# package opens is baked in at build time: set `EUI_ANDROID_URL` in the
+# environment of that build, or leave it unset for a development package
+# that opens the shell and lets an address be typed.
+[package.metadata.android]
+package = "org.eui.client"
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+# The session is a WebSocket over TLS to somewhere else: that is the whole
+# of what this application needs of the system. No storage, no location, no
+# camera, no contacts — an EUI client has no use for any of them, and an
+# application it is showing cannot ask for them either (08 §3).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[package.metadata.android.sdk]
+# Vulkan and a stable `ANativeWindow` from API 26; nothing here needs a
+# newer one. The target is what the store asks for.
+min_sdk_version = 26
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "EUI"
+# The client draws its own everything; the platform theme must not put a
+# title bar or an action bar above it.
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+# The client lays out for whatever size it is given and hears the resize,
+# so the activity must not be restarted for a rotation or a keyboard.
+config_changes = "orientation|screenSize|screenLayout|keyboardHidden|density|uiMode"
+# The soft keyboard resizes the window rather than covering the field.
+window_soft_input_mode = "adjustResize"

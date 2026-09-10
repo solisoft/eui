@@ -48,17 +48,34 @@ impl std::error::Error for ManifestError {}
 
 /// Where pins live: `$EUI_PINS_DIR`, else `$XDG_CONFIG_HOME/eui/pins`, else
 /// `~/.config/eui/pins` (`%APPDATA%\eui\pins` on Windows).
+///
+/// On Android none of those exist — there is no `$HOME` and no XDG — so it
+/// is the directory the platform gave the application, inside its own
+/// sandbox. Without a pin store there is no trust on first use and no
+/// session at all, so this is not a nicety.
 pub fn pins_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("EUI_PINS_DIR") {
         return Some(PathBuf::from(d));
     }
+    config_dir().map(|d| d.join("pins"))
+}
+
+/// The corner of the person's configuration this client keeps things in.
+#[cfg(not(target_os = "android"))]
+fn config_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(d).join("eui").join("pins"));
+        return Some(PathBuf::from(d).join("eui"));
     }
     if let Some(d) = std::env::var_os("APPDATA") {
-        return Some(PathBuf::from(d).join("eui").join("pins"));
+        return Some(PathBuf::from(d).join("eui"));
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("eui").join("pins"))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("eui"))
+}
+
+/// The directory the platform gave this application, inside its own sandbox.
+#[cfg(target_os = "android")]
+fn config_dir() -> Option<PathBuf> {
+    crate::android::data_dir()
 }
 
 /// Fetch `/.well-known/eui` from `origin` and run [`verify`] against `pins`.

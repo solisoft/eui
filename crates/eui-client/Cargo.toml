@@ -42,21 +42,37 @@ zune-jpeg = { version = "0.5.15", optional = true }
 image-webp = { version = "0.2.0", optional = true }
 # Ed25519 for the manifest signature; already in the tree under rustls.
 ring = "0.17"
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+# Sound. The Android backend is `oboe`, which cpal picks for that target on
+# its own; the audio device belongs to the window, like the GPU, and the
+# worker cannot open one and must not (08 §10).
+cpal = "0.15"
+
+# Three parts that are a platform as much as a feature. Each rests on a
+# crate with nothing behind it on Android — there is no `rfd` backend for
+# the Android file picker, no `arboard` for its clipboard, and no AccessKit
+# adapter for TalkBack — so they are declared for every target but that one,
+# and `build.rs` turns the matching `has_*` cfg off there. See its
+# `platform_parts`.
+[target.'cfg(not(target_os = "android"))'.dependencies]
 # Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
 # assistive technology asks; `--no-default-features` builds without it.
 accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
-
 # The system clipboard, for the person's own copy, cut and paste.
 arboard = { version = "3", optional = true, default-features = false, features = ["wayland-data-control"] }
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
-cpal = "0.15"
 # The platform's own file dialogs, for spec 03 §3.2. On Linux this is the
 # XDG portal rather than GTK, so a client in a sandbox asks the desktop for
 # a file the way everything else does.
 rfd = { version = "0.17.2", optional = true }
-# The audio device belongs to the window, like the GPU: the worker cannot
-# open one, and must not (08 §10).
+
+# Android. `android-native-activity` is what makes winit's event loop take
+# an `AndroidApp` instead of starting from `main`; the crate itself is here
+# for the soft keyboard and the application's own data directory, neither of
+# which the window can ask for through winit.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30", features = ["android-native-activity"] }
+android-activity = "0.6"
 
 [features]
 default = ["a11y", "clipboard", "files", "jpeg", "webp"]

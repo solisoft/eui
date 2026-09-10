@@ -215,6 +215,43 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 let _ = driver.paint(dw, dh);
             }
         }
+        // SNAPSHOT_SETTLE=<ms> — let time pass before the last paint, ticking
+        // the driver's clock and applying whatever arrives.
+        //
+        // Without this the tool paints but never ticks, so anything the clock
+        // drives is invisible to it: a `wake` never fires, a transition never
+        // eases, a glide never lands. An application that shows a loader until
+        // its first wake would be photographed mid-load forever.
+        if let Some(ms) = std::env::var("SNAPSHOT_SETTLE").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            let until = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < until {
+                let _ = wake_rx.recv_timeout(Duration::from_millis(16));
+                while let Ok(msg) = conn.rx.try_recv() {
+                    match msg {
+                        Incoming::Message(b) => {
+                            let frame = Frame::decode(&b).expect("frame");
+                            for f in driver.handle_frame(frame) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                        Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                        Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
+                        Incoming::Closed(e) => panic!("closed: {e}"),
+                    }
+                }
+                driver.tick(Instant::now());
+                let _ = driver.paint(dw, dh);
+                // Painting is what raises a wake, a time update or a viewport
+                // frame; `take_pending` is what lets them leave. A tool that
+                // paints and never drains generates them and sends none.
+                for f in driver.take_pending() {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                for hash in driver.pending_assets() {
+                    conn.request_asset(hash);
+                }
+            }
+        }
         // SNAPSHOT_KEYS="Tab;Escape" — keys pressed in order before the last
         // paint, so a focus ring, a trapped Tab or a surface that closes on
         // Escape can be looked at without a keyboard. Each press waits for
