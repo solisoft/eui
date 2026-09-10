@@ -187,3 +187,40 @@ fn the_sandbox_refuses_files_sockets_and_processes() {
         eprintln!("{what}: {:?} {}", out.status, err.trim());
     }
 }
+
+/// One application dying takes its own worker with it and nothing else.
+///
+/// This is the property the shell rests on: several tabs in one window,
+/// each with its own confined worker, and a crash in one of them — a
+/// seccomp kill, a panic, an OOM — that the others never learn about. They
+/// share a process, so it has to be *shown* that they share no fate.
+#[test]
+fn a_crashed_worker_leaves_its_neighbours_untouched() {
+    let (mut doomed, _) = Backend::open_with(eui_binary(), 100.0, 100.0, 1.0, 0);
+    let (mut bystander, _) = Backend::open_with(eui_binary(), 100.0, 100.0, 1.0, 0);
+    let (Backend::Remote { .. }, Backend::Remote { .. }) = (&doomed, &bystander) else {
+        eprintln!("no worker on this platform; skipping");
+        return;
+    };
+    let _ = doomed.hello();
+    let _ = bystander.hello();
+    assert!(doomed.closed().is_none() && bystander.closed().is_none());
+
+    // Take one worker down from outside, as a crash would.
+    let Backend::Remote { worker, .. } = &mut doomed else { panic!("a worker") };
+    if let Ok(mut w) = worker.lock() {
+        w.kill_for_test();
+    }
+    let (dead_list, _) = doomed.paint(100, 100);
+    assert!(dead_list.quads.is_empty(), "the dead one paints nothing");
+
+    // The other one is asked for everything a live tab is asked for. None
+    // of it goes through the dead one's pipe, and none of it panics.
+    assert!(bystander.closed().is_none(), "the survivor was not closed by its neighbour's death");
+    let _ = bystander.input(Input::PointerMove(10.0, 10.0));
+    let (list, _) = bystander.paint(100, 100);
+    let _ = list;
+    let _ = bystander.access_tree();
+    assert!(bystander.worker_status().is_some(), "the survivor's worker is still answering");
+    assert!(bystander.closed().is_none(), "and it still has a session");
+}
