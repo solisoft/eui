@@ -18,3 +18,7 @@ examples/demo-app/public/covers/
 examples/demo-app/public/x/
 # What the tracker's Play button mixes: generated, never committed.
 examples/demo-app/public/tracker/
+
+# `scripts/make-icons.py` is imported as a module when its PNG decoder is
+# wanted elsewhere, and Python leaves this behind when it is.
+__pycache__/
