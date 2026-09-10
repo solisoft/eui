@@ -50,16 +50,20 @@ pub fn data_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Library").join("Application Support").join("eui"))
 }
 
-/// The address this build was made for, baked in at build time.
+/// The address this build was made for, baked in at build time or passed at runtime.
 ///
 /// An application is one application, not a browser: there is no command
 /// line on a phone to take a session URL from, and no address bar worth
 /// typing into. So the packaging sets `EUI_IOS_URL` and the address is in
-/// the binary. Without one the client falls back to the shell, which is what
+/// the binary. Without one the client checks the runtime `EUI_IOS_URL` env var,
+/// and if that is also absent, falls back to the shell, which is what
 /// a development build wants — somewhere to type an address while the
 /// packaging is still being worked out.
-pub fn url() -> Option<&'static str> {
-    option_env!("EUI_IOS_URL").filter(|u| !u.is_empty())
+pub fn url() -> Option<String> {
+    if let Some(u) = option_env!("EUI_IOS_URL").filter(|u| !u.is_empty()) {
+        return Some(u.to_owned());
+    }
+    std::env::var("EUI_IOS_URL").ok().filter(|u| !u.is_empty())
 }
 
 /// Everything after UIKit has started: open the address this build was made
@@ -70,7 +74,7 @@ pub fn url() -> Option<&'static str> {
 /// what the static library's entry point guarantees, and why there is one.
 pub fn run() -> Result<(), String> {
     match url() {
-        Some(u) => crate::app::run(u.to_owned(), 0),
+        Some(u) => crate::app::run(u, 0),
         None => crate::app::shell(),
     }
 }
