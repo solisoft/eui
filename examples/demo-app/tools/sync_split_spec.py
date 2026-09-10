@@ -19,7 +19,14 @@ MARKER = "# ---- copied from app/controllers/eui_builders.sl, do not edit ----"
 
 SPECS = {
     ROOT / "tests" / "split_spec.sl": ["split_span", "split_sizes", "split_at"],
-    ROOT / "tests" / "drag_spec.sl": ["split_span", "split_sizes", "split_at", "split_event"],
+    ROOT / "tests" / "drag_spec.sl": [
+        "split_span",
+        "split_sizes",
+        "split_at",
+        "split_drag",
+        "split_keys",
+        "split_event",
+    ],
 }
 
 

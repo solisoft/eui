@@ -1,6 +1,11 @@
 # EUI view builders. Each returns a plain hash; nothing here is native.
 # Lives in app/controllers/ so it loads with the handlers (one namespace).
 #
+# This is the reference catalogue spec/03-widgets.md §4 names. It is the
+# copy `soli new <app> --eui` writes, vendored in the language repository
+# as `src/scaffold/templates/eui/eui_builders.sl`; the two are kept byte
+# for byte identical by `scripts/sync-catalogue.sh`.
+#
 #   {"k": kind, "s": style, "t": text, "c": children, "on": handlers, "key": key, "p": props}
 #
 # Style keys are the spec's vocabulary: display, gap, pad, margin, bg, fg,
@@ -654,7 +659,9 @@ def card(style, children)
 end
 
 # Tabs: a row of labels, the active one underlined in accent. `props` carry
-# the tab name so one handler serves every tab.# A tab strip. The active tab is said by its underline alone — it is not
+# the tab name so one handler serves every tab.
+#
+# The active tab is said by its underline alone — it is not
 # handed to `control` as selection, because a background behind the active
 # tab as well would say the same thing twice. The strip is keyed and carries
 # its role, so the set reaches an assistive technology as a set and each tab
@@ -1132,6 +1139,32 @@ end
 # The four events a split sends, folded into a component's state. `name` is
 # the state key holding the fraction; `name + "_drag"` holds whether a drag is
 # in flight. An application writes one line in its handler and is done.
+# One `pointer_move` while the divider is held: the point along the axis
+# is where the divider now is, in thousandths.
+def split_drag(state, params, name, dir, extent, min_a, min_b, bar)
+  payload = params["payload"] ?? [0, 0]
+  at = dir == "row" ? payload[0] : payload[1]
+  state[name] = split_at(extent, at, min_a, min_b, bar)
+  state
+end
+
+# The keyboard's half of the same divider: an arrow moves it by a step,
+# Home puts it back in the middle, and the result is held inside the
+# thousandths the fraction is measured in.
+def split_keys(state, params, name, dir, step)
+  payload = params["payload"] ?? [""]
+  pressed_key = payload[0]
+  back = dir == "row" ? "ArrowLeft" : "ArrowUp"
+  fwd = dir == "row" ? "ArrowRight" : "ArrowDown"
+  current = state[name] ?? 500
+  state[name] = current - step if pressed_key == back
+  state[name] = current + step if pressed_key == fwd
+  state[name] = 500 if pressed_key == "Home"
+  state[name] = 0 if state[name] < 0
+  state[name] = 1000 if state[name] > 1000
+  state
+end
+
 def split_event(state, params, name, dir, extent, min_a, min_b, bar)
   kind = params["kind"]
   drag = name + "_drag"
@@ -1141,23 +1174,10 @@ def split_event(state, params, name, dir, extent, min_a, min_b, bar)
     state[drag] = true
   elsif kind == "pointer_up"
     state[drag] = false
-  elsif kind == "pointer_move"
-    if state[drag] ?? false
-      payload = params["payload"] ?? [0, 0]
-      at = dir == "row" ? payload[0] : payload[1]
-      state[name] = split_at(extent, at, min_a, min_b, bar)
-    end
+  elsif kind == "pointer_move" && (state[drag] ?? false)
+    state = split_drag(state, params, name, dir, extent, min_a, min_b, bar)
   elsif kind == "key_down"
-    payload = params["payload"] ?? [""]
-    pressed_key = payload[0]
-    back = dir == "row" ? "ArrowLeft" : "ArrowUp"
-    fwd = dir == "row" ? "ArrowRight" : "ArrowDown"
-    current = state[name] ?? 500
-    state[name] = current - step if pressed_key == back
-    state[name] = current + step if pressed_key == fwd
-    state[name] = 500 if pressed_key == "Home"
-    state[name] = 0 if state[name] < 0
-    state[name] = 1000 if state[name] > 1000
+    state = split_keys(state, params, name, dir, step)
   end
   state
 end
@@ -2595,7 +2615,7 @@ def dev_bar(stats, shown = true)
 
   ms = fn(v) { str((v * 10).round() / 10.0) + " ms" }
   figures = [
-    dev_figure("event", stats["event"] == "" ? "—" : stats["event"], "accent.base"),
+    dev_figure("event", stats["event"].blank? ? "—" : stats["event"], "accent.base"),
     dev_figure("view", ms(stats["view_ms"]), "text.default"),
     dev_figure("encode", ms(stats["encode_ms"]), "text.default"),
     dev_figure("ops", str(stats["ops"]), dev_wire_tone(stats["ops"])),
@@ -2603,7 +2623,11 @@ def dev_bar(stats, shown = true)
     dev_figure("nodes", str(stats["nodes"]), "text.default"),
     dev_figure("seq", str(stats["seq"]), "text.muted"),
     dev_figure("renders", str(stats["renders"]), "text.muted"),
-    dev_figure("interned", str(stats["atoms"]) + "/" + str(stats["styles"]) + "/" + str(stats["colors"]) + "/" + str(stats["chunks"]), "text.muted")
+    dev_figure(
+      "interned",
+      [stats["atoms"], stats["styles"], stats["colors"], stats["chunks"]].map(fn(n) { str(n) }).join("/"),
+      "text.muted"
+    )
   ]
   {
     "k": "overlay",
@@ -2950,8 +2974,8 @@ end
 # timeline brings pictures, the sample brings letters, and the card treats
 # them the same.
 def post_avatar(post, size)
-  face = post["avatar"] ?? ""
-  return initial_avatar(post["initial"], post["tone"], size) if face == ""
+  face = post["avatar"]
+  return initial_avatar(post["initial"], post["tone"], size) if face.blank?
 
   built = avatar(face, size)
   built["s"]["shrink"] = 0

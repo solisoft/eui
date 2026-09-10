@@ -81,9 +81,9 @@ component whose view returns a node tree as plain data instead of HTML:
 router_eui("counter", "live#counter", "live#counter_view")
 ```
 
-The integration lives in `lang/src/serve/eui/` behind the cargo feature `eui`,
-**off by default**; with it off, none of that code is compiled. To run the
-counter through Soli:
+The integration lives in `lang/src/serve/eui/` behind the cargo feature
+`eui`, one of Soli's defaults; with it off, none of that code is compiled.
+To run the counter through Soli:
 
 ```sh
 (cd ../lang && cargo build --features eui)
@@ -92,3 +92,13 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eu
 # or, headless:
 EUI_SOLI_BIN=../lang/target/debug/soli cargo test -p eui-client --test soli_e2e
 ```
+
+A new application starts with the catalogue in it:
+
+```sh
+soli new my-app --eui     # + app/controllers/eui_builders.sl and a component
+```
+
+That copy comes from `examples/demo-app/app/controllers/eui_builders.sl`,
+which is where the catalogue is edited; `scripts/sync-catalogue.sh` puts it
+in the language repository, and `--check` says whether the two have drifted.
