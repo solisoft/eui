@@ -469,7 +469,7 @@ impl Chrome {
                 // have elided their titles it is the only thing telling
                 // them apart.
                 let s = match t.trust {
-                    Some(_) => s_sigils.get(tint_index(t.origin)).copied().unwrap_or(s_sigil_off),
+                    Some(_) => s_sigils.get(tint_index([t.origin, t.path])).copied().unwrap_or(s_sigil_off),
                     None => s_sigil_off,
                 };
                 b.open(NodeKind::Box, id + 1, s, 1);
@@ -586,16 +586,20 @@ impl Chrome {
                         self.actions.insert(id + n, open.clone());
                     }
                     let (origin, _) = split_origin_str(&r.url);
+                    let host = origin.trim_start_matches("wss://").trim_start_matches("ws://");
+                    // The component leads, because it is what differs; the
+                    // manifest's name follows it, muted, with the host.
+                    let component = component_of(&r.url);
+                    let lead = if component.is_empty() { r.name.as_str() } else { component };
+                    let under = if component.is_empty() || r.name.is_empty() { host.to_owned() } else { format!("{} · {host}", r.name) };
                     b.click();
                     b.open(NodeKind::Box, id, s_recent, 3);
-                    let letter = r.name.chars().next().unwrap_or('*').to_uppercase().to_string();
-                    b.open(NodeKind::Box, id + 1, s_sigils.get(tint_index(origin)).copied().unwrap_or(s_sigil_off), 1);
+                    let letter = lead.chars().next().unwrap_or('*').to_uppercase().to_string();
+                    b.open(NodeKind::Box, id + 1, s_sigils.get(tint_index([&r.url, ""])).copied().unwrap_or(s_sigil_off), 1);
                     b.text(id + 2, s_sigil_text, &letter);
                     b.close();
-                    b.text(id + 3, s_recent_name, if r.name.is_empty() { origin } else { &r.name });
-                    // The host, muted, so two applications of the same name
-                    // on different machines are told apart.
-                    b.text(id + 4, s_recent_where, origin.trim_start_matches("wss://").trim_start_matches("ws://"));
+                    b.text(id + 3, s_recent_name, lead);
+                    b.text(id + 4, s_recent_where, &under);
                     b.close();
                 }
                 b.close();
@@ -665,6 +669,18 @@ impl Chrome {
     }
 }
 
+/// What a session URL calls this particular application: the last segment
+/// of its path.
+///
+/// The manifest's name is the *server's* name, and one server serves many:
+/// a Soli application with a gallery, a feed and a music view answers
+/// `counter-app` for all three, so a list of them read `counter-app` three
+/// times over. The component is the half that differs.
+pub fn component_of(url: &str) -> &str {
+    let (_, path) = split_origin_str(url);
+    path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("")
+}
+
 /// The origin half of a URL, for a sigil's colour and a fallback label.
 fn split_origin_str(url: &str) -> (&str, &str) {
     let after = url.find("//").map_or(0, |i| i + 2);
@@ -682,11 +698,15 @@ fn split_origin_str(url: &str) -> (&str, &str) {
 /// so it turns with the desktop like everything else.
 const TINTS: [Role; 5] = [Role::AccentBase, Role::SuccessBase, Role::WarningBase, Role::InfoBase, Role::DangerBase];
 
-fn tint_index(origin: &str) -> usize {
+fn tint_index(parts: [&str; 2]) -> usize {
     // FNV-1a, for a stable answer across runs and machines — a tab that
     // changed colour between launches would be worse than no colour.
+    //
+    // Over the whole address, not the origin alone: one server serves many
+    // applications, so hashing the host gave every tab of it the same
+    // colour — which is exactly the case a sigil exists to disentangle.
     let mut h: u32 = 0x811c_9dc5;
-    for byte in origin.bytes() {
+    for byte in parts.iter().flat_map(|p| p.bytes()) {
         h ^= u32::from(byte);
         h = h.wrapping_mul(0x0100_0193);
     }

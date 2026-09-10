@@ -262,9 +262,17 @@ impl Tab {
     }
 
     /// How the strip should show this tab.
+    ///
+    /// The component, not the manifest's name: one server serves many, so a
+    /// Soli application with a gallery, a feed and a music view answers
+    /// `counter-app` for all of them and three tabs of it would carry the
+    /// same word three times. The name is the server's; the component is
+    /// this session's.
     fn view(&self) -> crate::chrome::TabView<'_> {
         let (origin, path) = split_origin(&self.url);
-        crate::chrome::TabView { title: &self.title, origin, path, trust: Some(self.trust) }
+        let component = crate::chrome::component_of(&self.url);
+        let title = if component.is_empty() { self.title.as_str() } else { component };
+        crate::chrome::TabView { title, origin, path, trust: Some(self.trust) }
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {

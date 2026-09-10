@@ -34,10 +34,14 @@ fn main() {
         chrome.set_desktop_theme(Some(mode), Vec::new());
         if blank {
             chrome.set_recents(
-                [("Vitrine", "wss://vitrine.solisoft.net/_eui/session/gallery"), ("Needle", "wss://needle.solisoft.net/_eui/session/music"), ("Feedx", "ws://127.0.0.1:5090/_eui/session/feed")]
-                    .iter()
-                    .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })
-                    .collect(),
+                [
+                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/gallery"),
+                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/music"),
+                    ("counter-app", "wss://eui-data.solisoft.test/_eui/session/tracker"),
+                ]
+                .iter()
+                .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })
+                .collect(),
             );
             chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None }], 0);
         } else {
