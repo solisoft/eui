@@ -300,6 +300,19 @@ jobs:
           path: ~/.cargo
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # The worker dies of SIGSYS on this runner and not on a developer's
+      # machine: seccomp is refusing a system call the 36-entry allow-list
+      # does not have, and the Landlock line says the kernel here is older.
+      # Logging instead of killing names the call; `|| true` keeps the
+      # diagnosis out of the pass/fail.
+      - name: Which system call the sandbox refuses here
+        if: runner.os == 'Linux'
+        run: |
+          uname -a
+          EUI_SECCOMP_LOG=1 cargo test --release -p eui-client --test worker -- --test-threads=1 2>&1 | tail -40 || true
+          echo '--- kernel audit ---'
+          sudo dmesg | grep -iE "seccomp|syscall=" | tail -40 || true
+
       # No GPU on a hosted runner, so the pixel tests skip themselves —
       # they say so and return rather than failing.
       - name: Run tests
