@@ -55,6 +55,9 @@ pub struct Renderer {
     atlas_layout: wgpu::BindGroupLayout,
     atlas_tex: wgpu::Texture,
     img_tex: wgpu::Texture,
+    /// The image texture's edge: 1 until a picture is packed, then
+    /// `ImageAtlas::SIZE`. Kept so the grow is done once.
+    img_size: u32,
     atlas_bind: wgpu::BindGroup,
     atlas_size: u32,
     instances: wgpu::Buffer,
@@ -304,7 +307,7 @@ impl Renderer {
         });
 
         let atlas_size = Atlas::INITIAL;
-        let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&device, &atlas_layout, atlas_size);
+        let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&device, &atlas_layout, atlas_size, 1);
 
         Ok(Self {
             device,
@@ -317,6 +320,7 @@ impl Renderer {
             atlas_layout,
             atlas_tex,
             img_tex,
+            img_size: 1,
             atlas_bind,
             atlas_size,
             instances,
@@ -371,7 +375,10 @@ impl Renderer {
         })
     }
 
-    fn make_atlas(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32) -> (wgpu::Texture, wgpu::Texture, wgpu::BindGroup) {
+    /// `img_size` is the image atlas's edge. It is 1 until a picture is
+    /// actually packed: the full texture is 2048² RGBA — 16 MiB of GPU
+    /// memory — and most applications never show one.
+    fn make_atlas(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: u32, img_size: u32) -> (wgpu::Texture, wgpu::Texture, wgpu::BindGroup) {
         let make = |label: &str, size: u32, format: wgpu::TextureFormat| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -385,7 +392,7 @@ impl Renderer {
             })
         };
         let tex = make("atlas", size, wgpu::TextureFormat::R8Unorm);
-        let img = make("images", ImageAtlas::SIZE, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let img = make("images", img_size, wgpu::TextureFormat::Rgba8UnormSrgb);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("atlas"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
         let view = tex.create_view(&Default::default());
         let img_view = img.create_view(&Default::default());
@@ -420,8 +427,12 @@ impl Renderer {
     /// Upload the atlases if they changed, growing the glyph texture with
     /// its atlas.
     fn sync_atlas(&mut self, atlas: &mut Atlas, images: &mut ImageAtlas) {
-        if atlas.size() != self.atlas_size {
-            let (tex, img, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size());
+        // The image texture is made full size the first time a picture is
+        // actually packed, and never before.
+        let want_img = if images.is_empty() { self.img_size } else { ImageAtlas::SIZE };
+        if atlas.size() != self.atlas_size || want_img != self.img_size {
+            let (tex, img, bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas.size(), want_img);
+            self.img_size = want_img;
             self.atlas_tex = tex;
             self.img_tex = img;
             self.atlas_bind = bind;

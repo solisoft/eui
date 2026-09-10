@@ -252,6 +252,10 @@ pub fn trace(line: impl FnOnce() -> String) {
 
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
+/// How often a `spin` alone asks for a frame: 30 a second. A transition
+/// runs at 60, but a spinner is a mark at rest, and the machine it is on
+/// should be too (10 §1).
+const SPIN_FRAME: Duration = Duration::from_millis(33);
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
 /// While a scroll is still moving, how often it may ask for rows it has
 /// outrun: often enough that a drag sees rows rather than placeholders,
@@ -368,6 +372,16 @@ pub struct Driver {
     windows: HashMap<u32, (u32, u32)>,
     /// When a moving scroll last asked for rows it had outrun.
     outrun_at: Option<Instant>,
+    /// The last list painted, when a `spin` was the only thing owed: the
+    /// next frame is the same list with the clock moved on, and the vertex
+    /// stage moves the clock (03 §5), so the tree need not be walked again.
+    spin_list: Option<DrawList>,
+    /// Something reached the driver since the last paint — an input, a
+    /// frame, an asset, a theme — that could change what the tree paints.
+    /// The spin clock is not that: `tick` leaves it alone.
+    touched: bool,
+    /// Frames answered from `spin_list`, for the trace and the tests.
+    spin_repeats: u64,
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
@@ -481,6 +495,9 @@ impl Driver {
             desktop_mode: None,
             windows: HashMap::new(),
             outrun_at: None,
+            spin_list: None,
+            touched: true,
+            spin_repeats: 0,
             scroll_touched: None,
             movies: HashMap::new(),
             players: HashMap::new(),
@@ -507,6 +524,7 @@ impl Driver {
     /// for, intersected with what the person allowed. Never more than
     /// [`caps::ALL`]; never anything implicitly.
     pub fn grant(&mut self, granted: u32) {
+        self.touched = true;
         self.granted = granted & caps::ALL;
     }
 
@@ -549,6 +567,7 @@ impl Driver {
     /// End the session from outside: the transport spoke nonsense or went
     /// away. Nothing is sent; the window reports `why`.
     pub fn close(&mut self, why: String) {
+        self.touched = true;
         if self.closed.is_none() {
             self.closed = Some(Close::Transport(why));
         }
@@ -557,6 +576,7 @@ impl Driver {
     /// Frames waiting for the window to send, to add to. What
     /// [`Self::take_pending`] hands over.
     pub fn pending_mut(&mut self) -> &mut Vec<Frame> {
+        self.touched = true;
         &mut self.pending
     }
 
@@ -564,6 +584,7 @@ impl Driver {
 
     /// Apply a frame from the server; returns frames to send back.
     pub fn handle_frame(&mut self, frame: Frame) -> Vec<Frame> {
+        self.touched = true;
         match frame {
             Frame::Welcome(w) => {
                 if w.version == 0 || w.version > PROTOCOL_VERSION {
@@ -753,6 +774,7 @@ impl Driver {
     /// Focus `ix` as the keyboard would — ring shown — for an assistive
     /// technology's Focus action.
     pub fn focus_node(&mut self, ix: NodeIx) -> Vec<Frame> {
+        self.touched = true;
         self.ensure_layout();
         if self.focus_order().contains(&ix) {
             self.set_focus(Some(ix), true)
@@ -764,6 +786,7 @@ impl Driver {
     /// Focus and press `ix`, as Tab then Enter would — an assistive
     /// technology's Click action. Nothing a keyboard could not do.
     pub fn activate_node(&mut self, ix: NodeIx) -> Vec<Frame> {
+        self.touched = true;
         let mut out = self.focus_node(ix);
         if self.focused == Some(ix) && !self.is_editable(ix) {
             out.extend(self.activate(ix));
@@ -780,6 +803,7 @@ impl Driver {
 
     /// Feed input; returns event frames to send.
     pub fn input(&mut self, input: Input) -> Vec<Frame> {
+        self.touched = true;
         self.now = Instant::now();
         match input {
             Input::Resized(w, h, scale) => {
@@ -856,6 +880,7 @@ impl Driver {
     /// Deliver verified bytes for a hash. Images are decoded and packed for
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
+        self.touched = true;
         self.assets.deliver(hash, bytes);
         // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
@@ -871,6 +896,7 @@ impl Driver {
 
     /// Record that a hash could not be fetched.
     pub fn asset_failed(&mut self, hash: Hash, why: String) {
+        self.touched = true;
         eprintln!("eui: asset {}: {why}", crate::assets::hex(&hash));
         self.assets.fail(hash, why);
     }
@@ -1657,6 +1683,7 @@ impl Driver {
     /// so the application's light/dark switch still does something. Both
     /// empty means the desktop has none and the theme's colours return.
     pub fn set_desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Frame> {
+        self.touched = true;
         let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.map_or(true, |m| m == self.viewer.mode);
         if same {
             return Vec::new();
@@ -2054,6 +2081,21 @@ impl Driver {
     /// Lay out if needed and produce this frame's draw list for a
     /// `w × h` device-pixel target. Clears the redraw flag.
     pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
+        // A frame owed to a spin alone, with nothing having reached the
+        // driver since the last one, is the last list again: the vertex
+        // stage turns the node from the clock the window passes it (03 §5),
+        // so walking the tree would produce the same quads. Where the
+        // driver shares the window's process — every platform but Linux —
+        // this is what keeps a spinner from costing a layout and a paint
+        // thirty times a second.
+        if !self.touched {
+            if let Some(list) = &self.spin_list {
+                self.redraw = false;
+                self.next_due = Some(self.now + SPIN_FRAME);
+                self.spin_repeats = self.spin_repeats.saturating_add(1);
+                return list.clone();
+            }
+        }
         self.show_stopped();
         self.note_style_changes();
         self.note_entrances();
@@ -2135,7 +2177,7 @@ impl Driver {
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
         });
         if list.wants_frame && self.next_due.is_none() {
-            self.next_due = Some(now + Duration::from_millis(16));
+            self.next_due = Some(now + SPIN_FRAME);
         }
         self.session.clear_all_dirty();
         trace(|| {
@@ -2155,6 +2197,12 @@ impl Driver {
             None
         } else if self.scroll_anim.is_some() {
             Some(now + Duration::from_millis(8))
+        } else if self.anims.is_empty() {
+            // Only a spin: half the frames a transition gets. A revolution
+            // is 1.2 s (03 §5), which is 12° a frame at thirty — smooth —
+            // and thirty frames is half the work of sixty, on a display
+            // that would otherwise be asked for a hundred and twenty.
+            Some(now + SPIN_FRAME)
         } else {
             Some(now + Duration::from_millis(16))
         };
@@ -2170,6 +2218,8 @@ impl Driver {
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
+        self.spin_list = if list.spin_only { Some(list.clone()) } else { None };
+        self.touched = false;
         list
     }
 
@@ -2659,6 +2709,12 @@ impl Driver {
             out.extend(self.emit(ix, EventKind::Window, Value::List(vec![Value::Int(i64::from(range.0)), Value::Int(i64::from(range.1))])));
         }
         out
+    }
+
+    /// How many frames were answered from the last spin-only list rather
+    /// than painted.
+    pub fn spin_repeats(&self) -> u64 {
+        self.spin_repeats
     }
 
     /// Frames a paint produced — a scroll that landed reports its offset —

@@ -666,9 +666,11 @@ impl ApplicationHandler<Wake> for App {
         // A running transition is the only thing that ever wakes the loop by
         // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
         // transport speaks.
+        let mut requested = false;
         if self.backend.tick(std::time::Instant::now()) {
             if let Some(w) = &self.window {
                 w.request_redraw();
+                requested = true;
             }
         }
         // A frame already due does not park the loop. It used to: `Wait`
@@ -681,8 +683,16 @@ impl ApplicationHandler<Wake> for App {
         // mouse moved and stopped the moment it was still. Come back in a
         // millisecond instead: it costs a wake-up while a frame is pending
         // and nothing at all at rest, where `next_frame_at` is `None`.
+        //
+        // But once a redraw *has* been asked for, the frame is the OS's to
+        // deliver, at its display's pace, and the due time — which the
+        // paint will move on — says nothing until then. Polling it every
+        // millisecond meanwhile was a thousand wake-ups a second on macOS,
+        // where the redraw comes with the next display refresh rather
+        // than at once: a spinner alone kept a core a fifth busy.
         let now = std::time::Instant::now();
         event_loop.set_control_flow(match self.backend.next_frame_at() {
+            _ if requested => ControlFlow::Wait,
             Some(at) if at > now => ControlFlow::WaitUntil(at),
             Some(_) => ControlFlow::WaitUntil(now + std::time::Duration::from_millis(1)),
             None => ControlFlow::Wait,

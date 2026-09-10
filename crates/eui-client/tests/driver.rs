@@ -1129,6 +1129,23 @@ fn a_spinning_node_marks_its_quads_and_keeps_frames_coming() {
     // draw this one again instead of asking for another.
     d.tick(t0 + Duration::from_millis(900));
     assert_eq!(d.paint(400, 300), list, "half a revolution later, the same list");
+    // And the driver did not walk the tree to say so: a frame owed to a
+    // spin alone, with nothing having reached the driver since, is the
+    // last list handed back. Thirty of them a second is the cadence.
+    assert_eq!(d.spin_repeats(), 1, "answered from the last list, not painted");
+    let due = d.next_frame_at().expect("the next spin frame");
+    let gap = due.saturating_duration_since(t0 + Duration::from_millis(900));
+    assert!(gap >= Duration::from_millis(30) && gap <= Duration::from_millis(40), "thirty a second: {gap:?}");
+    // Anything that reaches the driver ends the repeat, because it may
+    // change what the tree paints: a pointer over the box lights nothing
+    // here, but the driver cannot know that without looking.
+    d.input(Input::PointerMove(10.0, 10.0));
+    d.tick(t0 + Duration::from_millis(940));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.spin_repeats(), 1, "a real paint after an input");
+    d.tick(t0 + Duration::from_millis(980));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.spin_repeats(), 2, "and the repeat resumes once nothing has happened");
 }
 
 /// A 100 px list of ten rows of two heights (22 and 40, alternating) with

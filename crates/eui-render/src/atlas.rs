@@ -211,8 +211,27 @@ impl ImageAtlas {
     pub const SIZE: u32 = 2048;
 
     /// An empty atlas.
+    ///
+    /// The 16 MiB of texels is not allocated here. Most applications never
+    /// show a picture, and one that does not should not carry the buffer —
+    /// nor the matching texture, which is 16 MiB of GPU memory that no
+    /// budget in `spec/10-budgets.md` currently counts. The first write
+    /// allocates; until then this atlas is a few dozen bytes.
     pub fn new() -> Self {
-        Self { size: Self::SIZE, pixels: vec![0; (Self::SIZE * Self::SIZE * 4) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Some((0, Self::SIZE)) }
+        Self { size: Self::SIZE, pixels: Vec::new(), shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: None }
+    }
+
+    /// True once the texels exist, i.e. once anything has been packed. The
+    /// renderer asks so it can leave the texture unmade.
+    pub fn is_empty(&self) -> bool {
+        self.pixels.is_empty()
+    }
+
+    /// Allocate the texels on the first write.
+    fn ensure(&mut self) {
+        if self.pixels.is_empty() {
+            self.pixels = vec![0; (self.size as usize).saturating_mul(self.size as usize).saturating_mul(4)];
+        }
     }
 
     /// Take rows `y0..y1` of RGBA texels; refused, and nothing changes,
@@ -221,6 +240,7 @@ impl ImageAtlas {
         if y1 > self.size || y0 >= y1 || rows.len() != ((y1 - y0) as usize).saturating_mul(self.size as usize).saturating_mul(4) {
             return false;
         }
+        self.ensure();
         let start = (y0 as usize).saturating_mul(self.size as usize).saturating_mul(4);
         if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
             dst.copy_from_slice(rows);
@@ -313,6 +333,10 @@ impl ImageAtlas {
         if rgba.len() != (width as usize).checked_mul(height as usize)?.checked_mul(4)? {
             return None;
         }
+        // The one place a picture first reaches this atlas, so the one
+        // place the texels have to exist by. `update` only rewrites a
+        // region this already packed.
+        self.ensure();
         let w = width.checked_add(2)?;
         let h = height.checked_add(2)?;
         if w > self.size || h > self.size {
@@ -353,5 +377,42 @@ impl ImageAtlas {
 impl Default for ImageAtlas {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_image_atlas_costs_nothing_until_it_holds_a_picture() {
+        // The point of the laziness: 2048² RGBA is 16 MiB of buffer and a
+        // matching 16 MiB of GPU texture, and most applications never show
+        // a picture. A fresh atlas must therefore hold no texels and ask
+        // for no upload.
+        let mut atlas = ImageAtlas::new();
+        assert!(atlas.is_empty(), "a fresh image atlas holds no texels");
+        assert_eq!(atlas.dirty_rows(), None, "and so has nothing to upload");
+        assert!(atlas.pixels().is_empty());
+
+        // Packing one is what allocates, and it reports rows to upload.
+        let rgba = vec![255u8; 8 * 8 * 4];
+        let region = atlas.insert([7; 32], 8, 8, &rgba);
+        assert!(region.is_some(), "an 8x8 picture packs");
+        assert!(!atlas.is_empty(), "packing allocates the texels");
+        assert!(atlas.dirty_rows().is_some(), "and marks rows for upload");
+        assert_eq!(atlas.pixels().len(), (ImageAtlas::SIZE as usize).pow(2) * 4);
+
+        // The same hash again is the cached region, not a second pack.
+        assert_eq!(atlas.insert([7; 32], 8, 8, &rgba), region);
+    }
+
+    #[test]
+    fn rows_of_an_unallocated_atlas_are_empty_rather_than_a_panic() {
+        // `sync_atlas` asks for rows before anything is packed on the very
+        // first frame; an empty slice is the right answer, not an index out
+        // of a zero-length buffer.
+        let atlas = ImageAtlas::new();
+        assert!(atlas.rows(0, 4).is_empty());
     }
 }
