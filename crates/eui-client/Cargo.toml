@@ -30,10 +30,6 @@ pollster = "0.4"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "0.26"
-# The platform's own trust store, so the client agrees with the machine it
-# runs on: a development CA installed by `mkcert -install` is there, and
-# every other client on that machine already honours it.
-rustls-native-certs = "0.8"
 blake3 = "1"
 png = "0.17"
 # JPEG and WebP, both pure Rust and both optional: see the `jpeg` and
@@ -55,6 +51,11 @@ cpal = "0.15"
 # but those two, and `build.rs` turns the matching `has_*` cfg off there.
 # See its `platform_parts`.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# The platform's own trust store, so the client agrees with the machine it
+# runs on: a development CA installed by `mkcert -install` is there, and
+# every other client on that machine already honours it. A desktop only —
+# neither phone keeps its authorities where this can read them.
+rustls-native-certs = "0.8"
 # Accessibility: the tree handed to AT-SPI, UIA and AX. Only wakes when an
 # assistive technology asks; `--no-default-features` builds without it.
 accesskit = { version = "0.25", optional = true }

@@ -125,6 +125,17 @@ pub fn tls_config() -> std::sync::Arc<rustls::ClientConfig> {
         // trusted by the browser beside it, and a window that refused what
         // the browser accepts would be read as broken, not as careful.
         // `EUI_CA_SYSTEM=0` leaves the client on the public roots alone.
+        //
+        // A desktop only. Neither phone keeps its authorities in a
+        // directory of PEMs — iOS has a Keychain and Android has them in
+        // the framework — so `rustls-native-certs` there is not a store
+        // that comes up empty, it is a question that cannot be asked. The
+        // crate is left out for those targets rather than called and
+        // quietly believed, and `EUI_CA_FILE` is how a private CA reaches
+        // a phone. A session refused for want of one says so on the glass
+        // and names the variable (see `refusal` in `app.rs`), because a
+        // phone has no stderr to say it on.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if std::env::var("EUI_CA_SYSTEM").as_deref() != Ok("0") {
             let found = rustls_native_certs::load_native_certs();
             for cert in found.certs {
