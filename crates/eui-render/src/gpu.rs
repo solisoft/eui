@@ -163,8 +163,9 @@ impl fmt::Debug for Renderer {
 
 /// Where a frame is going: the view to draw into, the format that view was
 /// made with — a window's surface format is not `FORMAT` everywhere — its
-/// size in device pixels, and seconds on the client's clock, which the
-/// vertex stage animates `spin` from.
+/// size in device pixels, and the two clocks the vertex stage animates
+/// from: the window's, for `spin`, and the list's own age, for a
+/// transition (03 §5).
 #[derive(Debug, Clone, Copy)]
 pub struct Target<'a> {
     /// The view to draw into.
@@ -183,15 +184,35 @@ pub struct Target<'a> {
     /// what is already there. The first list of a frame clears; one
     /// composited on top of it does not.
     pub clear: bool,
-    /// Seconds since the window started.
-    pub now: f32,
+    /// Seconds since the window started. Double precision, so the spin's
+    /// phase is exact after hours; the fraction is what reaches the GPU.
+    pub now: f64,
+    /// Seconds since the paint that produced the list: a transition's
+    /// start time is relative to that, so the list and the clock agree
+    /// whatever process painted it.
+    pub age: f32,
 }
 
 impl<'a> Target<'a> {
-    /// A target that is the whole view: no offset, and it clears.
-    pub fn whole(view: &'a wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), now: f32) -> Self {
-        Self { view, format, size, origin: (0, 0), clear: true, now }
+    /// A target that is the whole view: no offset, and it clears. The list
+    /// is as old as the paint: `age` zero.
+    pub fn whole(view: &'a wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), now: f64) -> Self {
+        Self { view, format, size, origin: (0, 0), clear: true, now, age: 0.0 }
     }
+
+    /// The same target, for a list this old.
+    #[must_use]
+    pub fn aged(self, age: f32) -> Self {
+        Self { age, ..self }
+    }
+}
+
+/// The spin phase at `now`: a fraction of one revolution (03 §5), computed
+/// in double precision so a spinner is as smooth after a day as at the
+/// start.
+#[expect(clippy::cast_possible_truncation, reason = "a fraction of one")]
+fn spin_phase(now: f64) -> f32 {
+    (now / 1.2).fract() as f32
 }
 
 /// What one `render` cost the queue: the numbers the trace prints and the
@@ -409,7 +430,7 @@ impl Renderer {
                     buffers: &[wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Quad>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Unorm16x4, 8 => Unorm16x4],
                     }],
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -607,7 +628,8 @@ impl Renderer {
     /// Draw a list into a target. Returns what the frame cost the GPU's
     /// queue, for the trace and the budgets (10 §1).
     pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
-        let Target { view, format, size, origin, clear, now } = target;
+        let Target { view, format, size, origin, clear, now, age } = target;
+        let clock = [age, spin_phase(now), 0.0, 0.0];
         let mut stats = RenderStats { quads: list.quads.len(), runs: list.runs.len(), ..RenderStats::default() };
         stats.atlas_bytes = self.sync_atlas(tex, atlas, images);
         // The same list as last time — a spinner, a transition the vertex
@@ -647,12 +669,12 @@ impl Renderer {
                 // per distinct radius, in a submit of their own.
                 stats.passes += 1 + 3 * b.sigmas.len();
                 stats.submits += 1;
-                self.render_backdrop(tex, format, now, list, b)
+                self.render_backdrop(tex, format, clock, list, b)
             }
             None => Vec::new(),
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3], now, 0.0, 0.0, 0.0]));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3], clock[0], clock[1], clock[2], clock[3]]));
         let Some(pipeline) = self.pipelines.get(&format) else {
             return stats;
         };
@@ -727,7 +749,7 @@ impl Renderer {
     /// the caller must write its own uniforms afterwards — a queue's writes
     /// and submits are ordered, and that ordering is what keeps the two
     /// passes reading different values out of one buffer.
-    fn render_backdrop(&mut self, tex: &mut SessionTextures, format: wgpu::TextureFormat, now: f32, list: &DrawList, b: &Backdrop) -> Vec<wgpu::BindGroup> {
+    fn render_backdrop(&mut self, tex: &mut SessionTextures, format: wgpu::TextureFormat, clock: [f32; 4], list: &DrawList, b: &Backdrop) -> Vec<wgpu::BindGroup> {
         self.blur_pipeline_for(format);
         self.blur_targets(tex, format, b);
         let need = BLUR_STRIDE * 3 * b.sigmas.len() as u64;
@@ -770,7 +792,7 @@ impl Renderer {
         self.queue.write_buffer(&self.blur_params, 0, bytemuck::cast_slice(&params));
         // The snapshot draws a sub-rect of the frame, so the vertex stage is
         // told where the target's own origin sits in it.
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0, now, 0.0, 0.0, 0.0]));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&[rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0, clock[0], clock[1], clock[2], clock[3]]));
 
         let src_bind = |t: &wgpu::Texture| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -873,9 +895,16 @@ impl Renderer {
     }
 
     /// Draw into an off-screen target.
-    pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
+    pub fn render_offscreen(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f64, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
+        self.render_offscreen_at(tex, target, now, 0.0, list, atlas, images)
+    }
+
+    /// Draw into an off-screen target a list `age` seconds after it was
+    /// painted, for a test that wants to see a transition part way.
+    #[expect(clippy::too_many_arguments, reason = "a test's view of render(): two clocks and the four things a frame is drawn from")]
+    pub fn render_offscreen_at(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f64, age: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
         let view = target.texture.create_view(&Default::default());
-        self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now), list, atlas, images)
+        self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now).aged(age), list, atlas, images)
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

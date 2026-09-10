@@ -110,7 +110,12 @@ by a local handler's `set_style` — and the **new** record's `transition` is
 non-zero, the client animates `bg`, `fg`, `border_color` and `opacity` from
 the old record's resolved values to the new over that duration, along the
 theme's easing curve, plus `blur` (§2.1) — nothing else, because layout
-never runs per frame. A node that is mounted or replaced appears at once
+never runs per frame. The colours between are the renderer's: the quads a
+transitioning node paints carry both ends and the clock, and the vertex
+stage eases between them from the list's own age, so a frame owed to a
+transition alone is the previous draw list drawn again, as a spin's is.
+Only a transition of the blur is painted frame by frame, because the
+backdrop is sized from it. A node that is mounted or replaced appears at once
 unless it asks otherwise, which is `enter` below. The server is never
 told; a transition is the client's rendering of a state change it already
 knows about, and a client MAY skip it (reduced motion) without any

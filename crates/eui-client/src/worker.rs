@@ -602,6 +602,11 @@ fn put_list(w: &mut W, list: &DrawList) {
         w.f4(q.uv);
         w.f4(q.extra);
         w.f4(q.spin);
+        for pair in q.from.chunks_exact(2) {
+            if let [lo, hi] = *pair {
+                w.u32(u32::from(lo) | (u32::from(hi) << 16));
+            }
+        }
     }
     w.u32(u32::try_from(list.runs.len()).unwrap_or(u32::MAX));
     for r in &list.runs {
@@ -643,7 +648,19 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     let n = r.u32()? as usize;
     let mut quads = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
-        quads.push(Quad { rect: r.f4()?, params: r.f4()?, fill: r.f4()?, stroke: r.f4()?, uv: r.f4()?, extra: r.f4()?, spin: r.f4()? });
+        let (rect, params, fill, stroke, uv, extra, spin) = (r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?);
+        let mut from = [0u16; 8];
+        for pair in from.chunks_exact_mut(2) {
+            let v = r.u32()?;
+            if let [lo, hi] = pair {
+                #[expect(clippy::cast_possible_truncation, reason = "two sixteen-bit halves of one word")]
+                {
+                    *lo = v as u16;
+                    *hi = (v >> 16) as u16;
+                }
+            }
+        }
+        quads.push(Quad { rect, params, fill, stroke, uv, extra, spin, from });
     }
     let n = r.u32()? as usize;
     let mut runs = Vec::with_capacity(n.min(1 << 16));
@@ -1588,7 +1605,7 @@ mod tests {
     #[test]
     fn a_repeated_frame_carries_the_list_and_nothing_that_happens_once() {
         let list = |gpu_only: bool| DrawList {
-            quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0] }],
+            quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0], from: [0; 8] }],
             runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
@@ -1651,7 +1668,7 @@ mod tests {
             video: false,
         };
         let list = DrawList {
-            quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4] }],
+            quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8] }],
             runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],

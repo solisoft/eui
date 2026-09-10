@@ -803,14 +803,15 @@ impl Shell {
         };
         let view = frame.texture.create_view(&Default::default());
         let format = self.config.format;
-        let now = self.epoch.elapsed().as_secs_f32();
+        let now = self.epoch.elapsed().as_secs_f64();
+        let at = std::time::Instant::now();
 
         // The chrome first, clearing the whole window; then the application
         // over the part of it below the chrome, which is why the second
         // list must not clear.
         let mut stats = eui_render::RenderStats::default();
         if let (Some(list), Some((chrome, tex))) = (chrome_list, self.chrome.as_mut()) {
-            let target = eui_render::Target::whole(&view, format, (w, h), now);
+            let target = eui_render::Target::whole(&view, format, (w, h), now).aged(chrome.list_age(at));
             let (atlas, images) = chrome.atlases_mut();
             stats = renderer.render(tex, target, &list, atlas, images);
         }
@@ -826,6 +827,7 @@ impl Shell {
                 // strip with it.
                 clear: self.chrome.is_none(),
                 now,
+                age: tab.backend.list_age(at),
             };
             landed = l;
             let tex = &mut tab.textures;

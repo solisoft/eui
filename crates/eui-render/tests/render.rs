@@ -54,7 +54,7 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
         scale,
         size: (w, h),
         focus: None,
-        overrides: &[],
+        anims: &[],
         editing: None,
         now: 0.0,
         scrollbar_hot: None,
@@ -615,31 +615,145 @@ fn the_backdrop_is_only_as_big_as_the_blur_reaches() {
     assert!(b.rect[2] < 400 && b.rect[3] < 300, "not the whole framebuffer: {:?}", b.rect);
 }
 
+/// 03 §5: a node mid-transition paints both ends and the clock, and the
+/// list it is in is the same list for the whole of it. A transition of the
+/// blur cannot be the vertex stage's -- the backdrop is sized from it -- so
+/// that one is painted where it stands, as every transition once was.
 #[test]
-fn overrides_replace_a_nodes_colours_for_the_frame() {
+fn a_transition_paints_both_ends_and_the_clock() {
     let col = StyleRecord { display: Display::Column, ..Default::default() };
     let bg = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), height: Dim::Px(10), ..Default::default() };
     let mut fx = fixture(vec![col, bg], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
     let ix = fx.session.lookup(2).unwrap();
-    let mid = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5, blur: 0.0 };
-    let overrides = [(ix, mid)];
-    let list = paint(&mut Scene {
-        session: &fx.session,
-        layout: &fx.layout,
-        theme: &fx.theme,
-        text: &mut fx.text,
-        atlas: &mut fx.atlas,
-        images: &fx.images,
-        scale: 1.0,
-        size: (200, 100),
-        focus: None,
-        overrides: &overrides,
-        editing: None,
-        now: 0.0,
-        scrollbar_hot: None,
-    });
-    assert_eq!(list.quads[0].fill, [0.5, 0.25, 0.125, 1.0]);
-    assert_eq!(list.quads[0].params[3], 0.5);
+    let accent = eui_render::linear(fx.theme.color(Role::AccentBase));
+    let from = Colors { bg: Some(accent), fg: None, border: None, opacity: 1.0, blur: 0.0 };
+    let to = Colors { bg: Some([0.5, 0.25, 0.125, 1.0]), fg: None, border: None, opacity: 0.5, blur: 0.0 };
+    let at = Colors { bg: Some([0.6, 0.4, 0.3, 1.0]), fg: None, border: None, opacity: 0.75, blur: 0.0 };
+    let mut anim = GpuAnim { from, to, at, t0: -0.04, dur: 0.18, decelerate: false, baked: false };
+    let draw = |fx: &mut Fx, anims: &[(eui_tree::NodeIx, GpuAnim)]| {
+        paint(&mut Scene {
+            session: &fx.session,
+            layout: &fx.layout,
+            theme: &fx.theme,
+            text: &mut fx.text,
+            atlas: &mut fx.atlas,
+            images: &fx.images,
+            scale: 1.0,
+            size: (200, 100),
+            focus: None,
+            anims,
+            editing: None,
+            now: 0.0,
+            scrollbar_hot: None,
+        })
+    };
+    let list = draw(&mut fx, &[(ix, anim)]);
+    let q = list.quads[0];
+    assert_eq!(q.fill, [0.5, 0.25, 0.125, 1.0], "where it is going");
+    assert_eq!(unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]), pack_round(accent), "where it came from");
+    assert_eq!(q.params[3], 0.5, "the opacity it reaches");
+    assert_eq!(q.extra[3], 1.0, "and the one it left");
+    assert_eq!((q.spin[2], q.spin[3]), (-0.04, 0.18), "when, relative to this paint");
+    assert!(u32::try_from(q.params[2] as i64).is_ok_and(|f| f & ANIMATED != 0 && f & DECELERATE == 0), "marked for the vertex stage: {q:?}");
+    assert!(!list.cpu_bound, "and the list is good for every frame of it");
+
+    // The same, decelerating: an entrance's curve.
+    anim.decelerate = true;
+    let list = draw(&mut fx, &[(ix, anim)]);
+    assert!(u32::try_from(list.quads[0].params[2] as i64).is_ok_and(|f| f & DECELERATE != 0));
+
+    // Baked: painted at `at`, no ends, no clock.
+    anim.baked = true;
+    let list = draw(&mut fx, &[(ix, anim)]);
+    let q = list.quads[0];
+    assert_eq!(q.fill, [0.6, 0.4, 0.3, 1.0]);
+    assert_eq!(q.params[3], 0.75);
+    assert_eq!((q.extra[3], q.spin[2], q.spin[3], q.from), (0.0, 0.0, 0.0, [0; 8]));
+    assert!(u32::try_from(q.params[2] as i64).is_ok_and(|f| f & ANIMATED == 0));
+}
+
+/// A colour through sixteen bits and back, to the precision that survives.
+fn pack_round(c: [f32; 4]) -> [f32; 4] {
+    unpack4(eui_render::pack4(c))
+}
+
+/// One channel of linear light as the sRGB target stores it.
+fn linear_to_srgb(v: f32) -> f32 {
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// The vertex stage eases between the ends from the list's age: at the
+/// start the colour it left, halfway the theme's curve says where, and past
+/// the end the colour it reaches. The same list every time.
+#[test]
+fn a_transition_renders_its_midway_colour_at_half_time() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    // One plain quad, red to blue over a second, from the paint.
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let flags = ANIMATED as f32;
+    let from = [eui_render::pack4(red), [0; 4]].concat().try_into().unwrap();
+    list.quads = vec![Quad { rect: [10.0, 10.0, 40.0, 40.0], params: [0.0, 0.0, flags, 1.0], fill: blue, extra: [0.0, 0.0, 0.0, 1.0], spin: [0.0, 0.0, 0.0, 1.0], from, ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 9;
+    let target = r.offscreen(100, 100);
+    let mut at = |r: &mut Renderer, st: &mut SessionTextures, age: f32| {
+        r.render_offscreen_at(st, &target, 0.0, age, &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        let i = (30 * 100 + 30) * 4;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    let start = at(&mut r, &mut st, 0.0);
+    let mid = at(&mut r, &mut st, 0.5);
+    let end = at(&mut r, &mut st, 2.0);
+    assert!(start[0] > 250 && start[2] < 5, "at the start, the colour it left: {start:?}");
+    assert!(end[2] > 250 && end[0] < 5, "past the end, the colour it reaches: {end:?}");
+    // Halfway along the theme's curve, in linear light, then to sRGB as the
+    // target stores it; three levels of slack for the interpolation's
+    // rounding.
+    let k = eui_theme::Curve::STANDARD.at(0.5);
+    let srgb = |v: f32| (linear_to_srgb(v) * 255.0).round() as i32;
+    let want = [srgb(1.0 - k), 0, srgb(k)];
+    for (got, want) in mid.iter().zip(want) {
+        assert!((i32::from(*got) - want).abs() <= 3, "halfway: {mid:?}, wanted {want:?} at k = {k}");
+    }
+}
+
+/// An entrance starts from no opacity: the quad is not there at age zero
+/// and is on its way at half time, along the entrance's own curve.
+#[test]
+fn an_entering_quad_fades_its_opacity_from_nothing() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let flags = (ANIMATED | DECELERATE) as f32;
+    list.quads =
+        vec![Quad { rect: [10.0, 10.0, 40.0, 40.0], params: [0.0, 0.0, flags, 1.0], fill: white, extra: [0.0, 0.0, 0.0, 0.0], spin: [0.0, 0.0, 0.0, 1.0], from: [65535; 8], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    let target = r.offscreen(100, 100);
+    let mut at = |r: &mut Renderer, st: &mut SessionTextures, age: f32| {
+        r.render_offscreen_at(st, &target, 0.0, age, &list, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()[(30 * 100 + 30) * 4]
+    };
+    let start = at(&mut r, &mut st, 0.0);
+    let mid = at(&mut r, &mut st, 0.5);
+    let end = at(&mut r, &mut st, 1.5);
+    assert!(start < 3, "nothing there yet: {start}");
+    assert_eq!(end, 255, "and then all there");
+    let k = eui_theme::Curve::DECELERATE.at(0.5);
+    let want = (linear_to_srgb(k) * 255.0).round() as i32;
+    assert!((i32::from(mid) - want).abs() <= 3, "halfway along the entrance curve: {mid}, wanted {want} at k = {k}");
 }
 
 #[test]
@@ -661,7 +775,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         scale: 1.0,
         size: (200, 100),
         focus: None,
-        overrides: &[],
+        anims: &[],
         editing,
         now: 0.0,
         scrollbar_hot: None,
@@ -735,7 +849,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             scale: 1.0,
             size: (200, 100),
             focus: None,
-            overrides: &[],
+            anims: &[],
             editing,
             now: 0.0,
             scrollbar_hot: None,
@@ -848,7 +962,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             scale: 1.0,
             size: (100, 100),
             focus: None,
-            overrides: &[],
+            anims: &[],
             editing: None,
             now,
             scrollbar_hot: None,
@@ -899,7 +1013,7 @@ fn the_clock_turns_a_spinning_node_a_quarter_of_the_way_round() {
     let (mut fx, list) = spinning_bar();
     // One revolution per 1.2 s, so 0.3 s is a right angle: the horizontal
     // bar stands up, about a centre that does not move.
-    let shot = |r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx, now: f32| {
+    let shot = |r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx, now: f64| {
         let target = r.offscreen(100, 100);
         r.render_offscreen(st, &target, now, &list, &mut fx.atlas, &mut fx.images);
         r.read_back(&target).unwrap()

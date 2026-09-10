@@ -568,29 +568,39 @@ fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
     let t0 = Instant::now();
     d.tick(t0);
     let accent = box_fill(&d.paint(400, 300));
+    let quad = |list: &eui_render::DrawList| *list.quads.iter().find(|q| q.params[2] as u32 & (eui_render::TEXTURED | eui_render::TEXTURED_RGBA) == 0 && q.fill[3] > 0.0).expect("a box");
     // Restyle the button: danger background, `base` motion (180 ms).
     let danger =
         StyleRecord { display: Display::Row, padding: [3; 4], bg: ColorRef::role(Role::DangerBase.id()), fg: ColorRef::role(Role::AccentOn.id()), radius: 2, transition: 2, ..Default::default() };
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: danger }, Op::SetStyle { node: 3, style: 3 }] }));
     assert!(d.animating());
     assert_eq!(d.next_frame_at(), Some(t0), "a frame is due at once");
-    // At t0 the button still wears its old colour.
+    // The quad carries both ends and the clock: the vertex stage moves
+    // between them, so this list is the frame for the whole transition.
     let start_list = d.paint(400, 300);
-    let at_start = box_fill(&start_list);
-    assert_eq!(at_start, accent);
-    // The colours between are interpolated here, frame by frame, so the
-    // next frame is another list: this one is not the window's to repeat.
-    assert!(!start_list.gpu_only, "a transition frame is not drawn again as it is");
+    let q = quad(&start_list);
+    let danger = eui_render::linear(d.theme_color(Role::DangerBase));
+    assert_eq!(q.fill, danger, "where it is going");
+    assert_eq!(eui_render::unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]), eui_render::unpack4(eui_render::pack4(accent)), "where it came from");
+    assert!(q.params[2] as u32 & eui_render::ANIMATED != 0, "marked for the vertex stage");
+    assert_eq!(q.spin[2], 0.0, "it began at this paint");
+    assert!((q.spin[3] - 0.18).abs() < 1e-6, "and takes the base motion");
+    assert!(start_list.gpu_only, "so the window draws this list again");
+    assert_eq!(start_list.repeat_until_ms, 180, "until the transition ends");
     assert_eq!(d.next_frame_at(), Some(t0 + Duration::from_millis(16)));
-    // Halfway: somewhere between, and a frame is due when asked at that time.
+    // Halfway: the same list, not painted again; the clock is the GPU's.
     assert!(!d.tick(t0 + Duration::from_millis(5)), "not due yet");
     assert!(d.tick(t0 + Duration::from_millis(90)));
-    let mid = box_fill(&d.paint(400, 300));
-    assert!(mid != accent && mid[0] != 0.0, "{mid:?}");
-    // Past the end: exactly the new colour, and the driver is at rest again.
+    let mid_list = d.paint(400, 300);
+    assert!(std::sync::Arc::ptr_eq(&start_list, &mid_list), "the same list halfway");
+    assert_eq!(d.spin_repeats(), 1);
+    assert_eq!(d.next_frame_at(), Some(t0 + Duration::from_millis(106)), "the next frame at sixty");
+    // Past the end: exactly the new colour, no transition on the quad, and
+    // the driver is at rest again.
     d.tick(t0 + Duration::from_millis(200));
-    let end = box_fill(&d.paint(400, 300));
-    assert_eq!(end, eui_render::linear(d.theme_color(Role::DangerBase)));
+    let end = quad(&d.paint(400, 300));
+    assert_eq!(end.fill, danger);
+    assert!(end.params[2] as u32 & eui_render::ANIMATED == 0, "settled");
     assert!(!d.animating());
     assert_eq!(d.next_frame_at(), None);
     assert!(!d.tick(t0 + Duration::from_millis(300)));
@@ -672,7 +682,12 @@ fn an_entrance_dims_what_is_painted_inside_it() {
     d.tick(t0 + Duration::from_millis(90));
     let list = d.paint(400, 300);
     let pane = list.quads.iter().find(|q| q.rect[2] == 80.0 && q.rect[3] == 40.0).expect("the panel");
-    assert!(pane.params[3] > 0.0 && pane.params[3] < 1.0, "panel {:?}", pane.params[3]);
+    // The panel carries the entrance: from nothing to its own opacity,
+    // decelerating, on a clock that began ninety milliseconds ago.
+    assert_eq!((pane.extra[3], pane.params[3]), (0.0, 1.0), "panel from {} to {}", pane.extra[3], pane.params[3]);
+    assert!(pane.params[2] as u32 & (eui_render::ANIMATED | eui_render::DECELERATE) == eui_render::ANIMATED | eui_render::DECELERATE);
+    assert!((pane.spin[2] + 0.09).abs() < 1e-3 && (pane.spin[3] - 0.18).abs() < 1e-6, "when: {:?}", &pane.spin[2..]);
+    assert!(list.gpu_only, "and the list is the frame for the whole entrance");
     // Only the glyphs inside the panel — the counter behind it has its own,
     // and those must stay at full strength, which is half of what this
     // checks: the fade descends, and it stops where the node does.
@@ -682,16 +697,18 @@ fn an_entrance_dims_what_is_painted_inside_it() {
     assert!(!within.is_empty(), "the panel's text was painted");
     assert!(!without.is_empty(), "the counter's text is still there to compare against");
     for g in &within {
-        assert!((g.params[3] - pane.params[3]).abs() < 1e-3, "a glyph at {} while its panel is at {}", g.params[3], pane.params[3]);
+        assert_eq!((g.extra[3], g.params[3]), (pane.extra[3], pane.params[3]), "a glyph on its own way while its panel is on another: {g:?}");
+        assert_eq!((g.spin[2], g.spin[3]), (pane.spin[2], pane.spin[3]), "and on the panel's clock");
+        assert!(g.params[2] as u32 & eui_render::DECELERATE != 0);
     }
     for g in &without {
-        assert_eq!(g.params[3], 1.0, "a glyph outside the entrance was dimmed by it");
+        assert!(g.params[2] as u32 & eui_render::ANIMATED == 0 && g.params[3] == 1.0, "a glyph outside the entrance was dimmed by it");
     }
 
     // And once it has arrived, everything is back to full strength.
     d.tick(t0 + Duration::from_millis(200));
     let done = d.paint(400, 300);
-    assert!(done.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).all(|q| q.params[3] == 1.0));
+    assert!(done.quads.iter().filter(|q| q.params[2] as u32 & eui_render::TEXTURED != 0).all(|q| q.params[3] == 1.0 && q.params[2] as u32 & eui_render::ANIMATED == 0));
 }
 
 /// The exception is opt-in: the same node without the byte is simply there.

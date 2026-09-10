@@ -24,6 +24,15 @@ pub const BLURRED: u32 = 4;
 /// does not change from one spin frame to the next, which is what lets the
 /// window redraw one without repainting anything.
 pub const SPINNING: u32 = 8;
+/// The quad is mid-transition (03 §5): its fill, stroke and opacity are
+/// `mix(from, to, k)` for a `k` the vertex stage eases from the list's age,
+/// `spin[2]` (when the transition began, seconds before the paint) and
+/// `spin[3]` (how long it takes). The endpoints are in the instance, so the
+/// list does not change while it runs.
+pub const ANIMATED: u32 = 16;
+/// The transition decelerates (an entrance) rather than easing along the
+/// theme's standard curve.
+pub const DECELERATE: u32 = 32;
 
 /// The caret and selection of the focused editable node, as byte offsets
 /// into the text the node shows, plus how far the text is scrolled left to
@@ -75,14 +84,95 @@ pub struct Quad {
     pub uv: [f32; 4],
     /// `angle` in radians about the rect's centre (a canvas segment), the
     /// shadow's blur, the backdrop's standard deviation in device px, then
-    /// one spare float.
+    /// the opacity a transition started from (`ANIMATED`).
     pub extra: [f32; 4],
     /// Where this quad's centre sits relative to the centre of the spinning
     /// node it belongs to, device px, when `SPINNING` is set; zero
     /// otherwise. The vertex stage turns the offset and adds it back, so
     /// the node's centre never has to be sent: it is this quad's centre
-    /// minus this offset. Two spare floats follow.
+    /// minus this offset. Then, for `ANIMATED`, when the transition began
+    /// -- seconds relative to the paint, so at or below zero -- and how
+    /// long it takes.
     pub spin: [f32; 4],
+    /// The fill and the stroke a transition started from, as four 16-bit
+    /// unsigned normals each (`ANIMATED`); zero otherwise. Sixteen bits of
+    /// linear colour are more than the eye or the target has, at half the
+    /// bytes of floats.
+    pub from: [u16; 8],
+}
+
+impl Default for Quad {
+    fn default() -> Self {
+        bytemuck::Zeroable::zeroed()
+    }
+}
+
+/// A linear colour as the 16-bit normals `Quad::from` carries.
+#[must_use]
+pub fn pack4(c: [f32; 4]) -> [u16; 4] {
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "clamped to the unit interval and scaled to fit")]
+    let n = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+    [n(c[0]), n(c[1]), n(c[2]), n(c[3])]
+}
+
+/// The colour `pack4` packed, for a test that wants to read it back.
+#[must_use]
+pub fn unpack4(p: [u16; 4]) -> [f32; 4] {
+    let f = |v: u16| f32::from(v) / 65535.0;
+    [f(p[0]), f(p[1]), f(p[2]), f(p[3])]
+}
+
+/// One running transition (03 §5), as the painter is told of it: where it
+/// started, where it ends, and when. The vertex stage interpolates between
+/// the two from the list's age, so the quads a node paints carry both and
+/// the list stays the same list until the transition is over.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpuAnim {
+    /// The colours it left.
+    pub from: Colors,
+    /// The colours it reaches.
+    pub to: Colors,
+    /// The colours at this paint, for what cannot be interpolated on the
+    /// GPU: a blur, whose backdrop textures are sized from it, and a quad
+    /// that two transitions would pull at once.
+    pub at: Colors,
+    /// When it began, seconds relative to this paint: at or below zero.
+    pub t0: f32,
+    /// How long it takes, seconds.
+    pub dur: f32,
+    /// Decelerates (an entrance) rather than easing along the standard
+    /// curve.
+    pub decelerate: bool,
+    /// Painted at `at`, frame by frame, as every transition once was: the
+    /// blur it animates sizes the backdrop's textures, which the vertex
+    /// stage cannot do. Such a list is not drawn again.
+    pub baked: bool,
+}
+
+impl GpuAnim {
+    /// The eased fraction at this paint, for a quad that has to be baked
+    /// after all.
+    fn k(t0: f32, dur: f32, decelerate: bool) -> f32 {
+        let curve = if decelerate { eui_theme::Curve::DECELERATE } else { eui_theme::Curve::STANDARD };
+        curve.at(-t0 / dur.max(1e-3))
+    }
+}
+
+/// The endpoints a colour transitions between, as the quad carries them:
+/// `(to, from)`. An absent side fades through transparent -- the other
+/// side's colour at no alpha -- so a background arriving from none washes
+/// in rather than from some arbitrary colour, and one leaving washes out.
+fn endpoints(from: Option<[f32; 4]>, to: Option<[f32; 4]>) -> (Option<[f32; 4]>, Option<[f32; 4]>) {
+    match (from, to) {
+        (None, None) => (None, None),
+        (Some(a), Some(b)) => (Some(b), Some(a)),
+        (None, Some(b)) => (Some(b), Some([b[0], b[1], b[2], 0.0])),
+        (Some(a), None) => (Some([a[0], a[1], a[2], 0.0]), Some(a)),
+    }
+}
+
+fn lerp4(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
+    [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k]
 }
 
 /// One `draw` call: a span of instances, the scissor rect they are clipped
@@ -175,9 +265,9 @@ pub struct Scene<'a> {
     pub images: &'a ImageAtlas,
     /// The node wearing the focus ring, when focus is keyboard-visible.
     pub focus: Option<NodeIx>,
-    /// Nodes mid-transition (03 §5) with the colours to paint this frame,
-    /// in place of their record's.
-    pub overrides: &'a [(NodeIx, Colors)],
+    /// Nodes mid-transition (03 §5): where each is going, where it came
+    /// from, and when, for the vertex stage to interpolate.
+    pub anims: &'a [(NodeIx, GpuAnim)],
     /// The field being edited: its caret and selection (03 §3).
     pub editing: Option<Editing>,
     /// Seconds on the client's clock, for `spin` (03 §5).
@@ -198,7 +288,7 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let Some(root) = scene.session.root() else {
         return list;
     };
-    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, fade: 1.0, blur: None };
+    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -227,16 +317,52 @@ struct Painter<'s, 'a> {
     /// True once the top layer is being painted, so the overlays in it
     /// are drawn instead of deferred again.
     in_top: bool,
-    /// The entrances (03 §5) this node sits inside, multiplied together.
-    /// `opacity` is otherwise a property of one node's own quads, but an
-    /// entrance is the node *and everything painted for it* arriving — a
-    /// dialog whose panel faded up while its words were already at full
-    /// strength would read as the text arriving on its own.
-    fade: f32,
+    /// The transition of the node whose own quads are being pushed, if it
+    /// has one: every quad it paints gets the opacity endpoints and the
+    /// timeline, and constant colours unless the site that pushed it knew
+    /// better.
+    own: Option<Own>,
+    /// The entrance (03 §5) this node sits inside, if any. `opacity` is
+    /// otherwise a property of one node's own quads, but an entrance is
+    /// the node *and everything painted for it* arriving — a dialog whose
+    /// panel faded up while its words were already at full strength would
+    /// read as the text arriving on its own. Nested entrances on one
+    /// timeline fold into one; on different timelines they cannot both be
+    /// the vertex stage's, and the quads under them are baked instead.
+    fade: Option<FadeCtx>,
     /// The backdrop being accumulated, once some node has asked for one:
     /// the region as `x0, y0, x1, y1` in device pixels, the first blurred
     /// instance, and the standard deviations met.
     blur: Option<([f32; 4], u32, Vec<f32>)>,
+}
+
+/// A node's own transition, as its quads carry it.
+#[derive(Debug, Clone, Copy)]
+struct Own {
+    t0: f32,
+    dur: f32,
+    decelerate: bool,
+    opacity_from: f32,
+    opacity_to: f32,
+    /// The foreground it left, for its glyphs and caret; `None` when the
+    /// foreground does not move.
+    fg_from: Option<[f32; 4]>,
+}
+
+/// An entrance above the node being painted: how dim everything under it
+/// starts and ends, and when.
+#[derive(Debug, Clone, Copy)]
+struct FadeCtx {
+    from: f32,
+    to: f32,
+    /// The product at this paint, for a quad that has to be baked.
+    at: f32,
+    t0: f32,
+    dur: f32,
+    decelerate: bool,
+    /// Two timelines met: what is under this is painted at `at`, on the
+    /// CPU, and the list is right for this frame only.
+    conflict: bool,
 }
 
 impl Painter<'_, '_> {
@@ -331,8 +457,56 @@ impl Painter<'_, '_> {
         rect[0] < cx + cw && rect[0] + rect[2] > cx && rect[1] < cy + ch && rect[1] + rect[3] > cy
     }
 
+    /// Give a quad the node's own transition: the opacity it started
+    /// from, the timeline, and the colours it started from -- constant
+    /// unless the site knows the endpoints, as the background and the
+    /// glyphs do.
+    fn animate(&self, q: &mut Quad, fill_from: Option<[f32; 4]>, stroke_from: Option<[f32; 4]>) {
+        let Some(own) = self.own else { return };
+        let fill_from = fill_from.unwrap_or(q.fill);
+        let stroke_from = stroke_from.unwrap_or(q.stroke);
+        // The quad's opacity is the node's, or a fraction of it (a
+        // selection at a third): keep the fraction at both ends.
+        let ratio = if own.opacity_to > 0.0 { q.params[3] / own.opacity_to } else { 1.0 };
+        q.extra[3] = own.opacity_from * ratio;
+        q.spin[2] = own.t0;
+        q.spin[3] = own.dur;
+        q.from = [pack4(fill_from), pack4(stroke_from)].concat().try_into().unwrap_or([0; 8]);
+        let flags = flags_of(q) | ANIMATED | if own.decelerate { DECELERATE } else { 0 };
+        q.params[2] = flags as f32;
+    }
+
     fn push(&mut self, mut q: Quad) {
-        q.params[3] *= self.fade;
+        if self.own.is_some() && flags_of(&q) & ANIMATED == 0 {
+            self.animate(&mut q, None, None);
+        }
+        if let Some(f) = self.fade {
+            let flags = flags_of(&q);
+            let animated = flags & ANIMATED != 0;
+            let same_timeline = q.spin[2] == f.t0 && q.spin[3] == f.dur && (flags & DECELERATE != 0) == f.decelerate;
+            if animated && same_timeline && !f.conflict {
+                // The node's own transition and the entrance above it run
+                // together: one timeline, both ends scaled.
+                q.extra[3] *= f.from;
+                q.params[3] *= f.to;
+            } else if animated || f.conflict {
+                // Two timelines would pull one quad two ways. The vertex
+                // stage takes one; this quad is painted at now instead, and
+                // the list is right for this frame only.
+                if animated {
+                    bake(&mut q);
+                }
+                q.params[3] *= f.at;
+                self.list.cpu_bound = true;
+            } else {
+                q.extra[3] = q.params[3] * f.from;
+                q.params[3] *= f.to;
+                q.spin[2] = f.t0;
+                q.spin[3] = f.dur;
+                q.from = [pack4(q.fill), pack4(q.stroke)].concat().try_into().unwrap_or([0; 8]);
+                q.params[2] = (flags | ANIMATED | if f.decelerate { DECELERATE } else { 0 }) as f32;
+            }
+        }
         // A rotated quad's `rect` is not its bounding box; the scissor
         // handles it, the cull does not.
         if (q.extra[0] != 0.0 || self.visible(q.rect)) && q.rect[2] > 0.0 && q.rect[3] > 0.0 {
@@ -391,8 +565,17 @@ impl Painter<'_, '_> {
         }
         let record = self.scene.session.style_of(ix);
         let scale = self.scene.scale;
-        let over = self.scene.overrides.iter().find(|(n, _)| *n == ix).map(|(_, c)| *c);
-        let opacity = over.map_or(f32::from(record.opacity) / 255.0, |c| c.opacity);
+        // A transition on this node (03 §5). Its quads carry both ends and
+        // the vertex stage moves between them -- unless it has to be baked,
+        // in which case they carry where it stands now, as they always did.
+        let anim = self.scene.anims.iter().find(|(n, _)| *n == ix).map(|(_, a)| *a);
+        let opacity = match anim {
+            Some(a) if a.baked => a.at.opacity,
+            Some(a) => a.to.opacity,
+            None => f32::from(record.opacity) / 255.0,
+        };
+        let saved_own = self.own;
+        self.own = anim.filter(|a| !a.baked).map(|a| Own { t0: a.t0, dur: a.dur, decelerate: a.decelerate, opacity_from: a.from.opacity, opacity_to: a.to.opacity, fg_from: None });
         let dev = self.device(rect);
         let radius = self.scene.theme.radius(record.radius).unwrap_or(0.0) * scale;
 
@@ -409,80 +592,103 @@ impl Painter<'_, '_> {
                 uv: [0.0; 4],
                 extra: [0.0, blur, 0.0, 0.0],
                 spin: [0.0; 4],
+                ..Quad::default()
             });
         }
 
         // Background and border. A uniform border is one stroked quad; a
         // border that differs per side — a tab's underline, a banner's left
         // bar — is the fill plus up to four thin quads, square-cornered.
-        let fill = over.map_or_else(|| self.color(record.bg, None), |c| c.bg);
+        let (fill, fill_from) = match anim {
+            Some(a) if a.baked => (a.at.bg, None),
+            Some(a) => endpoints(a.from.bg, a.to.bg),
+            None => (self.color(record.bg, None), None),
+        };
         let b = style.border;
         let uniform = b.t == b.r && b.r == b.b && b.b == b.l;
         let border_w = b.t.max(b.r).max(b.b).max(b.l) * scale;
-        let stroke = if border_w > 0.0 { over.map_or_else(|| self.color(record.border_color, None), |c| c.border) } else { None };
+        let (stroke, stroke_from) = if border_w > 0.0 {
+            match anim {
+                Some(a) if a.baked => (a.at.border, None),
+                Some(a) => endpoints(a.from.border, a.to.border),
+                None => (self.color(record.border_color, None), None),
+            }
+        } else {
+            (None, None)
+        };
         // 03 §2: a `blur` shows the backdrop through the border box, and the
         // background is composited over that. It is therefore worth a quad
         // even when `bg` is none — a pane of clear frosted glass.
-        let sigma = over.map_or_else(|| f32::from(record.blur), |c| c.blur) * scale;
+        let sigma = anim.map_or_else(|| f32::from(record.blur), |a| a.at.blur) * scale;
         let frosted = sigma > 0.0 && dev[2] > 0.0 && dev[3] > 0.0 && self.visible(dev);
         let (chain, flags) = if frosted { (self.note_blur(sigma, dev), BLURRED as f32) } else { (0, 0.0) };
         if uniform {
             if fill.is_some() || stroke.is_some() || frosted {
                 self.set_chain(chain);
-                self.push(Quad {
+                let mut q = Quad {
                     rect: dev,
                     params: [radius, if stroke.is_some() { border_w } else { 0.0 }, flags, opacity],
                     fill: fill.unwrap_or([0.0; 4]),
                     stroke: stroke.unwrap_or([0.0; 4]),
                     uv: [0.0; 4],
                     extra: [0.0, 0.0, sigma, 0.0],
-                    spin: [0.0; 4],
-                });
+                    ..Quad::default()
+                };
+                self.animate(&mut q, fill_from, stroke_from);
+                self.push(q);
                 self.set_chain(0);
             }
         } else {
             if fill.is_some() || frosted {
                 self.set_chain(chain);
-                self.push(Quad { rect: dev, params: [radius, 0.0, flags, opacity], fill: fill.unwrap_or([0.0; 4]), stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0, 0.0, sigma, 0.0], spin: [0.0; 4] });
+                let mut q = Quad { rect: dev, params: [radius, 0.0, flags, opacity], fill: fill.unwrap_or([0.0; 4]), extra: [0.0, 0.0, sigma, 0.0], ..Quad::default() };
+                self.animate(&mut q, fill_from, None);
+                self.push(q);
                 self.set_chain(0);
             }
             if let Some(stroke) = stroke {
                 let [x, y, w, h] = dev;
-                let edge = |rect: [f32; 4]| Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] };
                 let (t, r, bo, l) = ((b.t * scale).round(), (b.r * scale).round(), (b.b * scale).round(), (b.l * scale).round());
-                if t > 0.0 {
-                    self.push(edge([x, y, w, t]));
-                }
-                if bo > 0.0 {
-                    self.push(edge([x, y + h - bo, w, bo]));
-                }
-                if l > 0.0 {
-                    self.push(edge([x, y, l, h]));
-                }
-                if r > 0.0 {
-                    self.push(edge([x + w - r, y, r, h]));
+                let edges = [[x, y, w, t], [x, y + h - bo, w, bo], [x, y, l, h], [x + w - r, y, r, h]];
+                for rect in edges.into_iter().filter(|e| e[2] > 0.0 && e[3] > 0.0) {
+                    let mut q = Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: stroke, ..Quad::default() };
+                    self.animate(&mut q, stroke_from, None);
+                    self.push(q);
                 }
             }
         }
 
         // Spec 03 §3: a 2 px ring in `focus.ring`, outside the border box.
+        // The ring is the viewer's, not the node's: it does not fade with
+        // a transition on the node.
         if self.scene.focus == Some(ix) {
             let ring = 2.0 * scale;
             let [x, y, w, h] = dev;
+            let own = self.own.take();
             self.push(Quad {
                 rect: [x - ring, y - ring, w + 2.0 * ring, h + 2.0 * ring],
                 params: [radius + ring, ring, 0.0, 1.0],
                 fill: [0.0; 4],
                 stroke: linear(self.scene.theme.color(Role::FocusRing)),
-                uv: [0.0; 4],
-                extra: [0.0; 4],
-                spin: [0.0; 4],
+                ..Quad::default()
             });
+            self.own = own;
         }
 
         // Foreground colour inherits down the tree; text.default is the floor.
         let parent_fg = self.inherited_fg.last().copied().unwrap_or_else(|| linear(self.scene.theme.color(Role::TextDefault)));
-        let fg = over.and_then(|c| c.fg).unwrap_or_else(|| self.color(record.fg, Some(parent_fg)).unwrap_or(parent_fg));
+        let resolved_fg = self.color(record.fg, Some(parent_fg)).unwrap_or(parent_fg);
+        let (fg, fg_from) = match anim {
+            Some(a) if a.baked => (a.at.fg.unwrap_or(resolved_fg), None),
+            Some(a) => {
+                let (to, from) = endpoints(a.from.fg, a.to.fg);
+                (to.unwrap_or(resolved_fg), from)
+            }
+            None => (resolved_fg, None),
+        };
+        if let Some(own) = &mut self.own {
+            own.fg_from = fg_from;
+        }
         self.inherited_fg.push(fg);
 
         let virtual_ = self.scene.layout.is_virtual(ix);
@@ -506,6 +712,7 @@ impl Painter<'_, '_> {
                         uv: [rx / n, ry / n, (rx + rw) / n, (ry + rh) / n],
                         extra: [0.0; 4],
                         spin: [0.0; 4],
+                        ..Quad::default()
                     });
                 }
             }
@@ -518,6 +725,7 @@ impl Painter<'_, '_> {
                     uv: [0.0; 4],
                     extra: [0.0; 4],
                     spin: [0.0; 4],
+                    ..Quad::default()
                 };
                 q.rect[3] = q.rect[3].max(1.0);
                 self.push(q);
@@ -532,12 +740,19 @@ impl Painter<'_, '_> {
         // Children, with a scissor for scrolling containers.
         if !virtual_ {
             // A node mid-entrance dims everything below it by as much as it
-            // is dimmed itself. `over` is set only while an animation runs,
-            // so this is 1.0 for every node of every ordinary frame.
+            // is dimmed itself. `anim` is set only while one runs, so this
+            // is `None` for every node of every ordinary frame.
             let saved_fade = self.fade;
             if record.animation == eui_proto::ANIMATION_ENTER {
-                if let Some(c) = over {
-                    self.fade *= c.opacity;
+                if let Some(a) = anim {
+                    let (from, to, at) = if a.baked { (a.at.opacity, a.at.opacity, a.at.opacity) } else { (a.from.opacity, a.to.opacity, a.at.opacity) };
+                    self.fade = Some(match self.fade {
+                        None => FadeCtx { from, to, at, t0: a.t0, dur: a.dur, decelerate: a.decelerate, conflict: a.baked },
+                        // Two entrances on one timeline -- grafted in one
+                        // batch, over one duration -- are one entrance.
+                        Some(f) if !f.conflict && !a.baked && f.t0 == a.t0 && f.dur == a.dur && f.decelerate == a.decelerate => FadeCtx { from: f.from * from, to: f.to * to, at: f.at * at, ..f },
+                        Some(f) => FadeCtx { at: f.at * at, conflict: true, ..f },
+                    });
                 }
             }
             let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
@@ -568,6 +783,7 @@ impl Painter<'_, '_> {
                 self.scrollbar(ix, rect, opacity);
             }
         }
+        self.own = saved_own;
         self.inherited_fg.pop();
     }
 
@@ -603,7 +819,7 @@ impl Painter<'_, '_> {
             let h = tops.get(row + 1).copied().unwrap_or(top) - top;
             let r = Rect::new(x0 + inset, y0 + top - sy + inset / 2.0, (inner_w - 2.0 * inset).max(0.0), (h - inset).max(0.0));
             let q = self.device(r);
-            self.push(Quad { rect: q, params: [radius * self.scene.scale, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+            self.push(Quad { rect: q, params: [radius * self.scene.scale, 0.0, 0.0, opacity], fill, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
         }
     }
 
@@ -623,7 +839,7 @@ impl Painter<'_, '_> {
             t.w += 2.0;
         }
         let q = self.device(t);
-        self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+        self.push(Quad { rect: q, params: [q[2] / 2.0, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
     }
 
     fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
@@ -667,14 +883,18 @@ impl Painter<'_, '_> {
                 }
                 for (y, x0, x1) in lines {
                     let r = self.device(Rect::new(origin_x + x0, origin_y + y - above, x1 - x0, above + below));
-                    self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+                    self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
                 }
             }
             let (cx, cy) = shaped.caret(e.caret);
             let x = ((origin_x + cx) * scale).round();
             let y0 = ((origin_y + cy - above) * scale).round();
             let y1 = ((origin_y + cy + below) * scale).round();
-            self.push(Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+            let mut caret = Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
+            if let Some(from) = self.own.and_then(|o| o.fg_from) {
+                self.animate(&mut caret, Some(from), None);
+            }
+            self.push(caret);
         }
         // Per-glyph colour, for syntax highlighting: the `spans` prop, a flat
         // list of `[start byte, length, colour]` triples.
@@ -697,19 +917,23 @@ impl Painter<'_, '_> {
             let Some(region) = self.scene.atlas.get(self.scene.text, g.key, scale) else {
                 continue;
             };
-            let fill = span_at(&spans, &mut cursor, g.start).unwrap_or(fg);
+            let span = span_at(&spans, &mut cursor, g.start);
             let gx = ((origin_x + g.x) * scale).round() + region.left as f32;
             let gy = ((origin_y + g.y) * scale).round() - region.top as f32;
             let (rx, ry, rw, rh) = (region.x as f32, region.y as f32, region.w as f32, region.h as f32);
-            self.push(Quad {
+            let mut q = Quad {
                 rect: [gx, gy, rw, rh],
                 params: [0.0, 0.0, TEXTURED as f32, opacity],
-                fill,
-                stroke: [0.0; 4],
+                fill: span.unwrap_or(fg),
                 uv: [rx / atlas_size, ry / atlas_size, (rx + rw) / atlas_size, (ry + rh) / atlas_size],
-                extra: [0.0; 4],
-                spin: [0.0; 4],
-            });
+                ..Quad::default()
+            };
+            // A glyph in the node's own colour moves with it; one a span
+            // coloured keeps its colour.
+            if let (Some(from), None) = (self.own.and_then(|o| o.fg_from), span) {
+                self.animate(&mut q, Some(from), None);
+            }
+            self.push(q);
         }
         if editing.is_some() {
             self.set_clip(saved);
@@ -758,7 +982,7 @@ impl Painter<'_, '_> {
                 }
                 1 => {
                     let q = self.device(Rect::new(cx0 + at(0), cy0 + at(1), at(2), at(3)));
-                    self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+                    self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
                 }
                 2 => {
                     let base = oy + at(0) * scale;
@@ -778,6 +1002,7 @@ impl Painter<'_, '_> {
                                 uv: [0.0; 4],
                                 extra: [0.0; 4],
                                 spin: [0.0; 4],
+                                ..Quad::default()
                             });
                             x += 1.0;
                         }
@@ -786,7 +1011,16 @@ impl Painter<'_, '_> {
                 3 => {
                     let (cx, cy) = pt(0);
                     let r = at(2) * scale;
-                    self.push(Quad { rect: [cx - r, cy - r, 2.0 * r, 2.0 * r], params: [r, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4] });
+                    self.push(Quad {
+                        rect: [cx - r, cy - r, 2.0 * r, 2.0 * r],
+                        params: [r, 0.0, 0.0, opacity],
+                        fill: color,
+                        stroke: [0.0; 4],
+                        uv: [0.0; 4],
+                        extra: [0.0; 4],
+                        spin: [0.0; 4],
+                        ..Quad::default()
+                    });
                 }
                 4 => {
                     let w = at(0) * scale;
@@ -825,6 +1059,7 @@ impl Painter<'_, '_> {
             uv: [0.0; 4],
             extra: [angle, 0.0, 0.0, 0.0],
             spin: [0.0; 4],
+            ..Quad::default()
         });
     }
 
@@ -929,6 +1164,28 @@ pub fn scrollbar_thumb(session: &Session, layout: &Layout, ix: NodeIx, rect: Rec
     let len = (track * rect.h / content.h).max(24.0).min(track);
     let y = rect.y + 2.0 + (track - len) * (offset.clamp(0.0, max) / max);
     Some(Rect::new(rect.x + rect.w - SCROLLBAR_WIDTH + 1.0, y, SCROLLBAR_WIDTH - 2.0, len))
+}
+
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
+fn flags_of(q: &Quad) -> u32 {
+    q.params[2] as u32
+}
+
+/// Paint an `ANIMATED` quad where its transition stands at this paint, and
+/// take the transition off it.
+fn bake(q: &mut Quad) {
+    let flags = flags_of(q);
+    let k = GpuAnim::k(q.spin[2], q.spin[3], flags & DECELERATE != 0);
+    let fill_from = unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]);
+    let stroke_from = unpack4([q.from[4], q.from[5], q.from[6], q.from[7]]);
+    q.fill = lerp4(fill_from, q.fill, k);
+    q.stroke = lerp4(stroke_from, q.stroke, k);
+    q.params[3] = q.extra[3] + (q.params[3] - q.extra[3]) * k;
+    q.params[2] = (flags & !(ANIMATED | DECELERATE)) as f32;
+    q.extra[3] = 0.0;
+    q.spin[2] = 0.0;
+    q.spin[3] = 0.0;
+    q.from = [0; 8];
 }
 
 fn intersect(a: [u32; 4], b: [f32; 4]) -> [u32; 4] {

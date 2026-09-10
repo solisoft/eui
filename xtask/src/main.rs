@@ -167,7 +167,7 @@ fn bench() -> Vec<Row> {
                 scale: 1.0,
                 size: (800, 600),
                 focus: None,
-                overrides: &[],
+                anims: &[],
                 editing: None,
                 now: 0.0,
                 scrollbar_hot: None,

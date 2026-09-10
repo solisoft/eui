@@ -12,7 +12,7 @@ use eui_proto::{
     caps, AlignItems, Batch, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, StyleRecord, Subtree, TextAlign, TextRef,
     ThemeMode, Value, Viewport, PROTOCOL_VERSION,
 };
-use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, ImageAtlas, Scene, SCROLLBAR_WIDTH};
+use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, GpuAnim, ImageAtlas, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
@@ -220,6 +220,28 @@ struct Anim {
 impl Anim {
     fn done(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.start) >= self.duration
+    }
+
+    /// Whether the vertex stage can run this one from the list's clock.
+    /// Colours and opacity it can; a blur it cannot, because the backdrop
+    /// pass sizes its textures from the radius, so a transition that moves
+    /// the blur is painted here frame by frame, as every one once was.
+    fn gpu(&self) -> bool {
+        self.from.blur == self.to.blur
+    }
+
+    /// What the painter is told: both ends, the clock relative to this
+    /// paint, and where it stands now for what has to be baked.
+    fn to_gpu(self, now: Instant) -> GpuAnim {
+        GpuAnim {
+            from: self.from,
+            to: self.to,
+            at: self.at(now),
+            t0: -now.saturating_duration_since(self.start).as_secs_f32(),
+            dur: self.duration.as_secs_f32(),
+            decelerate: self.curve == eui_theme::Curve::DECELERATE,
+            baked: !self.gpu(),
+        }
     }
 
     /// The colours at `now`, eased; exactly `to` once the time is up.
@@ -2209,7 +2231,10 @@ impl Driver {
         let layout_ms = t_layout.elapsed().as_secs_f64() * 1e3;
         self.redraw = false;
         let now = self.now;
-        let overrides: Vec<(NodeIx, Colors)> = self.anims.iter().map(|(ix, a)| (*ix, a.at(now))).collect();
+        // A transition that has run its course paints its final colours
+        // this frame -- the record's own, with no clock on them.
+        self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
+        let anims: Vec<(NodeIx, GpuAnim)> = self.anims.iter().map(|(ix, a)| (*ix, a.to_gpu(now))).collect();
         let editing = self.editing();
         trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
         let mut list = paint(&mut Scene {
@@ -2222,7 +2247,7 @@ impl Driver {
             scale: self.scale,
             size: (device_w, device_h),
             focus: if self.focus_visible { self.focused } else { None },
-            overrides: &overrides,
+            anims: &anims,
             editing,
             now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
@@ -2248,8 +2273,6 @@ impl Driver {
             )
         });
         self.last_text_stats = text_stats;
-        // A finished transition painted its final colours this frame.
-        self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
         self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
             None
         } else if self.scroll_anim.is_some() {
@@ -2274,24 +2297,26 @@ impl Driver {
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
-        // What this list cannot say for itself. A transition is still
-        // interpolated here, frame by frame, and a scroll in flight moves
-        // the offset the layout bakes in: either one makes the next frame a
-        // different list. Otherwise the list is the frame until the next
-        // timer -- a spin's angle is not in it, the vertex stage takes that
-        // from the clock -- so the window can draw it again without asking
-        // for it, at the spin's cadence or not at all. Anything that
-        // reaches the driver puts an end to that, because it may change
-        // what the tree paints.
-        let cpu_owed = !self.anims.is_empty() || self.scroll_anim.is_some() || list.cpu_bound;
+        // What this list cannot say for itself. A transition of the blur
+        // is interpolated here, frame by frame, and a scroll in flight
+        // moves the offset the layout bakes in: either one makes the next
+        // frame a different list. Otherwise the list is the frame until
+        // the last transition in it ends or the next timer fires -- the
+        // colours between are the vertex stage's, from the list's own
+        // clock, as a spin's angle is -- so the window can draw it again
+        // without asking for it, at the transition's cadence, the spin's,
+        // or not at all. Anything that reaches the driver puts an end to
+        // that, because it may change what the tree paints.
+        let cpu_owed = self.anims.iter().any(|(_, a)| !a.gpu()) || self.scroll_anim.is_some() || list.cpu_bound;
+        let motion_end = self.anims.iter().map(|(_, a)| a.start + a.duration).max();
         // A sound or a picture playing reports its position four times a
         // second (03 §7, §8), from a paint: the list holds until the next
         // report, whenever the window next draws it, and no frame is asked
         // for on its account -- that would be a wake-up a playing tab did
         // not have before.
         let report_due = (!self.mixer.is_empty() || !self.players.is_empty()).then(|| self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)));
-        let until = others.into_iter().flatten().chain(report_due).min();
-        let cadence = list.wants_frame.then_some(SPIN_FRAME);
+        let until = others.into_iter().flatten().chain(report_due).chain(motion_end).min();
+        let cadence = if !self.anims.is_empty() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
         list.gpu_only = !cpu_owed;
         list.repeat_until_ms = until.map_or(u32::MAX, |u| u32::try_from(u.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX));
         list.serial = next_serial();
