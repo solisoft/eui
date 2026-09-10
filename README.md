@@ -45,6 +45,34 @@ rustfmt.toml one formatting, enforced; 200 columns, not rustfmt's default 100
 what is specified, and what is not started — the worker sandbox on macOS
 and Windows, and how far the phones have got.
 
+## Get it
+
+Every push to `main` builds the client for all five platforms and replaces
+[the rolling build](https://github.com/solisoft/eui/releases/tag/rolling)
+with it, so these links always point at the newest one. Tagged versions are
+under [releases](https://github.com/solisoft/eui/releases).
+
+| | download | how it goes on |
+|---|---|---|
+| Linux | [`eui-x86_64-linux.tar.gz`](https://github.com/solisoft/eui/releases/download/rolling/eui-x86_64-linux.tar.gz) | unpack and run |
+| macOS | [`EUI-aarch64-macos.dmg`](https://github.com/solisoft/eui/releases/download/rolling/EUI-aarch64-macos.dmg) | open, drag across |
+| Windows | [`eui-x86_64-windows.zip`](https://github.com/solisoft/eui/releases/download/rolling/eui-x86_64-windows.zip) | unpack and run |
+| Android | [`eui.apk`](https://github.com/solisoft/eui/releases/download/rolling/eui.apk) | `adb install -r eui.apk` |
+| iOS, simulator | [`EUI-ios-simulator.zip`](https://github.com/solisoft/eui/releases/download/rolling/EUI-ios-simulator.zip) | `xcrun simctl install booted EUI.app` |
+| iOS, device | [`EUI-ios-device-unsigned.zip`](https://github.com/solisoft/eui/releases/download/rolling/EUI-ios-device-unsigned.zip) | sign it first — see below |
+
+The window carries the commit it was built from in its title, so a build
+from the wrong run can be told from the right one at a glance.
+
+The APK is signed with a debug key, which is what makes it installable
+without an account or a store. The iOS device build is **unsigned**, because
+no CI runner has an identity to sign with: give it one with
+`EUI_IOS_IDENTITY=... ./scripts/make-ios-app.sh device`, or let Xcode or
+`ios-deploy` sign it on the way to the phone. The simulator build needs
+none of that.
+
+Neither phone build has been run on a device by anyone yet.
+
 ## Try it
 
 ```sh
@@ -86,15 +114,24 @@ opens is baked in at build time; leave it out for a development build that
 opens the shell and lets an address be typed.
 
 ```sh
-cargo install cargo-apk
-EUI_ANDROID_URL=wss://example.test/_eui/session/gallery cargo apk build --release -p eui-android
-EUI_IOS_URL=wss://example.test/_eui/session/gallery cargo build --release -p eui-ios --target aarch64-apple-ios
+# Android: wants the SDK and NDK ($ANDROID_HOME, $ANDROID_NDK_ROOT).
+cargo install cargo-apk --locked
+EUI_ANDROID_URL=wss://example.test/_eui/session/gallery ./scripts/make-android-apk.sh
+
+# iOS: wants a Mac. `sim` needs no account, no profile and no device.
+EUI_IOS_URL=wss://example.test/_eui/session/gallery ./scripts/make-ios-app.sh sim
+EUI_IOS_URL=... EUI_IOS_IDENTITY="Apple Development: you@example.com" \
+    ./scripts/make-ios-app.sh device
 ```
 
-iOS links Rust in rather than loading it: add the resulting
-`libeui_ios.a` to an Xcode project, declare `void eui_start(void);` and call
-it from `main`. UIKit owns the process, so the entry point is a function it
-calls and not a `main` of ours.
+Either script leaves something installable in `dist/` and prints the command
+that installs it. There is no Xcode project in any of this: winit calls
+`UIApplicationMain` itself, so the iOS binary is a whole application and a
+`.app` is that binary next to an `Info.plist`.
+
+The static library is the other way in, for an Xcode project that already
+exists and owns its `main`: link `libeui_ios.a`, declare
+`void eui_start(void);` and call it.
 
 Neither has run on a device, and everything past `cargo check` on iOS needs
 a Mac. `doc/docs/eui/status.md` says what is done, what is not, and which of

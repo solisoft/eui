@@ -32,7 +32,10 @@ workspace = true
 # that opens the shell and lets an address be typed.
 [package.metadata.android]
 package = "org.eui.client"
-build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+# 64-bit ARM alone: every phone made this decade, and each extra ABI is
+# another whole compile of the client. `EUI_ANDROID_ABIS` in
+# `scripts/make-android-apk.sh` overrides this where that is not enough.
+build_targets = ["aarch64-linux-android"]
 # The session is a WebSocket over TLS to somewhere else: that is the whole
 # of what this application needs of the system. No storage, no location, no
 # camera, no contacts — an EUI client has no use for any of them, and an

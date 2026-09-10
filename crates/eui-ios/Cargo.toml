@@ -7,15 +7,24 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# iOS links Rust in as a static library rather than loading one: UIKit owns
-# the process and `UIApplicationMain` has to run before any of this does, so
-# the entry point is a function Xcode's own `main` calls, not a `main` of
-# ours. A `staticlib` on every target so that `cargo build --workspace` on a
-# desktop still builds it — where it compiles to nothing, because its one
-# source file is behind `cfg(target_os = "ios")`.
+# Two ways in, because there are two ways an iOS application gets built.
+#
+# The **binary** is the one to reach for: winit's `run_app` calls
+# `UIApplicationMain` itself, so an ordinary `fn main` is a whole iOS
+# application and `scripts/make-ios-app.sh` can wrap it in a `.app` with no
+# Xcode project anywhere. That is what the dev install uses.
+#
+# The **static library** is for embedding in an Xcode project that already
+# exists and owns its own `main`: it exports `eui_start` for that `main` to
+# call. Both are built on every target, and on a desktop both compile to
+# nothing, because their sources are behind `cfg(target_os = "ios")`.
 [lib]
 name = "eui_ios"
 crate-type = ["staticlib"]
+
+[[bin]]
+name = "eui-ios"
+path = "src/main.rs"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # The three parts with no UIKit behind them are left out by name rather than

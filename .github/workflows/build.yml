@@ -143,6 +143,101 @@ jobs:
             dist/EUI*.zip
           retention-days: 30
 
+  # The two phones, built so somebody can put them on a device. Neither is
+  # covered by `build-matrix`: an APK is not a binary and an iOS .app is not
+  # a binary either, and both want a toolchain the desktop jobs do not.
+  #
+  # They do not gate the run. Nothing here has met a device yet, and a
+  # packaging job that goes red on an SDK that moved would stop the client's
+  # own build from reporting — which is the thing people actually read.
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-apk-${{ hashFiles('**/Cargo.lock') }}
+
+      # The runner ships the SDK and an NDK; `cargo apk` wants to be told
+      # where the NDK is by name rather than finding it.
+      - name: Point at the NDK
+        run: echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+
+      # No `EUI_ANDROID_URL`: a CI build opens the shell, so whoever installs
+      # it can type an address at whatever server they are running. A build
+      # for one server is a thing to make deliberately, with the URL set.
+      - name: Build the APK
+        run: ./scripts/make-android-apk.sh dist
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: eui-android-apk
+          path: dist/eui.apk
+          retention-days: 30
+
+  build-ios:
+    name: Build iOS app
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ios-app-${{ hashFiles('**/Cargo.lock') }}
+
+      # The simulator build is the one anybody can run: no account, no
+      # profile, no device. `xcrun simctl install booted EUI.app`.
+      - name: Build the simulator app
+        run: ./scripts/make-ios-app.sh sim dist/sim
+
+      # And the device build, unsigned, because this runner has no identity
+      # to sign with. It is still worth having: Xcode or `ios-deploy` will
+      # sign it on the way to a phone.
+      - name: Build the device app, unsigned
+        run: ./scripts/make-ios-app.sh device dist/device
+
+      # A .app is a directory and a release asset is a file, so both are
+      # zipped here rather than left for whoever downloads them.
+      - name: Archive the apps
+        run: |
+          (cd dist/sim && zip -qry ../EUI-ios-simulator.zip EUI.app)
+          (cd dist/device && zip -qry ../EUI-ios-device-unsigned.zip EUI.app)
+
+      - name: Upload the apps
+        uses: actions/upload-artifact@v4
+        with:
+          name: eui-ios-app
+          path: dist/*.zip
+          retention-days: 30
+
   build-vitrine:
     name: Build Vitrine
     runs-on: macos-14
@@ -247,9 +342,72 @@ jobs:
             dist/Vitrine*.zip
           retention-days: 30
 
+  # Between tags there was nowhere to send anybody: the files existed, on the
+  # run, behind a GitHub login and four clicks. So every push to `main`
+  # replaces one rolling prerelease, and the download links in the README
+  # point at it and never move.
+  #
+  # A *prerelease*, deliberately: `/releases/latest` goes on meaning the last
+  # tagged version, and this is plainly the tip of `main` rather than
+  # something anybody promised.
+  #
+  # The old one is deleted rather than updated, because a rolling tag has to
+  # move with the branch and `action-gh-release` will not move a tag that
+  # already exists — it would leave the release pointing at the commit it was
+  # first made from, which is worse than no release at all.
+  publish-rolling:
+    name: Publish the rolling build
+    needs: [build-matrix, build-vitrine, build-android, build-ios]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Clear the last rolling build
+        run: gh release delete rolling --cleanup-tag --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rolling
+          name: Rolling build
+          # Which commit this is, because a window cannot otherwise be told
+          # from one built an hour earlier — the same reason the client
+          # carries its own short sha in its title.
+          body: |
+            The tip of `main`, built by CI. Replaced on every push, so the
+            links below always point at the newest one.
+
+            Commit `${{ github.sha }}`.
+
+            Phone builds have not been run on a device by anyone. The APK is
+            debug-signed and installs with `adb install -r eui.apk`; the iOS
+            simulator build needs no signing; the iOS device build is
+            unsigned and wants an identity on the way to a phone.
+          prerelease: true
+          files: |
+            eui-*/*.tar.gz
+            eui-*/*.zip
+            eui-*/*.dmg
+            eui-android-apk/*.apk
+            eui-ios-app/*.zip
+            vitrine-macos-*/*.dmg
+            vitrine-macos-*/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   create-release:
     name: Create Release (on tag push)
-    needs: [build-matrix, build-vitrine]
+    # The phone jobs are `continue-on-error`, so a packaging break cannot
+    # keep a release from happening; it just means that file is not in it.
+    needs: [build-matrix, build-vitrine, build-android, build-ios]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -265,6 +423,8 @@ jobs:
             eui-*/*.tar.gz
             eui-*/*.zip
             eui-*/*.dmg
+            eui-android-apk/*.apk
+            eui-ios-app/*.zip
             vitrine-macos-*/*.dmg
             vitrine-macos-*/*.zip
           draft: false

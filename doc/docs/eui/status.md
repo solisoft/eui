@@ -948,6 +948,17 @@ note where a target's standard library is missing.
   not offered as a substitute. This is the piece that makes a phone a stage
   rather than a port, and iOS is the stricter of the two: Android at least
   has an `isolatedProcess` service to argue about.
+- **Something to install.** `scripts/make-android-apk.sh` and
+  `scripts/make-ios-app.sh` produce an APK and a `.app`, and CI builds both
+  on every push to `main`, replacing one rolling prerelease so the README's
+  download links never move, as well as attaching them to every `v*`
+  release. The APK
+  is debug-signed, so `adb install` works with no account; the iOS
+  simulator build needs no signing at all; the iOS device build is unsigned
+  because no runner has an identity, and wants `EUI_IOS_IDENTITY` or Xcode
+  on the way to a phone. Both jobs are `continue-on-error`: a packaging
+  break must not stop the client's own build from reporting, which is the
+  thing people read.
 - **A build anyone can check.** `ring` and `blake3` want a toolchain for
   the target, so nothing above `eui-text` has been compiled for either
   phone here, and no APK and no `.app` has been built or run. Every
