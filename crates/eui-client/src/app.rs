@@ -34,6 +34,8 @@ pub enum Wake {
     Files,
     /// The host asked the window to close (a signal, say).
     Exit,
+    /// A frame the window asked to be woken for is due. See [`Timer`].
+    Frame,
     /// AccessKit has something for the window.
     #[cfg(has_a11y)]
     Access(accesskit_winit::Event),
@@ -286,6 +288,89 @@ struct Shell {
     /// When this window started, so the renderer can be handed a monotonic
     /// clock in seconds.
     epoch: std::time::Instant,
+    /// Frames drawn since the window opened. Only ever read by
+    /// [`LoopStats`], and only when it is asked for.
+    frames: u64,
+}
+
+/// A second's worth of loop activity, for finding out why a window that
+/// ought to be asleep is not.
+///
+/// An idle window parks: no passes of the loop, no frames. When one costs a
+/// core instead, the useful question is which of three things it is doing,
+/// and nothing outside the process can answer it — `top` and Activity
+/// Monitor both say "busy" and stop there. Two numbers separate them:
+///
+/// - **passes and frames both high**: something asks for a redraw on every
+///   pass, and the loop is drawing as fast as the platform allows.
+/// - **passes high, frames none**: the loop is being woken and drawing
+///   nothing, so a wake source is chattering rather than the tree.
+/// - **neither**: the main thread is asleep and the cost is on some other
+///   thread, so this is the wrong place to be looking.
+///
+/// Off unless `EUI_LOOP_STATS=1`, and one line a second when it is on: this
+/// is a thing to turn on when a window is misbehaving, not a thing to leave
+/// running.
+#[derive(Debug)]
+struct LoopStats {
+    /// When the second being counted began.
+    since: std::time::Instant,
+    /// Passes of `about_to_wait` since then.
+    passes: u64,
+    /// Frames drawn by every window at that moment, so the difference is
+    /// what this second cost.
+    frames_at: u64,
+    /// Wakes sent to the loop from elsewhere in the process, by kind. A
+    /// loop that passes far more often than it draws is being woken, and
+    /// this says by whom — which is the difference between a tree that
+    /// asks for too many frames and a thread that will not stop talking.
+    wakes: [u64; 6],
+    /// Passes that parked with no deadline at all, and passes that armed
+    /// one. Both park the loop on `Wait`; the deadline is the timer's.
+    waits: u64,
+    untils: u64,
+    /// The shortest `WaitUntil` asked for, in microseconds. A loop that
+    /// spins while asking to sleep is asking for something the platform
+    /// will not give it.
+    shortest_us: u64,
+    /// Which of the two asked for that shortest sleep: the window's own
+    /// next frame, or a socket waiting to be tried again.
+    shortest_from: &'static str,
+    /// Passes where a retry was the sooner of the two.
+    retry_won: u64,
+    /// Window events delivered, by kind. A loop that parks properly and
+    /// wakes anyway is being handed something; this says what.
+    wevents: [u64; 6],
+    /// Every `WaitUntil` delta added up, so the *mean* sleep asked for can
+    /// be read off. The minimum alone is a trap: one pass landing on the
+    /// deadline makes a loop that sleeps properly look like one that never
+    /// sleeps at all.
+    total_us: u64,
+}
+
+/// The names of [`LoopStats::wevents`], in its order.
+const WEVENT_NAMES: [&str; 6] = ["redraw", "cursor", "occluded", "resized", "focus", "other"];
+
+/// The names of [`LoopStats::wakes`], in its order.
+const WAKE_NAMES: [&str; 6] = ["transport", "audio", "files", "theme", "access", "frame"];
+
+impl LoopStats {
+    /// A counter, if the environment asked for one.
+    fn asked_for() -> Option<Self> {
+        std::env::var("EUI_LOOP_STATS").is_ok_and(|v| v == "1").then(|| Self {
+            since: std::time::Instant::now(),
+            passes: 0,
+            frames_at: 0,
+            wakes: [0; 6],
+            waits: 0,
+            untils: 0,
+            shortest_us: u64::MAX,
+            shortest_from: "-",
+            retry_won: 0,
+            wevents: [0; 6],
+            total_us: 0,
+        })
+    }
 }
 
 /// Append one chunk of a save to the file the person named, opening it on
@@ -721,8 +806,14 @@ impl Shell {
 
         // Assistive technologies register before the window shows; the tree
         // itself is built only if one asks.
+        //
+        // `EUI_A11Y=0` leaves the adapter out of this window, the way
+        // `EUI_SANDBOX=0` leaves out the worker. Building without the
+        // feature does the same thing permanently; this is for finding out
+        // whether the platform's accessibility is behind a cost, on a
+        // binary somebody already has, without asking them to build one.
         #[cfg(has_a11y)]
-        let access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy.clone()));
+        let access = (!std::env::var("EUI_A11Y").is_ok_and(|v| v == "0")).then(|| accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy.clone()));
 
         // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
         // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
@@ -837,6 +928,7 @@ impl Shell {
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             epoch: std::time::Instant::now(),
+            frames: 0,
             chrome: chrome.take(),
         };
 
@@ -1408,6 +1500,7 @@ impl Shell {
 
     /// Draw the window: the chrome, then the active application over it.
     fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
+        self.frames = self.frames.saturating_add(1);
         self.apply_resize(renderer);
         let (w, h) = (self.config.width, self.config.height);
         if w == 0 || h == 0 {
@@ -1950,6 +2043,82 @@ impl Shell {
     }
 }
 
+/// The deadline the loop wants to be woken at, kept by a thread of our own.
+///
+/// `ControlFlow::WaitUntil` is the obvious way to do this and it does not
+/// work: measured on this client, a window with a thirty-a-second animation
+/// passed through `about_to_wait` **125 000 times a second** while winit
+/// delivered thirty events, and it did so with a deadline a whole second
+/// out just as readily as with one 16 ms out. `WaitUntil` behaves as
+/// `Poll` — on Wayland and on macOS alike, which is what made an idle
+/// window cost an entire core. `ControlFlow::Wait` sleeps properly.
+///
+/// So the loop parks on `Wait`, and the deadline is kept here: one thread
+/// that sleeps until the moment asked for and then wakes the loop through
+/// the proxy — the same path the transport already uses, which demonstrably
+/// works. It costs one thread per process and nothing at rest, because a
+/// thread waiting on a channel is not running.
+struct Timer {
+    /// Rearm, or `None` to sleep until told otherwise. The thread ends when
+    /// this is dropped.
+    tx: mpsc::Sender<Option<std::time::Instant>>,
+    /// What it was last told, so an unchanged deadline is not re-sent on
+    /// every pass of the loop.
+    armed: Option<std::time::Instant>,
+}
+
+impl Timer {
+    /// Start the thread. `None` if one could not be spawned, in which case
+    /// the loop falls back to `WaitUntil` and its old behaviour.
+    fn start(proxy: EventLoopProxy<Wake>) -> Option<Self> {
+        let (tx, rx) = mpsc::channel::<Option<std::time::Instant>>();
+        let spawned = std::thread::Builder::new().name("eui-frame-timer".into()).spawn(move || {
+            let mut deadline: Option<std::time::Instant> = None;
+            loop {
+                let told = match deadline {
+                    Some(at) => {
+                        let now = std::time::Instant::now();
+                        if now >= at {
+                            deadline = None;
+                            // The loop does the work; this only says when.
+                            if proxy.send_event(Wake::Frame).is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                        rx.recv_timeout(at.saturating_duration_since(now))
+                    }
+                    None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                };
+                match told {
+                    Ok(at) => deadline = at,
+                    // The deadline arrived; the top of the loop sends for it.
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    // Every sender is gone: the loop is over.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+            }
+        });
+        match spawned {
+            Ok(_) => Some(Self { tx, armed: None }),
+            Err(e) => {
+                eprintln!("eui: no thread for the frame timer ({e}); falling back to the event loop's own, which spins");
+                None
+            }
+        }
+    }
+
+    /// Ask to be woken at `at`, or not at all. Sent only when it changes: at
+    /// rest this is one message and then silence.
+    fn arm(&mut self, at: Option<std::time::Instant>) {
+        if self.armed == at {
+            return;
+        }
+        self.armed = at;
+        let _ = self.tx.send(at);
+    }
+}
+
 /// The process: the event loop, and every window running in it.
 pub struct App {
     proxy: EventLoopProxy<Wake>,
@@ -1961,18 +2130,24 @@ pub struct App {
     /// opened twice.
     pending: Vec<(Vec<Launch>, bool)>,
     shells: std::collections::HashMap<WindowId, Shell>,
+    /// `EUI_LOOP_STATS=1`: one line a second saying what the loop did.
+    loop_stats: Option<LoopStats>,
+    /// The next frame's deadline, kept off the event loop. See [`Timer`].
+    timer: Option<Timer>,
 }
 
 impl App {
     /// Build for the applications to open when the loop resumes: one
     /// chromeless window each.
     pub fn new(launches: Vec<Launch>, proxy: EventLoopProxy<Wake>) -> Self {
-        Self { proxy, shared: None, pending: launches.into_iter().map(|l| (vec![l], false)).collect(), shells: std::collections::HashMap::new() }
+        let timer = Timer::start(proxy.clone());
+        Self { proxy, shared: None, pending: launches.into_iter().map(|l| (vec![l], false)).collect(), shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
     /// Build for one window with a tab strip in it, and nothing open.
     pub fn shell(proxy: EventLoopProxy<Wake>) -> Self {
-        Self { proxy, shared: None, pending: vec![(Vec::new(), true)], shells: std::collections::HashMap::new() }
+        let timer = Timer::start(proxy.clone());
+        Self { proxy, shared: None, pending: vec![(Vec::new(), true)], shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
     /// One window closed. The last one takes the process with it: a client
@@ -2039,6 +2214,21 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
+        if let Some(stats) = &mut self.loop_stats {
+            let which = match event {
+                Wake::Transport => 0,
+                Wake::Audio => 1,
+                Wake::Files => 2,
+                Wake::Theme => 3,
+                #[cfg(has_a11y)]
+                Wake::Access(_) => 4,
+                Wake::Frame => 5,
+                Wake::Exit => usize::MAX,
+            };
+            if let Some(slot) = stats.wakes.get_mut(which) {
+                *slot = slot.saturating_add(1);
+            }
+        }
         match event {
             // Which window the transport, the audio thread or the desktop
             // meant is not in the wake, and asking each is a `try_recv` on
@@ -2049,6 +2239,11 @@ impl ApplicationHandler<Wake> for App {
             // `about_to_wait`, which runs after this and after every other
             // event the loop had waiting: the wake is the whole message.
             Wake::Files => {}
+            // The deadline arrived. Everything it was for — ticking the
+            // driver, asking for the frame — is `about_to_wait`'s, and that
+            // runs after this and after every other event the loop had
+            // waiting. The wake is the whole message.
+            Wake::Frame => {}
             Wake::Theme => self.shells.values_mut().for_each(Shell::theme_wake),
             Wake::Exit => event_loop.exit(),
             #[cfg(has_a11y)]
@@ -2061,6 +2256,19 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(stats) = &mut self.loop_stats {
+            let which = match event {
+                WindowEvent::RedrawRequested => 0,
+                WindowEvent::CursorMoved { .. } => 1,
+                WindowEvent::Occluded(_) => 2,
+                WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => 3,
+                WindowEvent::Focused(_) => 4,
+                _ => 5,
+            };
+            if let Some(slot) = stats.wevents.get_mut(which) {
+                *slot = slot.saturating_add(1);
+            }
+        }
         let Some(shared) = self.shared.as_mut() else { return };
         let Some(shell) = self.shells.get_mut(&id) else { return };
         if !shell.event(&mut shared.renderer, event) {
@@ -2070,6 +2278,32 @@ impl ApplicationHandler<Wake> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = std::time::Instant::now();
+        if let Some(stats) = &mut self.loop_stats {
+            stats.passes = stats.passes.saturating_add(1);
+            let elapsed = now.saturating_duration_since(stats.since);
+            if elapsed >= std::time::Duration::from_secs(1) {
+                let frames: u64 = self.shells.values().map(|s| s.frames).sum();
+                let woken: String = WAKE_NAMES.iter().zip(stats.wakes.iter()).filter(|(_, n)| **n > 0).map(|(name, n)| format!(", {n} {name}")).collect();
+                let events: String = WEVENT_NAMES.iter().zip(stats.wevents.iter()).filter(|(_, n)| **n > 0).map(|(name, n)| format!(" {n} {name}")).collect();
+                let shortest = if stats.shortest_us == u64::MAX { "-".to_owned() } else { format!("{}us", stats.shortest_us) };
+                eprintln!(
+                    "eui loop: {} passes, {} frames in {:.2}s{}; parked {} with nothing due / {} with a deadline, soonest {} from {}, retry won {}; window events:{}; mean sleep asked {}us",
+                    stats.passes,
+                    frames.saturating_sub(stats.frames_at),
+                    elapsed.as_secs_f32(),
+                    woken,
+                    stats.waits,
+                    stats.untils,
+                    shortest,
+                    stats.shortest_from,
+                    stats.retry_won,
+                    if events.is_empty() { " none".to_owned() } else { events },
+                    stats.total_us.checked_div(stats.untils).unwrap_or(0)
+                );
+                *stats =
+                    LoopStats { since: now, passes: 0, frames_at: frames, wakes: [0; 6], waits: 0, untils: 0, shortest_us: u64::MAX, shortest_from: "-", retry_won: 0, wevents: [0; 6], total_us: 0 };
+            }
+        }
         // Dialogs the last events asked for, and the bytes they moved.
         for s in self.shells.values_mut() {
             s.serve_files();
@@ -2080,14 +2314,47 @@ impl ApplicationHandler<Wake> for App {
         // sleep does not hold the others back, and one that wants a frame
         // does not let them park.
         let due = self.shells.values_mut().filter_map(|s| s.park(now)).min();
+        let from = match (due, retry) {
+            (Some(a), Some(b)) if b < a => "retry",
+            (_, Some(_)) if due.is_none() => "retry",
+            _ => "frame",
+        };
         let due = match (due, retry) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        event_loop.set_control_flow(match due {
-            Some(at) => ControlFlow::WaitUntil(at),
-            None => ControlFlow::Wait,
-        });
+        if let Some(stats) = &mut self.loop_stats {
+            match due {
+                Some(at) => {
+                    stats.untils = stats.untils.saturating_add(1);
+                    let us = u64::try_from(at.saturating_duration_since(now).as_micros()).unwrap_or(u64::MAX);
+                    if us < stats.shortest_us {
+                        stats.shortest_us = us;
+                        stats.shortest_from = from;
+                    }
+                    stats.total_us = stats.total_us.saturating_add(us);
+                    if from == "retry" {
+                        stats.retry_won = stats.retry_won.saturating_add(1);
+                    }
+                }
+                None => stats.waits = stats.waits.saturating_add(1),
+            }
+        }
+        // `Wait` sleeps; `WaitUntil` does not (see `Timer`). So the loop
+        // always parks on the one that works, and the deadline goes to the
+        // thread that keeps it.
+        match &mut self.timer {
+            Some(timer) => {
+                timer.arm(due);
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            // No thread to keep it: the old behaviour, which at least
+            // animates, rather than a window that freezes.
+            None => event_loop.set_control_flow(match due {
+                Some(at) => ControlFlow::WaitUntil(at),
+                None => ControlFlow::Wait,
+            }),
+        }
     }
 }
 
