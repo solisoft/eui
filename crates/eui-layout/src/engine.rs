@@ -1180,21 +1180,36 @@ impl Layout {
             if cst.display == Display::None || (absolute_only && cst.position != Position::Absolute) {
                 continue;
             }
-            let avail_w = inner_w.loosen().shrink(cst.margin.horizontal());
-            let avail_h = inner_h.loosen().shrink(cst.margin.vertical());
+            // §5: a popover is measured against the *window*, not against
+            // the box it hangs off. It floats, so what limits it is the room
+            // the viewer has; measured against a stack inside a card it was
+            // free to grow past the bottom of the window, and a select of
+            // sixty minutes ended with its last options off the screen,
+            // where the wheel — which finds the page's scroller, not the
+            // panel's — could not reach them. Bounded here, a `scroll` in
+            // the panel takes `min(content, window)` and the options that do
+            // not fit scroll inside it. Width goes the same way, or a panel
+            // wider than the control it hangs off has its options clipped to
+            // that control.
+            let (outer_w, outer_h) = match Self::is_popover(f, st, c, cst) {
+                true => (Constraint::AtMost(self.viewport.w), Constraint::AtMost(self.viewport.h)),
+                false => (inner_w, inner_h),
+            };
+            let avail_w = outer_w.loosen().shrink(cst.margin.horizontal());
+            let avail_h = outer_h.loosen().shrink(cst.margin.vertical());
             let align = self.align_of(st, cst);
             // §5: `stretch` fills the stack for an in-flow child. An
             // absolute one takes its content size, as CSS does — a
             // popover is as tall as its options, not as tall as the
             // control it hangs off.
             let stretches = !absolute_only && cst.position != Position::Absolute;
-            let cw = match (align, cst.width, inner_w) {
-                _ if cst.width.resolve(inner_w).is_some() => Constraint::Exact(cst.width.resolve(inner_w).unwrap_or(0.0)),
+            let cw = match (align, cst.width, outer_w) {
+                _ if cst.width.resolve(outer_w).is_some() => Constraint::Exact(cst.width.resolve(outer_w).unwrap_or(0.0)),
                 (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if stretches => Constraint::Exact((b - cst.margin.horizontal()).max(0.0)),
                 _ => avail_w,
             };
-            let ch = match (align, cst.height, inner_h) {
-                _ if cst.height.resolve(inner_h).is_some() => Constraint::Exact(cst.height.resolve(inner_h).unwrap_or(0.0)),
+            let ch = match (align, cst.height, outer_h) {
+                _ if cst.height.resolve(outer_h).is_some() => Constraint::Exact(cst.height.resolve(outer_h).unwrap_or(0.0)),
                 (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if stretches => Constraint::Exact((b - cst.margin.vertical()).max(0.0)),
                 _ => avail_h,
             };
@@ -1227,6 +1242,13 @@ impl Layout {
         let z_of: HashMap<u32, u8> = placed.iter().map(|p| (p.ix.raw(), self.style_of(f.session, p.ix).map_or(0, |s| s.z))).collect();
         placed.sort_by_key(|p| z_of.get(&p.ix.raw()).copied().unwrap_or(0));
         Placement { children: placed, content: extent, baseline: first_baseline }
+    }
+
+    /// §5's popover: an absolute `overlay` child of a `stack`. The pair it
+    /// makes with its anchor is settled in [`Self::settle_anchored`]; here
+    /// it only says which child is measured against the window.
+    fn is_popover(f: &Env<'_>, parent: Style, c: NodeIx, cst: Style) -> bool {
+        parent.display == Display::Stack && cst.position == Position::Absolute && f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay)
     }
 
     /// §6: `N` equal columns, row-major.

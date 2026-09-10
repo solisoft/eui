@@ -130,7 +130,7 @@ The client's **viewport** — width, height, scale, mode, density, font
 scale — reaches the handler as `params["viewport"]` with the `connect`
 event and again as a `viewport` event whenever it changes (a resize, a
 mode switch). A view that keeps it in the state can lay itself out by
-width: `examples/counter-app`'s music player collapses its sidebar to a
+width: `examples/demo-app`'s music player collapses its sidebar to a
 rail under 900 px and drops it under 640.
 
 A `list` can be **windowed** (EUI spec 04 §7.1): give it `count`, the
@@ -140,7 +140,7 @@ a `row` prop. The client lays out and scrolls the whole extent, asks
 `window` with `[first, last]` when the rows in view change, and your
 handler stores that range in the state so the next view builds those rows
 and no other. A feed of forty thousand posts then costs the server one
-window of cards. `examples/counter-app`'s `feed` is written this way
+window of cards. `examples/demo-app`'s `feed` is written this way
 (`list_window` in its builders).
 
 A keyed child is also what the server memoises. When the view returns, for

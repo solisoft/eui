@@ -38,7 +38,7 @@ describe("Components", fn() {
 
   test("carries the whole vocabulary", fn() {
     let body = res_body(get("/components"))
-    # examples/counter-app/app/controllers/eui_builders.sl
+    # examples/demo-app/app/controllers/eui_builders.sl
     assert_contains(body, "All 107")
     # lang/src/serve/eui/tree.rs — the kinds, the roles, the events
     assert_contains(body, "The sixteen kinds")

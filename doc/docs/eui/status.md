@@ -145,7 +145,7 @@ binary builds exactly as before.
   interns atoms and styles per session, a tree diff, and a binary socket that
   validates every client event against the tree it last sent before it
   becomes a handler call.
-- `examples/counter-app` holds three components as a Soli app — the counter,
+- `examples/demo-app` holds three components as a Soli app — the counter,
   a todo list (keyed rows, a text field, checkboxes that report which item
   they belong to through the node's props), and a 10 000-row table sorted by
   `MoveChild` — plus `eui_builders.sl`, twenty-odd widgets composed from the
@@ -280,7 +280,7 @@ mostly the view (130 ms debug, about a tenth of that in release). The
 contract, documented with `router_eui`: a keyed node hash returned
 unchanged is assumed unchanged.
 
-**A feed, for the performance check.** `examples/counter-app`'s `feed`
+**A feed, for the performance check.** `examples/demo-app`'s `feed`
 component: ten posts to start with (`Load 5 000 more` adds five thousand), a
 third with a picture, in a virtualised list whose rows now carry their own
 `item_height` — two card heights, one addition per row per layout, only the
@@ -309,7 +309,7 @@ generated per install and never bundled. The window was written here
 without a display: it is the same `App` the `eui` binary runs, under test
 headlessly, and the desktop path runs headless with
 `SOLI_DESKTOP_NO_WINDOW=1`. A defeat to record: the plan said such an
-artifact would fall from 80 MB to about 15. Measured, the `counter-app`
+artifact would fall from 80 MB to about 15. Measured, the `demo-app`
 artifact is 96 MB (80 with a runtime built without Soli's default
 features); the window costs 12 MB and the rest is the Soli runtime and
 its database. `soli desktop build --no-db` (or `--db-url` for a database
@@ -424,7 +424,7 @@ What column resize still needs is the re-emitting of every row's styles that a
 width change touches, since a table is rows with per-cell widths rather than a
 grid with tracks.
 
-**Needle, a player that is nobody's copy.** `examples/counter-app`'s
+**Needle, a player that is nobody's copy.** `examples/demo-app`'s
 `music` component searches a catalogue, opens an artist or a record and
 plays a track: a field at the top, a rail of what the search found, one
 detail pane, a bar at the bottom, and on a window under 720 px the rail
@@ -635,7 +635,7 @@ both `xs` and a view branching on it never branches. `pane_bp` is the same idea
 at 200, 320, 480, 720.
 
 Twenty-one assertions cover the geometry and the drag, in
-`examples/counter-app/tests/`, run without a client because the functions are
+`examples/demo-app/tests/`, run without a client because the functions are
 pure. The one that matters most is that a `pointer_move` with no press does
 nothing — without it, selecting text inside a panel would move the divider.
 What is still missing is the latency: every frame of a drag is a round trip,

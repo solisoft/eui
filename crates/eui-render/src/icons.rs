@@ -54,6 +54,16 @@ const SEARCH: Icon = &[
 
 const CIRCLE: Icon = &[&[(20.0, 12.0), (19.0, 16.0), (16.0, 19.0), (12.0, 20.0), (8.0, 19.0), (5.0, 16.0), (4.0, 12.0), (5.0, 8.0), (8.0, 5.0), (12.0, 4.0), (16.0, 5.0), (19.0, 8.0), (20.0, 12.0)]];
 
+/// A bracket a person steps out of, right: the way out of a session. Three
+/// sides of a box, open where the arrow leaves it, so the shape reads at
+/// 16 px without the arrow crossing a line it should not.
+const LOGOUT: Icon = &[&[(13.0, 4.0), (5.0, 4.0), (5.0, 20.0), (13.0, 20.0)], &[(11.0, 12.0), (20.0, 12.0)], &[(17.0, 9.0), (20.0, 12.0), (17.0, 15.0)]];
+
+/// A page with two hangers and a rule under its header: a month. The one
+/// icon a date field needs, so that a field which opens a calendar does not
+/// have to look like a select that opens a list.
+const CALENDAR: Icon = &[&[(4.0, 6.0), (20.0, 6.0), (20.0, 20.0), (4.0, 20.0), (4.0, 6.0)], &[(4.0, 10.0), (20.0, 10.0)], &[(8.5, 3.5), (8.5, 7.5)], &[(15.5, 3.5), (15.5, 7.5)]];
+
 /// A triangle with a bang in it, for a warning.
 const WARNING: Icon = &[&[(12.0, 4.0), (21.0, 19.5), (3.0, 19.5), (12.0, 4.0)], &[(12.0, 10.0), (12.0, 14.5)], &[(12.0, 17.0)]];
 
@@ -82,6 +92,8 @@ pub fn icon(name: &str) -> Option<Icon> {
         "dot" => DOT,
         "search" => SEARCH,
         "circle" => CIRCLE,
+        "calendar" => CALENDAR,
+        "logout" => LOGOUT,
         "warning" => WARNING,
         _ => return None,
     })
@@ -110,6 +122,8 @@ pub const NAMES: &[&str] = &[
     "dot",
     "search",
     "circle",
+    "calendar",
+    "logout",
     "warning",
 ];
 

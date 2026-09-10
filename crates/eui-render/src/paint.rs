@@ -333,6 +333,15 @@ pub struct Scene<'a> {
     /// The scroller whose scrollbar the pointer is on or dragging: its
     /// thumb paints wider and darker.
     pub scrollbar_hot: Option<NodeIx>,
+    /// The scrollers whose bars are up, and how far in (0..1).
+    ///
+    /// 03 §2 says a scroller whose content overflows *wears* a thumb; when
+    /// it wears one is the client's to decide, and this is that decision
+    /// arriving. A bar is feedback about a movement, so a page nobody is
+    /// scrolling has none — and the one being scrolled fades back out on
+    /// its own. A scroller absent from this list draws no bar at all,
+    /// unless the pointer is on it.
+    pub scrollbars: &'a [(NodeIx, f32)],
     /// Device pixels per logical pixel.
     pub scale: f32,
     /// Framebuffer size in device pixels.
@@ -972,8 +981,13 @@ impl Painter<'_, '_> {
             Some(slot + 1)
         });
         let hot = self.scene.scrollbar_hot == Some(ix);
+        // Under the pointer it is always up: the pointer is on it to use it.
+        let fade = if hot { 1.0 } else { self.scene.scrollbars.iter().find(|(n, _)| *n == ix).map_or(0.0, |(_, f)| *f) };
+        if fade <= 0.0 {
+            return;
+        }
         let mut color = linear(self.scene.theme.color(if hot { Role::TextDefault } else { Role::TextMuted }));
-        color[3] *= if hot { 0.7 } else { 0.45 };
+        color[3] *= (if hot { 0.7 } else { 0.45 }) * fade;
         if hot {
             // Under the pointer the thumb fills its strip.
             t.x -= 1.0;

@@ -1,4 +1,4 @@
-//! The counter, served by Soli itself: `soli serve examples/counter-app` on a
+//! The counter, served by Soli itself: `soli serve examples/demo-app` on a
 //! binary built with `--features eui`, driven by the real transport and the
 //! real driver. Skipped unless `EUI_SOLI_BIN` points at such a binary.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
@@ -25,7 +25,7 @@ fn free_port() -> u16 {
 }
 
 fn start_soli(bin: &str) -> (Server, u16) {
-    let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/counter-app", env!("CARGO_MANIFEST_DIR")));
+    let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
     let port = free_port();
     // EUI_SOLI_LOG=path captures the server's stderr for a post-mortem.
     let stderr = match std::env::var("EUI_SOLI_LOG") {
@@ -38,7 +38,7 @@ fn start_soli(bin: &str) -> (Server, u16) {
         // machine happens to be configured for. Soli's `.env` loader only
         // fills a variable that is not already set, so setting these to
         // empty is how a test says "no account" over a developer's own
-        // `examples/counter-app/.env`.
+        // `examples/demo-app/.env`.
         .env("SPOTIFY_CLIENT_ID", "")
         .env("SPOTIFY_CLIENT_SECRET", "")
         .env("SPOTIFY_REFRESH_TOKEN", "")
@@ -365,60 +365,155 @@ fn probe_session_frames() {
     eprintln!("PROBE still open after 3 s; server alive: {}", server.0.try_wait().ok().flatten().is_none());
 }
 
+/// The demo application, section by section. It is an ERP now — a rail, six
+/// sections, and a parts distributor's figures in them — so the widgets are
+/// where an application would have put them rather than all on one page, and
+/// this walks to each in turn.
 #[test]
 fn the_gallery_mounts_and_its_widgets_respond() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
-    // The page is a scroll container now: grow the window so every widget
-    // the test clicks is inside the viewport instead of scrolled away.
+    // Tall, so that what a section holds is inside the viewport instead of
+    // scrolled away: a click is hit-tested against the page's scroller.
     for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+
+    // ---- Dashboard: where it lands.
     let all = texts(&d, root(&d));
-    for expected in ["Overview", "Nodes", "62 %", "Spec", "What is EUI?", "Rename", "A tooltip", "Nothing here yet", "1 / 9", "FA-1001 first"] {
-        assert!(all.iter().any(|t| t == expected), "gallery shows {expected:?}");
+    for expected in ["Meridian", "Revenue, month to date", "412 380 €", "62 %", "Quarter target", "Picked", "Before rebates"] {
+        assert!(all.iter().any(|t| t == expected), "the dashboard shows {expected:?}");
     }
     let nodes_before = d.session().live_nodes();
     assert!(nodes_before > 120, "{nodes_before} nodes");
     let _ = d.paint(1000, 900);
 
-    // Segmented control: click "Week" (its prop names it) — the selection moves.
+    // The period control sits in the top bar, on every section.
     let week = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Week")).unwrap();
     click(&mut d, &conn, week);
     let seq = d.session().last_seq().unwrap();
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
-    // Accordion: open "b"; "a" closes. The body text of b appears.
-    let why = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Why no CSS?")).unwrap();
-    click(&mut d, &conn, why);
-    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.starts_with("Styles are resolved")));
-    assert!(!texts(&d, root(&d)).iter().any(|t| t.starts_with("A protocol for interfaces")), "the other section closed");
-    // The sheet: opens as an overlay, closes again.
-    let open_sheet = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Open sheet")).unwrap();
+
+    // The banner opens the queue of what is late, as a sheet, and closes it.
+    let open_sheet = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Open the queue")).unwrap();
     click(&mut d, &conn, open_sheet);
-    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "A sheet"));
+    pump(&mut d, &conn, &wake, |d| has(d, "Past due"));
     let close = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Close")).unwrap();
     click(&mut d, &conn, close);
-    pump(&mut d, &conn, &wake, |d| !texts(d, root(d)).iter().any(|t| t == "A sheet"));
-    let _ = d.paint(1000, 900);
+    pump(&mut d, &conn, &wake, |d| !has(d, "Past due"));
 
-    // Select: opens under its anchor, an option picks and closes it.
-    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
-    assert!(!has(&d, "Small"), "closed: options are not in the tree");
-    let target = within(&d, "Select", "Medium");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "Small"));
-    let target = within(&d, "Select", "Large");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| !has(d, "Small"));
-    assert!(has(&d, "Large") && !has(&d, "Medium"), "the anchor shows the pick");
+    // Four charts and the spinner beside the quarter target.
+    let paths = d.session().atom_id("paths").expect("the paths atom");
+    let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
+    assert_eq!(canvases.len(), 5, "four charts and the spinner");
+    for c in &canvases {
+        match d.session().node(*c).unwrap().prop(paths) {
+            Some(eui_proto::Value::List(p)) => {
+                assert!(!p.is_empty());
+                assert!(p.iter().all(|path| matches!(path, eui_proto::Value::List(items) if matches!(items.get(1), Some(eui_proto::Value::Color(_))))), "colours resolved server-side");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let list = d.paint(1000, 2600);
+    assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
 
-    // Slider: a click three quarters along the track sets 75; once focused
-    // from the keyboard, ArrowRight nudges by the server's step of 5.
-    let value = within(&d, "Slider", "Value 40");
+    // ---- Orders: filters, a table of sixty-three, and the invoice grid.
+    goto(&mut d, &conn, &wake, "Orders", "Delivery window");
+    assert!(has(&d, "1 / 9"), "nine pages of seven");
+    assert!(has(&d, "63 matching"));
+
+    // The status select: closed it is its anchor, open it lists its options
+    // in an overlay, and a pick closes it. Every option is also a status in
+    // the table below, so "open" is a question about the overlay and not
+    // about whether the word is anywhere on the page.
+    assert!(!in_overlay(&d, "Draft"), "closed: the options are not in the tree");
+    let target = within(&d, "Status", "Any status");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| in_overlay(d, "Draft"));
+    let target = overlay_text(&d, "Invoiced");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| !in_overlay(d, "Draft"));
+
+    // Invoiced *and* unpaid is nothing at all, and the empty state says so.
+    let unpaid = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Only unpaid")).unwrap();
+    click(&mut d, &conn, unpaid);
+    pump(&mut d, &conn, &wake, |d| has(d, "Nothing matches"));
+    let clear = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Clear filters")).unwrap();
+    click(&mut d, &conn, clear);
+    pump(&mut d, &conn, &wake, |d| has(d, "1 / 9"));
+
+    // An order row opens its lines.
+    let row = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("SO-24001")).unwrap();
+    click(&mut d, &conn, row);
+    pump(&mut d, &conn, &wake, |d| has(d, "SKU"));
+
+    // The grid: a header click sorts by moving keyed rows; a second click on
+    // an editable cell turns it into an input, and a commit patches it.
+    assert!(has(&d, "FA-1001 first"));
+    let target = within(&d, "Invoices", "Amount");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1004 first"));
+    let target = within(&d, "Invoices", "Ada SARL");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client"));
+    let target = within(&d, "Invoices", "Ada SARL");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client · editing"));
+    let field = within(&d, "Invoices", "Ada SARL");
+    click(&mut d, &conn, field);
+    for f in d.input(Input::Key { key: "a".into(), modifiers: 2, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::Text("Ada & Co".into())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Ada & Co"));
+
+    // A date field opens its calendar in an overlay rather than in the page.
+    let anchor = within(&d, "Delivery window", "Any day");
+    click(&mut d, &conn, anchor);
+    pump(&mut d, &conn, &wake, |d| has(d, "September 2026"));
+    let target = within(&d, "Delivery window", "20");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-20 →"));
+    let target = within(&d, "Delivery window", "10");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-10 → 2026-09-20"));
+
+    // ---- Customers: a split, a tree, and an accordion.
+    goto(&mut d, &conn, &wake, "Customers", "Open balance");
+    assert!(has(&d, "Ada SARL"));
+    let why = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Addresses")).unwrap();
+    click(&mut d, &conn, why);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.starts_with("Invoices to")));
+    assert!(!texts(&d, root(&d)).iter().any(|t| t.starts_with("Camille Roy owns")), "the other section closed");
+    let grace = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Grace Ltd")).unwrap();
+    click(&mut d, &conn, grace);
+    pump(&mut d, &conn, &wake, |d| has(d, "41 200 €"));
+
+    // ---- Reports: the inline pickers, still the same three.
+    goto(&mut d, &conn, &wake, "Reports", "Close date");
+    let target = within(&d, "Close date", "15");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-15"));
+    let target = named(&d, "Close date", "Next month");
+    click(&mut d, &conn, target);
+    pump(&mut d, &conn, &wake, |d| has(d, "October 2026"));
+    assert!(has(&d, "2026-09-15"), "the pick survives turning the month");
+
+    // ---- Settings: the typed fields, and the slider the client captions.
+    goto(&mut d, &conn, &wake, "Settings", "Legal name");
+    assert!(has(&d, "A tooltip") == false, "the tooltip belongs to the dashboard");
+    let value = within(&d, "Low stock threshold", "Value 40");
     let track = slider_track(&d, value);
-    let _ = d.paint(1000, 900);
+    let _ = d.paint(1000, 2600);
     let r = d.layout().rect(track).unwrap();
     d.input(Input::PointerMove(r.x + r.w * 0.75, r.y + r.h / 2.0));
     d.input(Input::PointerDown(0));
@@ -440,99 +535,23 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     }
     pump(&mut d, &conn, &wake, |d| has(d, "Value 80"));
 
-    // Drag: press, move along the track, the value follows.
-    let value = within(&d, "Slider", "Value 80");
-    let track = slider_track(&d, value);
-    let _ = d.paint(1000, 900);
-    let r = d.layout().rect(track).unwrap();
-    d.input(Input::PointerMove(r.x + r.w * 0.8, r.y + r.h / 2.0));
-    for f in d.input(Input::PointerDown(0)) {
-        conn.tx.send(f.encode()).unwrap();
-    }
-    let seq = d.session().last_seq().unwrap();
-    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
-    let label = texts(&d, root(&d)).into_iter().find(|t| t.starts_with("Value ")).expect("slider value");
-    let value = within(&d, "Slider", &label);
-    let track = slider_track(&d, value);
-    let _ = d.paint(1000, 900);
-    let r = d.layout().rect(track).unwrap();
-    d.input(Input::PointerMove(r.x + r.w * 0.2, r.y + r.h / 2.0));
-    for f in d.input(Input::PointerUp(0)) {
-        conn.tx.send(f.encode()).unwrap();
-    }
-    pump(&mut d, &conn, &wake, |d| has(d, "Value 20"));
-
-    // Date picker: pick the 15th, then turn the month. Three calendars in
-    // a grid (4 / 2 / 1 columns by viewport); clicks are scoped by title.
-    let target = within(&d, "Date", "15");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-15"));
-    let target = within(&d, "Date", "›");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "October 2026"));
-    assert!(has(&d, "2026-09-15"), "the pick survives turning the month");
-
-    // Range: two clicks — the second earlier than the first.
-    let target = within(&d, "Range", "20");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-20 → …"));
-    let target = within(&d, "Range", "10");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "2026-09-10 → 2026-09-20"));
-
-    // Data grid: a header click sorts by moving keyed rows; a second click
-    // on an editable cell turns it into an input, and a commit patches it.
-    assert!(has(&d, "FA-1001 first"));
-    let target = within(&d, "Grid", "Amount");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "FA-1004 first"));
-    let target = within(&d, "Grid", "Ada SARL");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client"));
-    let target = within(&d, "Grid", "Ada SARL");
-    click(&mut d, &conn, target);
-    pump(&mut d, &conn, &wake, |d| has(d, "FA-1001 · client · editing"));
-    let field = within(&d, "Grid", "Ada SARL");
+    // A field keeps what was typed across server round trips the app does
+    // not care about, and a later click lands the caret in that text.
+    let name_label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Legal name")).unwrap();
+    let field = d.session().children(d.session().node(name_label).unwrap().parent)[1];
     click(&mut d, &conn, field);
+    // The company's name is already in it, so select it before typing: what
+    // is being tested is that a local edit survives a render, not what the
+    // caret does to a word it landed in the middle of.
     for f in d.input(Input::Key { key: "a".into(), modifiers: 2, down: true }) {
         conn.tx.send(f.encode()).unwrap();
     }
-    for f in d.input(Input::Text("Ada & Co".into())) {
-        conn.tx.send(f.encode()).unwrap();
-    }
-    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
-        conn.tx.send(f.encode()).unwrap();
-    }
-    pump(&mut d, &conn, &wake, |d| has(d, "Ada & Co"));
-
-    // Charts: four canvases in a grid (4 / 3 / 2 / 1 columns by viewport)
-    // plus the spinner; a line segment paints as a rotated quad.
-    let paths = d.session().atom_id("paths").expect("the paths atom");
-    let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
-    assert_eq!(canvases.len(), 5, "four charts and the spinner");
-    for c in &canvases {
-        match d.session().node(*c).unwrap().prop(paths) {
-            Some(eui_proto::Value::List(p)) => {
-                assert!(!p.is_empty());
-                assert!(p.iter().all(|path| matches!(path, eui_proto::Value::List(items) if matches!(items.get(1), Some(eui_proto::Value::Color(_))))), "colours resolved server-side");
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-    let list = d.paint(1000, 2600);
-    assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
-
-    // A field keeps what was typed across server round trips the app does
-    // not care about, and a later click lands the caret in that text.
-    let name_label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Name")).unwrap();
-    let field = d.session().children(d.session().node(name_label).unwrap().parent)[1];
-    click(&mut d, &conn, field);
     for f in d.input(Input::Text("azd".into())) {
         conn.tx.send(f.encode()).unwrap();
     }
-    let month = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Month")).unwrap();
+    let elsewhere = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Day")).unwrap();
     let seq = d.session().last_seq().unwrap();
-    click(&mut d, &conn, month);
+    click(&mut d, &conn, elsewhere);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     assert_eq!(d.session().text_of(field), Some("azd"), "the server's re-render did not wipe the field");
     let _ = d.paint(1000, 2600);
@@ -559,10 +578,73 @@ fn slider_track(d: &Driver, value: eui_tree::NodeIx) -> eui_tree::NodeIx {
     kids[at - 1]
 }
 
+/// The node showing `text` in the region `title` names — the smallest
+/// ancestor of the title that contains it. The dashboard's cards put their
+/// title in a header row beside a badge, so the title's own parent is
+/// usually just that row; climbing means a caller says which *card* it
+/// means without knowing how the card was built.
 fn within(d: &Driver, title: &str, text: &str) -> eui_tree::NodeIx {
-    let heading = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(title)).unwrap_or_else(|| panic!("no card titled {title:?}"));
-    let card = d.session().node(heading).unwrap().parent;
-    d.session().preorder(card).find(|ix| d.session().text_of(*ix) == Some(text)).unwrap_or_else(|| panic!("no {text:?} under {title:?}"))
+    let heading = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(title)).unwrap_or_else(|| panic!("no region titled {title:?}"));
+    let mut scope = d.session().node(heading).unwrap().parent;
+    for _ in 0..6 {
+        if let Some(hit) = d.session().preorder(scope).find(|ix| d.session().text_of(*ix) == Some(text)) {
+            return hit;
+        }
+        let up = d.session().node(scope).unwrap().parent;
+        if up == scope {
+            break;
+        }
+        scope = up;
+    }
+    panic!("no {text:?} under {title:?}")
+}
+
+/// A control that draws an icon rather than a word, found by the name it
+/// declares for a screen reader (03 §4) — the only thing a calendar's
+/// "Next month" button says once its glyph became a vector.
+fn named(d: &Driver, title: &str, name: &str) -> eui_tree::NodeIx {
+    let label = d.session().atom_id("label").expect("the label atom");
+    let heading = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(title)).unwrap_or_else(|| panic!("no region titled {title:?}"));
+    let mut scope = d.session().node(heading).unwrap().parent;
+    for _ in 0..6 {
+        let hit = d.session().preorder(scope).find(|ix| matches!(d.session().node(*ix).and_then(|n| n.prop(label)), Some(eui_proto::Value::Str(s)) if s == name));
+        if let Some(hit) = hit {
+            return hit;
+        }
+        let up = d.session().node(scope).unwrap().parent;
+        if up == scope {
+            break;
+        }
+        scope = up;
+    }
+    panic!("nothing named {name:?} under {title:?}")
+}
+
+/// Whether an open overlay — a select's list, a date field's calendar —
+/// carries this text. The page underneath is not asked.
+fn in_overlay(d: &Driver, text: &str) -> bool {
+    d.session()
+        .preorder(root(d))
+        .filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Overlay))
+        .any(|o| d.session().preorder(o).any(|ix| d.session().text_of(ix) == Some(text)))
+}
+
+/// That text, in the overlay that holds it.
+fn overlay_text(d: &Driver, text: &str) -> eui_tree::NodeIx {
+    d.session()
+        .preorder(root(d))
+        .filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Overlay))
+        .find_map(|o| d.session().preorder(o).find(|ix| d.session().text_of(*ix) == Some(text)))
+        .unwrap_or_else(|| panic!("no {text:?} in an overlay"))
+}
+
+/// Click a section in the rail and wait for it to arrive. The ERP keeps the
+/// section server-side, so this is one round trip and the landmark is the
+/// proof it landed.
+fn goto(d: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receiver<()>, section: &str, landmark: &str) {
+    let link = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(section)).unwrap_or_else(|| panic!("no way to {section:?}"));
+    click(d, conn, link);
+    pump(d, conn, wake, |d| texts(d, root(d)).iter().any(|t| t == landmark));
 }
 
 #[test]
@@ -573,7 +655,7 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     let pins = std::env::temp_dir().join(format!("eui-e2e-pins-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&pins);
     let m = eui_client::manifest::check(&origin, &pins, None).expect("a signed manifest");
-    assert_eq!(m.app_id, "counter-app", "the application folder's name");
+    assert_eq!(m.app_id, "demo-app", "the application folder's name");
     assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
     assert_eq!(m.entry, "/_eui/session");
     assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read"], "what config/routes.sl asked for");
@@ -1198,8 +1280,9 @@ fn the_docs_dialog_is_a_window_of_blocks_that_scrolling_extends() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 3_600.0);
     let _ = d.paint(1000, 3_600);
+    goto(&mut d, &conn, &wake, "Reports", "Month end");
     let before = d.session().live_nodes();
-    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Read the docs")).expect("the button");
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Open the handbook")).expect("the button");
     let button = d.session().node(label).unwrap().parent;
     let seq = d.session().last_seq().unwrap();
     let t = Instant::now();
@@ -1301,12 +1384,13 @@ fn the_gallerys_editor_takes_a_keystroke_and_gives_back_the_line() {
     let _ = d.paint(1000, 3_600);
     let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
     let reads = |d: &Driver, prefix: &str| texts(d, root(d)).iter().any(|x| x.starts_with(prefix));
+    goto(&mut d, &conn, &wake, "Settings", "Pricing rule");
     assert!(has(&d, "sample.sl"), "the card is in the page");
     assert!(has(&d, "unchanged"), "and says the buffer is the sample it shipped with");
     // A line the cursor is not on is tokenised, one node per token, so the
     // last line of the sample is found by its string and clicked through the
     // row that carries the handler.
-    let token = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("\"Ada\"")).expect("the sample's last line");
+    let token = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("reprice")).expect("the sample's last line");
     let line_row = d.session().node(d.session().node(token).unwrap().parent).unwrap().parent;
     let seq = d.session().last_seq().unwrap();
     click(&mut d, &conn, line_row);
@@ -1316,7 +1400,7 @@ fn the_gallerys_editor_takes_a_keystroke_and_gives_back_the_line() {
     // The line under the cursor is drawn plain, in three pieces, so that the
     // caret can invert the character it sits on: what is left of the cursor
     // is one node, and that is the whole line when the cursor is at its end.
-    assert!(has(&d, "greet(\"Ada\")"), "the click landed the caret at the end of the line");
+    assert!(has(&d, "reprice(all)"), "the click landed the caret at the end of the line");
     // A keystroke: `key_down` on the box that holds the buffer, and the
     // server sends back the line it changed.
     let seq = d.session().last_seq().unwrap();
@@ -1325,7 +1409,7 @@ fn the_gallerys_editor_takes_a_keystroke_and_gives_back_the_line() {
     }
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let _ = d.paint(1000, 3_600);
-    assert!(has(&d, "greet(\"Ada\")x"), "the character landed in the buffer at the cursor");
+    assert!(has(&d, "reprice(all)x"), "the character landed in the buffer at the cursor");
     assert!(has(&d, "modified"), "and the bar says the buffer is no longer the sample");
     assert!(reads(&d, "Ln 11, Col 14"), "with the cursor after it");
 }
@@ -1391,7 +1475,13 @@ fn the_gallerys_chime_is_fetched_played_and_reports_its_end() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
-    let _ = d.paint(1000, 900);
+    // The release card the sound sits in is near the foot of the dashboard,
+    // and a click is hit-tested against the page's scroller: what is below
+    // the fold is under nothing at all.
+    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 2600);
     // The node is in the tree, silent, and its sound is an asset the
     // client fetched from the session's origin.
     let find_audio = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).expect("an audio node");
@@ -1468,6 +1558,11 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    // Tall enough to reach the release card the picture sits in: what is
+    // below the fold is neither painted nor clickable.
+    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
     let mut clock = Instant::now();
     let turn = |d: &mut Driver, conn: &eui_client::Connection, clock: &mut Instant, ms: u64| {
         *clock += Duration::from_millis(ms);
@@ -1492,9 +1587,8 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
             }
         }
     };
-    // One player at a time, switched by the segmented control in the Media card.
-    let tab = within(&d, "Media", "Video");
-    click(&mut d, &conn, tab);
+    // Both players are in the release card, silent, from the first frame:
+    // a node that draws nothing until it is asked to costs a page nothing.
     pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)));
     let node = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Video)).expect("a video node");
     let src = d.session().atom_id("src").unwrap();
@@ -1509,7 +1603,7 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     assert!(!d.video_playing(), "no autoplay");
     let rect = d.layout().rect(node(&d)).expect("laid out");
     assert!((rect.w - 320.0).abs() < 0.5 && (rect.h - 180.0).abs() < 0.5, "sized by its style: {rect:?}");
-    let list = d.paint(1000, 900);
+    let list = d.paint(1000, 2600);
     assert!(list.quads.iter().any(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA), "its first frame is drawn");
     // Press play: it advances on the client's clock and asks to be woken
     // exactly when the next frame is due.
@@ -1840,7 +1934,7 @@ fn a_split_pane_follows_the_hand_while_it_is_still_down() {
     for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
-    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("Split panes")));
+    goto(&mut d, &conn, &wake, "Customers", "Open balance");
     let _ = d.paint(1000, 3600);
 
     // The dividers are the nodes that declare an orientation (03 §9).
@@ -1882,6 +1976,8 @@ fn a_split_pane_follows_the_hand_while_it_is_still_down() {
     // it to anything else: the role, as a string, over the wire.
     let role = d.session().atom_id("role").expect("a11y roles");
     let is_slider = |d: &Driver, ix| d.session().node(ix).and_then(|n| n.prop(role)).is_some_and(|v| matches!(v, eui_proto::Value::Str(s) if s == "slider"));
-    assert!(d.session().preorder(root(&d)).any(|ix| is_slider(&d, ix)), "the gallery's slider says so in its props");
-    assert!(!is_slider(&d, d.session().node(vertical).unwrap().parent), "and the split that holds this divider does not");
+    assert!(!is_slider(&d, d.session().node(vertical).unwrap().parent), "the split that holds this divider is not a slider");
+    // And a real one, a section away, is.
+    goto(&mut d, &conn, &wake, "Settings", "Low stock threshold");
+    assert!(d.session().preorder(root(&d)).any(|ix| is_slider(&d, ix)), "the slider says so in its props");
 }

@@ -9,12 +9,12 @@ Two different apps come out of this repo, built two different ways:
 - **EUI Demo** — the `eui-client` binary. A native window that connects to an
   EUI server over a WebSocket. Built by `cargo`, needs nothing outside this
   repo, and needs a server to point at.
-- **Vitrine** — the widget gallery (`examples/counter-app`, component
+- **Vitrine** — the widget gallery (`examples/demo-app`, component
   `gallery`) as a self-contained desktop artifact: its own Soli server on a
   thread, no database, the EUI window with the decoder in a confined worker.
   Double-click and it runs; there is nothing to point it at.
 
-Supporting pieces: **counter-app** (the Soli app itself) and
+Supporting pieces: **demo-app** (the Soli app itself) and
 **counter-server** (a minimal hand-written Rust server, for testing the
 client without Soli).
 
@@ -180,10 +180,10 @@ The `Info.plist` specifies:
 Vitrine is packaged by `soli desktop build`, which lives in
 [`solisoft/soli_lang`](https://github.com/solisoft/soli_lang), not here. The
 CI job therefore checks out **two** repositories: this one for the app source
-(`examples/counter-app`), and the language repo for the tool that packages it.
+(`examples/demo-app`), and the language repo for the tool that packages it.
 
 ```bash
-soli desktop build examples/counter-app \
+soli desktop build examples/demo-app \
   --app-id com.soli.vitrine \
   --name Vitrine \
   --eui gallery \

@@ -13,8 +13,8 @@
 !**/.env.example
 
 # Album art fetched from a catalogue at runtime: a cache, never committed.
-examples/counter-app/public/covers/
+examples/demo-app/public/covers/
 # Pictures fetched from x.com for the feed, cached as PNG the same way.
-examples/counter-app/public/x/
+examples/demo-app/public/x/
 # What the tracker's Play button mixes: generated, never committed.
-examples/counter-app/public/tracker/
+examples/demo-app/public/tracker/

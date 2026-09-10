@@ -295,8 +295,10 @@ catalogue implementation MUST:
 - put the identity a handler needs in the node's `props`, never in the
   event name.
 
-The reference catalogue ships with `examples/counter-app` as
-`app/controllers/eui_builders.sl`. Its families: actions (button variants,
+The reference catalogue ships with `examples/demo-app` as
+`app/controllers/eui_builders.sl`, and `soli new <app> --eui` writes that
+same file into a new application beside a component that uses it. Its
+families: actions (button variants,
 segmented control, menu, toolbar), input (field, checkbox, switch, select,
 slider, date and time, file drop, form), structure (card, panel, sheet,
 dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),

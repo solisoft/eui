@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=EUI
+GenericName=EUI client
+Comment=Open an application served over the EUI protocol
+# The client takes the session URL on its command line: a launcher entry
+# with no argument opens the window on its own start page, and one made
+# for a particular application appends that application's wss:// URL.
+Exec=eui
+Icon=eui
+Terminal=false
+Categories=Network;Development;
+# The Wayland app id and the X11 WM_CLASS the window is opened with
+# (crates/eui-client/src/app.rs). This is the whole of how a Wayland
+# compositor matches a running window to this file, and so to the icon:
+# there is no call for a window to hand its own picture over.
+StartupWMClass=eui

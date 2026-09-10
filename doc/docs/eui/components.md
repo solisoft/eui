@@ -1,15 +1,16 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/counter-app/app/controllers/eui_builders.sl` — 150 functions, all of
-> them plain Soli, none of them native — and the server that reads what they
+> `examples/demo-app/app/controllers/eui_builders.sl` — 182 functions, all of
+> them plain Soli, none of them native, and what `soli new <app> --eui`
+> writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
 
 A component is data. A view returns a hash, the server turns it into nodes,
 diffs it against the tree that session last received, and sends the patch. So
 a "component" here is nothing but a Soli function that returns a hash — you
-write one the same way the library wrote its hundred and fifty.
+write one the same way the library wrote its hundred and eighty-two.
 
 ## A component is two functions
 
@@ -246,7 +247,7 @@ before its first run and executes it on a fuel budget. Its effect is
 
 # The library
 
-A hundred and fifty functions, every one of them a function over the primitives.
+A hundred and eighty-two functions, every one of them a function over the primitives.
 Copy the file into your application and change it — that is the intended use.
 A widget is not a protocol feature.
 
@@ -265,7 +266,7 @@ A widget is not a protocol feature.
 | `scroll(style, children)` | A clipping viewport, laid out as a column |
 | `list(style, item_height, children)` | A virtualised list: the client lays out only the visible rows |
 | `list_window(style, item_height, count, heights, children, on_window)` | A **windowed** list — see below |
-| `input(value, on_change)` | A bordered single-line field, `change` wired to `on_change` |
+| `input(value, on_change, o = {})` | A bordered single-line field, `change` wired to `on_change`. `o` carries `style`, `props`, `key` and further `on` handlers |
 | `button(label, on_click)` | The primary button: accent roles, local hover and press |
 | `image(src, width, height)` | A picture from a file in the application |
 | `avatar(src, size)` | A round picture |
@@ -402,16 +403,71 @@ press switch between style records the session already holds.
 |---|---|
 | `checkbox(label, checked, on_toggle, props, o = {})` | The mark's fill says its state; `props` come back as `params["props"]`. `o["indeterminate"]` draws the third state |
 | `switch(label, on, on_toggle, props, o = {})` | A track and a knob, placed by `justify` |
+| `radio(label, selected, on_pick, props, o = {})` | A ring with a dot in it. It cannot be unticked: the group owns the value |
+| `radio_group(options, value, on_pick, o = {})` | The buttons, the `radio_group` role, and keys namespaced by `o["name"]` so two groups of Yes/No cannot restyle each other. `o["direction"]` is `"column"` unless `"row"` is asked for |
 | `field(label, value, on_change)` | A muted label over an input |
+| `textarea(value, on_change, o = {})` | The multi-line field. `o["rows"]` is a floor, not a ceiling — it grows with what is typed into it |
+| `text_link(label, on_click, props = {})` | Text in the accent colour that declares the `link` role. Not `link`: `breadcrumb` keeps a local of that name |
 | `form(children, submit_label, on_submit)` | The children, then a right-aligned submit |
 | `sized_input(value, on_change, width)` | An input of a fixed width |
-| `select(options, value, open, on_toggle, on_pick)` | Closed, it is its anchor; open, a dropdown. **The server owns `open`** |
+| `select(options, value, open, on_toggle, on_pick)` | Closed, it is its anchor; open, a dropdown. **The server owns `open`**. A list too long for the panel scrolls inside it |
 | `select_option(label, selected, on_pick)` | One row of that dropdown, carrying `{"value": label}` |
-| `dropdown(anchor, content, open)` | A panel positioned under its anchor; returns the anchor alone when closed |
+| `dropdown(anchor, content, open, max_px = 0)` | A panel positioned under its anchor; returns the anchor alone when closed. The content scrolls: the panel is as tall as its content, the window, or `max_px`, whichever is least |
 | `slider(value, min, max, on_set)` | A 240 px track. Press, drag, or click; arrows nudge once focused. `on_set` receives `params["kind"]` (`"click"`, `"pointer_down"`, `"pointer_move"`, `"pointer_up"`, `"key_down"`) |
 
 None of them keeps state. The handler does; the widget draws what it is told
 and carries the identity the handler will need.
+
+## Typed fields
+
+`field` is a label over an input, which is all a text field ever needed. A
+*typed* field is the same three parts — a label, a control, and a line
+underneath — with the type choosing the control and judging what ends up in
+it.
+
+The client has no types. An `input` is an `input`, and 03 §3 is not growing an
+`email` kind so that a phone can pick a keyboard; the type lives on the
+server, which is where the value was going anyway. What that costs is the
+keyboard hint. What it buys is that "valid" means whatever this application
+means by it, in Soli, beside the handler that stores the value — and that a
+field can be told it is wrong by something no client-side type could know,
+like a mailer that bounced.
+
+A value is judged when it arrives, and `change` arrives on blur or on Enter
+(06 §2), never per keystroke, so a field is never red while it is still being
+typed into. An empty required field is not wrong yet either: `o["submitted"]`
+is what says the person has had their turn.
+
+| Signature | Notes |
+|---|---|
+| `text_field(label, value, on_change, o = {})` | A line of anything. It judges nothing on its own |
+| `email_field(label, value, on_change, o = {})` | One local part, one `@`, a domain with a dot in it, no spaces. Everything a field can honestly check — the only test of an address is a message sent to it |
+| `number_field(label, value, on_change, o = {})` | `o["min"]`, `o["max"]` and `o["step"]` are the bounds and the stride; `o["on_step"]` adds − and + buttons that send the direction in `params["props"]["delta"]`. The handler does the arithmetic — `number_stepped` is it — because the value is the server's |
+| `textarea_field(label, value, on_change, o = {})` | The multi-line one; `o["rows"]` is the floor the empty box keeps |
+| `date_field(o)` | An anchor and a calendar in a `dropdown`. One options hash, not eleven arguments |
+| `datetime_field(o)` | The same, plus `time_select` under the month |
+| `date_range_field(o)` | Two ends on one calendar. It stays open until it has both |
+
+Every one of them takes the same options: `hint`, `error` (the server's own
+verdict, which wins), `required`, `submitted`, `invalid`, `complaint`,
+`width`, `name`. `label`, `description`, `required` and `invalid` go out as
+props, so a wrong value is *announced* as wrong and not only painted that way.
+
+The floating three take their state in that hash: `value` (or `start` and
+`finish`), `time`, `month`, `open`, and the handler names `on_toggle`,
+`on_pick`, `on_nav` — and for a datetime `on_hour_toggle`, `on_min_toggle`,
+`on_hour`, `on_min`. The server owns `open`, exactly as it owns a select's;
+what a picked day does to it is the handler's business.
+
+The panel is built by a thunk and only when it is down, so a closed picker
+does not pay for a month of day cells on every render.
+
+| Signature | Notes |
+|---|---|
+| `email_valid?(value)` / `number_valid?(value)` / `iso_day?(value)` | What the fields judge by, on their own |
+| `number_within?(value, min, max)` | A number, and inside the bounds the caller gave |
+| `number_stepped(value, delta, o)` | What − and + mean, clamped to `o["min"]`/`o["max"]` |
+| `field_shell(label, control, o)` / `field_error(…)` / `field_style(…)` / `field_props(…)` | The parts, for a field of your own |
 
 ## Calendar and pickers
 
@@ -424,6 +480,7 @@ arithmetic reaches the view.
 | `calendar(month, selected, range_start, range_end, on_pick, on_nav)` | Navigation, weekday header, a seven-column grid. `selected` is a list of ISO days; a range shades between its ends |
 | `date_picker(month, value, on_pick, on_nav)` | One day |
 | `datetime_picker(month, date, time, hour_open, min_open, on_pick, on_nav, on_hour_toggle, on_min_toggle, on_hour, on_min)` | A day plus hour and minute selects (`HH:MM`, nothing else) |
+| `time_select(time, hour_open, min_open, on_hour_toggle, on_min_toggle, on_hour, on_min)` | Those two selects on their own: twenty-four hours and sixty minutes, so there is no free text to parse and no "25:61" to reject |
 | `date_range_picker(month, start, finish, on_pick, on_nav)` | Two ends on one calendar |
 | `day_cell(iso, label, selected, in_range, on_pick)` | One day, carrying `{"date": iso}` |
 | `day_blank()` | The gap before the first of the month |

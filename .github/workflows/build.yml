@@ -223,7 +223,7 @@ jobs:
           SOLI_BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
         run: |
           mkdir -p dist
-          ./lang/target/release/soli desktop build eui/examples/counter-app \
+          ./lang/target/release/soli desktop build eui/examples/demo-app \
             --app-id com.soli.vitrine \
             --name Vitrine \
             --eui gallery \

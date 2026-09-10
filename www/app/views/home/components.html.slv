@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Reference<span>&sect;03</span></div>
         <div>
-            <h1>A hundred and fifty functions, and the vocabulary they speak.</h1>
+            <h1>A hundred and eighty-two functions, and the vocabulary they speak.</h1>
             <p class="lede">
                 An EUI component is a Soli function that returns a hash. There is no
                 widget runtime, no component registry and no client release behind any
@@ -16,7 +16,7 @@
                 <a href="#node"><b>The node</b><span>eight keys, sixteen kinds</span></a>
                 <a href="#style"><b>Style</b><span>thirty-seven keys, twenty-eight roles</span></a>
                 <a href="#events"><b>Events</b><span>twenty-four names, two handler forms</span></a>
-                <a href="#catalogue"><b>The catalogue</b><span>all 150, by family</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 182, by family</span></a>
                 <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
             </nav>
         </div>
@@ -242,10 +242,10 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <section id="catalogue">
         <div class="mark">Catalogue<span>&sect;03</span></div>
         <div>
-            <h2>All 150</h2>
+            <h2>All 182</h2>
             <p>
                 They live in one file &mdash;
-                <code>examples/counter-app/app/controllers/eui_builders.sl</code> &mdash;
+                <code>examples/demo-app/app/controllers/eui_builders.sl</code> &mdash;
                 and you are meant to copy it and change it. A widget is not a protocol
                 feature, and none of these had to ask permission to exist. Each one
                 below carries a call you can paste into a view.
@@ -375,13 +375,21 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Input and forms <span>9</span></h3>
+                <h3>Input and forms <span>13</span></h3>
                 <p class="soft">None of them holds state. The handler does.</p>
                 <dl class="api">
                     <dt><b>checkbox(label, checked, on_toggle, props)</b><i>checkbox(it["title"], it["done"], "toggle", {"id": it["id"]})</i></dt>
                     <dd><span class="d">The mark's fill says its state; props say which item it was</span><div class="p"><span class="w-check"><i></i>Write the spec</span></div></dd>
                     <dt><b>switch(label, on, on_toggle, props)</b><i>switch("Notify me", state["notify"], "toggle_notify", {})</i></dt>
                     <dd><span class="d">A track and a knob, placed by justify</span><div class="p"><span class="g-r"><span class="w-switch"><i></i></span><span class="g-t">Notify me</span></span></div></dd>
+                    <dt><b>radio(label, selected, on_pick, props)</b><i>radio("Net 30", terms == "Net 30", "pick_terms", {"value": "Net 30"})</i></dt>
+                    <dd><span class="d">A ring with a dot in it. It cannot be unticked: the group owns the value</span><div class="p"><span class="g-r"><span class="w-radio"><i></i></span><span class="g-t">Net 30</span></span></div></dd>
+                    <dt><b>radio_group(options, value, on_pick, o)</b><i>radio_group(["Net 30", "Net 60"], state["terms"], "pick_terms", {"name": "terms"})</i></dt>
+                    <dd><span class="d">The buttons, the radio_group role, and keys namespaced by the group's name</span><div class="p"><span class="g-c"><span class="g-r"><span class="w-radio"><i></i></span><span class="g-t">Net 30</span></span><span class="g-r"><span class="w-radio"></span><span class="g-t">Net 60</span></span></span></div></dd>
+                    <dt><b>textarea(value, on_change, o)</b><i>textarea(state["notes"], "notes_changed", {"rows": 3})</i></dt>
+                    <dd><span class="d">The multi-line field. rows is a floor, not a ceiling</span><div class="p"><span class="g-in tall">Anything the warehouse should read</span></div></dd>
+                    <dt><b>text_link(label, on_click, props)</b><i>text_link("Sign out", "sign_out", {})</i></dt>
+                    <dd><span class="d">Text in the accent colour that declares the link role</span><div class="p"><span class="g-t lnk">Sign out</span></div></dd>
                     <dt><b>field(label, value, on_change)</b><i>field("Name", state["name"], "name_changed")</i></dt>
                     <dd><span class="d">A muted label over an input</span><div class="p"><span class="g-c"><span class="g-m">Name</span><span class="g-in">Ada</span></span></div></dd>
                     <dt><b>form(children, submit_label, on_submit)</b><i>form([field("Name", "", "noop")], "Save", "save")</i></dt>
@@ -400,7 +408,36 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Calendar and pickers <span>12</span></h3>
+                <h3>Typed fields <span>13</span></h3>
+                <p class="soft">The client has no types &mdash; an <code>input</code> is an <code>input</code>, and 03 &sect;3 is not growing an <code>email</code> kind so a phone can pick a keyboard. The type lives on the server, which is where the value was going anyway, so &ldquo;valid&rdquo; means whatever this application means by it. A value is judged when it arrives, and <code>change</code> arrives on blur or Enter, so a field is never red while it is still being typed into.</p>
+                <dl class="api">
+                    <dt><b>text_field(label, value, on_change, o)</b><i>text_field("Legal name", state["name"], "name_changed", {"required": true})</i></dt>
+                    <dd><span class="d">A line of anything. It judges nothing on its own</span><div class="p"><span class="g-c"><span class="g-m">Legal name</span><span class="g-in">Meridian Industrial SAS</span></span></div></dd>
+                    <dt><b>email_field(label, value, on_change, o)</b><i>email_field("Billing address", state["email"], "email_changed", {})</i></dt>
+                    <dd><span class="d">One local part, one @, a domain with a dot in it. Everything a field can honestly check</span><div class="p"><span class="g-c"><span class="g-m">Billing address</span><span class="g-in bad">billing@</span><span class="g-m err">That does not look like an email address</span></span></div></dd>
+                    <dt><b>number_field(label, value, on_change, o)</b><i>number_field("Quantity", state["qty"], "qty_changed", {"min": 1, "max": 999, "step": 5, "on_step": "qty_step"})</i></dt>
+                    <dd><span class="d">Bounds and a stride; on_step adds the two buttons and the handler does the arithmetic</span><div class="p"><span class="g-r"><span class="g-in sm">20</span><span class="g-t">&minus;</span><span class="g-t">+</span></span></div></dd>
+                    <dt><b>textarea_field(label, value, on_change, o)</b><i>textarea_field("Notes", state["notes"], "notes_changed", {"rows": 3})</i></dt>
+                    <dd><span class="d">The multi-line one; rows is the floor the empty box keeps</span><div class="p"><span class="g-c"><span class="g-m">Notes</span><span class="g-in tall"></span></span></div></dd>
+                    <dt><b>date_field(o)</b><i>date_field({"label": "Delivery date", "value": state["day"], "month": state["month"], "open": state["open"], "on_toggle": "toggle", "on_pick": "pick", "on_nav": "nav"})</i></dt>
+                    <dd><span class="d">An anchor and a calendar in a dropdown &mdash; an overlay, so no card clips it and the page is not pushed open</span><div class="p"><span class="g-c"><span class="g-m">Delivery date</span><span class="g-in">2026-09-18&nbsp;&nbsp;&#128197;</span></span></div></dd>
+                    <dt><b>datetime_field(o)</b><i>datetime_field({"label": "Pickup slot", "value": day, "time": "09:30", &hellip;})</i></dt>
+                    <dd><span class="d">The same, plus the two clock selects under the month</span><div class="p"><span class="g-in">2026-09-18 09:30&nbsp;&nbsp;&#128197;</span></div></dd>
+                    <dt><b>date_range_field(o)</b><i>date_range_field({"label": "Delivery window", "start": a, "finish": b, &hellip;})</i></dt>
+                    <dd><span class="d">Two ends on one calendar. It stays open until it has both</span><div class="p"><span class="g-in">2026-09-10 &rarr; 2026-09-20&nbsp;&nbsp;&#128197;</span></div></dd>
+                    <dt><b>email_valid?(value) / number_valid?(value) / iso_day?(value)</b><i>email_valid?("ada@meridian.test")</i></dt>
+                    <dd><span class="d">What the fields judge by, on their own</span><div class="p"><span class="g-t">true</span></div></dd>
+                    <dt><b>number_within?(value, min, max)</b><i>number_within?(state["qty"], 1, 999)</i></dt>
+                    <dd><span class="d">A number, and inside the bounds the caller gave</span><div class="p"><span class="g-t">true</span></div></dd>
+                    <dt><b>number_stepped(value, delta, o)</b><i>number_stepped(state["qty"], props["delta"], {"min": 1, "max": 999, "step": 5})</i></dt>
+                    <dd><span class="d">What &minus; and + mean, clamped, in the handler that owns the value</span><div class="p"><span class="g-t">25</span></div></dd>
+                    <dt><b>field_shell(label, control, o)</b><i>field_shell("Reference", input(v, "ref"), {"hint": "Yours, or the sequence"})</i></dt>
+                    <dd><span class="d">The label, the control, and the line under it &mdash; for a field of your own</span><div class="p"><span class="g-c"><span class="g-m">Reference</span><span class="g-in">SO-24007</span><span class="g-m">Yours, or the sequence</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Calendar and pickers <span>13</span></h3>
                 <p class="soft">One engine, three pickers. Months are "YYYY-MM", days are ISO strings — which compare correctly as strings, so no date arithmetic reaches the view.</p>
                 <dl class="api">
                     <dt><b>calendar(month, selected, range_start, range_end, on_pick, on_nav)</b><i>calendar(state["month"], [state["day"]], "", "", "pick", "nav")</i></dt>
@@ -409,6 +446,8 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">One day</span><div class="p"><span class="g-c full"><span class="g-grid7"><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></span><span class="g-m">2026-09-08</span></span></div></dd>
                     <dt><b>datetime_picker(month, date, time, on_pick, on_nav, on_time)</b><i>datetime_picker(month, date, time, "pick", "nav", "set_time")</i></dt>
                     <dd><span class="d">A day and an HH:MM field</span><div class="p"><span class="g-c full"><span class="g-grid7"><i></i><i class="a"></i><i></i><i></i><i></i><i></i><i></i></span><span class="g-in sm">09:30</span></span></div></dd>
+                    <dt><b>time_select(time, hour_open, min_open, on_hour_toggle, on_min_toggle, on_hour, on_min)</b><i>time_select(state["time"], state["h_open"], state["m_open"], "h_toggle", "m_toggle", "set_h", "set_m")</i></dt>
+                    <dd><span class="d">Two selects, so the clock cannot hold anything but HH:MM</span><div class="p"><span class="g-r"><span class="g-in sm">09</span><span class="g-t">:</span><span class="g-in sm">30</span></span></div></dd>
                     <dt><b>date_range_picker(month, start, finish, on_pick, on_nav)</b><i>date_range_picker(month, start, finish, "pick", "nav")</i></dt>
                     <dd><span class="d">Two ends on one calendar</span><div class="p"><span class="g-grid7"><i></i><i class="a"></i><i class="r"></i><i class="r"></i><i class="a"></i><i></i><i></i></span></div></dd>
                     <dt><b>day_cell(iso, label, selected, in_range, on_pick)</b><i>day_cell("2026-09-08", "8", true, false, "pick")</i></dt>

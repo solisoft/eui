@@ -37,6 +37,27 @@ def split_at(extent, at, min_a, min_b, bar)
   int((a * 1000.0 / span).round())
 end
 
+def split_drag(state, params, name, dir, extent, min_a, min_b, bar)
+  payload = params["payload"] ?? [0, 0]
+  at = dir == "row" ? payload[0] : payload[1]
+  state[name] = split_at(extent, at, min_a, min_b, bar)
+  state
+end
+
+def split_keys(state, params, name, dir, step)
+  payload = params["payload"] ?? [""]
+  pressed_key = payload[0]
+  back = dir == "row" ? "ArrowLeft" : "ArrowUp"
+  fwd = dir == "row" ? "ArrowRight" : "ArrowDown"
+  current = state[name] ?? 500
+  state[name] = current - step if pressed_key == back
+  state[name] = current + step if pressed_key == fwd
+  state[name] = 500 if pressed_key == "Home"
+  state[name] = 0 if state[name] < 0
+  state[name] = 1000 if state[name] > 1000
+  state
+end
+
 def split_event(state, params, name, dir, extent, min_a, min_b, bar)
   kind = params["kind"]
   drag = name + "_drag"
@@ -46,23 +67,10 @@ def split_event(state, params, name, dir, extent, min_a, min_b, bar)
     state[drag] = true
   elsif kind == "pointer_up"
     state[drag] = false
-  elsif kind == "pointer_move"
-    if state[drag] ?? false
-      payload = params["payload"] ?? [0, 0]
-      at = dir == "row" ? payload[0] : payload[1]
-      state[name] = split_at(extent, at, min_a, min_b, bar)
-    end
+  elsif kind == "pointer_move" && (state[drag] ?? false)
+    state = split_drag(state, params, name, dir, extent, min_a, min_b, bar)
   elsif kind == "key_down"
-    payload = params["payload"] ?? [""]
-    pressed_key = payload[0]
-    back = dir == "row" ? "ArrowLeft" : "ArrowUp"
-    fwd = dir == "row" ? "ArrowRight" : "ArrowDown"
-    current = state[name] ?? 500
-    state[name] = current - step if pressed_key == back
-    state[name] = current + step if pressed_key == fwd
-    state[name] = 500 if pressed_key == "Home"
-    state[name] = 0 if state[name] < 0
-    state[name] = 1000 if state[name] > 1000
+    state = split_keys(state, params, name, dir, step)
   end
   state
 end

@@ -15,7 +15,7 @@
 
             <p>
                 They all live in one Soli application &mdash;
-                <code>examples/counter-app</code> &mdash; and each is a route of four
+                <code>examples/demo-app</code> &mdash; and each is a route of four
                 words: a handler that takes an event and returns state, and a view that
                 takes state and returns a hash. Clone the repository and you are running
                 these in about a minute.
@@ -23,7 +23,7 @@
 
             <div class="pane">
                 <b>run any of them</b>
-<pre>soli serve examples/counter-app --port 5092
+<pre>soli serve examples/demo-app --port 5092
 cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">tracker</span></pre>
             </div>
 
@@ -59,7 +59,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The tracker: a nameplate, transport and tempo panels, eight scopes, an instrument list, a channel heading strip and a 64-row pattern with the playing row lit."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/tracker_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/tracker_controller.sl</span>
                     <span>router_eui("tracker", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -111,7 +111,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The editor: a header with the file name, its state and the cursor position, a line-numbered gutter, the controller's own source with comments dimmed and strings and numbers coloured, and a status line."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/editor_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/editor_controller.sl</span>
                     <span>router_eui("editor", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -155,7 +155,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="Needle: a search bar, five generated record sleeves, and a transport bar across the foot of the window."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/music_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/music_controller.sl</span>
                     <span>router_eui("music", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -194,7 +194,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The catalogue page: stat tiles, an info banner, a progress bar with badges, a segmented control, a pager, a stepper and the controls card."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/live_controller.sl</span>
                     <span>router_eui("gallery", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -230,7 +230,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The feed: a header with a post count and a load button, and a card with an avatar, text and a moving picture with a scrubber."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/live_controller.sl</span>
                     <span>router_eui("feed", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -267,7 +267,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The table: a header row and ten thousand virtualised rows of reference, client, status and amount."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/live_controller.sl</span>
                     <span>router_eui("table", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -304,7 +304,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The todo list: an avatar and title, a text field with an add button, and four rows with checkboxes."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/live_controller.sl</span>
                     <span>router_eui("todo", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -328,7 +328,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
                      alt="The counter: a title, the number 0, a minus and a plus button, and a line of help text."
                      loading="lazy" decoding="async">
                 <figcaption>
-                    <span>examples/counter-app &middot; app/controllers/live_controller.sl</span>
+                    <span>examples/demo-app &middot; app/controllers/live_controller.sl</span>
                     <span>router_eui("counter", &hellip;)</span>
                 </figcaption>
             </figure>
@@ -375,7 +375,7 @@ cargo run -p eui-client -- ws://127.0.0.1:5092/_eui/session/<span class="s">trac
     <footer>
         <span>EUI · a protocol, a client, a specification</span>
         <a href="/components">Components</a>
-        <a href="https://github.com/solisoft/eui/tree/main/examples/counter-app">The sample application</a>
+        <a href="https://github.com/solisoft/eui/tree/main/examples/demo-app">The sample application</a>
         <a href="https://github.com/solisoft/eui">Source</a>
     </footer>
 </main>

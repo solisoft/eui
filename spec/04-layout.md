@@ -156,13 +156,16 @@ never counted into it, and never stretched to it.
 
 **Popovers.** An `overlay` child of a `stack` with `position: absolute` hangs
 off the stack's first in-flow child — its *anchor* — instead of the stack's
-own corner. Its left edge starts on the anchor's; its top is the anchor's
-bottom plus its own top margin. When that would put its bottom outside the
-viewport and the anchor has more room above it than below, it goes over the
-anchor instead: its bottom the anchor's top, less the same margin. Either way
-the box is then clamped into the viewport on both axes, so a panel taller or
-wider than the window still starts inside it. Nothing is measured again: the
-panel and its subtree are moved.
+own corner. It is measured against the **viewport** rather than against the
+stack, on both axes, less its own margins: it floats, so what limits it is
+the room the viewer has, and a `scroll` in it therefore stops at the window
+edge and scrolls the rest. Its left edge starts on the anchor's; its top is
+the anchor's bottom plus its own top margin. When that would put its bottom
+outside the viewport and the anchor has more room above it than below, it
+goes over the anchor instead: its bottom the anchor's top, less the same
+margin. Either way the box is then clamped into the viewport on both axes,
+so a panel taller or wider than the window still starts inside it. Nothing
+is measured again: the panel and its subtree are moved.
 
 ## 6. `grid`
 
