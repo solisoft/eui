@@ -9,15 +9,93 @@ use std::time::{Duration, Instant};
 use eui_audio::Control;
 use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
 use eui_proto::{
-    caps, AlignItems, Batch, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, StyleRecord, Subtree, TextAlign, TextRef,
-    ThemeMode, Value, Viewport, PROTOCOL_VERSION,
+    caps, AlignItems, Batch, Chunked, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, Resume, StyleRecord, Subtree,
+    TextAlign, TextRef, ThemeMode, Transfer, Value, Viewport, PROTOCOL_VERSION,
 };
+use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_UPLOAD_BYTES};
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, PaintCache, Scene, SCROLLBAR_WIDTH};
 
 use crate::assets::{AssetStore, Hash};
 use eui_text::TextEngine;
 use eui_theme::{Resolved, Theme, Viewer};
 use eui_tree::{Chunk, NodeIx, Session};
+
+/// A dialog the tree asked for and the window has not opened yet
+/// (spec 03 §3.2).
+///
+/// The driver never opens one: it has no window and, in a worker, no
+/// filesystem either. It only says that a node the person just activated
+/// carries `pick` or `save`, that the application declared a handler for
+/// the answer, and that the capability behind it was granted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileAsk {
+    /// The driver's own name for this dialog; every later call about it
+    /// carries it back.
+    pub token: u32,
+    /// The node that asked, by id.
+    pub node: u32,
+    /// Which dialog, and what to put in it.
+    pub want: FileWant,
+}
+
+/// Which dialog a [`FileAsk`] wants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileWant {
+    /// The platform's open dialog.
+    Open {
+        /// Extensions to offer, comma separated and without dots;
+        /// empty for every file.
+        accept: String,
+        /// Whether more than one file may be chosen.
+        multiple: bool,
+        /// The ceiling one file may not pass, in bytes.
+        max: u64,
+    },
+    /// The platform's save dialog.
+    Save {
+        /// The name to suggest.
+        name: String,
+    },
+}
+
+/// Bytes the server owes a save, for the window to put on disk.
+///
+/// The driver decodes them, as it decodes everything; it does not write
+/// them. The window knows the path, because the person chose it there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileWrite {
+    /// The [`FileAsk::token`] of the save these bytes belong to.
+    pub token: u32,
+    /// Whether more follow, this is the last, or the transfer failed —
+    /// in which case `bytes` is the reason and the partial file goes.
+    pub flag: Chunked,
+    /// The bytes to append.
+    pub bytes: Vec<u8>,
+}
+
+/// An upload in flight: what the driver must know to frame its chunks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Upload {
+    /// The node whose `pick` this answers.
+    node: u32,
+    /// The next chunk index to frame.
+    seq: u32,
+    /// Bytes framed so far.
+    sent: u64,
+    /// The ceiling the node asked for.
+    max: u64,
+}
+
+/// A save in flight, keyed by the node the person answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Save {
+    /// The ask the window still knows the path for.
+    token: u32,
+    /// The next chunk index expected: a gap ends the transfer.
+    seq: u32,
+    /// Bytes handed to the window so far.
+    written: u64,
+}
 
 /// What the window feeds the driver.
 #[derive(Debug, Clone, PartialEq)]
@@ -313,6 +391,13 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// runs at 60, but a spinner is a mark at rest, and the machine it is on
 /// should be too (10 §1).
 const SPIN_FRAME: Duration = Duration::from_millis(33);
+/// How long a scrollbar stays up once the scrolling stops, and how long it
+/// then takes to go. A bar reports a movement, so there is nothing for one
+/// to say about a page that is sitting still — and a strip of furniture
+/// down the right of every scroller is a strip of furniture in every
+/// screenshot of every page. Overlay bars, on Safari's timings.
+const BAR_HOLD: Duration = Duration::from_millis(800);
+const BAR_FADE: Duration = Duration::from_millis(400);
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
 /// How long a drag waits for the server to answer its last move before
 /// sending another. A server that answers paces the drag itself, so this
@@ -428,6 +513,24 @@ pub struct Driver {
     provisional: Vec<Undo>,
     granted: u32,
     welcomed: bool,
+    /// The session the server named in `Welcome`, and what to offer it if
+    /// the socket breaks (spec 01 §4.1).
+    session_id: Option<[u8; 16]>,
+    /// The last batch sequence applied, which is also the last acked.
+    acked: u64,
+    /// Dialogs the tree asked for that the window has not been handed yet.
+    file_asks: Vec<FileAsk>,
+    /// Dialogs opened and not yet answered, by token.
+    asks: HashMap<u32, FileAsk>,
+    /// The next token, for a dialog or an upload. Never reused, so a chunk
+    /// that arrives late cannot land in a later transfer.
+    next_token: u32,
+    /// Uploads in flight, by their id on the wire.
+    uploads: HashMap<u32, Upload>,
+    /// Saves in flight, by the node the person answered.
+    saves: HashMap<u32, Save>,
+    /// Bytes waiting for the window to put on disk.
+    writes: Vec<FileWrite>,
     /// A `Resync` went out and its answer has not arrived: if that answer is
     /// refused too, the session ends rather than looping.
     resyncing: bool,
@@ -470,6 +573,8 @@ pub struct Driver {
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
+    /// The scroller that last moved and when, for the bar it wears.
+    scrolled: Option<(NodeIx, Instant)>,
     /// Spec 03 §8: the moving pictures in the tree, and where each node
     /// is in its own. Decoding runs here, in the worker; the frame the
     /// clock makes due is written into the image atlas, so the painter
@@ -571,6 +676,14 @@ impl Driver {
             provisional: Vec::new(),
             granted: granted & caps::ALL,
             welcomed: false,
+            session_id: None,
+            acked: 0,
+            file_asks: Vec::new(),
+            asks: HashMap::new(),
+            next_token: 1,
+            uploads: HashMap::new(),
+            saves: HashMap::new(),
+            writes: Vec::new(),
             resyncing: false,
             hover_relight: false,
             layout_valid: false,
@@ -588,6 +701,7 @@ impl Driver {
             paint_cache: PaintCache::new(),
             last_paint_stats: eui_render::PaintStats::default(),
             scroll_touched: None,
+            scrolled: None,
             movies: HashMap::new(),
             players: HashMap::new(),
             framed: HashMap::new(),
@@ -618,8 +732,58 @@ impl Driver {
     }
 
     /// The opening frame.
+    ///
+    /// On the first socket it offers nothing. On a later one — the client
+    /// reconnecting after the network went away — it offers the session it
+    /// still holds a tree for and the last batch it applied (spec 01 §4.1).
+    /// Whether that offer is taken is the server's to say.
     pub fn hello(&self) -> Frame {
-        Frame::Hello(Hello { version: PROTOCOL_VERSION, viewport: self.viewport(), granted: self.granted })
+        let resume = self.session_id.filter(|_| self.session.root().is_some()).map(|session| Resume { session, acked: self.acked });
+        Frame::Hello(Hello { version: PROTOCOL_VERSION, viewport: self.viewport(), granted: self.granted, resume })
+    }
+
+    /// The session id the server named, once it has.
+    pub fn session_id(&self) -> Option<[u8; 16]> {
+        self.session_id
+    }
+
+    /// The last batch applied and acked.
+    pub fn acked(&self) -> u64 {
+        self.acked
+    }
+
+    /// Everything a session owns, dropped: the tree, the tables, focus, the
+    /// edits, the verified chunks, the transfers. What survives is what
+    /// belongs to the window rather than to the session — the theme, the
+    /// viewer, the atlases, and assets, which are named by their content
+    /// and so are the same bytes in any session.
+    fn start_over(&mut self) {
+        self.session = Session::new();
+        self.layout = Layout::new();
+        self.focused = None;
+        self.focus_visible = false;
+        self.edits.clear();
+        self.preedit.clear();
+        self.chunks.clear();
+        self.provisional.clear();
+        self.anims.clear();
+        self.scroll_anim = None;
+        self.windows.clear();
+        self.cached = None;
+        self.uploads.clear();
+        self.saves.clear();
+        self.file_asks.clear();
+        self.asks.clear();
+        // A save whose bytes will never come: the window deletes the
+        // partial file rather than leaving half an export behind.
+        let orphans: Vec<u32> = self.writes.iter().map(|w| w.token).collect();
+        self.writes.clear();
+        for token in orphans {
+            self.writes.push(FileWrite { token, flag: Chunked::Abort, bytes: b"the session ended".to_vec() });
+        }
+        self.acked = 0;
+        self.resyncing = false;
+        self.invalidate();
     }
 
     fn viewport(&self) -> Viewport {
@@ -686,9 +850,23 @@ impl Driver {
                     self.closed = Some(Close::Version(w.version));
                     return vec![Frame::Error { code: 100, message: format!("unsupported version {}", w.version) }];
                 }
+                // Spec 01 §4.1. The server decides whether the session the
+                // client offered is still there, and the client believes
+                // it: a tree kept against a server that has forgotten it
+                // would answer clicks the server cannot place.
+                if w.resumed {
+                    if self.session_id != Some(w.session) {
+                        self.closed = Some(Close::Protocol("resumed a session the client did not offer"));
+                        return vec![Frame::Error { code: 103, message: "resumed a session the client did not offer".into() }];
+                    }
+                } else if self.welcomed {
+                    self.start_over();
+                }
+                self.session_id = Some(w.session);
                 self.welcomed = true;
                 Vec::new()
             }
+            Frame::Blob(t) => self.blob(t),
             Frame::Batch(batch) => self.apply(&batch),
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
@@ -696,7 +874,7 @@ impl Driver {
                 self.closed = Some(Close::ServerError(code, message));
                 Vec::new()
             }
-            Frame::Hello(_) | Frame::Event(_) | Frame::Ack { .. } | Frame::Resync | Frame::Viewport(_) => {
+            Frame::Hello(_) | Frame::Event(_) | Frame::Ack { .. } | Frame::Resync | Frame::Viewport(_) | Frame::Upload(_) => {
                 self.closed = Some(Close::Protocol("client-only frame from server"));
                 vec![Frame::Error { code: 101, message: "client-only frame from server".into() }]
             }
@@ -704,6 +882,13 @@ impl Driver {
     }
 
     fn apply(&mut self, batch: &Batch) -> Vec<Frame> {
+        // A resumed session replays what the socket dropped, and the last
+        // batch before it broke may well have landed. Applying it twice is
+        // not always harmless — a `SetText` is, an `Insert` is not — so a
+        // sequence already applied is acked again and otherwise ignored.
+        if batch.seq <= self.acked {
+            return vec![Frame::Ack { seq: self.acked }];
+        }
         self.revert_provisional();
         match self.session.apply(batch) {
             Ok(()) => {
@@ -728,6 +913,7 @@ impl Driver {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
+                self.acked = batch.seq;
                 let mut out = vec![Frame::Ack { seq: batch.seq }];
                 // A `Focus` op focuses the way the keyboard does, ring included.
                 if batch.ops.iter().any(|o| matches!(o, eui_proto::Op::Focus { .. })) {
@@ -875,6 +1061,7 @@ impl Driver {
             self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
             self.layout_valid = false;
             self.scroll_touched = Some(self.now);
+            self.scrolled = Some((a.node, self.now));
             if a.done(self.now) {
                 self.scroll_anim = None;
                 let (nx, ny) = (a.to.0.round() as i64, a.to.1.round() as i64);
@@ -894,6 +1081,7 @@ impl Driver {
             self.layout.set_glide(a.node, a.from.1.min(a.to.1), a.from.1.max(a.to.1), delta);
             self.layout_valid = false;
             self.scroll_touched = Some(self.now);
+            self.scrolled = Some((a.node, self.now));
             a.armed = true;
             self.scroll_anim = Some(a);
         }
@@ -901,6 +1089,7 @@ impl Driver {
             self.scroll_anim = None;
             self.layout.clear_glide(a.node);
             self.scroll_touched = Some(self.now);
+            self.scrolled = Some((a.node, self.now));
             return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(bx as i64), Value::Int(by as i64)]));
         }
         Vec::new()
@@ -1586,6 +1775,9 @@ impl Driver {
                     let kind = if button == 1 { EventKind::ContextMenu } else { EventKind::Click };
                     let p = self.point_payload(ix, kind, x, y);
                     out.extend(self.emit(ix, kind, p));
+                    if matches!(kind, EventKind::Click) {
+                        self.offer_files(ix);
+                    }
                 }
             }
         }
@@ -1649,7 +1841,9 @@ impl Driver {
             let focusable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea)
                 || node.handler(EventKind::Click).is_some()
                 || node.handler(EventKind::KeyDown).is_some()
-                || node.handler(EventKind::KeyUp).is_some();
+                || node.handler(EventKind::KeyUp).is_some()
+                || node.handler(EventKind::FilePick).is_some()
+                || node.handler(EventKind::FileSave).is_some();
             if focusable && self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) {
                 order.push(ix);
             }
@@ -1727,7 +1921,9 @@ impl Driver {
     fn activate(&mut self, f: NodeIx) -> Vec<Frame> {
         let r = self.layout.rect(f).unwrap_or_default();
         let p = Value::List(vec![Value::Float(f64::from(r.w / 2.0)), Value::Float(f64::from(r.h / 2.0))]);
-        self.emit(f, EventKind::Click, p)
+        let out = self.emit(f, EventKind::Click, p);
+        self.offer_files(f);
+        out
     }
 
     fn ancestor_where(&self, from: NodeIx, pred: impl Fn(NodeKind) -> bool) -> Option<NodeIx> {
@@ -1874,6 +2070,7 @@ impl Driver {
         self.session.set_scroll(scroller, nx, ny);
         self.invalidate();
         self.scroll_touched = Some(Instant::now());
+        self.scrolled = Some((scroller, Instant::now()));
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
@@ -2110,8 +2307,31 @@ impl Driver {
         }
         self.session.set_scroll(scroller, nx, ny);
         self.scroll_touched = Some(Instant::now());
+        self.scrolled = Some((scroller, Instant::now()));
         self.invalidate();
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
+    }
+
+    /// The bar the scroller that last moved is wearing, and how far in.
+    /// Empty once it has faded, which is what stops the frames.
+    fn scrollbars(&mut self) -> Vec<(NodeIx, f32)> {
+        let Some((ix, at)) = self.scrolled else {
+            return Vec::new();
+        };
+        if self.session.node(ix).is_none() {
+            self.scrolled = None;
+            return Vec::new();
+        }
+        let since = self.now.saturating_duration_since(at);
+        if since <= BAR_HOLD {
+            return vec![(ix, 1.0)];
+        }
+        let gone = (since - BAR_HOLD).as_secs_f32() / BAR_FADE.as_secs_f32();
+        if gone >= 1.0 {
+            self.scrolled = None;
+            return Vec::new();
+        }
+        vec![(ix, 1.0 - gone)]
     }
 
     fn is_editable(&self, ix: NodeIx) -> bool {
@@ -2155,6 +2375,232 @@ impl Driver {
         let lx = x - (rect.x + style.border.l + style.padding.l) + scroll_x;
         let ly = y - (rect.y + style.border.t + style.padding.t);
         Some(shaped.byte_at(lx, ly).min(text.len()))
+    }
+
+
+    // -------------------------------------------------------------- files
+
+    /// Dialogs the tree asked for since the last call (spec 03 §3.2). The
+    /// window opens them; nothing else may.
+    pub fn take_file_asks(&mut self) -> Vec<FileAsk> {
+        std::mem::take(&mut self.file_asks)
+    }
+
+    /// Bytes a save is owed, for the window to append to the file the
+    /// person named.
+    pub fn take_writes(&mut self) -> Vec<FileWrite> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// A token nothing else will carry.
+    fn mint(&mut self) -> u32 {
+        let t = self.next_token;
+        self.next_token = self.next_token.saturating_add(1);
+        t
+    }
+
+    /// Spec 03 §3.2: the person activated a node. If it carries `pick` or
+    /// `save`, declares the handler that answers it, and the capability
+    /// behind it was granted, the window is asked for the platform's own
+    /// dialog.
+    ///
+    /// Three conditions, and every one of them is checked here rather than
+    /// where the dialog opens: a dialog the person did not ask for is the
+    /// whole of what makes a file picker dangerous.
+    fn offer_files(&mut self, from: NodeIx) {
+        for (kind, prop, cap) in [(EventKind::FilePick, "pick", caps::FS_PICK), (EventKind::FileSave, "save", caps::FS_SAVE)] {
+            let Some((ix, handler)) = self.target(from, kind) else { continue };
+            // A local chunk cannot be given a file and cannot answer with
+            // one: both ends of a transfer are the server's.
+            if !matches!(handler, Handler::Server(_)) {
+                continue;
+            }
+            let Some(atom) = self.session.atom_id(prop) else { continue };
+            let Some(node) = self.session.node(ix) else { continue };
+            let id = node.id;
+            let Some(value) = node.prop(atom).cloned() else { continue };
+            if self.granted & cap == 0 {
+                eprintln!("eui: node {id} carries `{prop}`, which needs a capability the person did not grant; nothing opens");
+                continue;
+            }
+            // One dialog at a time per node: a second click while the
+            // first is open must not stack two of them.
+            if self.asks.values().any(|a| a.node == id) {
+                continue;
+            }
+            let want = match kind {
+                EventKind::FilePick => {
+                    let (accept, flags, max) = match &value {
+                        Value::Str(a) => (a.clone(), 0, DEFAULT_UPLOAD_BYTES),
+                        Value::List(l) => {
+                            let accept = match l.first() {
+                                Some(Value::Str(a)) => a.clone(),
+                                _ => String::new(),
+                            };
+                            let flags = match l.get(1) {
+                                Some(Value::Int(f)) => *f,
+                                _ => 0,
+                            };
+                            let max = match l.get(2) {
+                                Some(Value::Int(m)) if *m > 0 => (*m as u64).min(MAX_UPLOAD_BYTES),
+                                _ => DEFAULT_UPLOAD_BYTES,
+                            };
+                            (accept, flags, max)
+                        }
+                        _ => (String::new(), 0, DEFAULT_UPLOAD_BYTES),
+                    };
+                    FileWant::Open { accept, multiple: flags & 1 != 0, max }
+                }
+                _ => {
+                    let name = match &value {
+                        Value::Str(n) => basename(n).to_owned(),
+                        Value::List(l) => match l.first() {
+                            Some(Value::Str(n)) => basename(n).to_owned(),
+                            _ => String::new(),
+                        },
+                        _ => String::new(),
+                    };
+                    FileWant::Save { name: if name.is_empty() { "download".into() } else { name } }
+                }
+            };
+            let token = self.mint();
+            let ask = FileAsk { token, node: id, want };
+            self.asks.insert(token, ask.clone());
+            self.file_asks.push(ask);
+            self.touched = true;
+        }
+    }
+
+    /// The person chose files in the dialog `token` opened: one `file_pick`
+    /// event each, and an upload id each for the window to stream against.
+    ///
+    /// A file past the ceiling the node asked for gets its event and an
+    /// immediate abort, so the application can say why rather than watch
+    /// nothing happen; its id accepts no chunks.
+    pub fn picked(&mut self, token: u32, files: Vec<(String, u64)>) -> (Vec<u32>, Vec<Frame>) {
+        let Some(ask) = self.asks.remove(&token) else { return (Vec::new(), Vec::new()) };
+        let FileWant::Open { max, .. } = ask.want else { return (Vec::new(), Vec::new()) };
+        self.touched = true;
+        let Some(ix) = self.session.lookup(ask.node) else { return (Vec::new(), Vec::new()) };
+        let (mut ids, mut out) = (Vec::new(), Vec::new());
+        for (name, size) in files {
+            let id = self.mint();
+            let name = basename(&name).to_owned();
+            let payload = Value::List(vec![Value::Int(i64::from(id)), Value::Str(name), Value::Int(i64::try_from(size).unwrap_or(i64::MAX))]);
+            out.extend(self.emit(ix, EventKind::FilePick, payload));
+            if size > max {
+                out.push(Frame::Upload(Transfer { id, seq: 0, flag: Chunked::Abort, bytes: format!("file is {size} bytes; this one accepts {max}").into_bytes() }));
+            } else {
+                self.uploads.insert(id, Upload { node: ask.node, seq: 0, sent: 0, max });
+            }
+            ids.push(id);
+        }
+        (ids, out)
+    }
+
+    /// The dialog `token` opened was dismissed. A cancel is not an event:
+    /// nothing happened, and the application hears nothing.
+    pub fn dialog_dismissed(&mut self, token: u32) {
+        if self.asks.remove(&token).is_some() {
+            self.touched = true;
+        }
+    }
+
+    /// Bytes of an upload, in order, framed for the wire. `last` closes it.
+    pub fn upload_chunk(&mut self, id: u32, bytes: &[u8], last: bool) -> Vec<Frame> {
+        let Some(up) = self.uploads.get(&id) else { return Vec::new() };
+        self.touched = true;
+        let (mut seq, sent, max) = (up.seq, up.sent, up.max);
+        let total = sent.saturating_add(bytes.len() as u64);
+        if total > max {
+            self.uploads.remove(&id);
+            return vec![Frame::Upload(Transfer { id, seq, flag: Chunked::Abort, bytes: format!("more than the {max} bytes this one accepts").into_bytes() })];
+        }
+        let mut out = Vec::new();
+        let mut rest = bytes;
+        loop {
+            let take = rest.len().min(MAX_TRANSFER_CHUNK_BYTES);
+            let (head, tail) = rest.split_at(take);
+            let done = last && tail.is_empty();
+            out.push(Frame::Upload(Transfer { id, seq, flag: if done { Chunked::Last } else { Chunked::More }, bytes: head.to_vec() }));
+            seq = seq.saturating_add(1);
+            rest = tail;
+            if rest.is_empty() {
+                break;
+            }
+        }
+        if last {
+            self.uploads.remove(&id);
+        } else if let Some(up) = self.uploads.get_mut(&id) {
+            up.seq = seq;
+            up.sent = total;
+        }
+        out
+    }
+
+    /// The window could not read what the person picked. The server is told
+    /// so it can stop waiting for bytes that are not coming.
+    pub fn upload_failed(&mut self, id: u32, why: String) -> Vec<Frame> {
+        if self.uploads.remove(&id).is_none() {
+            return Vec::new();
+        }
+        self.touched = true;
+        let mut bytes = why.into_bytes();
+        bytes.truncate(eui_proto::limits::MAX_ABORT_REASON);
+        vec![Frame::Upload(Transfer { id, seq: 0, flag: Chunked::Abort, bytes })]
+    }
+
+    /// The person chose where what this node offers should go. The server
+    /// is asked for it; the path stays with the window.
+    pub fn saving(&mut self, token: u32, name: String) -> Vec<Frame> {
+        let Some(ask) = self.asks.remove(&token) else { return Vec::new() };
+        if !matches!(ask.want, FileWant::Save { .. }) {
+            return Vec::new();
+        }
+        self.touched = true;
+        let Some(ix) = self.session.lookup(ask.node) else { return Vec::new() };
+        self.saves.insert(ask.node, Save { token, seq: 0, written: 0 });
+        self.emit(ix, EventKind::FileSave, Value::Str(basename(&name).to_owned()))
+    }
+
+    /// A chunk of what a save is owed (spec 01 §6).
+    ///
+    /// The client writes a file only where the person just said, and only
+    /// for the node they activated: a blob for anything else is a server
+    /// trying to put bytes on a disk nobody offered it, and ends the
+    /// session.
+    fn blob(&mut self, t: Transfer) -> Vec<Frame> {
+        let Some(save) = self.saves.get_mut(&t.id) else {
+            self.closed = Some(Close::Protocol("a blob for a save nobody asked for"));
+            return vec![Frame::Error { code: 104, message: "blob for a save nobody asked for".into() }];
+        };
+        let token = save.token;
+        if t.seq != save.seq {
+            self.saves.remove(&t.id);
+            self.writes.push(FileWrite { token, flag: Chunked::Abort, bytes: b"the server sent the chunks out of order".to_vec() });
+            return Vec::new();
+        }
+        match t.flag {
+            Chunked::Abort => {
+                self.saves.remove(&t.id);
+                self.writes.push(FileWrite { token, flag: Chunked::Abort, bytes: t.bytes });
+            }
+            flag => {
+                let written = save.written.saturating_add(t.bytes.len() as u64);
+                if written > MAX_SAVE_BYTES {
+                    self.saves.remove(&t.id);
+                    self.writes.push(FileWrite { token, flag: Chunked::Abort, bytes: format!("more than the {MAX_SAVE_BYTES} bytes one save may write").into_bytes() });
+                    return Vec::new();
+                }
+                save.written = written;
+                save.seq = save.seq.saturating_add(1);
+                if matches!(flag, Chunked::Last) {
+                    self.saves.remove(&t.id);
+                }
+                self.writes.push(FileWrite { token, flag, bytes: t.bytes });
+            }
+        }
+        Vec::new()
     }
 
     /// Text the person copied or cut since the last call, for the clipboard.
@@ -2557,6 +3003,14 @@ impl Driver {
             .into_iter()
             .collect();
         let editing = self.editing();
+        // Hold, then fade: while it is held there is nothing to redraw
+        // until the fade starts, so come back then rather than every frame
+        // of the wait.
+        let bars = self.scrollbars();
+        if let Some((_, at)) = self.scrolled {
+            let due = if self.now.saturating_duration_since(at) <= BAR_HOLD { at + BAR_HOLD } else { self.now + SPIN_FRAME };
+            self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+        }
         trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
         let mut list = paint(&mut Scene {
             session: &self.session,
@@ -2574,6 +3028,7 @@ impl Driver {
             editing,
             now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
+            scrollbars: &bars,
         });
         if list.wants_frame && self.next_due.is_none() {
             self.next_due = Some(now + SPIN_FRAME);
@@ -3314,4 +3769,11 @@ impl TextMeasurer for Measurer<'_> {
             // A video is measured by its frame, which no image store holds.
             .or_else(|| self.videos.get(hash).copied())
     }
+}
+
+/// The last segment of what a file dialog called a file, on either
+/// separator. Spec 06 §3: a path is the person's business, and the server
+/// is told the name it picked, not where it lives.
+fn basename(name: &str) -> &str {
+    name.rsplit(['/', '\\']).next().unwrap_or(name)
 }

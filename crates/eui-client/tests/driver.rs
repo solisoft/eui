@@ -1312,7 +1312,15 @@ fn the_scrollbar_thumb_drags_and_its_track_pages() {
     let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).expect("content overflows");
     assert!(thumb.x >= r.x + r.w - eui_render::SCROLLBAR_WIDTH);
     assert_eq!(thumb.h, 24.0);
-    assert!(list.quads.iter().any(|q| q.rect[0] == thumb.x && q.rect[3] == thumb.h), "the thumb is drawn");
+    // At rest the page wears no bar. 03 §2's thumb is feedback about a
+    // movement and nothing here has moved, so it is not painted until
+    // something scrolls — or until the pointer is on the strip, where it
+    // is there to be grabbed.
+    let drawn = |list: &eui_render::DrawList, thumb: &eui_layout::Rect| list.quads.iter().any(|q| q.rect[3] == thumb.h && q.rect[0] >= r.x + r.w - eui_render::SCROLLBAR_WIDTH - 2.0);
+    assert!(!drawn(&list, &thumb), "no bar until something moves");
+    d.input(Input::PointerMove(thumb.x + 2.0, thumb.y + 5.0));
+    let list = d.paint(400, 300);
+    assert!(drawn(&list, &thumb), "the thumb is drawn under the pointer");
     // A press on the track below the thumb pages down by the view height.
     d.input(Input::PointerMove(thumb.x + 2.0, r.y + r.h - 5.0));
     d.input(Input::PointerDown(0));

@@ -44,6 +44,12 @@ fn text(id: u32, style: u32, s: &str) -> FlatNode {
 }
 
 fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
+    draw_bars(fx, w, h, scale, &[])
+}
+
+/// The same, with the scrollers whose bars are up — the client's decision,
+/// which a test has to make for itself.
+fn draw_bars(fx: &mut Fx, w: u32, h: u32, scale: f32, bars: &[(eui_tree::NodeIx, f32)]) -> DrawList {
     paint(&mut Scene {
         session: &fx.session,
         layout: &fx.layout,
@@ -60,6 +66,7 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
         editing: None,
         now: 0.0,
         scrollbar_hot: None,
+        scrollbars: bars,
     })
 }
 
@@ -132,7 +139,13 @@ fn scroll_containers_open_a_scissor_run_and_cull_what_is_outside() {
     assert_eq!(list.clips.len(), 2);
     assert_eq!(list.clips[1], [0, 0, 200, 50]);
     // Only the rows overlapping the 50 px viewport survive: rows at y 0, 20,
-    // 40 — plus the scrollbar thumb, painted last, outside the scissor run.
+    // 40. No thumb: a bar reports a movement, and nothing here has moved.
+    assert_eq!(list.quads.len(), 3, "{list:#?}");
+
+    // Told the scroller's bar is up, it wears one — painted last, outside
+    // the scissor run.
+    let scroller = eui_tree::NodeIx::from_raw(1);
+    let list = draw_bars(&mut fx, 200, 400, 1.0, &[(scroller, 1.0)]);
     assert_eq!(list.quads.len(), 4, "{list:#?}");
     let thumb = list.quads.last().unwrap();
     assert_eq!(thumb.rect[2], SCROLLBAR_WIDTH - 2.0);
@@ -725,6 +738,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             editing: None,
             now: 0.0,
             scrollbar_hot: None,
+            scrollbars: &[],
         })
     };
     let list = draw(&mut fx, &[(ix, anim)]);
@@ -900,6 +914,7 @@ fn retained_glyph_quads_are_replayed_until_the_node_changes() {
             editing: None,
             now: 0.0,
             scrollbar_hot: None,
+            scrollbars: &[],
         })
     };
     let relayout = |fx: &mut Fx| fx.layout.compute(&mut Env { session: &fx.session, theme: &fx.theme, text: &mut fx.text }, Size::new(200.0, 100.0));
@@ -1024,6 +1039,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         editing,
         now: 0.0,
         scrollbar_hot: None,
+        scrollbars: &[],
     });
     let boxes: Vec<&Quad> = list.quads.iter().filter(|q| q.params[2] == 0.0).collect();
     assert_eq!(boxes.len(), 2, "one selection rect, one caret: {list:#?}");
@@ -1100,6 +1116,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             editing,
             now: 0.0,
             scrollbar_hot: None,
+            scrollbars: &[],
         });
         let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).expect("caret");
         let glyph = list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).expect("glyph");
@@ -1215,6 +1232,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             editing: None,
             now,
             scrollbar_hot: None,
+            scrollbars: &[],
         })
     };
     let a = at(0.0);
