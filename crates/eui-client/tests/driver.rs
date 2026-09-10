@@ -117,17 +117,21 @@ fn a_pointer_move_handler_follows_the_press_off_the_node() {
     let out = d.input(Input::PointerMove(r.x + 10.0, r.y + r.h / 2.0));
     assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove && e.node == 1)));
     let _ = d.input(Input::PointerDown(0));
-    assert!(d.input(Input::PointerMove(r.x + r.w + 40.0, r.y + r.h / 2.0)).is_empty(), "captured moves stay local");
+    assert!(d.input(Input::PointerMove(r.x + r.w + 40.0, r.y + r.h / 2.0)).is_empty(), "the input holds it for the frame");
+    // 06 §1: coalesced, at most one a frame carrying the latest value. The
+    // frame is where the server hears it -- still named for the node that
+    // was pressed, and still in that node's coordinates, though the
+    // pointer has left the box.
     let _ = d.paint(400, 300);
-    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove)), "no move until release");
-    let out = d.input(Input::PointerUp(0));
-    let Some(Frame::Event(e)) = out.iter().find(|f| matches!(f, Frame::Event(ev) if ev.event == EventKind::PointerMove)) else {
-        panic!("expected the last move on release, got {out:?}");
+    let sent = d.take_pending();
+    let Some(Frame::Event(e)) = sent.iter().find(|f| matches!(f, Frame::Event(ev) if ev.event == EventKind::PointerMove)) else {
+        panic!("expected the move at the frame that followed it, got {sent:?}");
     };
     assert_eq!(e.node, 1);
     let Value::List(p) = &e.payload else { panic!("{:?}", e.payload) };
     let Value::Float(x) = &p[0] else { panic!("{:?}", p[0]) };
     assert!(*x > 100.0, "local x past the box: {x}");
+    let out = d.input(Input::PointerUp(0));
     assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerUp && e.node == 1)), "{out:?}");
 }
 
@@ -940,13 +944,19 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     let scroll = d.session().lookup(2).unwrap();
     d.input(Input::PointerMove(50.0, 50.0));
     // One notch: nothing moves yet, a frame is due, nothing is reported.
+    // The glide starts on the driver's clock, which the input takes from
+    // the wall, so every tick below is measured from the notch and not
+    // from `t0` -- a loaded machine can spend a hundred milliseconds
+    // between the two, and a tick that lands before the start reads as a
+    // glide that has not moved.
+    let notch = Instant::now();
     assert!(d.input(Input::WheelStep(0.0, 1.0)).is_empty());
     assert!(d.animating());
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
     // Mid-way: the tree holds the landing, 100, and the layout knows the
     // content stands somewhere short of it -- between 0 and 100 px below
     // where it was put -- which is where the vertex stage draws it.
-    d.tick(t0 + Duration::from_millis(60));
+    d.tick(notch + Duration::from_millis(60));
     let _ = d.paint(400, 300);
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 100), "laid out once, at the landing");
     let dy = d.layout().glide(scroll).expect("gliding").delta.1;
@@ -956,8 +966,9 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     assert!(d.input(Input::Wheel(0.0, 0.0)).is_empty());
     assert!(d.animating(), "a zero delta does not cancel the motion");
     // A second notch mid-flight retargets to 120 (the end) from where the view is.
+    let second = Instant::now();
     d.input(Input::WheelStep(0.0, 1.0));
-    d.tick(t0 + Duration::from_millis(400));
+    d.tick(second + Duration::from_millis(400));
     let _ = d.paint(400, 300);
     assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 120));
     assert!(!d.animating());
@@ -1075,6 +1086,61 @@ fn a_hit_during_a_glide_finds_the_moved_row() {
     // where it lands (row 5): the hit follows what is drawn.
     let expected = 10 + ((11.0 + shown) / 22.0).floor() as u32;
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
+}
+
+/// A press on a `pointer_move` handler captures the pointer, and the move
+/// it coalesces is sent at the next paint -- one a frame, not one per OS
+/// sample. Held back until the button comes up instead, anything whose
+/// shape only the server knows cannot follow the hand: a slider hides it
+/// by moving its own thumb locally, a split pane has nothing to hide it
+/// with and sits where it started until the drag ends.
+#[test]
+fn a_drag_sends_one_move_a_frame_rather_than_one_when_it_ends() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    // Both, as a split declares them: the move to follow the hand and the
+    // release to end the drag.
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
+    tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::PointerUp, Handler::Server(ATOM_INC)));
+    let ops = vec![
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { width: Dim::Px(200), height: Dim::Px(100), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+    let moves = |fs: &[Frame]| fs.iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove)).count();
+
+    d.input(Input::PointerMove(50.0, 50.0));
+    let _ = d.paint(400, 300);
+    let _ = d.take_pending();
+    d.input(Input::PointerDown(0));
+    let _ = d.take_pending();
+
+    // Three OS samples inside one frame: the drag coalesces them and the
+    // input itself sends nothing.
+    for x in [60.0, 70.0, 80.0] {
+        assert_eq!(moves(&d.input(Input::PointerMove(x, 50.0))), 0, "the input holds it for the frame");
+    }
+    let _ = d.paint(400, 300);
+    let sent = d.take_pending();
+    assert_eq!(moves(&sent), 1, "one move a frame, at the last position: {sent:?}");
+    let Some(Frame::Event(e)) = sent.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove)) else { panic!("{sent:?}") };
+    let Value::List(at) = &e.payload else { panic!("{:?}", e.payload) };
+    assert_eq!(at.first(), Some(&Value::Float(80.0)), "the position it reached, not the one it left");
+
+    // And again on the next frame, so the server hears the hand move.
+    d.input(Input::PointerMove(120.0, 50.0));
+    let _ = d.paint(400, 300);
+    assert_eq!(moves(&d.take_pending()), 1, "a frame later, the next one");
+
+    // The release still carries the last move and the up.
+    d.input(Input::PointerMove(150.0, 50.0));
+    let out = d.input(Input::PointerUp(0));
+    assert_eq!(moves(&out), 1, "the move the frame did not get to");
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerUp)), "{out:?}");
 }
 
 #[test]

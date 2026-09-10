@@ -2375,6 +2375,14 @@ impl Driver {
         self.sync_video();
         let moved = self.advance_videos();
         self.pending.extend(moved);
+        // A drag captured the pointer and coalesced its moves: the server
+        // hears one a frame rather than one per OS sample, and it hears it
+        // here. Held back until the button came up instead, anything whose
+        // shape only the server knows could not follow the hand -- a
+        // slider hides that by moving its own thumb locally, a split pane
+        // has nothing to hide it with and sat where it started.
+        let dragged = self.flush_coalesced_move();
+        self.pending.extend(dragged);
         // A scroll in flight moves the view before layout; what it emits when
         // it lands is picked up by the next input or frame turn.
         let landed = self.advance_scroll();
