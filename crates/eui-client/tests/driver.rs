@@ -1141,13 +1141,18 @@ fn only_a_node_that_says_it_is_a_slider_is_laid_out_as_one() {
 }
 
 /// A press on a `pointer_move` handler captures the pointer, and the move
-/// it coalesces is sent at the next paint -- one a frame, not one per OS
-/// sample. Held back until the button comes up instead, anything whose
-/// shape only the server knows cannot follow the hand: a slider hides it
-/// by moving its own thumb locally, a split pane has nothing to hide it
-/// with and sits where it started until the drag ends.
+/// it coalesces is sent at the next paint -- not one per OS sample, and
+/// not one saved up for the release. Held to the release, anything whose
+/// shape only the server knows cannot follow the hand: a slider hides
+/// that by moving its own thumb locally, a split pane has nothing to hide
+/// it with and sits where it started.
+///
+/// One is in flight at a time. The gallery re-renders nine hundred nodes
+/// for each move, which takes longer than a frame on a busy machine, and
+/// a move a frame regardless of that is a queue -- felt as letting go and
+/// watching the thing carry on.
 #[test]
-fn a_drag_sends_one_move_a_frame_rather_than_one_when_it_ends() {
+fn a_drag_keeps_one_move_in_flight_rather_than_a_queue() {
     let mut d = welcomed();
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
@@ -1183,10 +1188,22 @@ fn a_drag_sends_one_move_a_frame_rather_than_one_when_it_ends() {
     let Value::List(at) = &e.payload else { panic!("{:?}", e.payload) };
     assert_eq!(at.first(), Some(&Value::Float(80.0)), "the position it reached, not the one it left");
 
-    // And again on the next frame, so the server hears the hand move.
+    // One at a time, though: until that move is answered the next waits,
+    // however many frames pass. A drag that outruns the server otherwise
+    // builds a queue, and the queue is what a hand feels when it stops and
+    // the thing it was dragging goes on moving.
     d.input(Input::PointerMove(120.0, 50.0));
     let _ = d.paint(400, 300);
-    assert_eq!(moves(&d.take_pending()), 1, "a frame later, the next one");
+    assert_eq!(moves(&d.take_pending()), 0, "the last one is still in flight");
+    // The server answers; the newest position goes next.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![] }));
+    d.input(Input::PointerMove(130.0, 50.0));
+    let _ = d.paint(400, 300);
+    let sent = d.take_pending();
+    assert_eq!(moves(&sent), 1, "answered, so the next goes: {sent:?}");
+    let Some(Frame::Event(e)) = sent.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove)) else { panic!("{sent:?}") };
+    let Value::List(at) = &e.payload else { panic!() };
+    assert_eq!(at.first(), Some(&Value::Float(130.0)), "the latest position, not the one that waited");
 
     // The release still carries the last move and the up.
     d.input(Input::PointerMove(150.0, 50.0));

@@ -110,6 +110,11 @@ struct Pointer {
     /// drag stores the latest and flushes it at paint, so the server is not
     /// asked to re-render the page a hundred times a second.
     coalesced_move: Option<(NodeIx, Value)>,
+    /// When the last drag move was sent, while the server has not answered
+    /// it. One move is in flight at a time: a drag that outruns the server
+    /// otherwise builds a queue, and the queue is what a hand feels when
+    /// it stops and the thing it was dragging goes on moving.
+    move_in_flight: Option<Instant>,
 }
 
 /// A field's local edit: the value the server last saw (`seed`), the value
@@ -309,6 +314,9 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// should be too (10 §1).
 const SPIN_FRAME: Duration = Duration::from_millis(33);
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
+/// How long a drag waits for the server to answer its last move before
+/// sending another. A handler that answers nothing must not stop the drag.
+const DRAG_ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// While a scroll is still moving, how often it may ask for rows it has
 /// outrun: often enough that a drag sees rows rather than placeholders,
 /// seldom enough that a drag is not a server render a frame.
@@ -672,7 +680,11 @@ impl Driver {
                 self.welcomed = true;
                 Vec::new()
             }
-            Frame::Batch(batch) => self.apply(&batch),
+            Frame::Batch(batch) => {
+                // The answer to whatever was asked, a drag's move included.
+                self.pointer.move_in_flight = None;
+                self.apply(&batch)
+            }
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
             Frame::Error { code, message } => {
@@ -1349,6 +1361,32 @@ impl Driver {
         self.session.node(ix).is_some_and(|n| n.props.iter().any(|(a, v)| *a == atom && matches!(v, Value::Bool(true))))
     }
 
+    /// The drag's move for this frame, if the server is ready for one.
+    ///
+    /// Sending one a frame regardless outruns a server that needs longer
+    /// than a frame to answer -- the gallery re-renders nine hundred nodes
+    /// for each -- and the moves queue. What that feels like is letting go
+    /// and watching the thing carry on: the hand stopped, the queue did
+    /// not. So one is in flight at a time, and the latest position waits
+    /// its turn rather than joining a line. A handler that answers nothing
+    /// would hold the drag for ever, so the wait has an end.
+    fn flush_drag_move(&mut self) -> Vec<Frame> {
+        if self.pointer.coalesced_move.is_none() {
+            return Vec::new();
+        }
+        if self.pointer.move_in_flight.is_some_and(|at| self.now.saturating_duration_since(at) < DRAG_ANSWER_WAIT) {
+            return Vec::new();
+        }
+        let out = self.flush_coalesced_move();
+        if !out.is_empty() {
+            self.pointer.move_in_flight = Some(self.now);
+            // The next frame is owed: the position it holds may be the one
+            // that never gets sent otherwise.
+            self.redraw = true;
+        }
+        out
+    }
+
     fn flush_coalesced_move(&mut self) -> Vec<Frame> {
         let Some((from, payload)) = self.pointer.coalesced_move.take() else {
             return Vec::new();
@@ -1478,6 +1516,8 @@ impl Driver {
             }
         }
         self.pointer.pressed_on = Some(ix);
+        // A new drag starts owing nothing, whatever the last one left.
+        self.pointer.move_in_flight = None;
         // Focus moves to the nearest editable node on the path, else to the
         // nearest one that handles keys — 03 §3: a grid or a canvas is
         // typed into after a click, not after finding it with `Tab`.
@@ -2427,7 +2467,7 @@ impl Driver {
         // shape only the server knows could not follow the hand -- a
         // slider hides that by moving its own thumb locally, a split pane
         // has nothing to hide it with and sat where it started.
-        let dragged = self.flush_coalesced_move();
+        let dragged = self.flush_drag_move();
         self.pending.extend(dragged);
         // A scroll in flight moves the view before layout; what it emits when
         // it lands is picked up by the next input or frame turn.
