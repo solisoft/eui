@@ -80,9 +80,11 @@ pub struct Chrome {
     /// True while the active tab has no application, so the chrome owns the
     /// whole window and there is no address row.
     blank: bool,
-    /// What the address bar last showed, so a rebuild that changes nothing
-    /// does not throw away what is being typed.
+    /// The batch number, which has to rise.
     seq: u64,
+    /// The atom and the style catalogue have been sent. They are sent once
+    /// and only once: a mount does not clear the session's tables.
+    defined: bool,
 }
 
 /// Node ids. Fixed for the parts there is one of, and strided for tabs so a
@@ -111,7 +113,7 @@ const TAB_STRIDE: u32 = 8;
 impl Chrome {
     /// A chrome for a window of `w × h` at `scale`.
     pub fn new(w: f32, h: f32, scale: f32) -> Self {
-        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, seq: 0 }
+        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, seq: 0, defined: false }
     }
 
     /// Where the application's viewport starts, in device-independent px.
@@ -157,8 +159,13 @@ impl Chrome {
     }
 
     /// This frame's draw list, and the atlases it drew into.
-    pub fn paint(&mut self, device_w: u32, device_h: u32) -> DrawList {
+    pub fn paint(&mut self, device_w: u32, device_h: u32) -> std::sync::Arc<DrawList> {
         self.driver.paint(device_w, device_h)
+    }
+
+    /// How old the list last handed out is, in seconds (03 §5).
+    pub fn list_age(&self, now: std::time::Instant) -> f32 {
+        self.driver.list_age(now)
     }
 
     /// The chrome's own atlases, which are its alone: it is a session like
@@ -275,6 +282,25 @@ impl Chrome {
             overflow: Overflow::Clip,
             ..Default::default()
         });
+        // One sigil style per tone, defined whatever the tabs are: the
+        // catalogue below has to come out the same on every rebuild, since
+        // it is only sent once.
+        let s_sigils: Vec<u32> = TINTS
+            .iter()
+            .map(|r| {
+                b.style(StyleRecord {
+                    width: Dim::Px(16),
+                    height: Dim::Px(16),
+                    display: Display::Row,
+                    justify: Justify::Center,
+                    align_items: AlignItems::Center,
+                    radius: 1,
+                    bg: role(r.id()),
+                    fg: role(Role::TextInverted.id()),
+                    ..Default::default()
+                })
+            })
+            .collect();
         let s_sigil_off = b.style(StyleRecord {
             width: Dim::Px(16),
             height: Dim::Px(16),
@@ -326,22 +352,42 @@ impl Chrome {
             border_color: role(Role::BorderSubtle.id()),
             ..Default::default()
         });
-        let s_field = b.style(StyleRecord {
-            display: Display::Row,
-            align_items: AlignItems::Center,
-            height: Dim::Px(28),
-            grow: 1,
-            gap: 2,
-            padding: [0, 3, 0, 3],
-            radius: 2,
-            bg: sunken,
-            border_width: [1, 1, 1, 1],
-            border_color: role(if editing { Role::FocusRing.id() } else { Role::BorderSubtle.id() }),
-            cursor: eui_proto::Cursor::Text,
-            overflow: Overflow::Clip,
-            ..Default::default()
-        });
+        let mut field_style = |border: Role| {
+            b.style(StyleRecord {
+                display: Display::Row,
+                align_items: AlignItems::Center,
+                height: Dim::Px(28),
+                grow: 1,
+                gap: 2,
+                padding: [0, 3, 0, 3],
+                radius: 2,
+                bg: sunken,
+                border_width: [1, 1, 1, 1],
+                border_color: role(border.id()),
+                cursor: eui_proto::Cursor::Text,
+                overflow: Overflow::Clip,
+                ..Default::default()
+            })
+        };
+        let s_field_idle = field_style(Role::BorderSubtle);
+        let s_field_on = field_style(Role::FocusRing);
+        let s_field = if editing { s_field_on } else { s_field_idle };
         let s_chip_text = b.style(StyleRecord { font_size: 0, font_weight: FontWeight::Bold, ..Default::default() });
+        let mut chip_style = |tone: Role| {
+            b.style(StyleRecord {
+                display: Display::Row,
+                align_items: AlignItems::Center,
+                height: Dim::Px(20),
+                padding: [0, 2, 0, 2],
+                radius: 1,
+                bg: role(subtle_of(tone).id()),
+                fg: role(tone.id()),
+                ..Default::default()
+            })
+        };
+        let s_chip_ok = chip_style(Role::SuccessBase);
+        let s_chip_local = chip_style(Role::WarningBase);
+        let s_chip_bad = chip_style(Role::DangerBase);
         let s_origin = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: text, line_clamp: 1, ..Default::default() });
         let s_path = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: muted, grow: 1, shrink: 1, basis: Dim::Px(0), line_clamp: 1, ..Default::default() });
         let s_input = b.style(StyleRecord { font_size: 1, font_family: eui_proto::FontFamily::Mono, fg: text, grow: 1, ..Default::default() });
@@ -351,7 +397,13 @@ impl Chrome {
         // Pre-order with child counts, so every subtree is written parent
         // first and the counts below have to match what follows them.
         let tab_count = tabs.len();
-        b.open(NodeKind::Box, ROOT, s_root, 2);
+        // The strip, then either the page the chrome draws itself or the
+        // address row and the hole the application is composited into. A
+        // count that does not match what follows it is not an error the
+        // graft reports where it happens: the extra node is taken for a
+        // sibling of the root, and the *next* mount then finds its id
+        // already in the tree.
+        b.open(NodeKind::Box, ROOT, s_root, if self.blank { 2 } else { 3 });
 
         // -- strip: one node per tab, then the new-tab button
         b.open(NodeKind::Box, STRIP, s_strip, tab_count as u32 + 1);
@@ -369,20 +421,9 @@ impl Chrome {
                 // The sigil: the first letter of the name. Once four tabs
                 // have elided their titles it is the only thing telling
                 // them apart.
-                let s = if t.trust.is_some() {
-                    b.style(StyleRecord {
-                        width: Dim::Px(16),
-                        height: Dim::Px(16),
-                        display: Display::Row,
-                        justify: Justify::Center,
-                        align_items: AlignItems::Center,
-                        radius: 1,
-                        bg: role(tint(t.origin).id()),
-                        fg: role(Role::TextInverted.id()),
-                        ..Default::default()
-                    })
-                } else {
-                    s_sigil_off
+                let s = match t.trust {
+                    Some(_) => s_sigils.get(tint_index(t.origin)).copied().unwrap_or(s_sigil_off),
+                    None => s_sigil_off,
                 };
                 b.open(NodeKind::Box, id + 1, s, 1);
                 let letter = t.title.chars().next().unwrap_or('·').to_uppercase().to_string();
@@ -406,10 +447,15 @@ impl Chrome {
 
         // -- below the strip: an address row and the application, or the
         //    page a tab shows before it has one.
-        if self.blank {
-            let s_blank =
-                b.style(StyleRecord { display: Display::Column, grow: 1, justify: Justify::Center, align_items: AlignItems::Center, gap: 4, padding: [8, 6, 9, 6], bg: surface, ..Default::default() });
-            let s_mark = b.style(StyleRecord {
+        // Every style the tree could use, defined whatever this rebuild
+        // draws. `Op::Mount` replaces the document and leaves the tables
+        // alone, so the catalogue is sent once and has to be identical
+        // every time — a style defined only in one branch would shift the
+        // ids of everything after it.
+        let s_blank =
+            b.style(StyleRecord { display: Display::Column, grow: 1, justify: Justify::Center, align_items: AlignItems::Center, gap: 4, padding: [8, 6, 9, 6], bg: surface, ..Default::default() });
+        let s_mark = {
+            b.style(StyleRecord {
                 width: Dim::Px(44),
                 height: Dim::Px(44),
                 display: Display::Row,
@@ -419,11 +465,13 @@ impl Chrome {
                 bg: role(Role::AccentBase.id()),
                 fg: role(Role::AccentOn.id()),
                 ..Default::default()
-            });
-            let s_mark_text = b.style(StyleRecord { font_size: 2, font_weight: FontWeight::Bold, ..Default::default() });
-            let s_head = b.style(StyleRecord { font_size: 3, font_weight: FontWeight::Bold, fg: text, text_align: TextAlign::Center, ..Default::default() });
-            let s_sub = b.style(StyleRecord { font_size: 1, fg: muted, text_align: TextAlign::Center, max_width: Dim::Px(420), ..Default::default() });
-            let s_big = b.style(StyleRecord {
+            })
+        };
+        let s_mark_text = b.style(StyleRecord { font_size: 2, font_weight: FontWeight::Bold, ..Default::default() });
+        let s_head = b.style(StyleRecord { font_size: 3, font_weight: FontWeight::Bold, fg: text, text_align: TextAlign::Center, ..Default::default() });
+        let s_sub = b.style(StyleRecord { font_size: 1, fg: muted, text_align: TextAlign::Center, max_width: Dim::Px(420), ..Default::default() });
+        let s_big = {
+            b.style(StyleRecord {
                 font_size: 1,
                 font_family: eui_proto::FontFamily::Mono,
                 fg: text,
@@ -437,22 +485,30 @@ impl Chrome {
                 border_color: role(Role::FocusRing.id()),
                 cursor: eui_proto::Cursor::Text,
                 ..Default::default()
-            });
+            })
+        };
+        // The application's own area. It draws nothing — the application's
+        // list is composited over it — but it has to be in the tree so the
+        // strip and the row are the height they are.
+        let s_hole = b.style(StyleRecord { grow: 1, ..Default::default() });
+
+        if self.blank {
             b.open(NodeKind::Box, CONTENT, s_blank, 4);
             b.open(NodeKind::Box, BLANK_MARK, s_mark, 1);
             b.text(BLANK_MARK_TEXT, s_mark_text, "EUI");
             b.close();
             b.text(BLANK_HEAD, s_head, "Open an application");
             b.text(BLANK_SUB, s_sub, "Type an address and press Enter.");
+            b.change();
             b.text_node(NodeKind::Input, BLANK_FIELD, s_big, Some(""));
             b.close();
         } else {
             let Some(t) = tabs.get(active) else { return };
             b.open(NodeKind::Box, ADDR, s_addr, 1);
             let chip = t.trust.map(|tr| match tr {
-                Trust::Pinned => ("pinned", Role::SuccessBase),
-                Trust::Local => ("local", Role::WarningBase),
-                Trust::Unverified => ("unverified", Role::DangerBase),
+                Trust::Pinned => ("pinned", s_chip_ok),
+                Trust::Local => ("local", s_chip_local),
+                Trust::Unverified => ("unverified", s_chip_bad),
             });
             self.actions.insert(FIELD, Action::EditAddress);
             self.actions.insert(ORIGIN, Action::EditAddress);
@@ -463,19 +519,10 @@ impl Chrome {
                 let mut url = String::with_capacity(t.origin.len() + t.path.len());
                 url.push_str(t.origin);
                 url.push_str(t.path);
+                b.change();
                 b.text_node(NodeKind::Input, INPUT, s_input, Some(&url));
             } else {
-                if let Some((label, tone)) = chip {
-                    let s = b.style(StyleRecord {
-                        display: Display::Row,
-                        align_items: AlignItems::Center,
-                        height: Dim::Px(20),
-                        padding: [0, 2, 0, 2],
-                        radius: 1,
-                        bg: role(subtle_of(tone).id()),
-                        fg: role(tone.id()),
-                        ..Default::default()
-                    });
+                if let Some((label, s)) = chip {
                     b.open(NodeKind::Box, CHIP, s, 1);
                     b.text(CHIP_TEXT, s_chip_text, label);
                     b.close();
@@ -490,16 +537,13 @@ impl Chrome {
             b.close();
             b.close();
 
-            // The application's own area. It draws nothing — the
-            // application's list is composited over it — but it has to be
-            // in the tree so the strip and the row are the height they are.
-            let s_hole = b.style(StyleRecord { grow: 1, ..Default::default() });
             b.node(NodeKind::Spacer, CONTENT, s_hole, 0);
         }
         b.close();
 
         self.seq += 1;
-        let batch = Batch { seq: self.seq, ops: b.finish() };
+        let batch = Batch { seq: self.seq, ops: b.finish(self.defined) };
+        self.defined = true;
         if self.driver.handle_frame(Frame::Batch(batch)).is_empty() {
             // The driver answers a mount with an `Ack`, which nobody wants
             // here; an empty answer means it refused the batch.
@@ -527,7 +571,9 @@ impl Chrome {
 /// have elided their titles it is the only thing telling them apart. It is
 /// drawn from the theme's own tones rather than a palette of this file's,
 /// so it turns with the desktop like everything else.
-fn tint(origin: &str) -> Role {
+const TINTS: [Role; 5] = [Role::AccentBase, Role::SuccessBase, Role::WarningBase, Role::InfoBase, Role::DangerBase];
+
+fn tint_index(origin: &str) -> usize {
     // FNV-1a, for a stable answer across runs and machines — a tab that
     // changed colour between launches would be worse than no colour.
     let mut h: u32 = 0x811c_9dc5;
@@ -535,13 +581,7 @@ fn tint(origin: &str) -> Role {
         h ^= u32::from(byte);
         h = h.wrapping_mul(0x0100_0193);
     }
-    match h % 5 {
-        0 => Role::AccentBase,
-        1 => Role::SuccessBase,
-        2 => Role::WarningBase,
-        3 => Role::InfoBase,
-        _ => Role::DangerBase,
-    }
+    (h % TINTS.len() as u32) as usize
 }
 
 /// The subtle companion of a tone role, for a chip's fill.
@@ -585,6 +625,13 @@ impl Builder {
         self.staged.push((EventKind::Click, Handler::Server(1)));
     }
 
+    /// The next node pushed reports its value when an edit settles. Without
+    /// it the driver keeps the text and tells nobody, so Enter in the
+    /// address bar did nothing at all.
+    fn change(&mut self) {
+        self.staged.push((EventKind::Change, Handler::Server(1)));
+    }
+
     fn push(&mut self, kind: NodeKind, id: u32, style: u32, text: Option<&str>, children: u32) -> usize {
         let handlers = if self.staged.is_empty() {
             (0, 0)
@@ -619,7 +666,18 @@ impl Builder {
         self.push(kind, id, style, s, 0);
     }
 
-    fn finish(self) -> Vec<Op> {
+    /// The batch for this tree.
+    ///
+    /// `defined` says the session already has the atom and the style
+    /// catalogue from an earlier rebuild. It matters: `Op::Mount` replaces
+    /// the document and leaves the tables where they are, so defining
+    /// either twice is a duplicate and the whole batch is refused — which
+    /// left the chrome blank from its second rebuild on, i.e. from the
+    /// first time a tab was clicked.
+    fn finish(self, defined: bool) -> Vec<Op> {
+        if defined {
+            return vec![Op::Mount(self.tree)];
+        }
         let mut ops: Vec<Op> = self.styles.into_iter().enumerate().map(|(i, record)| Op::DefStyle { id: i as u32 + 1, record }).collect();
         ops.insert(0, Op::DefAtom { id: 1, value: "chrome".into() });
         ops.push(Op::Mount(self.tree));
