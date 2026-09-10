@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="EUI">
+  <!-- The EUI mark: a rail and three rows — the smallest interface the
+       client can be asked to draw — which together silhouette an E. Every
+       part is a rounded rectangle, because that is the one shape the
+       renderer draws (spec 03 §2). The indigo is the theme's own accent
+       seed, oklch(0.55 0.18 264), lit from the top left; the middle row is
+       lighter, the way a line of content sits under a header.
+
+       This file is the source. `scripts/make-icons.sh` renders every raster
+       the platforms want from it; nothing here is redrawn by hand. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.65" y2="1">
+      <stop offset="0" stop-color="#6E7BF2"/>
+      <stop offset="0.55" stop-color="#4F5BD5"/>
+      <stop offset="1" stop-color="#38429F"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" ry="228" fill="url(#tile)"/>
+  <rect width="1024" height="1024" rx="228" ry="228" fill="url(#sheen)"/>
+  <g fill="#FFFFFF">
+    <rect x="236" y="272" width="92" height="480" rx="46"/>
+    <rect x="380" y="272" width="408" height="92" rx="46"/>
+    <rect x="380" y="466" width="264" height="92" rx="46" opacity="0.75"/>
+    <rect x="380" y="660" width="408" height="92" rx="46"/>
+  </g>
+</svg>

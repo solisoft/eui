@@ -32,6 +32,8 @@ examples/
 doc/         the documentation site, itself a Soli app
 www/         the public site, itself a Soli app
 xtask/       `bench` measures the budgets; `conform` runs every vector of spec/09
+assets/      the icon: `icon/eui.svg` is the source, and every raster the three
+             platforms want is rendered from it by `scripts/make-icons.py`
 deny.toml    cargo-deny policy; crates/eui-proto/fuzz has four fuzz targets
 rustfmt.toml one formatting, enforced; 200 columns, not rustfmt's default 100
 ```

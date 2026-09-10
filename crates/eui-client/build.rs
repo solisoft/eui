@@ -1,4 +1,5 @@
-//! What build this is, baked in at compile time.
+//! What build this is, baked in at compile time — and, on Windows, the
+//! executable's icon.
 //!
 //! A person looking at a window cannot tell one build from another, and a
 //! demo downloaded from the wrong run looks exactly like the right one --
@@ -16,6 +17,39 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let id = std::env::var("GITHUB_SHA").ok().map(|sha| sha.chars().take(7).collect::<String>()).or_else(git_short_sha).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=EUI_BUILD={id}");
+    windows_icon();
+}
+
+/// The icon Windows draws for the file itself.
+///
+/// It reaches a `.exe` as a linked resource and by no other route: winit's
+/// window icon dresses the running window, while Explorer, the desktop and
+/// the taskbar's pinned list draw what the linker embedded. The usual route
+/// is `rc.exe`, which exists only on Windows and only with the SDK on the
+/// path; what `rc.exe` produces is a `.res`, and `link.exe` takes one as an
+/// ordinary input. So `scripts/make-icons.py` writes the `.res` from the
+/// same SVG as every other icon, it is committed, and this names it.
+/// Nothing is compiled here and no compiler is looked for.
+///
+/// Only the MSVC toolchain links a `.res`: a `windows-gnu` build would need
+/// it turned into an object by `windres` first, and is told so rather than
+/// failed.
+fn windows_icon() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let root = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let res = std::path::Path::new(&root).join("../../assets/icon/eui.res");
+    println!("cargo:rerun-if-changed={}", res.display());
+    if !res.is_file() {
+        println!("cargo:warning=no {} — run scripts/make-icons.py; eui.exe keeps the default icon", res.display());
+        return;
+    }
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        println!("cargo:warning=eui.exe keeps the default icon: only the MSVC toolchain links a .res");
+        return;
+    }
+    println!("cargo:rustc-link-arg-bins={}", res.display());
 }
 
 /// The working tree's short commit, with a `+` when it has uncommitted

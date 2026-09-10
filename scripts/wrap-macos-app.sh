@@ -16,6 +16,10 @@ APP_NAME="${2:?app name}"
 BUNDLE_ID="${3:?bundle id}"
 OUT_DIR="${4:?output dir}"
 VERSION="${VERSION:-0.1.0}"
+# The icon, committed as .icns because macOS reads nothing else, and made
+# from assets/icon/eui.svg by scripts/make-icons.py. `ICON=` points this at
+# another one, the way the same script dresses another app's bundle.
+ICON="${ICON:-$SCRIPT_DIR/../assets/icon/eui.icns}"
 
 [ -f "$BINARY" ] || { echo "wrap-macos-app: no binary at $BINARY" >&2; exit 1; }
 
@@ -27,6 +31,17 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BINARY" "$CONTENTS/MacOS/$APP_NAME"
 chmod +x "$CONTENTS/MacOS/$APP_NAME"
 
+# The icon has to be inside the bundle and named by the plist; a file left
+# beside it is not looked at. Without one the Finder draws the blank
+# document sheet, which is what a download nobody trusts looks like.
+if [ -f "$ICON" ]; then
+  cp "$ICON" "$CONTENTS/Resources/$APP_NAME.icns"
+  ICON_KEY="    <key>CFBundleIconFile</key><string>$APP_NAME</string>"
+else
+  echo "wrap-macos-app: no icon at $ICON — the bundle will show the blank one" >&2
+  ICON_KEY=""
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -35,6 +50,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleExecutable</key><string>$APP_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+$ICON_KEY
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$APP_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
@@ -97,6 +113,10 @@ stage_volume() {
   mkdir -p "$stage/.background"
   cp -R "$APP" "$stage/" || return 1
   ln -s /Applications "$stage/Applications" || return 1
+  # The disk itself, in the sidebar and on the desktop while it is mounted.
+  # It is the same icon the app carries; a volume with none is the generic
+  # white disk, which says nothing about what was downloaded.
+  if [ -f "$ICON" ]; then cp "$ICON" "$stage/.VolumeIcon.icns"; fi
   make_background "$stage/.background" || true
   # Nothing drawn, nothing to carry: an empty directory would still ride
   # along in the image.
@@ -174,6 +194,21 @@ APPLESCRIPT
   wait "$pid"
 }
 
+# .VolumeIcon.icns is only looked at when the volume's Finder flags say it
+# has a custom icon. SetFile writes that bit and comes with Xcode; where it
+# is missing the same bit goes straight into the FinderInfo attribute — a
+# folder's flags are the two bytes at offset 8, and kHasCustomIcon is 0x0400.
+mark_volume_icon() {
+  local mount="$1"
+  [ -f "$mount/.VolumeIcon.icns" ] || return 0
+  if command -v SetFile >/dev/null 2>&1 && SetFile -a C "$mount" 2>/dev/null; then
+    return 0
+  fi
+  xattr -wx com.apple.FinderInfo \
+    "0000000000000000040000000000000000000000000000000000000000000000" "$mount" 2>/dev/null ||
+    echo "wrap-macos-app: could not mark the volume icon" >&2
+}
+
 # A mounted volume is not always free the instant the script stops touching
 # it; Spotlight or Finder can still hold it for a beat.
 detach_volume() {
@@ -210,6 +245,7 @@ make_dmg() {
   vol="$(basename "$mount")"
 
   dress_window "$vol" "$background" || true
+  mark_volume_icon "$mount"
   chmod -Rf go-w "$mount" 2>/dev/null || true
   sync
   detach_volume "$mount"

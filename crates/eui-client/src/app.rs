@@ -382,6 +382,16 @@ impl Tab {
     }
 }
 
+/// The window's own icon: the 64 px raster of `assets/icon/eui.svg`, which
+/// `scripts/make-icons.py` writes beside it. X11 puts it in the title bar
+/// and the task switcher and Windows in the taskbar; Wayland has no such
+/// call and matches a `.desktop` file by app id instead (`deploy/eui.desktop`),
+/// and macOS reads the bundle's `.icns`. Three kilobytes, decoded once.
+fn window_icon() -> Option<winit::window::Icon> {
+    let image = crate::assets::decode_png(include_bytes!("../../../assets/icon/png/eui-64.png")).ok()?;
+    winit::window::Icon::from_rgba(image.rgba, image.width, image.height).ok()
+}
+
 impl Shell {
     /// Open a window, and the applications named in `launches`.
     ///
@@ -398,6 +408,10 @@ impl Shell {
         // macOS enforces that with a panic where AT-SPI merely tolerates it;
         // and a window shown before its first frame is a flash of nothing.
         let attrs = Window::default_attributes().with_title(title).with_visible(false).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        let attrs = match window_icon() {
+            Some(icon) => attrs.with_window_icon(Some(icon)),
+            None => attrs,
+        };
         // The Wayland app id, so a compositor can match rules and a taskbar
         // an icon; on X11 the same two strings are the WM_CLASS.
         #[cfg(target_os = "linux")]
@@ -1540,6 +1554,16 @@ fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_carries_an_icon() {
+        // The raster is committed and included at compile time, so the only
+        // way this fails is that it was replaced by something winit will
+        // not take — which would otherwise show up as a window with the
+        // blank icon and no error anywhere.
+        let icon = window_icon();
+        assert!(icon.is_some(), "assets/icon/png/eui-64.png did not decode into an icon");
+    }
 
     #[test]
     fn space_is_the_named_key_that_types() {
