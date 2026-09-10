@@ -77,14 +77,18 @@ impl Launch {
     }
 }
 
-/// The application.
-pub struct App {
+/// One application, in its own window.
+///
+/// Everything here is per session and stays per session however many share
+/// a process: the window and its surface, the confined worker the tree
+/// lives in, the connection and its cookie, the textures, the audio device.
+/// What several sessions can share sits on [`App`], above them.
+struct Session {
     url: String,
-    title: String,
     /// Capabilities the person allows, if the manifest asks for them.
     allowed: u32,
-    window: Option<Arc<Window>>,
-    gpu: Option<Gpu>,
+    window: Arc<Window>,
+    gpu: Gpu,
     /// The driver: in a worker process when one could be started.
     backend: Backend,
     conn: Option<Connection>,
@@ -122,21 +126,129 @@ pub struct App {
     epoch: std::time::Instant,
 }
 
-impl App {
-    /// Build for a session URL.
-    pub fn new(launch: Launch, proxy: EventLoopProxy<Wake>) -> Self {
-        Self {
+impl Session {
+    /// Open a window on the session `launch` describes: the window, the
+    /// GPU, the worker, the manifest check and the connection.
+    ///
+    /// `None` if the platform could not give a window, a surface or an
+    /// adapter, or if the manifest refused the origin. The caller decides
+    /// what that means — for the only session it means give up, for the
+    /// second of several it means carry on without it.
+    fn open(launch: Launch, event_loop: &ActiveEventLoop, proxy: EventLoopProxy<Wake>) -> Option<Self> {
+        // Born hidden, shown once the renderer exists. Two reasons: the
+        // AccessKit adapter must exist before the window is first shown, and
+        // macOS enforces that with a panic where AT-SPI merely tolerates it;
+        // and a window shown before its first frame is a flash of nothing.
+        let attrs = Window::default_attributes().with_title(launch.title.clone()).with_visible(false).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
+        // The Wayland app id, so a compositor can match rules and a taskbar
+        // an icon; on X11 the same two strings are the WM_CLASS.
+        #[cfg(target_os = "linux")]
+        let attrs = {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            use winit::platform::x11::WindowAttributesExtX11;
+            WindowAttributesExtWayland::with_name(attrs, "eui", "eui").pipe(|a| WindowAttributesExtX11::with_name(a, "eui", "eui"))
+        };
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("eui: cannot create a window: {e}");
+                return None;
+            }
+        };
+
+        // Assistive technologies register before the window shows; the tree
+        // itself is built only if one asks.
+        #[cfg(feature = "a11y")]
+        let access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy.clone()));
+
+        // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
+        // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
+        // measured), for a backend the primary ones make unneeded.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
+        let surface = match instance.create_surface(Arc::clone(&window)) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("eui: cannot create a surface: {e}");
+                return None;
+            }
+        };
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }));
+        let Some(adapter) = adapter else {
+            eprintln!("eui: no GPU adapter");
+            return None;
+        };
+        let renderer = match eui_render::Renderer::with_adapter(&adapter) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("eui: {e}");
+                return None;
+            }
+        };
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&adapter);
+        // A surface only takes a format it advertises, and configuring it with
+        // any other is a validation error inside wgpu — which aborts, because
+        // it happens in a callback that cannot unwind. Metal advertises BGRA
+        // and the float formats and no RGBA8 at all, so the off-screen
+        // `FORMAT` is a request the Mac cannot serve.
+        //
+        // The shader writes linear values and leaves the conversion to the
+        // target, so the choice has to stay sRGB; only the channel order gives.
+        let format = if caps.formats.contains(&eui_render::FORMAT) {
+            eui_render::FORMAT
+        } else if let Some(srgb) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb) {
+            srgb
+        } else {
+            // No sRGB anywhere: draw rather than refuse, and say why the
+            // colours look washed out.
+            let first = caps.formats.first().copied().unwrap_or(eui_render::FORMAT);
+            eprintln!("eui: no sRGB surface format, falling back to {first:?} — colours will be light");
+            first
+        };
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto),
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(renderer.device(), &config);
+        let scale = window.scale_factor() as f32;
+        // The driver — decoding, layout, the VM — in its own confined
+        // process where the platform allows (08 §10); this process keeps
+        // the window, the GPU and the network.
+        let (backend, how) = Backend::open(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
+        eprintln!("eui: {how}");
+        let textures = renderer.session();
+        let gpu = Gpu { surface, config, renderer, textures };
+        // Everything the first frame needs is in place, and any assistive
+        // technology has already registered: it is safe to be seen.
+        //
+        // Ask for that first frame explicitly. A window that was visible at
+        // creation is told to redraw as it maps; one shown later is not, and
+        // on Wayland it simply maps blank and stays blank until some
+        // unrelated event happens to ask for a frame.
+        window.set_visible(true);
+        window.request_redraw();
+
+        let mut s = Self {
             url: launch.url,
-            title: launch.title,
             allowed: launch.allowed,
-            window: None,
-            gpu: None,
-            backend: Backend::local(crate::driver::Driver::new(960.0, 640.0, 1.0, 0)),
+            window,
+            gpu,
+            backend,
             conn: None,
             modifiers: 0,
             proxy,
             #[cfg(feature = "a11y")]
-            access: None,
+            access,
             #[cfg(feature = "clipboard")]
             clip: None,
             ime_area: None,
@@ -149,7 +261,53 @@ impl App {
             cookie: launch.cookie,
             host_loopback: launch.host_loopback,
             epoch: std::time::Instant::now(),
+        };
+
+        // The desktop's own colours, before the first frame; and again
+        // whenever the desktop changes them.
+        if !crate::desktop_theme::disabled() {
+            s.follow_desktop_theme();
+            // One wake per burst of changes: a switch touches several files
+            // and the window re-reads the theme once, when it gets to it.
+            let proxy = s.proxy.clone();
+            let pending = Arc::clone(&s.theme_pending);
+            s.theme_watch = crate::desktop_theme::watch(move || {
+                if !pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let _ = proxy.send_event(Wake::Theme);
+                }
+            });
         }
+
+        // Spec 01 §2.1: the manifest first. Its signature is verified and
+        // its key pinned before a byte of the session is trusted; only the
+        // debug loopback of 08 §1 may go on without one.
+        match crate::assets::origin_for(&s.url).map_err(|e| e.to_string()).and_then(|origin| {
+            let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
+            crate::manifest::check(&origin, &pins, s.cookie.as_deref()).map_err(|e| e.to_string())
+        }) {
+            Ok(m) => {
+                let granted = m.capabilities & s.allowed;
+                let refused = m.capabilities & !s.allowed;
+                eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
+                s.backend.grant(granted);
+            }
+            Err(e) if s.url.starts_with("ws://") => {
+                eprintln!("eui: {e}; continuing on the debug loopback without a manifest")
+            }
+            Err(e) => {
+                eprintln!("eui: {e}; refusing to connect");
+                return None;
+            }
+        }
+        let hello = s.backend.hello();
+        let proxy = s.proxy.clone();
+        match transport::connect(&s.url, hello, s.cookie.clone(), s.host_loopback, move || {
+            let _ = proxy.send_event(Wake::Transport);
+        }) {
+            Ok(c) => s.conn = Some(c),
+            Err(e) => eprintln!("eui: {e}"),
+        }
+        Some(s)
     }
 
     /// Follow the desktop's palette (05 §5): read it, hand it to the driver
@@ -167,9 +325,7 @@ impl App {
         self.desktop_theme = now;
         let out = self.backend.desktop_theme(mode, colors);
         self.send(out);
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+        self.window.request_redraw();
     }
 
     /// The pointer takes the shape of what it is over — a hand on a button,
@@ -180,10 +336,10 @@ impl App {
             return;
         }
         self.cursor = want;
-        if let Some(w) = &self.window {
+        {
             use eui_proto::Cursor as C;
             use winit::window::CursorIcon as I;
-            w.set_cursor(match want {
+            self.window.set_cursor(match want {
                 C::Default => I::Default,
                 C::Pointer => I::Pointer,
                 C::Text => I::Text,
@@ -244,9 +400,7 @@ impl App {
             self.conn = None;
         }
         if self.backend.needs_redraw() {
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
+            self.window.request_redraw();
         }
     }
 
@@ -267,7 +421,8 @@ impl App {
                 let _ = c.set_text(text);
             }
         }
-        if let Some(w) = &self.window {
+        {
+            let w = &self.window;
             // An input method is welcome exactly while a field has focus,
             // and its candidate window sits under that field. Told only on
             // a change: every toggle is a protocol round trip with the
@@ -333,7 +488,7 @@ impl App {
     }
 
     fn redraw(&mut self) {
-        let Some(gpu) = &mut self.gpu else { return };
+        let gpu = &mut self.gpu;
         let (w, h) = (gpu.config.width, gpu.config.height);
         if w == 0 || h == 0 {
             return;
@@ -397,218 +552,46 @@ impl App {
                 };
                 self.send(out);
                 if self.backend.needs_redraw() {
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                    self.window.request_redraw();
                 }
             }
             A::AccessibilityDeactivated => {}
         }
     }
-}
 
-impl ApplicationHandler<Wake> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        event_loop.set_control_flow(ControlFlow::Wait);
-        // Born hidden, shown once the renderer exists. Two reasons: the
-        // AccessKit adapter must exist before the window is first shown, and
-        // macOS enforces that with a panic where AT-SPI merely tolerates it;
-        // and a window shown before its first frame is a flash of nothing.
-        let attrs = Window::default_attributes().with_title(self.title.clone()).with_visible(false).with_inner_size(winit::dpi::LogicalSize::new(960.0, 640.0));
-        // The Wayland app id, so a compositor can match rules and a taskbar
-        // an icon; on X11 the same two strings are the WM_CLASS.
-        #[cfg(target_os = "linux")]
-        let attrs = {
-            use winit::platform::wayland::WindowAttributesExtWayland;
-            use winit::platform::x11::WindowAttributesExtX11;
-            WindowAttributesExtWayland::with_name(attrs, "eui", "eui").pipe(|a| WindowAttributesExtX11::with_name(a, "eui", "eui"))
-        };
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("eui: cannot create a window: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-
-        // Assistive technologies register before the window shows; the tree
-        // itself is built only if one asks.
-        #[cfg(feature = "a11y")]
-        {
-            self.access = Some(accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, self.proxy.clone()));
-        }
-
-        // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
-        // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
-        // measured), for a backend the primary ones make unneeded.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
-        let surface = match instance.create_surface(Arc::clone(&window)) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("eui: cannot create a surface: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }));
-        let Some(adapter) = adapter else {
-            eprintln!("eui: no GPU adapter");
-            event_loop.exit();
-            return;
-        };
-        let renderer = match eui_render::Renderer::with_adapter(&adapter) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("eui: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let size = window.inner_size();
-        let caps = surface.get_capabilities(&adapter);
-        // A surface only takes a format it advertises, and configuring it with
-        // any other is a validation error inside wgpu — which aborts, because
-        // it happens in a callback that cannot unwind. Metal advertises BGRA
-        // and the float formats and no RGBA8 at all, so the off-screen
-        // `FORMAT` is a request the Mac cannot serve.
-        //
-        // The shader writes linear values and leaves the conversion to the
-        // target, so the choice has to stay sRGB; only the channel order gives.
-        let format = if caps.formats.contains(&eui_render::FORMAT) {
-            eui_render::FORMAT
-        } else if let Some(srgb) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb) {
-            srgb
-        } else {
-            // No sRGB anywhere: draw rather than refuse, and say why the
-            // colours look washed out.
-            let first = caps.formats.first().copied().unwrap_or(eui_render::FORMAT);
-            eprintln!("eui: no sRGB surface format, falling back to {first:?} — colours will be light");
-            first
-        };
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto),
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(renderer.device(), &config);
-        let scale = window.scale_factor() as f32;
-        // The driver — decoding, layout, the VM — in its own confined
-        // process where the platform allows (08 §10); this process keeps
-        // the window, the GPU and the network.
-        let (backend, how) = Backend::open(size.width as f32 / scale, size.height as f32 / scale, scale, 0);
-        eprintln!("eui: {how}");
-        self.backend = backend;
-        // The desktop's own colours, before the first frame; and again
-        // whenever the desktop changes them.
-        if !crate::desktop_theme::disabled() {
-            self.follow_desktop_theme();
-            // One wake per burst of changes: a switch touches several files
-            // and the window re-reads the theme once, when it gets to it.
-            let proxy = self.proxy.clone();
-            let pending = Arc::clone(&self.theme_pending);
-            self.theme_watch = crate::desktop_theme::watch(move || {
-                if !pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    let _ = proxy.send_event(Wake::Theme);
-                }
-            });
-        }
-        let textures = renderer.session();
-        self.gpu = Some(Gpu { surface, config, renderer, textures });
-        // Everything the first frame needs is in place, and any assistive
-        // technology has already registered: it is safe to be seen.
-        //
-        // Ask for that first frame explicitly. A window that was visible at
-        // creation is told to redraw as it maps; one shown later is not, and
-        // on Wayland it simply maps blank and stays blank until some
-        // unrelated event happens to ask for a frame.
-        window.set_visible(true);
-        window.request_redraw();
-        self.window = Some(window);
-
-        // Spec 01 §2.1: the manifest first. Its signature is verified and
-        // its key pinned before a byte of the session is trusted; only the
-        // debug loopback of 08 §1 may go on without one.
-        match crate::assets::origin_for(&self.url).map_err(|e| e.to_string()).and_then(|origin| {
-            let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
-            crate::manifest::check(&origin, &pins, self.cookie.as_deref()).map_err(|e| e.to_string())
-        }) {
-            Ok(m) => {
-                let granted = m.capabilities & self.allowed;
-                let refused = m.capabilities & !self.allowed;
-                eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
-                self.backend.grant(granted);
-            }
-            Err(e) if self.url.starts_with("ws://") => {
-                eprintln!("eui: {e}; continuing on the debug loopback without a manifest")
-            }
-            Err(e) => {
-                eprintln!("eui: {e}; refusing to connect");
-                event_loop.exit();
-                return;
-            }
-        }
-        let hello = self.backend.hello();
-        let proxy = self.proxy.clone();
-        match transport::connect(&self.url, hello, self.cookie.clone(), self.host_loopback, move || {
-            let _ = proxy.send_event(Wake::Transport);
-        }) {
-            Ok(c) => self.conn = Some(c),
-            Err(e) => eprintln!("eui: {e}"),
-        }
+    /// The desktop changed its palette. One wake can stand for several
+    /// changes, so the flag is cleared before the read, not after.
+    fn theme_wake(&mut self) {
+        crate::driver::trace(|| "desktop theme wake".into());
+        self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.follow_desktop_theme();
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: Wake) {
-        match event {
-            Wake::Transport => self.pump(),
-            Wake::Exit => _event_loop.exit(),
-            Wake::Audio => self.drain_audio(),
-            Wake::Theme => {
-                crate::driver::trace(|| "desktop theme wake".into());
-                self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
-                self.follow_desktop_theme();
-            }
-            #[cfg(feature = "a11y")]
-            Wake::Access(e) => self.access_event(e),
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    /// One event for this session's window. `false` when the window should
+    /// close — which for the last session means the process is done.
+    fn event(&mut self, event: WindowEvent) -> bool {
         #[cfg(feature = "a11y")]
-        if let (Some(a), Some(w)) = (&mut self.access, &self.window) {
-            a.process_event(w, &event);
+        if let Some(a) = &mut self.access {
+            a.process_event(&self.window, &event);
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => return false,
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(size) => {
-                let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32);
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.config.width = size.width.max(1);
-                    gpu.config.height = size.height.max(1);
-                    gpu.surface.configure(gpu.renderer.device(), &gpu.config);
-                }
+                let scale = self.window.scale_factor() as f32;
+                let gpu = &mut self.gpu;
+                gpu.config.width = size.width.max(1);
+                gpu.config.height = size.height.max(1);
+                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
                 self.input(Input::Resized(size.width as f32 / scale, size.height as f32 / scale, scale));
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
+                let size = self.window.inner_size();
                 let scale = scale_factor as f32;
                 self.input(Input::Resized(size.width as f32 / scale, size.height as f32 / scale, scale));
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32);
+                let scale = self.window.scale_factor() as f32;
                 self.input(Input::PointerMove(position.x as f32 / scale, position.y as f32 / scale));
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -616,7 +599,7 @@ impl ApplicationHandler<Wake> for App {
                     MouseButton::Left => 0,
                     MouseButton::Right => 1,
                     MouseButton::Middle => 2,
-                    _ => return,
+                    _ => return true,
                 };
                 self.input(if state == ElementState::Pressed { Input::PointerDown(b) } else { Input::PointerUp(b) });
             }
@@ -625,7 +608,7 @@ impl ApplicationHandler<Wake> for App {
                 match delta {
                     MouseScrollDelta::LineDelta(x, y) => self.input(Input::WheelStep(-x, -y)),
                     MouseScrollDelta::PixelDelta(p) => {
-                        let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32);
+                        let scale = self.window.scale_factor() as f32;
                         self.input(Input::Wheel(-p.x as f32 / scale, -p.y as f32 / scale));
                     }
                 }
@@ -639,7 +622,7 @@ impl ApplicationHandler<Wake> for App {
                 let name = match &event.logical_key {
                     Key::Named(n) => named(*n),
                     Key::Character(c) => c.to_string(),
-                    _ => return,
+                    _ => return true,
                 };
                 if down && self.modifiers & 0b1110 == 0 {
                     if let Some(text) = &event.text {
@@ -671,19 +654,44 @@ impl ApplicationHandler<Wake> for App {
             }
             _ => {}
         }
+        true
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    /// Take this session down, in the order the platforms insist on.
+    ///
+    /// Not left to the drop glue: that runs in field order, which puts the
+    /// window first, and both of the steps below have to happen while it is
+    /// still alive.
+    fn close(self) {
+        #[cfg(feature = "a11y")]
+        let Session { window, gpu, access, .. } = self;
+        #[cfg(not(feature = "a11y"))]
+        let Session { window, gpu, .. } = self;
+        // The adapter holds the window's platform handle and talks to it as
+        // it goes; on macOS a window dropped first leaves it calling into a
+        // dead view.
+        #[cfg(feature = "a11y")]
+        drop(access);
+        // Dropping a surface with a frame still in flight is the classic
+        // hang. Wait for the device to go idle, let the surface go, and only
+        // then the window it was made from.
+        gpu.renderer.device().poll(wgpu::Maintain::Wait);
+        drop(gpu);
+        drop(window);
+    }
+
+    /// What this session wants of the loop before it parks: `None` to sleep
+    /// until something happens, or the instant it wants to be woken at.
+    /// The loop takes the earliest across every session.
+    fn park(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
         crate::driver::trace(|| format!("about_to_wait: due={:?}", self.backend.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
         // A running transition is the only thing that ever wakes the loop by
         // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
         // transport speaks.
         let mut requested = false;
-        if self.backend.tick(std::time::Instant::now()) {
-            if let Some(w) = &self.window {
-                w.request_redraw();
-                requested = true;
-            }
+        if self.backend.tick(now) {
+            self.window.request_redraw();
+            requested = true;
         }
         // A frame already due does not park the loop. It used to: `Wait`
         // sleeps until the OS or the transport speaks, and when the driver
@@ -702,11 +710,107 @@ impl ApplicationHandler<Wake> for App {
         // millisecond meanwhile was a thousand wake-ups a second on macOS,
         // where the redraw comes with the next display refresh rather
         // than at once: a spinner alone kept a core a fifth busy.
+        match self.backend.next_frame_at() {
+            _ if requested => None,
+            Some(at) if at > now => Some(at),
+            Some(_) => Some(now + std::time::Duration::from_millis(1)),
+            None => None,
+        }
+    }
+}
+
+/// The process: the event loop, and every session running in it.
+///
+/// One window each, and — for now — one GPU device each. What the sessions
+/// share at this point is the loop and the process; step by step more of
+/// the device side moves up here.
+pub struct App {
+    proxy: EventLoopProxy<Wake>,
+    /// Sessions asked for and not yet opened. `resumed` drains it; on the
+    /// platforms that suspend and resume, a session already open is not
+    /// opened twice.
+    pending: Vec<Launch>,
+    sessions: std::collections::HashMap<WindowId, Session>,
+}
+
+impl App {
+    /// Build for one session URL.
+    pub fn new(launch: Launch, proxy: EventLoopProxy<Wake>) -> Self {
+        Self { proxy, pending: vec![launch], sessions: std::collections::HashMap::new() }
+    }
+
+    /// One window closed. The last one takes the process with it: a client
+    /// with no window is not something a person can get back to.
+    fn close(&mut self, event_loop: &ActiveEventLoop, id: WindowId) {
+        if let Some(s) = self.sessions.remove(&id) {
+            s.close();
+        }
+        if self.sessions.is_empty() {
+            event_loop.exit();
+        }
+    }
+
+    /// Every session down, in order, on this thread — before anything in
+    /// the process exits under a live GPU device.
+    fn shutdown(&mut self) {
+        for (_, s) in self.sessions.drain() {
+            s.close();
+        }
+    }
+}
+
+impl ApplicationHandler<Wake> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Wait);
+        for launch in std::mem::take(&mut self.pending) {
+            match Session::open(launch, event_loop, self.proxy.clone()) {
+                Some(s) => {
+                    self.sessions.insert(s.window.id(), s);
+                }
+                // The window, the adapter or the manifest said no. With
+                // nothing else running there is nothing left to do.
+                None if self.sessions.is_empty() => {
+                    event_loop.exit();
+                    return;
+                }
+                None => {}
+            }
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
+        match event {
+            // Which session the transport, the audio thread or the desktop
+            // meant is not in the wake, and asking each is a `try_recv` on
+            // an empty channel — cheaper than carrying an id would be.
+            Wake::Transport => self.sessions.values_mut().for_each(Session::pump),
+            Wake::Audio => self.sessions.values_mut().for_each(Session::drain_audio),
+            Wake::Theme => self.sessions.values_mut().for_each(Session::theme_wake),
+            Wake::Exit => event_loop.exit(),
+            #[cfg(feature = "a11y")]
+            Wake::Access(e) => {
+                if let Some(s) = self.sessions.get_mut(&e.window_id) {
+                    s.access_event(e);
+                }
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let Some(session) = self.sessions.get_mut(&id) else { return };
+        if !session.event(event) {
+            self.close(event_loop, id);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = std::time::Instant::now();
-        event_loop.set_control_flow(match self.backend.next_frame_at() {
-            _ if requested => ControlFlow::Wait,
-            Some(at) if at > now => ControlFlow::WaitUntil(at),
-            Some(_) => ControlFlow::WaitUntil(now + std::time::Duration::from_millis(1)),
+        // The earliest instant any session asked for. A session that wants
+        // to sleep does not hold the others back, and one that wants a
+        // frame does not let them park.
+        let due = self.sessions.values_mut().filter_map(|s| s.park(now)).min();
+        event_loop.set_control_flow(match due {
+            Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
         });
     }
@@ -804,7 +908,8 @@ pub fn launch(launch: Launch) -> Result<(), String> {
         .ok();
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     WINDOW_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
-    // The worker and the GPU go here, on this thread, before anyone exits.
+    // The workers and the GPU go here, on this thread, before anyone exits.
+    app.shutdown();
     drop(app);
     result
 }
