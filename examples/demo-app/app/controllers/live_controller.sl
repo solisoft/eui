@@ -796,10 +796,24 @@ end
 # split out, and the handler, which turns a pointer position into a fraction.
 # One function, so a drag can never be measured against a width the view did
 # not use.
+# The width a card's content actually gets: the window, less the rail, less
+# the page's padding, less the card's own.
+#
+# Two things on this page are laid out at a size the *server* chose rather
+# than at one the layout hands them — a canvas, and a split pane — so both
+# ask this, and getting it wrong is visible as a panel that stops short of
+# the card it sits in or spills out of it. It was 820 px flat, which is what
+# the content was worth when the page was one column and had no rail.
+def erp_inner_px(lay)
+  inner = erp_content_px(lay) - 2 * space_px(lay["wide"] ? 6 : 4, lay["density"]) - 2 * space_px(5, lay["density"])
+  inner < 320 ? 320 : inner
+end
+
+# The handler answers the same question as the view: a drag is a fraction of
+# this number, so a split that disagreed with itself would jump under the
+# hand.
 def gallery_split_extent(state)
-  w = state["viewport"]["width"] ?? 1000
-  extent = w > 900 ? 820 : w - 80
-  extent < 320 ? 320 : extent
+  erp_inner_px(erp_layout(state))
 end
 
 def gallery_split(state)
@@ -2046,8 +2060,7 @@ def erp_charts(state, lay)
   cols = 3 if lay["wide"]
   cols = 4 if lay["rail"]
   gap = space_px(4, lay["density"])
-  inner = erp_content_px(lay) - 2 * space_px(lay["wide"] ? 6 : 4, lay["density"]) - 2 * space_px(5, lay["density"])
-  cw = int((inner - (cols - 1) * gap) / cols)
+  cw = int((erp_inner_px(lay) - (cols - 1) * gap) / cols)
   cw = 160 if cw < 160
   ch = 140
   series = erp_revenue()
