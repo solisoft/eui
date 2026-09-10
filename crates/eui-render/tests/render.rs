@@ -859,6 +859,38 @@ fn retained_glyph_quads_are_replayed_until_the_node_changes() {
     assert_eq!(cache.len(), 3);
 }
 
+/// A picture arriving is not a reason to lose the words.
+///
+/// The image texture is made full size the first time a picture is packed,
+/// and the two atlas textures share a bind group, so growing one remakes
+/// the other. The glyph texture that comes back is blank: unless the glyph
+/// atlas is told to send everything again, every glyph uploaded before that
+/// moment is gone from the GPU while the client still believes it is there
+/// -- and assets arrive over the network, long after the first frames, so
+/// the page renders and then loses its text.
+#[test]
+fn a_picture_arriving_does_not_wipe_the_glyphs_already_uploaded() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let mut fx = fixture(vec![col], vec![node(NodeKind::Box, 1, 1, 1), text(2, 0, "words")], vec![], &[], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    let target = r.offscreen(100, 100);
+    // Ink is what is darker than the surface it sits on.
+    let ink = |r: &mut Renderer| r.read_back(&target).unwrap().chunks(4).filter(|p| p[0] < 200).count();
+
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let before = ink(&mut r);
+    assert!(before > 20, "the words were drawn: {before} inked texels");
+
+    // A picture is packed, as one does when its bytes arrive: the image
+    // texture grows from nothing to its full size, and the glyph texture
+    // is remade with it.
+    fx.images.insert([9; 32], 8, 8, &vec![255u8; 8 * 8 * 4]).expect("an 8x8 picture packs");
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    assert_eq!(ink(&mut r), before, "the same words, drawn again after the picture landed");
+}
+
 /// An entrance starts from no opacity: the quad is not there at age zero
 /// and is on its way at half time, along the entrance's own curve.
 #[test]

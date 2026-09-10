@@ -204,11 +204,13 @@ impl Layout {
         // Measures survive across frames for nodes nothing touched: the
         // session's dirty bits say which subtrees changed (a node's own
         // change sets SELF, its ancestors' DESCENDANT), and an index reused
-        // by a new node carries a different id. A scroll dirties only the
-        // scroller and its ancestors, so a scrolled frame re-measures the
+        // by a new node carries a different id. A scroll or a repaint
+        // measures nothing differently -- an offset is not a size, a
+        // colour is not one -- so the scroller, the repainted node and
+        // their ancestors keep theirs, and a scrolled frame re-measures the
         // rows entering the window and nothing else.
         self.generation = self.generation.wrapping_add(1);
-        self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty == 0));
+        self.memo.retain(|k, _| f.session.node(NodeIx::from_raw(k.0)).is_some_and(|n| n.id == k.1 && n.dirty & (dirty::SELF | dirty::DESCENDANT) == 0));
         self.stats = Stats::default();
         self.columns_atom = f.session.atom_id("columns");
         self.item_height_atom = f.session.atom_id("item_height");

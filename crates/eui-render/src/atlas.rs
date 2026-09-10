@@ -165,6 +165,17 @@ impl Atlas {
         self.dirty.clear();
     }
 
+    /// Every row is owed again: the texture these glyphs were uploaded to
+    /// is gone. The two atlas textures share a bind group, so growing the
+    /// image texture remakes this one blank under a client that still
+    /// believes its glyphs are on the GPU.
+    pub fn mark_dirty_all(&mut self) {
+        self.dirty.clear();
+        if !self.pixels.is_empty() {
+            self.dirty.push((0, self.size));
+        }
+    }
+
     /// Glyphs currently packed.
     pub fn len(&self) -> usize {
         self.map.values().filter(|r| r.is_some()).count()

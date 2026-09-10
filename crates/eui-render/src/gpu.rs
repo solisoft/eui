@@ -601,6 +601,11 @@ impl Renderer {
             tex.img_tex = img;
             tex.atlas_bind = bind;
             tex.atlas_size = atlas.size();
+            // Both textures were remade -- they share a bind group -- so
+            // both are blank, and everything either atlas holds is owed
+            // again. A picture arriving over the network, frames after the
+            // words were uploaded, would otherwise take the words with it.
+            atlas.mark_dirty_all();
             images.mark_dirty_all();
         }
         // Only the rows that changed cross to the GPU: a few glyph rows

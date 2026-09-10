@@ -61,6 +61,12 @@ pub mod dirty {
     /// repaint is. Kept apart from [`SELF`] so a hover can leave the
     /// layout standing.
     pub const PAINT: u8 = 8;
+    /// Something below this node scrolled or repainted, and nothing else:
+    /// nothing under it measures differently, so what it measured stands.
+    /// The ancestors' bit for [`SCROLL`] and [`PAINT`], as [`DESCENDANT`]
+    /// is for [`SELF`] -- and unlike [`DESCENDANT`], a layout keeps its
+    /// memo through it.
+    pub const BELOW_UNMEASURED: u8 = 16;
 }
 
 /// One node.
@@ -209,32 +215,36 @@ impl Arena {
     /// stopping at the first ancestor already marked — everything above it
     /// already is.
     pub(crate) fn mark_dirty(&mut self, ix: NodeIx) -> Result<()> {
-        self.mark(ix, dirty::SELF)
+        self.mark(ix, dirty::SELF, dirty::DESCENDANT)
     }
 
     /// [`Self::mark_dirty`] with [`dirty::SCROLL`] instead: the ancestors
     /// still learn something below them moved, so a redraw is owed, but the
     /// node itself is not marked as having changed.
     pub(crate) fn mark_scrolled(&mut self, ix: NodeIx) -> Result<()> {
-        self.mark(ix, dirty::SCROLL)
+        self.mark(ix, dirty::SCROLL, dirty::BELOW_UNMEASURED)
     }
 
     /// [`Self::mark_dirty`] with [`dirty::PAINT`] instead: the node paints
     /// differently and measures the same.
     pub(crate) fn mark_painted(&mut self, ix: NodeIx) -> Result<()> {
-        self.mark(ix, dirty::PAINT)
+        self.mark(ix, dirty::PAINT, dirty::BELOW_UNMEASURED)
     }
 
-    fn mark(&mut self, ix: NodeIx, bit: u8) -> Result<()> {
+    /// Set `bit` on the node and `above` on its ancestors, up to the first
+    /// that already says as much: an ancestor that knows something below
+    /// it *changed* need not also be told something below it scrolled.
+    fn mark(&mut self, ix: NodeIx, bit: u8, above: u8) -> Result<()> {
         let node = self.require_mut(ix)?;
         node.dirty |= bit;
         let mut cur = node.parent;
         while cur.is_some() {
             let node = self.require_mut(cur)?;
-            if node.dirty & dirty::DESCENDANT != 0 {
+            let told = node.dirty & dirty::DESCENDANT != 0 || (above == dirty::BELOW_UNMEASURED && node.dirty & dirty::BELOW_UNMEASURED != 0);
+            if told {
                 break;
             }
-            node.dirty |= dirty::DESCENDANT;
+            node.dirty |= above;
             cur = node.parent;
         }
         Ok(())

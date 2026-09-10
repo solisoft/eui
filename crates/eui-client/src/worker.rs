@@ -593,21 +593,65 @@ impl Reply {
     }
 }
 
-fn put_list(w: &mut W, list: &DrawList) {
-    w.u32(u32::try_from(list.quads.len()).unwrap_or(u32::MAX));
-    for q in &list.quads {
-        w.f4(q.rect);
-        w.f4(q.params);
-        w.f4(q.fill);
-        w.f4(q.stroke);
-        w.f4(q.uv);
-        w.f4(q.extra);
-        w.f4(q.spin);
+/// A quad on the pipe: a byte naming which of its eight parts are not
+/// all zero, then those parts. A glyph is a rect, its params, a fill and
+/// its uvs -- 65 bytes rather than 128; a plain box, 49. The zero parts
+/// are exactly the ones the renderer ignores for that quad.
+fn put_quad(w: &mut W, q: &Quad) {
+    let parts = [q.rect, q.params, q.fill, q.stroke, q.uv, q.extra, q.spin];
+    let mut mask = 0u8;
+    for (i, part) in parts.iter().enumerate() {
+        if *part != [0.0; 4] {
+            mask |= 1 << i;
+        }
+    }
+    if q.from != [0; 8] {
+        mask |= 1 << 7;
+    }
+    w.u8(mask);
+    for (i, part) in parts.iter().enumerate() {
+        if mask & (1 << i) != 0 {
+            w.f4(*part);
+        }
+    }
+    if mask & (1 << 7) != 0 {
         for pair in q.from.chunks_exact(2) {
             if let [lo, hi] = *pair {
                 w.u32(u32::from(lo) | (u32::from(hi) << 16));
             }
         }
+    }
+}
+
+fn get_quad(r: &mut R<'_>) -> Wire<Quad> {
+    let mask = r.u8()?;
+    let mut parts = [[0.0f32; 4]; 7];
+    for (i, part) in parts.iter_mut().enumerate() {
+        if mask & (1 << i) != 0 {
+            *part = r.f4()?;
+        }
+    }
+    let mut from = [0u16; 8];
+    if mask & (1 << 7) != 0 {
+        for pair in from.chunks_exact_mut(2) {
+            let v = r.u32()?;
+            if let [lo, hi] = pair {
+                #[expect(clippy::cast_possible_truncation, reason = "two sixteen-bit halves of one word")]
+                {
+                    *lo = v as u16;
+                    *hi = (v >> 16) as u16;
+                }
+            }
+        }
+    }
+    let [rect, params, fill, stroke, uv, extra, spin] = parts;
+    Ok(Quad { rect, params, fill, stroke, uv, extra, spin, from })
+}
+
+fn put_list(w: &mut W, list: &DrawList) {
+    w.u32(u32::try_from(list.quads.len()).unwrap_or(u32::MAX));
+    for q in &list.quads {
+        put_quad(w, q);
     }
     w.u32(u32::try_from(list.runs.len()).unwrap_or(u32::MAX));
     for r in &list.runs {
@@ -656,19 +700,7 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     let n = r.u32()? as usize;
     let mut quads = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
-        let (rect, params, fill, stroke, uv, extra, spin) = (r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?, r.f4()?);
-        let mut from = [0u16; 8];
-        for pair in from.chunks_exact_mut(2) {
-            let v = r.u32()?;
-            if let [lo, hi] = pair {
-                #[expect(clippy::cast_possible_truncation, reason = "two sixteen-bit halves of one word")]
-                {
-                    *lo = v as u16;
-                    *hi = (v >> 16) as u16;
-                }
-            }
-        }
-        quads.push(Quad { rect, params, fill, stroke, uv, extra, spin, from });
+        quads.push(get_quad(r)?);
     }
     let n = r.u32()? as usize;
     let mut runs = Vec::with_capacity(n.min(1 << 16));
@@ -1667,6 +1699,36 @@ mod tests {
         let late = repeat.answer(t0 + Duration::from_millis(90)).expect("still on");
         assert_eq!(late.status.next_due_ms, Some(10), "due when the list runs out, not a cadence later");
         assert!(repeat.answer(t0 + Duration::from_millis(100)).is_none(), "and then it is the driver's turn");
+    }
+
+    /// Every pattern of zero and non-zero parts survives the pipe, and a
+    /// glyph's worth costs what it should.
+    #[test]
+    fn a_quad_crosses_the_pipe_sparsely_and_whole() {
+        let full = Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [7.0; 4], from: [1, 2, 3, 4, 5, 6, 7, 8] };
+        for mask in 0u8..=255 {
+            let mut q = full;
+            let parts: [&mut [f32; 4]; 7] = [&mut q.rect, &mut q.params, &mut q.fill, &mut q.stroke, &mut q.uv, &mut q.extra, &mut q.spin];
+            for (i, part) in parts.into_iter().enumerate() {
+                if mask & (1 << i) == 0 {
+                    *part = [0.0; 4];
+                }
+            }
+            if mask & (1 << 7) == 0 {
+                q.from = [0; 8];
+            }
+            let mut w = W(Vec::new());
+            put_quad(&mut w, &q);
+            let bytes = w.0;
+            let mut r = R { b: &bytes, i: 0 };
+            assert_eq!(get_quad(&mut r).unwrap(), q, "mask {mask:#b}");
+            assert_eq!(bytes.len(), 1 + 16 * usize::from((mask & 127).count_ones() as u8) + if mask & 128 != 0 { 16 } else { 0 });
+        }
+        // A glyph: rect, params, fill, uv.
+        let glyph = Quad { rect: [1.0; 4], params: [0.0, 0.0, 1.0, 1.0], fill: [1.0; 4], uv: [0.5; 4], ..Quad::default() };
+        let mut w = W(Vec::new());
+        put_quad(&mut w, &glyph);
+        assert_eq!(w.0.len(), 65);
     }
 
     #[test]

@@ -574,6 +574,37 @@ fn a_glide_widens_the_virtual_window_and_moves_the_hit() {
     assert!(l.rect(s.lookup(rows[186]).unwrap()).is_none(), "a viewport above the start of the travel is out of the window at rest");
 }
 
+/// §7: an offset is not a size. A scrolled frame keeps every measure --
+/// the scroller's and its ancestors' too -- and measures only what enters
+/// the window; on a page laid out in full, nothing at all.
+#[test]
+fn a_scroll_keeps_the_measures_of_what_did_not_move() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let sc = b.style(StyleRecord { height: px(100), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let scroll = b.push(NodeKind::Scroll, sc, 30);
+    for i in 0..30 {
+        b.text(t, &format!("row {i}"));
+    }
+    let mut s = b.session();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
+    frame(&mut l, &s);
+    assert!(l.stats().measures > 30, "the first frame measures everything: {}", l.stats().measures);
+    s.clear_all_dirty();
+    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 40 }] }).unwrap();
+    let root = s.lookup(1).unwrap();
+    assert_eq!(s.node(root).unwrap().dirty, eui_tree::dirty::BELOW_UNMEASURED, "the root is told something below scrolled, and no more");
+    frame(&mut l, &s);
+    assert_eq!(l.stats().measures, 0, "a scroll measures nothing");
+    assert!(l.stats().memo_hits >= 3, "the page, the scroller and its rows are what they were: {} hits", l.stats().memo_hits);
+    assert_eq!(r(&l, &s, 3).y, -40.0, "and the rows moved");
+}
+
 // ----------------------------------------------------------------- misc
 
 #[test]
