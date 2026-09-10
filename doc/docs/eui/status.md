@@ -832,6 +832,32 @@ bumping that rev, adding the two event names to `tree.rs`, routing upload
 chunks to a handler, giving a `file_save` handler a way to answer with
 bytes, and keeping a LiveView session alive across sockets.
 
+## One thing that is worth knowing before it is rediscovered
+
+`ControlFlow::WaitUntil` does not sleep. The window used to hand winit the
+instant it wanted the next animation frame at, which is what that control
+flow is for; measured, a window with a thirty-a-second animation passed
+through `about_to_wait` **125 000 times a second** and cost an entire core.
+Set unconditionally to a deadline a whole second out, it spun at the same
+rate. `ControlFlow::Wait` sleeps on the instant.
+
+Both platforms, which is what made it look like a Mac problem for a day —
+`WaitUntil` is the piece of winit that Wayland and AppKit share, and macOS
+runs the driver in the window's process, the configuration that spins twice
+as fast.
+
+So the loop parks on `Wait` and keeps its own deadline on a thread that
+wakes it through the proxy (`Timer` in `app.rs`). An animating window costs
+62 loop passes for 31 frames — one wake and one redraw each — and a window
+with nothing animating never reaches `about_to_wait` at all.
+
+`EUI_LOOP_STATS=1` prints one line a second — passes, frames, wakes by
+source, window events by kind, mean sleep asked for — and is how this was
+found. Reach for it before guessing: nothing outside a process can tell a
+redraw loop from a chattering wake source from a cost on another thread.
+Read the *mean* sleep, not the shortest; the shortest is a trap and cost two
+wrong conclusions here.
+
 ## What the specification covers
 
 Every document in `spec/` is normative now, and each names the code that
