@@ -2170,17 +2170,24 @@ fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
 fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
     use std::time::{Duration, Instant};
     let mut d = welcomed();
-    let t0 = Instant::now();
-    d.tick(t0);
+    d.tick(Instant::now());
     let _ = d.paint(400, 300);
     // The resize. Nothing is animating, so the only reason to wake is the
     // viewport that is owed in 50 ms.
+    //
+    // The clock below is anchored *after* the input, not before it: `input`
+    // reads the wall clock itself, so the settle it arms is 50 ms from
+    // whenever that call happened. Anchoring earlier makes this test a race
+    // it loses on a loaded machine -- which is what `cargo test --workspace`
+    // is, several suites at once -- and a flaky test in the suite that
+    // guards against a busy loop is worse than no test at all.
     d.input(Input::Resized(380.0, 280.0, 1.0));
-    d.tick(t0 + Duration::from_millis(5));
+    let resized = Instant::now();
+    d.tick(resized + Duration::from_millis(5));
     let _ = d.paint(380, 280);
     assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Viewport(_))), "held back for the settle");
     // The settle passes and the frame falls due.
-    let after = t0 + Duration::from_millis(60);
+    let after = resized + Duration::from_millis(60);
     assert!(d.tick(after), "a frame is due: the viewport the resize owes");
     let _ = d.paint(380, 280);
     let sent = d.take_pending();
