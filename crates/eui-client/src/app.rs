@@ -2341,7 +2341,7 @@ impl ApplicationHandler<Wake> for App {
                 let events: String = WEVENT_NAMES.iter().zip(stats.wevents.iter()).filter(|(_, n)| **n > 0).map(|(name, n)| format!(" {n} {name}")).collect();
                 let shortest = if stats.shortest_us == u64::MAX { "-".to_owned() } else { format!("{}us", stats.shortest_us) };
                 eprintln!(
-                    "eui loop: {} passes, {} frames in {:.2}s{}; parked {} with nothing due / {} with a deadline, soonest {} from {}, retry won {}; window events:{}; mean sleep asked {}us",
+                    "eui loop: {} passes, {} frames in {:.2}s{}; parked {} on Wait / {} on WaitUntil, soonest {} from {}, retry won {}; window events:{}; mean sleep asked {}us",
                     stats.passes,
                     frames.saturating_sub(stats.frames_at),
                     elapsed.as_secs_f32(),
@@ -2383,25 +2383,28 @@ impl ApplicationHandler<Wake> for App {
             (a, b) => a.or(b),
         };
         if let Some(stats) = &mut self.loop_stats {
-            match due {
-                Some(at) => {
-                    stats.untils = stats.untils.saturating_add(1);
-                    let us = u64::try_from(at.saturating_duration_since(now).as_micros()).unwrap_or(u64::MAX);
-                    if us < stats.shortest_us {
-                        stats.shortest_us = us;
-                        stats.shortest_from = from;
-                    }
-                    stats.total_us = stats.total_us.saturating_add(us);
-                    if from == "retry" {
-                        stats.retry_won = stats.retry_won.saturating_add(1);
-                    }
+            if let Some(at) = due {
+                let us = u64::try_from(at.saturating_duration_since(now).as_micros()).unwrap_or(u64::MAX);
+                if us < stats.shortest_us {
+                    stats.shortest_us = us;
+                    stats.shortest_from = from;
                 }
-                None => stats.waits = stats.waits.saturating_add(1),
+                stats.total_us = stats.total_us.saturating_add(us);
+                if from == "retry" {
+                    stats.retry_won = stats.retry_won.saturating_add(1);
+                }
+            }
+            // What the loop was actually parked on, not what it had due.
+            // A counter that reports the question rather than the answer is
+            // how two builds come to look identical when they are not —
+            // which cost a round trip to a Mac and back.
+            match idle_or_deadline(due, now) {
+                ControlFlow::Wait => stats.waits = stats.waits.saturating_add(1),
+                _ => stats.untils = stats.untils.saturating_add(1),
             }
         }
         // The deadline goes to the thread that keeps it (see `Timer`); what
-        // the loop parks on is `idle_flow`, which is not the same answer on
-        // every platform.
+        // the loop parks on is `idle_flow`.
         match &mut self.timer {
             Some(timer) => {
                 timer.arm(due);
@@ -2409,41 +2412,40 @@ impl ApplicationHandler<Wake> for App {
             }
             // No thread to keep it: the old behaviour, which at least
             // animates, rather than a window that freezes.
-            None => event_loop.set_control_flow(match due {
-                Some(at) => ControlFlow::WaitUntil(at),
-                None => idle_flow(now),
-            }),
+            None => event_loop.set_control_flow(idle_or_deadline(due, now)),
         }
     }
 }
 
-/// How to park the loop with nothing due — and the two platforms disagree
-/// about which control flow can be trusted to sleep, in opposite
-/// directions, which took a day and a counter to establish.
-///
-/// **Everywhere but Apple**, `Wait` sleeps and `WaitUntil` does not:
-/// measured, a deadline a whole second out spun the loop 125 000 times a
-/// second, and `Wait` went silent on the instant. That is why the deadline
-/// is kept on a thread of ours at all.
-///
-/// **On macOS and iOS it is the other way round.** winit parks its
-/// run-loop timer by setting that timer's fire date to `f64::MAX` — a
-/// timer it creates with a hundred-nanosecond repeating interval, to mimic
-/// polling — and CFRunLoop's timeout arithmetic does not survive a date
-/// that absurd. The loop stops sleeping: measured on an idle window with no
-/// session, no animation and no events at all, a hundred thousand passes a
-/// second and a whole core. A finite deadline, however far away, is an
-/// ordinary fire date and keeps the arithmetic sane.
-///
-/// Ten minutes, then, rather than for ever. It costs one wake-up an idle
-/// ten minutes on the platforms that need it, and nothing anywhere else.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn idle_flow(now: std::time::Instant) -> ControlFlow {
-    ControlFlow::WaitUntil(now + std::time::Duration::from_secs(600))
+/// The control flow for a window with no timer thread of its own: the
+/// deadline where there is one, and [`idle_flow`] where there is not.
+fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) -> ControlFlow {
+    match due {
+        Some(at) => ControlFlow::WaitUntil(at),
+        None => idle_flow(now),
+    }
 }
 
-/// See the Apple half above: here `Wait` is the one that sleeps.
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+/// How to park the loop with nothing due.
+///
+/// `Wait`, and on Linux that is the one that sleeps: `WaitUntil` never does,
+/// at any distance — measured, a deadline a whole second out spun the loop
+/// 125 000 times a second while `Wait` went silent on the instant. That is
+/// why a deadline is kept on a thread of ours at all (see [`Timer`]).
+///
+/// **On macOS this is not enough and the reason is not yet known.** An idle
+/// window there — no session, no animation, no frames, no events — passes
+/// through `about_to_wait` a hundred thousand times a second and costs a
+/// core. Both control flows do it: `WaitUntil` ten minutes out was tried on
+/// the strength of winit parking its own run-loop timer at `f64::MAX`, and
+/// spun exactly as `Wait` did. The accessibility adapter is not the cause
+/// either (`EUI_A11Y=0` changes nothing), and nothing this crate runs on
+/// that path touches the run loop: with no tabs, `about_to_wait` is a few
+/// channel polls and an early return.
+///
+/// So something else in the process signals the CFRunLoop, and `sample(1)`
+/// on a spinning window is what will name it. `EUI_LOOP_STATS=1` is how the
+/// above was established from a machine that has no macOS on it.
 fn idle_flow(_now: std::time::Instant) -> ControlFlow {
     ControlFlow::Wait
 }
