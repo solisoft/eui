@@ -1820,3 +1820,68 @@ fn a_hover_that_lights_a_tile_puts_it_out_again() {
     let _ = d.paint(1000, 880);
     assert_eq!(d.session().style_of(card_box).bg, rest, "not lit once the pointer has gone");
 }
+
+/// 06 §1 end to end: dragging a split pane's divider moves it while the
+/// hand is still down, not when the button comes up.
+///
+/// The bar's position is a `fraction` only the server knows, so the whole
+/// chain has to work -- the press captures the pointer, each frame sends
+/// the move it coalesced, the server folds it into the fraction and sends
+/// the tree back. Held to the release instead, the bar sits at five
+/// hundred per mille, in the middle, however far the hand has gone.
+#[test]
+fn a_split_pane_follows_the_hand_while_it_is_still_down() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    // The page is a scroll container: a viewport tall enough that the
+    // split is laid out where the pointer can reach it.
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("Split panes")));
+    let _ = d.paint(1000, 3600);
+
+    // The dividers are the nodes that declare an orientation (03 §9).
+    let orientation = d.session().atom_id("orientation").expect("the divider's a11y props");
+    let bars = |d: &Driver| -> Vec<eui_tree::NodeIx> { d.session().preorder(root(d)).filter(|ix| d.session().node(*ix).is_some_and(|n| n.prop(orientation).is_some())).collect() };
+    let vertical = *bars(&d).iter().find(|ix| d.layout().rect(**ix).is_some_and(|r| r.h > r.w)).expect("a vertical divider, dragged horizontally");
+    let before = d.layout().rect(vertical).expect("laid out").x;
+
+    // Press it and take the hand well to the left, a frame at a time.
+    let r = d.layout().rect(vertical).unwrap();
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + 20.0));
+    for f in d.input(Input::PointerDown(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 3600);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for step in 1..=6u8 {
+        d.input(Input::PointerMove(r.x - f32::from(step) * 20.0, r.y + 20.0));
+        let _ = d.paint(1000, 3600);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        while let Ok(Incoming::Message(bytes)) = conn.rx.try_recv() {
+            for out in d.handle_frame(Frame::decode(&bytes).unwrap()) {
+                conn.tx.send(out.encode()).unwrap();
+            }
+        }
+    }
+    // Still down: the bar has already moved.
+    let _ = d.paint(1000, 3600);
+    let during = d.layout().rect(vertical).expect("still laid out").x;
+    assert!(during < before - 20.0, "the bar followed the hand while it was down: {before} -> {during}");
+
+    // And what tells a slider from a split, since the client lays a
+    // slider's three parts out itself while one is dragged and must not do
+    // it to anything else: the role, as a string, over the wire.
+    let role = d.session().atom_id("role").expect("a11y roles");
+    let is_slider = |d: &Driver, ix| d.session().node(ix).and_then(|n| n.prop(role)).is_some_and(|v| matches!(v, eui_proto::Value::Str(s) if s == "slider"));
+    assert!(d.session().preorder(root(&d)).any(|ix| is_slider(&d, ix)), "the gallery's slider says so in its props");
+    assert!(!is_slider(&d, d.session().node(vertical).unwrap().parent), "and the split that holds this divider does not");
+}

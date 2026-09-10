@@ -1339,6 +1339,14 @@ impl Driver {
         let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else {
             return;
         };
+        // Only a slider. Three children under a `pointer_move` handler is
+        // not enough to know one: a split pane is a panel, a divider and a
+        // panel, dragged by the same handler, and laying its three out as
+        // a track, a thumb and the rest leaves it somewhere it never asked
+        // to be. The node says what it is (03 §9), so ask it.
+        if !self.declares_role(ix, "slider") {
+            return;
+        }
         let (lead, thumb, rest) = {
             let kids = self.session.children(ix);
             let [lead, thumb, rest] = kids[..] else {
@@ -1366,6 +1374,14 @@ impl Driver {
         if let Some(value) = self.slider_value_at(ix, track) {
             self.update_slider_caption(ix, value);
         }
+    }
+
+    /// Whether the node declares this accessibility `role` (03 §9).
+    fn declares_role(&self, ix: NodeIx, role: &str) -> bool {
+        let Some(atom) = self.session.atom_id("role") else {
+            return false;
+        };
+        self.session.node(ix).and_then(|n| n.prop(atom)).is_some_and(|v| matches!(v, Value::Str(s) if s == role))
     }
 
     fn slider_value_at(&self, ix: NodeIx, track: Rect) -> Option<i64> {

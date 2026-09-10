@@ -1088,6 +1088,58 @@ fn a_hit_during_a_glide_finds_the_moved_row() {
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
 }
 
+/// The client lays a slider's three parts out itself while one is being
+/// dragged, so the thumb does not wait for the server's next tree. Three
+/// children under a `pointer_move` handler is not enough to know a slider
+/// from anything else, though: a split pane is a panel, a divider and a
+/// panel under exactly such a handler, and laid out as a track, a thumb
+/// and the rest it lands somewhere it never asked to be. The node says
+/// what it is.
+#[test]
+fn only_a_node_that_says_it_is_a_slider_is_laid_out_as_one() {
+    const ROLE: u32 = 40;
+    let three = |d: &mut Driver, role: Option<&str>| {
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+        let props = if role.is_some() { (0, 1) } else { (0, 0) };
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props, handlers: (0, 1), child_count: 3 });
+        tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
+        if let Some(r) = role {
+            tree.props.push((ROLE, Value::Str(r.into())));
+        }
+        for id in 3..6u32 {
+            tree.nodes.push(FlatNode { kind: NodeKind::Box, id, style: 12, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        }
+        let ops = vec![
+            Op::DefAtom { id: ROLE, value: "role".into() },
+            Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 11, record: StyleRecord { display: Display::Row, width: Dim::Px(240), height: Dim::Px(24), ..Default::default() } },
+            Op::DefStyle { id: 12, record: StyleRecord { width: Dim::Px(80), height: Dim::Px(24), ..Default::default() } },
+            Op::Mount(tree),
+        ];
+        d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+        let _ = d.paint(400, 300);
+    };
+    // The middle child's box before and after a drag that stays inside it.
+    let middle_after_a_drag = |role: Option<&str>| -> (eui_layout::Rect, eui_layout::Rect) {
+        let mut d = welcomed();
+        three(&mut d, role);
+        let mid = d.session().lookup(4).unwrap();
+        let before = d.layout().rect(mid).expect("laid out");
+        d.input(Input::PointerMove(before.x + 4.0, before.y + 4.0));
+        d.input(Input::PointerDown(0));
+        d.input(Input::PointerMove(before.x + 60.0, before.y + 4.0));
+        let _ = d.paint(400, 300);
+        (before, d.layout().rect(mid).expect("still laid out"))
+    };
+    let (before, after) = middle_after_a_drag(Some("slider"));
+    assert!((after.x - before.x).abs() > 8.0, "a slider's thumb follows the hand at once: {before:?} -> {after:?}");
+    let (before, after) = middle_after_a_drag(None);
+    assert_eq!(after, before, "anything else keeps the box the layout gave it");
+    let (before, after) = middle_after_a_drag(Some("separator"));
+    assert_eq!(after, before, "including a node that says it is something else");
+}
+
 /// A press on a `pointer_move` handler captures the pointer, and the move
 /// it coalesces is sent at the next paint -- one a frame, not one per OS
 /// sample. Held back until the button comes up instead, anything whose
