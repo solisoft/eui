@@ -116,14 +116,14 @@ def x_token_post(form)
 end
 
 def x_exchange(code)
-  form = [
+  fields = [
     "grant_type=authorization_code",
     "code=" + url_encode(code),
     "redirect_uri=" + url_encode(x_redirect()),
     "code_verifier=" + x_verifier(),
     "client_id=" + url_encode(getenv("X_CLIENT_ID"))
   ]
-  x_token_post(form.join("&"))
+  x_token_post(fields.join("&"))
 end
 
 # A refresh token is good until it is used; each exchange hands back a new
@@ -136,12 +136,12 @@ def x_access_token
   refresh = getenv("X_REFRESH_TOKEN") ?? ""
   return nil if refresh == "" || !x_configured()
 
-  form = [
+  fields = [
     "grant_type=refresh_token",
     "refresh_token=" + url_encode(refresh),
     "client_id=" + url_encode(getenv("X_CLIENT_ID"))
   ]
-  data = x_token_post(form.join("&"))
+  data = x_token_post(fields.join("&"))
   return nil if data.nil?
 
   token = data["access_token"]

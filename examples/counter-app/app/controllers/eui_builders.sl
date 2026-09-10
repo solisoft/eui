@@ -2496,7 +2496,7 @@ def datetime_picker(
   minute = bits[1] if bits.length() > 1
   hours = range(0, 24).map(fn(h) { two_digits(h) })
   minutes = range(0, 60).map(fn(m) { two_digits(m) })
-  clock = column(
+  clock_column = column(
     {"gap": 1, "width": "100%"},
     [
       muted("Time"),
@@ -2516,7 +2516,7 @@ def datetime_picker(
   )
   column(
     {"gap": 2, "width": "100%"},
-    [calendar(month, date.present? ? [date] : [], "", "", on_pick, on_nav), clock, muted(date + " " + time)]
+    [calendar(month, date.present? ? [date] : [], "", "", on_pick, on_nav), clock_column, muted(date + " " + time)]
   )
 end
 

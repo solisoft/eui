@@ -371,10 +371,10 @@ def tracker_add_voice(sum, voice, count)
   level = tracker_level(voice["vol"], voice["age"])
   return sum if level <= 0
 
-  table = tracker_table(voice["wave"], level)
+  wave_table = tracker_table(voice["wave"], level)
   step = voice["step"]
   phase0 = voice["phase"]
-  mixed = range(0, count).map(fn(i) { sum[i] + table[int((phase0 + i * step) % 65536 / 256)] })
+  mixed = range(0, count).map(fn(i) { sum[i] + wave_table[int((phase0 + i * step) % 65536 / 256)] })
   return mixed if voice["age"] > 0
 
   # The note starts here: ramp its first sixty-four samples in place.
@@ -908,15 +908,15 @@ end
 def tracker_play_button(skin, state)
   return tracker_button(skin, "Play", "play", {}, true) unless skin["modern"]
 
-  spinner = loading_button(state["playing"] ? "Playing" : "Play", "play", "tracker_play")
-  spinner["s"]["min_width"] = 0
-  spinner["s"]["pad"] = [
+  play_button = loading_button(state["playing"] ? "Playing" : "Play", "play", "tracker_play")
+  play_button["s"]["min_width"] = 0
+  play_button["s"]["pad"] = [
     1,
     3,
     1,
     3
   ]
-  spinner
+  play_button
 end
 
 def tracker_button(skin, label, event, props, lit)

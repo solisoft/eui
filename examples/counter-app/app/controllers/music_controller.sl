@@ -1517,7 +1517,7 @@ def needle_topbar(state, layout)
     [needle_mark(), needle_label("Needle", 3, "bold", "text.default")]
   )
   source = needle_configured() ? "Spotify" : "sample catalogue"
-  badge = {
+  source_badge = {
     "k": "box",
     "s": {
       "pad": [0, 2, 0, 2],
@@ -1527,7 +1527,7 @@ def needle_topbar(state, layout)
     },
     "c": [needle_label(source, 0, "medium", "text.muted")]
   }
-  chips = needle_configured() ? [badge, needle_account_chip(state)] : [badge]
+  chips = needle_configured() ? [source_badge, needle_account_chip(state)] : [source_badge]
   head = layout["single"] ? [brand, spacer()] : [brand].concat(chips).concat([spacer()])
   row(
     {
@@ -2325,12 +2325,12 @@ def needle_seekbar(state, layout)
   # percentage of the padded box — which is what pushed the second clock
   # off the end.
   frame = frame.merge({"shrink": 1}) if wide
-  clock = {
+  clock_style = {
     "size": 0,
     "fg": "text.muted",
     "shrink": 0
   }
-  row(frame, [text(needle_clock(position), clock), bar, text(needle_clock(duration), clock)])
+  row(frame, [text(needle_clock(position), clock_style), bar, text(needle_clock(duration), clock_style)])
 end
 
 # Where the sound comes out. The list is Spotify's answer for this
