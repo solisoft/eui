@@ -1,7 +1,7 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/counter-app/app/controllers/eui_builders.sl` — 107 functions, all of
+> `examples/counter-app/app/controllers/eui_builders.sl` — 150 functions, all of
 > them plain Soli, none of them native — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
@@ -9,7 +9,7 @@
 A component is data. A view returns a hash, the server turns it into nodes,
 diffs it against the tree that session last received, and sends the patch. So
 a "component" here is nothing but a Soli function that returns a hash — you
-write one the same way the library wrote its hundred and seven.
+write one the same way the library wrote its hundred and fifty.
 
 ## A component is two functions
 
@@ -246,7 +246,7 @@ before its first run and executes it on a fuel budget. Its effect is
 
 # The library
 
-A hundred and seven functions, every one of them a function over the primitives.
+A hundred and fifty functions, every one of them a function over the primitives.
 Copy the file into your application and change it — that is the intended use.
 A widget is not a protocol feature.
 
@@ -259,6 +259,7 @@ A widget is not a protocol feature.
 | `row(style, children)` | A box with `display: row` |
 | `stack(style, children)` | A box with `display: stack` — children superimposed |
 | `text(content, style)` | A text node |
+| `icon(name, style)` | A named vector icon, stroked by the client in `fg`. The name is a **prop**, not text — so it is never shaped, never falls back to a symbols face, and never reaches a screen reader as the character it resembles. A name the client does not know draws nothing and keeps its space |
 | `spacer()` | Empty space with `grow: 1` |
 | `divider()` | A hairline rule |
 | `scroll(style, children)` | A clipping viewport, laid out as a column |
@@ -286,6 +287,99 @@ A widget is not a protocol feature.
 | `muted(content)` | Size 1, `text.muted` |
 | `text_interned(content, style)` | A text marked `intern` — for short strings that repeat across many nodes |
 
+## Controls and states
+
+Every interactive widget below is `control` plus a body. It exists because
+twenty-four widgets in this library once answered the pointer with a cursor and
+nothing else, and because not one of them could be disabled — the word did not
+appear in the file.
+
+| Signature | What it returns |
+|---|---|
+| `control(o)` | A keyed node: the size applied, the tone's resting colours, the caller's shape on top, the four pointer handlers wired to declared styles, the semantics in its props — and, when it is disabled or loading, no handler map at all |
+| `stateful(base, tone, on)` | The four pointer handlers alone, merged onto an existing handler map |
+| `tone_resting(tone, lit)` | A tone's resting colours, with its selected patch folded in |
+| `a11y_props(o)` | What a widget declares about itself, merged with the props its handler reads back |
+| `control_metrics(size)` | `pad`, `gap` and `min_width` for `sm`, `md` or `lg` |
+| `control_text_size(size)` | The text-scale index a label takes at that size |
+| `control_px(size, density)` | A control height in px, for the places where a fixed box is the point |
+| `icon_box_px(size)` / `checkbox_box_px(size)` | The square an icon button occupies, and the mark of a checkbox |
+| `size_spec(size)` | The whole row of the size table |
+
+`TONES` names five — `accent`, `neutral`, `ghost`, `danger`, `quiet`. Each is a
+resting colour set plus a **hover and a press delta**. Deltas, not whole styles:
+merged over whatever base the caller ended up with, they keep every geometry
+choice inside all three states, so a size, a selection or a patch applied from
+outside cannot go missing under the pointer. That is the invariant `restyle`
+used to repair afterwards, made structural instead — and `restyle` stays, for
+narrowing a widget from outside.
+
+```soli
+control({
+  "key": "cb:" + props["id"].to_s,
+  "tone": "quiet",
+  "size": "md",
+  "shape": {"justify": "start", "border": 0, "min_width": 0},
+  "on": {"click": on_toggle},
+  "props": props,
+  "disabled": disabled,
+  "a11y": {"role": "check_box", "checked": checked, "label": label},
+  "c": [mark, text(label, {"size": control_text_size("md")})]
+})
+```
+
+Precedence is `disabled` > `loading` > `read_only` > `active` > `hover` >
+`selected` > resting. The first two are terminal: they replace the resting style
+and take the handlers with them, so hover and press cannot be reached. Selection
+is folded into the **resting** style before the hover delta is derived, which is
+what stops a hover on an already-selected row looking broken.
+
+### Disabling deletes the handler map
+
+That single act is right in three places at once. No click reaches the server,
+because dispatch walks up from the hit node and finds nothing on the path. The
+node leaves the Tab order for free, because focus order is exactly the nodes
+holding a click, key or editable handler. And the cursor and colours come from
+one patch — `not_allowed`, `text.disabled`, `border.subtle`.
+
+It is wrong in a fourth. With no click handler the client's accessibility
+mapping sees no button to infer, and a disabled control decays into an unnamed
+group: a screen reader reads its label as loose text with no hint that it is a
+control, let alone an unavailable one. Which is why `disabled` is also a prop —
+it has to be something the widget *says*, not something it stops doing.
+
+### Two rules
+
+**Never style focus from a `focus` handler.** Focus fires for a pointer click
+too, so a server-side focus style lights the ring exactly when the client is
+taking care not to. What a widget owes focus is to stay reachable and to have a
+radius the ring can trace.
+
+**Size is the application's; density is the viewer's.** `pad`, `gap` and
+`margin` are space *indices*, and the client multiplies each by the viewer's
+density before it lands in a frame. Resolving them to pixels on the server would
+scale them twice. A data-dense application asks for `size: "sm"`; it does not
+get to choose a density.
+
+### What a widget may claim of the keyboard
+
+Three props the client reads, for the things a server cannot do because it
+does not own them — it does not own `Tab`, and until now it was never told
+about `Escape`.
+
+| Prop | Value | Means |
+|---|---|---|
+| `modal` | boolean | while it is laid out, the Tab order is **its subtree alone**; innermost wins, so a dialog over a dialog traps in the second |
+| `autofocus` | boolean | focus starts here when the surface arrives — and is not reclaimed by a later batch |
+| `keys` | list of key names | the keys this node wants, and it is sent no others |
+
+`keys` is the one that matters most. A `key_down` handler used to receive
+*every* key, so a widget had to choose between taking the arrows and keeping
+`Enter` as the press it stands for — and a dialog listening for `Escape`
+would hear every letter typed into the field inside it. Naming what you want
+settles both. A node with a handler and no `keys` prop still hears
+everything.
+
 ## Buttons
 
 | Signature | What it returns |
@@ -294,7 +388,7 @@ A widget is not a protocol feature.
 | `secondary_button(label, on_click)` | `surface.sunken` on `text.default` |
 | `danger_button(label, on_click)` | `danger.base` on `danger.on` |
 | `ghost_button(label, on_click)` | No fill, accent text |
-| `icon_button(label, on_click, props)` | A 28×28 square, `props` travelling with the click |
+| `icon_button(glyph, on_click, props, o = {})` | A square from the size scale. `o["icon"]` names a vector icon to draw instead of the glyph; `o["name"]` is what it is *called* — a control whose only text is `×` is announced as `×` |
 | `loading_button(label, on_click, key)` | Reveals a spinner and changes the label **locally** on press, then sends the event |
 | `local_button(label, program, after)` | A primary button whose click runs `program` locally, then sends `after` |
 | `theme_toggle()` | Light/dark, entirely on the client (`theme.toggle()`), no round trip and nothing told to the server |
@@ -306,8 +400,8 @@ press switch between style records the session already holds.
 
 | Signature | Notes |
 |---|---|
-| `checkbox(label, checked, on_toggle, props)` | The box's fill says its state; `props` come back as `params["props"]` |
-| `switch(label, on, on_toggle, props)` | A track and a knob, placed by `justify` |
+| `checkbox(label, checked, on_toggle, props, o = {})` | The mark's fill says its state; `props` come back as `params["props"]`. `o["indeterminate"]` draws the third state |
+| `switch(label, on, on_toggle, props, o = {})` | A track and a knob, placed by `justify` |
 | `field(label, value, on_change)` | A muted label over an input |
 | `form(children, submit_label, on_submit)` | The children, then a right-aligned submit |
 | `sized_input(value, on_change, width)` | An input of a fixed width |
@@ -345,10 +439,10 @@ arithmetic reaches the view.
 | Signature | Notes |
 |---|---|
 | `card(style, children)` | Raised surface, subtle border, radius 3, shadow 1 — your `style` wins where it sets a key |
-| `tabs(names, active, on_select)` | A row of labels, the active one underlined; each carries `{"tab": name}` |
-| `dialog(title, body_children, actions)` | An overlay: dimmed ground, centred panel, actions right |
-| `sheet(side, children)` | A 320 px panel at the left or right edge, over a dimmed ground |
-| `drawer(children)` | `sheet("left", …)` |
+| `tabs(names, active, on_select, o = {})` | A row of labels, the active one underlined; each carries `{"tab": name}` |
+| `dialog(title, body_children, actions, opts = {})` | An overlay: dimmed ground, centred panel, actions right. Declares itself `modal` and `autofocus`, so the client traps `Tab` inside it and puts focus there when it opens, and claims `Escape` alone — `opts["on_close"]` is the event that key sends |
+| `sheet(side, children, opts = {})` | A 320 px panel at the left or right edge, over a dimmed ground |
+| `drawer(children, opts = {})` | `sheet("left", …)` |
 | `popover(anchor, content, open)` | A panel over its anchor; the anchor alone when closed |
 | `toolbar(children)` | A raised strip with a bottom rule |
 | `accordion(sections, open_id, on_toggle)` | Sections of `{id, title, body}`; the open one shows its body |
@@ -356,6 +450,77 @@ arithmetic reaches the view.
 | `menu(items, on_pick)` | A raised column; each item carries `{"item": it}` |
 | `tooltip(content)` | Inverted text on the default ink |
 | `segmented(options, selected, on_select)` | One sunken row, the selected option raised |
+
+## Split panes
+
+| Signature | What it returns |
+|---|---|
+| `split_pane(o)` | Two panels and a divider that can be dragged. `dir` is `"row"` for a vertical divider with the panels side by side, `"column"` for a horizontal one with them stacked |
+| `split_sizes(extent, fraction, min_a, min_b, bar)` | The two panel extents in px, clamped to both minimums |
+| `split_at(extent, at, min_a, min_b, bar)` | A pointer position along the axis, as a fraction per mille |
+| `split_span(extent, bar)` | The room the panels share, once the divider has taken its own |
+| `split_event(state, params, name, dir, extent, min_a, min_b, bar)` | The four events a split sends, folded into a component's state |
+| `pane_bp(px)` / `pane_min(px, name)` / `pane_px(name)` | Breakpoints at the scale a *panel* lives at |
+
+```soli
+split_pane({
+  "key": "workspace",
+  "dir": "row",
+  "size": w, "cross": 400,
+  "fraction": state["split"],
+  "min_a": 160, "min_b": 240,
+  "on_drag": "split",
+  "dragging": state["split_drag"],
+  "a": fn(px) { sidebar(px) },
+  "b": fn(px) { detail(px) }
+})
+```
+
+and one line in the handler:
+
+```soli
+"split" => split_event(state, params, "split", "row", w, 160, 240, 6)
+```
+
+**Where the handlers sit is the whole design.** `pointer_down` is on the
+divider, so a drag can only start there. `pointer_move` and `pointer_up` are on
+the **container** — and a pointer payload is measured against the node whose
+handler catches it, so the number reaching the server is already the divider's
+position inside its container, needing no arithmetic and no memory of where the
+drag began. A press captures the pointer, so a move that leaves the divider
+still arrives; moves are coalesced to one per frame rather than one per sample
+the mouse sends.
+
+The divider also holds `key_down`, which is what puts it in the Tab order: a
+split can be moved with the arrow keys and recentred with `Home` by someone who
+never touches a pointer.
+
+`fraction` is per mille — an integer, so it survives state and props without
+ever being a float. Both conversions round rather than truncate, which is what
+makes the trip exact: a divider dropped on a pixel and rebuilt from its fraction
+lands on that pixel, where truncating at both ends lost one on the way.
+
+### Content that answers its panel
+
+`a` and `b` are functions of one argument: the panel's own extent in pixels. A
+panel is built knowing how much room it has, which is what lets its content
+answer the panel instead of the window.
+
+`bp()` is no use for this. Its rungs are Tailwind's and they are a *window's* —
+a panel of 309 px and one of 505 px are both `xs`, so a view that branches on
+`bp` inside a split never branches at all. `pane_bp` is the same idea at the
+scale a panel actually lives at: 200, 320, 480, 720.
+
+```soli
+"b": fn(px) {
+  cells = [stat("Rows", rows, ""), stat("Open", open, "")]
+  pane_min(px, "lg") ? row({"gap": 3}, cells) : column({"gap": 3}, cells)
+}
+```
+
+What this does not do yet is drag without a round trip. Every frame of a drag
+reaches the server, because a local chunk cannot read the event that triggered
+it. On loopback or a LAN that is invisible; over a long link it would not be.
 
 ## Navigation
 

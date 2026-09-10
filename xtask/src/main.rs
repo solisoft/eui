@@ -230,6 +230,7 @@ fn bench() -> Vec<Row> {
     rows.push(Row { what: "driver: first paint of table-10k (shaping)", value: format!("{first:?}, {} quads", list.quads.len()), budget: "< 80 ms", ok: first < Duration::from_millis(80) });
     rows.push(Row { what: "driver: scroll step, layout + paint (median)", value: format!("{scroll:?}"), budget: "< 2 ms", ok: scroll < Duration::from_millis(2) });
     rows.extend(motion_rows(&mut driver));
+    rows.extend(prose_rows());
     rows.push(Row {
         what: "driver RSS growth, table-10k with real text",
         value: format!("{:.1} MB", after.saturating_sub(before) as f64 / 1024.0),
@@ -240,6 +241,49 @@ fn bench() -> Vec<Row> {
 
     rows.extend(through_a_worker(scroll));
 
+    rows
+}
+
+/// A page of prose in a plain scroller: sixty paragraphs, laid out in full
+/// rather than virtualised, which is what a document looks like.
+fn prose_batch() -> Batch {
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let page = StyleRecord { display: Display::Column, height: Dim::Px(500), gap: 8, padding: [12; 4], ..Default::default() };
+    let para = StyleRecord { ..Default::default() };
+    let mut t = Subtree::default();
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    t.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 60 });
+    let words = ["the", "layout", "of", "a", "page", "is", "a", "function", "of", "its", "words", "and", "their", "widths", "and", "nothing", "else", "moves"];
+    for i in 0..60u32 {
+        let text: Vec<&str> = (0..18).map(|k| words[(k + i as usize) % words.len()]).collect();
+        t.nodes.push(FlatNode { kind: NodeKind::Text, id: 3 + i, style: 3, key: 0, text: Some(TextRef::Inline(text.join(" "))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: col }, Op::DefStyle { id: 2, record: page }, Op::DefStyle { id: 3, record: para }, Op::Mount(t)] }
+}
+
+/// A wheel step through the prose page: the layout of a scroll that is
+/// not virtualised, and the paint of words that did not change.
+fn prose_rows() -> Vec<Row> {
+    let mut rows = Vec::new();
+    let mut driver = Driver::new(800.0, 600.0, 1.0, 0);
+    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16] }));
+    driver.handle_frame(Frame::Batch(prose_batch()));
+    let s = Instant::now();
+    let list = driver.paint(800, 600);
+    let first = s.elapsed();
+    rows.push(Row { what: "driver: first paint of the prose page", value: format!("{first:?}, {} quads", list.quads.len()), budget: "< 40 ms", ok: first < Duration::from_millis(40) });
+    driver.input(Input::PointerMove(100.0, 100.0));
+    let t: Vec<Duration> = (0..10)
+        .map(|_| {
+            driver.input(Input::Wheel(0.0, 40.0));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    let st = driver.layout().stats();
+    rows.push(Row { what: "driver: scroll step, prose page (median)", value: format!("{d:?}, {} measures on the last", st.measures), budget: "< 2 ms", ok: d < Duration::from_millis(2) });
     rows
 }
 

@@ -1,0 +1,388 @@
+<main class="sheet">
+    <%- partial("layouts/top", {"here": "controls"}) %>
+
+    <section class="hero">
+        <div class="mark">Controls<span>&sect;03.4</span></div>
+        <div>
+            <h1>Twenty-four widgets answered the pointer with a cursor.</h1>
+            <p class="lede">
+                A catalogue can be complete and still not be good. The one in
+                <code>eui_builders.sl</code> had a hundred and thirty functions and could
+                not disable any of them &mdash; the word did not appear in two and a half
+                thousand lines. <em>control</em> is the base every interactive widget is
+                built on now: one options hash that carries the states, the size and the
+                semantics, so a widget gains all three without its callers changing.
+            </p>
+
+            <nav class="toc">
+                <a href="#audit"><b>The audit</b><span>what was actually there</span></a>
+                <a href="#owners"><b>Who owns a state</b><span>client, or server, or neither</span></a>
+                <a href="#tones"><b>Tones</b><span>five, as deltas</span></a>
+                <a href="#control"><b>control()</b><span>the options hash</span></a>
+                <a href="#disabled"><b>Disabled</b><span>right three times, wrong once</span></a>
+                <a href="#size"><b>Size, not density</b><span>two axes, one of them the viewer's</span></a>
+                <a href="#semantics"><b>Semantics</b><span>props a widget declares</span></a>
+                <a href="#status"><b>Where it stands</b><span>four of twenty-four</span></a>
+            </nav>
+        </div>
+    </section>
+
+    <section id="audit">
+        <div class="mark">Audit<span>before</span></div>
+        <div>
+            <h2>What the catalogue actually did</h2>
+            <p>
+                Counted, not remembered, across the hundred and thirty functions of
+                <code>eui_builders.sl</code> as it stood. The theming was excellent
+                &mdash; two hardcoded colours in the whole file, both deliberate scrims.
+                Everything the pointer and the keyboard touch was not.
+            </p>
+
+            <div class="tally">
+                <div><b>6</b><span>functions that answered <code>pointer_enter</code></span></div>
+                <div><b>2</b><span>that answered <code>key_down</code></span></div>
+                <div><b>1</b><span>use of <code>focus.ring</code>, in a grid cell</span></div>
+                <div><b class="nil">0</b><span>occurrences of the word <em>disabled</em></span></div>
+                <div><b>24</b><span>that set <code>cursor: pointer</code> and stopped there</span></div>
+                <div><b>2</b><span>hardcoded colours &mdash; the dialog and sheet scrims</span></div>
+            </div>
+
+            <p class="note">
+                The reference page opposite claimed every widget was &ldquo;themeable
+                through roles, keyboard-navigable, and carries documented accessibility
+                semantics&rdquo;. Only the first clause was true.
+            </p>
+        </div>
+    </section>
+
+    <section id="owners">
+        <div class="mark">States<span>&sect;03.3</span></div>
+        <div>
+            <h2>A state belongs to exactly one side</h2>
+            <p>
+                The eight states do not live in one place, and most of the mess in a
+                widget catalogue comes from pretending they do. Hover is the client's and
+                costs no network; selection is the server's and costs a render;
+                focus belongs to neither, and a server that tries to style it gets it
+                wrong.
+            </p>
+
+            <div class="owners">
+                <div class="owner">
+                    <b>Client, local</b>
+                    <p>
+                        <em>hover</em> and <em>active</em>. Declared as styles on the node
+                        and swapped by a verified bytecode chunk on
+                        <em>pointer_enter / leave / down / up</em>. No frame is sent, so
+                        the feedback does not wait for the network &mdash; and on a style
+                        carrying <em>transition: fast</em> the colour eases over 100 ms
+                        along the standard curve.
+                    </p>
+                </div>
+                <div class="owner">
+                    <b>Client, only</b>
+                    <p>
+                        <em>focus-visible</em>. The ring is drawn by the client, for
+                        keyboard and server-driven focus and never for a pointer click.
+                        A widget must not declare a <em>focus</em> handler to style it:
+                        focus fires on click too, so the server would light the ring
+                        exactly when the client is taking care not to. What a widget owes
+                        focus instead is to stay reachable, and to have a radius the ring
+                        can trace.
+                    </p>
+                </div>
+                <div class="owner">
+                    <b>Server</b>
+                    <p>
+                        <em>selected</em>, <em>checked</em>, <em>expanded</em>,
+                        <em>disabled</em>, <em>read_only</em> and <em>loading</em>. These
+                        are arguments, not events: the server re-renders and the diff
+                        carries the change. They are folded into the resting style
+                        <strong>before</strong> the hover delta is taken, which is why
+                        hovering an already-selected row does not look broken.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tones">
+        <div class="mark">Tones<span>five</span></div>
+        <div>
+            <h2>A tone is a resting colour set and two deltas</h2>
+            <p>
+                Deltas, not whole styles. Merged over whatever base a caller ended up
+                with, they keep every geometry choice inside all three states &mdash; so a
+                size, a selection, or a patch applied from outside cannot go missing under
+                the pointer. That is the invariant <code>restyle</code> used to repair
+                afterwards, made structural instead.
+            </p>
+            <p class="soft">
+                These five are real buttons. Hover them, hold them down, tab to them.
+            </p>
+
+            <div class="tones">
+                <div class="tone">
+                    <b>accent</b>
+                    <button class="swatch accent" type="button">Save</button>
+                    <dl>
+                        <dt>rest</dt><dd>accent.base &middot; accent.on</dd>
+                        <dt>hover</dt><dd>accent.hover + border.strong</dd>
+                        <dt>press</dt><dd>accent.active</dd>
+                    </dl>
+                </div>
+                <div class="tone">
+                    <b>neutral</b>
+                    <button class="swatch neutral" type="button">Cancel</button>
+                    <dl>
+                        <dt>rest</dt><dd>surface.sunken &middot; border.default</dd>
+                        <dt>hover</dt><dd>surface.raised + border.strong</dd>
+                        <dt>press</dt><dd>surface.sunken</dd>
+                    </dl>
+                </div>
+                <div class="tone">
+                    <b>ghost</b>
+                    <button class="swatch ghost" type="button">Details</button>
+                    <dl>
+                        <dt>rest</dt><dd>none &middot; accent.base</dd>
+                        <dt>hover</dt><dd>surface.sunken</dd>
+                        <dt>press</dt><dd>accent.active</dd>
+                    </dl>
+                </div>
+                <div class="tone">
+                    <b>danger</b>
+                    <button class="swatch danger" type="button">Delete</button>
+                    <dl>
+                        <dt>rest</dt><dd>danger.base &middot; danger.on</dd>
+                        <dt>hover</dt><dd>border.strong</dd>
+                        <dt>press</dt><dd>surface.sunken &middot; danger.base</dd>
+                    </dl>
+                </div>
+                <div class="tone">
+                    <b>quiet</b>
+                    <button class="swatch quiet" type="button">Overview</button>
+                    <dl>
+                        <dt>rest</dt><dd>none &middot; text.default</dd>
+                        <dt>hover</dt><dd>surface.sunken</dd>
+                        <dt>press</dt><dd>surface.sunken</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <p class="note">
+                Only <code>accent</code> has a hover and an active offset &mdash; the
+                theme derives them in OKLCH from the adjusted base. The status roles have
+                neither, so there is no <code>danger.active</code> to reach for: danger
+                presses to a sunken surface and keeps its own colour in the label. That
+                is a constraint of the palette, not an oversight in the widget, and
+                <code>danger.base</code> carries a guaranteed 3:1 against a surface either
+                way.
+            </p>
+
+            <div class="pair">
+                <div class="pane">
+                    <b>the border is reserved at rest</b>
+<pre>base = {
+  <span class="s">"border"</span>: <span class="n">1</span>,
+  <span class="s">"border_color"</span>: <span class="s">"none"</span>,
+  <span class="s">"transition"</span>: <span class="s">"fast"</span>
+}
+hover = base.merge(tone[<span class="s">"hover"</span>])</pre>
+                    <p>
+                        A border in EUI is part of the box &mdash; layout adds its widths
+                        to the frame. A border that appears on hover makes the button
+                        2&nbsp;px wider and shoves its whole row sideways under the
+                        pointer. Reserving the width and colouring it leaves nothing for
+                        layout to do: what changes is a colour, which the client animates
+                        on its own.
+                    </p>
+                </div>
+                <div class="pane">
+                    <b>and the swap runs on the client</b>
+<pre><span class="s">"pointer_enter"</span>: {
+  <span class="s">"local"</span>: <span class="s">"self.style = @hover"</span>,
+  <span class="s">"styles"</span>: {<span class="s">"hover"</span>: hover}
+}</pre>
+                    <p>
+                        The node is keyed, so the chunk can name itself. The client
+                        verifies the chunk before it runs once &mdash; every jump on an
+                        instruction boundary, the stack depth proved along every path
+                        &mdash; and a chunk that fails verification is dropped, silently
+                        and safely, leaving the widget with its resting style.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="control">
+        <div class="mark">API<span>one hash</span></div>
+        <div>
+            <h2>Every interactive widget is <code>control</code> plus a body</h2>
+            <p>
+                The options hash is the signature. It is how twenty-odd widgets gain seven
+                capabilities without a single call site changing: each keeps its old
+                positional arguments and grows a trailing <code>o = {}</code>.
+            </p>
+
+            <div class="family">
+                <h3>control(o) <span>14 keys</span></h3>
+                <dl class="api">
+                    <dt><b>key</b><i>"cb:" + props["id"]</i></dt>
+                    <dd><span class="d">Required, and unique. Nodes are named by key and the key map is flat, so a duplicate silently restyles someone else&rsquo;s widget. <code>control</code> throws rather than let that happen</span></dd>
+                    <dt><b>kind</b><i>"box"</i></dt>
+                    <dd><span class="d">Any of the sixteen. <code>box</code> unless a widget needs an <code>input</code></span></dd>
+                    <dt><b>tone</b><i>"accent"</i></dt>
+                    <dd><span class="d">One of the five above. <code>quiet</code> by default</span></dd>
+                    <dt><b>size</b><i>"sm"</i></dt>
+                    <dd><span class="d"><code>sm</code>, <code>md</code> or <code>lg</code>. Geometry only &mdash; it never touches colour</span></dd>
+                    <dt><b>shape</b><i>{"width": 28, "radius": 1, "pad": 0}</i></dt>
+                    <dd><span class="d">Extra resting style. The caller wins, and whatever it sets is inside every state</span></dd>
+                    <dt><b>on</b><i>{"click": "toggle"}</i></dt>
+                    <dd><span class="d">The handler map. The four pointer handlers are added around it</span></dd>
+                    <dt><b>props</b><i>{"id": 412}</i></dt>
+                    <dd><span class="d">The identity the handler reads back as <code>params["props"]</code></span></dd>
+                    <dt><b>a11y</b><i>{"role": "check_box", "checked": true}</i></dt>
+                    <dd><span class="d">What this control <em>is</em>. Merged into the props, so it costs no wire change</span></dd>
+                    <dt><b>selected / checked / expanded</b><i>"selected": is_active</i></dt>
+                    <dd><span class="d">Server state, folded into the resting colours before the deltas are taken</span></dd>
+                    <dt><b>disabled / read_only / loading</b><i>"disabled": true</i></dt>
+                    <dd><span class="d">The terminal states. They replace the resting style and take the handlers with them</span></dd>
+                    <dt><b>c</b><i>[mark, text(label, {})]</i></dt>
+                    <dd><span class="d">Children. A label takes its size from <code>control_text_size</code>, because only <code>fg</code> inherits</span></dd>
+                </dl>
+            </div>
+        </div>
+    </section>
+
+    <section id="disabled">
+        <div class="mark">Disabled<span>&sect;06.1</span></div>
+        <div>
+            <h2>One deletion, right three times and wrong once</h2>
+            <p>
+                Disabling a control does not add a state. It removes the handler map, and
+                that single act is correct almost everywhere:
+            </p>
+
+            <ul class="consequences">
+                <li><strong>No click reaches the server.</strong> Dispatch walks up from the hit node looking for a handler and finds nothing on the path, so no event is ever encoded.</li>
+                <li><strong>It leaves the Tab order.</strong> The client&rsquo;s focus order is exactly the nodes holding a click, key or editable handler &mdash; so a handler-less node drops out for free, with nothing to keep in sync.</li>
+                <li><strong>The cursor and the colours follow.</strong> <code>not_allowed</code>, <code>text.disabled</code> and <code>border.subtle</code>, all from one patch &mdash; and the disabled roles carry their own contrast guarantee in every mode.</li>
+                <li class="wrong"><strong>And it disappears from the accessibility tree.</strong> The client infers a role from the node&rsquo;s kind and the presence of a click handler. With the handler gone there is no button to infer, and a disabled control decays into an unnamed group: a screen reader reads its label as loose text, with no hint that it is a control at all, let alone an unavailable one.</li>
+            </ul>
+
+            <p>
+                Which is the whole argument for the semantics below. <code>disabled</code>
+                has to be something the widget <em>says</em>, not something it stops doing.
+            </p>
+
+            <p class="soft">
+                Rest, then disabled. The second one is not a colour scheme &mdash; it is
+                the absence of the handlers, and the cursor says so before anything is
+                clicked.
+            </p>
+            <p>
+                <button class="swatch accent" type="button">Publish</button>
+                &nbsp;&nbsp;
+                <button class="swatch" type="button" disabled>Publish</button>
+            </p>
+        </div>
+    </section>
+
+    <section id="size">
+        <div class="mark">Size<span>&sect;05.2</span></div>
+        <div>
+            <h2>Size is the application&rsquo;s. Density is the viewer&rsquo;s.</h2>
+            <p>
+                These are two axes and conflating them scales everything twice.
+                <code>pad</code>, <code>gap</code> and <code>margin</code> are space
+                <em>indices</em>, and the client already multiplies each one by the
+                viewer&rsquo;s density before it lands in a frame. A server that resolved
+                them to pixels first would have them scaled again. So the size table
+                stays in indices, and a data-dense application asks for
+                <code>size: "sm"</code> &mdash; it does not get to choose a density,
+                because that choice is not the application&rsquo;s to make.
+            </p>
+
+            <table class="ledger">
+                <thead>
+                    <tr><th>size</th><th>text</th><th>pad</th><th>gap</th><th>min width</th><th>icon</th><th>mark</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>sm</td><td>1</td><td>1&nbsp;3&nbsp;1&nbsp;3</td><td>2</td><td>32</td><td>24</td><td>16</td></tr>
+                    <tr><td>md</td><td>2</td><td>2&nbsp;4&nbsp;2&nbsp;4</td><td>3</td><td>44</td><td>28</td><td>18</td></tr>
+                    <tr><td>lg</td><td>3</td><td>3&nbsp;5&nbsp;3&nbsp;5</td><td>3</td><td>56</td><td>36</td><td>22</td></tr>
+                </tbody>
+            </table>
+
+            <p class="note">
+                There is deliberately no height in that table. Height is the text line
+                plus the padding, which the client scales on both axes for free; a height
+                pinned in pixels clips its own label the moment the viewer raises their
+                font scale. Fixed boxes are for the places where a fixed box <em>is</em>
+                the point &mdash; an icon button, a day cell, a row height &mdash; and
+                those go through <code>control_px</code>, which mirrors the density
+                factors: compact 0.8, cozy 1.0, comfortable 1.25.
+            </p>
+        </div>
+    </section>
+
+    <section id="semantics">
+        <div class="mark">Semantics<span>&sect;03.6</span></div>
+        <div>
+            <h2>What a widget says about itself</h2>
+            <p>
+                A node&rsquo;s props are already a generic bag the client reads by name.
+                So a widget can declare what it is at no cost on the wire, and a client
+                that does not know a prop ignores it. Every migrated builder emits these
+                now.
+            </p>
+
+            <div class="roles">
+                <div><b>role</b><span>check_box, switch, tab, tab_list, button, option&hellip;</span></div>
+                <div><b>label</b><span>the name, when the visible text is not it</span></div>
+                <div><b>checked</b><span>true, false, or <code>"mixed"</code></span></div>
+                <div><b>selected</b><span>for a tab, an option, a row</span></div>
+                <div><b>expanded</b><span>for a disclosure or a dropdown&rsquo;s anchor</span></div>
+                <div><b>disabled</b><span>said, rather than merely done</span></div>
+                <div><b>busy</b><span>set by <code>loading</code></span></div>
+                <div><b>read_only</b><span>editable in principle, not now</span></div>
+                <div><b>pos_in_set / set_size</b><span>place in a set, for a virtualised one especially</span></div>
+                <div><b>orientation</b><span>horizontal or vertical, for a set</span></div>
+            </div>
+
+            <p class="note">
+                <strong>Half-built, and worth saying so.</strong> The builders emit these
+                today; the client does not read them yet. Its mapping is still kind-based
+                &mdash; anything with a click handler is a button named by the text inside
+                it &mdash; so a checkbox, a switch, a tab and a menu item all still reach
+                AT-SPI, UIA and AX as &ldquo;Button&rdquo;. Teaching the client to prefer
+                a declared role over an inferred one is the other half, and it is a change
+                to one file and one paragraph of the specification, not to the protocol.
+            </p>
+        </div>
+    </section>
+
+    <section id="status">
+        <div class="mark">Status<span>today</span></div>
+        <div>
+            <h2>Four of twenty-four</h2>
+            <p>
+                <code>checkbox</code>, <code>switch</code>, <code>tabs</code> and
+                <code>icon_button</code> are migrated. Each kept its positional arguments,
+                so nothing that called them changed; each gained hover, press, disabled, a
+                size and its semantics. The gallery renders to the same 762 quads over 902
+                nodes it did before, in light and in dark &mdash; the point was to add
+                states, not to restyle anything.
+            </p>
+            <p>
+                Twenty builders still answer the pointer with a cursor and nothing else:
+                <code>menu</code>, <code>select_option</code>, <code>navbar</code>,
+                <code>sidebar</code>, <code>breadcrumb</code>, <code>segmented</code>,
+                <code>accordion</code>, <code>tree_view</code>, <code>day_cell</code>,
+                <code>pagination</code> and the rest. They are the next pass, and the
+                base they are moving onto is the one above.
+            </p>
+        </div>
+    </section>
+</main>

@@ -521,7 +521,14 @@ impl Layout {
                 }
                 (size, Some(tm.baseline))
             }
-            NodeKind::Image | NodeKind::Icon | NodeKind::Video => {
+            // An icon with no size of its own takes one from the text beside
+            // it, so `icon("check")` in a row of labels needs no measurement
+            // from the server and follows the viewer's font scale.
+            NodeKind::Icon => {
+                let side = (st.font.size * 1.25).max(1.0);
+                (Size::new(side, side), None)
+            }
+            NodeKind::Image | NodeKind::Video => {
                 let hash = node.props.iter().find_map(|(_, v)| match v {
                     Value::Asset(h) => Some(*h),
                     _ => None,

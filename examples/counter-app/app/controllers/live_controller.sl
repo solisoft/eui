@@ -197,8 +197,13 @@ end
 
 # One todo row: checkbox, then a remove button; both carry the item's id.
 def todo_row(it)
-  remove = ghost_button("×", "remove")
-  remove["p"] = {"id": it["id"]}
+  # An icon button is announced by its name, not by the character it draws:
+  # "Remove Write the spec", rather than "×".
+  remove = icon_button("×", "remove", {"id": it["id"]}, {
+    "tone": "ghost",
+    "icon": "close",
+    "name": "Remove " + it["title"]
+  })
   keyed(it["id"], row(
     {
       "gap": 3,
@@ -589,6 +594,10 @@ def gallery_defaults(state)
     "select_value": "Medium",
     "slider": 40,
     "slider_drag": false,
+    "split_x": 380,
+    "split_x_drag": false,
+    "split_y": 500,
+    "split_y_drag": false,
     "media_tab": "Sound",
     "cal_month": "2026-09",
     "cal_date": "",
@@ -702,6 +711,8 @@ def gallery(event_data)
     "select_toggle" => set_key(state, "select_open", !state["select_open"]),
     "select_pick" => set_key(set_key(state, "select_value", props["value"]), "select_open", false),
     "slider" => set_slider(state, params),
+    "split_x" => split_event(state, params, "split_x", "row", gallery_split_extent(state), 160, 200, 6),
+    "split_y" => split_event(state, params, "split_y", "column", 260, 70, 70, 6),
     "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
     "video" => set_key(
       set_key(state, "video", !(state["video"] ?? false)),
@@ -1044,6 +1055,94 @@ def gallery_calendar(state)
   )
 end
 
+# A split whose panels answer their own width, not the window's. The outer
+# divider is vertical; the left panel holds a second, horizontal one. Each
+# panel is built by a function of its own extent in pixels, so `bp_min` here
+# reads the panel and not the viewport — which is the whole point of handing
+# the size back to the caller.
+# The container's own width, wanted in two places: the view, which lays the
+# split out, and the handler, which turns a pointer position into a fraction.
+# One function, so a drag can never be measured against a width the view did
+# not use.
+def gallery_split_extent(state)
+  w = state["viewport"]["width"] ?? 1000
+  extent = w > 900 ? 820 : w - 80
+  extent < 320 ? 320 : extent
+end
+
+def gallery_split(state)
+  extent = gallery_split_extent(state)
+
+  column({"gap": 3}, [
+    h2("Split panes"),
+    muted("Drag either divider. Tab to one and use the arrow keys."),
+    split_pane({
+      "key": "gsplit",
+      "dir": "row",
+      "size": extent,
+      "cross": 260,
+      "fraction": state["split_x"],
+      "min_a": 160,
+      "min_b": 200,
+      "on_drag": "split_x",
+      "dragging": state["split_x_drag"],
+      "label": "Resize the sidebar",
+      "a": fn(px) {
+        split_pane({
+          "key": "gsplit_y",
+          "dir": "column",
+          "size": 260,
+          "cross": px,
+          "fraction": state["split_y"],
+          "min_a": 70,
+          "min_b": 70,
+          "on_drag": "split_y",
+          "dragging": state["split_y_drag"],
+          "label": "Resize the filter list",
+          "a": fn(ph) { gallery_split_pane("Filters", px, ph, "info") },
+          "b": fn(ph) { gallery_split_pane("Saved", px, ph, "success") }
+        })
+      },
+      "b": fn(px) { gallery_split_detail(px) }
+    })
+  ])
+end
+
+# The content genuinely changes shape with the panel: below 220 px it drops to
+# a single stacked column and the badge goes away.
+def gallery_split_pane(title, px, ph, tone)
+  roomy = pane_min(px, "md")
+  head = roomy ? row({"gap": 2, "align": "center"}, [
+    text(title, {"weight": "semibold"}),
+    spacer(),
+    badge(pane_bp(px), tone)
+  ]) : text(title, {"weight": "semibold"})
+
+  column({"pad": [2, 3, 2, 3], "gap": 2, "bg": "surface.raised", "height": ph}, [
+    head,
+    muted(px.to_s + " x " + ph.to_s)
+  ])
+end
+
+# The detail pane goes from one column to two as soon as it has the room for
+# them, on its own breakpoint and nobody else's.
+def gallery_split_detail(px)
+  cells = [
+    stat("Rows", "10,024", "invoices"),
+    stat("Open", "312", "unpaid")
+  ]
+  body = pane_min(px, "lg") ? row({"gap": 3}, cells) : column({"gap": 3}, cells)
+  column({"pad": [3, 3, 3, 3], "gap": 3, "bg": "surface.base", "height": 260}, [
+    row({"gap": 2, "align": "center"}, [
+      text("Detail", {"weight": "semibold"}),
+      spacer(),
+      muted(pane_bp(px) + " · " + px.to_s + " px")
+    ]),
+    divider(),
+    body
+  ])
+end
+
 def gallery_charts(state)
   view = state["viewport"] ?? {}
   w = view["width"] ?? 1280
@@ -1292,6 +1391,7 @@ def gallery_view(raw_state)
       gallery_media(state),
       gallery_calendar(state),
       invoices,
+      gallery_split(state),
       gallery_charts(state),
       wide ? row(
         {"gap": 4, "align": "start"},
@@ -1323,7 +1423,10 @@ def gallery_view(raw_state)
   page = scroll({}, [page_content])
   layers = sheet_open ? [
     page,
-    sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")])
+    sheet("right", [h2("A sheet"), text("Slides in over the page.", {"fg": "text.muted"}), button("Close", "sheet")], {
+      "label": "A sheet",
+      "on_close": "sheet"
+    })
   ] : [page]
   # A dialog is the topmost layer: it goes on after the sheet, so opening
   # one over the other still leaves the question on top.

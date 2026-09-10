@@ -264,6 +264,70 @@ fn text_puts_ink_inside_its_rect_and_nowhere_else() {
 }
 
 #[test]
+fn an_icon_puts_ink_in_its_own_colour_inside_its_own_rect() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [4; 4], ..Default::default() };
+    // `fg` on the icon, not inherited, so the test pins the colour it takes.
+    let ic = StyleRecord { width: Dim::Px(40), height: Dim::Px(40), fg: ColorRef::role(Role::DangerBase.id()), ..Default::default() };
+    let mut nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Icon, 2, 2, 0)];
+    nodes[1].props = (0, 1);
+    let mut fx = fixture(vec![col, ic], nodes, vec![(1, Value::Str("close".into()))], &["name"], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    assert!(!list.quads.is_empty(), "the icon drew something");
+    let target = r.offscreen(100, 100);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    let rect = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
+    let (mut inside, mut outside) = (0, 0);
+    for y in 0..100u32 {
+        for x in 0..100u32 {
+            if close(pixel(&px, 100, x, y), surface, 24) {
+                continue;
+            }
+            let in_rect = x as f32 >= rect.x && (x as f32) < rect.x + rect.w && y as f32 >= rect.y && (y as f32) < rect.y + rect.h;
+            if in_rect {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+    }
+    assert!(inside > 60, "a 40 px cross leaves ink: {inside}");
+    assert_eq!(outside, 0, "and none of it outside the icon's rect");
+    // The stroke is the icon's own `fg`, not the text colour it would have
+    // inherited as a glyph.
+    let want = rgba_of(fx.theme.color(Role::DangerBase));
+    let mut best = [0u8; 4];
+    let mut score = u32::MAX;
+    for y in 0..100u32 {
+        for x in 0..100u32 {
+            let p = pixel(&px, 100, x, y);
+            let d = p.iter().zip(want.iter()).map(|(a, b)| u32::from(a.abs_diff(*b))).sum::<u32>();
+            if d < score {
+                score = d;
+                best = p;
+            }
+        }
+    }
+    assert!(close(best, want, 12), "stroke {best:?} vs danger.base {want:?}");
+}
+
+#[test]
+fn an_unknown_icon_name_draws_nothing_and_keeps_its_box() {
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let ic = StyleRecord { width: Dim::Px(40), height: Dim::Px(40), ..Default::default() };
+    let mut nodes = vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Icon, 2, 2, 0)];
+    nodes[1].props = (0, 1);
+    let mut fx = fixture(vec![col, ic], nodes, vec![(1, Value::Str("no_such_icon".into()))], &["name"], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    assert!(list.quads.is_empty(), "nothing is drawn for a name this client does not know");
+    let rect = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
+    assert_eq!((rect.w, rect.h), (40.0, 40.0), "and the space it asked for is still there");
+}
+
+#[test]
 fn scroll_clips_at_the_pixel_level() {
     let Some(mut r) = gpu() else { return };
     let mut st = r.session();

@@ -215,6 +215,42 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 let _ = driver.paint(dw, dh);
             }
         }
+        // SNAPSHOT_KEYS="Tab;Escape" — keys pressed in order before the last
+        // paint, so a focus ring, a trapped Tab or a surface that closes on
+        // Escape can be looked at without a keyboard. Each press waits for
+        // whatever the server sends back, the way a click does.
+        if let Ok(keys) = std::env::var("SNAPSHOT_KEYS") {
+            for key in keys.split(';').map(str::trim).filter(|k| !k.is_empty()) {
+                let _ = driver.paint(dw, dh);
+                for f in driver.input(Input::Key { key: key.to_owned(), modifiers: 0, down: true }) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                for f in driver.input(Input::Key { key: key.to_owned(), modifiers: 0, down: false }) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if Instant::now() > deadline {
+                        break;
+                    }
+                    let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                    let mut answered = false;
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        if let Incoming::Message(b) = msg {
+                            answered = true;
+                            let frame = Frame::decode(&b).expect("frame");
+                            for f in driver.handle_frame(frame) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                    }
+                    let _ = driver.paint(dw, dh);
+                    if answered {
+                        break;
+                    }
+                }
+            }
+        }
         // SNAPSHOT_HOVER="x,y" — logical px, where the pointer is left
         // standing before the last paint, so a state that only exists under
         // it (a chart's band, a button) can be looked at. Hover settles at
@@ -263,6 +299,42 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         if std::env::var_os("SNAPSHOT_DUMP").is_some() {
             if let Some(root) = driver.session().root() {
                 dump(&driver, root, 0);
+            }
+        }
+        // SNAPSHOT_A11Y=1 — the tree a screen reader is handed, as text.
+        // A screen reader is the only honest test of what an application
+        // says about itself; this is the one that can run without one.
+        if std::env::var_os("SNAPSHOT_A11Y").is_some() {
+            for n in &driver.access_snapshot().nodes {
+                let st = &n.state;
+                let mut says: Vec<String> = Vec::new();
+                if let Some(c) = st.checked {
+                    says.push(format!("checked={c:?}"));
+                }
+                if let Some(v) = st.expanded {
+                    says.push(format!("expanded={v}"));
+                }
+                if let Some(v) = st.selected {
+                    says.push(format!("selected={v}"));
+                }
+                for (on, word) in [(st.disabled, "disabled"), (st.read_only, "read_only"), (st.required, "required"), (st.invalid, "invalid"), (st.busy, "busy"), (st.modal, "modal")] {
+                    if on {
+                        says.push((*word).to_owned());
+                    }
+                }
+                if let Some(v) = st.value_now {
+                    says.push(format!("value={v}"));
+                }
+                if st.set_size > 0 {
+                    says.push(format!("{} of {}", st.pos_in_set, st.set_size));
+                }
+                if st.orientation > 0 {
+                    says.push(format!("orientation={}", st.orientation));
+                }
+                if st.live > 0 {
+                    says.push(format!("live={}", st.live));
+                }
+                println!("a11y {:?} {:?} {}", n.role, n.label, says.join(" "));
             }
         }
     }

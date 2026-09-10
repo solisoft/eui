@@ -1,0 +1,540 @@
+<main class="sheet">
+    <%- partial("layouts/top", {"here": "gaps"}) %>
+
+    <section class="hero">
+        <div class="mark">Gaps<span>&sect;04.9</span></div>
+        <div>
+            <h1>What is not there yet.</h1>
+            <p class="lede">
+                Writing a renderer means rewriting what a browser gives away: text
+                shaping, input methods, accessibility, selection. That is the real cost of
+                this project and it is not hidden in a later milestone. This page is the
+                other half of the catalogue &mdash; the things a desktop application
+                expects, each one with where it would be fixed and whether anything is
+                actually blocking it. Five of them are closed now, and the page keeps
+                those rather than deleting them: what a gap cost to shut is the most
+                useful thing it leaves behind.
+            </p>
+
+            <nav class="toc">
+                <a href="#ledger"><b>The ledger</b><span>twenty-two needs, scored</span></a>
+                <a href="#icons"><b>Icons</b><span>the first one closed</span></a>
+                <a href="#events"><b>Six dead events</b><span>on the wire, nowhere else</span></a>
+                <a href="#menus"><b>Context menus</b><span>the event without the anchor</span></a>
+                <a href="#keyboard"><b>Accelerators</b><span>still no global key capture</span></a>
+                <a href="#layout"><b>Layout, stated</b><span>what version 1 leaves out</span></a>
+                <a href="#splits"><b>Split panes</b><span>the second one closed</span></a>
+                <a href="#a11y"><b>Accessibility</b><span>the third one closed</span></a>
+                <a href="#keys"><b>Keyboard</b><span>escape, traps and claims</span></a>
+                <a href="#blocked"><b>Blocked or unwritten</b><span>the distinction that matters</span></a>
+            </nav>
+        </div>
+    </section>
+
+    <section id="ledger">
+        <div class="mark">Ledger<span>today</span></div>
+        <div>
+            <h2>Twenty-two things a desktop application expects</h2>
+            <p>
+                Scored against what the client does now, not against what the catalogue
+                names. A widget that exists but cannot be reached from the keyboard is
+                partial, not present.
+            </p>
+
+            <table class="ledger gaps">
+                <thead>
+                    <tr><th>need</th><th>where it stands</th><th>state</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>icons</td><td>Nineteen icons under twenty-two names, stroked from the client's own table; an unknown name draws nothing and keeps its space</td><td class="yes">built</td></tr>
+                    <tr><td>drag &amp; drop</td><td>Three wire events, none emitted; no OS file drop</td><td class="no">absent</td></tr>
+                    <tr><td>context menu</td><td>The event fires on right-click; no widget, and no way to anchor at the pointer</td><td class="part">partial</td></tr>
+                    <tr><td>command palette</td><td>Needs an accelerator to open it, and there is no global key capture</td><td class="no">absent</td></tr>
+                    <tr><td>focus trap</td><td>A <code>modal</code> prop makes its subtree the whole Tab order, and nests</td><td class="yes">built</td></tr>
+                    <tr><td>escape to close</td><td>Reaches a handler on the path that asked for it; blurs only when none did</td><td class="yes">built</td></tr>
+                    <tr><td>accelerators</td><td>Keys reach only a focused node holding <code>key_down</code></td><td class="no">absent</td></tr>
+                    <tr><td>arrow navigation</td><td>A widget can now take the arrows and keep Enter, but there is still no roving focus and no type-ahead</td><td class="part">partial</td></tr>
+                    <tr><td>a11y roles</td><td>Declared in props and preferred over the kind; 35 role names, states, values and set positions</td><td class="yes">built</td></tr>
+                    <tr><td>overlay dismissal</td><td>No light-dismiss, no close on scroll or focus-out</td><td class="no">absent</td></tr>
+                    <tr><td>overlay placement</td><td>One shape: below, left-aligned, flipped up, clamped</td><td class="part">partial</td></tr>
+                    <tr><td>sticky headers</td><td>Sticky positioning is out of layout version 1</td><td class="no">absent</td></tr>
+                    <tr><td>grid tracks</td><td><code>N</code> equal columns only; no spanning, no named areas</td><td class="part">partial</td></tr>
+                    <tr><td>text selection</td><td>Inside an editable node only &mdash; a label cannot be selected</td><td class="part">partial</td></tr>
+                    <tr><td>horizontal scrollbar</td><td>The thumb is computed for the vertical axis alone</td><td class="no">absent</td></tr>
+                    <tr><td>exit animation</td><td>The accelerate curve is defined and used by nothing</td><td class="no">absent</td></tr>
+                    <tr><td>density / font scale</td><td>Plumbed through theme resolution and never set</td><td class="no">inert</td></tr>
+                    <tr><td>RTL mirroring</td><td>Shaping is bidirectional; layout mirroring is out of version 1</td><td class="no">absent</td></tr>
+                    <tr><td>split panes</td><td>Draggable dividers on both axes, keyboard-movable, panels sized in px</td><td class="yes">built</td></tr>
+                    <tr><td>virtualised lists</td><td>Windowed, with heights the tree does not hold</td><td class="yes">built</td></tr>
+                    <tr><td>light / dark / palette</td><td>Resolved from roles, contrast by construction, follows the desktop</td><td class="yes">built</td></tr>
+                    <tr><td>input methods</td><td>Preedit anchored to the field, commit as one <code>text_input</code></td><td class="yes">built</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="icons">
+        <div class="mark">Icons<span>built</span></div>
+        <div>
+            <h2>The kind that used to paint nothing</h2>
+            <p>
+                <code>icon</code> had been one of the sixteen primitives since the first
+                protocol version, sized by layout like a picture and painted by nothing:
+                the painter&rsquo;s match on node kind had no arm for it, so it fell
+                through and left a hole of the right size. The catalogue worked around it
+                with characters &mdash; a chevron was <code>&#9662;</code>, a tick was
+                <code>&#10003;</code> &mdash; which land on a 227&nbsp;KB fallback symbols
+                face and are a poor icon three ways over: they cannot be sized against the
+                control they sit in, cannot take a colour apart from their label, and
+                reach a screen reader as themselves.
+            </p>
+            <p>
+                There is an arm now, and a table of nineteen icons behind it, under
+                twenty-two names &mdash; <code>dash</code>, <code>sort_asc</code> and
+                <code>sort_desc</code> reach for a shape another name already draws.
+                Every icon is
+                polylines on a 24-unit grid with a 2-unit stroke, and every segment is the
+                <strong>same rounded capsule a chart&rsquo;s line is made of</strong> — so
+                it cost no new pipeline, no font, no asset fetch and no protocol version. A
+                run of one point is a dot, because a capsule of no length is a circle of
+                the stroke&rsquo;s own radius.
+            </p>
+
+            <div class="wire live">
+                <div><b>chevron_down</b></div>
+                <div><b>chevron_up</b></div>
+                <div><b>chevron_left</b></div>
+                <div><b>chevron_right</b></div>
+                <div><b>check</b></div>
+                <div><b>minus</b></div>
+                <div><b>plus</b></div>
+                <div><b>close</b></div>
+                <div><b>menu</b></div>
+                <div><b>arrow_up</b><i>sort_asc</i></div>
+                <div><b>arrow_down</b><i>sort_desc</i></div>
+                <div><b>arrow_left</b></div>
+                <div><b>arrow_right</b></div>
+                <div><b>more_h</b></div>
+                <div><b>more_v</b></div>
+                <div><b>dot</b></div>
+                <div><b>search</b></div>
+                <div><b>circle</b></div>
+                <div><b>warning</b></div>
+            </div>
+
+            <p>
+                An icon with no size of its own takes a square from the font size in
+                force, so one beside a label needs no measurement from the server. An
+                unknown name draws nothing and keeps its space &mdash; which is the rule
+                that lets the set grow without a client release, and is a MUST in
+                <a href="https://github.com/solisoft/eui/blob/main/spec/03-widgets.md">03 &sect;2</a>
+                now rather than an accident of the implementation.
+            </p>
+            <p class="note">
+                Nothing in the catalogue draws an icon as a character any more. The
+                select&rsquo;s chevron, the accordion&rsquo;s and the tree&rsquo;s
+                disclosures, the calendar&rsquo;s month arrows, the chip&rsquo;s remove
+                and the checkbox&rsquo;s tick and dash are icons. A few call sites still
+                <em>pass</em> a character &mdash; <code>icon_button</code> keeps taking
+                one, so an application that has not moved yet still works &mdash; but
+                where an <code>icon</code> is given beside it, the character is never
+                drawn. Pagination gained something else on the way: its ends are disabled
+                now, so the page cannot be walked past either end, which the character
+                version had never stopped.
+            </p>
+        </div>
+    </section>
+
+    <section id="events">
+        <div class="mark">Events<span>&sect;06.1</span></div>
+        <div>
+            <h2>Six of the twenty-five are on the wire and nowhere else</h2>
+            <p>
+                The protocol names twenty-five event kinds. Nineteen are emitted by the
+                client. The other six are decodable, documented, and never sent &mdash;
+                a server may subscribe to them and will wait forever.
+            </p>
+
+            <div class="wire dead">
+                <div><b>double_click</b><i>0x02</i></div>
+                <div><b>resize</b><i>0x10</i></div>
+                <div><b>drag_start</b><i>0x12</i></div>
+                <div><b>drag_over</b><i>0x13</i></div>
+                <div><b>drop</b><i>0x14</i></div>
+                <div><b>long_press</b><i>0x15</i></div>
+            </div>
+
+            <p>
+                Three of them are drag and drop, which is therefore absent end to end:
+                no drag threshold, no payload, no drop-target highlighting, and no OS
+                file drop into the window. The only real drags in the client today are
+                its own and are never reported &mdash; the scrollbar thumb, and extending
+                a selection inside a field.
+            </p>
+            <p class="note">
+                It is worth being exact about which of these is a hole and which is a
+                decision. <code>double_click</code> and <code>long_press</code> are
+                conveniences a server can approximate from what it does receive.
+                <code>drop</code> cannot be approximated by anything.
+            </p>
+        </div>
+    </section>
+
+    <section id="menus">
+        <div class="mark">Menus<span>&sect;04.5</span></div>
+        <div>
+            <h2>The event arrives; the anchor does not</h2>
+            <p>
+                Right-click <em>is</em> reported: a release of button&nbsp;1 becomes
+                <code>context_menu</code> rather than <code>click</code>. What is missing
+                is everywhere it would have to go.
+            </p>
+
+            <div class="split">
+                <div>
+                    <b>what anchoring can say</b>
+                    <ul>
+                        <li>An <code>overlay</code> inside a <code>stack</code> hangs off that stack&rsquo;s first in-flow child</li>
+                        <li>Its left edge starts on the anchor&rsquo;s left edge</li>
+                        <li>Its top is the anchor&rsquo;s bottom, plus its own top margin</li>
+                        <li>It flips above when it would fall out of the viewport and there is more room up there</li>
+                        <li>Then it is clamped into the viewport on both axes</li>
+                    </ul>
+                </div>
+                <div>
+                    <b>what it cannot say</b>
+                    <ul>
+                        <li>Any other placement &mdash; no start, end, left, right, or centred</li>
+                        <li>An offset, or an arrow that points back at the anchor</li>
+                        <li>A different anchor: it is always the first in-flow sibling</li>
+                        <li><strong>A position at the pointer</strong>, which is the one a context menu needs</li>
+                        <li>Close on an outside click, on a scroll, or on focus leaving</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">
+                And there is no <code>top</code>, <code>left</code>, <code>right</code> or
+                <code>bottom</code> in the style record at all: absolute position is
+                alignment plus margins. So a menu at the cursor cannot be expressed by
+                going around the anchoring rule either.
+            </p>
+        </div>
+    </section>
+
+    <section id="keyboard">
+        <div class="mark">Keyboard<span>&sect;06.3</span></div>
+        <div>
+            <h2>There is no global key capture</h2>
+            <p>
+                That is the specification&rsquo;s own sentence, under the heading
+                <em>What the client will not report</em>. Keystrokes reach a focused
+                editable node, or a focused node that explicitly holds a
+                <code>key_down</code> handler. Nothing else.
+            </p>
+            <p>
+                Read it together with the driver and the consequence is sharp: if nothing
+                has focus, no key is reported at all. <code>Ctrl+K</code>,
+                <code>Ctrl+S</code>, <code>/</code> and <code>?</code> &mdash; the whole
+                accelerator vocabulary of a desktop application &mdash; are unreachable,
+                and a command palette cannot be opened by the gesture that opens command
+                palettes.
+            </p>
+            <p>
+                Escape has the matching problem from the other side. The client handles it
+                before anything else and returns immediately: it drops focus, and the
+                server never learns the key was pressed. So no dialog, sheet, drawer,
+                popover or menu in the catalogue can close the way every one of them
+                should.
+            </p>
+            <p class="note">
+                Neither of these needs a protocol change. Escape reaching a
+                <code>key_down</code> handler on the path, a <code>modal</code> prop that
+                narrows the focus order to one subtree, and an <code>autofocus</code> prop
+                to put focus inside it when it opens &mdash; three small changes in the
+                client, and every overlay in the catalogue becomes usable from the
+                keyboard.
+            </p>
+        </div>
+    </section>
+
+    <section id="layout">
+        <div class="mark">Layout<span>&sect;04.9</span></div>
+        <div>
+            <h2>Stated so no one goes looking</h2>
+            <p>
+                The layout specification has a section listing what it deliberately does
+                not do in version 1. It is short, and every line of it is felt by some
+                desktop pattern.
+            </p>
+
+            <div class="units">
+                <div>
+                    <b>no sticky positioning</b>
+                    <p>
+                        No sticky table header, no sticky section header in a list, no
+                        toolbar pinned inside a scroller. The data grid keeps its header
+                        <em>outside</em> the virtualised list instead, which works and is
+                        the pattern to copy.
+                    </p>
+                </div>
+                <div>
+                    <b>grid: N equal columns</b>
+                    <p>
+                        No track sizing, no spanning, no named areas. A table with a
+                        32&nbsp;px checkbox column, a flexible name and a 120&nbsp;px date
+                        is built from rows with per-cell widths &mdash; which is why
+                        resizing a column means re-emitting every row.
+                    </p>
+                </div>
+                <div>
+                    <b>no aspect-ratio</b>
+                    <p>
+                        Thumbnails, media placeholders and avatars in a responsive grid
+                        need a height the server has worked out for them.
+                    </p>
+                </div>
+                <div>
+                    <b>no RTL mirroring</b>
+                    <p>
+                        Text shaping is bidirectional; layout is not. A leading edge is
+                        always the left one.
+                    </p>
+                </div>
+                <div>
+                    <b>no cross-container stacking</b>
+                    <p>
+                        <code>z</code> orders siblings within one <code>stack</code>.
+                        Between two overlays, order in the tree is the order on screen.
+                    </p>
+                </div>
+                <div>
+                    <b>no auto margins, no order</b>
+                    <p>
+                        Pushing one button to the right of a toolbar is a
+                        <code>spacer</code> with grow, which the catalogue does
+                        throughout.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="splits">
+        <div class="mark">Splits<span>built</span></div>
+        <div>
+            <h2>Draggable dividers, on both axes</h2>
+            <p>
+                This page listed split panes as unwritten rather than blocked, and the
+                distinction was worth something: they are written now, and nothing in the
+                client changed to allow it.
+            </p>
+            <p>
+                A press on the divider captures the pointer, so a drag that runs off it
+                still arrives. The move and release handlers sit on the <em>container</em>
+                rather than the divider, and the payload of a pointer event is measured
+                against the node whose handler catches it &mdash; so the number reaching
+                the server is already the divider&rsquo;s position inside its container,
+                needing no arithmetic and no memory of where the drag began. Moves are
+                coalesced to one per frame, not one per sample the mouse sends.
+            </p>
+            <p>
+                The divider also holds <code>key_down</code>, which is what puts it in the
+                Tab order: a split can be moved with the arrow keys, and recentred with
+                Home, by someone who never touches a pointer.
+            </p>
+
+            <div class="split">
+                <div>
+                    <b>what it does</b>
+                    <ul>
+                        <li>Vertical and horizontal dividers, and they nest</li>
+                        <li>A minimum size for each panel, clamped in one place</li>
+                        <li>The fraction is per mille, so it survives state as an integer</li>
+                        <li>Both conversions round, so a divider dropped on a pixel rebuilds on that pixel &mdash; checked across every pixel of travel</li>
+                        <li>A separator role, an orientation, and the position as a value</li>
+                    </ul>
+                </div>
+                <div>
+                    <b>content that answers its panel</b>
+                    <ul>
+                        <li>Each panel is built by a function of its own width in pixels</li>
+                        <li>So a view can branch on the panel instead of the window</li>
+                        <li><code>bp()</code> is no use here: its rungs are Tailwind&rsquo;s and a 309&nbsp;px panel and a 505&nbsp;px one are both <code>xs</code></li>
+                        <li><code>pane_bp(px)</code> is the same idea at the scale a panel lives at &mdash; 200, 320, 480, 720</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">
+                What is still missing is the latency: every frame of a drag is a round
+                trip, because a local chunk cannot read the event that triggered it. On a
+                loopback or a LAN that is invisible; over a long link it would not be.
+                That is the chunk-payload gap below, and it is the one thing here that a
+                protocol change would fix.
+            </p>
+        </div>
+    </section>
+
+    <section id="a11y">
+        <div class="mark">A11y<span>&sect;03.6</span></div>
+        <div>
+            <h2>A widget says what it is, instead of being guessed at</h2>
+            <p>
+                The mapping used to be kind and handler alone: anything with a
+                <code>click</code> handler was a button named by the text inside it. So a
+                checkbox, a switch, a tab, a menu item and a slider all reached AT-SPI,
+                UIA and AX as &ldquo;Button&rdquo;, and none of them carried a state. A
+                screen reader user could not tell a switch from a link.
+            </p>
+            <p>
+                A node may now <strong>declare</strong> itself, in props the client reads:
+                a role from thirty-five names, a label that overrides the text inside, and
+                the states &mdash; checked (with its third value), expanded, selected,
+                disabled, read-only, required, invalid, busy, modal &mdash; plus a value
+                with its range, a place in a set, a level, an orientation and a live
+                urgency. Props already travel, so this cost <strong>nothing on the
+                wire</strong>: it is a change to one file in the client and a section of
+                the specification.
+            </p>
+
+            <div class="split">
+                <div>
+                    <b>three rules, now normative</b>
+                    <ul>
+                        <li><strong>Leafness follows the role, not the handler.</strong> A button or a tab is named by its text and exposed without children; a <code>tab_list</code>, a <code>menu</code> or a <code>grid</code> keeps what it holds — which the old rule swallowed</li>
+                        <li><strong>A disabled node keeps its role.</strong> Disabling drops the handlers, so without a declaration there is no button left to infer and the control decays into an unnamed group</li>
+                        <li><strong>A present zero is not an absence.</strong> <code>value_now: 0</code> is a slider at the bottom of its range</li>
+                    </ul>
+                </div>
+                <div>
+                    <b>what the todo now says</b>
+                    <ul>
+                        <li><code>CheckBox "Write the spec" checked=Yes</code></li>
+                        <li><code>Button "Remove Write the spec"</code> — where it used to say <code>Button "×"</code></li>
+                        <li><code>Tab "Overview" selected=true 1 of 3</code></li>
+                        <li><code>Slider "Value" value=40</code></li>
+                        <li><code>Button "Previous page" disabled</code></li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">
+                An unknown role name falls back to the kind rather than failing, which is
+                what lets the vocabulary grow without a client release. Thirteen vectors
+                hold the rules, including every role discriminant surviving the
+                <code>to_u8</code>/<code>from_u8</code> round trip its journey across the
+                worker&rsquo;s process boundary makes of it. The kind-mapping default is
+                pinned by a separate test, so a tree that declares nothing is provably
+                exposed exactly as it was before any of this existed.
+            </p>
+            <p class="note">
+                <strong>Half-done, and worth saying so.</strong> The client reads all of
+                it; the catalogue is still declaring its way through. Checkbox, switch,
+                tabs, segmented, icon buttons, pagination, the calendar arrows, the
+                chip&rsquo;s remove, slider, progress, toast and the split divider say
+                what they are &mdash; a run of the gallery answers with six
+                <code>TabList</code>s, sixteen <code>Tab</code>s, four
+                <code>Separator</code>s, two <code>Slider</code>s and two
+                <code>Progress</code>es where every one of those used to be a button or a
+                group. Against that, three hundred and thirty-eight nodes are still plain
+                buttons: menus, the select, the tree, the data grid, dialogs and the day
+                cells have not been declared yet.
+                And a real screen reader remains the only honest test &mdash;
+                <code>SNAPSHOT_A11Y=1</code> on the off-screen renderer is the one that
+                can run without one.
+            </p>
+        </div>
+    </section>
+
+    <section id="keys">
+        <div class="mark">Keyboard<span>&sect;03.1</span></div>
+        <div>
+            <h2>Four things a server cannot do for itself</h2>
+            <p>
+                It does not own <code>Tab</code>. It was never told about
+                <code>Escape</code>. And it cannot know which node the client will treat
+                as pressed. So a dialog could not trap focus, could not open with focus
+                inside it, and could not close on the key every dialog closes on. Three
+                props and one changed rule fix all four.
+            </p>
+
+            <div class="split">
+                <div>
+                    <b>what the client now reads</b>
+                    <ul>
+                        <li><code>modal</code> &mdash; while it is laid out, the Tab order is <strong>its subtree alone</strong>. Innermost wins, so a dialog over a dialog traps in the second</li>
+                        <li><code>autofocus</code> &mdash; focus starts here when the surface arrives, and is <em>not</em> reclaimed by a later batch: someone tabbing through an open dialog is not pulled back to its first field</li>
+                        <li><code>keys</code> &mdash; the keys this node wants, and it is sent no others</li>
+                    </ul>
+                </div>
+                <div>
+                    <b>and what that buys</b>
+                    <ul>
+                        <li>A tab can take <code>ArrowLeft</code> and <code>ArrowRight</code> and still be activated by <code>Enter</code> &mdash; which a <code>key_down</code> handler used to make impossible, because it claimed every key</li>
+                        <li>A dialog can listen for <code>Escape</code> <strong>without hearing every letter typed into the field inside it</strong></li>
+                        <li>Fewer round trips: a key a node did not ask for is not sent at all</li>
+                        <li>A node with a handler and no <code>keys</code> prop still hears everything, so nothing that worked stops</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">
+                <code>Escape</code> follows from the third. It reaches a handler on the
+                path that asked for it, and focus is left where it was so the surface can
+                put it back; with nothing listening it drops focus, which is what it has
+                always done. Driven through a real server: the gallery&rsquo;s sheet opens
+                at 940 nodes carrying <code>Dialog "A sheet" modal</code>, and one
+                <code>Escape</code> later it is 934 and the dialog is gone.
+            </p>
+            <p class="note">
+                Ten vectors hold it, and the off-screen renderer grew
+                <code>SNAPSHOT_KEYS</code> so a focus ring, a trapped Tab or a surface
+                that closes on a key can be looked at without a keyboard. What is still
+                missing is above this: roving focus and type-ahead are a widget&rsquo;s
+                to implement over the wire for now, one round trip per arrow, and
+                accelerators need the global capture the specification still refuses.
+            </p>
+        </div>
+    </section>
+
+    <section id="blocked">
+        <div class="mark">Blocked<span>or not</span></div>
+        <div>
+            <h2>The distinction that actually matters</h2>
+            <p>
+                Most of this page is work, not impossibility. It is worth separating the
+                two, because the status page had one of them filed wrong: column resize
+                was recorded as blocked, and it is not.
+            </p>
+
+            <div class="split">
+                <div>
+                    <b>genuinely blocked</b>
+                    <ul>
+                        <li><strong>Sticky headers</strong> &mdash; layout version&nbsp;1 has no sticky, and faking it needs a scroll offset the server does not have</li>
+                        <li><strong>A masked password field</strong> &mdash; nothing in the client hides an <code>input</code>&rsquo;s glyphs</li>
+                        <li><strong>Local keyboard navigation and local drag</strong> &mdash; a bytecode chunk cannot see the event that triggered it, so it never learns which key, or where the pointer is</li>
+                        <li><strong>Control heights that follow density</strong> &mdash; the theme resolves them and no dimension on the wire can reference them</li>
+                    </ul>
+                </div>
+                <div>
+                    <b>merely unwritten</b>
+                    <ul>
+                        <li><strong>Column resize</strong> &mdash; the same server-driven drag <code>split_pane</code> now uses; what is left is re-emitting the row styles a width change touches</li>
+                        <li><strong>A context menu widget</strong>, once anchoring can name a point</li>
+                        <li><strong>textarea</strong> &mdash; the primitive is in the client and no builder wraps it</li>
+                        <li><strong>link, radio_group, combobox, rating, time_picker, list_item, panel</strong> &mdash; ordinary compositions, waiting their turn</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p class="note">
+                The rule the two columns come from: a thing is blocked when expressing it
+                would need a new node kind, a new style key, a new event, or a chunk that
+                can read its own event. Everything else is a function someone has not
+                written yet.
+            </p>
+        </div>
+    </section>
+</main>

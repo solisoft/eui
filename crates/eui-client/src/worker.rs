@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use eui_proto::{Frame, ThemeMode};
 use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller};
 
-use crate::a11y::{AccessNode, AccessRole, AccessSnapshot};
+use crate::a11y::{AccessNode, AccessRole, AccessSnapshot, AccessState, Checked};
 use crate::assets::Hash;
 use crate::driver::{Driver, Input};
 
@@ -751,9 +751,84 @@ fn put_access(w: &mut W, s: &AccessSnapshot) {
         for c in &n.children {
             w.u64(*c);
         }
+        put_state(w, &n.state);
     }
     w.u64(s.focus);
     w.f32(s.scale);
+}
+
+/// The declared state of one node. The booleans and the two tri-states pack
+/// into a bitfield; the numbers follow, each behind its own presence bit,
+/// because `0` is a value a slider may really sit at.
+fn put_state(w: &mut W, st: &AccessState) {
+    let mut flags: u32 = 0;
+    let mut set = |on: bool, bit: u32| {
+        if on {
+            flags |= 1 << bit;
+        }
+    };
+    set(st.disabled, 0);
+    set(st.read_only, 1);
+    set(st.required, 2);
+    set(st.invalid, 3);
+    set(st.busy, 4);
+    set(st.modal, 5);
+    set(st.checked.is_some(), 6);
+    set(matches!(st.checked, Some(Checked::Yes)), 7);
+    set(matches!(st.checked, Some(Checked::Mixed)), 8);
+    set(st.expanded.is_some(), 9);
+    set(st.expanded == Some(true), 10);
+    set(st.selected.is_some(), 11);
+    set(st.selected == Some(true), 12);
+    set(st.value_now.is_some(), 13);
+    set(st.value_min.is_some(), 14);
+    set(st.value_max.is_some(), 15);
+    w.u32(flags);
+    w.str(&st.description);
+    for v in [st.value_now, st.value_min, st.value_max] {
+        w.f32(v.unwrap_or(0.0) as f32);
+    }
+    w.u32(st.pos_in_set);
+    w.u32(st.set_size);
+    w.u32(st.level);
+    w.u8(st.orientation);
+    w.u8(st.live);
+}
+
+fn get_state(r: &mut R<'_>) -> Wire<AccessState> {
+    let flags = r.u32()?;
+    let on = |bit: u32| flags & (1 << bit) != 0;
+    let description = r.str()?;
+    let nums = [r.f32()?, r.f32()?, r.f32()?];
+    let some = |present: bool, v: f32| if present { Some(f64::from(v)) } else { None };
+    Ok(AccessState {
+        description,
+        checked: on(6).then(|| {
+            if on(8) {
+                Checked::Mixed
+            } else if on(7) {
+                Checked::Yes
+            } else {
+                Checked::No
+            }
+        }),
+        expanded: on(9).then(|| on(10)),
+        selected: on(11).then(|| on(12)),
+        disabled: on(0),
+        read_only: on(1),
+        required: on(2),
+        invalid: on(3),
+        busy: on(4),
+        modal: on(5),
+        value_now: some(on(13), nums[0]),
+        value_min: some(on(14), nums[1]),
+        value_max: some(on(15), nums[2]),
+        pos_in_set: r.u32()?,
+        set_size: r.u32()?,
+        level: r.u32()?,
+        orientation: r.u8()?,
+        live: r.u8()?,
+    })
 }
 
 fn get_access(r: &mut R<'_>) -> Wire<AccessSnapshot> {
@@ -771,7 +846,8 @@ fn get_access(r: &mut R<'_>) -> Wire<AccessSnapshot> {
         for _ in 0..k {
             children.push(r.u64()?);
         }
-        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, children });
+        let state = get_state(r)?;
+        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, children, state });
     }
     Ok(AccessSnapshot { nodes, focus: r.u64()?, scale: r.f32()? })
 }
@@ -1759,8 +1835,28 @@ mod tests {
         };
         let snap = AccessSnapshot {
             nodes: vec![
-                AccessNode { id: 1, role: AccessRole::Button, bounds: [1.0, 2.0, 3.0, 4.0], label: "Go".into(), value: String::new(), click: true, focus: true, children: vec![] },
-                AccessNode { id: 0, role: AccessRole::Window, bounds: [0.0; 4], label: "EUI".into(), value: String::new(), click: false, focus: false, children: vec![1] },
+                AccessNode {
+                    id: 1,
+                    role: AccessRole::Button,
+                    bounds: [1.0, 2.0, 3.0, 4.0],
+                    label: "Go".into(),
+                    value: String::new(),
+                    click: true,
+                    focus: true,
+                    children: vec![],
+                    state: AccessState::default(),
+                },
+                AccessNode {
+                    id: 0,
+                    role: AccessRole::Window,
+                    bounds: [0.0; 4],
+                    label: "EUI".into(),
+                    value: String::new(),
+                    click: false,
+                    focus: false,
+                    children: vec![1],
+                    state: AccessState::default(),
+                },
             ],
             focus: 1,
             scale: 2.0,

@@ -815,6 +815,8 @@ pub struct WellKnown {
     pub spans: Option<u32>,
     /// A canvas node's paths.
     pub paths: Option<u32>,
+    /// An icon node's name, per spec 03 §1.
+    pub name: Option<u32>,
     /// A grid's column count.
     pub columns: Option<u32>,
     /// A windowed list child's row.
@@ -844,6 +846,7 @@ impl WellKnown {
         let slot = match value {
             "spans" => &mut self.spans,
             "paths" => &mut self.paths,
+            "name" => &mut self.name,
             "columns" => &mut self.columns,
             "row" => &mut self.row,
             "item_height" => &mut self.item_height,

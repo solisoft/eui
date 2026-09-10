@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Reference<span>&sect;03</span></div>
         <div>
-            <h1>A hundred and seven functions, and the vocabulary they speak.</h1>
+            <h1>A hundred and fifty functions, and the vocabulary they speak.</h1>
             <p class="lede">
                 An EUI component is a Soli function that returns a hash. There is no
                 widget runtime, no component registry and no client release behind any
@@ -16,7 +16,7 @@
                 <a href="#node"><b>The node</b><span>eight keys, sixteen kinds</span></a>
                 <a href="#style"><b>Style</b><span>thirty-seven keys, twenty-eight roles</span></a>
                 <a href="#events"><b>Events</b><span>twenty-four names, two handler forms</span></a>
-                <a href="#catalogue"><b>The catalogue</b><span>all 107, by family</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 150, by family</span></a>
                 <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
             </nav>
         </div>
@@ -242,7 +242,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <section id="catalogue">
         <div class="mark">Catalogue<span>&sect;03</span></div>
         <div>
-            <h2>All 107</h2>
+            <h2>All 150</h2>
             <p>
                 They live in one file &mdash;
                 <code>examples/counter-app/app/controllers/eui_builders.sl</code> &mdash;
@@ -259,7 +259,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </p>
 
             <div class="family">
-                <h3>Primitives and wrappers <span>22</span></h3>
+                <h3>Primitives and wrappers <span>23</span></h3>
                 <p class="soft">The whole vocabulary the protocol can express, plus the helpers every view uses.</p>
                 <dl class="api">
                     <dt><b>node(kind, style, children)</b><i>node("box", {"gap": 2}, [text("Total", {})])</i></dt>
@@ -272,6 +272,8 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">A box whose children are superimposed</span><div class="p"><span class="g-stack"><i></i><i></i></span></div></dd>
                     <dt><b>text(content, style)</b><i>text("Total", {"size": 4, "weight": "semibold"})</i></dt>
                     <dd><span class="d">A run of text</span><div class="p"><span class="g-t">Total</span></div></dd>
+                    <dt><b>icon(name, style)</b><i>icon("chevron_down", {"width": 14, "height": 14, "fg": "text.muted"})</i></dt>
+                    <dd><span class="d">A named vector icon, stroked by the client in <code>fg</code>. The name is a prop, not text &mdash; never shaped, never a fallback face, never announced as the character it resembles</span><div class="p"><span class="g-r"><i class="g-l w1"></i><span class="g-m">&#9662;</span></span></div></dd>
                     <dt><b>spacer()</b><i>row({}, [label, spacer(), button("Save", "save")])</i></dt>
                     <dd><span class="d">Empty space with grow: 1</span><div class="p"><span class="g-between"><i class="g-l w2"></i><span class="w-btn primary">Save</span></span></div></dd>
                     <dt><b>divider()</b><i>column({"gap": 3}, [header, divider(), body])</i></dt>
@@ -321,6 +323,31 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">Size 1, text.muted</span><div class="p"><span class="g-m">3 left</span></div></dd>
                     <dt><b>text_interned(content, style)</b><i>text_interned(post["handle"], {"fg": "text.muted", "size": 1})</i></dt>
                     <dd><span class="d">Text put in the session's atom table — for short strings that repeat</span><div class="p"><span class="g-r"><span class="g-t">@ada</span><span class="g-m">one atom, sent once</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Controls and states <span>9</span></h3>
+                <p class="soft">The base every interactive widget is built on. Its story is on <a href="/controls">Controls</a>.</p>
+                <dl class="api">
+                    <dt><b>control(o)</b><i>control({"key": "cb:1", "tone": "accent", "size": "md", "on": {"click": "save"}, "a11y": {"role": "button"}, "c": [text("Save", {})]})</i></dt>
+                    <dd><span class="d">A keyed node with the four pointer handlers wired to declared styles &mdash; and, when disabled, no handler map at all</span><div class="p"><span class="w-btn primary">Save</span></div></dd>
+                    <dt><b>stateful(base, tone, on)</b><i>stateful(base, TONES["ghost"], {"click": "go"})</i></dt>
+                    <dd><span class="d">The four handlers alone, merged onto an existing map</span></dd>
+                    <dt><b>tone_resting(tone, lit)</b><i>tone_resting(TONES["quiet"], selected)</i></dt>
+                    <dd><span class="d">A tone&rsquo;s resting colours, with its selected patch folded in</span></dd>
+                    <dt><b>a11y_props(o)</b><i>a11y_props({"props": {"id": 4}, "a11y": {"role": "tab", "selected": true}})</i></dt>
+                    <dd><span class="d">What a widget declares about itself, beside the props its handler reads back</span></dd>
+                    <dt><b>control_metrics(size)</b><i>control_metrics("sm")</i></dt>
+                    <dd><span class="d">pad, gap and min_width for sm, md or lg</span><div class="p val">&rarr; <em>{"pad": [1, 3, 1, 3], "gap": 2, "min_width": 32}</em></div></dd>
+                    <dt><b>control_text_size(size)</b><i>control_text_size("lg")</i></dt>
+                    <dd><span class="d">The text-scale index a label takes at that size &mdash; only <code>fg</code> inherits, so a label is sized on its own</span></dd>
+                    <dt><b>control_px(size, density)</b><i>control_px("md", "compact")</i></dt>
+                    <dd><span class="d">A control height in px, for the places a fixed box is the point</span><div class="p val">&rarr; <em>29</em></div></dd>
+                    <dt><b>icon_box_px(size)</b><i>icon_box_px("md")</i></dt>
+                    <dd><span class="d">The square an icon button occupies</span></dd>
+                    <dt><b>checkbox_box_px(size)</b><i>checkbox_box_px("md")</i></dt>
+                    <dd><span class="d">The mark of a checkbox, and the knob of a switch derived from it</span></dd>
                 </dl>
             </div>
 
@@ -430,6 +457,27 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">Inverted text on the default ink</span><div class="p"><span class="g-tip">Ctrl+K</span></div></dd>
                     <dt><b>segmented(options, selected, on_select)</b><i>segmented(["Day", "Week", "Month"], seg, "seg")</i></dt>
                     <dd><span class="d">One sunken row, the selected option raised</span><div class="p"><span class="g-seg"><span class="on">Day</span><span>Week</span><span>Month</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Split panes <span>7</span></h3>
+                <p class="soft">Draggable dividers on both axes, and panels whose content answers the panel rather than the window.</p>
+                <dl class="api">
+                    <dt><b>split_pane(o)</b><i>split_pane({"key": "ws", "dir": "row", "size": w, "fraction": state["split"], "on_drag": "split", "a": fn(px) { left(px) }, "b": fn(px) { right(px) }})</i></dt>
+                    <dd><span class="d">Two panels and a divider. <code>pointer_down</code> is on the divider so a drag starts only there; the move and release are on the container, which is what makes the payload the divider&rsquo;s own position</span><div class="p"><span class="g-r"><i class="g-l w2 tall"></i><i class="g-rule vert"></i><i class="g-l w4 tall"></i></span></div></dd>
+                    <dt><b>split_sizes(extent, fraction, min_a, min_b, bar)</b><i>split_sizes(806, 500, 80, 80, 6)</i></dt>
+                    <dd><span class="d">The two panel extents in px, clamped to both minimums</span><div class="p val">&rarr; <em>[400, 400]</em></div></dd>
+                    <dt><b>split_at(extent, at, min_a, min_b, bar)</b><i>split_at(806, 603, 80, 80, 6)</i></dt>
+                    <dd><span class="d">A pointer position along the axis, as a fraction per mille. Rounds, so the trip back is exact</span><div class="p val">&rarr; <em>750</em></div></dd>
+                    <dt><b>split_span(extent, bar)</b><i>split_span(806, 6)</i></dt>
+                    <dd><span class="d">The room the panels share, once the divider has taken its own</span><div class="p val">&rarr; <em>800</em></div></dd>
+                    <dt><b>split_event(state, params, name, dir, extent, min_a, min_b, bar)</b><i>"split" =&gt; split_event(state, params, "split", "row", w, 160, 240, 6)</i></dt>
+                    <dd><span class="d">The four events folded into state. A move with no press is ignored, so selecting text in a panel cannot move the divider</span></dd>
+                    <dt><b>pane_bp(px)</b><i>pane_bp(505)</i></dt>
+                    <dd><span class="d">Breakpoints at the scale a <em>panel</em> lives at &mdash; 200, 320, 480, 720. <code>bp</code> is a window&rsquo;s, and calls both a 309 px and a 505 px panel <code>xs</code></span><div class="p val">&rarr; <em>"lg"</em></div></dd>
+                    <dt><b>pane_min(px, name)</b><i>pane_min(px, "lg") ? row({}, cells) : column({}, cells)</i></dt>
+                    <dd><span class="d">The branch a panel makes on its own width</span></dd>
                 </dl>
             </div>
 

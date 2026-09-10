@@ -414,9 +414,15 @@ selects a cell, a second click on an editable one puts an `input` in it, a
 header click sorts by `MoveChild`. The gallery shows eight invoices; its
 end-to-end test sorts by amount and edits a client. A list that fits its
 rows no longer swallows the page's wheel — the scroller under the pointer
-is the one that can still move in that direction (03 §3). Column resize and a
-sticky header inside the scroll are still out — layout §9 has no sticky,
-and a local handler cannot yet set a width from `pointer_move`.
+is the one that can still move in that direction (03 §3). A sticky header
+inside the scroll is still out — layout §9 has no sticky. Column resize was
+recorded here as out for the same reason, and that was wrong: what a local
+handler cannot do is set a width from `pointer_move`, which is a limit on
+*latency*, not on capability. A server-driven drag has always been available —
+the slider has used one from the start — and `split_pane` now does the same.
+What column resize still needs is the re-emitting of every row's styles that a
+width change touches, since a table is rows with per-cell widths rather than a
+grid with tracks.
 
 **Needle, a player that is nobody's copy.** `examples/counter-app`'s
 `music` component searches a catalogue, opens an artist or a record and
@@ -576,6 +582,182 @@ tops across the frame. A scroll step went from 1.75 ms to about 180 µs in
 this process, and from 2.03 ms — over budget — to under 500 µs through
 the worker; the first paint of the table, which used to add the same
 heights up twice, from 9.98 ms to 5.9 ms.
+
+**A base under the catalogue, and what the count of it was.** The catalogue
+was audited rather than remembered, and it did not come out well: of a hundred
+and thirty functions, six answered `pointer_enter`, two answered `key_down`,
+`focus.ring` was used once, and the word `disabled` did not appear at all.
+Twenty-four widgets set `cursor: pointer` and gave no other feedback. What was
+good was the theming — two hardcoded colours in 2 617 lines, both deliberate
+scrims, everything else a role.
+
+`control` is the base every interactive widget is built on now: one options hash
+carrying a tone, a size, the caller's own shape, the handler map, the props, and
+the semantics. Five tones, each a resting colour set plus a hover and a press
+**delta** — deltas, so whatever geometry the caller ended up with survives into
+all three states, which is the invariant `restyle` used to repair afterwards.
+Disabling deletes the handler map, and that one act is right three times over —
+no click reaches the server, the node leaves the Tab order for free, and the
+cursor and colours come from one patch — and wrong a fourth time, because with
+no click handler the accessibility mapping has no button to infer and the
+control decays into an unnamed group. So `disabled` is a prop as well: it has to
+be something a widget says, not something it stops doing.
+
+Four are moved onto it — `checkbox`, `switch`, `tabs`, `icon_button` — each
+keeping its positional arguments behind a trailing `o = {}`, so nothing that
+called them changed, and the gallery renders to the same 762 quads over 902
+nodes it did before. Twenty are still to move. The widgets emit their
+accessibility props today and the client does not read them yet; teaching it to
+prefer a declared role over an inferred one is a change to `a11y.rs` and one
+paragraph of 03 §6, not to the protocol.
+
+One thing the palette settled rather than the design: only `accent` carries a
+hover and an active offset. The status roles have neither, so there is no
+`danger.active` to reach for, and a pressed danger button goes to a sunken
+surface and keeps its own colour in the label.
+
+**Split panes, and the difference between blocked and unwritten.** Draggable
+dividers on both axes, nested, with a minimum for each panel. A press on the
+divider captures the pointer; `pointer_move` and `pointer_up` are handled on the
+*container*, and since a pointer payload is measured against the node whose
+handler catches it, the number reaching the server is already the divider's
+position inside its container. The divider holds `key_down`, so it is in the Tab
+order and the arrow keys move it.
+
+The fraction is per mille, and both conversions round rather than truncate —
+which is what makes the round trip exact, checked across every pixel of travel
+rather than at a few samples. Truncating at both ends lost a pixel.
+
+Panels are built by functions of their own width, so content can answer the
+panel rather than the window. `bp` turned out to be useless for that: its rungs
+are Tailwind's and they are a *window's*, so a 309 px panel and a 505 px one are
+both `xs` and a view branching on it never branches. `pane_bp` is the same idea
+at 200, 320, 480, 720.
+
+Twenty-one assertions cover the geometry and the drag, in
+`examples/counter-app/tests/`, run without a client because the functions are
+pure. The one that matters most is that a `pointer_move` with no press does
+nothing — without it, selecting text inside a panel would move the divider.
+What is still missing is the latency: every frame of a drag is a round trip,
+because a chunk cannot read the event that triggered it.
+
+**The icon kind draws.** `icon` had been a defined kind since the first
+version, laid out like a picture and painted by nothing: the painter's match
+on node kind had no arm for it, so it fell through and drew a hole of the
+right size. The catalogue worked around it with characters — a chevron was
+`▾`, a tick was `✓` — which land on the 227 KB fallback symbols face and are
+a poor icon three ways over: they cannot be sized against the control they sit
+in, cannot take a colour apart from their label, and reach a screen reader as
+themselves.
+
+There is an arm now, and a table of nineteen icons behind it, under
+twenty-two names — `dash`, `sort_asc` and `sort_desc` are the three that reach
+for a shape another name already draws. Every icon is
+polylines on a 24-unit grid with a 2-unit stroke, and every segment is the
+same rounded capsule a chart's line is made of — so this cost no new pipeline,
+no font, no asset fetch and no protocol version. A run of one point is a dot,
+since a capsule of no length is a circle of the stroke's own radius. An icon
+with no size takes a square from the font size in force, so one beside a label
+needs no measurement from the server; an unknown name draws nothing and keeps
+its space, which is what lets the set grow without a client release.
+
+`spec/03` §2 says all of that now, including the two MUSTs an unknown name
+carries. Two pixel tests hold it: a 40 px `close` leaves ink inside its rect
+and none outside it, in `danger.base` rather than the text colour it would
+have inherited as a glyph; and an unknown name draws no quads while keeping
+its 40 px box.
+
+Nothing in the catalogue draws an icon as a character any more: the select's
+chevron, the accordion's and the tree's disclosures, the calendar's month
+arrows, the chip's remove and the checkbox's tick and dash are icons.
+`icon_button` still *takes* a character beside its `icon` option, so an
+application that has not moved yet keeps working, and where both are given the
+character is never drawn. Pagination gained something else on the
+way: its ends are `disabled` now, so the page cannot be walked past either
+end, which the character version had never stopped.
+
+**A widget says what it is.** The accessibility mapping was kind and handler
+alone: anything holding a `click` handler was a button named by the text
+inside it. So a checkbox, a switch, a tab, a menu item and a slider all
+reached AT-SPI, UIA and AX as "Button", carrying no state at all — a screen
+reader user could not tell a switch from a link, or a ticked box from an
+unticked one.
+
+A node declares itself now, in props the client reads: a role from
+thirty-five names, a `label` that overrides the text gathered from inside,
+and the states — `checked` with its third value, `expanded`, `selected`,
+`disabled`, `read_only`, `required`, `invalid`, `busy`, `modal` — plus
+`value_now` with its range, `pos_in_set`/`set_size`, `level`, `orientation`
+and `live`. Props already travel, so **this cost nothing on the wire**: it is
+`a11y.rs`, a new `spec/03` §6.1, and the worker's snapshot codec, which grew
+a bitfield and three numbers.
+
+Three rules came out of it and are normative. Leafness follows the *role*,
+not the presence of a handler — a `tab_list`, a `menu` or a `grid` keeps the
+children the old rule swallowed. A disabled node keeps its role, because
+disabling a control means dropping its handlers and there would otherwise be
+no button left to infer. And a present zero is not an absence: `value_now: 0`
+is a slider at the bottom of its range, which is why the numbers travel
+behind presence bits rather than as sentinels.
+
+Thirteen vectors in `crates/eui-client/tests/a11y.rs`, named in `spec/09`
+§7.1, including every role discriminant surviving the `to_u8`/`from_u8` round
+trip that crossing the worker's process boundary makes of it. The
+kind-mapping default is pinned separately in `driver.rs`, so a tree that
+declares nothing is provably exposed as it was before §6.1 existed.
+
+The catalogue is declaring its way through: checkbox, switch, tabs, segmented,
+icon buttons, pagination, the calendar arrows, the chip's remove, slider,
+progress, toast and the split divider say what they are. A run of the gallery
+answers with six `TabList`s, sixteen `Tab`s, four `Separator`s, two `Slider`s
+and two `Progress`es where each of those used to be a button or a group —
+against three hundred and thirty-eight nodes that are still plain buttons:
+menus, the select, the tree, the data grid, dialogs and the day cells. `SNAPSHOT_A11Y=1` on
+the off-screen renderer prints the tree an assistive technology is handed,
+which is the check that can run without a screen reader — the todo's rows
+now read `CheckBox "Write the spec" checked=Yes` and
+`Button "Remove Write the spec"`, where the second used to be `Button "×"`.
+
+**What a server cannot do for itself.** It does not own `Tab`. It was never
+told about `Escape` — the client handled the key and returned before anything
+was reported. And it cannot know which node the client will treat as pressed.
+So no dialog in the catalogue could trap focus, open with focus inside it, or
+close on the key every dialog closes on, and no amount of server-side work
+would have fixed any of the three.
+
+Three props settle it, read by the client and specified in a new `spec/03`
+§3.1. `modal` makes its own subtree the whole of the Tab order while it is
+laid out — innermost first, so a dialog opened over a dialog traps inside the
+second. `autofocus` puts focus inside a surface when it arrives, and
+deliberately does *not* reclaim it on a later batch: a batch landing while
+someone tabs through an open dialog must not pull them back to its first
+field. `keys` names the keys a node wants.
+
+That third one turned out to matter more than it looked. A `key_down` handler
+used to receive **every** key, which is why a dialog could not simply listen
+for `Escape` — it would hear each letter typed into the field inside it, and a
+handler that closes on a key press closes on all of them. A node carrying
+`keys` is now sent only what it named, and only those are withheld from the
+client's own meaning: a tab can take `ArrowLeft` and `ArrowRight` and still be
+activated by `Enter`, which was not expressible before. A node with a handler
+and no `keys` prop hears everything, so nothing that worked stops.
+
+`Escape` follows from it: it reaches a handler on the path that asked for it
+and leaves focus alone, so the surface can put it back; with nothing listening
+it drops focus, as always. `dialog`, `alert`, `confirm`, `sheet` and `drawer`
+declare all of it now, and `spec/06` §3's "no global key capture" gained the
+clause `keys` adds to it.
+
+Ten vectors in `crates/eui-client/tests/keyboard.rs`, named in `spec/09` §7.1.
+And the off-screen renderer grew `SNAPSHOT_KEYS`, so a focus ring, a trapped
+`Tab` or a surface that closes on a key can be looked at without a keyboard:
+driven through a real server, the gallery's sheet opens at 940 nodes carrying
+`Dialog "A sheet" modal`, and one `Escape` later it is 934 nodes with no
+dialog at all.
+
+What this does not reach: roving focus and type-ahead, which a widget must
+still do over the wire at a round trip per arrow, and accelerators, which need
+the global key capture the specification still refuses.
 
 ## What the specification covers
 

@@ -509,8 +509,22 @@ impl Shell {
             chrome: chrome.take(),
         };
 
+        let renderer = &gpu_shared.renderer;
+        let (w, h) = shell.content_size();
+        for l in launches {
+            let tab = Tab::open(l, shell.proxy.clone(), renderer, w, h, scale);
+            shell.tabs.push(tab);
+        }
+        shell.rebuild_chrome();
+
         // The desktop's own colours, before the first frame; and again
         // whenever the desktop changes them.
+        //
+        // After the tabs, not before: `follow_desktop_theme` hands the
+        // palette to the applications that are open, and it remembers what
+        // it last read, so running it against an empty window read the
+        // theme, told nobody, and made every later call a no-op. The
+        // window then came up in the default palette and stayed there.
         if !crate::desktop_theme::disabled() {
             shell.follow_desktop_theme();
             // One wake per burst of changes: a switch touches several files
@@ -523,14 +537,6 @@ impl Shell {
                 }
             });
         }
-
-        let renderer = &gpu_shared.renderer;
-        let (w, h) = shell.content_size();
-        for l in launches {
-            let tab = Tab::open(l, shell.proxy.clone(), renderer, w, h, scale);
-            shell.tabs.push(tab);
-        }
-        shell.rebuild_chrome();
 
         // Everything the first frame needs is in place, and any assistive
         // technology has already registered: it is safe to be seen.
@@ -603,8 +609,10 @@ impl Shell {
             old.close("replaced");
         } else {
             self.tabs.push(tab);
-            self.active = self.tabs.len() - 1;
+            self.active = self.tabs.len().saturating_sub(1);
         }
+        let at = self.active;
+        self.theme_one(at);
         self.rebuild_chrome();
     }
 
@@ -647,6 +655,18 @@ impl Shell {
             A::Open(url) => self.open_url(url, renderer),
         }
         true
+    }
+
+    /// Hand the palette the window is already following to one tab.
+    ///
+    /// [`Self::follow_desktop_theme`] only acts when the desktop *changed*,
+    /// so a tab opened afterwards would never hear the colours at all.
+    fn theme_one(&mut self, at: usize) {
+        let Some(t) = self.desktop_theme.as_ref() else { return };
+        let (mode, colors) = (Some(t.mode), t.colors.clone());
+        let Some(tab) = self.tabs.get_mut(at) else { return };
+        let out = tab.backend.desktop_theme(mode, colors);
+        tab.send(out);
     }
 
     /// Follow the desktop's palette (05 §5): read it, hand it to every tab

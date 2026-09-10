@@ -62,7 +62,31 @@ and server focus only, editing and commit, wheel and scroll offsets, local
 handlers with and without a following server event, resync on a bad batch,
 transitions on a style change.
 
-### 7.1 Manifest — `crates/eui-client/tests/manifest.rs`
+### 7.1 Keyboard — `crates/eui-client/tests/keyboard.rs`
+
+§3.1: `Escape` reaching a handler on the path and leaving focus alone, and
+still only blurring when nothing asked for it; `modal` keeping `Tab` inside a
+subtree, nesting so the innermost wins, and leaving an unmodal page alone;
+`autofocus` placing focus when a surface arrives and *not* reclaiming it on a
+later batch; and `keys` letting a node take the arrows while `Enter` stays the
+press it stands for, sending it no key it did not name, and leaving a node
+without the prop hearing everything.
+
+### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
+
+§6.1's declared half: a `role` prop beating the kind it would have been
+inferred as; `checked` in all three of its states; a `label` overriding the
+text inside; a disabled node keeping its role and accepting neither action;
+a container role keeping the children a leaf role would swallow; `set_size`
+carrying a count virtualisation left out of the tree; a slider's value and
+range, including a present zero; an unknown role name falling back rather
+than failing; a live region's urgency; and every role discriminant surviving
+the `to_u8`/`from_u8` round trip the worker boundary makes of it.
+
+The kind-mapping default of §6 is pinned separately, in `driver.rs`, so that
+a tree declaring nothing is provably exposed as it was before §6.1 existed.
+
+### 7.3 Manifest — `crates/eui-client/tests/manifest.rs`
 
 Signature, protocol range, trust on first use, refusal of a changed key,
 acceptance of a rotation the pinned key signed, and garbage.

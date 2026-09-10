@@ -1491,6 +1491,13 @@ footer a:hover {
     background: var(--rule);
 }
 
+/* A divider standing on its end, for the split-pane sketch. */
+.g-rule.vert {
+    width: 3px;
+    height: 22px;
+    border-radius: 2px;
+}
+
 .g-dgrid {
     display: flex;
     flex-direction: column;
@@ -1919,4 +1926,366 @@ footer a:hover {
 /* A plate's numbers sit closer to it than a section's usually would. */
 .plate + .dims {
     gap: 1.1rem;
+}
+
+/* ------------------------------------------------------- the control base
+   A page about what the pointer does has to answer the pointer itself, so
+   the swatches below are real buttons with real states. Their timing is the
+   theme's own: motion.fast is 100 ms and the standard curve is (0.2,0,0,1),
+   which is what a catalogue widget gets when its style carries
+   `"transition": "fast"`. */
+
+.tally {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 1.75rem 2rem;
+    margin-top: 2rem;
+    max-width: 52rem;
+}
+
+.tally div {
+    border-top: 1px solid var(--rule);
+    padding-top: 0.7rem;
+}
+
+.tally b {
+    display: block;
+    font-family: var(--serif);
+    font-size: 2.4rem;
+    line-height: 1;
+    color: var(--ink);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+}
+
+.tally b.nil {
+    color: var(--rose);
+}
+
+.tally span {
+    display: block;
+    margin-top: 0.4rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+}
+
+.tones {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+    gap: 1.75rem 2rem;
+    margin-top: 2rem;
+    max-width: 56rem;
+}
+
+.tone > b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 500;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.9rem;
+}
+
+.tone dl {
+    margin: 0.9rem 0 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.25rem 0.6rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.5;
+}
+
+.tone dt {
+    color: var(--ink-soft);
+}
+
+.tone dd {
+    margin: 0;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.swatch {
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.4rem 1rem;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition:
+        background-color 100ms cubic-bezier(0.2, 0, 0, 1),
+        border-color 100ms cubic-bezier(0.2, 0, 0, 1),
+        color 100ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.swatch:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+}
+
+.swatch.accent {
+    background: var(--blue);
+    color: var(--paper);
+}
+
+.swatch.accent:hover {
+    background: color-mix(in oklab, var(--blue) 88%, var(--ink));
+    border-color: var(--rule);
+}
+
+.swatch.accent:active {
+    background: color-mix(in oklab, var(--blue) 76%, var(--ink));
+}
+
+.swatch.neutral {
+    background: var(--paper-sunk);
+    color: var(--ink);
+    border-color: var(--rule);
+}
+
+.swatch.neutral:hover {
+    background: var(--paper);
+    border-color: color-mix(in oklab, var(--rule) 60%, var(--ink));
+}
+
+.swatch.neutral:active {
+    background: var(--paper-sunk);
+}
+
+.swatch.ghost {
+    background: transparent;
+    color: var(--blue);
+}
+
+.swatch.ghost:hover {
+    background: var(--paper-sunk);
+}
+
+.swatch.ghost:active {
+    background: var(--paper-sunk);
+    color: color-mix(in oklab, var(--blue) 76%, var(--ink));
+}
+
+.swatch.danger {
+    background: var(--rose);
+    color: var(--paper);
+}
+
+.swatch.danger:hover {
+    border-color: var(--rule);
+}
+
+.swatch.danger:active {
+    background: var(--paper-sunk);
+    color: var(--rose);
+    border-color: var(--rule);
+}
+
+.swatch.quiet {
+    background: transparent;
+    color: var(--ink);
+}
+
+.swatch.quiet:hover,
+.swatch.quiet:active {
+    background: var(--paper-sunk);
+}
+
+/* Disabled is not a colour scheme, it is the absence of the handlers. The
+   cursor says so before anything is clicked. */
+.swatch[disabled] {
+    background: transparent;
+    color: var(--ink-soft);
+    opacity: 0.55;
+    border-color: var(--rule-faint);
+    cursor: not-allowed;
+    transition: none;
+}
+
+.owners {
+    margin-top: 1.75rem;
+    max-width: 50rem;
+}
+
+.owner {
+    display: grid;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    gap: 0 1.5rem;
+    padding: 0.9rem 0;
+    border-top: 1px solid var(--rule-faint);
+    align-items: baseline;
+}
+
+.owner > b {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--ink-soft);
+}
+
+.owner p {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.55;
+}
+
+.owner p em {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--ink);
+}
+
+/* The four things one deletion gets right, and the one it gets wrong. */
+.consequences {
+    list-style: none;
+    margin: 1.5rem 0 0;
+    padding: 0;
+    max-width: 46rem;
+}
+
+.consequences li {
+    position: relative;
+    padding: 0.55rem 0 0.55rem 1.9rem;
+    border-top: 1px solid var(--rule-faint);
+    font-size: 0.9rem;
+    line-height: 1.55;
+}
+
+.consequences li::before {
+    content: "\2713";
+    position: absolute;
+    left: 0;
+    top: 0.55rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--green);
+}
+
+.consequences li.wrong::before {
+    content: "\2717";
+    color: var(--rose);
+}
+
+@media (max-width: 40rem) {
+    .owner {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.4rem;
+    }
+}
+
+/* ----------------------------------------------------------------- the gaps
+   A ledger of what is not built has to be readable at a glance, so the last
+   column is a state and not a sentence. */
+
+.gaps td:last-child {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* `.ledger td:last-child` already colours this cell, and outranks a bare
+   class, so the state carries the element and the pseudo-class with it. */
+.gaps td:last-child.no {
+    color: var(--rose);
+}
+
+.gaps td:last-child.part {
+    color: var(--amber);
+}
+
+.gaps td:last-child.yes {
+    color: var(--green);
+}
+
+.gaps td:first-child {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--ink);
+    white-space: nowrap;
+}
+
+/* An event that exists on the wire and nowhere else. */
+.wire {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 0.5rem 1.5rem;
+    margin-top: 1.5rem;
+    max-width: 52rem;
+}
+
+.wire div {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.45rem 0;
+    border-top: 1px solid var(--rule-faint);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+
+.wire i {
+    font-style: normal;
+    color: var(--ink-soft);
+    font-size: 0.7rem;
+}
+
+.wire.dead b {
+    color: var(--rose);
+    font-weight: 500;
+}
+
+.wire.live b {
+    color: var(--ink);
+    font-weight: 500;
+}
+
+/* Two columns of prose that answer each other: blocked, and merely unwritten. */
+.split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: 2rem;
+    margin-top: 2rem;
+    max-width: 56rem;
+}
+
+.split > div > b {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 500;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.75rem;
+}
+
+.split ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.split li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--rule-faint);
+    font-size: 0.88rem;
+    line-height: 1.55;
+}
+
+.split li code {
+    font-size: 0.8rem;
 }

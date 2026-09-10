@@ -28,6 +28,7 @@
 
 pub mod atlas;
 pub mod gpu;
+pub mod icons;
 pub mod paint;
 pub mod retained;
 

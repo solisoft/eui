@@ -11,6 +11,16 @@ class HomeController < Controller
     render("home/components", {"title": "EUI components"})
   end
 
+  # GET /controls
+  def controls
+    render("home/controls", {"title": "EUI controls — the base every widget is built on"})
+  end
+
+  # GET /gaps
+  def gaps
+    render("home/gaps", {"title": "EUI gaps — what is not there yet"})
+  end
+
   # GET /samples
   def samples
     render("home/samples", {"title": "EUI samples — seven applications, one client"})

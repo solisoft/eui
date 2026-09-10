@@ -42,6 +42,19 @@ def spacer
   {"k": "spacer", "s": {"grow": 1}}
 end
 
+# A named vector icon, stroked by the client from its own table. The name is a
+# prop, not text: an icon is not a character, so it takes `fg` like a label but
+# is never shaped, never falls back to a symbols face, and never reaches a
+# screen reader as the glyph it happens to resemble. With no size of its own it
+# takes a square from the text beside it.
+def icon(name, style)
+  {
+    "k": "icon",
+    "s": style ?? {},
+    "p": {"name": name}
+  }
+end
+
 def divider
   {"k": "divider"}
 end
@@ -229,6 +242,223 @@ def restyle(n, patch)
   n
 end
 
+
+# ------------------------------------------------------------- control base
+# Every interactive widget below is `control` plus a body. It exists because
+# twenty-four widgets in this file answered the pointer with `cursor: pointer`
+# and nothing else, and because not one of them could be disabled: the word
+# did not appear in two and a half thousand lines.
+#
+# A tone is a resting colour set and the two deltas the pointer applies to it.
+# Deltas, not whole styles — merged over whatever base the caller ended up
+# with, they keep every geometry choice inside all three states, so a size or
+# a selection or the caller's own patch cannot go missing under the pointer.
+# That is `restyle`'s invariant made structural instead of repaired
+# afterwards; `restyle` stays, for narrowing a widget from outside.
+#
+# `selected` folds into the *resting* colours before the hover delta is taken,
+# which is why hovering an already-selected row does not look broken.
+TONES = {
+  "accent": {
+    "bg": "accent.base", "fg": "accent.on", "border_color": "none",
+    "hover": {"bg": "accent.hover", "border_color": "border.strong"},
+    "press": {"bg": "accent.active"},
+    "selected": {}
+  },
+  "neutral": {
+    "bg": "surface.sunken", "fg": "text.default", "border_color": "border.default",
+    "hover": {"bg": "surface.raised", "border_color": "border.strong"},
+    "press": {"bg": "surface.sunken"},
+    "selected": {"bg": "info.subtle"}
+  },
+  "ghost": {
+    "bg": "none", "fg": "accent.base", "border_color": "none",
+    "hover": {"bg": "surface.sunken"},
+    "press": {"bg": "surface.sunken", "fg": "accent.active"},
+    "selected": {"bg": "surface.sunken"}
+  },
+  # The theme gives `accent` a hover and an active offset and gives the status
+  # roles neither — there is no `danger.active` to reach for. So danger presses
+  # to a sunken surface and keeps its own colour in the label, which is the
+  # precedent `button_variant` already set, and `danger.base` carries a
+  # guaranteed 3:1 against a surface.
+  "danger": {
+    "bg": "danger.base", "fg": "danger.on", "border_color": "none",
+    "hover": {"border_color": "border.strong"},
+    "press": {"bg": "surface.sunken", "fg": "danger.base"},
+    "selected": {}
+  },
+  "quiet": {
+    "bg": "none", "fg": "text.default", "border_color": "none",
+    "hover": {"bg": "surface.sunken"},
+    "press": {"bg": "surface.sunken"},
+    "selected": {"bg": "surface.sunken"}
+  }
+}
+
+# Disabled is one patch over the resting style, and there are no other styles
+# left once the handlers are gone. `text.disabled` and `border.subtle` carry
+# their own contrast guarantee (05 §4), so this stays legible in every mode.
+DISABLED = {
+  "fg": "text.disabled",
+  "bg": "none",
+  "border_color": "border.subtle",
+  "cursor": "not_allowed",
+  "transition": "none"
+}
+
+# What a size decides. `pad` and `gap` are space *indices*, not pixels: the
+# client multiplies them by the viewer's density (05 §5), so a server that
+# resolved them here would scale them twice. A data-dense application asks for
+# `size: "sm"`; it does not get its own density, because density is the
+# viewer's to choose and not the application's.
+#
+# There is deliberately no height. Height is the text line plus the padding,
+# which the client scales on both axes for free; a height pinned in pixels
+# clips its own label the moment the viewer raises their font scale.
+SIZES = {
+  "sm": {"text": 1, "pad": [1, 3, 1, 3], "gap": 2, "min_width": 32, "icon": 24, "mark": 16},
+  "md": {"text": 2, "pad": [2, 4, 2, 4], "gap": 3, "min_width": 44, "icon": 28, "mark": 18},
+  "lg": {"text": 3, "pad": [3, 5, 3, 5], "gap": 3, "min_width": 56, "icon": 36, "mark": 22}
+}
+
+# The `control` scale of 05 §2, in px at cozy density. Only for the places
+# where a fixed box is the point — an icon button, a day cell, a row height —
+# never for anything that holds a label.
+CONTROL = [28, 36, 44]
+
+def size_spec(size)
+  SIZES[size] ?? SIZES["md"]
+end
+
+# Box geometry only. The text scale is not here: `size` styles a text node,
+# and only `fg` inherits, so a label takes its size from `control_text_size`.
+def control_metrics(size)
+  m = size_spec(size)
+  {"pad": m["pad"], "gap": m["gap"], "min_width": m["min_width"]}
+end
+
+def control_text_size(size)
+  size_spec(size)["text"]
+end
+
+def icon_box_px(size)
+  size_spec(size)["icon"]
+end
+
+def checkbox_box_px(size)
+  size_spec(size)["mark"]
+end
+
+def control_px(size, density)
+  ix = size == "sm" ? 0 : (size == "lg" ? 2 : 1)
+  factor = 1.0
+  factor = 0.8 if density == "compact"
+  factor = 1.25 if density == "comfortable"
+  int((CONTROL[ix] * factor).round())
+end
+
+def tone_resting(tone, lit)
+  base = {"bg": tone["bg"], "fg": tone["fg"], "border_color": tone["border_color"]}
+  return base unless lit
+
+  base.merge(tone["selected"] ?? {})
+end
+
+# The semantics a widget declares about itself. Props are a generic bag the
+# client already reads by name, so these cost no wire change and an older
+# client ignores them; what they buy is a checkbox that reaches a screen
+# reader as a checkbox rather than as a button named by its label.
+def a11y_props(o)
+  props = (o["props"] ?? {}).merge({})
+  semantics = o["a11y"] ?? {}
+  for name in semantics.keys()
+    value = semantics[name]
+    props[name] = value unless value.nil?
+  end
+  props["disabled"] = true if o["disabled"] == true
+  props["busy"] = true if o["loading"] == true
+  props["read_only"] = true if o["read_only"] == true
+  props
+end
+
+# Wire the four pointer events onto an already-final resting style. `base`
+# must be the style the node actually carries — the deltas are merged over
+# it, so whatever the caller changed is already inside every state.
+def stateful(base, tone, on)
+  hover = base.merge(tone["hover"] ?? {})
+  active = base.merge(tone["press"] ?? {})
+  on.merge({
+    "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
+    "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}},
+    "pointer_down": {"local": "self.style = @active", "styles": {"active": active}},
+    "pointer_up": {"local": "self.style = @hover", "styles": {"hover": hover}}
+  })
+end
+
+# One options hash, so a widget gains a capability without its callers
+# changing:
+#
+#   key       required and unique. 07 §3 names a node by key and the arena's
+#             key map is flat, so a duplicate silently restyles someone else.
+#   kind      "box" by default.
+#   tone      a TONES name; "quiet" by default.
+#   size      "sm" | "md" | "lg"; "md" by default.
+#   shape     extra resting style — radius, width, justify. The caller wins.
+#   on        the handler map, usually just {"click": event}.
+#   props     the identity the handler reads back (03 §4).
+#   a11y      what this control *is*, per a11y_props above.
+#   selected / checked / expanded   server state, folded into the resting look.
+#   disabled / read_only / loading  the terminal states.
+#
+# Precedence: disabled > loading > read_only > active > hover > selected >
+# resting. The first two are terminal — they replace the resting style and
+# take the handlers with them, so hover and pressed cannot be reached.
+#
+# Dropping the handler map is the whole of what `disabled` means, and it is
+# right in three places at once: no click reaches the server, because dispatch
+# finds nothing on the path; the node leaves the Tab order, because focus
+# order is exactly the nodes holding those handlers; and the cursor and the
+# colours come from DISABLED. It is wrong in a fourth, which is why `disabled`
+# is also a prop: with no click handler the client's accessibility mapping
+# sees no button, and a disabled control would decay into an unnamed group.
+def control(o)
+  key = o["key"]
+  throw "control: every control needs a unique key" if key.nil?
+
+  size = o["size"] ?? "md"
+  tone = TONES[o["tone"] ?? "quiet"] ?? TONES["quiet"]
+  disabled = o["disabled"] == true
+  loading = o["loading"] == true
+  inert = disabled || loading
+  lit = o["selected"] == true || o["checked"] == true
+
+  base = control_metrics(size).merge({
+    "display": "row",
+    "align": "center",
+    "justify": "center",
+    "radius": 2,
+    "border": 1,
+    "border_color": "none",
+    "transition": "fast"
+  })
+  base = base.merge(tone_resting(tone, lit))
+  base = base.merge(o["shape"] ?? {})
+  base = base.merge(DISABLED) if disabled
+  base = base.merge({"cursor": "wait"}) if loading && !disabled
+  base["cursor"] = base["cursor"] ?? "pointer"
+
+  n = {
+    "k": o["kind"] ?? "box",
+    "key": key,
+    "s": base,
+    "c": o["c"] ?? []
+  }
+  props = a11y_props(o)
+  n["p"] = props if props.keys().length() > 0
+  n["on"] = stateful(base, tone, o["on"] ?? {}) unless inert
+  n
+end
 # A button: a box with a click handler, and hover/pressed states that run
 # locally — the client repoints the node at a declared style on pointer
 # enter/down/up/leave, so feedback never waits for the network. The node is
@@ -285,77 +515,110 @@ end
 
 # A checkbox is a small box whose fill says its state, plus a label. `props`
 # travel back with the click so the handler knows which item it was.
-def checkbox(label, checked, on_toggle, props)
+#
+# The row is the hit target and the mark is a child of it: a mark that changed
+# size under the pointer would shove its own label sideways, so the pointer
+# washes the row and leaves the mark alone. `checked` is not handed to
+# `control` as selection — the mark already says the state, and a second
+# background saying it as well reads as a bug.
+def checkbox(label, checked, on_toggle, props, o = {})
+  size = o["size"] ?? "md"
+  box = checkbox_box_px(size)
+  disabled = o["disabled"] == true
+  mixed = o["indeterminate"] == true
+  lit = checked || mixed
   mark = {
     "k": "box",
     "s": {
-      "width": 18,
-      "height": 18,
+      "width": box,
+      "height": box,
       "radius": 1,
       "border": 2,
-      "border_color": checked ? "accent.base" : "border.strong",
-      "bg": checked ? "accent.base" : "none",
+      "border_color": disabled ? "border.subtle" : (lit ? "accent.base" : "border.strong"),
+      "bg": (lit && !disabled) ? "accent.base" : "none",
       "display": "row",
       "justify": "center",
-      "align": "center"
+      "align": "center",
+      "transition": "fast"
     },
-    "c": checked ? [text(
-      "✓",
+    "c": lit ? [icon(
+      mixed ? "minus" : "check",
       {
-        "fg": "accent.on",
-        "size": 0,
-        "weight": "bold"
+        "fg": disabled ? "text.disabled" : "accent.on",
+        "width": box - 6,
+        "height": box - 6
       }
     )] : []
   }
-  {
-    "k": "box",
-    "s": {
-      "display": "row",
-      "gap": 3,
-      "align": "center",
-      "cursor": "pointer"
-    },
+  control({
+    "key": o["key"] ?? ("cb:" + (props["id"] ?? label).to_s),
+    "size": size,
+    "shape": {"justify": "start", "border": 0, "radius": 1, "min_width": 0, "pad": [1, 2, 1, 2]},
     "on": {"click": on_toggle},
-    "p": props,
-    "c": [mark, text(label, checked ? {"fg": "text.muted"} : {})]
-  }
+    "props": props,
+    "disabled": disabled,
+    "a11y": {
+      "role": "check_box",
+      "checked": mixed ? "mixed" : checked,
+      "label": o["name"] ?? label
+    },
+    "c": [
+      mark,
+      text(label, {
+        "size": control_text_size(size),
+        "fg": disabled ? "text.disabled" : (checked ? "text.muted" : "text.default")
+      })
+    ]
+  })
 end
 
-def switch(label, on, on_toggle, props)
+# A switch is a track the knob slides along. Both track and knob carry a
+# transition, so the colour change eases; the knob's travel is a layout
+# change and does not animate, which 03 §5 is explicit about.
+def switch(label, on, on_toggle, props, o = {})
+  size = o["size"] ?? "md"
+  disabled = o["disabled"] == true
+  knob_px = checkbox_box_px(size) - 2
   knob = {"k": "box", "s": {
-    "width": 16,
-    "height": 16,
+    "width": knob_px,
+    "height": knob_px,
     "radius": 4,
-    "bg": on ? "accent.on" : "surface.raised",
-    "self": on ? "end" : "start"
+    "bg": (on && !disabled) ? "accent.on" : "surface.raised",
+    "self": on ? "end" : "start",
+    "transition": "fast"
   }}
   track = {
     "k": "box",
     "s": {
       "display": "row",
-      "width": 36,
-      "height": 20,
+      "width": knob_px * 2 + 4,
+      "height": knob_px + 4,
       "radius": 4,
       "pad": 1,
-      "bg": on ? "accent.base" : "border.strong",
+      "bg": disabled ? "border.subtle" : (on ? "accent.base" : "border.strong"),
       "justify": on ? "end" : "start",
-      "align": "center"
+      "align": "center",
+      "transition": "fast"
     },
     "c": [knob]
   }
-  {
-    "k": "box",
-    "s": {
-      "display": "row",
-      "gap": 3,
-      "align": "center",
-      "cursor": "pointer"
-    },
+  control({
+    "key": o["key"] ?? ("sw:" + (props["id"] ?? label).to_s),
+    "size": size,
+    "shape": {"justify": "start", "border": 0, "radius": 1, "min_width": 0, "pad": [1, 2, 1, 2]},
     "on": {"click": on_toggle},
-    "p": props,
-    "c": [track, text(label, {})]
-  }
+    "props": props,
+    "disabled": disabled,
+    "a11y": {
+      "role": "switch",
+      "checked": on,
+      "label": o["name"] ?? label
+    },
+    "c": [
+      track,
+      text(label, {"size": control_text_size(size), "fg": disabled ? "text.disabled" : "text.default"})
+    ]
+  })
 end
 
 def badge(label, tone)
@@ -391,30 +654,50 @@ def card(style, children)
 end
 
 # Tabs: a row of labels, the active one underlined in accent. `props` carry
-# the tab name so one handler serves every tab.
-def tabs(names, active, on_select)
-  row(
-    {
-      "gap": 5,
-      "border": [0, 0, 1, 0],
-      "border_color": "border.subtle"
-    },
-    names.map(fn(name) {
-      is_active = name == active
-      {
-        "k": "box",
-        "s": {
-          "pad": [2, 1, 2, 1],
-          "border": [0, 0, 2, 0],
-          "border_color": is_active ? "accent.base" : "none",
-          "cursor": "pointer"
-        },
-        "on": {"click": on_select},
-        "p": {"tab": name},
-        "c": [text(name, is_active ? {"weight": "semibold"} : {"fg": "text.muted"})]
-      }
+# the tab name so one handler serves every tab.# A tab strip. The active tab is said by its underline alone — it is not
+# handed to `control` as selection, because a background behind the active
+# tab as well would say the same thing twice. The strip is keyed and carries
+# its role, so the set reaches an assistive technology as a set and each tab
+# knows its place in it.
+def tabs(names, active, on_select, o = {})
+  size = o["size"] ?? "md"
+  off_list = o["disabled"] ?? []
+  count = names.length()
+  cells = range(0, count).map(fn(i) {
+    name = names[i]
+    is_active = name == active
+    off = off_list.includes?(name)
+    control({
+      "key": (o["key"] ?? "tabs") + ":" + name,
+      "size": size,
+      "shape": {
+        "pad": [2, 1, 2, 1],
+        "min_width": 0,
+        "radius": 0,
+        "border": [0, 0, 2, 0],
+        "border_color": is_active ? "accent.base" : "none"
+      },
+      "on": {"click": on_select},
+      "props": {"tab": name},
+      "disabled": off,
+      "a11y": {
+        "role": "tab",
+        "selected": is_active,
+        "label": name,
+        "pos_in_set": i + 1,
+        "set_size": count
+      },
+      "c": [text(name, {
+        "size": control_text_size(size),
+        "weight": is_active ? "semibold" : "regular",
+        "fg": off ? "text.disabled" : (is_active ? "text.default" : "text.muted")
+      })]
     })
-  )
+  })
+  strip = row({"gap": 5, "border": [0, 0, 1, 0], "border_color": "border.subtle"}, cells)
+  strip["key"] = o["key"] ?? "tabs"
+  strip["p"] = {"role": "tab_list", "orientation": "horizontal"}
+  strip
 end
 
 # A spinner: a three-quarter arc on a canvas that the client spins.
@@ -507,6 +790,10 @@ end
 def toast(message, tone)
   {
     "k": "box",
+    "p": {
+      "role": "status",
+      "live": tone == "danger" ? "assertive" : "polite"
+    },
     "s": {
       "display": "row",
       "gap": 3,
@@ -564,8 +851,9 @@ def dialog(title, body_children, actions, opts = {})
       actions
     )])
   )
-  {
+  n = {
     "k": "overlay",
+    "key": opts["key"] ?? ("dialog:" + title),
     "s": {
       "display": "stack",
       "justify": "center",
@@ -573,8 +861,21 @@ def dialog(title, body_children, actions, opts = {})
       "blur": 16,
       "bg": "#00000073"
     },
+    # `modal` keeps Tab inside the dialog, and puts it there when it opens:
+    # a server cannot do either, because it does not own Tab. `keys` claims
+    # Escape alone, so the buttons inside keep Enter as the press they stand
+    # for — and Escape now reaches the server, which is what closes it.
+    "p": {
+      "role": opts["alert"] == true ? "alert_dialog" : "dialog",
+      "label": title,
+      "modal": true,
+      "autofocus": true,
+      "keys": ["Escape"]
+    },
     "c": [panel]
   }
+  n["on"] = {"key_down": opts["on_close"]} unless opts["on_close"].nil?
+  n
 end
 # The page behind is put out of play twice over: blurred, so nothing
 # on it is legible enough to invite a click, and dimmed, so the panel
@@ -589,7 +890,10 @@ end
 # `opts`: {"ok": "Got it"}
 def alert(title, message, on_close, opts)
   opts = opts ?? {}
-  dialog(title, [text(message, {})], [button(opts["ok"] ?? "OK", on_close)])
+  dialog(title, [text(message, {})], [button(opts["ok"] ?? "OK", on_close)], opts.merge({
+    "alert": true,
+    "on_close": on_close
+  }))
 end
 
 # A confirm: a question with two answers. The affirmative sits last, where
@@ -602,7 +906,10 @@ def confirm(title, message, on_confirm, on_cancel, opts)
   ok_label = opts["ok"] ?? "Confirm"
   destructive = opts["danger"] ?? false
   ok = destructive ? danger_button(ok_label, on_confirm) : button(ok_label, on_confirm)
-  dialog(title, [text(message, {})], [secondary_button(opts["cancel"] ?? "Cancel", on_cancel), ok])
+  dialog(title, [text(message, {})], [secondary_button(opts["cancel"] ?? "Cancel", on_cancel), ok], opts.merge({
+    "alert": true,
+    "on_close": on_cancel
+  }))
 end
 
 def field(label, value, on_change)
@@ -614,6 +921,230 @@ def form(children, submit_label, on_submit)
 end
 
 # A table: header row plus keyed body rows; `columns` is a list of widths.
+
+# --------------------------------------------------------------- split panes
+# Two panels and a divider that can be dragged. `dir` is `"row"` for a
+# vertical divider with the panels side by side, `"column"` for a horizontal
+# one with them stacked.
+#
+# The drag is server-driven, and that is a smaller concession than it sounds.
+# A press captures the pointer, so a move that leaves the divider still
+# reaches it; moves are coalesced to one per frame rather than one per sample
+# the mouse sends; and the payload of a `pointer_move` is measured against the
+# node whose handler catches it — so the handlers sit on the container, and
+# the number arriving at the server is already the position of the divider
+# inside it, needing no arithmetic and no memory of where the drag began.
+# What a local chunk would save is one round trip per frame, and a chunk
+# cannot read its own event yet, so it could not do this at all.
+#
+# Where a panel's own size comes in: `a` and `b` are functions of one
+# argument, the panel's extent along the split axis in pixels. A panel is
+# built knowing how much room it has, which is what lets its content answer
+# the panel instead of the window — `bp(px)` and `bp_min(px, "md")` take a
+# width, and nothing about them says that width has to be the viewport's.
+
+# The breakpoint rungs above are Tailwind's, and they are a *window's*. Handed
+# a panel they say almost nothing: a pane of 309 px and one of 505 px are both
+# "xs", so a view that branches on `bp` inside a split never branches at all.
+# These are the same idea at the scale a panel actually lives at, and they are
+# what a split's content should ask.
+PANE = {
+  "xs": 0,
+  "sm": 200,
+  "md": 320,
+  "lg": 480,
+  "xl": 720
+}
+
+def pane_px(name)
+  PANE[name] ?? 0
+end
+
+def pane_bp(px)
+  return "xl" if px >= PANE["xl"]
+  return "lg" if px >= PANE["lg"]
+  return "md" if px >= PANE["md"]
+  return "sm" if px >= PANE["sm"]
+
+  "xs"
+end
+
+def pane_min(px, name)
+  px >= pane_px(name)
+end
+
+
+# The room the two panels share, once the divider has taken its own.
+def split_span(extent, bar)
+  span = extent - bar
+  span < 0 ? 0 : span
+end
+
+# `fraction` is per mille — an integer, so it survives a round trip through
+# state and a local handler's props without ever being a float. Both
+# conversions round rather than truncate, which is what makes the trip exact:
+# a divider dropped at a pixel and rebuilt from its fraction lands on the same
+# pixel, where truncating at both ends lost one on the way.
+def split_sizes(extent, fraction, min_a, min_b, bar)
+  span = split_span(extent, bar)
+  return [0, 0] if span <= 0
+
+  a = int((span * fraction / 1000.0).round())
+  room = span - min_b
+  a = room if a > room
+  a = min_a if a < min_a
+  a = 0 if a < 0
+  a = span if a > span
+  [a, span - a]
+end
+
+# The pointer's position along the axis becomes the fraction the divider sits
+# at. Clamped to both minimums, so a drag that runs past a panel's floor stops
+# there rather than inverting the pair — and the clamp lives here, once,
+# instead of in every application that draws a split.
+def split_at(extent, at, min_a, min_b, bar)
+  span = split_span(extent, bar)
+  return 500 if span <= 0
+
+  a = int(at) - int(bar / 2)
+  room = span - min_b
+  a = room if a > room
+  a = min_a if a < min_a
+  a = 0 if a < 0
+  a = span if a > span
+  int((a * 1000.0 / span).round())
+end
+
+def split_panel(build, px, across: Bool, cross)
+  {
+    "k": "box",
+    "s": {
+      "display": "column",
+      "width": across ? px : cross,
+      "height": across ? cross : px,
+      "overflow": "clip"
+    },
+    "c": [build(px)]
+  }
+end
+
+# The divider is not a `control`: it is a separator, its press has to reach
+# the server as well as restyle locally, and `control` would put its own
+# `pointer_down` over the top of that. It is keyed so the local chunk can
+# name it, and it holds `key_down`, which is what puts it in the Tab order —
+# so a split can be moved without a pointer at all.
+def split_divider(key, across: Bool, bar, cross, fraction, on_drag, dragging: Bool, label)
+  base = {
+    "width": across ? bar : cross,
+    "height": across ? cross : bar,
+    "bg": dragging ? "accent.base" : "border.subtle",
+    "cursor": across ? "resize_h" : "resize_v",
+    "transition": "fast"
+  }
+  hot = base.merge({"bg": "accent.base"})
+  {
+    "k": "box",
+    "key": key,
+    "s": base,
+    "p": {
+      "role": "separator",
+      "orientation": across ? "vertical" : "horizontal",
+      "label": label ?? "Resize panels",
+      "value_now": fraction,
+      "value_min": 0,
+      "value_max": 1000
+    },
+    "on": {
+      "pointer_enter": {"local": "self.style = @hot", "styles": {"hot": hot}},
+      "pointer_leave": {"local": "self.style = @base", "styles": {"base": base}},
+      "pointer_down": {"local": "self.style = @hot", "styles": {"hot": hot}, "then": on_drag},
+      "key_down": on_drag
+    }
+  }
+end
+
+#   key       required; the divider is keyed from it
+#   dir       "row" | "column"
+#   size      the container's extent along the split axis, in px
+#   cross     the extent across it; "100%" if absent
+#   fraction  per mille, 0..1000
+#   min_a / min_b   the smallest each panel may become, in px
+#   bar       the divider's thickness; 6 by default
+#   on_drag   the event the divider and the container both send
+#   dragging  true while a drag is in flight, so the divider stays lit
+#   a / b     fn(px) -> node
+def split_pane(o)
+  key = o["key"]
+  throw "split_pane: every split needs a key" if key.nil?
+
+  dir = o["dir"] ?? "row"
+  across = dir == "row"
+  bar = o["bar"] ?? 6
+  extent = o["size"] ?? 0
+  cross = o["cross"] ?? "100%"
+  fraction = o["fraction"] ?? 500
+  min_a = o["min_a"] ?? 80
+  min_b = o["min_b"] ?? 80
+  on_drag = o["on_drag"]
+  sizes = split_sizes(extent, fraction, min_a, min_b, bar)
+
+  n = {
+    "k": "box",
+    "key": key,
+    "s": {
+      "display": across ? "row" : "column",
+      "gap": 0,
+      "align": "stretch",
+      "width": across ? extent : cross,
+      "height": across ? cross : extent,
+      "overflow": "clip"
+    },
+    "c": [
+      split_panel(o["a"], sizes[0], across, cross),
+      split_divider(key + ":bar", across, bar, cross, fraction, on_drag, o["dragging"] == true, o["label"]),
+      split_panel(o["b"], sizes[1], across, cross)
+    ]
+  }
+  # The move and the release belong to the container, not to the divider: that
+  # is what makes the payload container-relative, and what lets the pointer
+  # leave the divider mid-drag without the drag ending.
+  n["on"] = {"pointer_move": on_drag, "pointer_up": on_drag} unless on_drag.nil?
+  n
+end
+
+# The four events a split sends, folded into a component's state. `name` is
+# the state key holding the fraction; `name + "_drag"` holds whether a drag is
+# in flight. An application writes one line in its handler and is done.
+def split_event(state, params, name, dir, extent, min_a, min_b, bar)
+  kind = params["kind"]
+  drag = name + "_drag"
+  step = 25
+
+  if kind == "pointer_down"
+    state[drag] = true
+  elsif kind == "pointer_up"
+    state[drag] = false
+  elsif kind == "pointer_move"
+    if state[drag] ?? false
+      payload = params["payload"] ?? [0, 0]
+      at = dir == "row" ? payload[0] : payload[1]
+      state[name] = split_at(extent, at, min_a, min_b, bar)
+    end
+  elsif kind == "key_down"
+    payload = params["payload"] ?? [""]
+    pressed_key = payload[0]
+    back = dir == "row" ? "ArrowLeft" : "ArrowUp"
+    fwd = dir == "row" ? "ArrowRight" : "ArrowDown"
+    current = state[name] ?? 500
+    state[name] = current - step if pressed_key == back
+    state[name] = current + step if pressed_key == fwd
+    state[name] = 500 if pressed_key == "Home"
+    state[name] = 0 if state[name] < 0
+    state[name] = 1000 if state[name] > 1000
+  end
+  state
+end
+
 def table_header(labels, widths)
   cells = range(0, labels.length()).map(fn(i) {
     {
@@ -723,9 +1254,9 @@ def grid_cell(row_id, col, value, selected, editing, open, on_select, on_change,
           "grow": 1,
           "clamp": 1
         }
-      ), text(
-        open == true ? "▴" : "▾",
-        {"size": 0, "fg": "text.muted"}
+      ), icon(
+        open == true ? "chevron_up" : "chevron_down",
+        {"width": 14, "height": 14, "fg": "text.muted"}
       )]
     )
     picks = choices.map(fn(o) {
@@ -959,6 +1490,13 @@ def progress(fraction)
   filled = 0 if filled < 0
   {
     "k": "box",
+    "p": {
+      "role": "progress",
+      "label": "Progress",
+      "value_now": filled,
+      "value_min": 0,
+      "value_max": 100
+    },
     "s": {
       "display": "row",
       "height": 6,
@@ -990,7 +1528,7 @@ end
 # back to a button's padding under the pointer. This one is a fixed box:
 # what changes on hover is the colour, which 03 §5 animates without ever
 # running layout again.
-def chip_remove(on_remove, props)
+def chip_remove(on_remove, props, label)
   base = {
     "display": "row",
     "justify": "center",
@@ -1009,7 +1547,7 @@ def chip_remove(on_remove, props)
     "k": "box",
     "key": "chip-x:" + on_remove + ":" + str(props["id"] ?? ""),
     "s": base,
-    "p": props,
+    "p": props.merge({"role": "button", "label": "Remove " + label.to_s}),
     "on": {
       "click": on_remove,
       "pointer_enter": {"local": "self.style = @hover", "styles": {"hover": hover}},
@@ -1017,16 +1555,13 @@ def chip_remove(on_remove, props)
       "pointer_down": {"local": "self.style = @active", "styles": {"active": active}},
       "pointer_up": {"local": "self.style = @hover", "styles": {"hover": hover}}
     },
-    "c": [text(
-      "×",
-      {"size": 1, "weight": "semibold"}
-    )]
+    "c": [icon("close", {"width": 10, "height": 10})]
   }
 end
 
 def chip(label, on_remove, props)
   parts = [text(label, {"size": 1})]
-  parts = parts.concat([chip_remove(on_remove, props)]) if on_remove.present?
+  parts = parts.concat([chip_remove(on_remove, props, label)]) if on_remove.present?
   {
     "k": "box",
     "s": {
@@ -1139,10 +1674,18 @@ def breadcrumb(crumbs, on_go)
 end
 
 def pagination(page, pages, on_page)
-  prev = secondary_button("‹", on_page)
-  prev["p"] = {"page": page - 1}
-  nxt = secondary_button("›", on_page)
-  nxt["p"] = {"page": page + 1}
+  prev = icon_button("‹", on_page, {"page": page - 1}, {
+    "tone": "neutral",
+    "icon": "chevron_left",
+    "name": "Previous page",
+    "disabled": page <= 1
+  })
+  nxt = icon_button("›", on_page, {"page": page + 1}, {
+    "tone": "neutral",
+    "icon": "chevron_right",
+    "name": "Next page",
+    "disabled": page >= pages
+  })
   row(
     {
       "gap": 2,
@@ -1155,10 +1698,20 @@ end
 
 # Segmented control: one row of options, the selected one raised.
 def segmented(options, selected, on_select)
-  cells = options.map(fn(opt) {
+  count = options.length()
+  cells = range(0, count).map(fn(i) {
+    opt = options[i]
     is_sel = opt == selected
     {
       "k": "box",
+      "p": {
+        "option": opt,
+        "role": "tab",
+        "label": opt,
+        "selected": is_sel,
+        "pos_in_set": i + 1,
+        "set_size": count
+      },
       "s": {
         "pad": [1, 3, 1, 3],
         "radius": 1,
@@ -1168,11 +1721,10 @@ def segmented(options, selected, on_select)
         "border_color": "border.subtle"
       },
       "on": {"click": on_select},
-      "p": {"option": opt},
       "c": [text(opt, is_sel ? {"weight": "semibold"} : {"fg": "text.muted"})]
     }
   })
-  row(
+  strip = row(
     {
       "gap": 1,
       "pad": 1,
@@ -1182,6 +1734,8 @@ def segmented(options, selected, on_select)
     },
     cells
   )
+  strip["p"] = {"role": "tab_list", "orientation": "horizontal"}
+  strip
 end
 
 # Accordion: sections with a header that toggles by id; the open one shows its body.
@@ -1208,9 +1762,9 @@ def accordion(sections, open_id, on_toggle)
         },
         "on": {"click": on_toggle},
         "p": {"id": sec["id"]},
-        "c": [text(
-          is_open ? "▾" : "▸",
-          {"fg": "text.muted", "size": 0}
+        "c": [icon(
+          is_open ? "chevron_down" : "chevron_right",
+          {"fg": "text.muted", "width": 14, "height": 14}
         ), text(sec["title"], {"weight": "semibold"})]
       }
       body = is_open ? [column({"pad": [
@@ -1316,7 +1870,7 @@ def tooltip(content)
 end
 
 # A sheet slides from an edge over the page: overlay, dim, panel at the edge.
-def sheet(side, children)
+def sheet(side, children, opts = {})
   panel = column(
     {
       "gap": 4,
@@ -1327,8 +1881,9 @@ def sheet(side, children)
     },
     children
   )
-  {
+  n = {
     "k": "overlay",
+    "key": opts["key"] ?? ("sheet:" + side),
     "s": {
       "display": "row",
       "justify": side == "left" ? "start" : "end",
@@ -1336,15 +1891,24 @@ def sheet(side, children)
       "blur": 10,
       "bg": "#00000047"
     },
+    "p": {
+      "role": "dialog",
+      "label": opts["label"] ?? "Panel",
+      "modal": true,
+      "autofocus": true,
+      "keys": ["Escape"]
+    },
     "c": [panel]
   }
+  n["on"] = {"key_down": opts["on_close"]} unless opts["on_close"].nil?
+  n
 end
 # Lighter than a dialog's, and blurred less: a sheet is somewhere you
 # went, not a question you have to answer, and the page it slid over
 # should stay recognisable behind it.
 
-def drawer(children)
-  sheet("left", children)
+def drawer(children, opts = {})
+  sheet("left", children, opts)
 end
 
 def popover(anchor, content, open)
@@ -1576,9 +2140,9 @@ def tree_view(nodes, open_ids, on_toggle, depth)
       },
       "on": has_kids ? {"click": on_toggle} : {},
       "p": {"id": n["id"]},
-      "c": [text(
-        has_kids ? (is_open ? "▾" : "▸") : "·",
-        {"fg": "text.muted", "size": 0}
+      "c": [icon(
+        has_kids ? (is_open ? "chevron_down" : "chevron_right") : "dot",
+        {"fg": "text.muted", "width": 14, "height": 14}
       ), text(n["label"], {})]
     }
     kids = is_open && has_kids ? [tree_view(n["children"], open_ids, on_toggle, depth + 1)] : []
@@ -1613,9 +2177,9 @@ def select_sized(options, value, open, on_toggle, on_pick, min_width, grow)
     "k": "box",
     "s": s,
     "on": {"click": on_toggle},
-    "c": [text(value, {"grow": 1}), text(
-      "▾",
-      {"fg": "text.muted", "size": 0}
+    "c": [text(value, {"grow": 1}), icon(
+      "chevron_down",
+      {"fg": "text.muted", "width": 14, "height": 14}
     )]
   }
   dropdown(anchor, options.map(fn(o) { select_option(o, o == value, on_pick, min_width) }), open)
@@ -1693,7 +2257,13 @@ def slider(value, min, max, on_set)
     "p": {
       "min": min,
       "max": max,
-      "width": width
+      "width": width,
+      "role": "slider",
+      "label": "Value",
+      "value_now": value,
+      "value_min": min,
+      "value_max": max,
+      "orientation": "horizontal"
     },
     "on": {
       "click": on_set,
@@ -1757,22 +2327,37 @@ def two_digits(n)
   n < 10 ? "0" + str(n) : str(n)
 end
 
-def icon_button(label, on_click, props)
-  {
-    "k": "box",
-    "s": {
-      "width": 28,
-      "height": 28,
-      "radius": 1,
-      "display": "row",
-      "justify": "center",
-      "align": "center",
-      "cursor": "pointer"
-    },
-    "p": props,
+# `glyph` is what is drawn; `name` is what it is called. A control whose only
+# text is "×" is announced as "×", which is the reason a name is worth giving
+# even where the argument has a default.
+def icon_button(glyph, on_click, props, o = {})
+  size = o["size"] ?? "md"
+  box = icon_box_px(size)
+  control({
+    "key": o["key"] ?? ("ib:" + on_click.to_s + ":" + glyph),
+    "tone": o["tone"] ?? "quiet",
+    "size": size,
+    "shape": {"width": box, "height": box, "radius": 1, "pad": 0, "min_width": box},
     "on": {"click": on_click},
-    "c": [text(label, {"weight": "bold"})]
-  }
+    "props": props,
+    "disabled": o["disabled"] == true,
+    "a11y": {
+      "role": "button",
+      "label": o["name"] ?? glyph,
+      "expanded": o["expanded"]
+    },
+    "c": [icon_or_glyph(glyph, o["icon"], size)]
+  })
+end
+
+# An icon button draws a named icon when it is given one, and the character it
+# was handed when it is not. The catalogue is mid-move from the second to the
+# first, and both have to work while it is.
+def icon_or_glyph(glyph, name, size)
+  return text(glyph, {"size": control_text_size(size), "weight": "bold"}) if name.nil?
+
+  side = int(icon_box_px(size) * 0.6)
+  icon(name, {"width": side, "height": side})
 end
 
 def day_cell(iso, label, selected, in_range, on_pick)
@@ -1829,7 +2414,7 @@ def calendar(month, selected, range_start, range_end, on_pick, on_nav)
   header = row(
     {"align": "center", "gap": 1},
     [
-      icon_button("‹", on_nav, {"delta": -1}),
+      icon_button("‹", on_nav, {"delta": -1}, {"icon": "chevron_left", "name": "Previous month"}),
       text(
         month_label(month),
         {
@@ -1838,7 +2423,7 @@ def calendar(month, selected, range_start, range_end, on_pick, on_nav)
           "text_align": "center"
         }
       ),
-      icon_button("›", on_nav, {"delta": 1})
+      icon_button("›", on_nav, {"delta": 1}, {"icon": "chevron_right", "name": "Next month"})
     ]
   )
   grid = {

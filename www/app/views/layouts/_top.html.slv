@@ -4,6 +4,8 @@
     <nav>
         <a href="/samples"<% if here == "samples" %> aria-current="page"<% end %>>Samples</a>
         <a href="/components"<% if here == "components" %> aria-current="page"<% end %>>Components</a>
+        <a href="/controls"<% if here == "controls" %> aria-current="page"<% end %>>Controls</a>
+        <a href="/gaps"<% if here == "gaps" %> aria-current="page"<% end %>>Gaps</a>
         <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui">Docs</a>
         <a href="https://github.com/solisoft/eui/tree/main/spec">Spec</a>
         <a href="https://github.com/solisoft/eui">Source</a>

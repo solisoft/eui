@@ -823,6 +823,7 @@ impl Painter<'_, '_> {
                 self.push(q);
             }
             NodeKind::Canvas => self.canvas(node, rect, &style, opacity),
+            NodeKind::Icon if !virtual_ => self.icon(node, rect, &style, fg, opacity),
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea if !virtual_ => {
                 self.text(ix, rect, &style, fg, opacity);
             }
@@ -1234,6 +1235,47 @@ impl Painter<'_, '_> {
             spin: [0.0; 4],
             ..Quad::default()
         });
+    }
+
+    /// A named icon, stroked from the table in [`crate::icons`]. It takes the
+    /// inherited `fg` like text does, and the largest square its content box
+    /// holds, centred -- so an icon beside a label is the label's colour and
+    /// close to its size without either being said twice.
+    fn icon(&mut self, node: &Node, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
+        let Some(atom) = self.scene.session.atoms().name else {
+            return;
+        };
+        let Some(Value::Str(name)) = node.prop(atom) else {
+            return;
+        };
+        let Some(paths) = crate::icons::icon(name) else {
+            return;
+        };
+        let w = rect.w - style.border.l - style.border.r - style.padding.l - style.padding.r;
+        let h = rect.h - style.border.t - style.border.b - style.padding.t - style.padding.b;
+        let side = w.min(h);
+        if side <= 0.0 {
+            return;
+        }
+        let scale = self.scene.scale;
+        let k = side / crate::icons::GRID;
+        let ox = (rect.x + style.border.l + style.padding.l + (w - side) / 2.0) * scale;
+        let oy = (rect.y + style.border.t + style.padding.t + (h - side) / 2.0) * scale;
+        let stroke = (crate::icons::STROKE * k * scale).max(1.0);
+        let at = |p: &(f32, f32)| (ox + p.0 * k * scale, oy + p.1 * k * scale);
+        for path in paths {
+            // A run of one point is a dot: a capsule of no length is a circle.
+            if let [only] = path {
+                let p = at(only);
+                self.segment(p, p, stroke, fg, opacity);
+                continue;
+            }
+            for pair in path.windows(2) {
+                if let [a, b] = pair {
+                    self.segment(at(a), at(b), stroke, fg, opacity);
+                }
+            }
+        }
     }
 
     /// A path colour: resolved on the wire (`Color`), a role id, or — for a

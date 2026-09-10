@@ -717,6 +717,8 @@ impl Driver {
                     if let Some(ix) = self.session.focused() {
                         out.extend(self.set_focus(Some(ix), true));
                     }
+                } else {
+                    out.extend(self.take_autofocus());
                 }
                 out
             }
@@ -1525,7 +1527,13 @@ impl Driver {
         let Some(root) = self.session.root() else {
             return order;
         };
-        let mut stack = vec![root];
+        // A modal owns the keyboard while it is up. Tab used to walk the whole
+        // tree from the root, so it left an open dialog and wandered the page
+        // behind it — and a server cannot fix that, because it does not own
+        // Tab. The innermost laid-out node carrying `modal` becomes the root
+        // of the walk instead, which nests: a dialog opened over a dialog
+        // traps inside the second.
+        let mut stack = vec![self.modal_root().unwrap_or(root)];
         while let Some(ix) = stack.pop() {
             let Some(node) = self.session.node(ix) else {
                 continue;
@@ -1543,6 +1551,53 @@ impl Driver {
             stack.extend(self.session.children(ix).iter().rev());
         }
         order
+    }
+
+    /// The innermost laid-out node declaring itself modal, if any. Preorder,
+    /// so a modal inside a modal comes later and wins.
+    fn modal_root(&self) -> Option<NodeIx> {
+        let atom = self.session.atom_id("modal")?;
+        let root = self.session.root()?;
+        let mut found = None;
+        for ix in self.session.preorder(root) {
+            if self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) && self.session.node(ix).and_then(|n| n.prop(atom)) == Some(&Value::Bool(true)) {
+                found = Some(ix);
+            }
+        }
+        found
+    }
+
+    /// The first laid-out node asking to be focused when it appears. A dialog
+    /// that opens with focus still behind it has nothing for `Escape` to fire
+    /// from, and nothing for the trap above to hold.
+    fn autofocus_target(&self) -> Option<NodeIx> {
+        let atom = self.session.atom_id("autofocus")?;
+        let from = self.modal_root().or_else(|| self.session.root())?;
+        self.session.preorder(from).find(|ix| self.layout.rect(*ix).is_some() && !self.layout.is_virtual(*ix) && self.session.node(*ix).and_then(|n| n.prop(atom)) == Some(&Value::Bool(true)))
+    }
+
+    /// Put focus where a newly-arrived surface asked for it.
+    ///
+    /// Only when focus is not already where it belongs, so a batch that
+    /// arrives while someone is tabbing through an open dialog does not yank
+    /// them back to its first field. A modal claims focus whenever focus is
+    /// outside it; a page with no modal claims it only when nothing has it.
+    fn take_autofocus(&mut self) -> Vec<Frame> {
+        if self.session.atom_id("autofocus").is_none() {
+            return Vec::new();
+        }
+        self.ensure_layout();
+        let Some(target) = self.autofocus_target() else {
+            return Vec::new();
+        };
+        let settled = match self.modal_root() {
+            Some(m) => self.focused.is_some_and(|f| self.session.preorder(m).any(|x| x == f)),
+            None => self.focused.is_some(),
+        };
+        if settled {
+            return Vec::new();
+        }
+        self.set_focus(Some(target), true)
     }
 
     /// `Tab` / `Shift+Tab`: the next or previous focusable node, wrapping.
@@ -1593,6 +1648,31 @@ impl Driver {
             cur = if node.parent.is_some() { Some(node.parent) } else { None };
         }
         None
+    }
+
+    /// Whether `f` asked for this key itself, and so should not have the
+    /// client's meaning put on it.
+    ///
+    /// A node holding `key_down` used to claim *every* key, which made a
+    /// widget choose: take the arrows, or keep `Enter` and `Space` as the
+    /// press they stand for. A `keys` prop naming what it wants settles it —
+    /// a tab can take `ArrowLeft` and `ArrowRight` and still be activated by
+    /// `Enter`. Without the prop the old all-or-nothing rule stands, so a
+    /// tracker that wants `Space` for itself keeps it.
+    fn claims_key(&self, f: NodeIx, key: &str) -> bool {
+        let Some(node) = self.session.node(f) else {
+            return false;
+        };
+        if node.handler(EventKind::KeyDown).is_none() {
+            return false;
+        }
+        let Some(atom) = self.session.atom_id("keys") else {
+            return true;
+        };
+        match node.prop(atom) {
+            Some(Value::List(want)) => want.iter().any(|k| matches!(k, Value::Str(s) if s == key)),
+            _ => true,
+        }
     }
 
     /// Hit node under the pointer, without requiring it to be a scroller.
@@ -2061,7 +2141,20 @@ impl Driver {
             return Vec::new();
         };
         if key == "Escape" {
-            return if down { self.set_focus(None, false) } else { Vec::new() };
+            if !down {
+                return Vec::new();
+            }
+            // 03 §3: Escape shuts what is open before it lets go of focus.
+            // It used to return here always, so no dialog, sheet, menu or
+            // popover could close on it — the server never learned the key
+            // had been pressed. Now anything on the path that asked for keys
+            // hears it, and focus stays where it is so the surface can put it
+            // back where it belongs; with nothing listening, Escape means what
+            // it always meant.
+            if self.ancestor_keyed(f).is_none() || !self.wants_key(f, key) {
+                return self.set_focus(None, false);
+            }
+            return self.emit(f, EventKind::KeyDown, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))]));
         }
         let mut out = Vec::new();
         if down {
@@ -2075,15 +2168,39 @@ impl Driver {
                 // A node that handles keys is not activated by `Enter` or
                 // `Space`: it asked for the keys, and in a tracker `Space`
                 // is what starts the song, not a click on the pattern.
-                "Enter" | " " if !editable && self.session.node(f).map_or(true, |n| n.handler(EventKind::KeyDown).is_none()) => {
+                "Enter" | " " if !editable && !self.claims_key(f, key) => {
                     out.extend(self.activate(f));
                 }
                 _ => {}
             }
         }
         let kind = if down { EventKind::KeyDown } else { EventKind::KeyUp };
-        out.extend(self.emit(f, kind, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))])));
+        if self.wants_key(f, key) {
+            out.extend(self.emit(f, kind, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))])));
+        }
         out
+    }
+
+    /// Whether the node that would handle this key actually asked for it.
+    ///
+    /// A `key_down` handler used to receive *every* key, which is why a
+    /// dialog could not simply listen for `Escape`: it would hear each letter
+    /// typed into the field inside it too, and a handler that closes on a key
+    /// press would close on all of them. A `keys` prop names what the node
+    /// wants and the rest are not sent — fewer round trips, and a server
+    /// handler that cannot fire on a key it never asked for. A node without
+    /// the prop still hears everything, so nothing that worked stops.
+    fn wants_key(&self, f: NodeIx, key: &str) -> bool {
+        let Some(target) = self.ancestor_keyed(f) else {
+            return true;
+        };
+        let Some(atom) = self.session.atom_id("keys") else {
+            return true;
+        };
+        match self.session.node(target).and_then(|n| n.prop(atom)) {
+            Some(Value::List(want)) => want.iter().any(|k| matches!(k, Value::Str(s) if s == key)),
+            _ => true,
+        }
     }
 
     /// Spec 03 §3: the caret, the selection and the clipboard belong to the

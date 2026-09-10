@@ -1,6 +1,6 @@
 # Widget catalogue
 
-> The primitives are specified (`spec/03`) and painted. A hundred and seven plain
+> The primitives are specified (`spec/03`) and painted. A hundred and fifty plain
 > Soli functions build the catalogue below in
 > `examples/counter-app/app/controllers/eui_builders.sl`, and a `gallery`
 > component shows them together. Every signature is in
@@ -55,7 +55,8 @@ loading state), `link`, `icon_button`, `segmented_control`, `menu`,
 error display
 
 **Structure.** `card`, `panel`, `sheet`, `dialog`, `drawer`, `popover`,
-`tooltip`, `tabs`, `accordion`, `split_pane`, `resizable`, `stepper`
+`tooltip`, `tabs`, `accordion`, `split_pane` (draggable dividers on both axes,
+nested, keyboard-movable), `resizable`, `stepper`
 
 **Navigation.** `navbar`, `sidebar`, `breadcrumb`, `pagination`, `tree_view`
 
@@ -65,8 +66,19 @@ error display
 **Feedback.** `toast`, `banner`, `progress`, `spinner`, `skeleton`,
 `empty_state`, `avatar`, `badge`, `chip`
 
-Every one of them is themeable through roles, keyboard-navigable, and carries
-documented accessibility semantics.
+Every one of them is themeable through roles: two hardcoded colours in the whole
+file, both deliberate scrims, and everything else a role — which is why the same
+widget follows a viewer into dark mode, and into their desktop's palette, with
+the server never seeing a colour.
+
+The other two claims this page used to make were not true, and are being made
+true rather than restated. Every interactive widget is now built on `control`,
+which gives it hover, press and a disabled state, a size, and the props with
+which it declares what it is. Four have been moved onto it — `checkbox`,
+`switch`, `tabs`, `icon_button` — and twenty still answer the pointer with a
+cursor and nothing else. Keyboard navigation beyond `Tab` needs client work that
+has not been done: there is no roving focus, no type-ahead, and `Escape` never
+reaches the server. See [what is not there yet](/gaps).
 
 ## Sound and moving pictures
 

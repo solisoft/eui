@@ -52,8 +52,17 @@ Everything paints as a rounded rectangle. For a node with style `s`:
 2. If any `s.border_width` is non-zero and `s.border_color` is not none,
    stroke the inside of the border box with it.
 3. `text` paints its glyphs in `s.fg`, or the nearest ancestor's `fg`, or
-   `text.default`; `image` paints its texture; `icon` paints its glyph in
-   `fg`; `divider` paints a 1 px line in `bg` or `border.default`.
+   `text.default`; `image` paints its texture; `icon` paints the paths its
+   `name` selects, in `fg`, as strokes of the same rounded capsule §1.1's
+   polylines are made of, scaled to the largest square its content box holds
+   and centred in it; `divider` paints a 1 px line in `bg` or
+   `border.default`.
+   A client MUST paint nothing for a `name` it does not know, and MUST NOT
+   refuse the batch: an icon set grows without a protocol version, so an
+   older client leaves a gap of the right size where a newer one draws.
+   An `icon` with no width or height of its own takes a square from the
+   font size in force, so an icon set beside a label needs no measurement
+   from the server.
 4. Children paint in order; `stack` children in ascending `z`. An `overlay`
    paints in the **top layer**: after every other node in the tree, overlays
    among themselves in tree order, clipped by the window and by no ancestor —
@@ -239,6 +248,39 @@ no shader, no tessellator and no allocation beyond its quads.
   caret in view. A paste is the person's act on their own clipboard;
   `clipboard.read` (08 §7) governs reads the application would initiate.
 
+### 3.1 What a node may claim of the keyboard
+
+Four props, read by the client, for the things a server cannot do because it
+does not own them.
+
+| Prop | Value | Means |
+|---|---|---|
+| `modal` | boolean | while this node is laid out, `Tab` order is **its subtree alone** |
+| `autofocus` | boolean | focus starts here when the surface holding it arrives |
+| `keys` | list of key names | the keys this node wants; it is sent no others |
+
+- **`modal`.** A client MUST restrict its focus order to the subtree of the
+  innermost laid-out node carrying `modal`. Innermost, so a dialog opened
+  over a dialog traps inside the second. Without this, `Tab` walks out of an
+  open dialog into the page behind it, and no server can prevent it.
+- **`autofocus`.** On applying a batch that did not carry an explicit `Focus`
+  op, a client SHOULD focus the first laid-out node carrying `autofocus` —
+  but only when focus is not already where it belongs: inside the modal if
+  there is one, or anywhere at all if there is not. A batch arriving while
+  someone is tabbing through an open dialog MUST NOT pull them back to its
+  first field.
+- **`keys`.** A node holding a `key_down` or `key_up` handler and carrying
+  `keys` is sent **only** the keys it names, and only those are withheld from
+  the client's own meaning. So a `tab` may take `ArrowLeft` and `ArrowRight`
+  and still be activated by `Enter`, and a dialog may listen for `Escape`
+  without hearing every letter typed into the field inside it. A node with a
+  handler and no `keys` prop hears everything, as before.
+
+`Escape` follows from the third: it reaches a `key_down` handler on the path
+that asked for it, and focus is left alone so the surface can put it back. If
+nothing on the path asked, `Escape` drops focus, which is what it has always
+done.
+
 ## 4. The catalogue contract
 
 The catalogue is a server-side library; the client knows nothing of it. A
@@ -360,3 +402,54 @@ Bounds are the layout rectangles. Focus is §3's. An assistive technology's
 *focus* action focuses as `Tab` would, and its *click* action presses as
 `Enter` would: nothing it can do exceeds what a keyboard user can do, so
 the server needs no new validation and learns nothing new.
+
+### 6.1 What a node may declare
+
+The table above is the **default**. A node MAY carry accessibility semantics
+in its props, and where it does they take precedence over the kind. A client
+MUST ignore a prop it does not understand and MUST NOT refuse the batch for
+one: the vocabulary grows without a protocol version, so props cost nothing
+on the wire and an older client falls back to the mapping above.
+
+| Prop | Value | Means |
+|---|---|---|
+| `role` | one of the names below | what this node is |
+| `label` | string | the accessible name, **overriding** the text inside |
+| `description` | string | read after the name |
+| `checked` | `true`, `false`, `"mixed"` | a tick, including the third state |
+| `expanded` | boolean | open or shut |
+| `selected` | boolean | chosen within a set |
+| `disabled` | boolean | present but unavailable |
+| `read_only` | boolean | editable in principle, not now |
+| `required` | boolean | must be filled in |
+| `invalid` | boolean | filled in wrongly |
+| `busy` | boolean | working |
+| `modal` | boolean | owns the window while it is up |
+| `value_now` / `value_min` / `value_max` | number | where a value sits, and its range |
+| `pos_in_set` / `set_size` | integer ≥ 1 | place in a set, and the size of it **including what virtualisation left out** |
+| `level` | integer ≥ 1 | depth, for a heading or a tree item |
+| `orientation` | `"horizontal"`, `"vertical"` | which way a set runs |
+| `live` | `"polite"`, `"assertive"` | how urgently a change should be read |
+
+The role names: `button`, `link`, `check_box`, `radio`, `radio_group`,
+`switch`, `tab`, `tab_list`, `tab_panel`, `menu`, `menu_item`, `menu_bar`,
+`combo_box`, `list_box`, `option`, `slider`, `spin_button`, `progress`,
+`dialog`, `alert_dialog`, `alert`, `status`, `tooltip`, `tree`, `tree_item`,
+`toolbar`, `navigation`, `table`, `row`, `cell`, `grid`, `grid_cell`,
+`column_header`, `heading`, `separator`, `group`, `label`, `image`.
+
+Three rules follow from the table and are normative:
+
+1. **Leafness is a property of the role, not of having a handler.** A node
+   whose resolved role is `button`, `link`, `check_box`, `radio`, `switch`,
+   `tab`, `menu_item`, `option`, `tree_item` or `column_header` is named by
+   every text inside it and exposed without children. Any other role keeps
+   its children — so a `tab_list`, a `menu` or a `grid` does not swallow
+   what it holds, which the handler-based rule alone would have done.
+2. **A disabled node keeps its role.** Disabling a control in a catalogue
+   built on this protocol means removing its handlers, and without a
+   declared role there would be no button left to infer. A node carrying
+   `disabled: true` MUST keep its role and MUST NOT accept the *click* or
+   *focus* action.
+3. **A number that is present and zero is not an absence.** `value_now: 0`
+   is a slider at the bottom of its range, not a slider without a value.
