@@ -2139,18 +2139,16 @@ impl Shell {
 /// work: measured on this client, a window with a thirty-a-second animation
 /// passed through `about_to_wait` **125 000 times a second** while winit
 /// delivered thirty events, and it did so with a deadline a whole second
-/// out just as readily as with one 16 ms out. On Wayland `WaitUntil`
-/// behaves as `Poll`, which is what made an idle window cost an entire
-/// core; `ControlFlow::Wait` sleeps properly there. (Apple is the other way
-/// round — see [`idle_flow`] — which is why what the loop parks on is asked
-/// of that function rather than written here.)
+/// out just as readily as with one 16 ms out. `WaitUntil` behaves as
+/// `Poll` — on Wayland and on macOS alike, which is what made an idle
+/// window cost an entire core. `ControlFlow::Wait` sleeps properly, on
+/// Linux; on Apple see [`idle_flow`], where neither of them does.
 ///
 /// So the deadline is kept here rather than given to the loop: one thread
 /// that sleeps until the moment asked for and then wakes the loop through
 /// the proxy — the same path the transport already uses, which demonstrably
 /// works. It costs one thread per process and nothing at rest, because a
-/// thread waiting on a channel is not running. Both platforms are then
-/// free to park on whichever control flow actually sleeps for them.
+/// thread waiting on a channel is not running.
 struct Timer {
     /// Rearm, or `None` to sleep until told otherwise. The thread ends when
     /// this is dropped.
@@ -2493,74 +2491,42 @@ fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) ->
     }
 }
 
-/// How long an Apple loop parks for when it has nothing to do. Far enough
-/// away to be one wake-up an idle ten minutes, near enough that CoreFoundation
-/// treats it as an ordinary date.
-#[cfg(target_vendor = "apple")]
-const IDLE_PARK: std::time::Duration = std::time::Duration::from_secs(600);
-
 /// How to park the loop with nothing due.
 ///
-/// The two platforms want opposite things, and each one's answer was paid
-/// for in measurements:
+/// `Wait`, and on Linux that is the one that sleeps: `WaitUntil` never does,
+/// at any distance — measured, a deadline a whole second out spun the loop
+/// 125 000 times a second while `Wait` went silent on the instant. That is
+/// why a deadline is kept on a thread of ours at all (see [`Timer`]).
+///
+/// **On Apple neither control flow sleeps, and winit's waker is not why.**
+/// That waker is a `CFRunLoopTimer` with a hundred-nanosecond repeating
+/// interval; `Wait` parks it at `f64::MAX` behind a guard that fires once,
+/// and `WaitUntil` re-arms it at a fresh date on every pass. If the timer
+/// were what kept the loop awake, those two could not behave alike. They do.
+/// Measured on an idle shell with no session, the accessibility adapter off
+/// and the input method quiet — so with every confound of `ab564e0`'s week
+/// removed:
 ///
 /// ```text
-/// Linux        Wait sleeps      WaitUntil spins
-/// macOS, iOS   Wait spins       WaitUntil sleeps
+/// Wait         250 000 passes a second, 2.0 us of each in this function
+/// WaitUntil    283 000 passes a second, 1.0 us of each in this function
 /// ```
 ///
-/// On Linux `WaitUntil` never sleeps, at any distance — measured, a deadline
-/// a whole second out spun the loop 125 000 times a second while `Wait` went
-/// silent on the instant. That is why a deadline is kept on a thread of ours
-/// at all (see [`Timer`]).
+/// Both spin, and the faster of the two is the one whose body got cheaper —
+/// which says the loop is running flat out rather than being woken at some
+/// outside rate, because an outside rate would not care what our body costs.
+/// So the run loop's wait returns immediately, every time: something is
+/// always due or always readable, and it is neither a window event nor a
+/// wake from any of our threads, because the counter sees none of either.
 ///
-/// On Apple it is `Wait` that never sleeps, and the reason is in winit's
-/// waker. It is a `CFRunLoopTimer` created with a **hundred-nanosecond
-/// repeating interval**, to mimic polling; `Wait` parks it by pushing its
-/// fire date out to `f64::MAX`, and does so behind a guard that fires once:
-///
-/// ```text
-/// pub fn stop(&mut self) {
-///     if self.next_fire_date.is_some() {      // once, and never again
-///         self.next_fire_date = None;
-///         CFRunLoopTimerSetNextFireDate(self.timer, f64::MAX)
-///     }
-/// }
-/// ```
-///
-/// Anything that puts that repeating timer back in the run loop's hand
-/// afterwards — and a repeating timer reschedules itself by its interval,
-/// which here is a hundred nanoseconds — is never pushed out again, because
-/// winit believes it already stopped it. The loop then has a timer due on
-/// every pass and never sleeps: no source signalled it, no event was
-/// delivered, and it still burns a core. A *finite* `WaitUntil` takes the
-/// other branch, `start_at(Some(instant))`, which re-asserts the fire date
-/// whenever the instant differs from the last — so the deadline must be
-/// computed fresh every pass, not cached. That is the whole mechanism of
-/// the fix: a far-off date, re-armed, beats a date so far off it is only
-/// ever set once.
-///
-/// This was tried once before, in `ab564e0`, and withdrawn in `b48f0db`
-/// because the Mac spun just the same on `WaitUntil`. That measurement is
-/// void: it was taken while [`Shell::sync_ime`] was also waking the loop on
-/// every pass (fixed in `7cfec14`), so both control flows were bound to spin
-/// whatever the waker did. The same confound voided `EUI_A11Y=0` and every
-/// other exclusion of that week.
-///
-/// What is measured, on the Mac, with the adapter off and the input method
-/// quiet: 250 000 passes a second, all of them parked on `Wait`, nothing due,
-/// no wakes from any thread and no window events at all. A loop that is not
-/// woken and does not sleep is a loop the run loop never let sleep.
-#[cfg(target_vendor = "apple")]
-fn idle_flow(now: std::time::Instant) -> ControlFlow {
-    // Fresh every pass on purpose: winit only re-arms its timer when the
-    // instant changes, and re-arming is the point.
-    ControlFlow::WaitUntil(now + IDLE_PARK)
-}
-
-/// How to park the loop with nothing due: everywhere but Apple, `Wait` is
-/// the one that sleeps. See the Apple half above for why they differ.
-#[cfg(not(target_vendor = "apple"))]
+/// `WaitUntil` was tried here (`bb8dd5f`) on the theory that winit's
+/// once-only `stop()` left that repeating timer loose. The numbers above are
+/// what came back, and the theory is withdrawn rather than left in the tree
+/// asserting itself; CoreFoundation clamps an absurd fire date rather than
+/// overflowing on it, which is very likely why the guard was never fatal.
+/// What is left is a negative result worth having: after `7cfec14` the waker
+/// is exonerated on evidence, not on argument, and the next reading has to
+/// come from a profile of the spinning thread.
 fn idle_flow(_now: std::time::Instant) -> ControlFlow {
     ControlFlow::Wait
 }
