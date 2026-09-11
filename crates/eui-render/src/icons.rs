@@ -64,6 +64,50 @@ const LOGOUT: Icon = &[&[(13.0, 4.0), (5.0, 4.0), (5.0, 20.0), (13.0, 20.0)], &[
 /// have to look like a select that opens a list.
 const CALENDAR: Icon = &[&[(4.0, 6.0), (20.0, 6.0), (20.0, 20.0), (4.0, 20.0), (4.0, 6.0)], &[(4.0, 10.0), (20.0, 10.0)], &[(8.5, 3.5), (8.5, 7.5)], &[(15.5, 3.5), (15.5, 7.5)]];
 
+/// Four panes: a dashboard, which is what a dashboard looks like when it is
+/// one small square. Kept off the grid's edge so the four gaps read as gaps
+/// and not as one grid of lines.
+const PANES: Icon = &[
+    &[(4.0, 4.0), (10.5, 4.0), (10.5, 10.5), (4.0, 10.5), (4.0, 4.0)],
+    &[(13.5, 4.0), (20.0, 4.0), (20.0, 10.5), (13.5, 10.5), (13.5, 4.0)],
+    &[(4.0, 13.5), (10.5, 13.5), (10.5, 20.0), (4.0, 20.0), (4.0, 13.5)],
+    &[(13.5, 13.5), (20.0, 13.5), (20.0, 20.0), (13.5, 20.0), (13.5, 13.5)],
+];
+
+/// A page with a folded corner and two lines of writing: an order, an
+/// invoice, a document of any kind. The fold is what stops it reading as a
+/// plain rectangle at 16 px.
+const DOC: Icon =
+    &[&[(6.0, 3.0), (14.0, 3.0), (19.0, 8.0), (19.0, 21.0), (6.0, 21.0), (6.0, 3.0)], &[(14.0, 3.0), (14.0, 8.0), (19.0, 8.0)], &[(9.5, 13.0), (15.5, 13.0)], &[(9.5, 17.0), (15.5, 17.0)]];
+
+/// A head and the shoulders under it, with a second person behind:
+/// customers, of whom there is more than one. The head is a twelve-sided
+/// circle, as `search`'s ring is.
+const USERS: Icon = &[
+    &[(13.5, 8.0), (13.1, 9.5), (12.0, 10.6), (10.5, 11.0), (9.0, 10.6), (7.9, 9.5), (7.5, 8.0), (7.9, 6.5), (9.0, 5.4), (10.5, 5.0), (12.0, 5.4), (13.1, 6.5), (13.5, 8.0)],
+    &[(3.5, 20.0), (3.5, 17.5), (6.0, 14.5), (15.0, 14.5), (17.5, 17.5), (17.5, 20.0)],
+    &[(16.0, 5.5), (18.5, 7.0), (18.5, 9.5), (16.5, 11.0)],
+    &[(19.0, 14.5), (20.5, 17.0), (20.5, 20.0)],
+];
+
+/// A carton seen from the front, with the seam down it: stock on a shelf.
+const BOX: Icon = &[&[(3.5, 7.5), (12.0, 3.5), (20.5, 7.5), (20.5, 16.5), (12.0, 20.5), (3.5, 16.5), (3.5, 7.5)], &[(3.5, 7.5), (12.0, 11.5), (20.5, 7.5)], &[(12.0, 11.5), (12.0, 20.5)]];
+
+/// Three bars standing on a floor: a report. The bars rise left to right so
+/// the shape has a direction, which a report generally does.
+const CHART: Icon = &[&[(4.0, 20.0), (20.5, 20.0)], &[(7.5, 20.0), (7.5, 14.0)], &[(12.0, 20.0), (12.0, 9.5)], &[(16.5, 20.0), (16.5, 5.0)]];
+
+/// Two rails with a handle on each, at different settings: settings. A gear
+/// is the conventional mark and a poor one here — its teeth collapse into a
+/// ring by 16 px, and this set is stroked, not filled.
+///
+/// The handles are ticks across the rails, not dots on them. A dot is a
+/// capsule of zero length, so it is a disc of the stroke's own radius — one
+/// unit on this grid, two thirds of a pixel at 16 px — drawn on top of the
+/// very line it is meant to mark. It was invisible, and the icon read as an
+/// equals sign.
+const SLIDERS: Icon = &[&[(4.0, 8.5), (20.0, 8.5)], &[(4.0, 15.5), (20.0, 15.5)], &[(9.0, 5.5), (9.0, 11.5)], &[(15.5, 12.5), (15.5, 18.5)]];
+
 /// A triangle with a bang in it, for a warning.
 const WARNING: Icon = &[&[(12.0, 4.0), (21.0, 19.5), (3.0, 19.5), (12.0, 4.0)], &[(12.0, 10.0), (12.0, 14.5)], &[(12.0, 17.0)]];
 
@@ -95,6 +139,12 @@ pub fn icon(name: &str) -> Option<Icon> {
         "calendar" => CALENDAR,
         "logout" => LOGOUT,
         "warning" => WARNING,
+        "grid" | "dashboard" => PANES,
+        "doc" | "orders" => DOC,
+        "users" | "customers" => USERS,
+        "box" | "inventory" => BOX,
+        "chart" | "reports" => CHART,
+        "sliders" | "settings" => SLIDERS,
         _ => return None,
     })
 }
@@ -125,6 +175,18 @@ pub const NAMES: &[&str] = &[
     "calendar",
     "logout",
     "warning",
+    "grid",
+    "dashboard",
+    "doc",
+    "orders",
+    "users",
+    "customers",
+    "box",
+    "inventory",
+    "chart",
+    "reports",
+    "sliders",
+    "settings",
 ];
 
 #[cfg(test)]

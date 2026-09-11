@@ -926,6 +926,9 @@ end
 # page moves under a header that stays.
 
 ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Reports", "Settings"]
+# What each section looks like, from the client's own set: no font, no
+# fetch, a name and a table (`crates/eui-render/src/icons.rs`).
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Reports": "chart", "Settings": "sliders"}
 
 ERP_PER_PAGE = 7
 
@@ -995,7 +998,7 @@ end
 # two borders down one edge is a panel with a seam in it.
 def erp_rail(state)
   links = restyle(
-    sidebar(ERP_SECTIONS, state["section"], "nav"),
+    sidebar(ERP_SECTIONS, state["section"], "nav", ERP_SECTION_ICONS),
     {"width": "100%", "bg": "none", "border": 0, "pad": 2}
   )
   column(
@@ -2468,7 +2471,7 @@ def gallery_view(raw_state)
   layers = layers.concat([drawer(
     [
       h2("Meridian"),
-      restyle(sidebar(ERP_SECTIONS, section, "nav"), {"width": "100%", "bg": "none", "border": 0, "pad": 0}),
+      restyle(sidebar(ERP_SECTIONS, section, "nav", ERP_SECTION_ICONS), {"width": "100%", "bg": "none", "border": 0, "pad": 0}),
       spacer(),
       erp_profile(state),
       button("Close", "nav_toggle")

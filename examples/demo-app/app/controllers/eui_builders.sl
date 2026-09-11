@@ -2224,7 +2224,19 @@ def navbar(brand, links, active, on_go)
   )
 end
 
-def sidebar(links, active, on_go)
+# A sidebar: one row per destination, and the one you are on marked.
+#
+# `icons` names an icon per link — `{"Orders": "doc"}` — and a link without
+# one still gets the width, so the labels of a part-iconed menu line up with
+# each other instead of stepping in and out.
+#
+# The row you are on is marked three ways, because one is not enough: a
+# filled ground for the eye scanning the column, a weight and a colour for
+# the eye reading it, and a bar down the leading edge that survives both a
+# colour blindness and the high-contrast palette. The bar is a box inside
+# the row rather than a border on it, so nothing shifts by two pixels as the
+# selection moves.
+def sidebar(links, active, on_go, icons = {})
   column(
     {
       "gap": 1,
@@ -2235,20 +2247,38 @@ def sidebar(links, active, on_go)
       "border_color": "border.subtle"
     },
     links.map(fn(l) {
+      here = l == active
+      mark = {"k": "box", "s": {
+        "width": 2,
+        "height": 16,
+        "radius": 1,
+        "shrink": 0,
+        "bg": here ? "accent.base" : "none"
+      }}
+      glyph = icon(icons[l] ?? "dot", {
+        "width": 16,
+        "height": 16,
+        "shrink": 0,
+        "fg": here ? "accent.base" : "text.muted"
+      })
       {
         "k": "box",
         "s": {
-          "pad": [1, 2, 1, 2],
-          "radius": 1,
-          "bg": l == active ? "surface.sunken" : "none",
-          "cursor": "pointer"
+          "display": "row",
+          "align": "center",
+          "gap": 2,
+          "pad": [2, 3, 2, 2],
+          "radius": 2,
+          "bg": here ? "surface.sunken" : "none",
+          "cursor": "pointer",
+          "transition": "fast"
         },
         "on": {"click": on_go},
-        "p": {"path": l},
-        "c": [text(l, l == active ? {
+        "p": {"path": l, "label": l, "current": here},
+        "c": [mark, glyph, text(l, here ? {
           "weight": "semibold",
           "fg": "accent.base"
-        } : {})]
+        } : {"fg": "text.default"})]
       }
     })
   )
