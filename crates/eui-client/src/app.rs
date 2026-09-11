@@ -271,7 +271,7 @@ struct Shell {
     /// rather than recomputed so a button pressed in one and released in
     /// the other does not arrive as half a click in each.
     pointer_in_app: bool,
-    proxy: EventLoopProxy<Wake>,
+    proxy: Proxy,
     #[cfg(has_a11y)]
     access: Option<accesskit_winit::Adapter>,
     #[cfg(has_clipboard)]
@@ -471,9 +471,9 @@ fn read_chunks(path: &std::path::Path, tx: &mpsc::SyncSender<Result<(Vec<u8>, bo
 /// The channel holds two chunks: the disk runs ahead of the socket by that
 /// much and no further, so a large attachment costs a fixed amount of
 /// memory however fast the disk is and however slow the network.
-fn start_reading(t: &mut Tab, id: u32, path: std::path::PathBuf, proxy: &EventLoopProxy<Wake>) {
+fn start_reading(t: &mut Tab, id: u32, path: std::path::PathBuf, proxy: &Proxy) {
     let (tx, rx) = mpsc::sync_channel::<Result<(Vec<u8>, bool), String>>(2);
-    let proxy = proxy.clone();
+    let proxy = Arc::clone(proxy);
     let spawned = std::thread::Builder::new().name("eui-upload".into()).spawn(move || {
         read_chunks(&path, &tx, || {
             let _ = proxy.send_event(Wake::Files);
@@ -518,7 +518,7 @@ impl Tab {
     /// `None` only when the worker could not be started — a refused
     /// manifest is reported in the tab rather than losing it, because in a
     /// shell the tab is where a person would look for the reason.
-    fn open(launch: Launch, proxy: EventLoopProxy<Wake>, renderer: &eui_render::Renderer, w: f32, h: f32, scale: f32) -> Self {
+    fn open(launch: Launch, proxy: Proxy, renderer: &eui_render::Renderer, w: f32, h: f32, scale: f32) -> Self {
         // The driver — decoding, layout, the VM — in its own confined
         // process where the platform allows (08 §10); this process keeps
         // the window, the GPU and the network. One per tab: an application
@@ -594,9 +594,9 @@ impl Tab {
     /// Open a socket for this tab's URL, with whatever the driver says the
     /// opening frame is now — a fresh `Hello` on the first attempt, and one
     /// offering the session back on every attempt after it (spec 01 §4.1).
-    fn dial(&mut self, proxy: &EventLoopProxy<Wake>) {
+    fn dial(&mut self, proxy: &Proxy) {
         let hello = self.backend.hello();
-        let p = proxy.clone();
+        let p = Arc::clone(proxy);
         match transport::connect(&self.url, hello, self.cookie.clone(), self.host_loopback, move || {
             let _ = p.send_event(Wake::Transport);
         }) {
@@ -733,12 +733,12 @@ impl Tab {
     /// Spec 03 §7: the device is open exactly while the tab has a sound
     /// loaded — nothing playing, nothing running, no wakeups. A tab keeps
     /// its sound when it goes to the back, as a browser tab does.
-    fn sync_audio(&mut self, proxy: &EventLoopProxy<Wake>) {
+    fn sync_audio(&mut self, proxy: &Proxy) {
         let wanted = self.backend.audio_playing();
         match (wanted, self.audio.is_some()) {
             (true, false) => {
                 let (tx, rx) = mpsc::channel();
-                let proxy = proxy.clone();
+                let proxy = Arc::clone(proxy);
                 match crate::audio::Output::start(self.backend.audio_tap(), tx, move || {
                     let _ = proxy.send_event(Wake::Audio);
                 }) {
@@ -817,7 +817,7 @@ impl Shell {
     /// With `chrome`, the window gets a tab strip and can be given more
     /// applications later; without it, it is the one chromeless window
     /// `eui <url>` and an embedding host have always had.
-    fn open(launches: Vec<Launch>, chrome: bool, event_loop: &ActiveEventLoop, proxy: EventLoopProxy<Wake>, shared: &mut Option<Shared>) -> Option<Self> {
+    fn open(launches: Vec<Launch>, chrome: bool, event_loop: &ActiveEventLoop, proxy: Proxy, shared: &mut Option<Shared>) -> Option<Self> {
         // The build is in the title because a window cannot otherwise be
         // told from one built an hour earlier, and a demo downloaded from
         // the wrong run looks exactly like the right one.
@@ -862,7 +862,7 @@ impl Shell {
         // whether the platform's accessibility is behind a cost, on a
         // binary somebody already has, without asking them to build one.
         #[cfg(has_a11y)]
-        let access = (!std::env::var("EUI_A11Y").is_ok_and(|v| v == "0")).then(|| accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, proxy.clone()));
+        let access = (!std::env::var("EUI_A11Y").is_ok_and(|v| v == "0")).then(|| accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, EventLoopProxy::clone(&proxy)));
 
         // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
         // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
@@ -986,7 +986,7 @@ impl Shell {
         let renderer = &gpu_shared.renderer;
         let (w, h) = shell.content_size();
         for l in launches {
-            let tab = Tab::open(l, shell.proxy.clone(), renderer, w, h, scale);
+            let tab = Tab::open(l, Arc::clone(&shell.proxy), renderer, w, h, scale);
             shell.tabs.push(tab);
         }
         shell.rebuild_chrome();
@@ -1003,7 +1003,7 @@ impl Shell {
             shell.follow_desktop_theme();
             // One wake per burst of changes: a switch touches several files
             // and the window re-reads the theme once, when it gets to it.
-            let proxy = shell.proxy.clone();
+            let proxy = Arc::clone(&shell.proxy);
             let pending = Arc::clone(&shell.theme_pending);
             shell.theme_watch = crate::desktop_theme::watch(move || {
                 if !pending.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1077,7 +1077,7 @@ impl Shell {
         let (w, h) = self.content_size();
         let scale = self.window.scale_factor() as f32;
         let launch = Launch::new(url, 0);
-        let tab = Tab::open(launch, self.proxy.clone(), renderer, w, h, scale);
+        let tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
         if let Some(slot) = self.tabs.get_mut(self.active) {
             let old = std::mem::replace(slot, tab);
             old.close("replaced");
@@ -1256,7 +1256,7 @@ impl Shell {
     /// them, so a window waiting on a server that is coming back up sleeps
     /// until it is worth another attempt and not a millisecond less.
     fn serve_links(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
-        let proxy = self.proxy.clone();
+        let proxy = Arc::clone(&self.proxy);
         let mut due: Option<std::time::Instant> = None;
         let mut changed = false;
         for t in &mut self.tabs {
@@ -1308,7 +1308,7 @@ impl Shell {
             return;
         }
         self.files_dirty = false;
-        let proxy = self.proxy.clone();
+        let proxy = Arc::clone(&self.proxy);
         for i in 0..self.tabs.len() {
             let asks = match self.tabs.get_mut(i) {
                 Some(t) => t.backend.take_file_asks(),
@@ -1337,9 +1337,9 @@ impl Shell {
     /// Open the platform's own dialog, on its own thread: a modal panel
     /// must not stop the window drawing behind it, and a portal on Linux
     /// can take a second to appear.
-    fn open_dialog(&mut self, i: usize, ask: FileAsk, proxy: &EventLoopProxy<Wake>) {
+    fn open_dialog(&mut self, i: usize, ask: FileAsk, proxy: &Proxy) {
         let Some(t) = self.tabs.get_mut(i) else { return };
-        let (token, tx, proxy) = (ask.token, t.files.tx.clone(), proxy.clone());
+        let (token, tx, proxy) = (ask.token, t.files.tx.clone(), Arc::clone(proxy));
         #[cfg(has_files)]
         {
             eprintln!(
@@ -1395,7 +1395,7 @@ impl Shell {
     }
 
     /// A dialog came back.
-    fn dialog_answered(&mut self, i: usize, answer: Dialog, proxy: &EventLoopProxy<Wake>) {
+    fn dialog_answered(&mut self, i: usize, answer: Dialog, proxy: &Proxy) {
         let Some(t) = self.tabs.get_mut(i) else { return };
         match answer {
             Dialog::Dismissed(token) => t.backend.dismissed(token),
@@ -1683,7 +1683,7 @@ impl Shell {
             // A scroll that landed during this paint reports its offset now.
             t.send(landed);
             // A batch may have added a sound, or taken the last one away.
-            let proxy = self.proxy.clone();
+            let proxy = Arc::clone(&self.proxy);
             t.sync_audio(&proxy);
         }
         // Hover settles at paint; so does what the pointer is over.
@@ -2161,7 +2161,7 @@ struct Timer {
 impl Timer {
     /// Start the thread. `None` if one could not be spawned, in which case
     /// the loop falls back to `WaitUntil` and its old behaviour.
-    fn start(proxy: EventLoopProxy<Wake>) -> Option<Self> {
+    fn start(proxy: Proxy) -> Option<Self> {
         let (tx, rx) = mpsc::channel::<Option<std::time::Instant>>();
         let spawned = std::thread::Builder::new().name("eui-frame-timer".into()).spawn(move || {
             let mut deadline: Option<std::time::Instant> = None;
@@ -2212,7 +2212,7 @@ impl Timer {
 
 /// The process: the event loop, and every window running in it.
 pub struct App {
-    proxy: EventLoopProxy<Wake>,
+    proxy: Proxy,
     /// The GPU, made by the first window to open and used by every one
     /// after it. `None` until then, and on a machine with no adapter.
     shared: Option<Shared>,
@@ -2231,13 +2231,15 @@ impl App {
     /// Build for the applications to open when the loop resumes: one
     /// chromeless window each.
     pub fn new(launches: Vec<Launch>, proxy: EventLoopProxy<Wake>) -> Self {
-        let timer = Timer::start(proxy.clone());
+        let proxy = Arc::new(proxy);
+        let timer = Timer::start(Arc::clone(&proxy));
         Self { proxy, shared: None, pending: launches.into_iter().map(|l| (vec![l], false)).collect(), shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
     /// Build for one window with a tab strip in it, and nothing open.
     pub fn shell(proxy: EventLoopProxy<Wake>) -> Self {
-        let timer = Timer::start(proxy.clone());
+        let proxy = Arc::new(proxy);
+        let timer = Timer::start(Arc::clone(&proxy));
         Self { proxy, shared: None, pending: vec![(Vec::new(), true)], shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
@@ -2278,7 +2280,7 @@ impl ApplicationHandler<Wake> for App {
             }
         }
         for (launches, chrome) in std::mem::take(&mut self.pending) {
-            match Shell::open(launches, chrome, event_loop, self.proxy.clone(), &mut self.shared) {
+            match Shell::open(launches, chrome, event_loop, Arc::clone(&self.proxy), &mut self.shared) {
                 Some(s) => {
                     self.shells.insert(s.window.id(), s);
                 }
@@ -2630,6 +2632,27 @@ pub fn launch_all(launches: Vec<Launch>) -> Result<(), String> {
     run_loop(move |proxy| App::new(launches, proxy))
 }
 
+/// One handle on the loop, held by everything that has to wake it.
+///
+/// Shared rather than cloned, because on macOS `EventLoopProxy::clone` is
+/// not a clone. It builds a whole new `CFRunLoopSource`, adds it to the
+/// main run loop under `kCFRunLoopCommonModes`, and calls `CFRunLoopWakeUp`
+/// — and its `Drop` releases the source without ever removing it from the
+/// loop. So every clone woke the loop and left another source behind for
+/// ever; cloning one per pass of `about_to_wait`, as `serve_links` and
+/// `serve_files` did, is a loop that wakes itself a quarter of a million
+/// times a second and walks a set of sources that never stops growing.
+///
+/// Measured on an idle window with no session: 283 000 passes a second, a
+/// microsecond of each inside `CFRunLoopAddSource`, and it was the profile
+/// of the spinning thread that finally named it — no counter here could,
+/// because nothing was ever *sent* and so nothing was ever counted.
+///
+/// An `Arc` costs an atomic increment and touches no run loop at all. The
+/// one place that still needs a real one is the accessibility adapter,
+/// which takes a proxy by value: one source per window, made once.
+type Proxy = Arc<EventLoopProxy<Wake>>;
+
 /// The event loop this platform starts from.
 #[cfg(not(target_os = "android"))]
 fn build_event_loop() -> Result<EventLoop<Wake>, String> {
@@ -2652,8 +2675,11 @@ fn build_event_loop() -> Result<EventLoop<Wake>, String> {
 /// main thread.
 fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), String> {
     let event_loop = build_event_loop()?;
+    // Two asked of the loop rather than one cloned: on macOS a clone is a
+    // run-loop source that is never taken back out (see `Proxy`), and
+    // `create_proxy` is the same cost said plainly.
+    let mut app = build(event_loop.create_proxy());
     let proxy = event_loop.create_proxy();
-    let mut app = build(proxy.clone());
     // A signal handler can only store a flag; this thread turns the flag
     // into a wake, and stops when the loop is gone.
     WINDOW_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
