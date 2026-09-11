@@ -2222,6 +2222,40 @@ fn a_refused_session_puts_its_reason_where_it_can_be_read() {
     let text: Vec<String> = session.preorder(root).filter_map(|ix| session.text_of(ix).map(ToOwned::to_owned)).collect();
     assert!(text.iter().any(|t| t == "The application stopped"), "no heading: {text:?}");
     assert!(text.iter().any(|t| t.contains("the signature does not verify")), "the reason is not on the page: {text:?}");
+
+    // And it can be taken away. An application that will not start has no
+    // window of its own to say why in, so this page is the only record of
+    // it — and a record nobody can select is one that gets photographed off
+    // a screen and typed back in by hand. The reason is an editable, it has
+    // the keyboard already, and the two keystrokes the page names put it on
+    // the clipboard.
+    let why = session.preorder(root).find(|ix| session.node(*ix).is_some_and(|n| n.kind == eui_proto::NodeKind::TextArea)).expect("the reason is a field, not a label");
+    assert_eq!(d.focused(), Some(why), "and it holds the keyboard, so no hunting for it first");
+    for key in ["a", "c"] {
+        let _ = d.input(Input::Key { key: key.into(), modifiers: 2, down: true });
+    }
+    assert_eq!(d.take_clipboard().as_deref(), Some("manifest: the signature does not verify"), "select all, copy");
+}
+
+/// A long reason wraps instead of running off the side of the window.
+///
+/// It was a one-line field before, which put everything past the fold out of
+/// reach — the part of a parser's complaint that names the file and the line
+/// is the end of it, and the end was what scrolled away.
+#[test]
+fn a_long_reason_wraps_rather_than_running_off_the_page() {
+    let long = "view 'chat#chat_view' failed: Parser error in /home/someone/Work/soli/eui/examples/demo-app/app/controllers/chat_controller.sl: Unexpected token 'from', expected identifier at 267:24";
+    let mut d = Driver::new(900.0, 500.0, 1.0, 0);
+    d.close(long.into());
+    let _ = d.paint(900, 500);
+
+    let session = d.session();
+    let root = session.root().expect("the stopped page is mounted");
+    let why = session.preorder(root).find(|ix| session.node(*ix).is_some_and(|n| n.kind == eui_proto::NodeKind::TextArea)).expect("the reason is a field");
+    let r = d.layout().rect(why).expect("laid out");
+    assert!(r.w <= 560.0, "held to a readable measure, got {}", r.w);
+    assert!(r.h > 40.0, "and it wrapped onto more than one line, got {}", r.h);
+    assert!(r.x >= 0.0 && r.x + r.w <= 900.0, "and it is inside the window: {r:?}");
 }
 
 /// Spec 03 §3 and 07 §6: a local handler on `focus` runs when the field

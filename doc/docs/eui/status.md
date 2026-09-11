@@ -390,11 +390,14 @@ catalogue's buttons fade between their hover and pressed states.
 rectangle, area, circle, arc — that the renderer draws with the one quad
 pipeline it already has, a rotation added to the vertex stage so a segment
 is a capsule and an arc a fan of them. Soli resolves the colours before
-encoding. The catalogue's `chart_line`, `chart_area`, `chart_bar` and
-`chart_donut` build the paths server-side; the gallery shows all four. Each
-one answers the pointer without a round trip: boxes over the drawing carry
-local handlers that light the column under it and fade in a value chip, and
-the donut's legend writes the reading into the hole.
+encoding. The catalogue's `chart_line`, `chart_area`, `chart_bar`,
+`chart_donut`, `chart_candle` and `chart_gantt` build the paths server-side;
+the gallery shows all six. Each one answers the pointer without a round trip:
+boxes over the drawing carry local handlers that light the column under it and
+fade in a value chip, and the donut's legend writes the reading into the hole.
+The candlestick scales to the extent of its lows and highs rather than to a
+top, and the Gantt runs its bands across the rows rather than down the
+columns; neither needed a byte of client.
 
 **Keyboard focus, and the widgets that needed it.** The client walks `Tab`
 order itself — editable fields and anything with a `click` handler, in

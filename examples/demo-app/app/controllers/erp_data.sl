@@ -484,3 +484,111 @@ end
 def erp_mix_labels
   ["Direct", "Search", "Social", "Mail"]
 end
+
+# The x axis of the three weekly charts. `line` and `area` carry seven days,
+# `bars` six, so the labels are taken from the front of one list rather than
+# kept in three.
+def erp_days(n)
+  ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].slice(0, n)
+end
+
+# Nine sessions of a price, `[open, high, low, close]`, oldest first: what the
+# candlestick draws. The shape is the point — two sessions up, a gap down, a
+# session that opened and closed at the same price, and a recovery through the
+# high — so a reader can tell a wick from a body at a glance.
+def erp_sessions
+  [
+    [42, 45, 41, 44],
+    [44, 47, 43, 46],
+    [46, 47, 42, 43],
+    [43, 44, 40, 41],
+    [41, 43, 40, 41],
+    [41, 46, 41, 45],
+    [45, 48, 44, 47],
+    [47, 49, 45, 46],
+    [46, 52, 46, 51]
+  ]
+end
+
+# The rollout as the Gantt draws it: a name, the day it starts, the days it
+# runs. Fifteen days, and two pairs that overlap — a plan with nothing
+# overlapping in it would draw a staircase and prove nothing.
+def erp_plan
+  [
+    {"label": "Spec", "start": 0, "span": 3},
+    {"label": "Schema", "start": 2, "span": 4},
+    {"label": "Import", "start": 5, "span": 5},
+    {"label": "Pilot", "start": 9, "span": 4},
+    {"label": "Rollout", "start": 12, "span": 3}
+  ]
+end
+
+# ---- The figures the multi-series charts draw ------------------------------
+#
+# Three regions over six weeks, one set of numbers read four ways: grouped
+# bars compare the regions week by week, the multi-line reads each region's
+# trend, and the stack reads the weekly total the three make together. Using
+# one set for three forms is deliberate — it is how a reader learns that the
+# form is a choice about the question, not about the data.
+def erp_regions
+  [[4, 6, 5, 9, 7, 8], [3, 3, 5, 4, 6, 7], [2, 4, 4, 5, 5, 9]]
+end
+
+def erp_region_names
+  ["North", "South", "Export"]
+end
+
+def erp_weeks
+  ["W1", "W2", "W3", "W4", "W5", "W6"]
+end
+
+# Products by revenue, unsorted on purpose: the chart ranks them, and a
+# ranked chart that trusts its input to arrive sorted is a chart that lies the
+# first time it does not.
+def erp_top_products
+  [
+    {"label": "Bearing 40mm", "value": 38},
+    {"label": "Hex bolt M8", "value": 61},
+    {"label": "Drive belt", "value": 24},
+    {"label": "Gasket set", "value": 47},
+    {"label": "Seal kit", "value": 15},
+    {"label": "Coupling", "value": 29}
+  ]
+end
+
+# Each region against its target, signed. Zero is the target, not zero sales.
+def erp_variance
+  [
+    {"label": "North", "value": 12},
+    {"label": "South", "value": -5},
+    {"label": "Export", "value": 21},
+    {"label": "Retail", "value": -14},
+    {"label": "Trade", "value": 3}
+  ]
+end
+
+# Orders taken by weekday and part of day: the grid a heatmap wants, where
+# what the reader is after is where the load falls rather than any one number.
+def erp_load
+  [[2, 5, 9, 7, 4], [4, 8, 12, 10, 6], [1, 3, 6, 5, 2]]
+end
+
+def erp_load_rows
+  ["Morning", "Afternoon", "Evening"]
+end
+
+def erp_load_cols
+  ["Mon", "Tue", "Wed", "Thu", "Fri"]
+end
+
+# Lead time in days, before the new schedule and after it. Down is better
+# here, which is why the chart names the two ends rather than colouring them
+# good and bad.
+def erp_lead_times
+  [
+    {"label": "Bearing 40mm", "from": 14, "to": 9},
+    {"label": "Hex bolt M8", "from": 6, "to": 4},
+    {"label": "Drive belt", "from": 21, "to": 18},
+    {"label": "Gasket set", "from": 11, "to": 5}
+  ]
+end

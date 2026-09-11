@@ -16,7 +16,19 @@ root node — set a node's text or a prop, switch the viewer's palette mode,
 and emit a server event. Nodes are
 named by **key**, the atom carried in the node's `key` field, so a chunk is
 independent of any one render's ids and is interned once per session. Nothing
-else. There is no I/O, no clock, no randomness, no allocation beyond the
+else.
+
+Key atom **`0` names the node the chunk is running on**. No node can answer
+to it otherwise — an unkeyed node is never entered in the key map — so the
+meaning is unambiguous, and a client MUST resolve it to the node whose
+handler is being run. This is what `self` compiles to.
+
+It matters more than a convenience. A chunk that named its own node by key
+would depend on that key, so a server interning by source would intern one
+chunk per key: every row of a list carrying the same hover would spend a
+chunk, and [`10-budgets.md`](10-budgets.md) allows 4 095 of them. With `0`,
+one source is one chunk however many nodes carry it, and a list of four
+thousand rows costs exactly one. There is no I/O, no clock, no randomness, no allocation beyond the
 operand stack and the strings it holds, and no way to reach another
 component's tree.
 
@@ -68,7 +80,7 @@ its operands. All varints are as in [`02-wire-format.md`](02-wire-format.md).
 | `0x1B` | `concat` | | `str str → str` | |
 | `0x20` | `jump` | `i16` | | relative to the next instruction |
 | `0x21` | `jump_if_false` | `i16` | `bool →` | |
-| `0x30` | `set_text` | `key:varint` | `str →` | the text of the first node whose key is atom `key`, locally |
+| `0x30` | `set_text` | `key:varint` | `str →` | the text of the first node whose key is atom `key` — or, for `0`, the node the chunk is on — locally |
 | `0x31` | `set_prop` | `key:varint atom:varint` | `any →` | that node's prop, locally |
 | `0x33` | `set_style` | `key:varint style:varint` | | point that node at a style table id, locally |
 | `0x32` | `emit` | `atom:varint` | | queue a server event named by the atom, payload = the root props |

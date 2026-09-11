@@ -307,6 +307,40 @@ appear in the file.
 | `icon_box_px(size)` / `checkbox_box_px(size)` | The square an icon button occupies, and the mark of a checkbox |
 | `size_spec(size)` | The whole row of the size table |
 
+### Hover belongs to the deepest node
+
+The client hovers whatever is **deepest** under the pointer and sends
+`pointer_leave` to what it was over before `pointer_enter` to what it is over
+now. So moving from a row onto a button *inside that row* is a genuine
+**leave of the row**, and a row whose `leave` hides something — a toolbar
+revealed on hover, say — hides it exactly as you reach for it, then shows it
+again the moment the pointer lands back on the row. That is a flicker, and no
+amount of care in the row alone fixes it: the row really is being left.
+
+The rule that works is that every hoverable node *inside* the row keeps the
+row's state up itself. `leave` then `enter` are applied in that order, so
+every crossing nets out right:
+
+| Crossing | Events | Result |
+|---|---|---|
+| row body → a tool | row leave hides, tool enter shows | shown |
+| tool → another tool | tool leave hides, tool enter shows | shown |
+| tool → row body | tool leave hides, row enter shows | shown |
+| tool → elsewhere | tool leave hides, nothing shows | hidden |
+| row body → elsewhere | row leave hides, nothing shows | hidden |
+
+A local chunk may name any **keyed** node, not only `self` — `self.style =
+@hover; tools_7.style = @shown` — and chunk source is lexed as identifiers, so
+a key that reaches one may hold no `:`, `/` or `-`.
+
+Two more things worth knowing before you hide something on hover. `opacity`
+is per node and **does not reach children**, so setting it on a container
+leaves every glyph inside it visible; `fg` *is* inherited by any child that
+sets none, which is why a toolbar hidden this way declines to set its own.
+And a node that is hidden by colour rather than by `display` stays laid out —
+which is what you want, since a node appearing on hover would reflow the text
+beside it.
+
 `TONES` names five — `accent`, `neutral`, `ghost`, `danger`, `quiet`. Each is a
 resting colour set plus a **hover and a press delta**. Deltas, not whole styles:
 merged over whatever base the caller ended up with, they keep every geometry
@@ -637,15 +671,77 @@ then numbers in logical pixels from the content box (`spec/03 §1.1`):
 | `chart_line(id, values, w, h)` | Grid, polyline, a dot per point |
 | `chart_area(id, values, w, h)` | Grid, filled area, line on top |
 | `chart_bar(id, values, w, h)` | Grid and bars, each an eighth of a slot apart |
-| `chart_donut(id, parts, labels, w, h)` | One arc per part in the four `base` roles, the total in the hole, a legend under it |
+| `chart_donut(id, parts, labels, w, h)` | One arc per part in the series roles, the total in the hole, a legend under it |
+| `chart_candle(id, bars, w, h)` | A candlestick a session, `[open, high, low, close]`: a wick from high to low and a body from open to close, `success` up and `danger` down |
+| `chart_gantt(id, tasks, w, h)` | A bar a task, `{"label", "start", "span"}`: the names in a gutter, the plot beside them, one band a row |
 | `chart_points(values, w, h)` | The series scaled into `w × h` as `[x, y]` pairs |
 | `chart_grid(w, h)` | Four hairlines to read a series against |
 | `chart_max(values)` | The top of the scale, never 0 |
 | `chart_spans(centres, w)` | The width of each hover band, from where the marks are |
+| `chart_extent(bars)` | `[low, high]` over a candlestick series — a price scale is an extent, not a top |
+| `chart_grid_v(w, h, divisions)` | Hairlines down rather than across, for an axis that is a time |
 | `flatten_points(points)` | `[[x, y], …]` → `[x, y, …]` |
+| `chart_role(i)` | The `i`-th series colour, in fixed order, never cycled |
+| `chart_scale_ticks(low, high)` | The four readings the four hairlines stand for |
+| `chart_y_axis(ticks, h, gutter)` | Those readings down the left of the plot |
+| `chart_x_axis_bands(labels, spans)` | Categories centred under the bands they name |
+| `chart_x_axis_points(labels, w)` | Categories spread between the ends, for marks that sit on the edges |
+| `chart_value_axis(low, high, w, divisions)` | Readings along the bottom, for a chart whose rows are the categories |
+| `chart_framed(ticks, x_axis, w, h, gutter, layers)` | The plot with both axes around it |
+
+More than one series, where `sets` is a list of series and `names` names them:
+
+| Signature | Notes |
+|---|---|
+| `chart_multi_line(id, sets, names, w, h)` | A line a series on one shared scale, markers ringed in the surface so crossings stay legible, legend under |
+| `chart_grouped_bar(id, sets, names, labels, w, h)` | A bar a series within each category, 2 px of surface between neighbours |
+| `chart_stacked_bar(id, sets, names, labels, w, h)` | Part-to-whole a category; the scale is the largest *total* |
+| `chart_ranked_bar(id, items, w, h)` | `{"label", "value"}` sorted high to low, names in a gutter, one hue — the job is size, not identity |
+| `chart_diverging_bar(id, items, w, h)` | `{"label", "value"}` signed about a zero rule, blue over and red under, the signed number beside every row |
+| `chart_heatmap(id, grid, col_labels, row_labels, w, h)` | Boxes rather than a canvas: one role at varying opacity, so a cell hit-tests itself |
+| `chart_dumbbell(id, items, w, h)` | `{"label", "from", "to"}` — two dots and the distance between them |
+| `chart_sparkline(values, w, h)` | A bare line: no grid, no axis, no labels |
+| `stat_spark(label, value, hint, values, w)` | `stat` with the shape of the last few periods under the number |
+| `chart_legend(names)` | A swatch and a name a series, in the order the marks were drawn, centred under the plot |
+
+Every builder above takes `w` and `h` as the size of the **whole** chart —
+axes included. Each works out its own gutter from how wide its readings print
+and takes `chart_plot_h(h)` for the marks, so a caller sizes a cell and never
+a plot. The ones whose x axis is a category (`chart_line`, `chart_area`,
+`chart_bar`, `chart_multi_line`, `chart_candle`) take an optional list of
+labels last; without it the marks are numbered.
+
 
 No chart library, no SVG, no client change: a chart is arithmetic in Soli and
 a list of numbers on the wire.
+
+### One series, and more than one
+
+One series needs no legend: the title names it, and `chart_line`,
+`chart_area`, `chart_bar`, `chart_ranked_bar` and `chart_sparkline` all draw
+in `series.1` alone. Two or more is a different job — the reader has to tell
+them apart — and every multi-series builder here ships a legend for that
+reason, because identity is never allowed to rest on colour alone.
+
+The scale is always shared. Two measures of different size go in two charts,
+never in one with two y-axes: a second scale lets the author decide which line
+looks higher, and that is not a decision a chart is allowed to make.
+
+`chart_role(i)` hands out `series.1` … `series.5` in fixed order and does not
+cycle. Past the fifth it returns the de-emphasis ink, because a sixth hue
+generated to fill the gap is indistinguishable from one already in the set to
+a reader with a colour vision deficiency — a tail belongs in a single "other",
+in small multiples, or encoded as something that is not hue. The five are
+`spec/05 §1.1`, and their separation is measured rather than judged.
+
+A candlestick scales to the extent of its lows and highs rather than to a top,
+because a price that moves three per cent about 400 is a flat smudge against a
+zero baseline; a body that rounds to nothing is still drawn a pixel tall, so a
+session that opened and closed at the same price is a line and not a gap. A
+Gantt is the one chart here whose bands run across rather than down — a column
+of washes and a column of bands, `chart_row_layers` rather than
+`chart_layers` — and its names are ranged against the plot so a short name and
+a long one both end where the bars begin.
 
 ### Answering the pointer
 
@@ -655,9 +751,23 @@ behind the drawing, the drawing, and a row of invisible bands in front. Each
 band holds a value chip and two local handlers (spec 07 §1), which repoint two
 nodes at styles the handler declared: its wash, and its own chip.
 
+The chip is an **`overlay`**, and a band is itself a `stack` so that the chip
+hangs off it. That is what makes a reading legible: an absolute `overlay`
+child of a `stack` is a popover (`04 §5`), measured against the *window*
+rather than against the box it hangs off and clipped by no ancestor. A chip
+that was a plain box inside its band was measured against the band, and a band
+is about thirty pixels wide — anything longer than a bare number came back as
+four wrapped lines sitting on top of the marks it was describing. Hanging off
+the band rather than off the chart also puts it in the column under the hand.
+
+Down is `display: none`, not `opacity: 0`. The top layer is hit-tested first
+and asks nothing about opacity, so a transparent chip left in the layout would
+quietly swallow every hover that landed under it — the legend included. The
+price is the fade, and it is worth paying.
+
 ```soli
 "pointer_enter": {
-  "local": "cw_line_3.style = @lit; ct_line_3.style = @shown",
+  "local": "cw_line_3.style = @lit; tip_line_3.style = @shown",
   "styles": {"lit": …, "shown": …}
 }
 ```

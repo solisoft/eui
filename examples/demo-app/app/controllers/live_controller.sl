@@ -1091,6 +1091,9 @@ def erp_dashboard(state, lay)
       ),
       erp_target(state, lay),
       erp_charts(state, lay),
+      erp_series_charts(state, lay),
+      erp_plan_charts(state, lay),
+      erp_ranked_charts(state, lay),
       lay["wide"] ? row({"gap": 4, "align": "start", "width": "100%"}, panels) : column({"gap": 4, "width": "100%"}, panels),
       erp_forecast(state, lay),
       erp_release(state, lay)
@@ -1102,7 +1105,7 @@ def erp_kpis(state, lay)
   row(
     {"gap": 3, "width": "100%", "wrap": "wrap"},
     [
-      tile(200, stat("Revenue, month to date", "412 380 €", "+8.4 % on August")),
+      tile(200, stat_spark("Revenue, month to date", "412 380 €", "+8.4 % on August", erp_revenue()["line"], 150)),
       tile(200, stat("Orders", "1 284", "63 open · 9 late")),
       tile(200, stat("Open invoices", "37", "128 940 € outstanding")),
       tile(200, erp_margin_card())
@@ -2065,18 +2068,124 @@ def erp_charts(state, lay)
   gap = space_px(4, lay["density"])
   cw = int((erp_inner_px(lay) - (cols - 1) * gap) / cols)
   cw = 160 if cw < 160
-  ch = 140
+  ch = 155
   series = erp_revenue()
   plots = [
-    column({"gap": 2}, [text("Revenue", {"weight": "bold"}), chart_line("line", series["line"], cw, ch)]),
-    column({"gap": 2}, [text("Cash", {"weight": "bold"}), chart_area("area", series["area"], cw, ch)]),
-    column({"gap": 2}, [text("Orders", {"weight": "bold"}), chart_bar("bars", series["bars"], cw, ch)]),
+    column(
+      {"gap": 2},
+      [text("Revenue", {"weight": "bold"}), chart_line("line", series["line"], cw, ch, erp_days(series["line"].length()))]
+    ),
+    column(
+      {"gap": 2},
+      [text("Cash", {"weight": "bold"}), chart_area("area", series["area"], cw, ch, erp_days(series["area"].length()))]
+    ),
+    column(
+      {"gap": 2},
+      [text("Orders", {"weight": "bold"}), chart_bar("bars", series["bars"], cw, ch, erp_days(series["bars"].length()))]
+    ),
     column(
       {"gap": 2},
       [text("By channel", {"weight": "bold"}), chart_donut("mix", series["mix"], erp_mix_labels(), ch, ch)]
     )
   ]
   erp_card("This week", [muted("hover a chart")], [{
+    "k": "box",
+    "s": {"display": "grid", "gap": 4, "width": "100%"},
+    "p": {"columns": cols},
+    "c": plots
+  }])
+end
+
+# ---- Three regions, three ways ---------------------------------------------
+#
+# The same eighteen numbers, drawn three times, because the form is an answer
+# to a question and the three questions are different: which region is biggest
+# this week (grouped), which way each region is going (lines), and how big the
+# week was altogether (stack). Each carries a legend — past one series, colour
+# stops being allowed to be the only thing that says which is which.
+def erp_series_charts(state, lay)
+  cols = 1
+  cols = 2 if lay["roomy"]
+  cols = 3 if lay["wide"]
+  gap = space_px(4, lay["density"])
+  cw = int((erp_inner_px(lay) - (cols - 1) * gap) / cols)
+  cw = 200 if cw < 200
+  ch = 165
+  rows = erp_regions()
+  names = erp_region_names()
+  weeks = erp_weeks()
+  plots = [
+    column({"gap": 2}, [text("By region", {"weight": "bold"}), chart_grouped_bar("grp", rows, names, weeks, cw, ch)]),
+    column(
+      {"gap": 2},
+      [text("Each region's run", {"weight": "bold"}), chart_multi_line("mline", rows, names, cw, ch, weeks)]
+    ),
+    column({"gap": 2}, [text("The week together", {"weight": "bold"}), chart_stacked_bar("stk", rows, names, weeks, cw, ch)])
+  ]
+  erp_card("Six weeks", [muted("hover a week")], [{
+    "k": "box",
+    "s": {"display": "grid", "gap": 4, "width": "100%"},
+    "p": {"columns": cols},
+    "c": plots
+  }])
+end
+
+# ---- The charts that read down rather than across --------------------------
+#
+# Four forms whose categories are words: a name needs room to be read, so the
+# rows run down and the marks run out to the right. The ranked bar spends one
+# hue because its question is size; the variance spends two because its
+# question is sign; the heatmap is boxes rather than a canvas, so a cell
+# hit-tests itself; and the dumbbell draws the distance rather than the two
+# ends, because the distance is the reading.
+def erp_ranked_charts(state, lay)
+  cols = lay["wide"] ? 2 : 1
+  gap = space_px(4, lay["density"])
+  cw = int((erp_inner_px(lay) - (cols - 1) * gap) / cols)
+  cw = 260 if cw < 260
+  plots = [
+    column({"gap": 2}, [text("Top parts", {"weight": "bold"}), chart_ranked_bar("rank", erp_top_products(), cw, 168)]),
+    column(
+      {"gap": 2},
+      [text("Against target", {"weight": "bold"}), chart_diverging_bar("var", erp_variance(), cw, 150)]
+    ),
+    column(
+      {"gap": 2},
+      [text("When the orders land", {"weight": "bold"}), chart_heatmap("load", erp_load(), erp_load_cols(), erp_load_rows(), cw, 120)]
+    ),
+    column(
+      {"gap": 2},
+      [text("Lead time, before and after", {"weight": "bold"}), chart_dumbbell("lead", erp_lead_times(), cw, 132)]
+    )
+  ]
+  erp_card("Where the work is", [muted("hover a row")], [{
+    "k": "box",
+    "s": {"display": "grid", "gap": 4, "width": "100%"},
+    "p": {"columns": cols},
+    "c": plots
+  }])
+end
+
+# ---- The two charts with an axis of their own ------------------------------
+#
+# A candlestick and a Gantt, which the four above are not: one scales to the
+# extent of its lows and highs rather than to a top, and one runs its bands
+# across the rows rather than down the columns. Both are canvases the server
+# sizes, so both ask `erp_inner_px` what the card will actually give them.
+def erp_plan_charts(state, lay)
+  cols = lay["wide"] ? 2 : 1
+  gap = space_px(4, lay["density"])
+  cw = int((erp_inner_px(lay) - (cols - 1) * gap) / cols)
+  cw = 240 if cw < 240
+  ch = 183
+  plots = [
+    column(
+      {"gap": 2},
+      [text("Meridian, 9 sessions", {"weight": "bold"}), chart_candle("candles", erp_sessions(), cw, ch)]
+    ),
+    column({"gap": 2}, [text("Rollout 24.3", {"weight": "bold"}), chart_gantt("plan", erp_plan(), cw, ch)])
+  ]
+  erp_card("The quarter", [muted("hover a session or a task")], [{
     "k": "box",
     "s": {"display": "grid", "gap": 4, "width": "100%"},
     "p": {"columns": cols},

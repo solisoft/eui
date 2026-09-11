@@ -2,7 +2,7 @@
 
 use crate::error::ThemeError;
 
-/// One of the 28 colour roles. The discriminant is the wire id.
+/// One of the 33 colour roles. The discriminant is the wire id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 #[allow(missing_docs)]
@@ -35,11 +35,19 @@ pub enum Role {
     BorderDefault = 26,
     BorderStrong = 27,
     FocusRing = 28,
+    /// The categorical series of a chart, in fixed order. A sixth series is
+    /// not a sixth hue: fold the tail into one "other", or facet — see
+    /// `spec/05-theme.md` §1.1.
+    Series1 = 29,
+    Series2 = 30,
+    Series3 = 31,
+    Series4 = 32,
+    Series5 = 33,
 }
 
 impl Role {
     /// Every role, in id order.
-    pub const ALL: [Role; 28] = [
+    pub const ALL: [Role; 33] = [
         Role::SurfaceBase,
         Role::SurfaceRaised,
         Role::SurfaceSunken,
@@ -68,10 +76,15 @@ impl Role {
         Role::BorderDefault,
         Role::BorderStrong,
         Role::FocusRing,
+        Role::Series1,
+        Role::Series2,
+        Role::Series3,
+        Role::Series4,
+        Role::Series5,
     ];
 
     /// The highest defined id.
-    pub const MAX_ID: u16 = 28;
+    pub const MAX_ID: u16 = 33;
 
     /// From a wire id; `0` and anything above [`Self::MAX_ID`] are rejected.
     pub fn from_id(id: u16) -> Result<Self, ThemeError> {
@@ -119,6 +132,11 @@ impl Role {
             Role::BorderDefault => "border.default",
             Role::BorderStrong => "border.strong",
             Role::FocusRing => "focus.ring",
+            Role::Series1 => "series.1",
+            Role::Series2 => "series.2",
+            Role::Series3 => "series.3",
+            Role::Series4 => "series.4",
+            Role::Series5 => "series.5",
         }
     }
 }

@@ -179,8 +179,21 @@ u8_enum!(
         Flow = 0,
         /// Positioned within a `stack` parent.
         Absolute = 1,
+        /// Out of flow like `Absolute`, but placed at the pointer rather than
+        /// against its anchor: a tooltip follows the hand, and only the client
+        /// knows where the hand is.
+        Pointer = 2,
     }
 );
+
+impl Position {
+    /// Out of the parent's flow: sized to its content, placed rather than
+    /// laid out, and never counted into the box it sits in.
+    #[must_use]
+    pub const fn out_of_flow(self) -> bool {
+        matches!(self, Self::Absolute | Self::Pointer)
+    }
+}
 
 u8_enum!(
     /// Pointer shape over the node.

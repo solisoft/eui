@@ -24,6 +24,13 @@ fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
+/// A server already running, when `EUI_SOLI_PORT` names one. Lets a test be
+/// pointed at the very server that is misbehaving instead of a fresh one
+/// started the test's own way — the flags differ, and so can the answer.
+fn existing_port() -> Option<u16> {
+    std::env::var("EUI_SOLI_PORT").ok().and_then(|p| p.parse().ok())
+}
+
 fn start_soli(bin: &str) -> (Server, u16) {
     let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
     let port = free_port();
@@ -187,8 +194,15 @@ fn the_counter_runs_end_to_end_against_soli() {
 
 /// Connect, wait for the first mount, and hand back the pieces.
 fn open(port: u16, component: &str, w: f32, h: f32) -> (Driver, eui_client::Connection, mpsc::Receiver<()>) {
+    open_with(port, component, w, h, 0)
+}
+
+/// [`open`] with capabilities granted, for a component that asks for one.
+/// Without the grant the client refuses the dialog and says so — which is
+/// the right behaviour and a confusing test failure.
+fn open_with(port: u16, component: &str, w: f32, h: f32, caps: u32) -> (Driver, eui_client::Connection, mpsc::Receiver<()>) {
     let url = format!("ws://127.0.0.1:{port}/_eui/session/{component}");
-    let mut driver = Driver::new(w, h, 1.0, 0);
+    let mut driver = Driver::new(w, h, 1.0, caps);
     let (wake_tx, wake_rx) = mpsc::channel::<()>();
     let conn = connect(&url, driver.hello().encode(), None, false, move || {
         let _ = wake_tx.send(());
@@ -196,6 +210,52 @@ fn open(port: u16, component: &str, w: f32, h: f32) -> (Driver, eui_client::Conn
     .expect("connect to soli");
     pump(&mut driver, &conn, &wake_rx, |d| d.session().root().is_some());
     (driver, conn, wake_rx)
+}
+
+/// Pump with the client's clock running, until `until` holds.
+///
+/// Needle does its slow work on a wake and not in the handler that asked for
+/// it (06 §1.1): the boot — a catalogue to generate, a speaker to find — and
+/// every search. So what a freshly opened session shows is "Warming up", and
+/// what a click on a suggestion shows is "Looking for …", each with a node
+/// asking for a 100 ms clock. Only `tick` advances that clock; a driver that
+/// merely paints never fires it, so a test that clicked and asserted read the
+/// waiting screen and called it a failure.
+fn settle(d: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receiver<()>, w: u32, h: u32, until: impl Fn(&Driver) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut clock = Instant::now();
+    while !until(d) {
+        assert!(Instant::now() < deadline, "it never settled: {:?}", texts(d, root(d)));
+        clock += Duration::from_millis(120);
+        d.tick(clock);
+        let _ = d.paint(w, h);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        let _ = wake.recv_timeout(Duration::from_millis(20));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
+                    if let Frame::Error { code, message } = &frame {
+                        panic!("soli sent error {code}: {message}");
+                    }
+                    for out in d.handle_frame(frame) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
+            }
+        }
+    }
+    let _ = d.paint(w, h);
+}
+
+/// The player, past its boot: the one wait every music test begins with.
+fn warm_up(d: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receiver<()>, w: u32, h: u32) {
+    settle(d, conn, wake, w, h, |d| texts(d, root(d)).iter().any(|t| t == "Find something to play"));
 }
 
 fn click(driver: &mut Driver, conn: &eui_client::Connection, ix: eui_tree::NodeIx) {
@@ -376,8 +436,10 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
     // Tall, so that what a section holds is inside the viewport instead of
-    // scrolled away: a click is hit-tested against the page's scroller.
-    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
+    // scrolled away: a click is hit-tested against the page's scroller. The
+    // number is a floor and not a measurement — the dashboard grows as the
+    // catalogue does, and it has already outrun 2 600 once.
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
     let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
@@ -391,9 +453,14 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     assert!(nodes_before > 120, "{nodes_before} nodes");
     let _ = d.paint(1000, 900);
 
-    // The period control sits in the top bar, on every section.
-    let week = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Week")).unwrap();
-    click(&mut d, &conn, week);
+    // The period control sits in the top bar, on every section. "Day", not
+    // "Week": "Week" is what the section opens on, so clicking it asked the
+    // server for the page it had already sent and the answer was the same
+    // tree. That used to travel as a batch with no ops in it, which moved
+    // the sequence and let this wait finish having tested nothing; the
+    // server now says nothing when it has nothing to say.
+    let day = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Day")).unwrap();
+    click(&mut d, &conn, day);
     let seq = d.session().last_seq().unwrap();
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
 
@@ -405,10 +472,13 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     click(&mut d, &conn, close);
     pump(&mut d, &conn, &wake, |d| !has(d, "Past due"));
 
-    // Four charts and the spinner beside the quarter target.
+    // Twelve charts — the four of "This week", the three of "Six weeks", the
+    // candlestick, the Gantt, and the ranked, diverging and dumbbell rows of
+    // "Where the work is" — and the spinner beside the quarter target. The
+    // heatmap is not among them: its cells are boxes, so it draws no canvas.
     let paths = d.session().atom_id("paths").expect("the paths atom");
     let canvases: Vec<_> = d.session().preorder(root(&d)).filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Canvas)).collect();
-    assert_eq!(canvases.len(), 5, "four charts and the spinner");
+    assert_eq!(canvases.len(), 14, "thirteen charts and the spinner");
     for c in &canvases {
         match d.session().node(*c).unwrap().prop(paths) {
             Some(eui_proto::Value::List(p)) => {
@@ -418,7 +488,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
             other => panic!("{other:?}"),
         }
     }
-    let list = d.paint(1000, 2600);
+    let list = d.paint(1000, 3600);
     assert!(list.quads.iter().any(|q| q.extra[0] != 0.0), "a segment is a rotated capsule");
 
     // ---- Orders: filters, a table of sixty-three, and the invoice grid.
@@ -513,7 +583,7 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     assert!(!has(&d, "A tooltip"), "the tooltip belongs to the dashboard");
     let value = within(&d, "Low stock threshold", "Value 40");
     let track = slider_track(&d, value);
-    let _ = d.paint(1000, 2600);
+    let _ = d.paint(1000, 3600);
     let r = d.layout().rect(track).unwrap();
     d.input(Input::PointerMove(r.x + r.w * 0.75, r.y + r.h / 2.0));
     d.input(Input::PointerDown(0));
@@ -549,12 +619,15 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     for f in d.input(Input::Text("azd".into())) {
         conn.tx.send(f.encode()).unwrap();
     }
-    let elsewhere = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Day")).unwrap();
+    // Somewhere else, and somewhere that moves: the period is on "Day" by
+    // now, and a click on the segment already chosen asks for the tree the
+    // client is holding, which the server answers with silence.
+    let elsewhere = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Month")).unwrap();
     let seq = d.session().last_seq().unwrap();
     click(&mut d, &conn, elsewhere);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     assert_eq!(d.session().text_of(field), Some("azd"), "the server's re-render did not wipe the field");
-    let _ = d.paint(1000, 2600);
+    let _ = d.paint(1000, 3600);
     let r = d.layout().rect(field).unwrap();
     d.input(Input::PointerMove(r.x + r.w - 2.0, r.y + r.h / 2.0));
     d.input(Input::PointerDown(0));
@@ -658,7 +731,10 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     assert_eq!(m.app_id, "demo-app", "the application folder's name");
     assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
     assert_eq!(m.entry, "/_eui/session");
-    assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read"], "what config/routes.sl asked for");
+    // `fs.pick` joined it when the messenger learned to take an attachment:
+    // the manifest is the whole list an application ever asks for, and the
+    // client pins it, so a capability added to a route shows up here.
+    assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read", "fs.pick"], "what config/routes.sl asked for");
     // Pinned: the same server is accepted again; a stranger's key is not.
     assert!(eui_client::manifest::check(&origin, &pins, None).is_ok());
     let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
@@ -808,6 +884,7 @@ fn the_player_searches_opens_a_record_and_plays_a_track() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "music", 1100.0, 760.0);
+    warm_up(&mut d, &conn, &wake, 1100, 760);
     let _ = d.paint(1100, 760);
     let all = texts(&d, root(&d));
     assert!(all.iter().any(|t| t == "Find something to play") && all.iter().any(|t| t == "Nothing playing"), "{all:?}");
@@ -817,6 +894,7 @@ fn the_player_searches_opens_a_record_and_plays_a_track() {
     let tile_box = d.session().node(tile).unwrap().parent;
     click(&mut d, &conn, tile_box);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    settle(&mut d, &conn, &wake, 1100, 760, |d| texts(d, root(d)).iter().any(|t| t == "RECORDS"));
     let _ = d.paint(1100, 760);
     let all = texts(&d, root(&d));
     assert!(all.iter().any(|t| t == "RECORDS") && all.iter().any(|t| t.contains("for \u{201c}Nova Reyes\u{201d}")), "{all:?}");
@@ -912,13 +990,15 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
     // headings: the note column of the first channel.
     let _ = d.paint(1000, 800);
     let r = d.layout().rect(grid).expect("the pattern is laid out");
-    let seq = d.session().last_seq().unwrap();
     d.input(Input::PointerMove(r.x + 40.0, r.y + 20.0));
     d.input(Input::PointerDown(0));
     for f in d.input(Input::PointerUp(0)) {
         conn.tx.send(f.encode()).unwrap();
     }
-    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    // Focus is the client's own doing, so this waits on the focus and not on
+    // the sequence: the server may well answer a click on a grid with the
+    // tree it already sent, and a tree that did not change is not sent.
+    pump(&mut d, &conn, &wake, |d| d.focused() == Some(grid));
     assert_eq!(d.focused(), Some(grid), "clicking a grid that wants keys focuses it (03 §3)");
 
     // `y` is A in FT2's upper key row, so at the default octave the cell
@@ -1046,6 +1126,7 @@ fn the_player_plays_a_file_from_the_machine_and_the_bar_follows_it() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "music", 1000.0, 900.0);
+    warm_up(&mut d, &conn, &wake, 1000, 900);
     let _ = d.paint(1000, 900);
     // The welcome offers what sits in `public/music` beside the catalogue.
     let tile = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("On this machine")).expect("the machine tile");
@@ -1357,9 +1438,11 @@ fn the_dev_bar_is_absent_from_a_session_that_is_not_in_dev_mode() {
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
     let _ = d.paint(1000, 900);
     // A second render, so a bar that had numbers to draw would have them.
-    let week = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Week")).unwrap();
+    // "Day", not "Week": "Week" is what the section opens on, and the server
+    // has nothing to send when it is asked for the tree already on screen.
+    let day = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Day")).unwrap();
     let seq = d.session().last_seq().unwrap();
-    click(&mut d, &conn, week);
+    click(&mut d, &conn, day);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let _ = d.paint(1000, 900);
     let all = texts(&d, root(&d));
@@ -1425,29 +1508,53 @@ fn a_chart_shows_the_value_under_the_pointer_without_a_round_trip() {
     let (_server, port) = start_soli(&bin);
     // Tall enough to have the charts in view: hit-testing stops at the
     // page's scroller, and a band below the fold is under nothing.
-    let (mut d, _conn, _wake) = open(port, "gallery", 1000.0, 2_600.0);
+    let (mut d, _conn, _wake) = open(port, "gallery", 1000.0, 3_600.0);
     let keyed = |d: &Driver, key: &str| d.session().atom_id(key).and_then(|a| d.session().lookup_key(a)).unwrap_or_else(|| panic!("a node keyed {key}"));
     // Hover settles on a valid layout, so a move is worth a paint either
     // side of it; what the chunk did must still leave the wire silent.
     let hover = |d: &mut Driver, ix: eui_tree::NodeIx| {
-        let _ = d.paint(1000, 2_600);
+        let _ = d.paint(1000, 3_600);
         let r = d.layout().rect(ix).expect("laid out");
         let sent = d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
-        let _ = d.paint(1000, 2_600);
+        let _ = d.paint(1000, 3_600);
         let mut frames = sent;
         frames.extend(d.take_pending());
         assert!(!frames.iter().any(|f| matches!(f, Frame::Event(_))), "a hover on a chart says nothing to the server: {frames:?}");
     };
-    let _ = d.paint(1000, 2_600);
-    let chip = keyed(&d, "ct_bars_1");
+    let _ = d.paint(1000, 3_600);
+    // A chip is an `overlay` hanging off its band (04 §5), so it is measured
+    // against the window and takes the width its reading asks for. Down is
+    // `display: none` and not a transparency: the top layer is hit-tested
+    // first and never asks about opacity, so a chip left in the layout would
+    // eat the hovers meant for whatever sits under it. Laid out or not is
+    // therefore the thing to assert, and it is the stronger assertion anyway.
+    let reading = |d: &Driver, chip: eui_tree::NodeIx| d.session().node(chip).and_then(|n| n.children.first().copied()).and_then(|t| d.session().text_of(t).map(str::to_owned));
+    let up = |d: &Driver, chip: eui_tree::NodeIx| d.layout().rect(chip).is_some();
+    let chip = keyed(&d, "tip_bars_1");
     let wash = keyed(&d, "cw_bars_1");
-    assert_eq!(d.session().text_of(chip), Some("7"), "the chip carries the value it stands for");
-    assert_eq!(d.session().style_of(chip).opacity, 0, "and is transparent until it is asked for");
+    assert_eq!(reading(&d, chip).as_deref(), Some("Tue · 7"), "the chip carries the day and the value it stands for");
+    assert!(!up(&d, chip), "and is not laid out until it is asked for");
     assert_eq!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE);
     let band = d.session().node(chip).unwrap().parent;
     hover(&mut d, band);
-    assert_eq!(d.session().style_of(chip).opacity, 255, "the tooltip is up");
+    assert!(up(&d, chip), "the tooltip is up");
     assert_ne!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE, "and its column is washed");
+    // The candlestick scales to the extent of its lows and highs rather than
+    // to a top, and the Gantt's bands run across the rows rather than down the
+    // columns; both hover through the same two-node chunk as the bars.
+    let session_chip = keyed(&d, "tip_candles_1");
+    assert_eq!(reading(&d, session_chip).as_deref(), Some("2 · 46 +2"), "the close, and what the session did to it");
+    let session_band = d.session().node(session_chip).unwrap().parent;
+    hover(&mut d, session_band);
+    assert!(up(&d, session_chip));
+    let task_chip = keyed(&d, "tip_plan_2");
+    let task_wash = keyed(&d, "cw_plan_2");
+    assert_eq!(reading(&d, task_chip).as_deref(), Some("5 → 10 · 5 d"), "when the task runs, worked out server-side");
+    let task_band = d.session().node(task_chip).unwrap().parent;
+    hover(&mut d, task_band);
+    assert!(up(&d, task_chip), "the row's chip is up");
+    assert_ne!(d.session().style_of(task_wash).bg, eui_proto::ColorRef::NONE, "and its row is washed");
+
     // The donut has no bands — an arc is not a box — so its legend is what
     // the pointer finds, and what it changes is the text in the hole.
     let hole = keyed(&d, "dv_mix");
@@ -1460,9 +1567,9 @@ fn a_chart_shows_the_value_under_the_pointer_without_a_round_trip() {
     assert_eq!(d.session().text_of(name), Some("Search"));
     // Leaving the band put its pair back on the way here: a chart's hover
     // is not provisional, it is undone by the leave that follows it.
-    assert_eq!(d.session().style_of(chip).opacity, 0, "the tooltip is down");
+    assert!(!up(&d, chip), "the tooltip is down");
     assert_eq!(d.session().style_of(wash).bg, eui_proto::ColorRef::NONE);
-    let _ = d.paint(1000, 2_600);
+    let _ = d.paint(1000, 3_600);
     d.input(Input::PointerOut);
     assert_eq!(d.session().text_of(hole), Some("11"), "and the hole reads the total again");
 }
@@ -1478,10 +1585,10 @@ fn the_gallerys_chime_is_fetched_played_and_reports_its_end() {
     // The release card the sound sits in is near the foot of the dashboard,
     // and a click is hit-tested against the page's scroller: what is below
     // the fold is under nothing at all.
-    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
-    let _ = d.paint(1000, 2600);
+    let _ = d.paint(1000, 3600);
     // The node is in the tree, silent, and its sound is an asset the
     // client fetched from the session's origin.
     let find_audio = |d: &Driver| d.session().preorder(root(d)).find(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Audio)).expect("an audio node");
@@ -1560,7 +1667,7 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
     // Tall enough to reach the release card the picture sits in: what is
     // below the fold is neither painted nor clickable.
-    for f in d.input(Input::Resized(1000.0, 2600.0, 1.0)) {
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
     let mut clock = Instant::now();
@@ -1603,7 +1710,7 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
     assert!(!d.video_playing(), "no autoplay");
     let rect = d.layout().rect(node(&d)).expect("laid out");
     assert!((rect.w - 320.0).abs() < 0.5 && (rect.h - 180.0).abs() < 0.5, "sized by its style: {rect:?}");
-    let list = d.paint(1000, 2600);
+    let list = d.paint(1000, 3600);
     assert!(list.quads.iter().any(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA), "its first frame is drawn");
     // Press play: it advances on the client's clock and asks to be woken
     // exactly when the next frame is due.
@@ -1857,6 +1964,7 @@ fn a_hover_that_lights_a_tile_puts_it_out_again() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
     let (_server, port) = start_soli(&bin);
     let (mut d, conn, wake) = open(port, "music", 1000.0, 900.0);
+    warm_up(&mut d, &conn, &wake, 1000, 900);
     let _ = d.paint(1000, 900);
     // A suggestion lays out a wall of records.
     let tile = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Nova Reyes")).unwrap();
@@ -1864,6 +1972,7 @@ fn a_hover_that_lights_a_tile_puts_it_out_again() {
     let seq = d.session().last_seq().unwrap();
     click(&mut d, &conn, tile_box);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    settle(&mut d, &conn, &wake, 1000, 900, |d| texts(d, root(d)).iter().any(|t| t == "Night Drive"));
     let _ = d.paint(1000, 900);
     let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Night Drive")).expect("a record tile");
     // The label sits inside the hoverable box, sometimes a column deep:
@@ -1900,18 +2009,22 @@ fn a_hover_that_lights_a_tile_puts_it_out_again() {
     let _ = d.paint(1000, 900);
     assert_ne!(d.session().style_of(card_box).bg, rest, "lit under the pointer");
     let seq = d.session().last_seq().unwrap();
-    for f in d.input(Input::Resized(1000.0, 880.0, 1.0)) {
+    // Narrower, not just shorter: a render that changed nothing sends
+    // nothing, and a window that only lost twenty pixels of height lays the
+    // wall of records out exactly as it was — no diff, no batch, and nothing
+    // for the pointer to survive.
+    for f in d.input(Input::Resized(880.0, 880.0, 1.0)) {
         conn.tx.send(f.encode()).unwrap();
     }
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
-    let _ = d.paint(1000, 880);
+    let _ = d.paint(880, 880);
     let card = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Night Drive")).expect("still there");
     let mut card_box = d.session().node(card).unwrap().parent;
     while d.session().handler(card_box, eui_proto::EventKind::PointerEnter).is_none() {
         card_box = d.session().node(card_box).unwrap().parent;
     }
     d.input(Input::PointerMove(r.x + r.w / 2.0, 4.0));
-    let _ = d.paint(1000, 880);
+    let _ = d.paint(880, 880);
     assert_eq!(d.session().style_of(card_box).bg, rest, "not lit once the pointer has gone");
 }
 
@@ -1980,4 +2093,324 @@ fn a_split_pane_follows_the_hand_while_it_is_still_down() {
     // And a real one, a section away, is.
     goto(&mut d, &conn, &wake, "Settings", "Low stock threshold");
     assert!(d.session().preorder(root(&d)).any(|ix| is_slider(&d, ix)), "the slider says so in its props");
+}
+
+/// Atrium takes a picture, keeps it, and shows it.
+///
+/// The whole path, with only the dialog and the disk played by the test:
+/// the attach button asks the window for a picker, the client mints an
+/// upload and streams the bytes, the server reassembles them into the
+/// session's spool and posts `file_upload`, and the controller copies the
+/// file under `public` — where it becomes an asset the window fetches back
+/// by content hash.
+///
+/// It exists because this path failed three times for three different
+/// reasons, each one hidden behind the last: a binary file destroyed by a
+/// read/write round trip, an event whose fields sat somewhere no handler
+/// looks, and a row number taken from a stale cache. None of them was
+/// visible from either end alone.
+#[test]
+fn atrium_keeps_a_picture_someone_attached() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let kept: Option<(Server, u16)> = match existing_port() {
+        Some(_) => None,
+        None => Some(start_soli(&bin)),
+    };
+    let port = existing_port().unwrap_or_else(|| kept.as_ref().expect("started").1);
+    let (mut d, conn, wake) = open_with(port, "chat", 1200.0, 900.0, eui_proto::caps::FS_PICK);
+    let _ = d.paint(1200, 900);
+
+    // One orange pixel, and a *whole* PNG — signature, header, data, end.
+    //
+    // It was a header and nothing else at first, which travelled and was
+    // kept exactly right and then drew an empty box, because a picture that
+    // cannot be decoded is not an error anywhere: the server hashes bytes
+    // and the client fails to make an image of them. A test whose fixture
+    // is not really a picture cannot tell that from success.
+    //
+    // Binary matters too: the bug this was first written for turned every
+    // non-UTF-8 byte into a question mark.
+    let png: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+        0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x38, 0x51, 0xa1, 0xf1, 0x1f, 0x00, 0x05, 0xdc, 0x02, 0x68, 0x57, 0xcc, 0x8a, 0xe1, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+        0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    // The paperclip: the one node that carries `pick`.
+    let attach = d.session().preorder(root(&d)).find(|ix| d.session().handler(*ix, EventKind::FilePick).is_some()).expect("the composer offers a picker");
+    click(&mut d, &conn, attach);
+    let asks = d.take_file_asks();
+    assert_eq!(asks.len(), 1, "a click on the paperclip asks for exactly one dialog: {asks:?}");
+
+    // The person chose. The client mints an id, tells the server, and
+    // streams; the test plays the disk.
+    // A name this run alone will use. `public/chat` keeps what earlier runs
+    // attached, and a glob that matched them picked an older, different file
+    // and compared the wrong bytes.
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let name = format!("holiday-{stamp}.png");
+    let (ids, out) = d.picked(asks[0].token, vec![(name.clone(), png.len() as u64)]);
+    for f in out {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.upload_chunk(ids[0], &png, true) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+
+    // The message lands in the room with the file's name on it. Anything
+    // that went wrong instead says so in the banner, so a failure here
+    // reads as the reason and not as a timeout.
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.contains(&name)));
+    let said = texts(&d, root(&d));
+    assert!(!said.iter().any(|t| t.contains("did not arrive") || t.contains("could not be kept")), "the attachment was refused: {said:?}");
+
+    // And the bytes are on disk, byte for byte, under the application —
+    // which is what makes them an asset the other window can be shown.
+    let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
+    let landed: Vec<std::path::PathBuf> = std::fs::read_dir(std::path::Path::new(&app).join("public/chat"))
+        .expect("public/chat exists once something has been attached")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().ends_with(&name))
+        .collect();
+    assert!(!landed.is_empty(), "the picture was not kept under public/chat; the page says: {:?}", texts(&d, root(&d)));
+    let on_disk = std::fs::read(&landed[0]).expect("read what was kept");
+    assert_eq!(on_disk, png, "the bytes changed on the way through");
+
+    // What is left behind is left on purpose. The message stays in the room
+    // and its file stays beside it, because deleting the file and keeping
+    // the message is precisely the state that used to end the session: an
+    // `image` names a file by path, the server hashes it to put it on the
+    // wire, and a path that is gone is a view that cannot be encoded. The
+    // view tolerates it now, and a test that tidied up would be testing the
+    // tidy case only.
+}
+
+/// Spec 04 §6: writing a line into a room of four thousand messages costs a
+/// handful of ops, not a redraw of the room.
+///
+/// The river is a `list_window`, so only the rows inside the window are ever
+/// built, and each one is cached under a key made of the room, its index,
+/// the width and the generation — none of which a send moves. What changes
+/// is the count, the foot, and the one new row. The ceiling here is loose on
+/// purpose: what it guards against is the other shape, where every row in
+/// the window comes back rewritten, which is a hundred ops and upwards.
+#[test]
+fn writing_a_line_does_not_redraw_the_room() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let kept: Option<(Server, u16)> = match existing_port() {
+        Some(_) => None,
+        None => Some(start_soli(&bin)),
+    };
+    let port = existing_port().unwrap_or_else(|| kept.as_ref().expect("started").1);
+    let (mut d, conn, wake) = open(port, "chat", 1200.0, 900.0);
+    let _ = d.paint(1200, 900);
+    // The composer is the one field that reports what is typed into it, and
+    // its arrival is what says the room is up.
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).len() > 20);
+    let _ = d.paint(1200, 900);
+    let hole = d.session().preorder(root(&d)).find(|ix| d.session().handler(*ix, EventKind::TextInput).is_some()).expect("the composer takes text");
+    let r = d.layout().rect(hole).expect("the composer is laid out");
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    d.input(Input::PointerDown(0));
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let said = format!("ligne-{}", stamp % 100_000);
+    for f in d.input(Input::Text(said.clone())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| value(d).is_some_and(|v| v.contains(&said)) || texts(d, root(d)).iter().any(|t| t.contains(&said)));
+
+    // Enter commits the field and submits it. Everything the server sends
+    // back from here until the line is on screen is the cost of the send.
+    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut widest = 0usize;
+    let mut batches = 0usize;
+    loop {
+        // The line is in the river and the box has emptied behind it: the
+        // draft node carries the same string until the send goes through,
+        // so the text alone does not say it landed.
+        let empty = d.session().text_of(hole).unwrap_or("").is_empty();
+        if empty && texts(&d, root(&d)).iter().any(|t| t == &said) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for the line to land");
+        let _ = wake.recv_timeout(Duration::from_millis(50));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
+                    if let Frame::Error { code, message } = &frame {
+                        panic!("soli sent error {code}: {message}");
+                    }
+                    if let Frame::Batch(b) = &frame {
+                        widest = widest.max(b.ops.len());
+                        batches += 1;
+                    }
+                    for out in d.handle_frame(frame) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
+            }
+        }
+        let _ = d.paint(1200, 900);
+    }
+    assert!(batches > 0, "the send was answered");
+    assert!(widest <= 40, "a send rewrote the room: {widest} ops in one batch over {batches} batches");
+}
+
+/// A line written in one window reaches the other without that window
+/// asking for anything.
+///
+/// The session is a WebSocket and `Batch` is S→C (01 §3): nothing ties one
+/// to an `Event`, and the client applies whatever arrives. So a server that
+/// knows something changed can say so, instead of leaving every window to
+/// find out on its own clock — which is up to a whole `wake` period late
+/// (06 §1.1) and costs a render per period per window to learn that nothing
+/// happened. `eui_wake` is the trigger, and Atrium pulls it at the two
+/// places that move its counter.
+///
+/// What makes this a test of the push and not of the clock: the listening
+/// driver's clock is never advanced and not one frame it produces is sent.
+/// It asks for nothing. Anything that arrives, the server sent because it
+/// wanted to.
+#[test]
+fn a_line_reaches_the_other_window_without_it_asking() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let kept: Option<(Server, u16)> = match existing_port() {
+        Some(_) => None,
+        None => Some(start_soli(&bin)),
+    };
+    let port = existing_port().unwrap_or_else(|| kept.as_ref().expect("started").1);
+    let (mut writer, w_conn, w_wake) = open(port, "chat", 1200.0, 900.0);
+    let (mut reader, r_conn, r_wake) = open(port, "chat", 1200.0, 900.0);
+    let _ = writer.paint(1200, 900);
+    let _ = reader.paint(1200, 900);
+    pump(&mut writer, &w_conn, &w_wake, |d| texts(d, root(d)).len() > 20);
+    pump(&mut reader, &r_conn, &r_wake, |d| texts(d, root(d)).len() > 20);
+    let _ = writer.paint(1200, 900);
+    let _ = reader.paint(1200, 900);
+
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let said = format!("poussee-{}", stamp % 100_000);
+    let hole = writer.session().preorder(root(&writer)).find(|ix| writer.session().handler(*ix, EventKind::TextInput).is_some()).expect("the composer takes text");
+    let r = writer.layout().rect(hole).expect("the composer is laid out");
+    writer.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    writer.input(Input::PointerDown(0));
+    for f in writer.input(Input::PointerUp(0)) {
+        w_conn.tx.send(f.encode()).unwrap();
+    }
+    for f in writer.input(Input::Text(said.clone())) {
+        w_conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut writer, &w_conn, &w_wake, |d| value(d).is_some_and(|v| v.contains(&said)) || texts(d, root(d)).iter().any(|t| t.contains(&said)));
+    let sent = Instant::now();
+    for f in writer.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        w_conn.tx.send(f.encode()).unwrap();
+    }
+
+    // The reader is mute from here: no clock, no frames out, only frames in.
+    let deadline = sent + Duration::from_secs(20);
+    loop {
+        if texts(&reader, root(&reader)).iter().any(|t| t == &said) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the line never arrived: the other window was told nothing, and it asked for nothing");
+        let _ = r_wake.recv_timeout(Duration::from_millis(10));
+        while let Ok(msg) = r_conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
+                    if let Frame::Error { code, message } = &frame {
+                        panic!("soli sent error {code}: {message}");
+                    }
+                    let _ = reader.handle_frame(frame);
+                }
+                Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => reader.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => reader.asset_failed(hash, why),
+            }
+        }
+        // The writer keeps its own socket moving; what the reader gets is
+        // not owed to anything the reader did.
+        let _ = w_wake.recv_timeout(Duration::from_millis(1));
+        while let Ok(msg) = w_conn.rx.try_recv() {
+            if let Incoming::Message(bytes) = msg {
+                if let Ok(frame) = Frame::decode(&bytes) {
+                    for out in writer.handle_frame(frame) {
+                        w_conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("the other window had it {} ms later", sent.elapsed().as_millis());
+}
+
+/// A room opens on its last hundred messages, and says what it is holding
+/// back.
+///
+/// `count` is one wire number per message, sent with the list and read by
+/// the client to size the scrollbar — so a room of four thousand costs four
+/// thousand of them to put a hundred on screen, and gives a thumb too small
+/// to grab. The rest of the room is one click away and still in the
+/// database; it is simply not on the wire until it is asked for.
+#[test]
+fn a_room_opens_on_a_hundred_and_unrolls_on_request() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let kept: Option<(Server, u16)> = match existing_port() {
+        Some(_) => None,
+        None => Some(start_soli(&bin)),
+    };
+    let port = existing_port().unwrap_or_else(|| kept.as_ref().expect("started").1);
+    let (mut d, conn, wake) = open(port, "chat", 1200.0, 900.0);
+    let _ = d.paint(1200, 900);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().node(ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List)));
+
+    let river = |d: &Driver| -> u32 {
+        let count = d.session().atom_id("count").expect("the count atom");
+        d.session()
+            .preorder(root(d))
+            .filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::List))
+            .find_map(|ix| match d.session().node(ix)?.prop(count) {
+                Some(eui_proto::Value::Int(n)) => Some(*n as u32),
+                _ => None,
+            })
+            .expect("the river says how long it is")
+    };
+    assert_eq!(river(&d), 100, "a hundred, whatever the room holds");
+
+    // The rest is offered, and the offer says how much there is.
+    let said = texts(&d, root(&d));
+    let offer = said.iter().find(|t| t.ends_with("earlier messages")).expect("the room says what it is holding back: {said:?}");
+    let held: u32 = offer.split(' ').next().and_then(|n| n.parse().ok()).expect("a number of messages");
+    assert!(held > 100, "the seeded room is deeper than one page: {offer}");
+
+    let button = d
+        .session()
+        .preorder(root(&d))
+        .find(|ix| d.session().text_of(*ix).is_some_and(|t| t.ends_with("earlier messages")))
+        .map(|ix| d.session().node(ix).unwrap().parent)
+        .expect("the offer is a button");
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, button);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1200, 900);
+    assert_eq!(river(&d), 200, "one more page, not the whole room");
+    let after = texts(&d, root(&d)).iter().find(|t| t.ends_with("earlier messages")).cloned().expect("still holding some back");
+    let left: u32 = after.split(' ').next().and_then(|n| n.parse().ok()).unwrap();
+    assert_eq!(left, held - 100, "and the offer counted down by exactly a page");
 }

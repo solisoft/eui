@@ -248,6 +248,27 @@ impl Atlas {
         Some(Region { x: x + 1, y: y + 1, w: img.width, h: img.height, left: img.left, top: img.top })
     }
 
+    /// Forget every glyph, keeping the size.
+    ///
+    /// The map is keyed by scale as well as by glyph, and nothing here has
+    /// ever been evicted — which was right while the scale only changed
+    /// when a window was dragged between two monitors. A zoom makes it a
+    /// keystroke, and thirteen levels of a text-heavy page would fill the
+    /// sheet; a full one packs nothing more and draws those glyphs as
+    /// nothing, silently. Cleared on a rescale instead, beside the layout
+    /// and the paint cache that are already thrown away there.
+    ///
+    /// The generation goes up, so a uv taken before this is not mistaken
+    /// for one taken after. Nothing is marked dirty: as after [`Self::grow`],
+    /// the rows still on the GPU belong to nobody, and the glyphs packed
+    /// next will dirty the rows they land on.
+    pub fn clear(&mut self) {
+        let generation = self.generation.wrapping_add(1);
+        let size = self.size;
+        *self = Self::with_size(size);
+        self.generation = generation;
+    }
+
     /// Double the edge length, forgetting every packed glyph; they are
     /// re-packed on demand.
     fn grow(&mut self) {

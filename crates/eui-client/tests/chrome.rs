@@ -171,3 +171,30 @@ fn the_keyboard_changes_hands_with_the_address_bar() {
     chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
     assert!(chrome.holds_keys(), "an empty tab has no application to give it to");
 }
+
+/// The chrome draws a box the size of the window under everything, so its
+/// background is the ground the application stands on wherever the
+/// application paints none of its own — which is most pages, since a root
+/// with no `bg` is the ordinary case.
+///
+/// It therefore has to follow the palette the page is in. The viewer can
+/// change that from inside the application, with a local `theme.toggle()`
+/// that never reaches the window's own theme handling; before the shell
+/// forwarded it, a page switched to light sat on a floor still in the dark.
+#[test]
+fn the_chromes_ground_follows_the_palette_it_is_put_in() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    chrome.rebuild(&tabs(), 0);
+    let dark = {
+        let _ = chrome.input(Input::Mode(eui_proto::ThemeMode::Dark));
+        chrome.paint(W as u32, H as u32).clear
+    };
+    let light = {
+        let _ = chrome.input(Input::Mode(eui_proto::ThemeMode::Light));
+        chrome.paint(W as u32, H as u32).clear
+    };
+    assert_ne!(dark, light, "the two palettes must not share a background");
+    // And back, exactly: the mode is a choice, not an accumulation.
+    let _ = chrome.input(Input::Mode(eui_proto::ThemeMode::Dark));
+    assert_eq!(chrome.paint(W as u32, H as u32).clear, dark);
+}

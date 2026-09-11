@@ -148,6 +148,11 @@ pub enum Input {
         down: bool,
     },
     /// The window is now `w × h` logical px at `scale` device px per logical.
+    ///
+    /// `scale` is what the *page* is drawn at, which is the display's own
+    /// density times whatever zoom the window applies: a driver has no
+    /// notion of zoom and does not need one, because everything it would
+    /// change is already a function of this number.
     Resized(f32, f32, f32),
     /// The viewer changed palette.
     Mode(ThemeMode),
@@ -204,6 +209,9 @@ struct Pointer {
     /// otherwise builds a queue, and the queue is what a hand feels when
     /// it stops and the thing it was dragging goes on moving.
     move_in_flight: Option<Instant>,
+    /// Whether `x`/`y` mean anything: a pointer that has left the window has
+    /// no position, and a panel that follows it must not be placed at one.
+    inside: bool,
 }
 
 /// How far a finger may wander from where it landed and still be a press
@@ -633,6 +641,16 @@ pub struct Driver {
     /// The next token, for a dialog or an upload. Never reused, so a chunk
     /// that arrives late cannot land in a later transfer.
     next_token: u32,
+    /// Scrollers a batch's `ScrollTo` just moved, waiting for the layout
+    /// that says how far they were allowed to go (spec 04 §7).
+    ///
+    /// The op carries absolute pixels, and a server cannot know the height
+    /// the client gave the scroller — so a server that wants the foot of a
+    /// list can only estimate it, and an estimate that is over would leave
+    /// the view in blank space past the last row. The offset is therefore
+    /// clamped to the content the way a wheel notch already is, which also
+    /// means a hostile offset can move nothing it could not have reached.
+    scroll_asked: Vec<u32>,
     /// Uploads in flight, by their id on the wire.
     uploads: HashMap<u32, Upload>,
     /// Saves in flight, by the node the person answered.
@@ -790,6 +808,7 @@ impl Driver {
             file_asks: Vec::new(),
             asks: HashMap::new(),
             next_token: 1,
+            scroll_asked: Vec::new(),
             uploads: HashMap::new(),
             saves: HashMap::new(),
             writes: Vec::new(),
@@ -1013,16 +1032,53 @@ impl Driver {
                 // again, so its `enter` runs once more at the next paint —
                 // where hover settles anyway. `hovered()` does not move in
                 // the meantime: the pointer never went anywhere.
+                //
+                // And so must whatever has focus. A field's focus ring is a
+                // local style like any other, so a batch wiped it and only
+                // hover was put back: on a page with a clock — a batch every
+                // tick — the caret sat in a box that blinked its own border
+                // off and on for as long as you looked at it. Focus has not
+                // moved either; re-running its `focus` is the same repair.
                 if self.session.take_restored_local() {
                     self.pointer.hover_pending = true;
                     self.hover_relight = true;
+                    if let Some(f) = self.focused.filter(|f| self.session.node(*f).is_some()) {
+                        let relit = self.emit(f, eui_proto::EventKind::Focus, eui_proto::Value::Null);
+                        self.pending.extend(relit);
+                    }
                 }
                 // Focus and edits follow the tree.
                 if self.focused.is_some_and(|f| self.session.node(f).is_none()) {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
+                // A `SetText` on a field the person is editing is the server
+                // saying what that field now holds, and the client's buffer
+                // has to agree — otherwise a composer that the handler
+                // emptied on send goes on showing the message that was just
+                // sent, because the local edit outlived the text under it.
+                //
+                // There is no race to lose here: the server only emits
+                // `SetText` when its own value changed, and it never learns
+                // a keystroke it was not told about.
+                for op in &batch.ops {
+                    if let eui_proto::Op::SetText { node, text } = op {
+                        if let Some(edit) = self.edits.get_mut(node) {
+                            let value = match text {
+                                eui_proto::TextRef::Inline(t) => t.clone(),
+                                eui_proto::TextRef::Atom(a) => self.session.atom(*a).unwrap_or("").to_owned(),
+                            };
+                            let end = value.len();
+                            *edit = Edit { seed: value.clone(), value, caret: end, anchor: end, scroll_x: 0.0 };
+                        }
+                    }
+                }
                 self.acked = batch.seq;
+                for op in &batch.ops {
+                    if let eui_proto::Op::ScrollTo { node, .. } = op {
+                        self.scroll_asked.push(*node);
+                    }
+                }
                 let mut out = vec![Frame::Ack { seq: batch.seq }];
                 // A `Focus` op focuses the way the keyboard does, ring included.
                 if batch.ops.iter().any(|o| matches!(o, eui_proto::Op::Focus { .. })) {
@@ -1204,9 +1260,20 @@ impl Driver {
         Vec::new()
     }
 
-    /// The display scale, device px per logical px.
+    /// Device px per logical px: the display's density, times the window's
+    /// zoom where it has one.
     pub fn scale(&self) -> f32 {
         self.scale
+    }
+
+    /// Which palette this session is in.
+    ///
+    /// The viewer may have chosen it through the application's own control
+    /// — `theme.toggle()` in a local handler — and a window that draws
+    /// anything of its own behind this session has to know, or it draws it
+    /// in the palette nobody asked for.
+    pub fn mode(&self) -> ThemeMode {
+        self.viewer.mode
     }
 
     /// Focus `ix` as the keyboard would — ring shown — for an assistive
@@ -1274,6 +1341,12 @@ impl Driver {
                 if rescaled {
                     self.layout.invalidate_all();
                     self.paint_cache.clear();
+                    // And the glyphs themselves, which are packed under the
+                    // scale they were rasterised at. Kept, they would be
+                    // one sheet of dead coverage per zoom level a page has
+                    // been through, until the sheet fills and the next
+                    // glyph is drawn as nothing.
+                    self.atlas.clear();
                 }
                 self.invalidate();
                 // The clock this input arrived on, not a fresh reading of
@@ -1327,9 +1400,39 @@ impl Driver {
     fn ensure_layout(&mut self) {
         if !self.layout_valid {
             let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes };
+            // The layout places a `position: pointer` panel where the hand is,
+            // so it has to be told where that is before it walks — a chip shown
+            // by the same hover that moved the pointer would otherwise land at
+            // the origin for one frame.
+            self.layout.set_pointer(self.pointer.inside.then_some((self.pointer.x, self.pointer.y)));
             self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
             self.layout_valid = true;
             self.relayouts = self.relayouts.saturating_add(1);
+        }
+        self.settle_scrolls();
+    }
+
+    /// Bring every offset a `ScrollTo` set inside the content it names, now
+    /// that there is a layout to measure it against. `max_y` is the same
+    /// number the wheel and the arrow keys are held to.
+    fn settle_scrolls(&mut self) {
+        if self.scroll_asked.is_empty() {
+            return;
+        }
+        for id in std::mem::take(&mut self.scroll_asked) {
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
+            let (Some(view), Some(content)) = (self.layout.rect(ix), self.layout.content_size(ix)) else {
+                continue;
+            };
+            let (max_x, max_y) = ((content.w - view.w).max(0.0) as i64, (content.h - view.h).max(0.0) as i64);
+            let (x, y) = self.session.node(ix).map_or((0, 0), |n| n.scroll);
+            let (cx, cy) = (x.clamp(0, max_x), y.clamp(0, max_y));
+            if (cx, cy) != (x, y) {
+                self.session.set_scroll(ix, cx, cy);
+                self.invalidate();
+            }
         }
     }
 
@@ -1363,7 +1466,14 @@ impl Driver {
         self.audio_dirty = true;
         self.video_dirty = true;
         if let Some(img) = self.assets.image(&hash) {
-            self.images.insert(hash, img.width, img.height, &img.rgba);
+            // Shrunk first when it is bigger than the sheet: the atlas
+            // refuses what will not fit and remembers the refusal, so a
+            // picture handed over whole would be drawn as nothing, for
+            // ever, in silence.
+            match crate::assets::fit_to_atlas(&img) {
+                Some(small) => self.images.insert(hash, small.width, small.height, &small.rgba),
+                None => self.images.insert(hash, img.width, img.height, &img.rgba),
+            };
         }
         // An image's intrinsic size just changed under nodes nothing marked
         // dirty: the memoised measures cannot be trusted.
@@ -1410,7 +1520,7 @@ impl Driver {
         let name = match handler {
             Handler::Server(name) => Some(name),
             Handler::Local(chunk) => {
-                match self.run_local(chunk, false) {
+                match self.run_local(chunk, false, target) {
                     Ok(queued) => {
                         let state = self.root_state();
                         out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
@@ -1419,7 +1529,7 @@ impl Driver {
                 }
                 None
             }
-            Handler::LocalThenServer { chunk, name } => match self.run_local(chunk, true) {
+            Handler::LocalThenServer { chunk, name } => match self.run_local(chunk, true, target) {
                 Ok(queued) => {
                     let state = self.root_state();
                     out.extend(queued.into_iter().map(|n| Frame::Event(EventFrame { node, event: kind, name: n, payload: state.clone() })));
@@ -1451,7 +1561,7 @@ impl Driver {
 
     /// Verify (once) and run a chunk against the session. Returns the atoms
     /// the chunk asked to emit, in order.
-    fn run_local(&mut self, chunk_id: u32, provisional: bool) -> Result<Vec<u32>, String> {
+    fn run_local(&mut self, chunk_id: u32, provisional: bool, here: NodeIx) -> Result<Vec<u32>, String> {
         let verified = match self.chunks.get(&chunk_id) {
             Some(Some(c)) => c.clone(),
             Some(None) => return Err("chunk failed verification earlier".into()),
@@ -1483,7 +1593,7 @@ impl Driver {
                 }
             }
         };
-        let mut host = SessionHost { session: &mut self.session, emitted: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
+        let mut host = SessionHost { session: &mut self.session, here: Some(here), emitted: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
         let repaint = host.repaint;
@@ -1570,6 +1680,14 @@ impl Driver {
     fn pointer_move(&mut self, x: f32, y: f32) -> Vec<Frame> {
         self.pointer.x = x;
         self.pointer.y = y;
+        self.pointer.inside = true;
+        // A chip that follows the hand follows it here, not at the next
+        // layout: the pointer moves many times a frame and the tree it is
+        // moving over has not changed. Only the panel's origin does, which
+        // is a shift of one subtree and a repaint.
+        if self.layout_valid && self.layout.track_pointer(&self.session, x, y) {
+            self.redraw = true;
+        }
         // A thumb drag needs no layout: the scroller's box does not move.
         if let Some((scroller, grip)) = self.pointer.dragging_thumb {
             return self.drag_thumb(scroller, grip, y);
@@ -1614,6 +1732,7 @@ impl Driver {
     /// coordinates for a pointer that is no longer on this window.
     fn clear_hover(&mut self) -> Vec<Frame> {
         self.pointer.hover_pending = false;
+        self.pointer.inside = false;
         if self.pointer.over_scrollbar.is_some() {
             self.pointer.over_scrollbar = None;
             self.redraw = true;
@@ -3171,15 +3290,49 @@ impl Driver {
             ..Default::default()
         };
         let heading = StyleRecord { font_size: 4, font_weight: FontWeight::Bold, fg: role(eui_theme::Role::TextDefault), ..Default::default() };
-        let reason = StyleRecord { font_size: 1, fg: role(eui_theme::Role::TextMuted), text_align: TextAlign::Center, max_width: Dim::Px(420), ..Default::default() };
+        // The reason is a field and not a label, because a label cannot be
+        // selected (04: only an editable carries a selection) and this page
+        // is very often the only record of what went wrong: an application
+        // that will not start has no window of its own to say it in, and a
+        // window opened straight onto a URL has no chrome to fall back to.
+        // Unselectable, the reason had to be copied off the screen by hand
+        // or photographed — which is what it came to.
+        //
+        // `TextArea` and not `Input`: it wraps. A parser's complaint names
+        // a file, a line and a column and does not fit on one.
+        let reason = StyleRecord {
+            font_size: 1,
+            font_family: eui_proto::FontFamily::Mono,
+            fg: role(eui_theme::Role::DangerBase),
+            bg: role(eui_theme::Role::SurfaceRaised),
+            max_width: Dim::Px(560),
+            padding: [2, 3, 2, 3],
+            radius: 2,
+            ..Default::default()
+        };
+        let hint = StyleRecord { font_size: 0, fg: role(eui_theme::Role::TextMuted), text_align: TextAlign::Center, ..Default::default() };
+        // Both modifiers already work — the driver reads control and super
+        // as the same bit for an editable — so this only has to name the
+        // one the person is holding.
+        let keys = if cfg!(target_os = "macos") { "Select it to copy: \u{2318}A, then \u{2318}C." } else { "Select it to copy: Ctrl+A, then Ctrl+C." };
         let mut tree = Subtree::default();
-        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 3 });
         tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("The application stopped".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
-        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 3, style: 3, key: 0, text: Some(TextRef::Inline(why)), props: (0, 0), handlers: (0, 0), child_count: 0 });
-        let batch = Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: page }, Op::DefStyle { id: 2, record: heading }, Op::DefStyle { id: 3, record: reason }, Op::Mount(tree)] };
+        tree.nodes.push(FlatNode { kind: NodeKind::TextArea, id: 3, style: 3, key: 0, text: Some(TextRef::Inline(why)), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 4, style: 4, key: 0, text: Some(TextRef::Inline(keys.into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        let batch = Batch {
+            seq: 1,
+            ops: vec![Op::DefStyle { id: 1, record: page }, Op::DefStyle { id: 2, record: heading }, Op::DefStyle { id: 3, record: reason }, Op::DefStyle { id: 4, record: hint }, Op::Mount(tree)],
+        };
         if self.session.apply(&batch).is_err() {
             return;
         }
+        // Focused here rather than with an `Op::Focus`: this batch never
+        // goes near `handle_frame`, which is what would have read one, and
+        // there is no server left to tell about it either way. Without it
+        // the two keystrokes the hint names do nothing until the field is
+        // found and clicked.
+        self.focused = self.session.lookup(3);
         self.invalidate();
         self.redraw = true;
     }
@@ -3941,6 +4094,15 @@ impl Driver {
 /// on nodes by key atom, and an event queue. Nothing else is reachable.
 struct SessionHost<'a> {
     session: &'a mut Session,
+    /// The node whose handler is running, for `self` (spec 07 §3).
+    ///
+    /// A chunk names a node by the atom of its key, and key atom `0` — which
+    /// no node can have, since an unkeyed node is never entered in the key
+    /// map — means *this* one. Resolving `self` here rather than baking the
+    /// key in at compile time is what lets one chunk serve every row of a
+    /// list: a source compiled per key is one interned chunk per key, and
+    /// the table holds 4 095.
+    here: Option<NodeIx>,
     emitted: Vec<u32>,
     /// Something the layout reads changed.
     touched: bool,
@@ -3981,6 +4143,17 @@ fn from_wire(v: &Value) -> eui_vm::Value {
     }
 }
 
+impl SessionHost<'_> {
+    /// The node a chunk named: by its key's atom, or — for atom `0` — the
+    /// one the handler is on.
+    fn named(&self, key: u32) -> Option<NodeIx> {
+        if key == 0 {
+            return self.here;
+        }
+        self.session.lookup_key(key)
+    }
+}
+
 impl eui_vm::Host for SessionHost<'_> {
     fn atom(&self, id: u32) -> Option<&str> {
         self.session.atom(id)
@@ -3995,7 +4168,7 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.set_root_prop_local(atom, to_wire(value))
     }
     fn set_text(&mut self, key: u32, text: String) -> bool {
-        let Some(ix) = self.session.lookup_key(key) else {
+        let Some(ix) = self.named(key) else {
             return false;
         };
         self.touched = true;
@@ -4016,7 +4189,7 @@ impl eui_vm::Host for SessionHost<'_> {
         self.session.set_prop_local(ix, atom, to_wire(value))
     }
     fn set_style(&mut self, key: u32, style: u32) -> bool {
-        let Some(ix) = self.session.lookup_key(key) else {
+        let Some(ix) = self.named(key) else {
             return false;
         };
         if let Some(undo) = &mut self.undo {

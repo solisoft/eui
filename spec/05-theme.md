@@ -16,7 +16,7 @@ settings MUST produce the same values, within the tolerance in §7.
 ## 1. Colour roles
 
 A `ColorRef` in role space (`1..=0x7FFF`, see [`02-wire-format.md`](02-wire-format.md)
-§3.2) names one of these. The numbering is stable; ids `29..=0x7FFF` are
+§3.2) names one of these. The numbering is stable; ids `34..=0x7FFF` are
 reserved and MUST be rejected.
 
 | id | Role | id | Role |
@@ -35,6 +35,25 @@ reserved and MUST be rejected.
 | 12 | `accent.on` | 26 | `border.default` |
 | 13 | `success.base` | 27 | `border.strong` |
 | 14 | `success.subtle` | 28 | `focus.ring` |
+
+| id | Role | id | Role |
+|---:|---|---:|---|
+| 29 | `series.1` | 32 | `series.4` |
+| 30 | `series.2` | 33 | `series.5` |
+| 31 | `series.3` | | |
+
+### 1.1 The series roles
+
+`series.1` … `series.5` are the categorical ramp a chart draws with, and they
+exist because the status roles are not free to be borrowed: a green series
+reads as "good" to someone who has learned the rest of the interface. A client
+MUST assign them in fixed order — `series.1` to the first series, `series.2` to
+the second — and MUST NOT cycle. There is no `series.6`: past five, a server
+folds the tail into one "other" series, facets into small multiples, or encodes
+the sixth dimension with something that is not hue.
+
+The ramp is chosen so that adjacent pairs stay apart for a reader with a colour
+vision deficiency; §4.1 gives the values and the guarantee.
 
 ## 2. Scales
 
@@ -141,6 +160,28 @@ every role. Hue comes from the relevant seed, or from the fixed status hues.
 | `border.default` | 0.86 | 0.32 | 0.70 | min(sC, 0.02) | sh |
 | `border.strong` | 0.70 | 0.45 | 0.90 | min(sC, 0.02) | sh |
 | `focus.ring` | 0.55 | 0.75 | 0.85 | max(aC, 0.18) | ah |
+| `series.1` | 0.50 | 0.52 | 0.72 | 0.12 | 264 |
+| `series.2` | 0.50 | 0.52 | 0.80 | 0.12 | 70 |
+| `series.3` | 0.74 | 0.66 | 0.88 | 0.12 | 170 |
+| `series.4` | 0.48 | 0.50 | 0.70 | 0.12 | 330 |
+| `series.5` | 0.70 | 0.66 | 0.84 | 0.12 | 195 |
+
+The series hues are fixed, not derived from the theme's accent: a theme that
+retunes its accent MUST NOT retune them, because their separation is a property
+of the set, not of any one of them. `series.1` shares the default accent's hue
+so that a single-series chart still looks like the product.
+
+The series roles are **not** subject to §4.3. They are not text and not a
+control: what they owe the reader is separation from each other, which is
+measured as the OKLab ΔE (×100) between adjacent pairs after simulating
+protanopia, deuteranopia and tritanopia. Every adjacent pair clears ΔE 8 under
+each simulation and ΔE 15 to normal vision — worst pair 21.5 light, 15.7 dark,
+12.4 high contrast under simulation. In light and dark some steps sit below 3:1
+against `surface.base`, so a client that paints a chart from these roles MUST
+give identity a second carrier: a legend, direct labels, or a table view.
+Colour alone is never the answer to "which series is this". High contrast lifts
+every step above 3:1 instead, which is why its column leaves the lightness band
+the other two keep to.
 
 ### 4.2 The `on` roles
 

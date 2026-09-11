@@ -96,6 +96,12 @@ pub struct Chrome {
     blank: bool,
     /// Applications worth offering on a blank page, newest first.
     recents: Vec<crate::recent::Recent>,
+    /// Why the last application in the active tab stopped, if it did.
+    ///
+    /// Kept here rather than on `TabView` so that setting it is one call and
+    /// not a change every caller has to make — the same reason `recents`
+    /// lives here.
+    trouble: Option<String>,
     /// The batch number, which has to rise.
     seq: u64,
     /// The atom and the style catalogue have been sent. They are sent once
@@ -127,6 +133,12 @@ const BLANK_MARK_TEXT: u32 = 13;
 const BLANK_HEAD: u32 = 14;
 const BLANK_SUB: u32 = 15;
 const BLANK_FIELD: u32 = 16;
+/// Why the last application in this tab stopped, on the page it left behind.
+/// An `input` and not a `text`, so the reason can be selected and copied:
+/// the client owns caret and clipboard inside an editable (03 §3) and owns
+/// neither on a label, and a diagnostic nobody can paste into a bug report
+/// is half a diagnostic.
+const BLANK_WHY: u32 = 17;
 /// The recent list on the blank page. Eight ids to a row, of which five are
 /// used: the row, its sigil box, the letter in it, the name and the host. A
 /// stride that only just fits is a collision waiting for the next label —
@@ -142,7 +154,7 @@ const TAB_STRIDE: u32 = 8;
 impl Chrome {
     /// A chrome for a window of `w × h` at `scale`.
     pub fn new(w: f32, h: f32, scale: f32) -> Self {
-        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, recents: Vec::new(), seq: 0, defined: false }
+        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, recents: Vec::new(), trouble: None, seq: 0, defined: false }
     }
 
     /// Where the application's viewport starts, in device-independent px.
@@ -246,6 +258,13 @@ impl Chrome {
     /// from disk on each rebuild, which happens on every tab switch.
     pub fn set_recents(&mut self, recents: Vec<crate::recent::Recent>) {
         self.recents = recents;
+    }
+
+    /// Why the active tab has no application. `None` for a tab that simply
+    /// has not opened one yet — which is not a fault and should not read
+    /// like one.
+    pub fn set_trouble(&mut self, why: Option<String>) {
+        self.trouble = why;
     }
 
     /// Put the address bar into editing and select what is there.
@@ -514,6 +533,22 @@ impl Chrome {
         // ids of everything after it.
         let s_blank =
             b.style(StyleRecord { display: Display::Column, grow: 1, justify: Justify::Center, align_items: AlignItems::Center, gap: 4, padding: [8, 6, 9, 6], bg: surface, ..Default::default() });
+        // Why the last application stopped. An `input` and not a `text`,
+        // because the client owns caret, selection and `Ctrl+C` inside an
+        // editable (03 §3) and owns none of them on a label — and a
+        // diagnostic nobody can paste into a bug report is half a
+        // diagnostic. It is styled to read as a sentence rather than a
+        // field: no border, no fill, just the words, in the colour the rest
+        // of the page uses for something that went wrong.
+        let s_why = b.style(StyleRecord {
+            width: Dim::Px(560),
+            padding: [1, 2, 1, 2],
+            font_family: eui_proto::FontFamily::Mono,
+            font_size: 0,
+            fg: role(Role::DangerBase.id()),
+            bg: ColorRef::NONE,
+            ..Default::default()
+        });
         let s_mark = {
             b.style(StyleRecord {
                 width: Dim::Px(44),
@@ -594,7 +629,8 @@ impl Chrome {
 
         if self.blank {
             let shown = self.recents.len().min(crate::recent::KEEP);
-            b.open(NodeKind::Box, CONTENT, s_blank, 4 + u32::from(shown > 0));
+            let why = self.trouble.as_deref().unwrap_or("");
+            b.open(NodeKind::Box, CONTENT, s_blank, 4 + u32::from(!why.is_empty()) + u32::from(shown > 0));
             b.open(NodeKind::Box, BLANK_MARK, s_mark, 1);
             b.text(BLANK_MARK_TEXT, s_mark_text, "EUI");
             b.close();
@@ -602,6 +638,13 @@ impl Chrome {
             b.text(BLANK_SUB, s_sub, "Type an address and press Enter.");
             b.change();
             b.text_node(NodeKind::Input, BLANK_FIELD, s_big, Some(""));
+            if !why.is_empty() {
+                // A field, so the reason can be selected and copied, and a
+                // `TextArea` so it wraps: a refusal that names a host and a
+                // pin does not fit on one line, and what does not fit is
+                // scrolled out of a single-line field and out of reach.
+                b.text_node(NodeKind::TextArea, BLANK_WHY, s_why, Some(why));
+            }
             if shown > 0 {
                 b.open(NodeKind::Box, RECENT_BASE - 1, s_recents, shown as u32);
                 for (i, r) in self.recents.iter().take(shown).enumerate() {

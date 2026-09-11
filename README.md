@@ -28,9 +28,9 @@ crates/
   eui-ios     the static library Xcode links, and its entry point  [untested]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
-  demo-app        counter, todo, a 10 000-row table and a gallery as a Soli
-                  app; the catalogue (buttons to date pickers to charts) is
-                  app/controllers/eui_builders.sl
+  demo-app        counter, todo, a 10 000-row table, a gallery and Atrium —
+                  a team messenger — as a Soli app; the catalogue (buttons to
+                  date pickers to charts) is app/controllers/eui_builders.sl
   snapshot        render the counter, or any live Soli component, off-screen
 doc/         the documentation site, itself a Soli app
 www/         the public site, itself a Soli app
@@ -97,6 +97,17 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090 --a
 # A Soli app (../lang built with --features eui), with a capability granted:
 ../lang/target/debug/soli serve examples/demo-app --port 5011
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read
+
+# Atrium, the messenger. Open it twice against the one server: the two
+# windows are two people, and each sees what the other types, sends, reacts
+# to and attaches. What happened is pushed — `eui_wake` renders the other
+# sessions where the counter moves — and what went stale on its own is found
+# by the view's `wake` (06 §1.1), a tick, and a sequence number.
+# The room lives in a module global, and a global belongs to one realtime
+# worker — so the server it is served from wants SOLI_WS_WORKERS=1, or two
+# windows land on different threads and hold different rooms.
+SOLI_WS_WORKERS=1 ../lang/target/debug/soli serve examples/demo-app --port 5011
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/chat --allow fs.pick
 ```
 
 ### The phones

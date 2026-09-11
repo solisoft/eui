@@ -94,7 +94,7 @@ resolution against a parent.
 | 54 | 1 | `line_clamp` | 0 = unlimited |
 | 55 | 1 | `text_decoration` | bitfield: 1 underline, 2 strikethrough |
 | 56 | 1 | `overflow` | 0 `visible`, 1 `clip`, 2 `scroll` |
-| 57 | 1 | `position` | 0 `flow`, 1 `absolute` (meaningful inside `stack`) |
+| 57 | 1 | `position` | 0 `flow`, 1 `absolute`, 2 `pointer` (meaningful inside `stack`; see [`04-layout.md`](04-layout.md) §5) |
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
 | 60 | 1 | `transition` | 0 none, else `motion` scale index + 1: colours and opacity animate into this record (03 §5) |

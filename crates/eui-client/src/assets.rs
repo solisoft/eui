@@ -180,6 +180,86 @@ pub struct Image {
     pub rgba: Vec<u8>,
 }
 
+/// The longest edge a picture may have once it is packed, in texels.
+///
+/// The sheet is 2048 across (`ImageAtlas::SIZE`) and nothing is ever
+/// evicted from it, so a picture packed at the sheet's own edge would take
+/// the whole arena and every picture after it would be refused. Half the
+/// edge leaves room for four such pictures side by side, and 1024 texels is
+/// 512 logical pixels on a 2x display — wider than anything the catalogue
+/// draws inline.
+pub const ATLAS_EDGE: u32 = 1024;
+
+/// A copy of `img` small enough for the atlas, or `None` when it already
+/// fits and nothing needs copying.
+///
+/// A picture with an edge past the sheet's was refused by `pack`, the
+/// refusal was remembered so it was never retried, and the painter, finding
+/// no region, drew nothing — a box of bare background, which on a dark
+/// surface is a black square, with no error in the log and no way to tell
+/// it from a picture that is genuinely black. A photograph off a phone or a
+/// screenshot of a whole page is over the line by default, so this was the
+/// common case rather than the edge one.
+///
+/// The natural size is left alone: `Image` is what the layout measures an
+/// unsized picture by (03 §1), and a picture that laid out at the size we
+/// happened to pack it at would change shape for the wrong reason. Only the
+/// texels handed to the atlas shrink, and the painter stretches whatever
+/// region it finds across the node's box, so the drawing is unchanged.
+///
+/// Box-filtered, not sampled: a screenshot of text reduced by nearest
+/// neighbour is noise. Each destination pixel averages the source pixels
+/// that fall under it, weighted by alpha so that what is transparent does
+/// not drag colour into what is not. One pass over the picture, once, when
+/// its bytes arrive.
+pub fn fit_to_atlas(img: &Image) -> Option<Image> {
+    let long = img.width.max(img.height);
+    if long <= ATLAS_EDGE || img.width == 0 || img.height == 0 {
+        return None;
+    }
+    let scale = f64::from(ATLAS_EDGE) / f64::from(long);
+    let nw = ((f64::from(img.width) * scale).round() as u32).clamp(1, ATLAS_EDGE);
+    let nh = ((f64::from(img.height) * scale).round() as u32).clamp(1, ATLAS_EDGE);
+    let (w, h) = (img.width as usize, img.height as usize);
+    if img.rgba.len() != w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    let (dw, dh) = (nw as usize, nh as usize);
+    let mut out = vec![0u8; dw.checked_mul(dh)?.checked_mul(4)?];
+    for y in 0..dh {
+        let y0 = y * h / dh;
+        let y1 = (((y + 1) * h).div_ceil(dh)).clamp(y0 + 1, h);
+        for x in 0..dw {
+            let x0 = x * w / dw;
+            let x1 = (((x + 1) * w).div_ceil(dw)).clamp(x0 + 1, w);
+            // Colour is summed already multiplied by its own alpha, so a
+            // transparent pixel contributes none of its colour; the sum is
+            // divided back out at the end.
+            let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let Some(&[pr, pg, pb, pa]) = img.rgba.get((sy * w + sx) * 4..(sy * w + sx) * 4 + 4) else { continue };
+                    let al = u64::from(pa);
+                    r += u64::from(pr) * al;
+                    g += u64::from(pg) * al;
+                    b += u64::from(pb) * al;
+                    a += al;
+                    n += 1;
+                }
+            }
+            if a == 0 || n == 0 {
+                continue;
+            }
+            let Some([dr, dg, db, da]) = out.get_mut((y * dw + x) * 4..(y * dw + x) * 4 + 4) else { continue };
+            *dr = (r / a) as u8;
+            *dg = (g / a) as u8;
+            *db = (b / a) as u8;
+            *da = (a / n) as u8;
+        }
+    }
+    Some(Image { width: nw, height: nh, rgba: out })
+}
+
 /// Decode whatever the bytes are, by their first bytes: PNG always, JPEG
 /// and WebP when the client was built with them (`jpeg`, `webp`). A format
 /// the build does not carry is a decode failure with its name in it, so

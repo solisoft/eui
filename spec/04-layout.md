@@ -167,6 +167,25 @@ margin. Either way the box is then clamped into the viewport on both axes,
 so a panel taller or wider than the window still starts inside it. Nothing
 is measured again: the panel and its subtree are moved.
 
+**Following the pointer.** `position: pointer` is `absolute` in every respect
+above — out of flow, sized to its content, measured against the viewport,
+never counted into its stack — but the anchor gives it only its stack, not its
+place. A client MUST put it **above the pointer** and **centred on it**: its
+bottom the pointer's `y` less its own top margin, its centre the pointer's
+`x`. When there is no room above — the top of the box would fall outside the
+viewport — it goes under the pointer instead, its top the pointer's `y` plus
+the same margin. It is then clamped into the viewport on both axes as any
+other panel is.
+
+A tooltip is the case this exists for, and it is a client's job for the same
+reason a scrollbar is: a local chunk has no access to the pointer (see
+[`07-bytecode.md`](07-bytecode.md) §1), and asking the server for a position
+is a round trip per mouse sample. The client MUST keep such a panel under the
+pointer as it moves, and SHOULD do so without laying out again — nothing about
+the panel changes but its origin. A client that does not know where the
+pointer is — it has left the window, or the input is not a pointer at all —
+leaves the panel where it was.
+
 ## 6. `grid`
 
 Version 1 supports one shape: `N` equal columns. `N` is the container's

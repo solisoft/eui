@@ -158,3 +158,74 @@ fn an_image_node_is_fetched_then_sized_then_painted() {
     let _ = Role::AccentBase;
     let _ = Input::Unfocused;
 }
+
+/// A picture of `w` × `h`, a diagonal ramp so that averaging it gives
+/// something checkable, fully opaque.
+fn ramp(w: u32, h: u32) -> assets::Image {
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let v = ((x + y) % 256) as u8;
+            rgba.extend_from_slice(&[v, 255 - v, 128, 255]);
+        }
+    }
+    assets::Image { width: w, height: h, rgba }
+}
+
+/// A picture bigger than the atlas is drawn, not silently dropped.
+///
+/// `ImageAtlas::pack` refuses anything with an edge past the sheet's 2048
+/// and remembers the refusal so it is never retried, so before
+/// `fit_to_atlas` a photograph off a phone — over the line on both axes by
+/// default — reached the painter as no region at all and was drawn as bare
+/// background: a black box, with nothing in the log to say why.
+#[test]
+fn a_picture_too_big_for_the_sheet_is_shrunk_rather_than_lost() {
+    let big = ramp(2493, 3401);
+
+    let small = assets::fit_to_atlas(&big).expect("over the edge, so a copy");
+    assert_eq!(small.height, assets::ATLAS_EDGE, "the long edge is the cap");
+    assert_eq!(small.width, 751, "and the short one keeps the proportion");
+    assert_eq!(small.rgba.len() as u32, small.width * small.height * 4);
+    assert!(small.rgba.chunks(4).all(|p| p[3] == 255), "opaque throughout");
+    assert!(small.rgba.chunks(4).any(|p| p[0] > 0), "and not a black square");
+
+    // The natural size is what an unsized picture lays out at, so it has to
+    // survive the shrink untouched.
+    assert_eq!((big.width, big.height), (2493, 3401));
+
+    let h = hash_of(b"big");
+    let mut whole = eui_render::ImageAtlas::new();
+    assert!(whole.insert(h, big.width, big.height, &big.rgba).is_none(), "the sheet refuses it whole");
+    let mut shrunk = eui_render::ImageAtlas::new();
+    assert!(shrunk.insert(h, small.width, small.height, &small.rgba).is_some(), "and takes it shrunk");
+}
+
+/// One that already fits is handed over as it is, with no copy made.
+#[test]
+fn a_picture_that_fits_is_not_copied() {
+    assert!(assets::fit_to_atlas(&assets::decode_image(AVATAR).unwrap()).is_none());
+}
+
+/// Transparency does not drag colour into what is opaque: a red pixel next
+/// to a transparent one averages to red, not to half of red.
+#[test]
+fn what_is_transparent_lends_no_colour_to_what_is_not() {
+    let mut rgba = Vec::new();
+    for y in 0..2100u32 {
+        for x in 0..2100u32 {
+            if (x + y) % 2 == 0 {
+                rgba.extend_from_slice(&[255, 0, 0, 255]);
+            } else {
+                rgba.extend_from_slice(&[0, 0, 255, 0]);
+            }
+        }
+    }
+    let small = assets::fit_to_atlas(&assets::Image { width: 2100, height: 2100, rgba }).unwrap();
+    let mid = small.rgba.chunks(4).nth((small.height / 2 * small.width + small.width / 2) as usize).unwrap();
+    assert_eq!((mid[0], mid[1], mid[2]), (255, 0, 0), "the blue was invisible and stays out");
+    // Not exactly half: 2100 into 1024 gives boxes two or three pixels
+    // wide, so a checkerboard does not fall evenly inside every one of
+    // them. Around half is the claim.
+    assert!((100..=160).contains(&mid[3]), "and about half the coverage survives as alpha, got {}", mid[3]);
+}

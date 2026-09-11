@@ -107,6 +107,14 @@ pub struct Layout {
     /// §5's absolute `overlay` in a `stack`. They are settled after the
     /// walk, when both boxes are known in viewport coordinates.
     anchored: Vec<(NodeIx, NodeIx)>,
+    /// Where the pointer is, in viewport coordinates, when the client knows.
+    /// A `position: pointer` panel is placed here rather than against its
+    /// anchor, and kept here between layouts by [`Self::track_pointer`].
+    pointer: Option<(f32, f32)>,
+    /// The `position: pointer` panels laid out this frame. Unlike `anchored`
+    /// these outlive the walk: the pointer moves far more often than the tree
+    /// changes, and following it must not cost a layout.
+    tracking: Vec<NodeIx>,
     /// For each windowed list, the rows that had a child this frame, in
     /// order: the painter draws a placeholder for every other row in view.
     placed_rows: HashMap<NodeIx, Vec<u32>>,
@@ -226,6 +234,7 @@ impl Layout {
         self.row_atom = f.session.atom_id("row");
         self.windowed.clear();
         self.anchored.clear();
+        self.tracking.clear();
         self.viewport = viewport;
 
         let Some(root) = f.session.root() else { return };
@@ -666,14 +675,14 @@ impl Layout {
         let children: Vec<NodeIx> = f.session.children(ix).to_vec();
         let Some(anchor) = children.iter().copied().find(|c| {
             let st = self.style(f, *c);
-            st.display != Display::None && st.position != Position::Absolute
+            st.display != Display::None && !st.position.out_of_flow()
         }) else {
             return;
         };
         for c in children {
             let st = self.style(f, c);
             let overlay = f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay);
-            if overlay && st.position == Position::Absolute && st.display != Display::None {
+            if overlay && st.position.out_of_flow() && st.display != Display::None {
                 self.anchored.push((c, anchor));
             }
         }
@@ -687,6 +696,17 @@ impl Layout {
         for (panel, anchor) in pairs {
             let (Some(p), Some(a)) = (self.rect(panel), self.rect(anchor)) else { continue };
             let gap = self.style(f, panel).margin.t;
+            // §5: a panel that follows the pointer is placed against the hand
+            // rather than against the box it hangs off. Its anchor still says
+            // *which* stack it belongs to, and it is still measured against
+            // the window; only the origin comes from somewhere else.
+            if self.style(f, panel).position == Position::Pointer {
+                self.tracking.push(panel);
+                if let Some((x, y)) = self.pointer {
+                    self.place_at_pointer(f.session, panel, x, y, gap);
+                }
+                continue;
+            }
             let below = a.y + a.h + gap;
             let above = a.y - gap - p.h;
             // Below unless it would fall out of the window and there is
@@ -699,6 +719,48 @@ impl Layout {
             let x = a.x.clamp(0.0, (self.viewport.w - p.w).max(0.0));
             self.shift(f.session, panel, x - p.x, y - p.y);
         }
+    }
+
+    /// Where the pointer is, for the next layout. `None` when it has left the
+    /// window, which leaves a tracking panel wherever it was — it is about to
+    /// be hidden by the `pointer_leave` that follows anyway.
+    pub fn set_pointer(&mut self, at: Option<(f32, f32)>) {
+        self.pointer = at;
+    }
+
+    /// Follow the pointer without laying anything out again. The panels were
+    /// measured this frame and only their origin moves, so this is a handful
+    /// of additions per move rather than a walk of the tree. Returns whether
+    /// anything moved, which is whether the frame needs painting again.
+    pub fn track_pointer(&mut self, s: &Session, x: f32, y: f32) -> bool {
+        self.pointer = Some((x, y));
+        let panels = std::mem::take(&mut self.tracking);
+        let mut moved = false;
+        for panel in &panels {
+            let gap = self.style_of(s, *panel).map_or(0.0, |st| st.margin.t);
+            moved |= self.place_at_pointer(s, *panel, x, y, gap);
+        }
+        self.tracking = panels;
+        moved
+    }
+
+    /// The hand is the anchor: **above** the cursor by the panel's own top
+    /// margin and centred on it, because a chip under the fingertip is a chip
+    /// the fingertip covers, and because a hand approaching from below sees
+    /// what it is pointing at rather than its own knuckles. It drops under
+    /// the cursor only when there is no room over it, and is clamped to the
+    /// window on both axes either way.
+    fn place_at_pointer(&mut self, s: &Session, panel: NodeIx, x: f32, y: f32, gap: f32) -> bool {
+        let Some(p) = self.rect(panel) else { return false };
+        let above = y - gap - p.h;
+        let ty = if above >= 0.0 { above } else { y + gap };
+        let ty = ty.clamp(0.0, (self.viewport.h - p.h).max(0.0));
+        let tx = (x - p.w / 2.0).clamp(0.0, (self.viewport.w - p.w).max(0.0));
+        if (tx - p.x).abs() < 0.5 && (ty - p.y).abs() < 0.5 {
+            return false;
+        }
+        self.shift(s, panel, tx - p.x, ty - p.y);
+        true
     }
 
     /// Move a laid-out subtree bodily. Only the popover's own boxes change;
@@ -910,7 +972,7 @@ impl Layout {
         // §4.1 hypothetical main sizes.
         for c in children {
             let cst = self.style(f, c);
-            if cst.display == Display::None || cst.position == Position::Absolute {
+            if cst.display == Display::None || cst.position.out_of_flow() {
                 continue;
             }
             let (m_before, m_after, c_before, c_after) = if row { (cst.margin.l, cst.margin.r, cst.margin.t, cst.margin.b) } else { (cst.margin.t, cst.margin.b, cst.margin.l, cst.margin.r) };
@@ -1177,7 +1239,7 @@ impl Layout {
         let mut first_baseline = None;
         for c in children {
             let cst = self.style(f, c);
-            if cst.display == Display::None || (absolute_only && cst.position != Position::Absolute) {
+            if cst.display == Display::None || (absolute_only && !cst.position.out_of_flow()) {
                 continue;
             }
             // §5: a popover is measured against the *window*, not against
@@ -1202,7 +1264,7 @@ impl Layout {
             // absolute one takes its content size, as CSS does — a
             // popover is as tall as its options, not as tall as the
             // control it hangs off.
-            let stretches = !absolute_only && cst.position != Position::Absolute;
+            let stretches = !absolute_only && !cst.position.out_of_flow();
             let cw = match (align, cst.width, outer_w) {
                 _ if cst.width.resolve(outer_w).is_some() => Constraint::Exact(cst.width.resolve(outer_w).unwrap_or(0.0)),
                 (AlignItems::Stretch, Length::Auto, Constraint::Exact(b)) if stretches => Constraint::Exact((b - cst.margin.horizontal()).max(0.0)),
@@ -1232,7 +1294,7 @@ impl Layout {
             // §5: an absolute child is placed on the stack, not counted
             // into it — a popover that grew the box it hangs off would
             // push the page open every time it opened.
-            if cst.position != Position::Absolute {
+            if !cst.position.out_of_flow() {
                 extent.w = extent.w.max(m.w + cst.margin.horizontal());
                 extent.h = extent.h.max(m.h + cst.margin.vertical());
             }
@@ -1248,7 +1310,7 @@ impl Layout {
     /// makes with its anchor is settled in [`Self::settle_anchored`]; here
     /// it only says which child is measured against the window.
     fn is_popover(f: &Env<'_>, parent: Style, c: NodeIx, cst: Style) -> bool {
-        parent.display == Display::Stack && cst.position == Position::Absolute && f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay)
+        parent.display == Display::Stack && cst.position.out_of_flow() && f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay)
     }
 
     /// §6: `N` equal columns, row-major.
@@ -1261,7 +1323,7 @@ impl Layout {
             .copied()
             .filter(|c| {
                 let s = self.style(f, *c);
-                s.display != Display::None && s.position != Position::Absolute
+                s.display != Display::None && !s.position.out_of_flow()
             })
             .collect();
         let gaps = st.gap * n.saturating_sub(1) as f32;

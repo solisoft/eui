@@ -1,0 +1,9 @@
+name = "eui-data.solisoft.test"
+domain = "eui-data.solisoft.test"
+start_script = "soli serve . --port $PORT --workers $WORKERS"
+workers = 8
+stop_script = ""
+health_check = "/health"
+graceful_timeout = 30
+port_range_start = 20000
+port_range_end = 30000

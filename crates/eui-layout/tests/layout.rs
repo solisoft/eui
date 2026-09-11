@@ -863,3 +863,49 @@ fn a_box_ends_at_its_last_line() {
     assert_eq!(r(&l, &s, inner).h, 44.0);
     assert_eq!(r(&l, &s, fr).h, 44.0, "the frame is exactly its content, in a column with room to spare");
 }
+
+/// §5: a `position: pointer` panel is placed against the hand rather than
+/// against the box it hangs off — above the cursor, centred on it — and it
+/// keeps up with the hand without a second layout.
+#[test]
+fn a_panel_that_follows_the_pointer_sits_above_it_and_keeps_up() {
+    let mut b = B::default();
+    let column = b.style(col());
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let box_h = b.style(StyleRecord { height: px(200), ..st() });
+    let chip = b.style(StyleRecord { position: Position::Pointer, margin: [2, 0, 0, 0], ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, column, 1);
+    b.push(NodeKind::Box, stack, 2);
+    let plot = b.push(NodeKind::Box, box_h, 0);
+    let tip = b.push(NodeKind::Overlay, chip, 1);
+    b.text(t, "nine");
+    let s = b.session();
+
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    l.set_pointer(Some((180.0, 120.0)));
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, Size::new(400.0, 300.0));
+    let plot = r(&l, &s, plot);
+    let at = r(&l, &s, tip);
+    // Above the pointer by the panel's own top margin (4 px), centred on it:
+    // anchored to the plot instead, it sat at the plot's bottom-left corner
+    // wherever in the plot the pointer actually was.
+    assert!((at.y + at.h + 4.0 - 120.0).abs() < 0.01, "its bottom is 4 px over the cursor: {at:?}");
+    assert!((at.x + at.w / 2.0 - 180.0).abs() < 0.01, "and its centre is on the cursor: {at:?}");
+    assert!(at.y < plot.y + plot.h, "not parked at the foot of the plot: {at:?} vs {plot:?}");
+
+    // Moving the hand moves the chip, and moves nothing else.
+    assert!(l.track_pointer(&s, 60.0, 240.0), "the panel moved");
+    let then = r(&l, &s, tip);
+    assert!((then.y + then.h + 4.0 - 240.0).abs() < 0.01, "it followed: {then:?}");
+    assert!((then.x + then.w / 2.0 - 60.0).abs() < 0.01, "on both axes: {then:?}");
+    assert_eq!(r(&l, &s, 3), plot, "and the tree under it did not move");
+    assert!(!l.track_pointer(&s, 60.0, 240.0), "and standing still costs no repaint");
+
+    // No room above: it drops under the cursor rather than off the window.
+    l.track_pointer(&s, 200.0, 2.0);
+    let low = r(&l, &s, tip);
+    assert!(low.y >= 2.0, "under the cursor when there is no room over it: {low:?}");
+}

@@ -506,6 +506,10 @@ pub struct Status {
     /// The pointer's shape over what it is on, as [`eui_proto::Cursor`]'s
     /// wire byte.
     pub cursor: u8,
+    /// The palette this session is in, as [`eui_proto::ThemeMode`]'s wire
+    /// byte. The viewer can change it from inside the application, where
+    /// nothing else in this reply would show it.
+    pub mode: u8,
     /// A sound is loaded: the window keeps its audio device open (03 §7).
     pub audio: bool,
     /// A picture is playing (03 §8).
@@ -584,6 +588,7 @@ impl Reply {
             None => w.bool(false),
         }
         w.u8(s.cursor);
+        w.u8(s.mode);
         w.bool(s.audio);
         w.bool(s.video);
         w.u32(u32::try_from(s.files.len()).unwrap_or(u32::MAX));
@@ -694,6 +699,7 @@ impl Reply {
         let clipboard = r.opt_str()?;
         let next_due_ms = if r.bool()? { Some(r.u32()?) } else { None };
         let cursor = r.u8()?;
+        let mode = r.u8()?;
         let audio = r.bool()?;
         let video = r.bool()?;
         let n = r.u32()? as usize;
@@ -714,7 +720,7 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, audio, video, files, writes };
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, files, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -1187,6 +1193,7 @@ fn status_of(d: &mut Driver) -> Status {
         clipboard: d.take_clipboard(),
         next_due_ms: d.next_frame_at().map(|at| u32::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)),
         cursor: d.cursor().to_u8(),
+        mode: d.mode() as u8,
         audio: d.audio_playing(),
         video: d.video_playing(),
         files: d.take_file_asks(),
@@ -1333,7 +1340,10 @@ impl Repeat {
         }
         let until = (list.repeat_until_ms != u32::MAX).then(|| received + Duration::from_millis(u64::from(list.repeat_until_ms)));
         let reply = Reply {
-            status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, ..Status::default() },
+            // The palette is carried, unlike the rest: the window's chrome
+            // now follows it, and a default here would put the strip into
+            // the light for as long as a spinner kept repeating this list.
+            status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, mode: reply.status.mode, ..Status::default() },
             payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: None },
         };
         Some(Self { reply, until })
@@ -1874,6 +1884,11 @@ impl Backend {
         self.with_local(|d| d.cursor()).or_else(|| self.with_worker(|w| eui_proto::Cursor::from_u8(w.status.cursor).unwrap_or(eui_proto::Cursor::Default))).unwrap_or(eui_proto::Cursor::Default)
     }
 
+    /// The palette this session is in.
+    pub fn mode(&mut self) -> eui_proto::ThemeMode {
+        self.with_local(|d| d.mode()).or_else(|| self.with_worker(|w| eui_proto::ThemeMode::from_u8(w.status.mode).unwrap_or_default())).unwrap_or_default()
+    }
+
     /// Text the viewer copied since the last call.
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.with_local(|d| d.take_clipboard()).or_else(|| self.with_worker(|w| w.status.clipboard.take())).flatten()
@@ -2141,6 +2156,7 @@ mod tests {
             clipboard: Some("c".into()),
             next_due_ms: Some(16),
             cursor: 1,
+            mode: 1,
             audio: true,
             video: false,
             files: vec![

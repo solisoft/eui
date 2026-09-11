@@ -231,7 +231,7 @@ fn check_style_rejects_indices_past_a_scale() {
     assert_eq!(bad(|r| r.radius = 5), ThemeError::ScaleIndex("radius", 5));
     assert_eq!(bad(|r| r.shadow = 4), ThemeError::ScaleIndex("shadow", 4));
     assert_eq!(bad(|r| r.font_size = 8), ThemeError::ScaleIndex("text", 8));
-    assert_eq!(bad(|r| r.bg = ColorRef::role(29)), ThemeError::UnknownRole(29));
+    assert_eq!(bad(|r| r.bg = ColorRef::role(34)), ThemeError::UnknownRole(34));
     // Literals and `none` are not role lookups.
     let r = StyleRecord { bg: ColorRef::literal(5), fg: ColorRef::NONE, ..Default::default() };
     assert!(check_style(&r).is_ok());
@@ -241,8 +241,9 @@ fn check_style_rejects_indices_past_a_scale() {
 fn role_ids_are_stable_and_bounded() {
     assert_eq!(Role::from_id(1).unwrap(), Role::SurfaceBase);
     assert_eq!(Role::from_id(28).unwrap(), Role::FocusRing);
+    assert_eq!(Role::from_id(33).unwrap(), Role::Series5);
     assert_eq!(Role::from_id(0).unwrap_err(), ThemeError::UnknownRole(0));
-    assert_eq!(Role::from_id(29).unwrap_err(), ThemeError::UnknownRole(29));
+    assert_eq!(Role::from_id(34).unwrap_err(), ThemeError::UnknownRole(34));
     for (i, role) in Role::ALL.iter().enumerate() {
         assert_eq!(usize::from(role.id()), i + 1);
         assert_eq!(Role::from_id(role.id()).unwrap(), *role);
@@ -345,4 +346,20 @@ fn the_themes_easing_is_the_standard_curve() {
         let t = i as f32 / 10.0;
         assert!((ease(t) - eui_theme::Curve::STANDARD.at(t)).abs() < 1e-6, "at {t}");
     }
+}
+
+/// The five categorical series colours are validated, not chosen by eye: each mode's
+/// ramp clears the adjacent-pair CVD separation floor (ΔE ≥ 8 in OKLab×100 under
+/// protan/deutan/tritan) and the normal-vision floor (ΔE ≥ 15) against the mode's own
+/// surface. Re-run the palette validator before touching the hues, chroma, or
+/// lightnesses in `theme.rs` — these hexes are the record of what passed.
+#[test]
+fn series_roles_keep_their_validated_colors() {
+    let hex = |mode| {
+        let r = Theme::default().resolve(Viewer { mode, ..Default::default() });
+        Role::ALL[28..33].iter().map(|role| format!("#{:06x}", r.color(*role) >> 8)).collect::<Vec<_>>()
+    };
+    assert_eq!(hex(ThemeMode::Light), ["#3f60a7", "#8a5600", "#4bc39f", "#82417d", "#00b5b5"]);
+    assert_eq!(hex(ThemeMode::Dark), ["#4566ae", "#915b00", "#29a987", "#884783", "#00a7a7"]);
+    assert_eq!(hex(ThemeMode::HighContrast), ["#7ea3f0", "#efb062", "#7df1cb", "#c882c2", "#55e3e3"]);
 }

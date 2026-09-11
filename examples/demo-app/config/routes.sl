@@ -19,6 +19,9 @@ router_eui("clock", "live#clock", "live#clock_view")
 # Spec 01 §4: a view the server cannot encode, so the suite can watch a
 # session end with its reason instead of freezing.
 router_eui("broken", "live#broken", "live#broken_view")
+# Atrium: a team messenger, and the only component here whose screen changes
+# because someone at another window did something. Open it twice.
+router_eui("chat", "chat#chat", "chat#chat_view")
 
 get("/health", "home#health")
 
@@ -33,4 +36,6 @@ get("/x/login", "x#login")
 get("/x/callback", "x#callback")
 
 # What the manifest asks the client for; the person still has to allow it.
-eui_capabilities("clipboard.read")
+# `fs.pick` is Atrium's: without it the attach button opens no dialog at all,
+# and there is no diagnostic the application can see (03 §3.2).
+eui_capabilities("clipboard.read", "fs.pick")

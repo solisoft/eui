@@ -128,6 +128,36 @@ fn backoff(tries: u32) -> std::time::Duration {
     std::time::Duration::from_millis(ms.min(30_000))
 }
 
+/// The steps `Ctrl +` and `Ctrl -` move between, which are a browser's.
+///
+/// A ladder rather than a factor: multiplying by 1.1 and dividing by it
+/// again does not come back to 1.0, so a person who zoomed in and out the
+/// same number of times would be left at 99.99 % with no way of saying so.
+/// Every step here is a number a person could name.
+const ZOOM: [f32; 13] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+/// Where 100 % sits in [`ZOOM`], so `Ctrl 0` and a new tab agree with it.
+const ZOOM_ONE: usize = 5;
+
+/// The step next to `z`, in the direction `up`; `z` itself at either end.
+///
+/// The step it starts from is the nearest one rather than an exact match,
+/// so a level that came from somewhere else — a rounding, a future setting
+/// — still moves, instead of sticking because it is between two rungs.
+fn zoom_step(z: f32, up: bool) -> f32 {
+    let mut near = ZOOM_ONE;
+    let mut best = f32::INFINITY;
+    for (i, s) in ZOOM.iter().enumerate() {
+        let d = (s - z).abs();
+        if d < best {
+            best = d;
+            near = i;
+        }
+    }
+    let want = if up { near.saturating_add(1) } else { near.wrapping_sub(1) };
+    ZOOM.get(want).copied().unwrap_or_else(|| ZOOM.get(near).copied().unwrap_or(1.0))
+}
+
 /// What a dialog thread answers with.
 #[derive(Debug)]
 #[cfg_attr(not(has_files), allow(dead_code))]
@@ -220,6 +250,10 @@ struct Tab {
     audio: Option<crate::audio::Output>,
     /// Frames the audio thread produced, for the loop to send.
     audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
+    /// Why this tab's session ended, if it did. The blank page a dead tab
+    /// falls back to shows it, in a field, so it can be selected and pasted
+    /// into a bug report — which is what a diagnostic is for.
+    trouble: Option<String>,
     /// What the strip calls it: the manifest's name, or the last path
     /// segment until the manifest arrives.
     title: String,
@@ -237,6 +271,12 @@ struct Tab {
     files: Files,
     /// The link word the chrome was last told about.
     shown_link: Option<&'static str>,
+    /// How much larger this page is drawn than the display asks for.
+    ///
+    /// Per tab, as a browser's zoom is per site: two applications open
+    /// beside each other were not written at the same size, and a person
+    /// who made one readable did not ask for the other to change.
+    zoom: f32,
 }
 
 /// One window: the surface, the chrome, and the applications in it.
@@ -288,6 +328,12 @@ struct Shell {
     ime_area: Option<[f32; 4]>,
     /// The desktop theme watcher, alive as long as the window.
     theme_watch: Option<Box<dyn std::any::Any + Send>>,
+    /// The palette the chrome was last put in, or `None` while it has not
+    /// been told one.
+    ///
+    /// The window's, not a tab's: the chrome is drawn once, whatever is
+    /// open below it, so what it was last told is a property of the window.
+    chrome_mode: Option<eui_proto::ThemeMode>,
     /// The desktop palette last applied.
     desktop_theme: Option<crate::desktop_theme::DesktopTheme>,
     /// A theme wake is queued and not yet handled.
@@ -526,6 +572,7 @@ impl Tab {
         let (backend, how) = Backend::open(w, h, scale, 0);
         eprintln!("eui {}: {how}", crate::BUILD);
         let mut tab = Tab {
+            trouble: None,
             title: name_from_url(&launch.url),
             url: launch.url,
             allowed: launch.allowed,
@@ -542,6 +589,7 @@ impl Tab {
             tries: 0,
             files: Files::default(),
             shown_link: None,
+            zoom: 1.0,
         };
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
@@ -608,8 +656,18 @@ impl Tab {
             }
             // A URL the client refuses is not a network fault: trying it
             // again would refuse it again, in the same words, forever.
+            //
+            // And the words go on the glass, not only on stderr. This is a
+            // window that never showed anything at all — no session, and in
+            // a chromeless window no address bar either — so a refusal kept
+            // to the log is one the person watching an empty rectangle has
+            // no way to reach. `close` is what puts it on the page the
+            // driver mounts for a session that ended, where it can be
+            // selected and copied.
             Err(e @ transport::TransportError::Insecure(_)) => {
                 eprintln!("eui: {e}");
+                self.trouble = Some(e.to_string());
+                self.backend.close(e.to_string());
                 self.link = Link::Ended;
             }
             Err(e) => {
@@ -724,6 +782,9 @@ impl Tab {
             // `Error` from the server. Another socket would end the same
             // way, so this one is not tried again.
             eprintln!("eui: closing: {c}");
+            // Kept, not only logged: a reason that lives on stderr alone is
+            // a reason nobody reading the window will ever see.
+            self.trouble = Some(c.to_string());
             self.conn = None;
             self.link = Link::Ended;
         }
@@ -974,6 +1035,7 @@ impl Shell {
             clip: None,
             cursor: eui_proto::Cursor::Default,
             ime_area: None,
+            chrome_mode: None,
             theme_watch: None,
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1037,18 +1099,86 @@ impl Shell {
         Some(shell)
     }
 
-    /// The size an application's viewport gets, in device-independent px:
-    /// the window, less whatever the chrome is holding above it.
+    /// Device pixels per logical pixel, as the display asks for it. The
+    /// chrome is drawn at this and nothing else: a tab strip that grew with
+    /// the page would be a browser whose toolbar zooms, which none do.
+    fn scale(&self) -> f32 {
+        self.window.scale_factor() as f32
+    }
+
+    /// The active tab's zoom, or 1.0 when there is no tab to ask.
+    fn zoom(&self) -> f32 {
+        self.tabs.get(self.active).map_or(1.0, |t| t.zoom)
+    }
+
+    /// Device pixels per logical pixel *as the application is told it*.
+    ///
+    /// This is the whole of the zoom. Everything downstream — the layout,
+    /// the glyph raster, the paint cache key, the `Viewport` the server is
+    /// sent — already turns on the scale it is handed, so a page drawn half
+    /// again as large is a page told the display is half again as dense.
+    fn app_scale(&self) -> f32 {
+        self.scale() * self.zoom()
+    }
+
+    /// A point in the window's logical px, as the page under the chrome
+    /// sees it: the strip's height off the top, then the zoom out of both
+    /// axes. The inverse of what `paint.rs` does with the same factor.
+    fn to_app(x: f32, y: f32, top: f32, zoom: f32) -> (f32, f32) {
+        (x / zoom, (y - top) / zoom)
+    }
+
+    /// Draw the active page at `z`, and tell it so.
+    ///
+    /// Nothing else is needed: the driver compares the scale it is handed
+    /// with the one it had, and on a change throws away the layout and the
+    /// paint cache and re-rasterises every glyph — which is exactly the
+    /// work a zoom asks for, and was already there for a window dragged
+    /// between two monitors of different densities.
+    ///
+    /// Not through `rebuild_chrome`, which would have been the short way:
+    /// a rebuild resets the address bar's edit state, so zooming while
+    /// typing an address would have eaten what was typed.
+    fn set_zoom(&mut self, z: f32) -> bool {
+        let at = self.active;
+        let Some(t) = self.tabs.get_mut(at) else { return true };
+        if (t.zoom - z).abs() < f32::EPSILON {
+            return true;
+        }
+        t.zoom = z;
+        let (w, h) = self.content_size();
+        self.send_to_tab(Input::Resized(w, h, self.app_scale()));
+        // The pointer the driver holds is in the *old* page's units, and
+        // it is what decides which scroller a wheel turns and what stays
+        // lit. Without this, the first scroll after a zoom step goes to
+        // whatever used to be under the cursor.
+        if let (true, Some((x, y))) = (self.pointer_in_app, self.pointer_at) {
+            let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
+            let (x, y) = Self::to_app(x, y, top, z);
+            self.send_to_tab(Input::PointerMove(x, y));
+        }
+        crate::driver::trace(|| format!("zoom: tab {at} at {:.0} %", z * 100.0));
+        self.window.request_redraw();
+        true
+    }
+
+    /// The size an application's viewport gets, in *its* logical px: the
+    /// window, less whatever the chrome is holding above it.
+    ///
+    /// Taken from the device pixels rather than from the window's logical
+    /// ones, because with a zoom on they are no longer the same unit: the
+    /// strip above is measured in the window's, the page below in its own.
     fn content_size(&self) -> (f32, f32) {
-        let scale = self.window.scale_factor() as f32;
-        let (w, h) = (self.config.width as f32 / scale, self.config.height as f32 / scale);
-        let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
-        (w, (h - top).max(1.0))
+        let s = self.app_scale();
+        let top = self.content_origin() as f32;
+        let w = self.config.width as f32 / s;
+        let h = ((self.config.height as f32 - top) / s).max(1.0);
+        (w, h)
     }
 
     /// Where an application's list starts in the window, in device pixels.
     fn content_origin(&self) -> u32 {
-        let scale = self.window.scale_factor() as f32;
+        let scale = self.scale();
         let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
         if top.is_finite() {
             (top * scale) as u32
@@ -1072,12 +1202,18 @@ impl Shell {
         // click and something to type into.
         if views.is_empty() {
             let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None };
+            chrome.set_trouble(None);
             chrome.rebuild(&[blank], 0);
         } else {
+            // Why the active tab has nothing in it, if that is a fault
+            // rather than a tab nobody has used yet.
+            chrome.set_trouble(self.tabs.get(self.active).and_then(|t| t.trouble.clone()));
             chrome.rebuild(&views, self.active);
         }
         let (w, h) = self.content_size();
-        let scale = self.window.scale_factor() as f32;
+        // The tab that just became active, at *its* zoom: this is what
+        // gives every tab its own level back as the strip is clicked.
+        let scale = self.app_scale();
         if let Some(t) = self.tabs.get_mut(self.active) {
             let out = t.backend.input(Input::Resized(w, h, scale));
             t.send(out);
@@ -1088,9 +1224,14 @@ impl Shell {
     /// Open `url` in the active tab, or in a new one if there is none.
     fn open_url(&mut self, url: String, renderer: &eui_render::Renderer) {
         let (w, h) = self.content_size();
-        let scale = self.window.scale_factor() as f32;
+        // The zoom stays with the tab, not with the session in it: a reload
+        // — which comes through here — would otherwise throw it away, and
+        // so would typing the same address again.
+        let zoom = self.zoom();
+        let scale = self.app_scale();
         let launch = Launch::new(url, 0);
-        let tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
+        let mut tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
+        tab.zoom = zoom;
         if let Some(slot) = self.tabs.get_mut(self.active) {
             let old = std::mem::replace(slot, tab);
             old.close("replaced");
@@ -1187,6 +1328,9 @@ impl Shell {
         self.desktop_theme = now;
         if let Some((c, _)) = &mut self.chrome {
             c.set_desktop_theme(mode, colors.clone());
+        }
+        if let Some(m) = mode {
+            self.chrome_mode = Some(m);
         }
         for t in &mut self.tabs {
             let out = t.backend.desktop_theme(mode, colors.clone());
@@ -1534,6 +1678,7 @@ impl Shell {
         };
         crate::driver::trace(|| format!("platform palette: {mode:?}"));
         self.send_to_tab(Input::Mode(mode));
+        self.chrome_mode = Some(mode);
         self.chrome_input(Input::Mode(mode), renderer);
     }
 
@@ -1554,8 +1699,47 @@ impl Shell {
             let area = self.chrome.as_ref().and_then(|(c, _)| c.ime_area());
             return (area.map(|r| [r.x, r.y, r.w, r.h]), 0.0);
         }
-        let area = self.tabs.get(self.active).and_then(|t| t.backend.ime_area());
+        // The rectangle comes back in the page's own px; winit wants the
+        // window's, which the zoom has pulled apart. Multiplied here, so
+        // `sync_ime` keeps speaking one unit.
+        let z = self.zoom();
+        let area = self.tabs.get(self.active).and_then(|t| t.backend.ime_area()).map(|[x, y, w, h]| [x * z, y * z, w * z, h * z]);
         (area, self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top()))
+    }
+
+    /// Put the chrome in the palette the visible application is in.
+    ///
+    /// The chrome draws a box the size of the window under everything, so
+    /// that box *is* the page's background wherever the application paints
+    /// none of its own — and an application's root very often paints none.
+    /// The tab's own clear colour cannot do it: `LoadOp` has no sub-rect,
+    /// so the list drawn over the chrome is not allowed to clear at all
+    /// (see [`Self::redraw`]), and the ground stays whatever the chrome
+    /// put there.
+    ///
+    /// So the chrome follows. It heard the platform and the desktop
+    /// already; what it never heard was the viewer reaching for the
+    /// application's own light/dark control, which runs as a local handler
+    /// and never leaves the tab. The result was a page in one palette over
+    /// a floor in the other.
+    ///
+    /// Asked once a pass rather than pushed, for the reason
+    /// [`Self::settle_ime`] gives: the change can happen without the
+    /// transport hearing a thing, and comparing two bytes is cheaper than
+    /// finding every place it could have happened.
+    fn settle_chrome_mode(&mut self, renderer: &eui_render::Renderer) {
+        if self.chrome.is_none() {
+            return;
+        }
+        // An empty tab has no session to take a palette from: the chrome is
+        // drawing its own page, and keeps the one it has.
+        let Some(mode) = self.tabs.get_mut(self.active).map(|t| t.backend.mode()) else { return };
+        if self.chrome_mode == Some(mode) {
+            return;
+        }
+        self.chrome_mode = Some(mode);
+        crate::driver::trace(|| format!("chrome follows the page into {mode:?}"));
+        self.chrome_input(Input::Mode(mode), renderer);
     }
 
     /// Make the platform agree with [`Self::ime_target`].
@@ -1603,7 +1787,7 @@ impl Shell {
     /// the compositor sent between them.
     fn apply_resize(&mut self, renderer: &eui_render::Renderer) {
         let Some(size) = self.pending_resize.take() else { return };
-        let scale = self.window.scale_factor() as f32;
+        let scale = self.scale();
         self.config.width = size.width.max(1);
         self.config.height = size.height.max(1);
         if let Some(surface) = &self.surface {
@@ -1614,12 +1798,13 @@ impl Shell {
             c.resized(w, h, scale);
         }
         let (cw, ch) = self.content_size();
-        self.send_to_tab(Input::Resized(cw, ch, scale));
+        self.send_to_tab(Input::Resized(cw, ch, self.app_scale()));
     }
 
     /// Draw the window: the chrome, then the active application over it.
     fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
         self.frames = self.frames.saturating_add(1);
+        self.settle_chrome_mode(renderer);
         self.apply_resize(renderer);
         let (w, h) = (self.config.width, self.config.height);
         if w == 0 || h == 0 {
@@ -1769,7 +1954,11 @@ impl Shell {
         if let Some(a) = &mut self.access {
             a.process_event(&self.window, &event);
         }
-        let scale = self.window.scale_factor() as f32;
+        // The window's own units: what the chrome is drawn and clicked in,
+        // and what winit hands out. The page's are these divided by its
+        // zoom, which is what `to_app` below is for.
+        let scale = self.scale();
+        let zoom = self.zoom();
         let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
         match event {
             WindowEvent::CloseRequested => return false,
@@ -1790,7 +1979,7 @@ impl Shell {
                     c.resized(size.width as f32 / scale, size.height as f32 / scale, scale);
                 }
                 let (cw, ch) = self.content_size();
-                self.send_to_tab(Input::Resized(cw, ch, scale));
+                self.send_to_tab(Input::Resized(cw, ch, scale * zoom));
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32 / scale, position.y as f32 / scale);
@@ -1806,7 +1995,8 @@ impl Shell {
                     self.chrome_input(Input::PointerMove(x, y), renderer);
                 } else {
                     self.pointer_in_app = true;
-                    self.send_to_tab(Input::PointerMove(x, y - top));
+                    let (x, y) = Self::to_app(x, y, top, zoom);
+                    self.send_to_tab(Input::PointerMove(x, y));
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -1864,7 +2054,7 @@ impl Shell {
                     };
                 }
                 self.pointer_at = Some((x, y));
-                let y = y - top;
+                let (x, y) = Self::to_app(x, y, top, zoom);
                 self.send_to_tab(match t.phase {
                     P::Started => Input::TouchDown(t.id, x, y),
                     P::Moved => Input::TouchMove(t.id, x, y),
@@ -1874,6 +2064,14 @@ impl Shell {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 crate::driver::trace(|| format!("raw wheel {delta:?}"));
+                // A pixel delta is a finger on a trackpad: it has moved a
+                // distance on the glass, and the page should move the same
+                // distance whatever it is drawn at, so it is divided by the
+                // zoom of the half it lands in. A line delta is a notch,
+                // which asks for a *line* — and a line of a zoomed page is
+                // taller, so it is not divided. Built inside the branch
+                // because the chrome is never zoomed.
+                let scale = if self.pointer_in_app { scale * zoom } else { scale };
                 let i = match delta {
                     MouseScrollDelta::LineDelta(x, y) => Input::WheelStep(-x, -y),
                     MouseScrollDelta::PixelDelta(p) => Input::Wheel(-p.x as f32 / scale, -p.y as f32 / scale),
@@ -1904,6 +2102,26 @@ impl Shell {
                     }
                     self.rebuild_chrome();
                     return true;
+                }
+                // Ctrl/⌘ +, − and 0: the zoom of the page below. The shell's
+                // own, like the two below it, and never the application's.
+                //
+                // No `self.chrome.is_some()` guard, unlike those: a window
+                // opened straight onto one address has no strip but is
+                // still a page somebody may find too small.
+                //
+                // `=` and `_` are not padding. On a US layout `+` is
+                // Shift+`=` and `−` is unshifted, so what arrives is `=`
+                // as often as `+`; every browser accepts both, and a
+                // person who holds Shift gets `_`. The release is left to
+                // fall through to the page, as Ctrl+T's and Ctrl+W's are.
+                if down && self.modifiers & 0b1010 != 0 {
+                    match name.as_str() {
+                        "+" | "=" => return self.set_zoom(zoom_step(self.zoom(), true)),
+                        "-" | "_" => return self.set_zoom(zoom_step(self.zoom(), false)),
+                        "0" => return self.set_zoom(1.0),
+                        _ => {}
+                    }
                 }
                 // Ctrl+T, Ctrl+W: the shell's own, and never the
                 // application's — a page must not be able to eat them.
@@ -2075,12 +2293,12 @@ impl Shell {
         }
         surface.configure(shared.renderer.device(), &self.config);
         self.surface = Some(surface);
-        let scale = self.window.scale_factor() as f32;
+        let scale = self.scale();
         if let Some((c, _)) = &mut self.chrome {
             c.resized(size.width as f32 / scale, size.height as f32 / scale, scale);
         }
         let (cw, ch) = self.content_size();
-        self.send_to_tab(Input::Resized(cw, ch, scale));
+        self.send_to_tab(Input::Resized(cw, ch, self.app_scale()));
         self.window.request_redraw();
         crate::driver::trace(|| "resumed: a new surface".into());
     }
@@ -2115,9 +2333,11 @@ impl Shell {
     /// until something happens, or the instant it wants to be woken at.
     ///
     /// Only the active tab is ticked. A background application is mounted
-    /// and idle — it is not being clicked, EUI has no server push, and
-    /// nothing it could animate is on the glass — so four open tabs cost
-    /// what one does at rest.
+    /// and idle — it is not being clicked, and nothing it could animate is
+    /// on the glass — so four open tabs cost what one does at rest. A frame
+    /// the server sends of its own accord still lands: the transport wakes
+    /// the loop and the batch is applied wherever it belongs. What a
+    /// background tab does not get is a clock, which is the expensive half.
     fn park(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
         let t = self.tabs.get_mut(self.active)?;
         crate::driver::trace(|| format!("about_to_wait: due={:?}", t.backend.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
@@ -2752,6 +2972,21 @@ mod tests {
         assert_eq!(backoff(4), std::time::Duration::from_millis(4800));
         assert_eq!(backoff(7), std::time::Duration::from_secs(30));
         assert_eq!(backoff(u32::MAX), std::time::Duration::from_secs(30), "and never grows past it");
+    }
+
+    /// The ladder is the point: a factor applied and undone the same
+    /// number of times would not come back to a level anyone can name.
+    #[test]
+    fn the_zoom_walks_its_ladder_and_stops_at_both_ends() {
+        assert_eq!(zoom_step(1.0, true), 1.1);
+        assert_eq!(zoom_step(1.1, true), 1.25);
+        assert_eq!(zoom_step(1.1, false), 1.0, "in and out again is exactly where it started");
+        assert_eq!(zoom_step(3.0, true), 3.0, "the top is not walked off");
+        assert_eq!(zoom_step(0.5, false), 0.5, "nor the bottom");
+        // A level from somewhere other than this ladder still moves, from
+        // the rung nearest it, rather than sticking between two.
+        assert_eq!(zoom_step(1.13, true), 1.25);
+        assert_eq!(zoom_step(1.13, false), 1.0);
     }
 
     /// Spec 03 §3.2: a save is created on its first chunk, not when the
