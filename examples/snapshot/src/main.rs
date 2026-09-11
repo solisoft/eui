@@ -128,29 +128,40 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         // rendering, so a pane that is two clicks in can be looked at.
         // The label is matched on a node's text; the click goes to the
         // nearest ancestor that has a handler for it, the way an event does.
+        //
+        // An entry that reads "x,y" is clicked at that point in logical px
+        // instead. A field carries its *value* as its text, not a label, and
+        // what it answers a press with — focus, a caret, a style a local
+        // handler put there — is exactly what a picture is wanted for; there
+        // is no label to name it by, and its value is a poor one.
         if let Ok(labels) = std::env::var("SNAPSHOT_CLICK") {
             for label in labels.split(';').map(str::trim).filter(|l| !l.is_empty()) {
                 let _ = driver.paint(dw, dh);
-                let Some(root) = driver.session().root() else {
-                    break;
-                };
-                let Some(mut ix) = driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(label)) else {
-                    eprintln!("snapshot: nothing reads {label:?}");
-                    continue;
-                };
-                while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
-                    let Some(up) = driver.session().node(ix).map(|n| n.parent) else {
-                        break;
-                    };
-                    if up == ix {
-                        break;
+                let point = label.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)));
+                let at = match point {
+                    Some(at) => Some(at),
+                    None => {
+                        let found = driver.session().root().and_then(|root| driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(label)));
+                        let Some(mut ix) = found else {
+                            eprintln!("snapshot: nothing reads {label:?}");
+                            continue;
+                        };
+                        while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
+                            let Some(up) = driver.session().node(ix).map(|n| n.parent) else {
+                                break;
+                            };
+                            if up == ix {
+                                break;
+                            }
+                            ix = up;
+                        }
+                        driver.layout().rect(ix).map(|r| (r.x + r.w / 2.0, r.y + r.h / 2.0))
                     }
-                    ix = up;
-                }
-                let Some(r) = driver.layout().rect(ix) else {
+                };
+                let Some((px, py)) = at else {
                     continue;
                 };
-                driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+                driver.input(Input::PointerMove(px, py));
                 driver.input(Input::PointerDown(0));
                 for f in driver.input(Input::PointerUp(0)) {
                     conn.tx.send(f.encode()).unwrap();
@@ -377,14 +388,40 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     }
 }
 
-/// `SNAPSHOT_DUMP=1`: one line per node, indented by depth — kind, id, rect
-/// and the text, for reading a layout without a screen.
+/// `SNAPSHOT_DUMP=1`: one line per node, indented by depth — kind, id, the
+/// style it is pointed at, its rect and its text, for reading a layout
+/// without a screen.
+///
+/// The style id is there because a local handler's whole effect is to
+/// change it (07 §1): a hover that did not light or a focus that did not
+/// take is a node still on the style it started on, and nothing else in a
+/// picture says which style that was.
 fn dump(driver: &Driver, ix: eui_tree::NodeIx, depth: usize) {
     let s = driver.session();
     let Some(node) = s.node(ix) else { return };
     let rect = driver.layout().rect(ix).map_or("absent".to_owned(), |r| format!("{:.0},{:.0} {:.0}x{:.0}", r.x, r.y, r.w, r.h));
     let text = s.text_of(ix).map_or(String::new(), |t| format!(" {t:?}"));
-    println!("{:indent$}{:?}#{} {rect}{text}", "", node.kind, node.id, indent = depth * 2);
+    // Which events the node answers, and whether locally: a widget that
+    // "does nothing" is usually one the view never gave the handler to.
+    let kinds = [
+        (eui_proto::EventKind::Click, "click"),
+        (eui_proto::EventKind::PointerEnter, "enter"),
+        (eui_proto::EventKind::PointerLeave, "leave"),
+        (eui_proto::EventKind::Focus, "focus"),
+        (eui_proto::EventKind::Blur, "blur"),
+        (eui_proto::EventKind::Change, "change"),
+    ];
+    let on: Vec<String> = kinds
+        .iter()
+        .filter_map(|(k, name)| {
+            s.handler(ix, *k).map(|h| match h {
+                eui_proto::Handler::Server(_) => (*name).to_owned(),
+                _ => format!("{name}*"),
+            })
+        })
+        .collect();
+    let on = if on.is_empty() { String::new() } else { format!(" on[{}]", on.join(",")) };
+    println!("{:indent$}{:?}#{} s{}{on} {rect}{text}", "", node.kind, node.id, node.style, indent = depth * 2);
     for c in s.children(ix) {
         dump(driver, *c, depth + 1);
     }

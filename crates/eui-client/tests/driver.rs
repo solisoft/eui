@@ -2223,3 +2223,56 @@ fn a_refused_session_puts_its_reason_where_it_can_be_read() {
     assert!(text.iter().any(|t| t == "The application stopped"), "no heading: {text:?}");
     assert!(text.iter().any(|t| t.contains("the signature does not verify")), "the reason is not on the page: {text:?}");
 }
+
+/// Spec 03 §3 and 07 §6: a local handler on `focus` runs when the field
+/// takes focus, the way `pointer_enter` runs when the pointer arrives.
+///
+/// A field is the one place where focus has to say something the client
+/// does not say for it: the ring is drawn for *keyboard* focus alone, so a
+/// field clicked into looks exactly like the seven around it unless its own
+/// handler changes what it looks like.
+#[test]
+fn a_local_handler_on_focus_runs_when_a_click_focuses_the_field() {
+    const FIELD_KEY: u32 = 20;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 2, key: FIELD_KEY, text: Some(TextRef::Inline("typed".into())), props: (0, 0), handlers: (0, 2), child_count: 0 });
+    tree.handlers.push((EventKind::Focus, Handler::Local(1)));
+    tree.handlers.push((EventKind::Blur, Handler::Local(2)));
+
+    let rest = StyleRecord { min_width: Dim::Px(120), min_height: Dim::Px(24), bg: ColorRef::role(3), ..Default::default() };
+    let lit = StyleRecord { min_width: Dim::Px(120), min_height: Dim::Px(24), bg: ColorRef::role(1), ..Default::default() };
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    let out = d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: FIELD_KEY, value: "field".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 2, record: rest },
+            Op::DefStyle { id: 3, record: lit },
+            // `self.style = @lit` on focus, `= @rest` on blur.
+            Op::DefChunkBytes { id: 1, bytes: eui_vm::Asm::new(1).set_style(FIELD_KEY, 3).ret() },
+            Op::DefChunkBytes { id: 2, bytes: eui_vm::Asm::new(1).set_style(FIELD_KEY, 2).ret() },
+            Op::Mount(tree),
+        ],
+    }));
+    assert_eq!(out, vec![Frame::Ack { seq: 1 }]);
+
+    let ix = d.session().lookup(2).unwrap();
+    assert_eq!(d.session().node(ix).map(|n| n.style), Some(2), "it starts on its resting style");
+
+    let (x, y) = centre(&mut d, 2);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    let ix = d.session().lookup(2).unwrap();
+    assert_eq!(d.session().node(ix).map(|n| n.style), Some(3), "focus ran its chunk");
+
+    // And leaving it puts the field back.
+    d.input(Input::PointerMove(1.0, 299.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    let ix = d.session().lookup(2).unwrap();
+    assert_eq!(d.session().node(ix).map(|n| n.style), Some(2), "blur ran its chunk");
+}

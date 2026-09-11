@@ -161,23 +161,95 @@ end
 # What both of them are. The border is reserved at rest and only coloured
 # later, for the reason `button_variant` gives below: a border that appears
 # when a value goes wrong would shove every field under it sideways.
+#
+# The background is `surface.sunken` because a field with none of its own is
+# the colour of the card it sits on — nothing says where the box is until
+# something has been typed into it. `sunken` is the role that means inset,
+# and 05 §3 resolves it away from the surface in **both** palettes (0.955
+# against 0.985 in light, 0.15 against 0.19 in dark), so one word here is a
+# correct contrast in every mode and the server still sends no colour.
 def editable(kind, value, on_change, o)
   base = {
     "pad": [2, 3, 2, 3],
     "border": 1,
     "border_color": "border.default",
-    "radius": 2
+    "radius": 2,
+    "bg": "surface.sunken",
+    "transition": "fast"
   }
+  style = base.merge(o["style"] ?? {})
+  key = o["key"].to_s
+  key = editable_key(on_change, o) if key.blank?
   n = {
     "k": kind,
     "t": value ?? "",
-    "s": base.merge(o["style"] ?? {}),
+    "s": style,
     "on": {"change": on_change}.merge(o["on"] ?? {})
   }
-  n["key"] = o["key"] unless (o["key"] ?? "") == ""
+  unless key.blank?
+    n["key"] = key
+    n["on"] = editable_states(style, key, n["on"])
+  end
   props = o["props"] ?? {}
   n["p"] = props if props.keys().length() > 0
   n
+end
+
+# A name for a field nobody named. A local handler reaches its own node by
+# key (07 §1), so a field without one can have no states at all; the event it
+# sends and the label it carries are what tell two fields apart, and a field
+# with neither is one this cannot help.
+def editable_key(on_change, o)
+  label = (o["props"] ?? {})["label"].to_s
+  said = on_change.to_s
+  return "" if said.blank? && label.blank?
+
+  "ed:" + said + ":" + label
+end
+
+# Hover and focus, both local (07 §6): the client repoints the node at a
+# style the session already holds, so neither waits for a round trip.
+#
+# Focus earns its keep more than hover does. The client draws its ring for
+# *keyboard* focus alone (03 §3), so a field clicked into had nothing to say
+# it was the one taking the keystrokes, and a form of eight fields looked the
+# same whichever one was live.
+#
+# `state.field_focus` is why leaving is a question and not a reset: a pointer
+# that wanders off a field someone is still typing into must not take the
+# focused look with it. Focus writes this field's key there and blur clears
+# it, and a chunk may read a root prop — so `pointer_leave` asks who holds
+# focus before it decides what to go back to.
+#
+# A handler the caller already put on one of these four is kept, and runs
+# *after* the chunk (`then`, 07 §6): a combobox needs its `blur` and its look
+# at once. One that is itself local is left alone — two chunks on one event
+# is the caller's business, not this function's.
+def editable_states(style, key, on)
+  bad = style["border_color"] == "danger.base"
+  hover = style.merge({"bg": "surface.base"})
+  focus = style.merge({"bg": "surface.base"})
+  hover["border_color"] = "border.strong" unless bad
+  focus["border_color"] = "accent.base" unless bad
+  styles = {"base": style, "hover": hover, "focus": focus}
+  mine = "\"" + key + "\""
+  held = "if state.field_focus == " + mine
+  states = {
+    "pointer_enter": {"local": held + " { self.style = @focus } else { self.style = @hover }", "styles": styles},
+    "pointer_leave": {"local": held + " { self.style = @focus } else { self.style = @base }", "styles": styles},
+    "focus": {"local": "state.field_focus = " + mine + "; self.style = @focus", "styles": styles},
+    "blur": {"local": "state.field_focus = \"\"; self.style = @base", "styles": styles}
+  }
+  out = on.merge({})
+  for name in states.keys()
+    said = out[name]
+    if said.nil?
+      out[name] = states[name]
+    elsif said.to_s == said
+      out[name] = states[name].merge({"then": said})
+    end
+  end
+  out
 end
 
 # The primary button: accent roles, so it follows the viewer into dark mode
@@ -2338,6 +2410,10 @@ def select(options, value, open, on_toggle, on_pick)
 end
 
 def select_sized(options, value, open, on_toggle, on_pick, min_width, grow)
+  # The same surface as the box you type into, for the same reason: a select
+  # the colour of the card it sits on reads as a label until it is clicked.
+  # The hover is the neutral tone's, so a select and a button answer the
+  # pointer with the same two colours.
   s = {
     "display": "row",
     "align": "center",
@@ -2347,14 +2423,16 @@ def select_sized(options, value, open, on_toggle, on_pick, min_width, grow)
     "border": 1,
     "border_color": "border.default",
     "radius": 2,
-    "bg": "surface.raised",
-    "cursor": "pointer"
+    "bg": "surface.sunken",
+    "cursor": "pointer",
+    "transition": "fast"
   }
   s["grow"] = 1 if grow
   anchor = {
     "k": "box",
+    "key": "sel:" + on_toggle.to_s,
     "s": s,
-    "on": {"click": on_toggle},
+    "on": stateful(s, TONES["neutral"], {"click": on_toggle}),
     "c": [text(value, {"grow": 1}), icon(
       "chevron_down",
       {"fg": "text.muted", "width": 14, "height": 14}
@@ -3054,7 +3132,10 @@ def picker_field(o, caption, empty, make)
       "justify": "start",
       "gap": 2,
       "width": o["width"] ?? "100%",
-      "bg": "surface.raised",
+      # No `bg`: the neutral tone rests on `surface.sunken` and hovers to
+      # `surface.raised`, which is what every other field does now. Naming
+      # `raised` here made the resting state the hover state, so a date field
+      # sat flat on its card and answered the pointer with nothing.
       "border_color": bad ? "danger.base" : "border.default"
     },
     "on": {"click": o["on_toggle"]},
