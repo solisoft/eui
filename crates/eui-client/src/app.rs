@@ -991,6 +991,19 @@ impl Shell {
         }
         shell.rebuild_chrome();
 
+        // Which of the two palettes the platform is in, *before* the first
+        // frame. Only `ThemeChanged` used to say, and that fires when the
+        // desktop changes its mind — never when a window opens into a
+        // choice already made. A client started in the dark drew itself
+        // light and stayed that way until somebody toggled the system.
+        //
+        // Linux hid it: the Omarchy palette below carries a mode with it,
+        // so the one desktop this was developed on always knew. macOS and
+        // Windows have no such file and were simply wrong.
+        if let Some(theme) = shell.window.theme() {
+            shell.set_mode(theme, renderer);
+        }
+
         // The desktop's own colours, before the first frame; and again
         // whenever the desktop changes them.
         //
@@ -1508,6 +1521,22 @@ impl Shell {
         self.sync_cursor(false);
     }
 
+    /// The platform changed palette, or has just said which one it was in.
+    ///
+    /// Both halves matter. The application hears it, as it always did — and
+    /// so does the chrome, which has a driver and a palette of its own and
+    /// was never told: a tab strip and an address bar in the light above a
+    /// page in the dark, which is exactly as odd as it sounds.
+    fn set_mode(&mut self, theme: winit::window::Theme, renderer: &eui_render::Renderer) {
+        let mode = match theme {
+            winit::window::Theme::Dark => eui_proto::ThemeMode::Dark,
+            winit::window::Theme::Light => eui_proto::ThemeMode::Light,
+        };
+        crate::driver::trace(|| format!("platform palette: {mode:?}"));
+        self.send_to_tab(Input::Mode(mode));
+        self.chrome_input(Input::Mode(mode), renderer);
+    }
+
     /// Where the keyboard belongs: the chrome's address bar when the chrome
     /// holds the keys, else the focused field of the active tab, and the
     /// offset its rectangle has to be read against.
@@ -1950,13 +1979,7 @@ impl Shell {
                 self.chrome_input(Input::PointerOut, renderer);
             }
             WindowEvent::Focused(false) => self.send_to_tab(Input::Unfocused),
-            WindowEvent::ThemeChanged(t) => {
-                let mode = match t {
-                    winit::window::Theme::Dark => eui_proto::ThemeMode::Dark,
-                    winit::window::Theme::Light => eui_proto::ThemeMode::Light,
-                };
-                self.send_to_tab(Input::Mode(mode));
-            }
+            WindowEvent::ThemeChanged(t) => self.set_mode(t, renderer),
             _ => {}
         }
         true
