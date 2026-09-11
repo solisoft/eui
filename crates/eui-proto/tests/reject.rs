@@ -363,7 +363,7 @@ fn unknown_style_enums_are_rejected() {
     assert_eq!(style_with(52, &[4]), E::UnknownTag("font_weight"));
     assert_eq!(style_with(53, &[4]), E::UnknownTag("text_align"));
     assert_eq!(style_with(56, &[3]), E::UnknownTag("overflow"));
-    assert_eq!(style_with(57, &[2]), E::UnknownTag("position"));
+    assert_eq!(style_with(57, &[3]), E::UnknownTag("position"));
     assert_eq!(style_with(59, &[9]), E::UnknownTag("cursor"));
 }
 

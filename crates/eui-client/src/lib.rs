@@ -50,6 +50,6 @@ pub mod transport;
 pub mod worker;
 
 pub use assets::{AssetError, AssetStore, Image};
-pub use driver::{Close, Driver, FileAsk, FileWant, FileWrite, Input};
+pub use driver::{Close, Driver, FileAsk, FileWant, FileWrite, Fix, Input, NfcAsk, NfcRecord, PickSource};
 pub use transport::{check_url, connect, Connection, Incoming, TransportError};
 pub use worker::Backend;

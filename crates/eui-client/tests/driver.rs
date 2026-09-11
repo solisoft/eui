@@ -2310,3 +2310,115 @@ fn a_local_handler_on_focus_runs_when_a_click_focuses_the_field() {
     let ix = d.session().lookup(2).unwrap();
     assert_eq!(d.session().node(ix).map(|n| n.style), Some(2), "blur ran its chunk");
 }
+
+/// A tree whose one node asks where the machine is every `ms`.
+fn locating(granted: u32, ms: i64) -> Driver {
+    let mut d = Driver::new(400.0, 300.0, 1.0, granted);
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    let _ = d.handle_frame(Frame::Batch(counter_batch()));
+    const A_LOCATE: u32 = 60;
+    const A_WHERE: u32 = 61;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_LOCATE, Value::Int(ms)));
+    tree.handlers.push((EventKind::Location, Handler::Server(A_WHERE)));
+    let ops = vec![
+        Op::DefAtom { id: A_LOCATE, value: "locate".into() },
+        Op::DefAtom { id: A_WHERE, value: "where".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    d
+}
+
+/// The `location` payloads a driver has queued, in order.
+fn fixes(d: &mut Driver) -> Vec<Vec<f64>> {
+    d.take_pending()
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == EventKind::Location => match &e.payload {
+                Value::List(l) => Some(l.iter().filter_map(|v| if let Value::Float(x) = v { Some(*x) } else { None }).collect()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Spec 06 §1.2: a node that asks where the machine is is told on its own
+/// interval, and the answer is coarse.
+#[test]
+fn a_node_that_asks_where_it_is_is_told_coarsely_on_its_own_interval() {
+    use std::time::{Duration, Instant};
+    let mut d = locating(eui_proto::caps::LOCATION, 10);
+    assert!(!d.wants_location(), "nobody has painted yet, so nothing is collected");
+
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    assert!(d.wants_location(), "a node asked and the capability is there");
+    assert!(fixes(&mut d).is_empty(), "asking is not knowing: no fix has arrived");
+
+    // A fix off a receiver, precise to a few metres.
+    d.located(eui_client::Fix { latitude: 48.858_372_1, longitude: 2.294_481_9, accuracy_m: 4.0 });
+    d.tick(t0 + Duration::from_millis(20));
+    let _ = d.paint(400, 300);
+    let first = fixes(&mut d);
+    assert_eq!(first.len(), 1, "the first fix goes out at once");
+    // Three decimal places, and an accuracy that does not claim to be
+    // better than the rounding just made it.
+    assert_eq!(first[0], vec![48.858, 2.294, 100.0], "coarsened on the way out");
+
+    // 10 ms was asked for; a second is the floor.
+    d.tick(t0 + Duration::from_millis(500));
+    let _ = d.paint(400, 300);
+    assert!(fixes(&mut d).is_empty(), "10 ms asked, one second is the floor");
+    d.tick(t0 + Duration::from_millis(1_100));
+    let _ = d.paint(400, 300);
+    assert_eq!(fixes(&mut d).len(), 1, "one an interval");
+    let _ = d.paint(400, 300);
+    assert!(fixes(&mut d).is_empty(), "one an interval, not one a frame");
+}
+
+/// Without the capability there is no list, no store and no diagnostic —
+/// 08 §3: the call site is absent, not guarded.
+#[test]
+fn a_location_nobody_granted_is_not_even_kept() {
+    use std::time::Instant;
+    let mut d = locating(0, 5_000);
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    d.located(eui_client::Fix { latitude: 48.858, longitude: 2.294, accuracy_m: 4.0 });
+    assert!(d.fix().is_none(), "a fix without the grant is dropped, not held");
+    assert!(!d.wants_location(), "and the window is never asked to run the radio");
+    let _ = d.paint(400, 300);
+    assert!(fixes(&mut d).is_empty());
+}
+
+/// Spec 06 §3: nothing about where the machine is while the window is not
+/// the one being used.
+#[test]
+fn a_window_that_is_not_in_front_reports_no_location() {
+    use std::time::{Duration, Instant};
+    let mut d = locating(eui_proto::caps::LOCATION, 1_000);
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    d.located(eui_client::Fix { latitude: 48.858, longitude: 2.294, accuracy_m: 4.0 });
+
+    let _ = d.input(Input::Unfocused);
+    assert!(!d.wants_location(), "the radio can be put away");
+    d.tick(t0 + Duration::from_millis(1_100));
+    let _ = d.paint(400, 300);
+    assert!(fixes(&mut d).is_empty(), "behind another window, nobody is followed");
+
+    // Coming back resumes it, and the fix did not have to be found again.
+    let _ = d.input(Input::Refocused);
+    assert!(d.wants_location());
+    assert!(d.fix().is_some(), "the fix was kept, so there is no cold start");
+    d.tick(t0 + Duration::from_millis(2_300));
+    let _ = d.paint(400, 300);
+    assert_eq!(fixes(&mut d).len(), 1, "and it is reported again");
+}

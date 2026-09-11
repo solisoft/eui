@@ -62,6 +62,9 @@ impl W {
     fn f32(&mut self, v: f32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
+    fn f64(&mut self, v: f64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
     fn f4(&mut self, v: [f32; 4]) {
         for x in v {
             self.f32(x);
@@ -119,6 +122,10 @@ impl<'a> R<'a> {
     fn f32(&mut self) -> Wire<f32> {
         let b = self.take(4)?;
         Ok(f32::from_le_bytes(b.try_into().map_err(|_| "f32")?))
+    }
+    fn f64(&mut self) -> Wire<f64> {
+        let b = self.take(8)?;
+        Ok(f64::from_le_bytes(b.try_into().map_err(|_| "f64")?))
     }
     fn f4(&mut self) -> Wire<[f32; 4]> {
         Ok([self.f32()?, self.f32()?, self.f32()?, self.f32()?])
@@ -212,6 +219,27 @@ pub enum Request {
     },
     /// The window could not read what was picked.
     UploadFailed(u32, String),
+    /// A reader read a tag for a scan the tree asked for (03 §3.3).
+    Scanned {
+        /// The scan, by the token the driver minted.
+        token: u32,
+        /// The tag's own identifier, as the platform spells it.
+        uid: String,
+        /// `(kind, payload)` per record.
+        records: Vec<(String, String)>,
+    },
+    /// A scan ended without reading anything.
+    ScanEnded(u32),
+    /// Where the machine is, as the platform reported it (06 §1.2). The
+    /// radio belongs to the window; the rounding belongs to the driver.
+    Located {
+        /// Degrees north, WGS 84.
+        latitude: f64,
+        /// Degrees east, WGS 84.
+        longitude: f64,
+        /// The radius the platform claims, in metres.
+        accuracy_m: f64,
+    },
     /// The person chose where a save should go, and what it is called.
     Saving {
         /// The [`FileAsk::token`] the dialog was opened for.
@@ -308,6 +336,26 @@ impl Request {
                 w.u32(*id);
                 w.str(why);
             }
+            Request::Scanned { token, uid, records } => {
+                w.u8(21);
+                w.u32(*token);
+                w.str(uid);
+                w.u32(records.len() as u32);
+                for (kind, payload) in records {
+                    w.str(kind);
+                    w.str(payload);
+                }
+            }
+            Request::ScanEnded(token) => {
+                w.u8(22);
+                w.u32(*token);
+            }
+            Request::Located { latitude, longitude, accuracy_m } => {
+                w.u8(20);
+                w.f64(*latitude);
+                w.f64(*longitude);
+                w.f64(*accuracy_m);
+            }
             Request::Close(why) => {
                 w.u8(19);
                 w.str(why);
@@ -372,6 +420,18 @@ impl Request {
             17 => Request::UploadFailed(r.u32()?, r.str()?),
             18 => Request::Saving { token: r.u32()?, name: r.str()? },
             19 => Request::Close(r.str()?),
+            20 => Request::Located { latitude: r.f64()?, longitude: r.f64()?, accuracy_m: r.f64()? },
+            21 => {
+                let token = r.u32()?;
+                let uid = r.str()?;
+                let n = r.u32()? as usize;
+                let mut records = Vec::with_capacity(n.min(64));
+                for _ in 0..n {
+                    records.push((r.str()?, r.str()?));
+                }
+                Request::Scanned { token, uid, records }
+            }
+            22 => Request::ScanEnded(r.u32()?),
             _ => return Err("unknown request"),
         };
         r.done()?;
@@ -437,6 +497,7 @@ fn put_input(w: &mut W, i: &Input) {
             w.u8(*m as u8);
         }
         Input::Unfocused => w.u8(12),
+        Input::Refocused => w.u8(18),
         Input::PointerOut => w.u8(13),
         Input::TouchDown(id, x, y) => {
             w.u8(14);
@@ -483,6 +544,7 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         15 => Input::TouchMove(r.u64()?, r.f32()?, r.f32()?),
         16 => Input::TouchUp(r.u64()?, r.f32()?, r.f32()?),
         17 => Input::TouchCancel(r.u64()?),
+        18 => Input::Refocused,
         _ => return Err("unknown input"),
     })
 }
@@ -517,8 +579,14 @@ pub struct Status {
     /// Dialogs the tree asked for and the window has not opened yet
     /// (spec 03 §3.2).
     pub files: Vec<FileAsk>,
+    /// Scans the tree asked for and the window has not started (03 §3.3).
+    pub nfc: Vec<crate::driver::NfcAsk>,
     /// Bytes a save is owed, for the window to put on disk.
     pub writes: Vec<FileWrite>,
+    /// A node is asking where the machine is, the capability is granted and
+    /// the window has the input — so the platform's positioning should be
+    /// running, and should not be a moment longer than this stays true.
+    pub wants_location: bool,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -591,22 +659,30 @@ impl Reply {
         w.u8(s.mode);
         w.bool(s.audio);
         w.bool(s.video);
+        w.bool(s.wants_location);
         w.u32(u32::try_from(s.files.len()).unwrap_or(u32::MAX));
         for a in &s.files {
             w.u32(a.token);
             w.u32(a.node);
             match &a.want {
-                FileWant::Open { accept, multiple, max } => {
+                FileWant::Open { accept, multiple, max, source } => {
                     w.u8(0);
                     w.str(accept);
                     w.bool(*multiple);
                     w.u64(*max);
+                    w.u8(source.to_u8());
                 }
                 FileWant::Save { name } => {
                     w.u8(1);
                     w.str(name);
                 }
             }
+        }
+        w.u32(u32::try_from(s.nfc.len()).unwrap_or(u32::MAX));
+        for a in &s.nfc {
+            w.u32(a.token);
+            w.u32(a.node);
+            w.str(&a.prompt);
         }
         w.u32(u32::try_from(s.writes.len()).unwrap_or(u32::MAX));
         for f in &s.writes {
@@ -702,16 +778,22 @@ impl Reply {
         let mode = r.u8()?;
         let audio = r.bool()?;
         let video = r.bool()?;
+        let wants_location = r.bool()?;
         let n = r.u32()? as usize;
         let mut files = Vec::with_capacity(n.min(64));
         for _ in 0..n {
             let (token, node) = (r.u32()?, r.u32()?);
             let want = match r.u8()? {
-                0 => FileWant::Open { accept: r.str()?, multiple: r.bool()?, max: r.u64()? },
+                0 => FileWant::Open { accept: r.str()?, multiple: r.bool()?, max: r.u64()?, source: crate::driver::PickSource::from_u8(r.u8()?) },
                 1 => FileWant::Save { name: r.str()? },
                 _ => return Err("file ask"),
             };
             files.push(FileAsk { token, node, want });
+        }
+        let n = r.u32()? as usize;
+        let mut nfc = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            nfc.push(crate::driver::NfcAsk { token: r.u32()?, node: r.u32()?, prompt: r.str()? });
         }
         let n = r.u32()? as usize;
         let mut writes = Vec::with_capacity(n.min(1024));
@@ -720,7 +802,7 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, files, writes };
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, files, nfc, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -1081,6 +1163,19 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.close(why);
                         Payload::None
                     }
+                    Request::Located { latitude, longitude, accuracy_m } => {
+                        d.located(crate::driver::Fix { latitude, longitude, accuracy_m });
+                        Payload::None
+                    }
+                    Request::Scanned { token, uid, records } => {
+                        let records: Vec<crate::driver::NfcRecord> = records.into_iter().map(|(kind, payload)| crate::driver::NfcRecord { kind, payload }).collect();
+                        d.scanned(token, &uid, &records);
+                        Payload::None
+                    }
+                    Request::ScanEnded(token) => {
+                        d.scan_ended(token);
+                        Payload::None
+                    }
                     Request::Grant(g) => {
                         d.grant(g);
                         Payload::None
@@ -1196,7 +1291,9 @@ fn status_of(d: &mut Driver) -> Status {
         mode: d.mode() as u8,
         audio: d.audio_playing(),
         video: d.video_playing(),
+        wants_location: d.wants_location(),
         files: d.take_file_asks(),
+        nfc: d.take_nfc_asks(),
         writes: d.take_writes(),
     }
 }
@@ -1902,6 +1999,33 @@ impl Backend {
         self.with_worker(|w| std::mem::take(&mut w.status.files)).unwrap_or_default()
     }
 
+    /// Scans the tree asked for and the window has not started (03 §3.3).
+    pub fn take_nfc_asks(&mut self) -> Vec<crate::driver::NfcAsk> {
+        if let Some(asks) = self.with_local(|d| d.take_nfc_asks()) {
+            return asks;
+        }
+        self.with_worker(|w| std::mem::take(&mut w.status.nfc)).unwrap_or_default()
+    }
+
+    /// A reader read a tag. Answers with the frames the event produced, for
+    /// a driver in this process; a worker sends its own.
+    pub fn scanned(&mut self, token: u32, uid: &str, records: &[crate::driver::NfcRecord]) -> Vec<Frame> {
+        if let Some(out) = self.with_local(|d| d.scanned(token, uid, records)) {
+            return out;
+        }
+        let records: Vec<(String, String)> = records.iter().map(|r| (r.kind.clone(), r.payload.clone())).collect();
+        let _ = self.with_worker(|w| w.call(&Request::Scanned { token, uid: uid.to_owned(), records }));
+        Vec::new()
+    }
+
+    /// A scan ended with nothing read.
+    pub fn scan_ended(&mut self, token: u32) {
+        if self.with_local(|d| d.scan_ended(token)).is_some() {
+            return;
+        }
+        let _ = self.with_worker(|w| w.call(&Request::ScanEnded(token)));
+    }
+
     /// Bytes a save is owed, for the window to put on disk.
     pub fn take_writes(&mut self) -> Vec<FileWrite> {
         if let Some(writes) = self.with_local(|d| d.take_writes()) {
@@ -1999,6 +2123,24 @@ impl Backend {
             return out;
         }
         self.with_worker(|w| w.call(&Request::AccessAction(id, click)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// True while the platform's positioning should be running (06 §1.2).
+    ///
+    /// Asked on every pass of the loop, and it is a comparison either way:
+    /// the worker already answered it in its last reply, and a driver in
+    /// this process answers from a list it keeps.
+    pub fn wants_location(&self) -> bool {
+        self.with_local(|d| d.wants_location()).or_else(|| self.with_worker(|w| w.status.wants_location)).unwrap_or(false)
+    }
+
+    /// Hand the driver where the machine is. The radio is the window's; the
+    /// rounding and the rate are the driver's.
+    pub fn located(&mut self, latitude: f64, longitude: f64, accuracy_m: f64) {
+        if self.with_local(|d| d.located(crate::driver::Fix { latitude, longitude, accuracy_m })).is_some() {
+            return;
+        }
+        let _ = self.with_worker(|w| w.call(&Request::Located { latitude, longitude, accuracy_m }));
     }
 
     /// True while a picture is playing (03 §8).
@@ -2160,7 +2302,7 @@ mod tests {
             audio: true,
             video: false,
             files: vec![
-                FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20 } },
+                FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20, source: crate::driver::PickSource::Held } },
                 FileAsk { token: 4, node: 10, want: FileWant::Save { name: "export.csv".into() } },
             ],
             writes: vec![FileWrite { token: 4, flag: eui_proto::Chunked::Last, bytes: vec![7, 7, 7] }],

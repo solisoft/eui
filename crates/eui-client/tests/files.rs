@@ -7,7 +7,7 @@
 //! on, and it is testable without either.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
-use eui_client::{Driver, FileAsk, FileWant, Input};
+use eui_client::{Driver, FileAsk, FileWant, Input, NfcRecord, PickSource};
 use eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
 use eui_proto::*;
 
@@ -18,19 +18,32 @@ const ATOM_SAVE: u32 = 4;
 
 const ATTACH: u32 = 2;
 const EXPORT: u32 = 3;
+const SHOOT: u32 = 4;
+const TAP: u32 = 5;
+const ATOM_SHOOT: u32 = 5;
+const ATOM_TAP: u32 = 6;
+const ATOM_NFC: u32 = 7;
 
 /// box(1) [ attach(2) with `pick`, export(3) with `save` ].
 fn tree() -> Batch {
     let col = StyleRecord { display: Display::Column, gap: 4, ..Default::default() };
     let button = StyleRecord { display: Display::Row, padding: [3; 4], min_width: Dim::Px(80), min_height: Dim::Px(24), ..Default::default() };
     let mut t = Subtree::default();
-    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 4 });
     t.nodes.push(FlatNode { kind: NodeKind::Box, id: ATTACH, style: 2, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 0 });
     t.props.push((ATOM_PICK, Value::List(vec![Value::Str("csv,txt".into()), Value::Int(1), Value::Int(512 * 1024)])));
     t.handlers.push((EventKind::FilePick, Handler::Server(ATOM_ATTACH)));
     t.nodes.push(FlatNode { kind: NodeKind::Box, id: EXPORT, style: 2, key: 0, text: None, props: (1, 1), handlers: (1, 1), child_count: 0 });
     t.props.push((ATOM_SAVE, Value::Str("export.csv".into())));
     t.handlers.push((EventKind::FileSave, Handler::Server(ATOM_EXPORT)));
+    // The camera: the same `pick`, with bit 1 of its flags set.
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: SHOOT, style: 2, key: 0, text: None, props: (2, 1), handlers: (2, 1), child_count: 0 });
+    t.props.push((ATOM_PICK, Value::List(vec![Value::Str("jpg".into()), Value::Int(3), Value::Int(512 * 1024)])));
+    t.handlers.push((EventKind::FilePick, Handler::Server(ATOM_SHOOT)));
+    // A tag reader.
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: TAP, style: 2, key: 0, text: None, props: (3, 1), handlers: (3, 1), child_count: 0 });
+    t.props.push((ATOM_NFC, Value::Str("Hold your phone near the label".into())));
+    t.handlers.push((EventKind::NfcTag, Handler::Server(ATOM_TAP)));
     Batch {
         seq: 1,
         ops: vec![
@@ -38,6 +51,9 @@ fn tree() -> Batch {
             Op::DefAtom { id: ATOM_EXPORT, value: "export".into() },
             Op::DefAtom { id: ATOM_PICK, value: "pick".into() },
             Op::DefAtom { id: ATOM_SAVE, value: "save".into() },
+            Op::DefAtom { id: ATOM_SHOOT, value: "shoot".into() },
+            Op::DefAtom { id: ATOM_TAP, value: "tap".into() },
+            Op::DefAtom { id: ATOM_NFC, value: "nfc".into() },
             Op::DefStyle { id: 1, record: col },
             Op::DefStyle { id: 2, record: button },
             Op::Mount(t),
@@ -75,7 +91,7 @@ fn a_click_on_a_node_carrying_pick_asks_the_window_for_a_dialog() {
     click(&mut d, ATTACH);
     let ask = one_ask(&mut d);
     assert_eq!(ask.node, ATTACH);
-    assert_eq!(ask.want, FileWant::Open { accept: "csv,txt".into(), multiple: true, max: 512 * 1024 });
+    assert_eq!(ask.want, FileWant::Open { accept: "csv,txt".into(), multiple: true, max: 512 * 1024, source: PickSource::Held });
 }
 
 /// The capability is the whole of what stands between a tree and a dialog.
@@ -299,4 +315,80 @@ fn a_file_reaches_the_server_and_what_it_owes_comes_back() {
     let bytes: Vec<u8> = written.iter().flat_map(|w| w.bytes.clone()).collect();
     assert_eq!(String::from_utf8_lossy(&bytes), "counter\n0\n");
     assert!(written.iter().all(|w| w.token == ask.token));
+}
+
+/// Spec 03 §3.2: `pick` with bit 1 of its flags asks for the camera, and
+/// the camera is a different grant from the filesystem.
+///
+/// Taking a photograph reads nothing anyone already has, and reading a
+/// folder takes no photograph. A client that treated one grant as the other
+/// would be spending a permission on a power it was not given for.
+#[test]
+fn a_pick_that_asks_for_the_camera_needs_the_camera() {
+    // `fs.pick` alone: the paperclip works, the shutter does not.
+    let mut d = driver(caps::FS_PICK);
+    click(&mut d, SHOOT);
+    assert!(d.take_file_asks().is_empty(), "fs.pick does not buy a camera");
+    click(&mut d, ATTACH);
+    assert_eq!(d.take_file_asks().len(), 1, "and it still buys what it is for");
+
+    // `camera` alone: the other way round, exactly.
+    let mut d = driver(caps::CAMERA);
+    click(&mut d, ATTACH);
+    assert!(d.take_file_asks().is_empty(), "a camera does not buy the filesystem");
+    click(&mut d, SHOOT);
+    let ask = one_ask(&mut d);
+    assert_eq!(ask.node, SHOOT);
+    // Bit 0 was set too, and is dropped: neither platform takes several
+    // photographs in one sheet, and a `multiple` the sheet cannot honour
+    // would be a promise to the server that the client then breaks.
+    assert_eq!(ask.want, FileWant::Open { accept: "jpg".into(), multiple: false, max: 512 * 1024, source: PickSource::Camera });
+}
+
+/// Spec 03 §3.3: a scan starts on an activation, reads once, and says
+/// nothing at all when it reads nothing.
+#[test]
+fn a_tag_is_read_once_for_the_node_that_asked() {
+    let mut d = driver(caps::NFC);
+    click(&mut d, TAP);
+    let asks = d.take_nfc_asks();
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    let ask = &asks[0];
+    assert_eq!(ask.node, TAP);
+    assert_eq!(ask.prompt, "Hold your phone near the label");
+
+    let records = [NfcRecord { kind: "uri".into(), payload: "https://eui.example/label/91".into() }];
+    let out = d.scanned(ask.token, "04:a2:1f:7b", &records);
+    let event = out.iter().find_map(|f| match f {
+        Frame::Event(e) if e.event == EventKind::NfcTag => Some(e),
+        _ => None,
+    });
+    let event = event.expect("the tag reached the node that asked");
+    assert_eq!(event.node, TAP);
+    assert_eq!(
+        event.payload,
+        Value::List(vec![
+            Value::Str("04:a2:1f:7b".into()),
+            Value::List(vec![Value::List(vec![Value::Str("uri".into()), Value::Str("https://eui.example/label/91".into())])]),
+        ])
+    );
+
+    // A reader that delivers twice is answered once: the token was spent.
+    assert!(d.scanned(ask.token, "04:a2:1f:7b", &records).is_empty(), "one tag a scan");
+}
+
+/// The capability is the whole of what stands between a tree and a reader,
+/// and a scan that reads nothing is reported to nobody (06 §3).
+#[test]
+fn without_the_capability_nothing_scans() {
+    let mut d = driver(0);
+    click(&mut d, TAP);
+    assert!(d.take_nfc_asks().is_empty());
+
+    let mut d = driver(caps::NFC);
+    click(&mut d, TAP);
+    let token = d.take_nfc_asks()[0].token;
+    d.scan_ended(token);
+    assert!(d.take_pending().is_empty(), "somebody thought better of it, and nobody was told");
+    assert!(d.scanned(token, "04:a2:1f:7b", &[]).is_empty(), "and the scan is over");
 }

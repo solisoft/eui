@@ -154,6 +154,16 @@ pub enum EventKind {
     /// The person chose where to put what this node's `save` offers
     /// (spec 03 §3.2). The bytes are owed as `Blob` frames.
     FileSave = 0x1B,
+    /// Where the machine is, for a node carrying `locate` (spec 06 §1.2).
+    ///
+    /// Asked for, like [`Self::Wake`], rather than something that happened:
+    /// a node with the prop and this handler is answered on its own
+    /// interval, and only while the `location` capability is granted and
+    /// the window has the input.
+    Location = 0x1C,
+    /// A tag was read for a node whose `nfc` scan the person started
+    /// (spec 03 §3.3).
+    NfcTag = 0x1D,
 }
 
 impl EventKind {
@@ -187,6 +197,8 @@ impl EventKind {
             0x19 => Ok(Self::Wake),
             0x1A => Ok(Self::FilePick),
             0x1B => Ok(Self::FileSave),
+            0x1C => Ok(Self::Location),
+            0x1D => Ok(Self::NfcTag),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

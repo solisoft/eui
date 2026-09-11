@@ -1474,6 +1474,17 @@ impl Shell {
             for ask in asks {
                 self.open_dialog(i, ask, &proxy);
             }
+            // Scans the tree asked for. The platform that has a reader
+            // starts one; the ones that do not say so and end it, which is
+            // reported to nobody (06 §3) and leaves the node exactly as it
+            // was rather than waiting on an answer that is not coming.
+            let scans = match self.tabs.get_mut(i) {
+                Some(t) => t.backend.take_nfc_asks(),
+                None => continue,
+            };
+            for scan in scans {
+                self.start_scan(i, scan);
+            }
             // What the dialogs answered.
             let mut answers = Vec::new();
             if let Some(t) = self.tabs.get(i) {
@@ -1491,6 +1502,24 @@ impl Shell {
         }
     }
 
+    /// Start the platform's own scan (03 §3.3).
+    ///
+    /// Only the phones have a reader. Everywhere else this ends the scan at
+    /// once, which is the same answer the person cancelling would give and
+    /// leaves nothing in flight.
+    #[allow(unused_variables)]
+    fn start_scan(&mut self, i: usize, ask: crate::driver::NfcAsk) {
+        let Some(t) = self.tabs.get_mut(i) else { return };
+        #[cfg(has_nfc)]
+        {
+            if crate::nfc::start(&ask) {
+                return;
+            }
+        }
+        eprintln!("eui: this build has no tag reader");
+        t.backend.scan_ended(ask.token);
+    }
+
     /// Open the platform's own dialog, on its own thread: a modal panel
     /// must not stop the window drawing behind it, and a portal on Linux
     /// can take a second to appear.
@@ -1503,7 +1532,7 @@ impl Shell {
                 "eui: node {} asked for {}",
                 ask.node,
                 match &ask.want {
-                    FileWant::Open { accept, multiple, max } => format!("a file to open (accept [{accept}], multiple {multiple}, at most {max} bytes)"),
+                    FileWant::Open { accept, multiple, max, source } => format!("{source:?} (accept [{accept}], multiple {multiple}, at most {max} bytes)"),
                     FileWant::Save { name } => format!("somewhere to save \"{name}\""),
                 }
             );
@@ -1512,6 +1541,15 @@ impl Shell {
                 let _ = proxy.send_event(Wake::Files);
             };
             let spawned = std::thread::Builder::new().name("eui-dialog".into()).spawn(move || match ask.want {
+                // A camera on a desktop is not `rfd`'s to open and is not
+                // a file dialog with a different title: there is no capture
+                // path on this platform yet, and offering the file system
+                // instead would spend a `camera` grant on `fs.pick`'s
+                // power. The phones are where this one lands.
+                FileWant::Open { source: crate::driver::PickSource::Camera, .. } => {
+                    eprintln!("eui: this build has no camera");
+                    answer(Dialog::Dismissed(token));
+                }
                 FileWant::Open { accept, multiple, .. } => {
                     let mut dialog = rfd::FileDialog::new();
                     let exts: Vec<&str> = accept.split(',').map(str::trim).filter(|e| !e.is_empty()).collect();
@@ -2197,6 +2235,10 @@ impl Shell {
                 self.chrome_input(Input::PointerOut, renderer);
             }
             WindowEvent::Focused(false) => self.send_to_tab(Input::Unfocused),
+            // Its twin was ignored until `location` arrived: nothing the
+            // client did cared that the window had come back, and now
+            // something does (06 §3).
+            WindowEvent::Focused(true) => self.send_to_tab(Input::Refocused),
             WindowEvent::ThemeChanged(t) => self.set_mode(t, renderer),
             _ => {}
         }

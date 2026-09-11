@@ -47,6 +47,11 @@ pub struct Session {
     media: Vec<NodeIx>,
     /// The nodes with a `wake` handler (06 §1.1), likewise.
     wakers: Vec<NodeIx>,
+    /// Nodes carrying a `location` handler, so the driver does not walk the
+    /// tree to find them. Kept exactly as `wakers` is: both are answered on
+    /// a clock rather than in response to anything, so both have to be
+    /// found without a search per tick.
+    locators: Vec<NodeIx>,
     /// The atom ids of the names the client reads per node — `spans`,
     /// `paths`, `row` — so a painter asks a struct rather than hashes a
     /// string per node per frame.
@@ -96,6 +101,7 @@ impl Session {
             entrances: Vec::new(),
             media: Vec::new(),
             wakers: Vec::new(),
+            locators: Vec::new(),
             known: WellKnown::default(),
             style_changes: Vec::new(),
             local_styles: std::collections::HashMap::new(),
@@ -182,11 +188,17 @@ impl Session {
         &self.wakers
     }
 
+    /// The nodes that asked where the machine is (06 §1.2).
+    pub fn locators(&self) -> &[NodeIx] {
+        &self.locators
+    }
+
     /// Forget the nodes that were released.
     fn prune_sets(&mut self) {
         let arena = &self.arena;
         self.media.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.wakers.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+        self.locators.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
     }
 
     /// A style record.
@@ -571,6 +583,9 @@ impl Session {
                 if *event == EventKind::Wake && !self.wakers.contains(&ix) {
                     self.wakers.push(ix);
                 }
+                if *event == EventKind::Location && !self.locators.contains(&ix) {
+                    self.locators.push(ix);
+                }
                 Ok(())
             }
             Op::ClearHandler { node, event } => {
@@ -578,6 +593,9 @@ impl Session {
                 self.arena.require_mut(ix)?.handlers.retain(|(e, _)| e != event);
                 if *event == EventKind::Wake {
                     self.wakers.retain(|w| *w != ix);
+                }
+                if *event == EventKind::Location {
+                    self.locators.retain(|w| *w != ix);
                 }
                 Ok(())
             }
@@ -711,6 +729,9 @@ impl Session {
             if subtree.handlers_of(flat).iter().any(|(e, _)| *e == EventKind::Wake) {
                 self.wakers.push(ix);
             }
+            if subtree.handlers_of(flat).iter().any(|(e, _)| *e == EventKind::Location) {
+                self.locators.push(ix);
+            }
             if let Some(top) = open.last_mut() {
                 self.arena.require_mut(top.0)?.children.push(ix);
                 top.1 = top.1.saturating_sub(1);
@@ -829,6 +850,8 @@ pub struct WellKnown {
     pub heights: Option<u32>,
     /// A node's wake period.
     pub wake: Option<u32>,
+    /// How often a node wants to be told where the machine is, in ms.
+    pub locate: Option<u32>,
     /// A node that wants `pointer_move` only while a button is held: a
     /// splitter, a slider, anything dragged. Without it a hover costs a
     /// round trip per pointer position (06 §1).
@@ -857,6 +880,7 @@ impl WellKnown {
             "count" => &mut self.count,
             "heights" => &mut self.heights,
             "wake" => &mut self.wake,
+            "locate" => &mut self.locate,
             "drag_only" => &mut self.drag_only,
             "src" => &mut self.src,
             "playing" => &mut self.playing,

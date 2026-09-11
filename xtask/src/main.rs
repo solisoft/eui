@@ -506,9 +506,19 @@ fn conform() {
     } else {
         eprintln!("note: EUI_SOLI_BIN not set — skipping the Soli end-to-end suite (spec 09 §10)");
     }
+    // Each step gets its own target directory, and it has to. `xtask`
+    // depends on `eui-client`, so building *this* binary and then running a
+    // workspace test from inside it are two resolutions of the same graph
+    // sharing one `target/`: the second unifies features differently, and the
+    // rlibs the first left behind are evicted under it. What that looks like
+    // is a doctest handed `--extern rustls=…-caac25ec480b39c5.rlib` for a
+    // file that no longer exists, and a gate that fails on a tree where
+    // `cargo test --workspace` passes on its own. A directory of its own
+    // costs a first build and buys a check that means what it says.
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/conform");
     for args in steps {
         eprintln!("conform: cargo {}", args.join(" "));
-        let status = std::process::Command::new(&cargo).args(&args).status().expect("cargo runs");
+        let status = std::process::Command::new(&cargo).args(&args).env("CARGO_TARGET_DIR", &target).status().expect("cargo runs");
         if !status.success() {
             eprintln!("conform: FAILED at cargo {}", args.join(" "));
             std::process::exit(1);

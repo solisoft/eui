@@ -84,9 +84,11 @@ pub mod caps {
     pub const FS_PICK: u32 = 1 << 6;
     /// Write a file where the user says.
     pub const FS_SAVE: u32 = 1 << 7;
+    /// Read a tag held against the machine.
+    pub const NFC: u32 = 1 << 8;
 
     /// The names of 01 §2.1, in bit order.
-    pub const NAMES: [(&str, u32); 8] = [
+    pub const NAMES: [(&str, u32); 9] = [
         ("camera", CAMERA),
         ("microphone", MICROPHONE),
         ("clipboard.read", CLIPBOARD_READ),
@@ -95,6 +97,7 @@ pub mod caps {
         ("location", LOCATION),
         ("fs.pick", FS_PICK),
         ("fs.save", FS_SAVE),
+        ("nfc", NFC),
     ];
 
     /// A capability by its name, `clipboard.read`.
@@ -107,7 +110,11 @@ pub mod caps {
         NAMES.iter().filter(|(_, bit)| mask & bit != 0).map(|(n, _)| *n).collect()
     }
     /// Every bit this protocol version defines.
-    pub const ALL: u32 = 0xFF;
+    ///
+    /// It grows from the top as capabilities are added, and a bit outside
+    /// it is a decode error (08 §3) — which is the point: a client that
+    /// does not know what bit 256 means must not quietly agree to it.
+    pub const ALL: u32 = 0x1FF;
 }
 
 /// The viewer's presentation state.

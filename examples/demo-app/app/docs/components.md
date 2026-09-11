@@ -751,14 +751,19 @@ behind the drawing, the drawing, and a row of invisible bands in front. Each
 band holds a value chip and two local handlers (spec 07 §1), which repoint two
 nodes at styles the handler declared: its wash, and its own chip.
 
-The chip is an **`overlay`**, and a band is itself a `stack` so that the chip
-hangs off it. That is what makes a reading legible: an absolute `overlay`
-child of a `stack` is a popover (`04 §5`), measured against the *window*
-rather than against the box it hangs off and clipped by no ancestor. A chip
-that was a plain box inside its band was measured against the band, and a band
-is about thirty pixels wide — anything longer than a bare number came back as
-four wrapped lines sitting on top of the marks it was describing. Hanging off
-the band rather than off the chart also puts it in the column under the hand.
+The chip is an **`overlay` with `position: pointer`**, and there is one a
+chart rather than one a band — the band's handler writes the reading into it
+and shows it. Two things make that work, and both are `04 §5`. An overlay
+child of a `stack` is a popover, measured against the *window* and clipped by
+no ancestor: a chip that was a plain box inside its band was measured against
+the band, a band is about thirty pixels wide, and anything longer than a bare
+number came back as four wrapped lines sitting on top of the marks it was
+describing. And `pointer` says the **client** places it, above the cursor and
+centred on it. It has to be the client: a local chunk has no access to the
+pointer by design (`07 §1`), and asking the server for a position is a round
+trip per mouse sample. Anchored to the band instead — and a band is the full
+height of the plot — the chip sat at the foot of the chart wherever in the
+column the hand actually was.
 
 Down is `display: none`, not `opacity: 0`. The top layer is hit-tested first
 and asks nothing about opacity, so a transparent chip left in the layout would
@@ -767,7 +772,7 @@ price is the fade, and it is worth paying.
 
 ```soli
 "pointer_enter": {
-  "local": "cw_line_3.style = @lit; tip_line_3.style = @shown",
+  "local": "cw_line_3.style = @lit; tip_line.style = @shown; tt_line.text = \"Thu · 8\"",
   "styles": {"lit": …, "shown": …}
 }
 ```

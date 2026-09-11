@@ -50,6 +50,17 @@ fn platform_parts() {
             println!("cargo:rustc-cfg={cfg}");
         }
     }
+    // The other direction: three things only a phone has behind them. A
+    // desktop has no tag reader and no positioning the client can reach,
+    // and a camera there is not a sheet anybody raises — so the code that
+    // would call them is not compiled for it, exactly as `has_files` is
+    // not compiled for a phone.
+    for cfg in ["has_nfc", "has_location", "has_camera"] {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+        if phone {
+            println!("cargo:rustc-cfg={cfg}");
+        }
+    }
     println!("cargo:rustc-check-cfg=cfg(no_subprocess)");
     if phone {
         println!("cargo:rustc-cfg=no_subprocess");

@@ -38,6 +38,111 @@ pub struct FileAsk {
     pub want: FileWant,
 }
 
+/// Where the bytes an [`FileAsk`] wants are to come from.
+///
+/// The distinction is not cosmetic and it is not the platform's to make:
+/// reading what someone already has and making something new with a camera
+/// are different powers, gated by different capabilities (01 §2.1). It
+/// rides on `pick` rather than on a prop of its own because everything
+/// after the sheet closes is identical — a name, a size, and `Upload`
+/// frames (01 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PickSource {
+    /// Whatever the person already has: the file system, or on a phone the
+    /// photo library. Needs `fs.pick`.
+    #[default]
+    Held,
+    /// A picture taken now. Needs `camera`, and nothing on the filesystem
+    /// is read.
+    Camera,
+}
+
+impl PickSource {
+    /// The capability without which there is no sheet and no diagnostic.
+    pub const fn capability(self) -> u32 {
+        match self {
+            Self::Held => caps::FS_PICK,
+            Self::Camera => caps::CAMERA,
+        }
+    }
+
+    /// For the pipe between the worker and the window.
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Held => 0,
+            Self::Camera => 1,
+        }
+    }
+
+    /// Back from the pipe. An unknown source is `Held`, which is the one
+    /// that asks for the least.
+    pub const fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Camera,
+            _ => Self::Held,
+        }
+    }
+}
+
+/// A scan the tree asked for and the window has not started yet.
+///
+/// The same shape as a [`FileAsk`] and for the same reason: on iOS a scan
+/// **is** a system sheet, raised by `NFCNDEFReaderSession`, and it may only
+/// be raised because a person did something. Android has no sheet and
+/// listens while the activity is in front, but the rule is the client's
+/// rather than the platform's, so both behave alike: a scan begins on an
+/// activation and on nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfcAsk {
+    /// The driver's own name for this scan.
+    pub token: u32,
+    /// The node that asked, by id.
+    pub node: u32,
+    /// What to tell the person the scan is for. iOS shows it; Android has
+    /// nowhere to put it and the application should say it in the tree.
+    pub prompt: String,
+}
+
+/// One record off a tag.
+///
+/// Deliberately not a general NDEF model: a client that shipped one would
+/// be parsing a format a server chose, in a process that on both phones has
+/// no worker to be confined to (08 §10). `kind` is `text`, `uri`, `mime:…`
+/// or `raw`, and `payload` is what that kind means — UTF-8 for the first
+/// three, lower-case hex for the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfcRecord {
+    /// What `payload` is.
+    pub kind: String,
+    /// The record, as `kind` says to read it.
+    pub payload: String,
+}
+
+/// Where the machine is, as the platform reported it.
+///
+/// Handed in by the window — the driver has no radio, no GPS and, in a
+/// worker, no way to reach either. What it does own is the rounding: a fix
+/// is coarsened on the way out (see [`COARSE_STEPS_PER_DEGREE`]) and the server is
+/// never told more than that.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fix {
+    /// Degrees north, WGS 84.
+    pub latitude: f64,
+    /// Degrees east, WGS 84.
+    pub longitude: f64,
+    /// The radius the platform claims, in metres.
+    pub accuracy_m: f64,
+}
+
+impl Fix {
+    /// This fix as a server may hear it: rounded, and honest about how
+    /// rounded.
+    fn coarse(self) -> [f64; 3] {
+        let round = |v: f64| (v * COARSE_STEPS_PER_DEGREE).round() / COARSE_STEPS_PER_DEGREE;
+        [round(self.latitude), round(self.longitude), self.accuracy_m.max(COARSE_ACCURACY_M)]
+    }
+}
+
 /// Which dialog a [`FileAsk`] wants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWant {
@@ -50,6 +155,8 @@ pub enum FileWant {
         multiple: bool,
         /// The ceiling one file may not pass, in bytes.
         max: u64,
+        /// Where the bytes come from.
+        source: PickSource,
     },
     /// The platform's save dialog.
     Save {
@@ -158,6 +265,12 @@ pub enum Input {
     Mode(ThemeMode),
     /// The window lost focus.
     Unfocused,
+    /// The window has the input again.
+    ///
+    /// Its twin has been here since the beginning; this one arrived with
+    /// `location`, which is the first thing the client does that must stop
+    /// when the window is not in front and start again when it is.
+    Refocused,
 }
 
 /// Why the driver wants the session closed.
@@ -537,6 +650,37 @@ const MIN_WAKE_MS: u64 = 100;
 /// the client.
 const MAX_WAKES: usize = 4;
 
+/// The fastest a node may be told where the machine is.
+///
+/// A second, not the hundred milliseconds a clock gets. No positioning
+/// hardware moves faster than this in any way that means anything, and the
+/// cost of asking is a radio rather than a timer — which is battery on the
+/// two platforms this exists for.
+const MIN_LOCATE_MS: u64 = 1_000;
+
+/// How many nodes may ask at once. One page wants one fix; four is the
+/// same allowance a clock gets and is already generous.
+const MAX_LOCATORS: usize = 2;
+
+/// How coarse a coarse location is, as steps of a degree.
+///
+/// `01 §2.1` grants the power to read a **coarse** location and there is no
+/// second capability for a fine one, so the client rounds before anything
+/// leaves it: a thousandth of a degree is about 110 m at the equator and
+/// less everywhere else. The rounding happens here rather than at the
+/// platform because this is the side a server cannot argue with.
+///
+/// Multiply, round, divide — in that order. Dividing by `0.001` and
+/// multiplying back puts the error straight back into the answer: it turns
+/// 48.8583721 into 48.858000000000004, which is not three decimal places
+/// and is a different number from the one anyone would write down.
+const COARSE_STEPS_PER_DEGREE: f64 = 1_000.0;
+
+/// The floor put under a reported accuracy, in metres. A fix rounded to
+/// [`COARSE_DEGREES`] is not better than this, whatever the receiver said,
+/// and telling a server otherwise would be a lie the client authored.
+const COARSE_ACCURACY_M: f64 = 100.0;
+
 /// A scroll offset easing from `from` to `to`, per wheel notch (03 §5's
 /// `motion.base`); a notch arriving mid-way retargets from where the view is.
 #[derive(Debug, Clone, Copy)]
@@ -638,6 +782,11 @@ pub struct Driver {
     file_asks: Vec<FileAsk>,
     /// Dialogs opened and not yet answered, by token.
     asks: HashMap<u32, FileAsk>,
+    /// Scans the tree asked for and the window has not started.
+    nfc_asks: Vec<NfcAsk>,
+    /// Scans in flight, by token, so an answer can be matched to the node
+    /// that asked and an answer for a scan nobody started is refused.
+    scans: HashMap<u32, u32>,
     /// The next token, for a dialog or an upload. Never reused, so a chunk
     /// that arrives late cannot land in a later transfer.
     next_token: u32,
@@ -720,8 +869,19 @@ pub struct Driver {
     /// batch changed it, and kept otherwise so a re-render does not reset
     /// the phase of a clock that is already running.
     wakes: Vec<(u32, Duration, Instant)>,
+    /// Nodes asking where the machine is, with their interval and when
+    /// each is next owed one. The same shape as `wakes`, for the same
+    /// reason: a clock that keeps its phase across re-renders.
+    locators: Vec<(u32, Duration, Instant)>,
+    /// The freshest fix the window handed over, if any.
+    fix: Option<Fix>,
+    /// Whether the window has the input. A location is not reported while
+    /// it does not (06 §3): an application does not get to follow someone
+    /// around because its window is open behind something else.
+    in_front: bool,
     /// Whether the tree changed since the wakes were last collected.
     wake_dirty: bool,
+    locate_dirty: bool,
     /// Whether the notice of [`Self::show_stopped`] has replaced the tree,
     /// so it is mounted once and not on every frame after.
     stopped: bool,
@@ -807,6 +967,8 @@ impl Driver {
             acked: 0,
             file_asks: Vec::new(),
             asks: HashMap::new(),
+            nfc_asks: Vec::new(),
+            scans: HashMap::new(),
             next_token: 1,
             scroll_asked: Vec::new(),
             uploads: HashMap::new(),
@@ -836,7 +998,11 @@ impl Driver {
             video_sizes: HashMap::new(),
             video_dirty: false,
             wakes: Vec::new(),
+            locators: Vec::new(),
+            fix: None,
+            in_front: true,
             wake_dirty: false,
+            locate_dirty: false,
             stopped: false,
             video_clock: None,
             video_due: None,
@@ -857,6 +1023,36 @@ impl Driver {
     pub fn grant(&mut self, granted: u32) {
         self.touched = true;
         self.granted = granted & caps::ALL;
+    }
+
+    /// Hand over the freshest fix (06 §1.2).
+    ///
+    /// The window calls this; the driver has no radio and, in a worker, no
+    /// way to reach one. Nothing is sent from here — the fix is kept and
+    /// goes out on the interval the nodes asked for, coarsened on the way.
+    /// A fix that arrives without the capability is dropped rather than
+    /// stored: what is not kept cannot leak.
+    pub fn located(&mut self, fix: Fix) {
+        if self.granted & caps::LOCATION == 0 {
+            return;
+        }
+        self.fix = Some(fix);
+        self.touched = true;
+    }
+
+    /// Whether the platform should have its positioning turned on.
+    ///
+    /// True exactly while a node asks, the capability is granted and the
+    /// window has the input — so the window can stop the radio the moment
+    /// the page that wanted it goes away, rather than leaving it running
+    /// for the life of the session.
+    pub fn wants_location(&self) -> bool {
+        self.granted & caps::LOCATION != 0 && self.in_front && !self.locators.is_empty()
+    }
+
+    /// The fix the driver is holding, for a window that wants to show one.
+    pub fn fix(&self) -> Option<Fix> {
+        self.fix
     }
 
     /// The opening frame.
@@ -1024,6 +1220,7 @@ impl Driver {
                 self.audio_dirty = true;
                 self.video_dirty = true;
                 self.wake_dirty = true;
+                self.locate_dirty = true;
                 self.invalidate();
                 self.note_style_changes();
                 self.note_entrances();
@@ -1379,7 +1576,17 @@ impl Driver {
             Input::Paste(t) => self.text_input(&t),
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::PointerOut => self.clear_hover(),
+            Input::Refocused => {
+                self.in_front = true;
+                Vec::new()
+            }
             Input::Unfocused => {
+                // 06 §3: nothing about where the machine is while the
+                // window is not the one being used. The fix is kept —
+                // coming back should not cost a cold start — but no node
+                // hears it, and `wants_location` goes false so the window
+                // can put the radio away.
+                self.in_front = false;
                 // Whatever the window has lost the input to, it is not
                 // holding a finger any more. The contact is forgotten here
                 // rather than by a `TouchCancel`, because the window cannot
@@ -2032,6 +2239,7 @@ impl Driver {
                     out.extend(self.emit(ix, kind, p));
                     if matches!(kind, EventKind::Click) {
                         self.offer_files(ix);
+                        self.offer_scan(ix);
                     }
                 }
             }
@@ -2340,6 +2548,7 @@ impl Driver {
         let p = Value::List(vec![Value::Float(f64::from(r.w / 2.0)), Value::Float(f64::from(r.h / 2.0))]);
         let out = self.emit(f, EventKind::Click, p);
         self.offer_files(f);
+        self.offer_scan(f);
         out
     }
 
@@ -2802,6 +3011,36 @@ impl Driver {
         std::mem::take(&mut self.file_asks)
     }
 
+    /// Scans the tree asked for and the window has not started (03 §3.3).
+    pub fn take_nfc_asks(&mut self) -> Vec<NfcAsk> {
+        std::mem::take(&mut self.nfc_asks)
+    }
+
+    /// A tag was read for the scan `token` opened.
+    ///
+    /// A scan ends when it reads something: the token is spent here, so a
+    /// platform that delivers twice is answered once. A token nobody
+    /// started is ignored — the window is trusted, but a bug in it must not
+    /// put an event on the wire that no node asked for.
+    pub fn scanned(&mut self, token: u32, uid: &str, records: &[NfcRecord]) -> Vec<Frame> {
+        let Some(id) = self.scans.remove(&token) else { return Vec::new() };
+        let Some(ix) = self.session.lookup(id) else { return Vec::new() };
+        self.touched = true;
+        let listed = records.iter().map(|r| Value::List(vec![Value::Str(r.kind.clone()), Value::Str(r.payload.clone())])).collect();
+        self.emit(ix, EventKind::NfcTag, Value::List(vec![Value::Str(uid.to_owned()), Value::List(listed)]))
+    }
+
+    /// The scan `token` opened ended without reading anything.
+    ///
+    /// Nothing is reported, for the reason a dismissed dialog is not
+    /// (06 §3): an application learns that someone held their phone up and
+    /// thought better of it only if it is told, and it is not told.
+    pub fn scan_ended(&mut self, token: u32) {
+        if self.scans.remove(&token).is_some() {
+            self.touched = true;
+        }
+    }
+
     /// Bytes a save is owed, for the window to append to the file the
     /// person named.
     pub fn take_writes(&mut self) -> Vec<FileWrite> {
@@ -2823,8 +3062,44 @@ impl Driver {
     /// Three conditions, and every one of them is checked here rather than
     /// where the dialog opens: a dialog the person did not ask for is the
     /// whole of what makes a file picker dangerous.
+    /// Spec 03 §3.3: the person activated a node carrying `nfc`. If it also
+    /// declares a **server** handler for `nfc_tag` and the `nfc` capability
+    /// was granted, the window is asked to start a scan.
+    ///
+    /// The three conditions are 03 §3.2's, word for word, and for the same
+    /// reason: a scan the person did not ask for is the whole of what makes
+    /// a reader dangerous. A tree that merely arrives starts nothing.
+    fn offer_scan(&mut self, from: NodeIx) {
+        let Some((ix, handler)) = self.target(from, EventKind::NfcTag) else { return };
+        // A local chunk cannot be handed a tag: what a reader saw is the
+        // server's, as both ends of a transfer are.
+        if !matches!(handler, Handler::Server(_)) {
+            return;
+        }
+        let Some(atom) = self.session.atom_id("nfc") else { return };
+        let Some(node) = self.session.node(ix) else { return };
+        let id = node.id;
+        let prompt = match node.prop(atom) {
+            Some(Value::Str(p)) => p.clone(),
+            Some(Value::Null) | None => return,
+            Some(_) => String::new(),
+        };
+        if self.granted & caps::NFC == 0 {
+            eprintln!("eui: node {id} carries `nfc`, which needs a capability the person did not grant; nothing scans");
+            return;
+        }
+        // One scan at a time per node, as one dialog is.
+        if self.scans.values().any(|n| *n == id) {
+            return;
+        }
+        let token = self.mint();
+        self.scans.insert(token, id);
+        self.nfc_asks.push(NfcAsk { token, node: id, prompt });
+        self.touched = true;
+    }
+
     fn offer_files(&mut self, from: NodeIx) {
-        for (kind, prop, cap) in [(EventKind::FilePick, "pick", caps::FS_PICK), (EventKind::FileSave, "save", caps::FS_SAVE)] {
+        for (kind, prop) in [(EventKind::FilePick, "pick"), (EventKind::FileSave, "save")] {
             let Some((ix, handler)) = self.target(from, kind) else { continue };
             // A local chunk cannot be given a file and cannot answer with
             // one: both ends of a transfer are the server's.
@@ -2835,10 +3110,6 @@ impl Driver {
             let Some(node) = self.session.node(ix) else { continue };
             let id = node.id;
             let Some(value) = node.prop(atom).cloned() else { continue };
-            if self.granted & cap == 0 {
-                eprintln!("eui: node {id} carries `{prop}`, which needs a capability the person did not grant; nothing opens");
-                continue;
-            }
             // One dialog at a time per node: a second click while the
             // first is open must not stack two of them.
             if self.asks.values().any(|a| a.node == id) {
@@ -2865,7 +3136,13 @@ impl Driver {
                         }
                         _ => (String::new(), 0, DEFAULT_UPLOAD_BYTES),
                     };
-                    FileWant::Open { accept, multiple: flags & 1 != 0, max }
+                    // Bit 1 asks for the camera. A node that asks for both
+                    // gets the camera and one picture: there is no taking
+                    // several photographs in one sheet on either platform,
+                    // and a `multiple` the sheet cannot honour is a promise
+                    // to the server that the client would then break.
+                    let source = if flags & 2 != 0 { PickSource::Camera } else { PickSource::Held };
+                    FileWant::Open { accept, multiple: flags & 1 != 0 && source == PickSource::Held, max, source }
                 }
                 _ => {
                     let name = match &value {
@@ -2879,6 +3156,18 @@ impl Driver {
                     FileWant::Save { name: if name.is_empty() { "download".into() } else { name } }
                 }
             };
+            // The capability is whatever *this* sheet needs, which for a
+            // `pick` is not known until its flags have been read: taking a
+            // photograph and reading a folder are not the same grant, and
+            // reading the prop is what says which one was asked for.
+            let cap = match &want {
+                FileWant::Open { source, .. } => source.capability(),
+                FileWant::Save { .. } => caps::FS_SAVE,
+            };
+            if self.granted & cap == 0 {
+                eprintln!("eui: node {id} carries `{prop}`, which needs a capability the person did not grant; nothing opens");
+                continue;
+            }
             let token = self.mint();
             let ask = FileAsk { token, node: id, want };
             self.asks.insert(token, ask.clone());
@@ -3271,6 +3560,10 @@ impl Driver {
         self.mixer = eui_audio::Mixer::new(48_000);
         self.players.clear();
         self.wakes.clear();
+        self.locators.clear();
+        self.fix = None;
+        self.scans.clear();
+        self.nfc_asks.clear();
         self.anims.clear();
         self.edits.clear();
         self.windows.clear();
@@ -3412,6 +3705,8 @@ impl Driver {
         self.pending.extend(ticks);
         let woken = self.wake_events();
         self.pending.extend(woken);
+        let placed = self.location_events();
+        self.pending.extend(placed);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
         // them — once the view has been still for a moment, not per frame
         // of a glide or a drag: a request a frame is a server render a
@@ -3526,7 +3821,12 @@ impl Driver {
             Some(now + Duration::from_millis(16))
         };
         let wake_due = self.wakes.iter().map(|(_, _, at)| *at).min();
-        let others = [settle_due, self.video_due, self.viewport_due, wake_due];
+        // The same for a node that asked where the machine is: without it
+        // the list outlives the interval, the cached frame is handed back
+        // instead of a real paint, and the event that was due is never
+        // looked for. A clock nobody winds is not a clock.
+        let locate_due = self.fix.and_then(|_| self.locators.iter().map(|(_, _, at)| *at).min());
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due];
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
@@ -3953,6 +4253,81 @@ impl Driver {
             out.extend(self.emit(ix, EventKind::Wake, Value::Null));
         }
         out
+    }
+
+    /// Spec 06 §1.2: the nodes that asked where the machine is, answered on
+    /// their own interval from the freshest fix the window handed over.
+    ///
+    /// Four things must all hold, and every one of them is checked here:
+    /// the `location` capability was granted, the window has the input, a
+    /// fix exists, and the node's interval has elapsed. Without the first
+    /// there is no list to walk — a capability that was not granted has no
+    /// code path, and the tree is not even read for it.
+    fn location_events(&mut self) -> Vec<Frame> {
+        if self.granted & caps::LOCATION == 0 {
+            self.locators.clear();
+            return Vec::new();
+        }
+        if self.locate_dirty {
+            self.locate_dirty = false;
+            self.collect_locators();
+        }
+        if self.locators.is_empty() || !self.in_front {
+            return Vec::new();
+        }
+        let Some(fix) = self.fix else { return Vec::new() };
+        let now = self.now;
+        let mut due: Vec<u32> = Vec::new();
+        for (id, period, at) in self.locators.iter_mut() {
+            if *at <= now {
+                due.push(*id);
+                // From now, as a wake is: a window that was not painted for
+                // a minute does not owe sixty fixes.
+                *at = now + *period;
+            }
+        }
+        let [lat, lon, accuracy] = fix.coarse();
+        let mut out = Vec::new();
+        for id in due {
+            let Some(ix) = self.session.lookup(id) else { continue };
+            out.extend(self.emit(ix, EventKind::Location, Value::List(vec![Value::Float(lat), Value::Float(lon), Value::Float(accuracy)])));
+        }
+        out
+    }
+
+    /// Walk the tree for the nodes that asked where the machine is. The
+    /// twin of [`Self::collect_wakes`], down to keeping the phase of the
+    /// ones already running.
+    fn collect_locators(&mut self) {
+        if self.session.root().is_none() {
+            self.locators.clear();
+            return;
+        }
+        let Some(atom) = self.session.atoms().locate else {
+            self.locators.clear();
+            return;
+        };
+        let now = self.now;
+        let asked: Vec<(u32, Duration)> = self
+            .session
+            .locators()
+            .iter()
+            .filter_map(|ix| self.session.node(*ix))
+            .filter(|n| n.handler(EventKind::Location).is_some())
+            .filter_map(|n| match n.prop(atom) {
+                Some(Value::Int(ms)) if *ms > 0 => Some((n.id, Duration::from_millis((*ms as u64).max(MIN_LOCATE_MS)))),
+                _ => None,
+            })
+            .take(MAX_LOCATORS)
+            .collect();
+        let old = std::mem::take(&mut self.locators);
+        self.locators = asked
+            .into_iter()
+            .map(|(id, period)| {
+                let kept = old.iter().find(|(o, p, _)| *o == id && *p == period).map(|(_, _, at)| *at);
+                (id, period, kept.unwrap_or(now))
+            })
+            .collect();
     }
 
     /// Walk the tree for the nodes that ask to be woken, keeping the phase
