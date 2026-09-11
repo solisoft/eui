@@ -211,20 +211,37 @@ mark_volume_icon() {
 
 # A mounted volume is not always free the instant the script stops touching
 # it; Spotlight or Finder can still hold it for a beat.
+#
+# And a detach that returned is not the same as a device that is gone. The
+# forced detach is asynchronous: `hdiutil convert` run straight after it
+# reads an image the kernel has not finished letting go of, and answers
+# "Resource temporarily unavailable" — which is what took a CI run down with
+# the .app and its zip already built. So the mount point is waited on until
+# it actually disappears, and a volume that will not go is said out loud
+# rather than left for `convert` to trip over.
 detach_volume() {
   local mount="$1" tries=0
   while [ "$tries" -lt 10 ]; do
-    hdiutil detach "$mount" >/dev/null 2>&1 && return 0
+    hdiutil detach "$mount" >/dev/null 2>&1 && break
     sleep 2
     tries=$((tries + 1))
   done
-  hdiutil detach "$mount" -force >/dev/null 2>&1
+  [ "$tries" -lt 10 ] || hdiutil detach "$mount" -force >/dev/null 2>&1 || true
+  tries=0
+  while [ -d "$mount" ] && [ "$tries" -lt 15 ]; do
+    sleep 1
+    tries=$((tries + 1))
+  done
+  if [ -d "$mount" ]; then
+    echo "wrap-macos-app: $mount is still attached" >&2
+  fi
+  return 0
 }
 
 make_dmg() {
   local stage="$OUT_DIR/.dmg-stage"
   local rw="$OUT_DIR/.$APP_NAME-rw.dmg"
-  local background mount vol
+  local background mount vol tries=0
 
   background="$(stage_volume "$stage")" || return 1
 
@@ -250,7 +267,15 @@ make_dmg() {
   sync
   detach_volume "$mount"
 
-  hdiutil convert "$rw" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null || return 1
+  # Even waited on, the image can still answer "Resource temporarily
+  # unavailable" on a loaded runner. It is a transient, so it is retried
+  # rather than allowed to lose a build that is otherwise complete.
+  until hdiutil convert "$rw" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG" >/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 5 ] || return 1
+    echo "wrap-macos-app: hdiutil convert did not take ($tries), trying again" >&2
+    sleep 5
+  done
   rm -f "$rw"
   rm -rf "$stage"
 }

@@ -107,8 +107,14 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/${{ matrix.exe }}"
           ls -lh dist/
 
+      # Allowed to fail so the binaries below still reach the artifacts: the
+      # DMG is the last thing the script makes, and `hdiutil` failing on it
+      # once cost a run every download it had already built. The job is still
+      # failed for it, after the upload — see the step at the end.
       - name: Wrap in a .app bundle, with a DMG beside it
+        id: wrap
         if: matrix.platform == 'macos'
+        continue-on-error: true
         run: |
           mv dist/eui dist/eui-${{ matrix.arch }}-macos
           ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI com.soli.eui dist
@@ -142,6 +148,14 @@ jobs:
             dist/EUI*.dmg
             dist/EUI*.zip
           retention-days: 30
+
+      # Raised only now: the wrapping is a real failure and is reported as
+      # one, but not before what it did manage to build has been handed over.
+      - name: The macOS wrapping worked
+        if: matrix.platform == 'macos' && steps.wrap.outcome == 'failure'
+        run: |
+          echo "wrap-macos-app failed; whatever it built is in the artifacts above" >&2
+          exit 1
 
   # The two phones, built so somebody can put them on a device. Neither is
   # covered by `build-matrix`: an APK is not a binary and an iOS .app is not
@@ -383,7 +397,9 @@ jobs:
       # The same key goes beside the executable, or the app cannot unlock
       # itself at launch and exits before drawing anything.
       - name: Wrap in a .app bundle, with a DMG beside it
+        id: wrap
         if: matrix.platform == 'macos'
+        continue-on-error: true
         env:
           BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
         run: ./eui/scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
@@ -442,6 +458,13 @@ jobs:
             dist/Vitrine*.zip
             dist/Vitrine*.tar.gz
           retention-days: 30
+
+      # As in the client job: reported, but only once the downloads are safe.
+      - name: The macOS wrapping worked
+        if: matrix.platform == 'macos' && steps.wrap.outcome == 'failure'
+        run: |
+          echo "wrap-macos-app failed; whatever it built is in the artifacts above" >&2
+          exit 1
 
   # Between tags there was nowhere to send anybody: the files existed, on the
   # run, behind a GitHub login and four clicks. So every push to `main`
