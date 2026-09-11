@@ -212,36 +212,45 @@ mark_volume_icon() {
 # A mounted volume is not always free the instant the script stops touching
 # it; Spotlight or Finder can still hold it for a beat.
 #
-# And a detach that returned is not the same as a device that is gone. The
-# forced detach is asynchronous: `hdiutil convert` run straight after it
-# reads an image the kernel has not finished letting go of, and answers
-# "Resource temporarily unavailable" — which is what took a CI run down with
-# the .app and its zip already built. So the mount point is waited on until
-# it actually disappears, and a volume that will not go is said out loud
-# rather than left for `convert` to trip over.
+# And an unmounted volume is not a detached image. The two come apart: the
+# /Volumes entry goes while the device stays, and `hdiutil convert` on an
+# image that is still attached answers "Resource temporarily unavailable".
+# Measured on CI — five refusals over twenty seconds, with the mount point
+# long gone — which is why waiting on the mount point was not enough and the
+# image itself is what is waited on here, through `hdiutil info`.
+#
+# The device is also what the forced detach is aimed at. Forcing the mount
+# point unmounts a volume that is already unmounted and leaves the device
+# exactly where it was.
 detach_volume() {
-  local mount="$1" tries=0
+  local mount="$1" dev="$2" image="$3" tries=0
   while [ "$tries" -lt 10 ]; do
     hdiutil detach "$mount" >/dev/null 2>&1 && break
     sleep 2
     tries=$((tries + 1))
   done
-  [ "$tries" -lt 10 ] || hdiutil detach "$mount" -force >/dev/null 2>&1 || true
-  tries=0
-  while [ -d "$mount" ] && [ "$tries" -lt 15 ]; do
+  while hdiutil info | grep -qF "$image"; do
+    if [ "$tries" -ge 20 ]; then
+      echo "wrap-macos-app: $image is still attached" >&2
+      return 0
+    fi
+    # Once the polite detach has had its ten seconds, take the device.
+    if [ "$tries" -ge 10 ] && [ -n "$dev" ]; then
+      hdiutil detach "$dev" -force >/dev/null 2>&1 || true
+    fi
     sleep 1
     tries=$((tries + 1))
   done
-  if [ -d "$mount" ]; then
-    echo "wrap-macos-app: $mount is still attached" >&2
-  fi
   return 0
 }
 
 make_dmg() {
   local stage="$OUT_DIR/.dmg-stage"
   local rw="$OUT_DIR/.$APP_NAME-rw.dmg"
-  local background mount vol tries=0
+  local background mount vol attached dev image tries=0
+  # `hdiutil info` names images by absolute path, and `$OUT_DIR` need not be
+  # one — it is `dist` on CI.
+  image="$(cd "$OUT_DIR" && pwd)/.$APP_NAME-rw.dmg"
 
   background="$(stage_volume "$stage")" || return 1
 
@@ -253,8 +262,12 @@ make_dmg() {
   hdiutil create -srcfolder "$stage" -volname "$APP_NAME" -fs HFS+ \
     -fsargs "-c c=64,a=16,e=16" -format UDRW -size "${megabytes}m" -ov "$rw" >/dev/null || return 1
 
-  mount="$(hdiutil attach -readwrite -noverify -noautoopen "$rw" |
-    grep -Eo '/Volumes/.*$' | tail -1)" || return 1
+  # Both halves of what `attach` says are needed later: the volume to dress
+  # and the device to detach. They are read from one run of it — attaching
+  # twice to learn the second would be a second image.
+  attached="$(hdiutil attach -readwrite -noverify -noautoopen "$rw")" || return 1
+  mount="$(printf '%s\n' "$attached" | grep -Eo '/Volumes/.*$' | tail -1)"
+  dev="$(printf '%s\n' "$attached" | awk '/^\/dev\// { print $1; exit }')"
   [ -n "$mount" ] || return 1
   # The volume name is not always the one asked for: mounting alongside a
   # volume of the same name gets a numbered one, and the layout has to name
@@ -265,7 +278,7 @@ make_dmg() {
   mark_volume_icon "$mount"
   chmod -Rf go-w "$mount" 2>/dev/null || true
   sync
-  detach_volume "$mount"
+  detach_volume "$mount" "$dev" "$image"
 
   # Even waited on, the image can still answer "Resource temporarily
   # unavailable" on a loaded runner. It is a transient, so it is retried

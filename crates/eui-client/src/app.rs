@@ -2504,8 +2504,10 @@ const IDLE_PARK: std::time::Duration = std::time::Duration::from_secs(600);
 /// The two platforms want opposite things, and each one's answer was paid
 /// for in measurements:
 ///
-///     Linux        `Wait` sleeps       `WaitUntil` spins
-///     macOS, iOS   `Wait` spins        `WaitUntil` sleeps
+/// ```text
+/// Linux        Wait sleeps      WaitUntil spins
+/// macOS, iOS   Wait spins       WaitUntil sleeps
+/// ```
 ///
 /// On Linux `WaitUntil` never sleeps, at any distance — measured, a deadline
 /// a whole second out spun the loop 125 000 times a second while `Wait` went
