@@ -1,4 +1,5 @@
-//! The window: winit in `ControlFlow::Wait`, a wgpu surface, and the driver.
+//! The window: a parked winit loop (see `idle_flow`), a wgpu surface, and
+//! the driver.
 //!
 //! There is no render loop. The window redraws when a frame arrived, the
 //! viewer did something, or the OS asked — and at no other time. That is
@@ -2116,15 +2117,18 @@ impl Shell {
 /// work: measured on this client, a window with a thirty-a-second animation
 /// passed through `about_to_wait` **125 000 times a second** while winit
 /// delivered thirty events, and it did so with a deadline a whole second
-/// out just as readily as with one 16 ms out. `WaitUntil` behaves as
-/// `Poll` — on Wayland and on macOS alike, which is what made an idle
-/// window cost an entire core. `ControlFlow::Wait` sleeps properly.
+/// out just as readily as with one 16 ms out. On Wayland `WaitUntil`
+/// behaves as `Poll`, which is what made an idle window cost an entire
+/// core; `ControlFlow::Wait` sleeps properly there. (Apple is the other way
+/// round — see [`idle_flow`] — which is why what the loop parks on is asked
+/// of that function rather than written here.)
 ///
-/// So the loop parks on `Wait`, and the deadline is kept here: one thread
+/// So the deadline is kept here rather than given to the loop: one thread
 /// that sleeps until the moment asked for and then wakes the loop through
 /// the proxy — the same path the transport already uses, which demonstrably
 /// works. It costs one thread per process and nothing at rest, because a
-/// thread waiting on a channel is not running.
+/// thread waiting on a channel is not running. Both platforms are then
+/// free to park on whichever control flow actually sleeps for them.
 struct Timer {
     /// Rearm, or `None` to sleep until told otherwise. The thread ends when
     /// this is dropped.
@@ -2421,26 +2425,32 @@ impl ApplicationHandler<Wake> for App {
                     stats.retry_won = stats.retry_won.saturating_add(1);
                 }
             }
+        }
+        // The deadline goes to the thread that keeps it (see `Timer`); what
+        // the loop parks on is `idle_flow`.
+        let flow = match &mut self.timer {
+            Some(timer) => {
+                timer.arm(due);
+                idle_flow(now)
+            }
+            // No thread to keep it: the old behaviour, which at least
+            // animates, rather than a window that freezes.
+            None => idle_or_deadline(due, now),
+        };
+        if let Some(stats) = &mut self.loop_stats {
             // What the loop was actually parked on, not what it had due.
             // A counter that reports the question rather than the answer is
             // how two builds come to look identical when they are not —
-            // which cost a round trip to a Mac and back.
-            match idle_or_deadline(due, now) {
+            // which cost a round trip to a Mac and back. Read from `flow`
+            // itself for the same reason: derived a second time from `due`,
+            // it went on reporting `Wait` for a loop the timer thread had
+            // already taken the deadline off.
+            match flow {
                 ControlFlow::Wait => stats.waits = stats.waits.saturating_add(1),
                 _ => stats.untils = stats.untils.saturating_add(1),
             }
         }
-        // The deadline goes to the thread that keeps it (see `Timer`); what
-        // the loop parks on is `idle_flow`.
-        match &mut self.timer {
-            Some(timer) => {
-                timer.arm(due);
-                event_loop.set_control_flow(idle_flow(now));
-            }
-            // No thread to keep it: the old behaviour, which at least
-            // animates, rather than a window that freezes.
-            None => event_loop.set_control_flow(idle_or_deadline(due, now)),
-        }
+        event_loop.set_control_flow(flow);
         if let (Some(stats), Some(body)) = (&mut self.loop_stats, body) {
             stats.body_us = stats.body_us.saturating_add(u64::try_from(body.elapsed().as_micros()).unwrap_or(0));
         }
@@ -2456,24 +2466,72 @@ fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) ->
     }
 }
 
+/// How long an Apple loop parks for when it has nothing to do. Far enough
+/// away to be one wake-up an idle ten minutes, near enough that CoreFoundation
+/// treats it as an ordinary date.
+#[cfg(target_vendor = "apple")]
+const IDLE_PARK: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// How to park the loop with nothing due.
 ///
-/// `Wait`, and on Linux that is the one that sleeps: `WaitUntil` never does,
-/// at any distance — measured, a deadline a whole second out spun the loop
-/// 125 000 times a second while `Wait` went silent on the instant. That is
-/// why a deadline is kept on a thread of ours at all (see [`Timer`]).
+/// The two platforms want opposite things, and each one's answer was paid
+/// for in measurements:
 ///
-/// An idle macOS window used to spin here too — a hundred thousand passes a
-/// second with no events at all — and the cause was not the control flow.
-/// The loop was waking itself: [`Shell::sync_ime`] kept what it had last
-/// told the platform on the *active tab*, while the shell's address bar
-/// reports an area with no tab to keep it on, so the comparison that should
-/// have returned at once never matched. Every pass called
-/// `set_ime_allowed`, every call signalled the CFRunLoop, and the signal
-/// woke the pass that made it. It went unfound for so long because both
-/// control flows spun identically and `EUI_A11Y=0` changed nothing, which
-/// pointed away from this crate — but the wake source was never the OS.
-/// That state now belongs to the window, where the platform keeps it.
+///     Linux        `Wait` sleeps       `WaitUntil` spins
+///     macOS, iOS   `Wait` spins        `WaitUntil` sleeps
+///
+/// On Linux `WaitUntil` never sleeps, at any distance — measured, a deadline
+/// a whole second out spun the loop 125 000 times a second while `Wait` went
+/// silent on the instant. That is why a deadline is kept on a thread of ours
+/// at all (see [`Timer`]).
+///
+/// On Apple it is `Wait` that never sleeps, and the reason is in winit's
+/// waker. It is a `CFRunLoopTimer` created with a **hundred-nanosecond
+/// repeating interval**, to mimic polling; `Wait` parks it by pushing its
+/// fire date out to `f64::MAX`, and does so behind a guard that fires once:
+///
+/// ```text
+/// pub fn stop(&mut self) {
+///     if self.next_fire_date.is_some() {      // once, and never again
+///         self.next_fire_date = None;
+///         CFRunLoopTimerSetNextFireDate(self.timer, f64::MAX)
+///     }
+/// }
+/// ```
+///
+/// Anything that puts that repeating timer back in the run loop's hand
+/// afterwards — and a repeating timer reschedules itself by its interval,
+/// which here is a hundred nanoseconds — is never pushed out again, because
+/// winit believes it already stopped it. The loop then has a timer due on
+/// every pass and never sleeps: no source signalled it, no event was
+/// delivered, and it still burns a core. A *finite* `WaitUntil` takes the
+/// other branch, `start_at(Some(instant))`, which re-asserts the fire date
+/// whenever the instant differs from the last — so the deadline must be
+/// computed fresh every pass, not cached. That is the whole mechanism of
+/// the fix: a far-off date, re-armed, beats a date so far off it is only
+/// ever set once.
+///
+/// This was tried once before, in `ab564e0`, and withdrawn in `b48f0db`
+/// because the Mac spun just the same on `WaitUntil`. That measurement is
+/// void: it was taken while [`Shell::sync_ime`] was also waking the loop on
+/// every pass (fixed in `7cfec14`), so both control flows were bound to spin
+/// whatever the waker did. The same confound voided `EUI_A11Y=0` and every
+/// other exclusion of that week.
+///
+/// What is measured, on the Mac, with the adapter off and the input method
+/// quiet: 250 000 passes a second, all of them parked on `Wait`, nothing due,
+/// no wakes from any thread and no window events at all. A loop that is not
+/// woken and does not sleep is a loop the run loop never let sleep.
+#[cfg(target_vendor = "apple")]
+fn idle_flow(now: std::time::Instant) -> ControlFlow {
+    // Fresh every pass on purpose: winit only re-arms its timer when the
+    // instant changes, and re-arming is the point.
+    ControlFlow::WaitUntil(now + IDLE_PARK)
+}
+
+/// How to park the loop with nothing due: everywhere but Apple, `Wait` is
+/// the one that sleeps. See the Apple half above for why they differ.
+#[cfg(not(target_vendor = "apple"))]
 fn idle_flow(_now: std::time::Instant) -> ControlFlow {
     ControlFlow::Wait
 }
