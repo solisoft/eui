@@ -295,6 +295,15 @@ struct Shell {
     /// When this window started, so the renderer can be handed a monotonic
     /// clock in seconds.
     epoch: std::time::Instant,
+    /// Something happened that could have left a dialog to open or bytes to
+    /// move, so the next pass of the loop asks the driver about files.
+    ///
+    /// `about_to_wait` runs on every pass, and on a platform where the loop
+    /// wakes for reasons of its own that is a great many; two locks a tab a
+    /// pass to be told "nothing" is a cost an idle window must not carry.
+    /// What can produce work is short and known: an input, a frame, a
+    /// dialog thread's answer, and a transfer already in flight.
+    files_dirty: bool,
     /// Frames drawn since the window opened. Only ever read by
     /// [`LoopStats`], and only when it is asked for.
     frames: u64,
@@ -970,6 +979,7 @@ impl Shell {
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             epoch: std::time::Instant::now(),
             frames: 0,
+            files_dirty: true,
             chrome: chrome.take(),
         };
 
@@ -1212,6 +1222,9 @@ impl Shell {
     /// application still answers what it was asked — but only the active
     /// one can ask for the glass.
     fn pump(&mut self) {
+        // A `Blob` arrives as a frame, and the bytes it carries are owed to
+        // a file (01 §6).
+        self.files_dirty = true;
         let active = self.active;
         let mut redraw = false;
         let mut remember = None;
@@ -1288,6 +1301,13 @@ impl Shell {
     /// Spec 03 §3.2: the dialogs the tree asked for, the files they chose,
     /// and the bytes moving either way.
     fn serve_files(&mut self) {
+        // A transfer in flight is its own reason to look: its thread has
+        // chunks for the socket and the socket has bytes for the disk.
+        let moving = self.tabs.iter().any(|t| !t.files.reading.is_empty() || !t.files.writing.is_empty());
+        if !self.files_dirty && !moving {
+            return;
+        }
+        self.files_dirty = false;
         let proxy = self.proxy.clone();
         for i in 0..self.tabs.len() {
             let asks = match self.tabs.get_mut(i) {
@@ -1470,6 +1490,8 @@ impl Shell {
     /// so the chrome's height comes off here — and an input over the chrome
     /// never reaches the application at all.
     fn send_to_tab(&mut self, i: Input) {
+        // A click or a key is where a dialog comes from (03 §3.2).
+        self.files_dirty = true;
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let out = t.backend.input(i);
         t.send(out);
@@ -2308,8 +2330,10 @@ impl ApplicationHandler<Wake> for App {
             Wake::Audio => self.shells.values_mut().for_each(|s| s.tabs.iter_mut().for_each(Tab::drain_audio)),
             // A dialog answered or a chunk is ready. Both are collected in
             // `about_to_wait`, which runs after this and after every other
-            // event the loop had waiting: the wake is the whole message.
-            Wake::Files => {}
+            // event the loop had waiting — so the wake is nearly the whole
+            // message, and the flag is the rest of it: without it that pass
+            // would look like every other idle one and skip the collection.
+            Wake::Files => self.shells.values_mut().for_each(|s| s.files_dirty = true),
             // The deadline arrived. Everything it was for — ticking the
             // driver, asking for the frame — is `about_to_wait`'s, and that
             // runs after this and after every other event the loop had
@@ -2320,6 +2344,9 @@ impl ApplicationHandler<Wake> for App {
             #[cfg(has_a11y)]
             Wake::Access(e) => {
                 if let Some(s) = self.shells.get_mut(&e.window_id) {
+                    // An assistive technology's action is an activation like
+                    // any other, and may ask for a dialog.
+                    s.files_dirty = true;
                     s.access_event(e);
                 }
             }
