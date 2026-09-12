@@ -2422,7 +2422,12 @@ def erp_board_column(state, name, ids, cards)
     "kan_over",
     "kan_drop",
     [row({"gap": 2, "align": "center", "pad": [0, 1, 1, 1]}, [text(name, {"weight": "bold", "size": 1}), spacer(), muted(str(ids.length()))])].concat(rows),
-    {"column": name}
+    # The slot a `drag_over` carries is an index among *this box's children*,
+    # and the header is the first of them — so every index is one higher than
+    # the card it means. `lead` is how many children come before the cards, and
+    # the handler takes it off again. Prepend another chrome row here and this
+    # is the one number to change.
+    {"column": name, "lead": 1}
   )
 end
 
@@ -2525,8 +2530,18 @@ def erp_board_event(state, event, params, props)
   return state if id == ""
 
   slot = drag_slot(params)
+  # An index among the drop zone's children, so discount the chrome above the
+  # cards. A hover over the header itself lands on 0, which is the top and is
+  # what it looks like.
+  lead = props["lead"] ?? 0
+  slot = (slot - lead < 0 ? 0 : slot - lead) if slot >= 0
   col = props["column"] ?? board_at(board, id)[0]
   if event == "kan_over"
+    # No slot yet — the gesture has begun but the client has not said where.
+    # `board_move` reads a negative slot as 0, so moving here would throw the
+    # card to the top of the column on every grab. Leave the board alone until
+    # the hand says something.
+    return state if slot < 0
     return set_key(state, "kan", board_move(board, id, col, slot))
   end
 
