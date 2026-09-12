@@ -192,3 +192,166 @@ fn a_node_with_no_keys_prop_still_claims_everything() {
     assert!(!kinds.contains(&EventKind::Click), "the old all-or-nothing rule stands: {kinds:?}");
     assert!(kinds.contains(&EventKind::KeyDown));
 }
+
+// -------------------------------------------------- keys inside a field
+//
+// 03 §3.1's "and only those are withheld from the client's own meaning" was
+// written for a tab strip taking the arrows. Inside a field it needs three
+// tiers, because the naive reading — a named key is the server's — makes the
+// field undeletable, and the useful reading is that the client keeps a key it
+// has a use for and yields one it does not.
+
+/// A wrapper that may claim keys, holding a field that reports everything a
+/// field can report, and a button beside it. `page` cannot serve here: its
+/// input carries no handlers, so a `change` or a `submit` would be emitted to
+/// nobody and the test would pass on an empty list either way.
+///
+/// ids: 1 the page, 2 the wrapper, 3 the field, 4 the button.
+fn field_page(keys: Option<Vec<&str>>) -> Batch {
+    const A_KEYS: u32 = 1;
+    const A_SAID: u32 = 2;
+    const A_PRESSED: u32 = 3;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+
+    let named = keys.is_some();
+    if let Some(list) = keys {
+        tree.props.push((A_KEYS, Value::List(list.into_iter().map(|k| Value::Str(k.to_owned())).collect())));
+    }
+    tree.handlers.push((EventKind::KeyDown, Handler::Server(A_SAID)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, u32::from(named)), handlers: (0, 1), child_count: 1 });
+
+    tree.handlers.push((EventKind::Change, Handler::Server(A_SAID)));
+    tree.handlers.push((EventKind::Submit, Handler::Server(A_SAID)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 3, style: 0, key: 0, text: Some(TextRef::Inline(String::new())), props: (0, 0), handlers: (1, 2), child_count: 0 });
+
+    tree.handlers.push((EventKind::Click, Handler::Server(A_PRESSED)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 0, key: 0, text: None, props: (0, 0), handlers: (3, 1), child_count: 0 });
+
+    Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: A_KEYS, value: "keys".into() },
+            Op::DefAtom { id: A_SAID, value: "said".into() },
+            Op::DefAtom { id: A_PRESSED, value: "pressed".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [4; 4], ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }
+}
+
+/// Tab until focus lands on `id`. Counting presses instead would depend on
+/// which of the other nodes happens to be focusable in a given tree, and the
+/// keyed node in these tests is exactly the one that varies.
+fn focus_on(d: &mut Driver, id: u32) {
+    for _ in 0..8 {
+        if d.focused().and_then(|ix| d.session().node(ix)).map(|n| n.id) == Some(id) {
+            return;
+        }
+        tab(d);
+    }
+    panic!("nothing focusable with id {id}");
+}
+
+fn in_the_field(d: &mut Driver) {
+    focus_on(d, 3);
+}
+
+fn typed(d: &Driver) -> String {
+    d.session().lookup(3).and_then(|ix| d.session().text_of(ix)).unwrap_or("").to_owned()
+}
+
+fn type_it(d: &mut Driver, s: &str) {
+    d.input(Input::Text(s.into()));
+}
+
+/// Tier 1, and the whole reason the tiers exist: naming a key cannot take
+/// editing away. A field that cannot be deleted from is not a field.
+#[test]
+fn naming_a_key_cannot_make_a_field_undeletable() {
+    let mut d = driver(field_page(Some(vec!["Backspace"])));
+    in_the_field(&mut d);
+    type_it(&mut d, "ab");
+    assert_eq!(typed(&d), "ab");
+    let out = press(&mut d, "Backspace");
+    assert_eq!(typed(&d), "a", "the character went, claim or no claim");
+    assert!(events(&out).is_empty(), "and the client kept a key it had a use for: {:?}", events(&out));
+}
+
+/// Tier 3, and the gesture a tag field is built on. The same key, the same
+/// claim, an empty field: now the client has nothing to delete, so it is not
+/// the one to answer.
+#[test]
+fn backspace_with_nothing_to_delete_is_the_servers() {
+    let mut d = driver(field_page(Some(vec!["Backspace"])));
+    in_the_field(&mut d);
+    let out = press(&mut d, "Backspace");
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "the node that asked for it hears it: {:?}", events(&out));
+}
+
+/// The same rule with a caret rather than a value: an arrow that would move
+/// nowhere is not the client's either.
+#[test]
+fn an_arrow_with_nowhere_to_go_is_the_servers() {
+    let mut d = driver(field_page(Some(vec!["ArrowLeft"])));
+    in_the_field(&mut d);
+    type_it(&mut d, "ab");
+    // The caret is at the end, so there is somewhere to go.
+    let out = press(&mut d, "ArrowLeft");
+    assert!(events(&out).is_empty(), "the client moved the caret: {:?}", events(&out));
+    // Twice more and it is at 0, where the key means nothing.
+    press(&mut d, "ArrowLeft");
+    let out = press(&mut d, "ArrowLeft");
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "and now it is the server's");
+}
+
+/// Tier 2. A claim on `Enter` withholds the `submit` — the thing the key
+/// *stands for* — and never the `change`, because a server that claimed it to
+/// take a highlighted suggestion still needs to know what was typed, and needs
+/// it before the key that acts on it.
+#[test]
+fn enter_in_a_claimed_field_reports_the_value_and_withholds_the_submit() {
+    let mut d = driver(field_page(Some(vec!["Enter"])));
+    in_the_field(&mut d);
+    type_it(&mut d, "ab");
+    let out = press(&mut d, "Enter");
+    let seen = events(&out);
+    assert_eq!(seen.first().map(|(k, _)| *k), Some(EventKind::Change), "the value first: {seen:?}");
+    assert!(seen.iter().any(|(k, n)| *k == EventKind::KeyDown && *n == 2), "then the key: {seen:?}");
+    assert!(!seen.iter().any(|(k, _)| *k == EventKind::Submit), "and no submit: {seen:?}");
+}
+
+/// The negative, so the claim is visibly what does it.
+#[test]
+fn enter_in_a_field_nobody_claimed_still_submits() {
+    let mut d = driver(field_page(None));
+    in_the_field(&mut d);
+    type_it(&mut d, "ab");
+    let out = press(&mut d, "Enter");
+    let seen = events(&out);
+    assert!(seen.iter().any(|(k, _)| *k == EventKind::Submit), "{seen:?}");
+}
+
+/// 03 §3.1's narrowing, and the regression it guards. A node carrying a bare
+/// `key_down` claims every key **for itself** — but not on behalf of what is
+/// inside it, or a dialog that merely listens would swallow `Enter` from every
+/// button in it.
+#[test]
+fn a_dialog_that_asked_for_keys_does_not_swallow_its_buttons_enter() {
+    let mut d = driver(field_page(None));
+    focus_on(&mut d, 4);
+    let out = press(&mut d, "Enter");
+    let seen = events(&out);
+    assert!(seen.iter().any(|(k, n)| *k == EventKind::Click && *n == 4), "the button was still pressed: {seen:?}");
+}
+
+/// A printable character is never withheld, and cannot be: the text does not
+/// arrive as a key at all. This is why comma cannot be a delimiter, and it is
+/// worth a vector so nobody tries again.
+#[test]
+fn a_printable_character_is_never_withheld() {
+    let mut d = driver(field_page(Some(vec![","])));
+    in_the_field(&mut d);
+    type_it(&mut d, ",");
+    assert_eq!(typed(&d), ",", "the comma landed in the field regardless");
+}

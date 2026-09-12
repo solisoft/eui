@@ -4168,14 +4168,21 @@ impl Driver {
         }
         let claim = self.key_claim(f, key);
         let mut out = Vec::new();
+        // 03 §3.1: whether the client's own editing had a use for this key.
+        // It is the whole of the rule inside a field — a key the client used
+        // is one it *keeps*, and a key it could not use is one it yields, so
+        // `Backspace` reaches the application exactly when there was nothing
+        // to delete. Reporting it either way would leave the application
+        // unable to tell the two apart, which is the same as not reporting it.
+        let mut used = false;
         if down {
             let editable = self.is_editable(f);
             match key {
-                // 03 §3.1, the first tier: editing the text is never withheld.
-                // A field you cannot type into is not a field, and no prop may
-                // make one — so this arm runs before the claim is consulted,
-                // and `edit_key` declines when it has nothing to do.
-                _ if editable && self.edit_key(f, key, modifiers) => {}
+                // The first tier: editing the text is never withheld. A field
+                // you cannot type into is not a field, and no prop may make
+                // one — so this arm runs before the claim is consulted, and
+                // `edit_key` declines when it has nothing to do.
+                _ if editable && self.edit_key(f, key, modifiers) => used = true,
                 "Enter" if self.session.node(f).map(|n| n.kind) == Some(NodeKind::Input) => {
                     // The value goes either way. A server that claimed `Enter`
                     // — to take the highlighted suggestion rather than the text
@@ -4198,7 +4205,7 @@ impl Driver {
             }
         }
         let kind = if down { EventKind::KeyDown } else { EventKind::KeyUp };
-        if claim != Claim::Ignored {
+        if claim != Claim::Ignored && !used {
             out.extend(self.emit(f, kind, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))])));
         }
         out

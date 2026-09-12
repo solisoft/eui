@@ -290,12 +290,50 @@ does not own them. §3.2 to §3.4 are the rest of that family.
   the client's own meaning. So a `tab` may take `ArrowLeft` and `ArrowRight`
   and still be activated by `Enter`, and a dialog may listen for `Escape`
   without hearing every letter typed into the field inside it. A node with a
-  handler and no `keys` prop hears everything, as before.
+  handler and no `keys` prop hears everything — but only **for itself**: a
+  dialog that merely listens must not swallow the `Enter` that presses a
+  button inside it.
+
+  **Inside an editable node**, "withheld from the client's own meaning" needs
+  saying in three parts, because the obvious reading makes a field nothing can
+  be typed into. The rule is that **a client keeps a key it has a use for and
+  yields one it does not**:
+
+  1. **Editing the text** — `Backspace`, `Delete`, the arrows, `Home`/`End`,
+     `Ctrl+A`/`C`/`X`, `Enter` in a `textarea`, and every printable character —
+     is **never** withheld. No prop may take it away. A key the client used
+     this way is **not** reported, because a client that both acted on a key
+     and passed it on leaves the application unable to tell that apart from a
+     key it could not use, which is the same as not reporting it at all.
+  2. **Acting on the field as a whole** — `Enter` in an `input` — is withheld
+     on a claim, and what is withheld is the **`submit`**, never the `change`.
+     A server that claimed `Enter` to take a highlighted suggestion instead of
+     the text still needs to know what was typed, and needs it *before* the
+     key that acts on it. This is the same rule as a claim on a button, which
+     withholds the **click** the key stands for: the key is reported, and the
+     client's *interpretation* of it is not applied.
+  3. **A key in a position where it does nothing** — `Backspace` with nothing
+     before the caret, `ArrowLeft` at 0, `Ctrl+C` with no selection — is never
+     the client's, claim or no claim, and is reported if `keys` asked for it.
+     There was no meaning to withhold. This is what lets a list of tokens above
+     a field take `Backspace` as "remove the last" without the field losing the
+     ability to delete a character.
+
+  A **printable character is never withheld and cannot be**: text does not
+  reach the client as a key at all, but as input with no key name on it, so
+  there is nothing to hold back. A separator typed into a field is in the
+  field before any handler could have been told, and a server that wants one
+  takes it out of the value instead.
 
 `Escape` follows from the third: it reaches a `key_down` handler on the path
 that asked for it, and focus is left alone so the surface can put it back. If
 nothing on the path asked, `Escape` drops focus, which is what it has always
-done.
+done. The editing rules above do not touch it — a panel that closes on
+`Escape` hears it with the caret still in the field below.
+
+`Tab` is never any of this. It moves focus, always, and a node cannot ask for
+it: the order is the client's (§3) and a surface that could take `Tab` could
+strand someone in it.
 
 ### 3.2 What a node may claim of the filesystem
 

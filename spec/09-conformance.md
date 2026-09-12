@@ -90,6 +90,16 @@ later batch; and `keys` letting a node take the arrows while `Enter` stays the
 press it stands for, sending it no key it did not name, and leaving a node
 without the prop hearing everything.
 
+§3.1 inside a field, which is where the withholding clause earns its three
+parts: naming a key cannot make a field undeletable, and the same key with
+nothing left to delete reaches the node that asked for it; an arrow with
+somewhere to go is the client's and one at the end of the line is not; a
+claimed `Enter` reporting the value *before* the key and withholding only the
+`submit`, and an unclaimed one still submitting; a node with a bare handler not
+swallowing the `Enter` that presses a button inside it; and a printable
+character landing in the field whatever the prop says, because text never
+arrives as a key.
+
 ### 7.6 Touch — `crates/eui-client/tests/touch.rs`
 
 06 §5: a tap reaching what it landed on, and still reaching it after five
