@@ -99,8 +99,12 @@ install -m 0644 deploy/app.infos.data.example /home/rocky/sites/eui-data.solisof
 install -m 0600 deploy/env.production.example /home/rocky/sites/eui-data.solisoft.net/.env
 ```
 
-The `.env` needs the SoliDB connection on top of `SOLI_APP_HOSTS` and
-`SOLI_SESSION_SECRET`. Then, once, after the first deploy:
+The `.env` needs the SoliDB connection (`SOLIDB_HOST`, `SOLIDB_DATABASE`,
+`SOLIDB_USERNAME`, `SOLIDB_PASSWORD`) on top of `APP_ENV`, `SOLI_APP_HOSTS`
+and `SOLI_SESSION_SECRET` — and `SOLI_WS_WORKERS=1`, which belongs there
+and nowhere else: `start_script` in `app.infos` is a program and its
+arguments, so an environment prefix on that line is read as the name of the
+program to run. Then, once, after the first deploy:
 
 ```sh
 cd /home/rocky/sites/eui-data.solisoft.net
