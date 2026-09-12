@@ -2396,7 +2396,16 @@ def erp_board_card(id, card, held)
   # (03 §4), and hears the grab so the server knows what is in the hand.
   draggable(id, "card", style, [drag_grip("Move " + card["title"]), body], {
     "p": {"card": id, "label": card["title"]},
-    "on": {"drag_start": "kan_grab"}
+    # The grab shows the ghost here rather than waiting for the answer: a
+    # chunk cannot read the pointer, but it does not need to — it reveals, and
+    # the client places (04 §5).
+    "on": {
+      "drag_start": {
+        "local": "kan_ghost.style = @up; kan_ghost_t.text = " + chart_quoted(card["title"]),
+        "styles": {"up": erp_board_ghost_style(true)},
+        "then": "kan_grab"
+      }
+    }
   })
 end
 
@@ -2426,19 +2435,55 @@ def erp_board_say(state)
   })
 end
 
+# What the hand carries. The card itself travels — the server answers each
+# `drag_over` by making the move, so the board is its own preview (06 §6.3) —
+# and this is the label that comes along for the ride, so the eye has something
+# attached to the pointer while the columns rearrange under it.
+#
+# `position: pointer` is the whole of it: an absolute `overlay` in a `stack`,
+# which the client keeps under the hand without laying anything out again
+# (04 §5). Hidden is `display: none` rather than a transparency, because the
+# top layer is hit-tested first and asks nothing about opacity — a ghost left
+# in the layout would answer every `drag_over` meant for the column beneath.
+def erp_board_ghost_style(shown)
+  shown ? {
+    "bg": "surface.overlay",
+    "fg": "text.default",
+    "border": 1,
+    "border_color": "accent.base",
+    "radius": 2,
+    "shadow": 2,
+    "pad": [1, 2, 1, 2],
+    "position": "pointer",
+    "margin": [2, 0, 0, 0],
+    "z": 6
+  } : {"display": "none", "position": "pointer"}
+end
+
+def erp_board_ghost(state, cards)
+  held = state["kan_held"] ?? ""
+  {
+    "k": "overlay",
+    "key": "kan_ghost",
+    "s": erp_board_ghost_style(held != ""),
+    "c": [keyed("kan_ghost_t", text(held == "" ? " " : cards[held]["title"], {"size": 0, "weight": "semibold"}))]
+  }
+end
+
 def erp_board(state, lay)
   board = state["kan"] ?? erp_board_defaults()
   cards = erp_board_cards()
   cols = ERP_BOARD_COLUMNS.map(fn(name) { erp_board_column(state, name, board[name] ?? [], cards) })
+  grid = {
+    "k": "box",
+    "s": {"display": lay["roomy"] ? "grid" : "column", "gap": 3, "width": "100%", "align": "start"},
+    "p": {"columns": 3},
+    "c": cols
+  }
   erp_card(
     "The week's work",
     [muted("drag a card by its grip, or focus one and press Space")],
-    [{
-      "k": "box",
-      "s": {"display": lay["roomy"] ? "grid" : "column", "gap": 3, "width": "100%", "align": "start"},
-      "p": {"columns": 3},
-      "c": cols
-    }, erp_board_say(state)]
+    [stack({"width": "100%", "justify": "start", "align": "start"}, [grid, erp_board_ghost(state, cards)]), erp_board_say(state)]
   )
 end
 

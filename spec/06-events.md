@@ -343,6 +343,14 @@ folder into itself is not a move, and a panel that follows the pointer
 - **It does not move anything.** The tree changes when the server says so. A
   client that reordered optimistically would have to reconcile two orders, and
   a `MoveChild` (spec 02 §5) costs four bytes.
+- **It does not invent a ghost.** What the hand carries is the thing itself:
+  the server answers each `drag_over` by making the move, so the item travels
+  and the list is its own preview. An application that wants something under
+  the cursor as well declares it — an `overlay` with `position: pointer`
+  (spec 04 §5), which the client keeps under the hand without laying anything
+  out again, revealed by the `drag_start` handler's own local chunk so that it
+  is up before the server has answered. A chunk cannot read the pointer and
+  does not need to: it reveals, and the client places.
 - **It does not announce.** Announcing is prose, prose is content, and content
   is the server's. What the client owes is that focus stays on the moved node,
   that `pos_in_set` and `set_size` (spec 03 §6.1) stay true, and that the node

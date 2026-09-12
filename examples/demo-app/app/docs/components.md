@@ -692,8 +692,17 @@ this costs nothing that was not already owed.
 
 **The preview is the move itself.** On each `drag_over` the server puts the
 item where the hand says and re-renders; the diff turns the permutation into
-one `MoveChild`. There is no ghost to draw and no insertion line to invent,
-because the list *is* the preview. `erp_board_event` in the demo is the whole
+one `MoveChild`. There is no insertion line to invent, because the list *is*
+the preview — and with nothing drawn over it, no hit test has to ignore one.
+
+**A ghost is declared, not invented.** The thing under the cursor is an
+`overlay` with `position: pointer`, which the client keeps under the hand with
+no relayout, revealed by the `drag_start` handler's own local chunk so that it
+is up before the server has answered. `erp_board_ghost` in the demo is the
+whole of it — a style, a keyed label, and one line in the handler. Hidden is
+`display: none` and not a transparency: the top layer is hit-tested first and
+asks nothing about opacity, so a ghost left in the layout would answer every
+`drag_over` meant for the column beneath it. `erp_board_event` in the demo is the whole
 of a server's share — about thirty lines, and most of them are the cancel.
 
 **Three ways in, and the client picks.** Eight pixels of travel for a mouse; a
