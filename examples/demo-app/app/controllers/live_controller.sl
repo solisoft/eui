@@ -2424,12 +2424,7 @@ def erp_board_column(state, name, ids, cards)
     "kan_over",
     "kan_drop",
     [row({"gap": 2, "align": "center", "pad": [0, 1, 1, 1]}, [text(name, {"weight": "bold", "size": 1}), spacer(), muted(str(ids.length()))])].concat(rows),
-    # The slot a `drag_over` carries is an index among *this box's children*,
-    # and the header is the first of them — so every index is one higher than
-    # the card it means. `lead` is how many children come before the cards, and
-    # the handler takes it off again. Prepend another chrome row here and this
-    # is the one number to change.
-    {"column": name, "lead": 1}
+    {"column": name}
   )
 end
 
@@ -2531,12 +2526,13 @@ def erp_board_event(state, event, params, props)
   id = state["kan_held"] ?? ""
   return state if id == ""
 
+  # The slot counts the container's **draggable** children and nothing else
+  # (06 §6.2), so the header above the cards is already discounted and a card's
+  # slot is its place among the cards. Taking the chrome off again here was a
+  # second correction for a fault that was really in the client — the cards had
+  # been wrapped in something that could not be picked up — and it left every
+  # drop a place too high once that was fixed.
   slot = drag_slot(params)
-  # An index among the drop zone's children, so discount the chrome above the
-  # cards. A hover over the header itself lands on 0, which is the top and is
-  # what it looks like.
-  lead = props["lead"] ?? 0
-  slot = (slot - lead < 0 ? 0 : slot - lead) if slot >= 0
   col = props["column"] ?? board_at(board, id)[0]
   if event == "kan_over"
     # No slot yet — the gesture has begun but the client has not said where.

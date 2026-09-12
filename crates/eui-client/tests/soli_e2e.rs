@@ -2922,4 +2922,32 @@ fn a_card_is_carried_from_one_column_to_another() {
     // and what this can read back.
     let said = d.session().text_of(keyed(&d, "kan_say")).unwrap_or("").to_owned();
     assert!(said.contains("1 of 3"), "dropped on the first card, so first of three: {said:?}");
+
+    // Backlog now reads t4, t2, t3. Dropping on its *last* card is the case a
+    // count that is off by one gets wrong in either direction, and the case
+    // the two columns-and-a-header tests above cannot see.
+    let _ = d.paint(1000, 3600);
+    let deep = keyed(&d, "t5");
+    let onto = keyed(&d, "t3");
+    let from = d.layout().rect(deep).expect("laid out");
+    let to = d.layout().rect(onto).expect("laid out");
+    for f in d.input(Input::PointerMove(from.x + from.w / 2.0, from.y + from.h / 2.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerDown(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerMove(to.x + to.w / 2.0, to.y + to.h / 2.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 3600);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().text_of(keyed(d, "kan_say")).is_some_and(|t| t.contains("Archive 2025 invoices moved")));
+    let said = d.session().text_of(keyed(&d, "kan_say")).unwrap_or("").to_owned();
+    assert!(said.contains("Backlog, 3 of 4"), "the third of four, where the hand was: {said:?}");
 }
