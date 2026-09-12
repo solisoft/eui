@@ -336,6 +336,51 @@ struct Pointer {
     /// Whether `x`/`y` mean anything: a pointer that has left the window has
     /// no position, and a panel that follows it must not be placed at one.
     inside: bool,
+    /// The drag this press became, if it became one (06 §6).
+    drag: Option<Drag>,
+    /// The scroller a drag is currently running along the edge of, and when it
+    /// was last stepped. 06 §6.4: the offset moves every frame and the
+    /// `scroll` event goes once, when the movement stops.
+    autoscroll: Option<(NodeIx, Instant)>,
+}
+
+/// How long a contact must be held still before it becomes a grab, per
+/// 06 §5.1. Both phones use half a second for their own long press and a
+/// person's expectation is theirs, not ours.
+const TOUCH_HOLD_MS: u64 = 500;
+
+/// How close to a scroller's edge a drag has to be held before the view
+/// starts moving, in logical pixels — or a fifth of the viewport, whichever is
+/// less. The fraction is what stops a short list scrolling from its middle
+/// (06 §6.4).
+const AUTOSCROLL_BAND: f32 = 48.0;
+
+/// How fast it moves at the very edge, in logical pixels a second, ramping
+/// from nothing at the band's inner edge.
+const AUTOSCROLL_MAX: f32 = 900.0;
+
+/// A drag in flight (06 §6). The client owns the whole of the hand and tells
+/// the server only what changed: one `drag_start`, a `drag_over` per boundary
+/// crossed, one `drop`.
+///
+/// The source is held by **key atom**, not by `NodeIx` or id, and that is the
+/// correctness core. A move between containers is a removal and an insertion
+/// (02 §5), so the node is destroyed and rebuilt under the hand and its id
+/// changes; the key is the only thing that survives, and `by_key` re-resolves
+/// it for free. 03 §3.4 requires a draggable node to carry one.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    /// The key atom of the node in the hand.
+    source: u32,
+    /// Where the press landed, for the slop.
+    from: (f32, f32),
+    /// Whether the slop has been crossed, or a handle or a hold took it
+    /// straight there. Before this nothing has been emitted and the gesture
+    /// is still a click if it ends here.
+    grabbed: bool,
+    /// The target and slot last reported, so a drag that crosses no boundary
+    /// says nothing (06 §2).
+    sent: Option<(u32, i64)>,
 }
 
 /// How far a finger may wander from where it landed and still be a press
@@ -399,6 +444,9 @@ struct Touch {
     /// Logical px per millisecond, smoothed towards the newest sample.
     speed: (f32, f32),
     phase: TouchPhase,
+    /// When an undecided contact becomes a held one (06 §5.1). Cleared the
+    /// moment it wanders or lifts, because neither of those is a hold.
+    hold: Option<Instant>,
 }
 
 impl Touch {
@@ -1496,6 +1544,21 @@ impl Driver {
         }
     }
 
+    /// 03 §6: what an assistive technology asked for. `0` focus, `1` click,
+    /// `2` move before, `3` move after — and the two moves are the keyboard's
+    /// `Ctrl` with an arrow, which is what keeps the ceiling rule true.
+    pub fn access_act(&mut self, ix: NodeIx, action: u8) -> Vec<Frame> {
+        match action {
+            1 => self.activate_node(ix),
+            2 | 3 => {
+                let mut out = self.focus_node(ix);
+                out.extend(self.move_once(ix, if action == 2 { -1 } else { 1 }));
+                out
+            }
+            _ => self.focus_node(ix),
+        }
+    }
+
     /// Focus and press `ix`, as Tab then Enter would — an assistive
     /// technology's Click action. Nothing a keyboard could not do.
     pub fn activate_node(&mut self, ix: NodeIx) -> Vec<Frame> {
@@ -1604,7 +1667,11 @@ impl Driver {
                 // name the contact it never saw an id for — it only knows
                 // that the input is gone.
                 self.touch.end();
-                let mut out = self.set_focus(None, false);
+                // 06 §6.1 step 5: a window that loses the input has lost the
+                // hand with it, and a drag it cannot see the end of must not
+                // be left open.
+                let mut out = self.finish_drag(true);
+                out.extend(self.set_focus(None, false));
                 if let Some(pressed) = self.pointer.pressed_on.take() {
                     let (x, y) = (self.pointer.x, self.pointer.y);
                     let payload = self.button_payload(pressed, EventKind::PointerUp, x, y, 0);
@@ -1710,6 +1777,459 @@ impl Driver {
     /// The asset store.
     pub fn assets(&self) -> &AssetStore {
         &self.assets
+    }
+
+    // ------------------------------------------------------------- dragging
+    //
+    // 06 §6. The prop says what a node *is*; the handler says who *hears*.
+    // Those are two different nodes found by two different walks, and keeping
+    // them apart is what lets a row be draggable while the list it sits in is
+    // what the drop reaches.
+
+    /// The nearest node at or above `from` carrying `drag`, with its key —
+    /// the source of a gesture that starts here. A node with no key cannot be
+    /// dragged (03 §3.4): the client would have nothing to hold it by once the
+    /// server rebuilt it in another container.
+    fn drag_source(&self, from: NodeIx) -> Option<(NodeIx, u32)> {
+        let atom = self.session.atoms().drag?;
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let node = self.session.node(ix)?;
+            if node.prop(atom).is_some_and(|v| !matches!(v, Value::Bool(false))) {
+                return (node.key != 0).then_some((ix, node.key));
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        None
+    }
+
+    /// Whether a press here grabs at once rather than waiting out the slop or
+    /// the hold — 03 §3.4's `drag_handle`, and 06 §5 step 2's amendment.
+    fn on_drag_handle(&self, from: NodeIx) -> bool {
+        let Some(atom) = self.session.atoms().drag_handle else {
+            return false;
+        };
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let Some(node) = self.session.node(ix) else {
+                return false;
+            };
+            if node.prop(atom).is_some_and(|v| !matches!(v, Value::Bool(false))) {
+                return true;
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        false
+    }
+
+    /// The groups a node carries, as the prop gives them: `true` is the empty
+    /// group, a string is one, a list is several.
+    fn groups(node_prop: Option<&Value>) -> Option<Vec<&str>> {
+        match node_prop? {
+            Value::Bool(false) => None,
+            Value::Bool(true) => Some(Vec::new()),
+            Value::Str(s) => Some(vec![s.as_str()]),
+            Value::List(items) => Some(items.iter().filter_map(|v| if let Value::Str(s) = v { Some(s.as_str()) } else { None }).collect()),
+            _ => None,
+        }
+    }
+
+    /// The nearest container at or above `from` that accepts what is in the
+    /// hand. Matching is the client's affordance and not authorisation —
+    /// 06 §4 still has the server re-derive everything.
+    fn drop_target(&self, from: NodeIx, carried: NodeIx) -> Option<NodeIx> {
+        let wk = self.session.atoms();
+        let (drag_atom, accept_atom) = (wk.drag?, wk.accepts?);
+        let want = Self::groups(self.session.node(carried)?.prop(drag_atom))?;
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let node = self.session.node(ix)?;
+            if let Some(takes) = Self::groups(node.prop(accept_atom)) {
+                // `drag: true` is the empty group and matches `accepts: true`
+                // alone; a named group matches a container naming it.
+                let matched = if want.is_empty() { takes.is_empty() } else { want.iter().any(|g| takes.contains(g)) };
+                if matched {
+                    return Some(ix);
+                }
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        None
+    }
+
+    /// 06 §6.2: the slot the thing in the hand would take, counted among the
+    /// container's draggable items so a header or a divider is skipped and the
+    /// number indexes the server's records rather than its nodes.
+    ///
+    /// The rule is the slot whose box contains the pointer, clamped to the
+    /// ends — not the nearest boundary. Once the server previews the move by
+    /// making it, the thing in the hand is under the pointer, so the slot does
+    /// not change again until the pointer leaves that box; a midpoint rule
+    /// oscillates there, and needs hysteresis for rows of unequal height.
+    fn slot_in(&self, container: NodeIx, x: f32, y: f32) -> i64 {
+        let Some(drag_atom) = self.session.atoms().drag else {
+            return 0;
+        };
+        // 04 §7.1: a windowed list's children are not its rows — they are the
+        // window's, and each says which row it is. Counting ordinals there
+        // would give the position within the window, which is a number about
+        // the client's scroll offset rather than about the server's records.
+        let windowed = self.session.atoms().count.and_then(|a| self.session.node(container)?.prop(a)).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None });
+        let vertical = self.drag_axis_is_vertical(container);
+        let mut slot: i64 = 0;
+        let mut seen: i64 = 0;
+        let Some(node) = self.session.node(container) else {
+            return 0;
+        };
+        for child in &node.children {
+            let carries = self.session.node(*child).is_some_and(|n| n.prop(drag_atom).is_some_and(|v| !matches!(v, Value::Bool(false))));
+            if !carries {
+                continue;
+            }
+            let Some(r) = self.layout.rect(*child) else {
+                continue;
+            };
+            let here = match windowed {
+                Some(_) => self.session.atoms().row.and_then(|a| self.session.node(*child)?.prop(a)).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(seen),
+                None => seen,
+            };
+            let (lo, hi, at) = if vertical { (r.y, r.y + r.h, y) } else { (r.x, r.x + r.w, x) };
+            if at >= lo && at < hi {
+                return here;
+            }
+            if at >= hi {
+                slot = here.saturating_add(1);
+            }
+            seen = seen.saturating_add(1);
+        }
+        // Past the last row placed, the end of what there is: the whole list
+        // when it is windowed, the children when it is not.
+        let last = windowed.unwrap_or(seen).saturating_sub(1).max(0);
+        slot.min(last)
+    }
+
+    /// A container's `drag_axis`, defaulting to the way a column runs.
+    fn drag_axis_is_vertical(&self, container: NodeIx) -> bool {
+        let Some(atom) = self.session.atoms().drag_axis else {
+            return true;
+        };
+        !matches!(self.session.node(container).and_then(|n| n.prop(atom)), Some(Value::Str(s)) if s == "x")
+    }
+
+    /// The gesture becomes a drag: 06 §6.1 step 2. Emitted once, to the
+    /// nearest handler above the **source** — the node carrying `drag`, which
+    /// is not in general the node the press landed on.
+    fn begin_drag(&mut self) -> Vec<Frame> {
+        let Some(mut d) = self.pointer.drag.filter(|d| !d.grabbed) else {
+            return Vec::new();
+        };
+        let Some(src) = self.session.lookup_key(d.source) else {
+            self.pointer.drag = None;
+            return Vec::new();
+        };
+        d.grabbed = true;
+        self.pointer.drag = Some(d);
+        self.redraw = true;
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        let payload = self.button_payload(src, EventKind::DragStart, x, y, 0);
+        trace(|| format!("drag: grabbed node {:?}", self.session.node(src).map(|n| n.id)));
+        self.emit(src, EventKind::DragStart, payload)
+    }
+
+    /// 06 §6.1 step 3. The client resolves the target and the slot each frame
+    /// and reports **only when the pair has changed** — a drag that crosses no
+    /// boundary is silent, so six hundred samples down a list of forty is
+    /// forty events.
+    fn drag_over(&mut self) -> Vec<Frame> {
+        let Some(mut d) = self.pointer.drag.filter(|d| d.grabbed) else {
+            return Vec::new();
+        };
+        // The source may have been rebuilt under a new id by a cross-container
+        // move; the key finds it either way. Gone entirely means the server
+        // has moved on, and the gesture with it.
+        let Some(src) = self.session.lookup_key(d.source) else {
+            trace(|| "drag: the source left the tree".to_owned());
+            return self.finish_drag(true);
+        };
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        // What is under the hand, blind to what is *in* it (06 §6.2).
+        let found = self.layout.hit_skipping(&self.session, x, y, Some(src)).and_then(|ix| self.drop_target(ix, src));
+        let Some(target) = found else {
+            return Vec::new();
+        };
+        let slot = self.slot_in(target, x, y);
+        let id = self.session.node(target).map(|n| n.id).unwrap_or(0);
+        if d.sent == Some((id, slot)) {
+            return Vec::new();
+        }
+        d.sent = Some((id, slot));
+        self.pointer.drag = Some(d);
+        let (lx, ly) = self.local_point(target, EventKind::DragOver, x, y);
+        let payload = Value::List(vec![Value::Float(f64::from(lx)), Value::Float(f64::from(ly)), Value::Int(slot)]);
+        trace(|| format!("drag: over node {id} slot {slot}"));
+        self.emit(target, EventKind::DragOver, payload)
+    }
+
+    /// The end of a gesture, either way. 06 §6.1 steps 4 and 5: a cancel is an
+    /// ordinary `drop` carrying `slot = -1`, so a server that handles `drop`
+    /// and nothing else is correct and complete.
+    fn finish_drag(&mut self, cancelled: bool) -> Vec<Frame> {
+        let Some(d) = self.pointer.drag.take() else {
+            return Vec::new();
+        };
+        if !d.grabbed {
+            return Vec::new();
+        }
+        self.redraw = true;
+        // Whatever the hand was dragging the view along by, it has stopped.
+        // The `scroll` that owes its landing goes with the drop.
+        let mut out = match self.pointer.autoscroll.take() {
+            Some((node, _)) => {
+                let (sx, sy) = self.session.node(node).map(|n| n.scroll).unwrap_or((0, 0));
+                self.emit(node, EventKind::Scroll, Value::List(vec![Value::Int(sx), Value::Int(sy)]))
+            }
+            None => Vec::new(),
+        };
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        let src = self.session.lookup_key(d.source);
+        // Who hears it. A drop goes to whatever is under the hand; a cancel
+        // goes to the source, and when the source is what went missing, to the
+        // container last reported over — that one is still there, and it is
+        // the node that would have received the drop. If neither is left there
+        // is nobody to tell and nothing worth saying: the server removed the
+        // row itself, so it already knows.
+        let last = d.sent.and_then(|(id, _)| self.session.lookup(id));
+        let under = src.and_then(|s| self.layout.hit_skipping(&self.session, x, y, Some(s)).and_then(|ix| self.drop_target(ix, s)));
+        let target = if cancelled { src.or(last) } else { under.or(src) };
+        let Some(target) = target else {
+            return Vec::new();
+        };
+        // Where it lands is where the last `drag_over` said it would. That is
+        // the same answer as asking the pointer again for a drag the hand
+        // made, and the only answer there is for one the keyboard made.
+        let reported = d.sent.filter(|(id, _)| self.session.node(target).map(|n| n.id) == Some(*id)).map(|(_, s)| s);
+        let slot = if cancelled { -1 } else { reported.unwrap_or_else(|| self.slot_in(target, x, y)) };
+        let (lx, ly) = self.local_point(target, EventKind::Drop, x, y);
+        let payload = Value::List(vec![Value::Float(f64::from(lx)), Value::Float(f64::from(ly)), Value::Int(slot)]);
+        trace(|| format!("drag: dropped in node {:?} slot {slot}", self.session.node(target).map(|n| n.id)));
+        out.extend(self.emit(target, EventKind::Drop, payload));
+        out
+    }
+
+    /// 03 §3's keyboard half of a drag. `None` when the key was not one of
+    /// these, so the caller goes on to everything else it means.
+    fn drag_key(&mut self, key: &str, modifiers: u32) -> Option<Vec<Frame>> {
+        let focused = self.focused?;
+        let grabbed = self.pointer.drag.is_some_and(|d| d.grabbed);
+        let axis = self.session.node(focused).map(|n| n.parent).filter(|p| p.is_some());
+        let vertical = axis.map_or(true, |p| self.drag_axis_is_vertical(p));
+        let (back, on) = if vertical { ("ArrowUp", "ArrowDown") } else { ("ArrowLeft", "ArrowRight") };
+
+        // A grab in progress owns the arrows, `Space`, `Escape` and the ends —
+        // and only those, and only while it lasts.
+        if grabbed {
+            let step = match key {
+                k if k == back => Some(-1),
+                k if k == on => Some(1),
+                _ => None,
+            };
+            if let Some(step) = step {
+                return Some(self.move_grabbed(step));
+            }
+            if key == " " || key == "Enter" {
+                return Some(self.finish_drag(false));
+            }
+            return None;
+        }
+
+        // Not grabbed, nothing is claimed unless the focused node can be moved
+        // and has no `click` to stand for — that row keeps `Enter`/`Space` for
+        // what it is, and reaches the grab through a handle of its own.
+        let (src, key_atom) = self.drag_source(focused)?;
+        if src != focused {
+            return None;
+        }
+        if key == " " && self.session.node(focused).is_some_and(|n| n.handler(EventKind::Click).is_none()) {
+            let at = self.layout.rect(focused).unwrap_or_default();
+            self.pointer.drag = Some(Drag { source: key_atom, from: (at.x, at.y), grabbed: false, sent: None });
+            return Some(self.begin_drag());
+        }
+        let _ = modifiers;
+        None
+    }
+
+    /// One place along, as a whole gesture: a grab, a move and a drop, with
+    /// nothing in between for anyone to be in the middle of. It is what an
+    /// assistive technology's two move actions do (03 §6), and it is the same
+    /// three events a hand produces, so a server needs no second path for it.
+    fn move_once(&mut self, ix: NodeIx, step: i64) -> Vec<Frame> {
+        let Some((src, key_atom)) = self.drag_source(ix) else {
+            return Vec::new();
+        };
+        let at = self.layout.rect(src).unwrap_or_default();
+        self.pointer.drag = Some(Drag { source: key_atom, from: (at.x, at.y), grabbed: false, sent: None });
+        let mut out = self.begin_drag();
+        out.extend(self.move_grabbed(step));
+        out.extend(self.finish_drag(false));
+        out
+    }
+
+    /// One place along, from the keyboard. The slot is the source's own plus
+    /// the step, clamped, and it is reported as a `drag_over` so that a server
+    /// previewing a pointer drag previews this one the same way.
+    fn move_grabbed(&mut self, step: i64) -> Vec<Frame> {
+        let Some(mut d) = self.pointer.drag.filter(|d| d.grabbed) else {
+            return Vec::new();
+        };
+        let Some(src) = self.session.lookup_key(d.source) else {
+            return self.finish_drag(true);
+        };
+        let Some(parent) = self.session.node(src).map(|n| n.parent).filter(|p| p.is_some()) else {
+            return Vec::new();
+        };
+        let Some(target) = self.drop_target(parent, src) else {
+            return Vec::new();
+        };
+        let at = self.layout.rect(src).unwrap_or_default();
+        let here = self.slot_in(target, at.x + at.w / 2.0, at.y + at.h / 2.0);
+        let want = match d.sent {
+            Some((_, last)) => last.saturating_add(step),
+            None => here.saturating_add(step),
+        };
+        let last = self.session.node(target).map_or(0, |n| n.children.len() as i64).saturating_sub(1).max(0);
+        let slot = want.clamp(0, last);
+        let id = self.session.node(target).map(|n| n.id).unwrap_or(0);
+        if d.sent == Some((id, slot)) {
+            return Vec::new();
+        }
+        d.sent = Some((id, slot));
+        self.pointer.drag = Some(d);
+        let payload = Value::List(vec![Value::Float(0.0), Value::Float(0.0), Value::Int(slot)]);
+        self.emit(target, EventKind::DragOver, payload)
+    }
+
+    /// 06 §5.1: an undecided contact held still past the deadline. Three
+    /// outcomes, and the first is the reason the section exists — a finger can
+    /// pick a row up out of a list it would otherwise only be able to scroll.
+    ///
+    /// Run from `paint`, because a contact that is being held is by definition
+    /// sending no events to be run from.
+    fn touch_hold(&mut self) -> Vec<Frame> {
+        let Some(due) = self.touch.hold.filter(|d| self.now >= *d) else {
+            return Vec::new();
+        };
+        self.touch.hold = None;
+        let _ = due;
+        if self.touch.phase != TouchPhase::Undecided {
+            return Vec::new();
+        }
+        let Some(pressed) = self.pointer.pressed_on else {
+            return Vec::new();
+        };
+        // A thing that can be picked up is picked up. The press is not given
+        // back — 06 §2, the lift is the drop — and the contact is a drag from
+        // here, so `touch_move` sends moves rather than scrolling the view.
+        if self.pointer.drag.is_some_and(|d| !d.grabbed) {
+            trace(|| "touch: held long enough to grab".to_owned());
+            self.touch.phase = TouchPhase::Dragging;
+            self.pointer.pressed_on = None;
+            let mut out = self.flush_coalesced_move();
+            out.extend(self.begin_drag());
+            out.extend(self.drag_over());
+            return out;
+        }
+        // Otherwise the reserved kind finally gets its use. The press *is*
+        // given back, the way a scroll gives it back: a long press that opened
+        // a menu must not also activate what it opened from.
+        if self.target(pressed, EventKind::LongPress).is_some() {
+            trace(|| "touch: long press".to_owned());
+            let (x, y) = (self.pointer.x, self.pointer.y);
+            let payload = self.point_payload(pressed, EventKind::LongPress, x, y);
+            let mut out = self.emit(pressed, EventKind::LongPress, payload);
+            out.extend(self.cancel_press());
+            self.touch.phase = TouchPhase::Scrolling;
+            return out;
+        }
+        Vec::new()
+    }
+
+    /// 06 §6.4: a drag held near the edge of a scroller scrolls it, because
+    /// the alternative is a list you cannot reach the bottom of without
+    /// letting go. Run once a frame while a drag is live.
+    ///
+    /// The offset moves directly rather than through [`Self::scroll_by`],
+    /// which would emit a `scroll` a frame. One goes when the movement stops,
+    /// the way a glide's does and for the same reason.
+    fn autoscroll(&mut self) -> Vec<Frame> {
+        let live = self.pointer.drag.is_some_and(|d| d.grabbed) && self.pointer.inside;
+        let step = live.then(|| self.autoscroll_step()).flatten();
+        let Some((scroller, dy)) = step else {
+            // Nothing to do, and if something was being done it has stopped:
+            // one `scroll` says where it ended up.
+            let Some((node, _)) = self.pointer.autoscroll.take() else {
+                return Vec::new();
+            };
+            let (_, sy) = self.session.node(node).map(|n| n.scroll).unwrap_or((0, 0));
+            let (sx, _) = self.session.node(node).map(|n| n.scroll).unwrap_or((0, 0));
+            return self.emit(node, EventKind::Scroll, Value::List(vec![Value::Int(sx), Value::Int(sy)]));
+        };
+        let now = self.now;
+        // The first frame of a move has no elapsed time to scale by, and a
+        // stalled one must not be allowed to jump the view: a frame is worth
+        // at most the 32 ms the drag's own back-pressure already waits.
+        let dt = match self.pointer.autoscroll {
+            Some((was, at)) if was == scroller => (now.saturating_duration_since(at).as_secs_f32()).min(0.032),
+            _ => 0.0,
+        };
+        self.pointer.autoscroll = Some((scroller, now));
+        self.redraw = true;
+        self.next_due = Some(now);
+        if dt <= 0.0 {
+            return Vec::new();
+        }
+        let (sx, sy) = self.session.node(scroller).map(|n| n.scroll).unwrap_or((0, 0));
+        let content = self.layout.content_size(scroller).unwrap_or_default();
+        let view = self.layout.rect(scroller).unwrap_or_default();
+        let max_y = (content.h - view.h).max(0.0) as i64;
+        let ny = (sy + (dy * dt).round() as i64).clamp(0, max_y);
+        if ny == sy {
+            return Vec::new();
+        }
+        self.session.set_scroll(scroller, sx, ny);
+        self.invalidate();
+        self.scroll_touched = Some(now);
+        self.scrolled = Some((scroller, now));
+        // The rows moved under a pointer that did not: the slot is resolved
+        // again, and §6.1's change rule keeps that to one event a row crossed.
+        self.drag_over()
+    }
+
+    /// The scroller the hand is at the edge of, and how fast to move it, in
+    /// logical pixels a second. `None` when the hand is not near an edge, or
+    /// near one nothing can move towards.
+    fn autoscroll_step(&mut self) -> Option<(NodeIx, f32)> {
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        let mut cur = self.layout.hit(&self.session, x, y);
+        while let Some(ix) = cur {
+            if matches!(self.session.node(ix).map(|n| n.kind), Some(NodeKind::Scroll | NodeKind::List)) {
+                if let Some(view) = self.layout.rect(ix) {
+                    let band = AUTOSCROLL_BAND.min(view.h * 0.2);
+                    if band > 0.0 {
+                        let over = ((view.y + band) - y).max(0.0);
+                        let under = (y - (view.y + view.h - band)).max(0.0);
+                        let depth = if over > 0.0 { -over } else { under };
+                        if depth != 0.0 {
+                            let rate = (depth / band).clamp(-1.0, 1.0) * AUTOSCROLL_MAX;
+                            if self.scroller_accepts(ix, 0.0, rate) {
+                                return Some((ix, rate));
+                            }
+                        }
+                    }
+                }
+            }
+            cur = self.session.node(ix).and_then(|n| if n.parent.is_some() { Some(n.parent) } else { None });
+        }
+        None
     }
 
     /// The nearest node at or above `from` carrying a handler for `kind`.
@@ -1909,6 +2429,31 @@ impl Driver {
         // A thumb drag needs no layout: the scroller's box does not move.
         if let Some((scroller, grip)) = self.pointer.dragging_thumb {
             return self.drag_thumb(scroller, grip, y);
+        }
+        // 06 §6.1 step 2: the press becomes a drag when the pointer leaves the
+        // slop, or at once if it landed on a handle. Everything after that is
+        // the drag's, and the capture below never runs — a drag reports
+        // `drag_over`, not `pointer_move`.
+        if let Some(d) = self.pointer.drag {
+            self.ensure_layout();
+            if !d.grabbed {
+                let handle = self.pointer.pressed_on.is_some_and(|ix| self.on_drag_handle(ix));
+                let wandered = (x - d.from.0).hypot(y - d.from.1) >= TOUCH_SLOP;
+                if !handle && !wandered {
+                    return Vec::new();
+                }
+                // The press is dropped, not given back: 06 §2 says a gesture
+                // that became a drag reports no `pointer_up` and no `click`,
+                // and a phantom release between the press and the drop would
+                // be a third thing for a server to reason about. What the
+                // move had coalesced still goes, so nothing is lost.
+                self.pointer.pressed_on = None;
+                let mut out = self.flush_coalesced_move();
+                out.extend(self.begin_drag());
+                out.extend(self.drag_over());
+                return out;
+            }
+            return self.drag_over();
         }
         // Dragging inside the focused field extends the selection; the
         // field's box does not move while its text is edited.
@@ -2196,6 +2741,12 @@ impl Driver {
             }
         }
         self.pointer.pressed_on = Some(ix);
+        // 06 §6.1: a press whose path reaches a `drag` node *arms* the
+        // gesture, and nothing more. Nothing is emitted and the server is told
+        // nothing — an arming press that turns out to be a click must be
+        // indistinguishable from one that never armed. A handle skips the
+        // slop and grabs here.
+        self.pointer.drag = self.drag_source(ix).map(|(_, key)| Drag { source: key, from: (self.pointer.x, self.pointer.y), grabbed: false, sent: None });
         trace(|| format!("press on node {:?}, moves go to {:?}", self.session.node(ix).map(|n| n.id), self.target(ix, EventKind::PointerMove).and_then(|(t, _)| self.session.node(t)).map(|n| n.id)));
         // A new drag starts owing nothing, whatever the last one left.
         self.pointer.move_in_flight = None;
@@ -2233,6 +2784,14 @@ impl Driver {
         if button == 0 && self.pointer.dragging_thumb.take().is_some() {
             return Vec::new();
         }
+        // 06 §2: a gesture that became a drag reports no `pointer_up` and no
+        // `click` — the lift *is* the drop. Without this, putting a card down
+        // also activates it.
+        if self.pointer.drag.is_some_and(|d| d.grabbed) {
+            self.pointer.pressed_on = None;
+            return self.finish_drag(false);
+        }
+        self.pointer.drag = None;
         let mut out = self.flush_coalesced_move();
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
@@ -2284,16 +2843,25 @@ impl Driver {
         if self.touch.id.is_some() {
             return Vec::new();
         }
-        self.touch = Touch { id: Some(id), from: (x, y), last: (x, y), at: Some(self.now), speed: (0.0, 0.0), phase: TouchPhase::Undecided };
+        self.touch = Touch { id: Some(id), from: (x, y), last: (x, y), at: Some(self.now), speed: (0.0, 0.0), phase: TouchPhase::Undecided, hold: None };
         // The pointer arrives before it presses, so the press lands on the
         // node under the finger and not on wherever the last one was.
         let mut out = self.pointer_move(x, y);
         out.extend(self.pointer_down(0));
         // Taken as a drag, and by whom: the thumb is the client's own, the
         // rest is whatever asked for moves.
-        let taken = self.pointer.dragging_thumb.is_some() || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some());
+        // 06 §5 step 2, as amended: a grip takes the contact at once. It is
+        // what lets a finger carry a row out of a list it could otherwise only
+        // scroll — a draggable row carries a *prop*, not a `pointer_move`
+        // handler, precisely so that the stroke stays the list's.
+        let taken = self.pointer.dragging_thumb.is_some() || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some() || self.on_drag_handle(ix));
         if taken {
             self.touch.phase = TouchPhase::Dragging;
+        } else {
+            // 06 §5.1: undecided is also held. The clock runs from where the
+            // contact landed, and a frame is owed when it elapses.
+            self.touch.hold = Some(self.now + Duration::from_millis(TOUCH_HOLD_MS));
+            self.next_due = Some(self.now + Duration::from_millis(TOUCH_HOLD_MS));
         }
         trace(|| format!("touch {id} down at {x},{y}: {:?}", self.touch.phase));
         out
@@ -2315,6 +2883,8 @@ impl Driver {
             TouchPhase::Undecided if self.touch.wandered(x, y) > TOUCH_SLOP => {
                 trace(|| format!("touch {id} became a scroll at {x},{y}"));
                 self.touch.phase = TouchPhase::Scrolling;
+                // 06 §5.1: a contact that wandered is not a held one.
+                self.touch.hold = None;
                 // The press is given back before the view moves: what it
                 // landed on hears `pointer_up` and no `click`, because
                 // none was meant. A button under a scrolling thumb must
@@ -2371,7 +2941,10 @@ impl Driver {
             return Vec::new();
         }
         self.touch.end();
-        let mut out = self.cancel_press();
+        // 06 §5 step 7 and §6.1 step 5: a gesture the platform took away ends
+        // the drag it had become, with the sentinel slot.
+        let mut out = self.finish_drag(true);
+        out.extend(self.cancel_press());
         self.pointer.dragging_thumb = None;
         out.extend(self.clear_hover());
         out
@@ -2479,7 +3052,12 @@ impl Driver {
                 || node.handler(EventKind::KeyDown).is_some()
                 || node.handler(EventKind::KeyUp).is_some()
                 || node.handler(EventKind::FilePick).is_some()
-                || node.handler(EventKind::FileSave).is_some();
+                || node.handler(EventKind::FileSave).is_some()
+                // 03 §3: a thing that can be moved can be reached without a
+                // pointer. Without this a draggable row with no `click` is
+                // unreachable by keyboard — and by 03 §6's ceiling rule, that
+                // would forbid the assistive action too.
+                || self.session.atoms().drag.is_some_and(|a| node.prop(a).is_some_and(|v| !matches!(v, Value::Bool(false))));
             if focusable && self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) {
                 order.push(ix);
             }
@@ -2797,6 +3375,12 @@ impl Driver {
         if self.pointer.dragging_thumb.is_some() || self.pointer.over_scrollbar.is_some() {
             return Cursor::Default;
         }
+        // 03 §3: while a drag is live the shape is `grabbing`, over
+        // everything — the hand is holding something wherever it happens to
+        // be, and what it is over says nothing about that.
+        if self.pointer.drag.is_some_and(|d| d.grabbed) {
+            return Cursor::Grabbing;
+        }
         let Some(over) = self.pointer.over else {
             return Cursor::Default;
         };
@@ -2812,6 +3396,12 @@ impl Driver {
             }
             if first && self.is_editable(ix) {
                 return Cursor::Text;
+            }
+            // 03 §3: `grab` over a thing that can be picked up, ahead of the
+            // hand a `click` would draw — a draggable row is usually both, and
+            // what the pointer is about to do to it is pick it up.
+            if self.session.atoms().drag.is_some_and(|a| node.prop(a).is_some_and(|v| !matches!(v, Value::Bool(false)))) {
+                return Cursor::Grab;
             }
             if node.handler(EventKind::Click).is_some() {
                 return Cursor::Pointer;
@@ -3414,6 +4004,22 @@ impl Driver {
                 return out;
             }
         }
+        // 06 §6.1 step 5: `Escape` puts down what is in the hand. It is
+        // tested before focus, because a pointer drag leaves focus wherever it
+        // was — usually nowhere — and the guard below would swallow the key.
+        if down && key == "Escape" && self.pointer.drag.is_some_and(|d| d.grabbed) {
+            return self.finish_drag(true);
+        }
+        // 03 §3: a thing that can be moved is picked up with `Space` and put
+        // down with it, and the arrows move it in between. Nothing is claimed
+        // until it is grabbed, and `Space` is claimed only where there is no
+        // `click` to stand for. It reports what a pointer drag reports and
+        // nothing else, so a server needs no second path for the keyboard.
+        if down {
+            if let Some(out) = self.drag_key(key, modifiers) {
+                return out;
+            }
+        }
         let Some(f) = self.focused else {
             return Vec::new();
         };
@@ -3663,7 +4269,12 @@ impl Driver {
         // driver shares the window's process — every platform but Linux —
         // this is what keeps a spinner from costing a layout and a paint
         // thirty times a second.
-        if !self.touched {
+        // A drag is never a spin: the hand may be at the edge of a list, and
+        // 06 §6.4's scrolling is this frame's to do. Nothing has touched the
+        // tree — the hand is not the tree — so without this the view would sit
+        // still for exactly as long as the pointer did.
+        let dragging = self.pointer.drag.is_some_and(|d| d.grabbed) || self.touch.hold.is_some();
+        if !self.touched && !dragging {
             if let Some(c) = &self.cached {
                 if c.until.map_or(true, |u| self.now < u) {
                     self.redraw = false;
@@ -3715,6 +4326,14 @@ impl Driver {
         }
         self.ensure_layout();
         self.follow_slider_drag();
+        // 06 §5.1: a contact held still long enough to mean something. It
+        // sends nothing while it is being held, so the clock is read here.
+        let held = self.touch_hold();
+        self.pending.extend(held);
+        // 06 §6.4: a drag held at the edge of a list moves it. After layout,
+        // because the band is measured against the boxes this frame placed.
+        let carried = self.autoscroll();
+        self.pending.extend(carried);
         let now = self.now;
         if let Some(due) = self.viewport_due {
             if now >= due {

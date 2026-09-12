@@ -227,10 +227,26 @@ no shader, no tessellator and no allocation beyond its quads.
   else the focused node's, else the first in document order that can. A nested
   `list` that does not overflow must not swallow the page's wheel. Nothing is
   reported but the `scroll` the landing produces.
+- A node carrying `drag` (§3.4) takes focus on `Tab`, so a thing that can be
+  moved can be reached without a pointer. **`Space`** picks it up; the arrows
+  then move it along the container's axis, `Space` puts it down, `Escape` puts
+  it back. While the grab is live the client owns those keys, and **only** those
+  and only on that node — not grabbed, nothing is claimed at all and the arrows
+  are still the scroller's.
+
+  `Space` is claimed only on a node with no `click` handler. A row that is both
+  activatable and movable keeps `Enter`/`Space` for the thing it stands for and
+  reaches the grab through a `drag_handle` child, which is its own focus stop.
+  A `keys` prop (§3.1) naming `" "`, an arrow or `Escape` takes it back: the
+  server wins when it asks explicitly. The grab reports what a pointer drag
+  reports and nothing else — `drag_start`, `drag_over`, `drop`
+  ([`06-events.md`](06-events.md) §6) — so a server needs no second path for the
+  keyboard.
 - The pointer takes the shape of what it is over: the nearest ancestor's
   `cursor` style when one names a shape, else a text beam over an editable
-  node, else a hand over anything with a `click` handler, else the arrow —
-  and the arrow on a scrollbar.
+  node, else `grab` over a node resolving `drag` (§3.4), else a hand over
+  anything with a `click` handler, else the arrow — and the arrow on a
+  scrollbar. While a drag is live the shape is `grabbing`, over everything.
 - An `input` taller than its line — stretched by a row, or given a
   control height — centres its line vertically, caret and selection with
   it; a `textarea` starts at the top.
@@ -250,8 +266,8 @@ no shader, no tessellator and no allocation beyond its quads.
 
 ### 3.1 What a node may claim of the keyboard
 
-Four props, read by the client, for the things a server cannot do because it
-does not own them.
+Three props, read by the client, for the things a server cannot do because it
+does not own them. §3.2 to §3.4 are the rest of that family.
 
 | Prop | Value | Means |
 |---|---|---|
@@ -391,6 +407,57 @@ This is why a save costs a round trip rather than riding on an asset: the
 bytes are generated when the person asks for them, they are nobody else's,
 and no one who is not on this session can fetch them.
 
+### 3.4 What a node may claim of the pointer
+
+Five props, for the gesture a server cannot resolve because it does not own
+the hand: picking something up and putting it somewhere else.
+
+| Prop | Value | Means |
+|---|---|---|
+| `drag` | boolean, or `Str group` | this node can be picked up; the string names its group |
+| `accepts` | boolean, `Str group`, or `List[Str]` | this node takes items of those groups |
+| `drag_handle` | boolean | a press here grabs at once, without the slop or the hold |
+| `drag_axis` | `"x"`, `"y"` or `"both"` | which way a slot moves, and which arrows move it |
+| `drag_only` | boolean | this node hears `pointer_move` only while a button is down |
+
+**There is no "reorder me".** Reordering is the case where the item's own
+parent is the target, so a container that `accepts` what its children `drag`
+reorders itself and takes the same thing from elsewhere, and the server tells
+the two apart because it has both ends and a model. One prop, two behaviours,
+and no way for them to disagree.
+
+**The prop says what a node *is*; the handler says who *hears*.** A row is
+draggable and a list is what hears the drop, and those are two different nodes
+resolved by two different walks: the props by the walk in
+[`06-events.md`](06-events.md) §6, the handler by §2's nearest-handler rule as
+always. Matching is the client's affordance and not authorisation — it decides
+which containers light up and which shape the pointer takes, and §4 there still
+requires the server to re-derive everything it is told.
+
+`drag: true` is the empty group and matches `accepts: true` alone. A named
+group matches a container naming it, or naming it among several.
+
+**A draggable node MUST carry a `key`.** It is how the client holds on to what
+is in the hand: a move between containers is a removal and an insertion
+([`02-wire-format.md`](02-wire-format.md) §5), so the node's id changes under
+the gesture and only the key survives it. Keyed children are also what make the
+server's reorder a `MoveChild` rather than a rebuild, so this costs nothing that
+was not already owed.
+
+**`drag_only`** is the older of the five and belongs here rather than in §3.1,
+though it is not the keyboard's. A split bar's container must hear
+`pointer_move` while it is being dragged and must not hear it the rest of the
+time, and the obvious answer — give it the handler only while the drag runs —
+loses events: one already in flight names a handler the server has since
+removed, and §4 of [`06-events.md`](06-events.md) ends the session for it. The
+prop lets the handler stay and the moves stop.
+
+The pointer's shape follows from `drag` without any style: **`grab` over a node
+resolving `drag`**, and `grabbing` over everything while a drag is live. Both
+already exist in the `cursor` scale, and an application that wants a different
+shape still says so in the style, which wins as it does for everything else.
+
+
 ## 4. The catalogue contract
 
 The catalogue is a server-side library; the client knows nothing of it. A
@@ -514,6 +581,18 @@ Bounds are the layout rectangles. Focus is §3's. An assistive technology's
 *focus* action focuses as `Tab` would, and its *click* action presses as
 `Enter` would: nothing it can do exceeds what a keyboard user can do, so
 the server needs no new validation and learns nothing new.
+
+A node carrying `drag` (§3.4) also offers **move-before** and **move-after**,
+which do in one step what §3's grab does in three, and stand at the same
+ceiling — a keyboard user reaches the same place by the longer road.
+They are offered only where there is somewhere to go, and a platform that has
+no vocabulary for them exposes them as the custom actions it does have: the
+ones that exist — grabbed, dropeffect — were deprecated by the standard that
+invented them, and a moved thing announces itself better than a held one
+describes itself. The announcement is the server's, through a node with
+`live` (§6.1), because it is prose and prose is content. The client's share is
+that focus stays on the thing it moved, that `pos_in_set` and `set_size` stay
+true, and that the thing is brought into view.
 
 ### 6.1 What a node may declare
 

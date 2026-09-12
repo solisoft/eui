@@ -909,3 +909,66 @@ fn a_panel_that_follows_the_pointer_sits_above_it_and_keeps_up() {
     let low = r(&l, &s, tip);
     assert!(low.y >= 2.0, "under the cursor when there is no room over it: {low:?}");
 }
+
+/// §5: a panel placed at the pointer sits under the hand by construction, so
+/// asking it first would put it between the pointer and the thing it is
+/// describing — a tooltip would answer the hover that shows it, and flicker.
+/// It is painted and never pointed at.
+#[test]
+fn a_panel_at_the_pointer_is_painted_but_never_pointed_at() {
+    let mut b = B::default();
+    let column = b.style(col());
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let plot = b.style(StyleRecord { height: px(200), ..st() });
+    let chip = b.style(StyleRecord { position: Position::Pointer, margin: [2, 0, 0, 0], ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, column, 1);
+    b.push(NodeKind::Box, stack, 2);
+    let under = b.push(NodeKind::Box, plot, 0);
+    let tip = b.push(NodeKind::Overlay, chip, 1);
+    b.text(t, "nine");
+    let s = b.session();
+
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    l.set_pointer(Some((120.0, 140.0)));
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, Size::new(400.0, 300.0));
+
+    let at = r(&l, &s, tip);
+    assert!(at.w > 0.0 && at.h > 0.0, "the chip is laid out and painted: {at:?}");
+    // The point the chip covers still finds what is under it.
+    let inside = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+    let hit = l.hit(&s, inside.0, inside.1).expect("something is under the chip");
+    assert_ne!(hit, s.lookup(tip).unwrap(), "the chip did not answer");
+    assert_eq!(hit, s.lookup(under).unwrap(), "the plot it describes did");
+}
+
+/// §6.2: a drag asks what is under the hand while ignoring what is *in* it.
+/// Without the exclusion the deepest node under the pointer is always the
+/// thing being carried, and a folder could be dropped into itself.
+#[test]
+fn a_drag_does_not_find_a_target_inside_what_it_is_carrying() {
+    let mut b = B::default();
+    let column = b.style(col());
+    let row_st = b.style(StyleRecord { height: px(40), ..st() });
+    let inner = b.style(StyleRecord { height: px(20), width: px(120), ..st() });
+    b.push(NodeKind::Box, column, 2);
+    let carried = b.push(NodeKind::Box, row_st, 1);
+    let within = b.push(NodeKind::Box, inner, 0);
+    let other = b.push(NodeKind::Box, row_st, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 300.0);
+
+    let (carried, within, other) = (s.lookup(carried).unwrap(), s.lookup(within).unwrap(), s.lookup(other).unwrap());
+    let at = r_(&l, &s, 3);
+    let (x, y) = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+    assert_eq!(l.hit(&s, x, y), Some(within), "unfiltered, the deepest node wins");
+    let through = l.hit_skipping(&s, x, y, Some(carried)).expect("the point still lands on something");
+    assert_ne!(through, within, "the whole subtree goes, not just its root");
+    assert_ne!(through, carried, "and the root of it with them");
+
+    // What is outside the carried subtree is still found.
+    let below = r_(&l, &s, 4);
+    assert_eq!(l.hit_skipping(&s, below.x + 1.0, below.y + below.h / 2.0, Some(carried)), Some(other));
+}

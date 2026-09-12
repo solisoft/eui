@@ -32,10 +32,10 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x0F` | `scroll` | `List[Int x, Int y]`, the new offsets | per frame |
 | `0x10` | `resize` | `List[Float w, Float h]` | per frame |
 | `0x11` | `context_menu` | as `click` | |
-| `0x12` | `drag_start` | as `pointer_down` | |
-| `0x13` | `drag_over` | as `pointer_move` | per frame |
-| `0x14` | `drop` | as `pointer_up` | |
-| `0x15` | `long_press` | as `click` | |
+| `0x12` | `drag_start` | as `pointer_down` (§6) | once a gesture |
+| `0x13` | `drag_over` | `List[Float x, Float y, Int slot]` (§6) | per frame, **and only when the target or the slot changes** |
+| `0x14` | `drop` | `List[Float x, Float y, Int slot]`, `slot = -1` for a cancel (§6) | once a gesture |
+| `0x15` | `long_press` | as `click` | on a held contact, §5.1 |
 | `0x16` | `window` | `List[Int first, Int last]`, the rows a windowed `list` needs (spec 04 §7.1), inclusive | when the range changes, once a scroll has landed |
 | `0x17` | `ended` | `Null`, a sound or a picture reached its end (spec 03 §7, §8) | |
 | `0x18` | `time_update` | `List[Int position_ms, Int duration_ms]` | at most 10/s |
@@ -122,7 +122,12 @@ that asks for a hundred gets two.
   button because the button's handler is the nearest one on the path from the
   hit node to the root. That walk is the whole dispatch algorithm.
 - `pointer_move`, `scroll`, `resize` and `drag_over` are coalesced: at most one
-  per frame per node, carrying the latest value.
+  per frame per node, carrying the latest value. `drag_over` is coalesced
+  **twice**: per frame as the others are, and again against the last one sent,
+  so a drag that crosses no boundary reports nothing at all. Six hundred
+  samples down a list of forty is forty events (§6).
+- A gesture that became a drag reports **no `pointer_up` and no `click`**: the
+  lift is the `drop`. Without this, putting a card down also activates it.
 - `change` fires when an editable node's value settles — on blur, on `Enter`
   in a single-line field, or after 300 ms of no input. `text_input` fires per
   committed insertion and exists for local handlers; a server that subscribes
@@ -189,9 +194,10 @@ The first contact is followed like this:
 1. **Down.** The pointer moves to the contact and presses button `0`:
    `pointer_move` then `pointer_down`, exactly as a mouse would.
 2. The gesture is then **taken** or **undecided**. It is taken if the node
-   the press landed on resolves a `pointer_move` handler, or if the press
-   took hold of a scrollbar thumb (spec 03 §2) — a slider, a split bar, a
-   drag of any kind. Otherwise it is undecided.
+   the press landed on resolves a `pointer_move` handler, or carries
+   `drag_handle` (spec 03 §3.4), or if the press took hold of a scrollbar
+   thumb (spec 03 §2) — a slider, a split bar, a drag of any kind. Otherwise
+   it is undecided.
 3. **Taken**: every move is a `pointer_move` at the contact, coalesced by
    §2 like any other, and the lift is a `pointer_up`. The view does not
    scroll, and no fling follows.
@@ -217,6 +223,40 @@ The first contact is followed like this:
    call arriving, the application going to the background. Whatever was
    pressed receives `pointer_up`; no `click` follows and no fling.
 
+### 5.1 The held contact
+
+A gesture that is **undecided** is also being held, and the client runs a
+timer of **500 ms** from where the contact landed. Whichever of these comes
+first decides it:
+
+- the contact passes the slop — a scroll, exactly as step 4 above, and the
+  timer is forgotten;
+- the contact lifts — a tap, and the timer is forgotten;
+- the timer elapses with the contact still inside the slop, and then:
+  - if the press resolves a node carrying `drag` (spec 03 §3.4), the gesture
+    becomes a **drag**. `drag_start` is emitted, the press is **not** given
+    back — no `pointer_up`, no `click` — every later move is a `drag_over`,
+    and the lift is the `drop`. A client SHOULD ask the platform for a haptic;
+  - else if the press resolves a `long_press` handler, `long_press` is
+    emitted, and the press is then given back as a scroll gives it back:
+    `pointer_up`, no `click`, because a long press that opened a menu must not
+    also activate what it opened from. The gesture ends there;
+  - else nothing happens and the contact stays undecided.
+
+`long_press` is not emitted for a mouse. A held button is not a gesture, and
+`context_menu` is already what the second button means.
+
+**This adds no event kind and tells no finger from a mouse.** The server
+writes `drag` and `accepts` and hears the same three events either way; it is
+the *client* that picks the grab suiting the input it has — eight pixels of
+travel for a mouse, a handle or half a second for a finger. That is this
+section's own principle applied one level further in. A client with a mouse
+runs no timer, because nothing is ever undecided for one.
+
+What this costs, plainly: a slow drag begun by a slowly-moving finger on a row
+with **no** handle is a scroll. There is no way around it that does not steal
+strokes from the list, and the handle is the escape.
+
 Nothing here is particular to one platform. Android delivers contacts
 through `MotionEvent` and iOS through `touchesBegan`/`Moved`/`Ended`/
 `Cancelled`; both arrive as the four phases above, and the rules that follow
@@ -231,3 +271,97 @@ to put it out.
 describing a resting pointer, and `cursor` (spec 03 §4) means nothing on a
 touch screen. An application whose only affordance is hover has no touch
 behaviour, and this specification does not invent one for it.
+
+## 6. Dragging
+
+A drag is the one gesture where what the person is doing and what the
+application is being told are furthest apart. The hand moves continuously; the
+model changes a handful of times. So the client resolves the whole of the hand
+— how a press becomes a grab, what is under it, which slot it is in, when a
+list should scroll because the hand is at its edge — and reports only the
+changes, in the same way it resolves slop, fling, hover and a scrollbar and
+reports only what they land on.
+
+**The client owns the hand; the server owns the order.**
+
+### 6.1 The gesture
+
+One drag at a time, because there is one pointer and §5 allows one contact.
+
+1. **Armed.** A `pointer_down` whose path reaches a node carrying `drag`
+   (spec 03 §3.4) arms the gesture. Nothing is emitted and nothing is visible
+   to the server: an arming press that turns out to be a click MUST be
+   indistinguishable from one that never armed.
+2. **Grabbed.** The gesture becomes a drag when the pointer leaves the slop —
+   the same distance §5 uses, about 8 logical px — or at once if the press
+   landed on a `drag_handle`, or after the hold in §5.1, or from the keyboard
+   (spec 03 §3). `drag_start` is emitted **once**, to the nearest handler above
+   the **source**: the node carrying `drag`.
+3. **Over.** While the drag runs the client resolves, each frame, the node
+   under the pointer and the slot within it, and emits `drag_over` to the
+   nearest handler above that **target** — but only when the pair has changed
+   since the last one sent. A drag that crosses no boundary is silent.
+4. **Dropped.** The lift emits `drop` **once**, to the target, carrying the
+   slot it landed in.
+5. **Cancelled.** `Escape`, a cancelled contact (§5 step 7), the window losing
+   the input, or the source leaving the tree all end the drag with a `drop`
+   carrying **`slot = -1`**. A cancel is an ordinary drop with a sentinel, so a
+   server that handles `drop` and nothing else is correct and complete. It is
+   reported to the source; when the source is what went missing, to the
+   container last reported over, which is still there and is the node that
+   would have received the drop. When neither is left the drag ends and nothing
+   is emitted — the server took the row away itself, and already knows.
+
+Dispatch is §2's and unchanged — the nearest handler on the path, no bubbling.
+What is new is that a *second*, independent walk finds the props. **The prop
+says what a node is; the handler says who hears.** A row is draggable and the
+list is what hears the drop, and a container with no handler is not a target
+however it is marked.
+
+### 6.2 The slot
+
+`slot` is the position the thing in the hand would take, counted **among the
+container's draggable items** and not among its children, so a header, a
+footer or a divider is skipped and the number indexes the records the server
+holds rather than the nodes it sent. For a windowed `list` (spec 04 §7.1) it is
+a row index, which is the same quantity for a container whose children are its
+rows.
+
+The rule is **the slot whose box contains the pointer**, clamped to the ends —
+not the nearest boundary. The difference matters as soon as the server previews
+the move by making it: the thing in the hand is then under the pointer, so the
+slot does not change again until the pointer genuinely leaves that box, and the
+oscillation a midpoint rule produces cannot happen. It also needs no hysteresis
+for rows of unequal height.
+
+A client MUST NOT resolve a target inside the source's own subtree. Dropping a
+folder into itself is not a move, and a panel that follows the pointer
+(spec 04 §5) is never hit-tested at all.
+
+### 6.3 What the client does not do
+
+- **It does not move anything.** The tree changes when the server says so. A
+  client that reordered optimistically would have to reconcile two orders, and
+  a `MoveChild` (spec 02 §5) costs four bytes.
+- **It does not announce.** Announcing is prose, prose is content, and content
+  is the server's. What the client owes is that focus stays on the moved node,
+  that `pos_in_set` and `set_size` (spec 03 §6.1) stay true, and that the node
+  is brought into view.
+- **It does not decide whether the drop is allowed.** Groups match so the
+  client knows which containers to light and which shape to draw. §4 still
+  holds: the server re-derives everything.
+
+### 6.4 Scrolling under the hand
+
+A drag held near the edge of a scroller scrolls it, because the alternative is
+a list you cannot reach the bottom of without letting go. Within
+`min(48 px, 0.2 × the viewport on that axis)` of an edge the client scrolls
+towards it, from nothing at the band's inner edge to a client-chosen maximum at
+the outer. The fraction matters: a short list must not scroll from its middle.
+
+The scroller is the one §3's scrolling keys would have chosen — the one under
+the pointer that can still move that way, else its ancestor that can. Rows move
+under a pointer that is standing still, so the client re-resolves the slot
+after each step, and §6.1's change rule keeps that to one event per boundary
+crossed. One `scroll` event is emitted when the movement stops, as a glide's is
+and for the same reason.

@@ -23,7 +23,7 @@
 //! [`crate::worker`]: the worker builds it, the window hands it to the
 //! platform.
 
-use eui_proto::{EventKind, NodeKind};
+use eui_proto::{EventKind, NodeKind, Value};
 use eui_tree::NodeIx;
 
 use crate::driver::Driver;
@@ -298,6 +298,13 @@ pub struct AccessNode {
     pub click: bool,
     /// Accepts a Focus action.
     pub focus: bool,
+    /// Accepts the custom "move before" action of 03 §6: there is somewhere
+    /// ahead of this node to put it. It does what `Ctrl` with an arrow does,
+    /// so nothing an assistive technology can do exceeds what a keyboard user
+    /// can — which is the whole of why it may exist at all.
+    pub move_prev: bool,
+    /// The same, the other way.
+    pub move_next: bool,
     /// Children, in order.
     pub children: Vec<u64>,
     /// What the node declared about itself.
@@ -365,6 +372,8 @@ impl Driver {
             value: String::new(),
             click: false,
             focus: false,
+            move_prev: false,
+            move_next: false,
             children,
             state: AccessState::default(),
         };
@@ -396,8 +405,19 @@ impl Driver {
                 NodeKind::List => AccessRole::List,
                 _ => AccessRole::Container,
             });
-            let mut a =
-                AccessNode { id: id_of(ix), role, bounds: [rect.x, rect.y, rect.w, rect.h], label: String::new(), value: String::new(), click: false, focus: false, children: Vec::new(), state };
+            let mut a = AccessNode {
+                id: id_of(ix),
+                role,
+                bounds: [rect.x, rect.y, rect.w, rect.h],
+                label: String::new(),
+                value: String::new(),
+                click: false,
+                focus: false,
+                move_prev: false,
+                move_next: false,
+                children: Vec::new(),
+                state,
+            };
             let editable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea);
             if editable {
                 a.value = session.text_of(ix).unwrap_or("").to_owned();
@@ -421,6 +441,17 @@ impl Driver {
                     a.click = true;
                     a.focus = true;
                 }
+            }
+            // 03 §6: a node that can be picked up offers the two moves, and
+            // only where there is somewhere to go. `pos_in_set`/`set_size`
+            // carry the rest of the story, and the announcement is the
+            // server's through a `live` node — prose is content.
+            if session.atoms().drag.is_some_and(|at| node.prop(at).is_some_and(|v| !matches!(v, Value::Bool(false)))) {
+                let siblings = session.children(node.parent);
+                let at = siblings.iter().position(|c| *c == ix);
+                a.move_prev = at.is_some_and(|i| i > 0);
+                a.move_next = at.is_some_and(|i| i + 1 < siblings.len());
+                a.focus = true;
             }
             // A declared label overrides the text gathered from inside.
             if let Some(text) = at.label.and_then(|x| node.prop(x)).and_then(str_of) {
@@ -547,7 +578,7 @@ impl AccessAtoms {
 /// px like everything else in the client.
 #[cfg(has_a11y)]
 pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
-    use accesskit::{Action, Affine, Invalid, Live, Node, NodeId, Orientation, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
+    use accesskit::{Action, Affine, CustomAction, Invalid, Live, Node, NodeId, Orientation, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
     let mut nodes: Vec<(NodeId, Node)> = Vec::with_capacity(snapshot.nodes.len());
     for n in &snapshot.nodes {
         let role = match n.role {
@@ -614,6 +645,20 @@ pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
         }
         if n.focus {
             a.add_action(Action::Focus);
+        }
+        // 03 §6: the two moves, as the only vocabulary the platform has left
+        // for them. The indices are what comes back in `ActionData`, and they
+        // are the action bytes the driver expects.
+        let mut moves = Vec::new();
+        if n.move_prev {
+            moves.push(CustomAction { id: 2, description: "Move before".into() });
+        }
+        if n.move_next {
+            moves.push(CustomAction { id: 3, description: "Move after".into() });
+        }
+        if !moves.is_empty() {
+            a.add_action(Action::CustomAction);
+            a.set_custom_actions(moves);
         }
         let st = &n.state;
         if !st.description.is_empty() {

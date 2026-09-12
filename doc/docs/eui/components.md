@@ -623,6 +623,53 @@ it. On loopback or a LAN that is invisible; over a long link it would not be.
 | `spinner_sized(size)` | The same, sized |
 | `empty_state(title, body, action_label, on_action)` | Centred: a placeholder mark, a title, a line, one button |
 
+## Picking things up
+
+Spec 06 §6. The client owns the whole of the hand — how a press becomes a
+grab, what is under it, which slot it is in, when a list should scroll because
+the hand is at its edge — and tells the server three things: one `drag_start`,
+one `drag_over` a boundary crossed, one `drop`. Everything that runs at the
+speed of a pointer runs here; what comes back is a `MoveChild`, four bytes.
+
+Two props declare it, and the split between them is the design: **the prop
+says what a node *is*; the handler says who *hears*.** A card is draggable and
+the column is what hears the drop, and those are two different nodes found by
+two different walks.
+
+| Signature | Notes |
+|---|---|
+| `draggable(key, group, style, children, opts)` | A thing that can be picked up. The key is **not** optional |
+| `drag_grip(label)` | The grip: a press here grabs at once, with no slop and no hold |
+| `drop_zone(group, style, on_over, on_drop, children, props)` | A thing that takes what others carry |
+| `drag_slot(params)` | The slot an event carries; `-1` means the gesture was cancelled |
+| `board_move(board, id, col, slot)` | Move an id to a column and a place, taking it out of wherever it was |
+| `board_at(board, id)` | `[column, slot]`, so a cancelled drag goes back exactly where it was |
+
+**There is no "reorder me" flag.** Reordering is the case where the item's own
+parent is the target, so a container that `accepts` what its children `drag`
+reorders itself *and* takes the same thing from elsewhere. One prop, two
+behaviours, and no way for them to disagree.
+
+**A draggable node must carry a key.** It is what the client holds it by: a
+move between containers is a removal and an insertion, so the node is rebuilt
+under the hand and its id changes. Only the key survives that. Keyed children
+are also what make the server's answer a `MoveChild` rather than a rebuild, so
+this costs nothing that was not already owed.
+
+**The preview is the move itself.** On each `drag_over` the server puts the
+item where the hand says and re-renders; the diff turns the permutation into
+one `MoveChild`. There is no ghost to draw and no insertion line to invent,
+because the list *is* the preview. `erp_board_event` in the demo is the whole
+of a server's share — about thirty lines, and most of them are the cancel.
+
+**Three ways in, and the client picks.** Eight pixels of travel for a mouse; a
+grip or half a second of holding for a finger; `Space` then the arrows for a
+keyboard. The server writes the same tree for
+all of them and hears the same three events. A draggable node carries a *prop*
+and not a `pointer_move` handler, which is exactly why a finger can still
+scroll a list of them.
+
+
 ## Charts
 
 A chart is a `canvas` with a `paths` prop. Each path is a list — kind, colour,

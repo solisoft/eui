@@ -17,7 +17,17 @@ it says that instead. A budget that was never measured is a slogan.
 | Idle RSS, 200-node application | < 25 MB |
 | 10 000-row virtualised table, RSS | < 45 MB |
 | 10 000-row virtualised table, scroll | 60 fps, < 2 ms CPU per frame |
+| 10 000-row virtualised table, drag | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
+
+A drag frame costs what a wheel notch costs: one hit test, one search for the
+slot, at most one scroll step, and a relayout of the rows that have boxes — not
+of the ten thousand that do not. The thing that can be slow is the **server's**
+answer, and that is the honest limit here. A live reorder is a render and a diff
+per boundary crossed, which the one-answer-at-a-time rule of
+[`06-events.md`](06-events.md) §2 caps at a few dozen a second; past that the
+client goes on following the hand, because nothing about the hand waits on the
+server, and the rows arrive behind it. That degrades; it does not break.
 
 Measured on 2026-09-08, `cargo build --release -p eui-client`, x86-64 Linux,
 LTO, stripped: **15.64 MB** (15 644 096 bytes) with the default features and

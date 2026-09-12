@@ -374,6 +374,14 @@ impl Layout {
     /// The deepest laid-out node under a point, honouring stack order and
     /// scroll clipping.
     pub fn hit(&self, s: &Session, x: f32, y: f32) -> Option<NodeIx> {
+        self.hit_skipping(s, x, y, None)
+    }
+
+    /// The same, blind to one subtree. A drag asks this about what is under
+    /// the hand while ignoring what is *in* it (06 §6.2): a folder dropped
+    /// into itself is not a move, and without the exclusion the deepest node
+    /// under the pointer is always the thing being carried.
+    pub fn hit_skipping(&self, s: &Session, x: f32, y: f32, skip: Option<NodeIx>) -> Option<NodeIx> {
         let root = s.root()?;
         let whole = Rect::new(f32::MIN / 2.0, f32::MIN / 2.0, f32::MAX, f32::MAX);
         // An `overlay` paints in the top layer, above everything and
@@ -381,11 +389,11 @@ impl Layout {
         // outside whatever would have clipped it. The layout listed them
         // as it went.
         for top in self.overlays.iter().rev() {
-            if let Some(hit) = self.hit_in(s, *top, x, y, whole) {
+            if let Some(hit) = self.hit_in(s, *top, x, y, whole, skip) {
                 return Some(hit);
             }
         }
-        self.hit_in(s, root, x, y, whole)
+        self.hit_in(s, root, x, y, whole, skip)
     }
 
     /// The style resolved this frame for a style id, for a painter that
@@ -394,7 +402,17 @@ impl Layout {
         self.by_style_id.get(&style_id).copied()
     }
 
-    fn hit_in(&self, s: &Session, ix: NodeIx, x: f32, y: f32, clip: Rect) -> Option<NodeIx> {
+    fn hit_in(&self, s: &Session, ix: NodeIx, x: f32, y: f32, clip: Rect, skip: Option<NodeIx>) -> Option<NodeIx> {
+        if skip == Some(ix) {
+            return None;
+        }
+        // 04 §5: a panel placed at the pointer is under the hand by
+        // construction, so asking it first would put it between the pointer
+        // and the thing it describes — a tooltip would answer the hover that
+        // shows it, and flicker. It is painted, never pointed at.
+        if self.tracking.contains(&ix) {
+            return None;
+        }
         let rect = self.rect(ix)?;
         let node = s.node(ix)?;
         let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
@@ -430,7 +448,7 @@ impl Layout {
             if s.node(*child).is_some_and(|n| n.kind == NodeKind::Overlay) {
                 continue;
             }
-            if let Some(hit) = self.hit_in(s, *child, cx, cy, child_clip) {
+            if let Some(hit) = self.hit_in(s, *child, cx, cy, child_clip, skip) {
                 return Some(hit);
             }
         }

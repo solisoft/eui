@@ -194,7 +194,10 @@ pub enum Request {
     AccessTree,
     /// An assistive technology's action on a node: `true` click, `false`
     /// focus.
-    AccessAction(u64, bool),
+    /// An assistive technology acted on a node. The byte is the action:
+    /// `0` focus, `1` click, `2` move before, `3` move after (03 §6). It was
+    /// a boolean while there were two of them.
+    AccessAction(u64, u8),
     /// The viewer's desktop palette (05 §5): its mode if it has one, and
     /// colours by role id. Empty means none: the theme's own colours.
     DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
@@ -301,10 +304,10 @@ impl Request {
             }
             Request::Tick => w.u8(9),
             Request::AccessTree => w.u8(10),
-            Request::AccessAction(id, click) => {
+            Request::AccessAction(id, action) => {
                 w.u8(11);
                 w.u64(*id);
-                w.bool(*click);
+                w.u8(*action);
             }
             Request::Audio { frames, channels, rate } => {
                 w.u8(13);
@@ -392,7 +395,7 @@ impl Request {
             8 => Request::Paint(r.u32()?, r.u32()?),
             9 => Request::Tick,
             10 => Request::AccessTree,
-            11 => Request::AccessAction(r.u64()?, r.bool()?),
+            11 => Request::AccessAction(r.u64()?, r.u8()?),
             12 => {
                 let mode = match r.u8()? {
                     255 => None,
@@ -1003,7 +1006,7 @@ fn put_access(w: &mut W, s: &AccessSnapshot) {
         w.f4(n.bounds);
         w.str(&n.label);
         w.str(&n.value);
-        w.u8(u8::from(n.click) | (u8::from(n.focus) << 1));
+        w.u8(u8::from(n.click) | (u8::from(n.focus) << 1) | (u8::from(n.move_prev) << 2) | (u8::from(n.move_next) << 3));
         w.u32(u32::try_from(n.children.len()).unwrap_or(u32::MAX));
         for c in &n.children {
             w.u64(*c);
@@ -1104,7 +1107,7 @@ fn get_access(r: &mut R<'_>) -> Wire<AccessSnapshot> {
             children.push(r.u64()?);
         }
         let state = get_state(r)?;
-        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, children, state });
+        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, move_prev: actions & 4 != 0, move_next: actions & 8 != 0, children, state });
     }
     Ok(AccessSnapshot { nodes, focus: r.u64()?, scale: r.f32()? })
 }
@@ -1222,9 +1225,9 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                     }
                     Request::Tick => Payload::Tick(d.tick(Instant::now())),
                     Request::AccessTree => Payload::Access(d.access_snapshot()),
-                    Request::AccessAction(id, click) => {
+                    Request::AccessAction(id, action) => {
                         if let Some(ix) = d.node_for_accessibility(id) {
-                            let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
+                            let out = d.access_act(ix, action);
                             d.pending_mut().extend(out);
                         }
                         Payload::None
@@ -2110,19 +2113,18 @@ impl Backend {
         }
     }
 
-    /// An assistive technology's action on a node: `click`, or focus.
-    /// Returns encoded frames to send.
-    pub fn access_action(&mut self, id: u64, click: bool) -> Vec<Vec<u8>> {
+    /// An assistive technology's action on a node: focus, click, or one of
+    /// the two moves of 03 §6. Returns encoded frames to send.
+    pub fn access_action(&mut self, id: u64, action: u8) -> Vec<Vec<u8>> {
         if let Some(out) = self.with_local(|d| {
             let Some(ix) = d.node_for_accessibility(id) else {
                 return Vec::new();
             };
-            let out = if click { d.activate_node(ix) } else { d.focus_node(ix) };
-            out.iter().map(Frame::encode).collect::<Vec<_>>()
+            d.access_act(ix, action).iter().map(Frame::encode).collect::<Vec<_>>()
         }) {
             return out;
         }
-        self.with_worker(|w| w.call(&Request::AccessAction(id, click)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
+        self.with_worker(|w| w.call(&Request::AccessAction(id, action)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
     /// True while the platform's positioning should be running (06 §1.2).
@@ -2192,7 +2194,7 @@ mod tests {
             Request::Paint(640, 480),
             Request::Tick,
             Request::AccessTree,
-            Request::AccessAction(42, true),
+            Request::AccessAction(42, 1),
             Request::DesktopTheme(Some(ThemeMode::Dark), vec![(1, 0x101a26ff), (9, 0xf7a96aff)]),
             Request::DesktopTheme(None, Vec::new()),
             Request::Audio { frames: 512, channels: 2, rate: 48_000 },
@@ -2333,6 +2335,8 @@ mod tests {
                     value: String::new(),
                     click: true,
                     focus: true,
+                    move_prev: false,
+                    move_next: false,
                     children: vec![],
                     state: AccessState::default(),
                 },
@@ -2344,6 +2348,8 @@ mod tests {
                     value: String::new(),
                     click: false,
                     focus: false,
+                    move_prev: false,
+                    move_next: false,
                     children: vec![1],
                     state: AccessState::default(),
                 },

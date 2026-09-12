@@ -186,6 +186,13 @@ the panel changes but its origin. A client that does not know where the
 pointer is — it has left the window, or the input is not a pointer at all —
 leaves the panel where it was.
 
+**A panel positioned at the pointer is never hit-tested.** It is on the top
+layer and it is under the hand by construction, so asking it first would put
+it between the pointer and everything it describes: a tooltip would answer the
+hover that shows it, and flicker. Nothing is ever dropped on one
+([`06-events.md`](06-events.md) §6.2) and nothing is ever clicked on one. A
+panel meant to be pointed at is anchored, not tracking.
+
 ## 6. `grid`
 
 Version 1 supports one shape: `N` equal columns. `N` is the container's
@@ -262,6 +269,14 @@ nothing new to ask. A server that
 answers with those rows as children, and lets the others go, holds one
 window of a feed in memory, not the feed: forty thousand posts cost the
 client forty thousand integers and the server a few dozen cards.
+
+A server SHOULD keep the row a drag started on inside the window it answers,
+until the drop. It knows which one, because it received `drag_start`
+([`06-events.md`](06-events.md) §6.1); without it, a drag that autoscrolls
+three hundred rows drops the thing it is carrying out of the tree. A client
+survives a server that does not — it holds what is in the hand by key, and
+ends the drag when the key goes — but what it survives to is a cancelled
+gesture.
 
 ## 8. Invalidation
 

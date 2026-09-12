@@ -1090,6 +1090,7 @@ def erp_dashboard(state, lay)
         "sheet"
       ),
       erp_target(state, lay),
+      erp_board(state, lay),
       erp_charts(state, lay),
       erp_series_charts(state, lay),
       erp_plan_charts(state, lay),
@@ -2331,6 +2332,151 @@ def erp_ranked_charts(state, lay)
   }])
 end
 
+# ---- The board -------------------------------------------------------------
+#
+# Three columns of cards a hand can move, and the whole of what the server does
+# about it is reorder a list of ids. The client resolves the gesture — the
+# slop, the grip, the half-second hold on a phone, the slot under the pointer,
+# the list scrolling when the hand reaches its edge — and says three things:
+# grabbed, over here now, put down (06 §6).
+#
+# The preview is the move itself. On each `drag_over` the card is put where the
+# hand says, the view renders from the new order, and the diff turns the
+# permutation into one `MoveChild` — four bytes. There is no ghost to draw and
+# no insertion line to invent, because the board *is* the preview.
+
+ERP_BOARD_COLUMNS = ["Backlog", "In progress", "Done"]
+
+def erp_board_cards
+  {
+    "t1": {"title": "Reconcile October stock", "who": "Camille", "tone": "accent"},
+    "t2": {"title": "Chase SO-24003", "who": "Tom", "tone": "warning"},
+    "t3": {"title": "Price list for Q4", "who": "Iris", "tone": "info"},
+    "t4": {"title": "Close the Lyon count", "who": "Grace", "tone": "success"},
+    "t5": {"title": "Archive 2025 invoices", "who": "Nightly", "tone": "accent"},
+    "t6": {"title": "Rewrite the pick sheet", "who": "Camille", "tone": "info"}
+  }
+end
+
+def erp_board_defaults
+  {"Backlog": ["t1", "t2", "t3"], "In progress": ["t4", "t5"], "Done": ["t6"]}
+end
+
+# The board's share of the component's state. `gallery_defaults` builds from
+# these rather than from whatever arrives, so a key that is not named here is
+# dropped on every round trip — which is a good rule and an easy one to be
+# caught by.
+def erp_board_state_defaults
+  {"kan": erp_board_defaults(), "kan_held": "", "kan_from": ["Backlog", 0], "kan_say": " "}
+end
+
+# One card. Keyed, because the key is what the client holds it by across a
+# move between columns — the node itself is destroyed and rebuilt there, and
+# its id with it (02 §5).
+def erp_board_card(id, card, held)
+  body = column(
+    {"gap": 1, "grow": 1},
+    [text(card["title"], {"weight": "semibold", "size": 1}), muted(card["who"])]
+  )
+  style = {
+    "display": "row",
+    "gap": 2,
+    "align": "center",
+    "pad": 3,
+    "radius": 2,
+    "bg": "surface.raised",
+    "border": 1,
+    "border_color": held ? "accent.base" : "border.subtle",
+    "shadow": held ? 2 : 0,
+    "opacity": held ? 160 : 255,
+    "width": "100%",
+    "transition": "fast"
+  }
+  # The card says which card it is in its props, never in the event's name
+  # (03 §4), and hears the grab so the server knows what is in the hand.
+  draggable(id, "card", style, [drag_grip("Move " + card["title"]), body], {
+    "p": {"card": id, "label": card["title"]},
+    "on": {"drag_start": "kan_grab"}
+  })
+end
+
+def erp_board_column(state, name, ids, cards)
+  held = state["kan_held"] ?? ""
+  rows = ids.map(fn(id) { erp_board_card(id, cards[id], id == held) })
+  rows = [muted("nothing here")] if rows.length() == 0
+  drop_zone(
+    "card",
+    {"display": "column", "gap": 2, "pad": 2, "radius": 3, "bg": "surface.sunken", "width": "100%", "min_height": 120},
+    "kan_over",
+    "kan_drop",
+    [row({"gap": 2, "align": "center", "pad": [0, 1, 1, 1]}, [text(name, {"weight": "bold", "size": 1}), spacer(), muted(str(ids.length()))])].concat(rows),
+    {"column": name}
+  )
+end
+
+# What a screen reader is told. The client does not announce — announcing is
+# prose and prose is content — so the move says itself here, in a node the
+# platform reads out when its text changes (03 §6.1).
+def erp_board_say(state)
+  keyed("kan_say", {
+    "k": "text",
+    "t": state["kan_say"] ?? " ",
+    "s": {"size": 0, "fg": "text.muted"},
+    "p": {"role": "status", "live": "polite"}
+  })
+end
+
+def erp_board(state, lay)
+  board = state["kan"] ?? erp_board_defaults()
+  cards = erp_board_cards()
+  cols = ERP_BOARD_COLUMNS.map(fn(name) { erp_board_column(state, name, board[name] ?? [], cards) })
+  erp_card(
+    "The week's work",
+    [muted("drag a card by its grip, or focus one and press Space")],
+    [{
+      "k": "box",
+      "s": {"display": lay["roomy"] ? "grid" : "column", "gap": 3, "width": "100%", "align": "start"},
+      "p": {"columns": 3},
+      "c": cols
+    }, erp_board_say(state)]
+  )
+end
+
+# The server's whole share of a drag. `drag_start` latches what is in the hand
+# and where it came from; `drag_over` puts it where the hand says, which *is*
+# the preview; `drop` either lets it stand or, on the sentinel slot, puts it
+# back where it began.
+def erp_board_event(state, event, params, props)
+  board = state["kan"] ?? erp_board_defaults()
+  cards = erp_board_cards()
+  return state unless event == "kan_over" || event == "kan_drop" || event == "kan_grab"
+
+  if event == "kan_grab"
+    was = board_at(board, props["card"] ?? "")
+    held = set_key(set_key(state, "kan_held", props["card"] ?? ""), "kan_from", was)
+    return set_key(held, "kan", board)
+  end
+
+  id = state["kan_held"] ?? ""
+  return state if id == ""
+
+  slot = drag_slot(params)
+  col = props["column"] ?? board_at(board, id)[0]
+  if event == "kan_over"
+    return set_key(state, "kan", board_move(board, id, col, slot))
+  end
+
+  # The drop. A cancelled gesture carries `-1` and the card goes home.
+  if slot < 0
+    was = state["kan_from"] ?? board_at(board, id)
+    put = board_move(board, id, was[0], was[1])
+    return set_key(set_key(set_key(state, "kan", put), "kan_held", ""), "kan_say", cards[id]["title"] + " stayed in " + was[0])
+  end
+  put = board_move(board, id, col, slot)
+  said = cards[id]["title"] + " moved to " + col + ", " + str(slot + 1) + " of " + str(put[col].length())
+  set_key(set_key(set_key(state, "kan", put), "kan_held", ""), "kan_say", said)
+end
+
 # ---- The two charts with an axis of their own ------------------------------
 #
 # A candlestick and a Gantt, which the four above are not: one scales to the
@@ -2580,6 +2726,7 @@ def gallery_defaults(state)
     .merge(erp_inventory_defaults())
     .merge(erp_reports_defaults())
     .merge(erp_settings_defaults())
+    .merge(erp_board_state_defaults())
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
   end
@@ -2593,6 +2740,8 @@ def gallery(event_data)
   state = gallery_defaults(event_data["state"] ?? {})
   picker = erp_picker_name(event)
   return erp_picker(state, picker, event, props) unless picker == ""
+
+  return erp_board_event(state, event, params, props) if event == "kan_grab" || event == "kan_over" || event == "kan_drop"
 
   match event {
     # The shell.

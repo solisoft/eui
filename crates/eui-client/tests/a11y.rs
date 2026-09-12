@@ -225,3 +225,50 @@ fn an_assistive_technologys_click_still_reaches_the_handler() {
     assert_eq!(events, vec![EventKind::Click], "declaring a role does not change what a press does");
     let _ = Input::Key { key: "a".into(), modifiers: 0, down: true };
 }
+
+/// 03 §6: a node that can be picked up offers the two moves, and only where
+/// there is somewhere to go. They do what `Ctrl` with an arrow does, which is
+/// what keeps the ceiling rule true — nothing an assistive technology can do
+/// exceeds what a keyboard user can.
+#[test]
+fn a_row_that_can_be_moved_offers_the_two_moves_where_there_is_somewhere_to_go() {
+    const A_DRAG: u32 = 30;
+    const A_ACCEPTS: u32 = 31;
+    const A_GRAB: u32 = 32;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.props.push((A_ACCEPTS, Value::Bool(true)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 3 });
+    for i in 0..3u32 {
+        let p0 = tree.props.len() as u32;
+        tree.props.push((A_DRAG, Value::Bool(true)));
+        let h0 = tree.handlers.len() as u32;
+        tree.handlers.push((EventKind::DragStart, Handler::Server(A_GRAB)));
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 10 + i, style: 2, key: 50 + i, text: None, props: (p0, 1), handlers: (h0, 1), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefAtom { id: A_DRAG, value: "drag".into() },
+        Op::DefAtom { id: A_ACCEPTS, value: "accepts".into() },
+        Op::DefAtom { id: A_GRAB, value: "grabbed".into() },
+        Op::DefAtom { id: 50, value: "a".into() },
+        Op::DefAtom { id: 51, value: "b".into() },
+        Op::DefAtom { id: 52, value: "c".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 2, record: StyleRecord { height: Dim::Px(30), width: Dim::Px(200), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+
+    let snap = d.access_snapshot();
+    let of = |id: u32| {
+        let ix = d.session().lookup(id).unwrap();
+        snap.nodes.iter().find(|n| n.id == u64::from(ix.raw()) + 1).expect("in the tree").clone()
+    };
+    let (first, middle, last) = (of(10), of(11), of(12));
+    assert!(!first.move_prev && first.move_next, "nothing before the first");
+    assert!(middle.move_prev && middle.move_next, "the middle goes either way");
+    assert!(last.move_prev && !last.move_next, "nothing after the last");
+    assert!(first.focus, "and it can be reached without a pointer at all");
+}

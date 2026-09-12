@@ -856,6 +856,17 @@ pub struct WellKnown {
     /// splitter, a slider, anything dragged. Without it a hover costs a
     /// round trip per pointer position (06 §1).
     pub drag_only: Option<u32>,
+    /// A node that can be picked up, and the group it belongs to (03 §3.4).
+    pub drag: Option<u32>,
+    /// A node that takes what others carry, and the groups it takes.
+    pub accepts: Option<u32>,
+    /// A grip inside a draggable node: a press here grabs at once, with no
+    /// slop to cross and no hold to wait out. It is what makes a row
+    /// draggable by a finger without stealing the stroke that scrolls the
+    /// list it is in (06 §5).
+    pub drag_handle: Option<u32>,
+    /// Which way a container's slots run, and so which arrows move them.
+    pub drag_axis: Option<u32>,
     /// A media node's asset.
     pub src: Option<u32>,
     /// Whether it plays.
@@ -882,6 +893,10 @@ impl WellKnown {
             "wake" => &mut self.wake,
             "locate" => &mut self.locate,
             "drag_only" => &mut self.drag_only,
+            "drag" => &mut self.drag,
+            "accepts" => &mut self.accepts,
+            "drag_handle" => &mut self.drag_handle,
+            "drag_axis" => &mut self.drag_axis,
             "src" => &mut self.src,
             "playing" => &mut self.playing,
             "loop" => &mut self.loop_,

@@ -36,6 +36,14 @@ const CLOSE: Icon = &[&[(6.0, 6.0), (18.0, 18.0)], &[(18.0, 6.0), (6.0, 18.0)]];
 
 const MENU: Icon = &[&[(4.0, 7.0), (20.0, 7.0)], &[(4.0, 12.0), (20.0, 12.0)], &[(4.0, 17.0), (20.0, 17.0)]];
 
+/// The grip on something that can be dragged (03 §3.4). Three short rules,
+/// and both halves of that are decided rather than chosen. Not the six dots
+/// the convention draws, because a dot here is a run of one point, which comes
+/// out as a disc of the stroke's own radius — a pixel and a third at the size
+/// a grip is used at — and what the eye gets is a smudge. And not two rules,
+/// because two rules are an equals sign.
+const GRIP: Icon = &[&[(8.0, 7.0), (16.0, 7.0)], &[(8.0, 12.0), (16.0, 12.0)], &[(8.0, 17.0), (16.0, 17.0)]];
+
 const ARROW_UP: Icon = &[&[(12.0, 19.0), (12.0, 5.0)], &[(6.0, 11.0), (12.0, 5.0), (18.0, 11.0)]];
 const ARROW_DOWN: Icon = &[&[(12.0, 5.0), (12.0, 19.0)], &[(6.0, 13.0), (12.0, 19.0), (18.0, 13.0)]];
 const ARROW_LEFT: Icon = &[&[(19.0, 12.0), (5.0, 12.0)], &[(11.0, 6.0), (5.0, 12.0), (11.0, 18.0)]];
@@ -127,6 +135,7 @@ pub fn icon(name: &str) -> Option<Icon> {
         "plus" => PLUS,
         "close" => CLOSE,
         "menu" => MENU,
+        "grip" | "drag" => GRIP,
         "arrow_up" | "sort_asc" => ARROW_UP,
         "arrow_down" | "sort_desc" => ARROW_DOWN,
         "arrow_left" => ARROW_LEFT,
@@ -161,6 +170,8 @@ pub const NAMES: &[&str] = &[
     "plus",
     "close",
     "menu",
+    "grip",
+    "drag",
     "arrow_up",
     "arrow_down",
     "arrow_left",

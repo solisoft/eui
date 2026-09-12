@@ -106,6 +106,24 @@ The tests are the driver's, not the window's — a contact becomes the pointer
 before any platform is involved — so they run everywhere and want no touch
 screen.
 
+06 §5.1 is here too: a contact held past the timer on a `drag` becoming a drag
+and never a tap, one held on a `long_press` handler reporting it and giving the
+press back without a click, one that wandered first being a scroll with no
+timer left to fire, and a held contact on a row carrying neither doing nothing
+at all. The hold is a clock the test names, not a sleep.
+
+### 7.7 Dragging — `crates/eui-client/tests/drag.rs`
+
+06 §6: an arming press that becomes a click being indistinguishable from one
+that never armed; the slop turning the press into a drag and taking the click
+back; a handle grabbing without it; `drag_over` arriving once a boundary
+crossed and not once a sample; the slot being the box the pointer is in, so a
+row moved under the hand does not oscillate; a `MoveChild` arriving mid-drag
+and the gesture still naming the same row; a target inside the source
+resolving nothing; `Escape`, a lost window and a vanished source each ending
+it with `slot = -1`; and a drag at the foot of a list scrolling it and
+reporting one `scroll` rather than one a frame.
+
 ### 7.4 Files — `crates/eui-client/tests/files.rs`
 
 Spec 03 §3.2 and 01 §6, eleven vectors. A click on a node carrying `pick`

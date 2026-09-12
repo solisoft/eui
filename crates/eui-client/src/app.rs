@@ -1992,9 +1992,18 @@ impl Shell {
             }
             A::ActionRequested(req) => {
                 let Some(t) = self.tabs.get_mut(active) else { return };
+                // 03 §6: focus, click, and the two custom moves. AccessKit has
+                // no drag vocabulary — ARIA deprecated `grabbed` and
+                // `dropeffect`, and nothing replaced them — so a move arrives
+                // as the custom action the node offered, by the index it was
+                // published under.
                 let out = match req.action {
-                    accesskit::Action::Click => t.backend.access_action(req.target_node.0, true),
-                    accesskit::Action::Focus => t.backend.access_action(req.target_node.0, false),
+                    accesskit::Action::Click => t.backend.access_action(req.target_node.0, 1),
+                    accesskit::Action::Focus => t.backend.access_action(req.target_node.0, 0),
+                    accesskit::Action::CustomAction => match req.data {
+                        Some(accesskit::ActionData::CustomAction(i @ (2 | 3))) => t.backend.access_action(req.target_node.0, i as u8),
+                        _ => Vec::new(),
+                    },
                     _ => Vec::new(),
                 };
                 t.send(out);

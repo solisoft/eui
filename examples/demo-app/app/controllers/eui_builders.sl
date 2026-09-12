@@ -5174,6 +5174,133 @@ def stat_spark(label, value, hint, vals, w)
   )
 end
 
+# ---- Picking things up -----------------------------------------------------
+#
+# Spec 06 §6. The client owns the whole of the hand — how a press becomes a
+# grab, what is under it, which slot it is in, when a list should scroll
+# because the hand is at its edge — and tells the server three things: one
+# `drag_start`, one `drag_over` a boundary crossed, one `drop`.
+#
+# Two props do the declaring, and the split between them is the design:
+# **the prop says what a node *is*; the handler says who *hears*.** A card is
+# draggable and the column is what hears the drop, and those are two different
+# nodes. There is no "reorder me" flag either — reordering is the case where
+# the card's own column is the target, so one `accepts` gives both.
+#
+# A draggable node MUST carry a key. It is what the client holds it by: a move
+# between columns is a removal and an insertion, so the node is rebuilt under
+# the hand and its id changes, and only the key survives that.
+
+# A thing that can be picked up. `group` is what a column has to accept for it
+# to land there; the key is not optional.
+def draggable(key, group, style, children, opts = {})
+  {
+    "k": "box",
+    "key": key,
+    "s": style,
+    "p": {"drag": group}.merge(opts["p"] ?? {}),
+    "on": opts["on"] ?? {},
+    "c": children
+  }
+end
+
+# The grip. A press here grabs at once — no slop to cross on a mouse and no
+# half-second to wait out on a finger — which is what lets a row be dragged out
+# of a list a finger can otherwise only scroll (06 §5 step 2).
+def drag_grip(label)
+  {
+    "k": "box",
+    "s": {
+      "display": "row",
+      "align": "center",
+      "justify": "center",
+      "width": 20,
+      "height": 24,
+      "radius": 2,
+      "cursor": "grab",
+      "fg": "text.muted",
+      "shrink": 0,
+      "transition": "fast"
+    },
+    "p": {"drag_handle": true, "role": "button", "label": label},
+    "on": {
+      "pointer_enter": {"local": "self.style = @lit", "styles": {"lit": drag_grip_style(true)}},
+      "pointer_leave": {"local": "self.style = @rest", "styles": {"rest": drag_grip_style(false)}}
+    },
+    "c": [{"k": "icon", "s": {"width": 18, "height": 18}, "p": {"name": "grip"}}]
+  }
+end
+
+# The grip lit and at rest. A grip is a small target and an easy one to miss,
+# so it answers the pointer before the pointer commits to it.
+def drag_grip_style(lit)
+  {
+    "display": "row",
+    "align": "center",
+    "justify": "center",
+    "width": 20,
+    "height": 24,
+    "radius": 2,
+    "cursor": "grab",
+    "bg": lit ? "surface.sunken" : "none",
+    "fg": lit ? "text.default" : "text.muted",
+    "shrink": 0,
+    "transition": "fast"
+  }
+end
+
+# A thing that takes what others carry. The handlers are what make it a target
+# at all: a container marked `accepts` with nothing listening is not one.
+def drop_zone(group, style, on_over, on_drop, children, props = {})
+  {
+    "k": "box",
+    "s": style,
+    "p": {"accepts": group}.merge(props),
+    "on": {"drag_over": on_over, "drop": on_drop},
+    "c": children
+  }
+end
+
+# The slot a `drag_over` or a `drop` carries: the third number, and `-1` when
+# the gesture was cancelled rather than finished.
+def drag_slot(params)
+  (params["payload"] ?? [])[2] ?? -1
+end
+
+# Move `id` to `slot` of `col` in a board — a hash of column name to a list of
+# ids — taking it out of wherever it was first. This is the whole of what a
+# reorder is on the server: the view renders the lists, the cards are keyed,
+# and the diff turns the permutation into `MoveChild` ops on its own.
+def board_move(board, id, col, slot)
+  out = {}
+  for name in board.keys()
+    kept = []
+    for it in board[name]
+      kept = kept.concat([it]) if it != id
+    end
+    out[name] = kept
+  end
+  at = slot < 0 ? 0 : slot
+  at = out[col].length() if at > out[col].length()
+  before = out[col].slice(0, at)
+  after = out[col].slice(at, out[col].length())
+  out[col] = before.concat([id]).concat(after)
+  out
+end
+
+# Where `id` sits now, as `[column, slot]`, so a cancelled drag can put it
+# back exactly where it was rather than at the top of where it came from.
+def board_at(board, id)
+  for name in board.keys()
+    i = 0
+    for it in board[name]
+      return [name, i] if it == id
+      i = i + 1
+    end
+  end
+  [board.keys()[0], 0]
+end
+
 # ---- Feed ------------------------------------------------------------------
 
 # A text whose content repeats across many nodes: interned as an atom, so
