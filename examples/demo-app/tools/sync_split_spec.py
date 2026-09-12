@@ -19,6 +19,23 @@ MARKER = "# ---- copied from app/controllers/eui_builders.sl, do not edit ----"
 
 SPECS = {
     ROOT / "tests" / "split_spec.sl": ["split_span", "split_sizes", "split_at"],
+    ROOT / "tests" / "selection_spec.sl": [
+        "selection",
+        "selection_scope",
+        "selection_all",
+        "selection_none",
+        "selection_scoped",
+        "selection_ids_of",
+        "selection_all?",
+        "selection_has?",
+        "selection_toggle",
+        "selection_count",
+        "selection_empty?",
+        "selection_mark",
+        "selection_index",
+        "selection_in?",
+        "selection_ids",
+    ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",
         "split_sizes",

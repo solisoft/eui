@@ -651,25 +651,21 @@ def ghost_button(label, on_click)
   button_variant(label, on_click, "none", "accent.base")
 end
 
-# A checkbox is a small box whose fill says its state, plus a label. `props`
-# travel back with the click so the handler knows which item it was.
-#
-# The row is the hit target and the mark is a child of it: a mark that changed
-# size under the pointer would shove its own label sideways, so the pointer
-# washes the row and leaves the mark alone. `checked` is not handed to
-# `control` as selection — the mark already says the state, and a second
-# background saying it as well reads as a bug.
-def checkbox(label, checked, on_toggle, props, o = {})
-  size = o["size"] ?? "md"
+# The tick itself, without the row around it. It draws and nothing else: no
+# handler, no key, no role. That is what lets it sit inside a node whose own
+# role is a leaf — `option`, say — where a real `checkbox` would be dropped
+# from the accessibility tree while still taking the click (06 §2 gives the
+# nearest handler on the path the event, and that would be the mark, not the
+# row). Whatever holds it says the state; this only shows it.
+def check_mark(checked, mixed, disabled, size)
   box = checkbox_box_px(size)
-  disabled = o["disabled"] == true
-  mixed = o["indeterminate"] == true
   lit = checked || mixed
-  mark = {
+  {
     "k": "box",
     "s": {
       "width": box,
       "height": box,
+      "shrink": 0,
       "radius": 1,
       "border": 2,
       "border_color": disabled ? "border.subtle" : (lit ? "accent.base" : "border.strong"),
@@ -688,6 +684,29 @@ def checkbox(label, checked, on_toggle, props, o = {})
       }
     )] : []
   }
+end
+
+# A checkbox is a small box whose fill says its state, plus a label. `props`
+# travel back with the click so the handler knows which item it was.
+#
+# The row is the hit target and the mark is a child of it: a mark that changed
+# size under the pointer would shove its own label sideways, so the pointer
+# washes the row and leaves the mark alone. `checked` is not handed to
+# `control` as selection — the mark already says the state, and a second
+# background saying it as well reads as a bug.
+def checkbox(label, checked, on_toggle, props, o = {})
+  size = o["size"] ?? "md"
+  disabled = o["disabled"] == true
+  mixed = o["indeterminate"] == true
+  mark = check_mark(checked, mixed, disabled, size)
+  # A checkbox with no label is a bare tick — a header's select-all, say, where
+  # the count beside it is a node of its own and must not be swallowed into the
+  # tick's name. Don't leave an empty text node for the gap to push away from.
+  kids = [mark]
+  kids = kids.concat([text(label, {
+    "size": control_text_size(size),
+    "fg": disabled ? "text.disabled" : (checked ? "text.muted" : "text.default")
+  })]) unless label.blank?
   control({
     "key": o["key"] ?? ("cb:" + (props["id"] ?? label).to_s),
     "size": size,
@@ -700,13 +719,7 @@ def checkbox(label, checked, on_toggle, props, o = {})
       "checked": mixed ? "mixed" : checked,
       "label": o["name"] ?? label
     },
-    "c": [
-      mark,
-      text(label, {
-        "size": control_text_size(size),
-        "fg": disabled ? "text.disabled" : (checked ? "text.muted" : "text.default")
-      })
-    ]
+    "c": kids
   })
 end
 
@@ -2538,6 +2551,475 @@ def dropdown(anchor, content, open, max_px = 0)
       "c": [scroll(pane, content)]
     }
   ])
+end
+
+# ---- Multi-selection --------------------------------------------------------
+# A selection is `{"ids": [...], "all": Bool, "scope": Str}`, and the flag is
+# the whole design:
+#
+#   all == false   `ids` are what is chosen.
+#   all == true    everything is chosen *except* `ids`.
+#
+# The second reading is what makes "select all" free over a windowed list. A
+# selection held as a list of ids would put ten thousand strings into the
+# session state and re-serialise them on every event; held as one boolean plus
+# the handful of rows someone unticked afterwards, it costs nothing and answers
+# for rows the server has never sent. An application spends it the same way:
+# `all: true` goes into the query as `NOT IN (ids)`, not as an enumeration.
+#
+# `selection_toggle` is one body with two meanings — add-or-remove in `ids` is
+# "choose" under the first reading and "except" under the second — and that
+# symmetry is the reason for the shape rather than a happy accident.
+#
+# `scope` is what stops the flag lying. "All" is always relative to the query
+# that was on screen when it was clicked; select every unpaid order, clear the
+# filter, and without a scope token "all" silently means every order there is.
+# The caller puts whatever names its query in there and compares it.
+#
+# Every field is read with `??` and `== true`, never `||`: in Soli `false` and
+# `0` are truthy, so `sel["all"] || false` is a bug that survives testing.
+def selection(ids = [], scope = "")
+  {"ids": ids, "all": false, "scope": scope}
+end
+
+def selection_scope(sel)
+  (sel ?? {})["scope"] ?? ""
+end
+
+# Everything, as one boolean. The exception list starts empty.
+def selection_all(sel)
+  {"ids": [], "all": true, "scope": selection_scope(sel)}
+end
+
+def selection_none(sel)
+  {"ids": [], "all": false, "scope": selection_scope(sel)}
+end
+
+# A selection is only meaningful for the query it was made in. Hand this the
+# token naming the current query and it answers with the selection, or with an
+# empty one when the query has moved on underneath it.
+def selection_scoped(sel, scope)
+  return selection([], scope) if sel.nil? || selection_scope(sel) != scope
+
+  sel
+end
+
+def selection_ids_of(sel)
+  (sel ?? {})["ids"] ?? []
+end
+
+def selection_all?(sel)
+  (sel ?? {})["all"] == true
+end
+
+def selection_has?(sel, id)
+  inside = selection_ids_of(sel).includes?(id)
+  return !inside if selection_all?(sel)
+
+  inside
+end
+
+# `concat` appends to the array it is called on and hands it back, so
+# `ids.concat([id])` would grow the selection this one was derived from — the
+# caller's, and anything else still holding that array. `kept` is fresh out of
+# `filter`, so appending to it touches nobody, and the filter is doing double
+# duty as the copy.
+def selection_toggle(sel, id)
+  ids = selection_ids_of(sel)
+  kept = ids.filter(fn(x) { x != id })
+  return {"ids": kept, "all": selection_all?(sel), "scope": selection_scope(sel)} if kept.length() < ids.length()
+
+  {"ids": kept.concat([id]), "all": selection_all?(sel), "scope": selection_scope(sel)}
+end
+
+def selection_count(sel, total)
+  held = selection_ids_of(sel).length()
+  return held unless selection_all?(sel)
+  return 0 if held > total
+
+  total - held
+end
+
+def selection_empty?(sel, total)
+  selection_count(sel, total) == 0
+end
+
+# What the header's tick should say: "none", "all", or "some" — which is the
+# `"mixed"` third state of 03 §6.1, and which `checkbox` already draws as a
+# minus when it is given `indeterminate`.
+def selection_mark(sel, total)
+  count = selection_count(sel, total)
+  return "none" if count == 0
+  return "all" if count >= total
+
+  "some"
+end
+
+# `selection_has?` walks the id list, which is right for a list of twenty and
+# wrong for a window of thirty rows re-asked on every scroll. Build the index
+# once per render and read it per row.
+#
+# The index stores `true` and holds nothing else. A `false` entry would read
+# correctly through `selection_in?` and still be counted by `.keys().length()`,
+# so a count taken from the hash would start lying the first time someone
+# ticked a row and unticked it again.
+def selection_index(sel)
+  index = {}
+  for id in selection_ids_of(sel)
+    index[id] = true
+  end
+  index
+end
+
+def selection_in?(index, sel, id)
+  inside = index[id] == true
+  return !inside if selection_all?(sel)
+
+  inside
+end
+
+# The chosen ids, spelled out. Only for a list short enough that the server
+# already holds every row — a windowed list must push `all` into its query
+# instead, which is the whole point of the flag.
+def selection_ids(sel, every)
+  return selection_ids_of(sel) unless selection_all?(sel)
+
+  every.filter(fn(id) { !selection_ids_of(sel).includes?(id) })
+end
+
+# Ten thousand reads as 10 000, not as 10000. A count this widget shows sits
+# beside figures the application wrote itself, and one of them grouped and the
+# other not looks like a bug rather than a choice.
+def grouped_number(n)
+  gn_chars = str(n).chars()
+  gn_out = ""
+  gn_i = 0
+  while gn_i < gn_chars.length()
+    gn_left = gn_chars.length() - gn_i
+    gn_out = gn_out + " " if gn_i > 0 && gn_left % 3 == 0
+    gn_out = gn_out + gn_chars[gn_i]
+    gn_i = gn_i + 1
+  end
+  gn_out
+end
+
+# What the header says. Not "3 selected" on its own: the total is what makes
+# "select all" mean anything, and over a windowed list it is the only number
+# saying how much is out there at all.
+def multi_select_count_text(sel, total)
+  msc_count = selection_count(sel, total)
+  return "None selected" if msc_count == 0
+  return "All " + grouped_number(total) + " selected" if msc_count >= total
+
+  grouped_number(msc_count) + " of " + grouped_number(total) + " selected"
+end
+
+# The tri-state tick, the count, and a way back to nothing.
+#
+# The tick is a real `checkbox` — it is a control in its own right, it is not
+# inside a row, and `indeterminate` already gives it the `"mixed"` third state
+# of 03 §6.1. Its visible label is empty and its accessible name comes from
+# `name`, because the count beside it is a separate node and must not become
+# part of the tick's name.
+#
+# The count keeps its node whatever it says. A live region that is removed and
+# re-added is an insertion rather than a change, and an insertion is not
+# reliably announced — so the node is always there and only its text moves.
+def multi_select_header(sel, total, o)
+  msh_mark = selection_mark(sel, total)
+  msh_parts = []
+  msh_parts = msh_parts.concat([checkbox("", msh_mark == "all", o["on_all"], {}, {
+    "key": o["key"] + ":all",
+    "size": o["size"] ?? "sm",
+    "indeterminate": msh_mark == "some",
+    "name": o["all_label"] ?? "Select every row"
+  })]) if o["on_all"].present?
+  msh_parts = msh_parts.concat([{
+    "k": "box",
+    "s": {"display": "row", "align": "center", "grow": 1},
+    "p": {"role": "status", "live": "polite"},
+    "c": [muted(multi_select_count_text(sel, total))]
+  }])
+  msh_parts = msh_parts.concat([text_link("Clear", o["on_clear"], {})]) if o["on_clear"].present? && msh_mark != "none"
+  row({"gap": 2, "align": "center", "width": "100%"}, msh_parts)
+end
+
+# One row, and it is one `control` with one click handler.
+#
+# The tick inside it is `check_mark` and not `checkbox`, deliberately. The
+# row's role is `option`, which 03 §6 rule 1 makes a leaf: a real checkbox in
+# there would be dropped from the accessibility tree while hit-testing still
+# handed it the click (06 §2 gives the event to the nearest handler on the
+# path, which would be the mark and not the row). One handler per row is also
+# one Tab stop per row, which is what a list forty rows long wants.
+#
+# Selected is said by a 3 px rule down the left edge and by the tick, and not
+# by a background. `control` folds `selected` into the *resting* colours before
+# the hover delta is taken, and the quiet tone's selected wash and its hover
+# wash are both `surface.sunken` — so a selected row under the pointer would
+# lose the only thing saying it was selected. A border width reserved at rest
+# and merely coloured when chosen is the same trick `button_variant` uses
+# below: layout has nothing to do, and hover has nothing to take away. So
+# `selected` is not handed to `control` at all.
+#
+# `a11y.selected` is, and it is present even when false. `control`'s own
+# `selected` is purely visual — `a11y_props` promotes only `disabled`,
+# `loading` and `read_only` — and to an assistive technology an absent
+# `selected` means "not selectable" where `false` means "selectable, not
+# selected". Leave it off the unticked rows and the list reads as though only
+# the chosen ones were ever there.
+def multi_select_row(item, chosen, on_toggle, pos, total, o)
+  msr_size = o["size"] ?? "sm"
+  msr_on = chosen == true
+  msr_off = item["disabled"] == true
+  msr_body = [check_mark(msr_on, false, msr_off, msr_size)]
+  if o["row"].nil?
+    msr_body = msr_body.concat([text(item["label"], {
+      "size": control_text_size(msr_size),
+      "grow": 1,
+      "weight": msr_on ? "semibold" : "regular",
+      "fg": msr_off ? "text.disabled" : "text.default"
+    })])
+  else
+    msr_make = o["row"]
+    msr_body = msr_body.concat(msr_make(item, msr_on))
+  end
+  # `id` is what comes back as `params["props"]["id"]` and is what the
+  # selection is keyed by. `row` is the absolute index a windowed list needs
+  # (04 §7.1): a child without one is not laid out at all. Two numbers, two
+  # jobs — and a selection keyed by the second would name a different record
+  # the moment the list is sorted or filtered.
+  msr_props = {"id": item["id"]}
+  msr_props["row"] = item["row"] unless item["row"].nil?
+  control({
+    "key": o["key"] + ":row:" + item["id"].to_s,
+    "size": msr_size,
+    "tone": "quiet",
+    "shape": {
+      "justify": "start",
+      "align": "center",
+      "width": "100%",
+      "min_width": 0,
+      "gap": 2,
+      "radius": 1,
+      "pad": [1, 2, 1, 2],
+      "border": [0, 0, 0, 3],
+      "border_color": msr_on ? "accent.base" : "none"
+    }.merge(o["row_shape"] ?? {}),
+    "on": {"click": on_toggle},
+    "props": msr_props,
+    "disabled": msr_off,
+    "a11y": {
+      "role": "option",
+      "selected": msr_on,
+      "label": item["name"] ?? item["label"],
+      "pos_in_set": pos,
+      "set_size": total
+    },
+    "c": msr_body
+  })
+end
+
+# The container's own semantics. `list_box` is not a leaf role, so it keeps its
+# rows; `multi_selectable` is not in the client's atom table and reaches no
+# assistive technology today, but 03 §6.1 requires a client to ignore a prop it
+# does not understand, so it costs nothing and is right the day the client
+# grows it.
+def multi_select_semantics(o)
+  msm_props = {"role": "list_box", "orientation": "vertical", "multi_selectable": true}
+  msm_props["label"] = o["label"] unless o["label"].blank?
+  msm_props
+end
+
+# Header, rule, whatever the caller wants standing above the rows, then the
+# rows. `head` is for a caption that belongs to the list and must not scroll
+# with it — a row of column names, say: the same argument `data_grid` makes for
+# keeping its header outside the scroller, and version 1 has no sticky.
+def multi_select_shell(sel, total, o, body)
+  mss_parts = [multi_select_header(sel, total, o), divider()]
+  mss_parts = mss_parts.concat(o["head"]) unless o["head"].nil?
+  mss_parts = mss_parts.concat([body])
+  column({"gap": 0, "width": "100%"}, mss_parts)
+end
+
+# A list of rows, all of them present, each one tickable.
+#
+# `items` are `{"id", "label"}` hashes, optionally `"name"` (the accessible
+# name, when the label alone would not do) and `"disabled"`. `o` carries:
+#
+#   key       required, and the prefix for every key inside. The arena's key
+#             map is flat and first-wins, so two of these over the same ids
+#             would otherwise make each other's rows unreachable.
+#   label     the list's accessible name.
+#   size      "sm" by default; a list is denser than a form.
+#   total     when the caller knows of more rows than it passed.
+#   on_all    the header's tri-state tick. Without it there is no header tick.
+#   on_clear  a way back to nothing, shown only when something is chosen.
+#   height    px; present means the rows scroll inside it.
+#   empty     what stands there when there is nothing to choose from.
+#   row       fn(item, chosen) -> children, for a row that is more than a
+#             label: a bar, a badge, a second line.
+#   row_shape extra resting style for every row; the caller wins. Pin a
+#             `height` here when the rows are windowed, so what is measured is
+#             what `heights` promised.
+#   head      nodes between the rule and the rows, outside the scroller.
+def multi_select_list(items, sel, on_toggle, o = {})
+  throw "multi_select_list: o[\"key\"] names every node inside it" if o["key"].blank?
+
+  msl_total = o["total"] ?? items.length()
+  return multi_select_shell(sel, msl_total, o, column(
+    {"pad": 6, "align": "center", "width": "100%"},
+    [muted(o["empty"] ?? "Nothing to choose from")]
+  )) if items.length() == 0
+
+  msl_index = selection_index(sel)
+  msl_rows = range(0, items.length()).map(fn(i) {
+    multi_select_row(items[i], selection_in?(msl_index, sel, items[i]["id"]), on_toggle, i + 1, msl_total, o)
+  })
+  msl_body = scroll({"width": "100%", "gap": 0}, msl_rows)
+  msl_body["s"]["height"] = o["height"] unless o["height"].nil?
+  msl_body["p"] = multi_select_semantics(o)
+  multi_select_shell(sel, msl_total, o, msl_body)
+end
+
+# The same widget over rows the server does not hold (04 §7.1). `make` is
+# `fn(i)` returning the item for absolute row `i` — a pure function of the
+# index, as `erp_product` already is — and only the rows in `window` are built.
+#
+# `o` additionally carries `count`'s companions: `heights`, `item_height` and
+# `on_window`. Two things this must not get wrong, and neither says so:
+#
+#   `set_size` is `count` and never the window's length. 03 §6.1 is explicit
+#   that it counts what virtualisation left out, and the client already honours
+#   it — so an assistive technology says "12 of 10 000" only if we send the
+#   10 000.
+#
+#   A row must not change height when it is ticked. Row tops come from
+#   `heights`, but a row that is present is measured at its content size and
+#   drawn at that top — so a row that grows when chosen overlaps the one below
+#   it, with no clamp and no warning, and the scrollbar comes up short.
+def multi_select_window(make, count, window, sel, on_toggle, o = {})
+  throw "multi_select_window: o[\"key\"] names every node inside it" if o["key"].blank?
+
+  msw_win = window ?? [0, 0]
+  msw_first = msw_win[0] ?? 0
+  msw_last = msw_win[1] ?? 0
+  msw_last = count - 1 if msw_last > count - 1
+  msw_index = selection_index(sel)
+  msw_rows = []
+  msw_rows = range(msw_first, msw_last + 1).map(fn(i) {
+    msw_item = make(i)
+    msw_item["row"] = i
+    multi_select_row(msw_item, selection_in?(msw_index, sel, msw_item["id"]), on_toggle, i + 1, count, o)
+  }) if msw_first <= msw_last
+  msw_body = list_window(
+    {"width": "100%"},
+    o["item_height"] ?? 28,
+    count,
+    o["heights"],
+    msw_rows,
+    o["on_window"]
+  )
+  msw_body["s"]["height"] = o["height"] unless o["height"].nil?
+  # `list_window` writes `p` whole, so this merges. Assigning would drop
+  # `count`, `heights` and `item_height`, and the list would quietly become an
+  # ordinary virtualised one of the thirty rows it happens to be holding.
+  msw_body["p"] = msw_body["p"].merge(multi_select_semantics(o))
+  multi_select_shell(sel, count, o, msw_body)
+end
+
+# What the anchor shows: a chip per chosen option, capped, then how many more.
+#
+# Each chip's × sends the same `on_pick` with the same id, because removing a
+# chip *is* toggling that option off — one handler, one meaning, and the panel
+# never has to be open for it. `chip_remove` keys itself from `props["id"]`, so
+# every chip must carry one: hand them all the same props and they share a key,
+# and the arena's key map is flat and first-wins, so all but the first become
+# unreachable.
+def multi_select_chips(options, sel, on_pick, o)
+  msp_chosen = options.filter(fn(opt) { selection_has?(sel, opt["id"]) })
+  return [text(o["placeholder"] ?? "Choose…", {"fg": "text.muted", "grow": 1})] if msp_chosen.length() == 0
+
+  msp_max = o["max_chips"] ?? 3
+  msp_show = msp_chosen.length() > msp_max ? msp_max : msp_chosen.length()
+  msp_parts = range(0, msp_show).map(fn(i) {
+    chip(msp_chosen[i]["label"], on_pick, {"id": msp_chosen[i]["id"]})
+  })
+  msp_parts = msp_parts.concat([
+    muted("+" + str(msp_chosen.length() - msp_show))
+  ]) if msp_chosen.length() > msp_show
+  msp_parts
+end
+
+# The field itself. `combo_box` is not one of §6 rule 1's leaf roles, so the
+# chips and their × stay visible to an assistive technology rather than being
+# flattened into the anchor's name.
+def multi_select_anchor(options, sel, open, on_toggle, on_pick, o)
+  msa_style = {
+    "display": "row",
+    "align": "center",
+    "gap": 1,
+    "pad": [1, 2, 1, 2],
+    "min_width": o["min_width"] ?? 200,
+    "border": 1,
+    "border_color": "border.default",
+    "radius": 2,
+    "bg": "surface.sunken",
+    "cursor": "pointer",
+    "transition": "fast"
+  }
+  msa_style["grow"] = 1 if o["grow"] == true
+  msa_kids = multi_select_chips(options, sel, on_pick, o)
+  msa_kids = msa_kids.concat([
+    spacer(),
+    icon("chevron_down", {"fg": "text.muted", "width": 14, "height": 14})
+  ])
+  {
+    "k": "box",
+    "key": o["key"] + ":anchor",
+    "s": msa_style,
+    "p": {"role": "combo_box", "expanded": open == true, "label": o["label"] ?? "Choose"},
+    "on": stateful(msa_style, TONES["neutral"], {"click": on_toggle}),
+    "c": msa_kids
+  }
+end
+
+# Several of something, chosen in a panel, shown as chips.
+#
+# The panel stays open as options are ticked. That is the one behavioural
+# difference from `select`, and it is not in the widget: the caller's `on_pick`
+# toggles the selection and leaves `open` alone, where `select`'s closes it.
+#
+# Its rows are the same `multi_select_row` the listbox uses — that is the whole
+# of what the two widgets share, and it is enough that a tick means the same
+# thing in both.
+#
+# `options` are `{"id", "label"}` hashes. Do not hand it thousands: a panel is
+# capped at `DROPDOWN_MAX_PX` and a virtualised one inside an overlay would
+# need its own window and a scroll to restore on reopen — which is a combo box
+# with a search field in it, and a different widget.
+def multi_select(options, sel, open, on_toggle, on_pick, o = {})
+  throw "multi_select: o[\"key\"] names every node inside it" if o["key"].blank?
+
+  msd_anchor = multi_select_anchor(options, sel, open, on_toggle, on_pick, o)
+  return msd_anchor unless open == true
+
+  # A row is `width: 100%` in a list, and inside an absolutely positioned
+  # overlay that resolves against the window rather than against the panel —
+  # so a three-option panel came out eleven hundred pixels wide. In here the
+  # rows ask for the anchor's width and the panel takes its size from them,
+  # which is what lets the client place it under the anchor at all (04 §5).
+  msd_opts = o.merge({
+    "row_shape": {"width": "auto", "min_width": o["min_width"] ?? 200}.merge(o["row_shape"] ?? {})
+  })
+  msd_index = selection_index(sel)
+  msd_rows = range(0, options.length()).map(fn(i) {
+    msd_on = selection_in?(msd_index, sel, options[i]["id"])
+    multi_select_row(options[i], msd_on, on_pick, i + 1, options.length(), msd_opts)
+  })
+  msd_panel = column({"gap": 0}, msd_rows)
+  msd_panel["p"] = multi_select_semantics(o)
+  dropdown(msd_anchor, [msd_panel], true, DROPDOWN_MAX_PX)
 end
 
 # ---- Slider ----------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Widget catalogue
 
-> The primitives are specified (`spec/03`) and painted. A hundred and eighty-two plain
+> The primitives are specified (`spec/03`) and painted. Two hundred and sixty plain
 > Soli functions build the catalogue below in
 > `examples/demo-app/app/controllers/eui_builders.sl`, and a `gallery`
 > component shows them together. `soli new <app> --eui` starts an
@@ -49,8 +49,8 @@ can ship its own without asking anyone.
 loading state), `link`, `icon_button`, `segmented_control`, `menu`,
 `context_menu`, `command_palette`, `toolbar`
 
-**Input.** `text_field`, `password_field`, `textarea`, `select`, `combobox`,
-`checkbox`, `radio_group`, `switch`, `slider`, `date_picker`,
+**Input.** `text_field`, `password_field`, `textarea`, `select`, `multi_select`,
+`combobox`, `checkbox`, `radio_group`, `switch`, `slider`, `date_picker`,
 `datetime_picker`, `date_range_picker` (one calendar engine, two selections),
 `time_picker`, `calendar`, `color_picker`, `rating`, `file_drop`, `form` with
 error display
@@ -61,7 +61,8 @@ nested, keyboard-movable), `resizable`, `stepper`
 
 **Navigation.** `navbar`, `sidebar`, `breadcrumb`, `pagination`, `tree_view`
 
-**Data.** `table` (sortable, virtualised), `data_grid` (editable cells, header outside the scroll), `list_item`, `chart`
+**Data.** `table` (sortable, virtualised), `data_grid` (editable cells, header outside the scroll), `multi_select_list`
+and `multi_select_window` (tickable rows, select-all across the whole count rather than the window), `list_item`, `chart`
 (line, bar, area, donut, drawn on `canvas`), `stat`, `code_block`, `markdown`
 
 **Feedback.** `toast`, `banner`, `progress`, `spinner`, `skeleton`,
@@ -72,14 +73,20 @@ file, both deliberate scrims, and everything else a role — which is why the sa
 widget follows a viewer into dark mode, and into their desktop's palette, with
 the server never seeing a colour.
 
+One consequence of the protocol shows through the catalogue here: `click`
+carries `[x, y]` and no modifier bits (06 §1), and `double_click` and
+`long_press` are in the enum but no client emits them. So a multi-selection is
+one row at a time, or all of them; a range is expressible from the keyboard,
+where `key_down` does carry the modifiers, and not from the pointer.
+
 The other two claims this page used to make were not true, and are being made
 true rather than restated. Every interactive widget is now built on `control`,
 which gives it hover, press and a disabled state, a size, and the props with
 which it declares what it is. Four have been moved onto it — `checkbox`,
 `switch`, `tabs`, `icon_button` — and twenty still answer the pointer with a
 cursor and nothing else. Keyboard navigation beyond `Tab` needs client work that
-has not been done: there is no roving focus, no type-ahead, and `Escape` never
-reaches the server. See [what is not there yet](/gaps).
+has not been done: there is no roving focus and no type-ahead. See
+[what is not there yet](/docs/status).
 
 ## Sound and moving pictures
 

@@ -1,7 +1,7 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders.sl` — 182 functions, all of
+> `examples/demo-app/app/controllers/eui_builders.sl` — 260 functions, all of
 > them plain Soli, none of them native, and what `soli new <app> --eui`
 > writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
@@ -10,7 +10,7 @@
 A component is data. A view returns a hash, the server turns it into nodes,
 diffs it against the tree that session last received, and sends the patch. So
 a "component" here is nothing but a Soli function that returns a hash — you
-write one the same way the library wrote its hundred and eighty-two.
+write one the same way the library wrote its two hundred and sixty.
 
 ## A component is two functions
 
@@ -247,7 +247,7 @@ before its first run and executes it on a fuel budget. Its effect is
 
 # The library
 
-A hundred and eighty-two functions, every one of them a function over the primitives.
+Two hundred and sixty functions, every one of them a function over the primitives.
 Copy the file into your application and change it — that is the intended use.
 A widget is not a protocol feature.
 
@@ -446,6 +446,7 @@ press switch between style records the session already holds.
 | `sized_input(value, on_change, width)` | An input of a fixed width |
 | `select(options, value, open, on_toggle, on_pick)` | Closed, it is its anchor; open, a dropdown. **The server owns `open`**. A list too long for the panel scrolls inside it |
 | `select_option(label, selected, on_pick)` | One row of that dropdown, carrying `{"value": label}` |
+| `multi_select(options, sel, open, on_toggle, on_pick, o = {})` | Several of something. The anchor carries a chip per chosen option — each chip's × sends the same `on_pick`, because removing one *is* toggling it off — and the panel's rows are the listbox's. Picking does **not** shut it: that is the caller's handler, not the widget |
 | `dropdown(anchor, content, open, max_px = 0)` | A panel positioned under its anchor; returns the anchor alone when closed. The content scrolls: the panel is as tall as its content, the window, or `max_px`, whichever is least |
 | `slider(value, min, max, on_set)` | A 240 px track. Press, drag, or click; arrows nudge once focused. `on_set` receives `params["kind"]` (`"click"`, `"pointer_down"`, `"pointer_move"`, `"pointer_up"`, `"key_down"`) |
 
@@ -636,6 +637,9 @@ it. On loopback or a LAN that is invisible; over a long link it would not be.
 | `grid_col_editable(col)` | `false` only when the column sets `editable: false` |
 | `grid_col_align(col)` | `start`, `center` or `end` — default `start` |
 | `grid_sort_rows(rows, col, dir)` | `sort_by` that column, reversed when `dir` is `"desc"` |
+| `multi_select_list(items, sel, on_toggle, o = {})` | A list whose rows are tickable, with a tri-state select-all and a count. `items` are `{"id", "label"}`; `o["key"]` is required and prefixes every key inside; `o["row"]` is `fn(item, chosen)` for a row that is more than a label |
+| `multi_select_window(make, count, window, sel, on_toggle, o = {})` | The same over a windowed list (04 §7.1). `make` is `fn(i)` for absolute row `i`; only the rows in `window` are built, `set_size` is the whole `count`, and `o["row_shape"]` pins the height `heights` promised |
+| `selection_toggle(sel, id)` / `selection_count(sel, total)` / `selection_mark(sel, total)` | The model those two share — see **Multi-selection** below |
 | `stat(label, value, hint)` | A card with one big number |
 | `chip(label, on_remove, props)` | A pill, with an optional × carrying `props` |
 | `badge(label, tone)` | `tone` is a role family: `"info"` → `info.subtle` on `info.base` |
@@ -912,6 +916,51 @@ list_window({"grow": 1}, 128, count, feed_heights(count), cards, "window")
 The handler stores that window in its state, the view builds those rows, and
 the client draws placeholders for rows it has not received. Two viewports of
 margin and a settle delay keep a fast scroll from showing them.
+
+## Multi-selection
+
+A selection is one hash, and a flag reverses what its list means:
+
+```soli
+{"ids": ["AX-0003"], "all": false, "scope": "stock"}   # these are chosen
+{"ids": ["AX-0003"], "all": true,  "scope": "stock"}   # all but these
+```
+
+The second reading is the whole point. Ten thousand rows selected is one
+boolean, not ten thousand strings in the session state re-serialised on every
+event — and because `selection_has?` *answers* for a row rather than storing
+one, a row that scrolls into view an hour later arrives already ticked. An
+application spends it the same way: `all` goes into the query as `NOT IN
+(ids)`.
+
+`selection_toggle` is one body with two meanings: adding to `ids` is choosing
+under the first reading and excepting under the second. That symmetry is the
+reason for the shape.
+
+`scope` is what stops the flag lying. "All" is always relative to the query
+that was on screen when it was clicked, so select every unpaid order, clear
+the filter, and without a token "all" silently means every order there is.
+`selection_scoped(sel, token)` hands back the selection, or an empty one when
+the query has moved on.
+
+Two things a windowed list must get right, and neither says so when it is
+wrong. **Selection is keyed by row id, never by row index** — the `window`
+event's payload is indices, which is exactly what makes the mistake look
+natural, and a sort renumbers every row. And **a row must not change height
+when it is ticked**: row tops come from `heights`, but a row that is present
+is measured at its content size and drawn at that top, so a taller one creeps
+over its neighbour and the scrollbar comes up short.
+
+A row is one `control` with one click handler, and the tick inside it is
+`check_mark` and not a `checkbox`. Its role is `option`, which 03 §6 rule 1
+makes a leaf: a real checkbox in there would be dropped from the accessibility
+tree while hit-testing still handed it the click. One handler per row is also
+one Tab stop per row.
+
+There is no shift-click. `click` carries `[x, y]` and no modifier bits (06 §1),
+and `double_click` and `long_press` are in the enum but no client emits them —
+so a range is expressible from the keyboard, where `key_down` carries the
+modifiers, and not from the pointer.
 
 ## Patterns
 

@@ -410,10 +410,10 @@ The reference catalogue ships with `examples/demo-app` as
 same file into a new application beside a component that uses it. Its
 families: actions (button variants,
 segmented control, menu, toolbar), input (field, checkbox, switch, select,
-slider, date and time, file drop, form), structure (card, panel, sheet,
+multi select, slider, date and time, file drop, form), structure (card, panel, sheet,
 dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
-grid, list item, chart, stat, code block, markdown), feedback (toast,
+grid, multi-select list, list item, chart, stat, code block, markdown), feedback (toast,
 banner, progress, spinner, skeleton, empty state, avatar, badge, chip).
 
 ## 7. Sound

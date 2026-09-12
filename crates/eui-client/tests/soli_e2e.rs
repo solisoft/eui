@@ -1252,6 +1252,132 @@ fn a_wheel_scroll_into_unloaded_rows_asks_for_them_and_gets_cards() {
     assert!(d.layout().rect(card).is_some(), "the card has a rect");
 }
 
+/// Multi-selection over ten thousand rows the server never holds.
+///
+/// The first half is ordinary: tick a row, read the count. The second half is
+/// the reason the widget exists — a selection keyed by row *id*, and a
+/// select-all kept as one flag rather than ten thousand strings, answer for
+/// rows that have not been built. So the window can move out from under the
+/// selection and come back with its ticks intact, and a row the server has
+/// never sent arrives already ticked.
+#[test]
+fn multi_selection_is_by_id_and_survives_the_window_it_scrolled_past() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    goto(&mut d, &conn, &wake, "Inventory", "Stock ledger");
+    assert!(has(&d, "None selected"), "nothing is chosen to begin with");
+
+    let id = d.session().atom_id("id").expect("the id atom");
+    let role = d.session().atom_id("role").expect("the role atom");
+    let selected = d.session().atom_id("selected").expect("the selected atom");
+    let pos_in_set = d.session().atom_id("pos_in_set").expect("the pos_in_set atom");
+    let set_size = d.session().atom_id("set_size").expect("the set_size atom");
+    let row_atom = d.session().atom_id("row").expect("the row atom");
+    let count_atom = d.session().atom_id("count").expect("the count atom");
+    let sku_of = |d: &Driver, ix: eui_tree::NodeIx| match d.session().node(ix).and_then(|n| n.prop(id)) {
+        Some(eui_proto::Value::Str(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let find_row = |d: &Driver, sku: &str| d.session().preorder(root(d)).find(|ix| sku_of(d, *ix).as_deref() == Some(sku));
+    let is_on = |d: &Driver, ix: eui_tree::NodeIx| d.session().node(ix).and_then(|n| n.prop(selected)) == Some(&eui_proto::Value::Bool(true));
+
+    // ---- One row, chosen by the id it carries, not by where it sits.
+    let third = find_row(&d, "AX-0003").expect("the third part is in the first window");
+    click(&mut d, &conn, third);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "1 of 10 000 selected"));
+
+    let third = find_row(&d, "AX-0003").expect("and is still there afterwards");
+    let node = d.session().node(third).unwrap();
+    assert_eq!(node.prop(role), Some(&eui_proto::Value::Str("option".into())), "a row is an option, not a check box");
+    assert_eq!(node.prop(selected), Some(&eui_proto::Value::Bool(true)));
+    assert_eq!(node.prop(pos_in_set), Some(&eui_proto::Value::Int(3)), "one-based, or row zero loses the prop");
+    // 03 §6.1: the size of the set *including what virtualisation left out*.
+    assert_eq!(node.prop(set_size), Some(&eui_proto::Value::Int(10_000)), "the ledger, not the window");
+    // An unchosen row says so rather than saying nothing: absent means "not
+    // selectable", false means "selectable, not selected".
+    let fourth = find_row(&d, "AX-0004").expect("its neighbour");
+    assert_eq!(d.session().node(fourth).unwrap().prop(selected), Some(&eui_proto::Value::Bool(false)));
+
+    // ---- Every row there is, as one flag.
+    let all = named(&d, "Stock ledger", "Select every part in the ledger");
+    click(&mut d, &conn, all);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "All 10 000 selected"));
+
+    // ---- And the flag read backwards: everything except this one.
+    let third = find_row(&d, "AX-0003").unwrap();
+    click(&mut d, &conn, third);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "9 999 of 10 000 selected"));
+    assert!(!is_on(&d, find_row(&d, "AX-0003").unwrap()), "the one exception");
+    assert!(is_on(&d, find_row(&d, "AX-0004").unwrap()), "and nothing else");
+
+    // ---- Now scroll past every row the server has sent.
+    let list = d.session().preorder(root(&d)).find(|ix| d.session().node(*ix).and_then(|n| n.prop(count_atom)) == Some(&eui_proto::Value::Int(10_000))).expect("the ledger's windowed list");
+    let r = d.layout().rect(list).expect("it is laid out");
+    d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+    for _ in 0..30 {
+        d.input(Input::Wheel(0.0, 1000.0));
+    }
+    let mut clock = Instant::now();
+    d.tick(clock);
+    let _ = d.paint(1000, 900);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    clock += Duration::from_millis(200);
+    d.tick(clock);
+    let _ = d.paint(1000, 900);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // Rows the server had never built when the flag was set. They arrive
+    // ticked, because the selection answers for a row rather than storing one.
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| matches!(d.session().node(ix).and_then(|n| n.prop(row_atom)), Some(eui_proto::Value::Int(n)) if *n > 200)));
+    let far: Vec<eui_tree::NodeIx> = d.session().preorder(list).filter(|ix| matches!(d.session().node(*ix).and_then(|n| n.prop(row_atom)), Some(eui_proto::Value::Int(n)) if *n > 200)).collect();
+    assert!(far.len() > 5, "a window's worth of new rows, got {}", far.len());
+    for ix in &far {
+        assert!(is_on(&d, *ix), "row {:?} came back unticked", sku_of(&d, *ix));
+    }
+
+    // ---- And back. The exception is still the only one.
+    for _ in 0..40 {
+        d.input(Input::Wheel(0.0, -1000.0));
+    }
+    clock += Duration::from_millis(200);
+    d.tick(clock);
+    let _ = d.paint(1000, 900);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| sku_of(d, ix).as_deref() == Some("AX-0003")));
+    assert!(!is_on(&d, find_row(&d, "AX-0003").unwrap()), "the exception survived the round trip");
+    assert!(is_on(&d, find_row(&d, "AX-0004").unwrap()));
+    assert!(has(&d, "9 999 of 10 000 selected"));
+
+    // ---- The dropdown: chips in the anchor, and a panel that stays open.
+    assert!(!in_overlay(&d, "Katowice"), "the panel is shut");
+    let anchor = named(&d, "Raise a purchase order", "Other warehouses");
+    click(&mut d, &conn, anchor);
+    pump(&mut d, &conn, &wake, |d| in_overlay(d, "Katowice"));
+    let lyon = overlay_text(&d, "Lyon");
+    click(&mut d, &conn, lyon);
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().filter(|t| *t == "Lyon").count() > 1);
+    // Picking does not shut it -- the one behavioural difference from
+    // `select`, and it lives in the handler rather than in the widget.
+    assert!(in_overlay(&d, "Katowice"), "still open after a pick");
+    let katowice = overlay_text(&d, "Katowice");
+    click(&mut d, &conn, katowice);
+    pump(&mut d, &conn, &wake, |d| {
+        d.session().preorder(root(d)).any(|ix| matches!(d.session().node(ix).and_then(|n| n.prop(d.session().atom_id("label").unwrap())), Some(eui_proto::Value::Str(s)) if s == "Remove Katowice"))
+    });
+    assert!(in_overlay(&d, "Katowice"), "and still open after the second");
+}
+
 /// The Magic Mouse path: notched wheel steps, a real clock, no manual
 /// ticking — as the window loop drives it.
 #[test]

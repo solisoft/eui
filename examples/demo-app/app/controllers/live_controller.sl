@@ -1720,44 +1720,123 @@ def erp_stock_heights
   heights
 end
 
-def erp_stock_card(state, lay)
-  widths = lay["wide"] ? [110, 170, 110, 90, 90] : [110, 90]
-  labels = lay["wide"] ? ["SKU", "Part", "Warehouse", "On hand", "Price"] : ["SKU", "On hand"]
-  window = state["inv_window"] ?? [0, 24]
-  first = window[0] ?? 0
-  last = window[1] ?? 24
-  last = ERP_STOCK_COUNT - 1 if last > ERP_STOCK_COUNT - 1
-  rows = first > last ? [] : range(first, last + 1).map(fn(i) {
-    part = erp_product(i)
-    values = lay["wide"] ? [
-      part["sku"],
-      part["name"],
-      part["warehouse"],
-      str(part["on_hand"]),
-      part["price"]
-    ] : [part["sku"], str(part["on_hand"])]
+def erp_stock_widths(lay)
+  lay["wide"] ? [110, 170, 110, 90, 90] : [110, 90]
+end
+
+def erp_stock_labels(lay)
+  lay["wide"] ? ["SKU", "Part", "Warehouse", "On hand", "Price"] : ["SKU", "On hand"]
+end
+
+# The cells of one part. Text nodes and not a `table_row`, because the row *is*
+# the control here: these are its children, with nothing in between to take the
+# click or to add a second key.
+def erp_stock_cells(part, lay)
+  esc_widths = erp_stock_widths(lay)
+  esc_values = lay["wide"] ? [
+    part["sku"],
+    part["name"],
+    part["warehouse"],
+    str(part["on_hand"]),
+    part["price"]
+  ] : [part["sku"], str(part["on_hand"])]
+  range(0, esc_values.length()).map(fn(i) { text(esc_values[i], {"width": esc_widths[i], "size": 1}) })
+end
+
+# The column names, built by hand rather than with `table_header`, so that the
+# gap, the padding and the 16 px the tick occupies are the same here as in a
+# row. A header whose columns do not line up with the cells under them is
+# worse than no header at all.
+def erp_stock_header(lay)
+  esh_labels = erp_stock_labels(lay)
+  esh_widths = erp_stock_widths(lay)
+  # 16 for the tick and 3 for the rule down a chosen row's left edge, which is
+  # reserved at rest and so shifts every cell by three whether it is coloured
+  # or not.
+  esh_cells = [node("box", {"width": 19, "shrink": 0}, [])]
+  esh_cells = esh_cells.concat(range(0, esh_labels.length()).map(fn(i) {
+    text(esh_labels[i], {"width": esh_widths[i], "weight": "semibold", "size": 1, "fg": "text.muted"})
+  }))
+  row(
     {
-      "k": "box",
-      "s": {"display": "column", "width": "100%"},
-      "p": {"row": i},
-      "c": [table_row(part["id"], values, widths)]
-    }
-  })
+      "gap": 2,
+      "pad": [0, 2, 0, 2],
+      "height": ERP_ROW_PX,
+      "align": "center",
+      "width": "100%",
+      "border": [0, 0, 1, 0],
+      "border_color": "border.default"
+    },
+    esh_cells
+  )
+end
+
+# Ten thousand rows, of which the server holds the thirty in view, and any
+# number of them chosen.
+#
+# `row_shape` pins the height rather than letting the padding decide it. Row
+# tops come from `heights` (04 §7.1) but a row that is present is measured at
+# its content size and drawn at that top, so a row even a pixel taller than
+# `ERP_ROW_PX` would creep over the one below it — and the scrollbar would come
+# up short by the same amount, ten thousand times over.
+#
+# Selecting everything costs one boolean. The rows that scroll into view
+# afterwards arrive already ticked, because the selection can answer for a row
+# the server has never built.
+def erp_stock_card(state, lay)
   erp_card(
     "Stock ledger",
-    [badge("10 000 parts", "info")],
-    [
-      table_header(labels, widths),
-      list_window(
-        {"height": 400, "width": "100%"},
-        ERP_ROW_PX,
-        ERP_STOCK_COUNT,
-        erp_stock_heights(),
-        rows,
-        "inv_window"
-      )
-    ]
+    [badge("10 000 parts", "info"), secondary_button("Raise a purchase order", "stock_order")],
+    [multi_select_window(
+      fn(i) { erp_product(i) },
+      ERP_STOCK_COUNT,
+      state["inv_window"],
+      selection_scoped(state["stock_sel"], "stock"),
+      "stock_toggle",
+      {
+        "key": "stock",
+        "label": "Stock ledger",
+        "all_label": "Select every part in the ledger",
+        "on_all": "stock_all",
+        "on_clear": "stock_clear",
+        "on_window": "inv_window",
+        "item_height": ERP_ROW_PX,
+        "heights": erp_stock_heights(),
+        "height": 400,
+        "head": [erp_stock_header(lay)],
+        "row_shape": {"height": ERP_ROW_PX, "pad": [0, 2, 0, 2], "radius": 0},
+        "row": fn(part, chosen) { erp_stock_cells(part, lay) }
+      }
+    )]
   )
+end
+
+# Picking leaves the panel open, which is the whole difference from `select`
+# and is one line of a handler rather than anything in the widget.
+def gallery_whs_pick(state, id)
+  set_key(state, "inv_whs", selection_toggle(selection_scoped(state["inv_whs"], "whs"), id))
+end
+
+def gallery_stock_toggle(state, id)
+  set_key(state, "stock_sel", selection_toggle(selection_scoped(state["stock_sel"], "stock"), id))
+end
+
+def gallery_stock_all(state)
+  gk_sel = selection_scoped(state["stock_sel"], "stock")
+  return set_key(state, "stock_sel", selection_none(gk_sel)) if selection_mark(gk_sel, ERP_STOCK_COUNT) == "all"
+
+  set_key(state, "stock_sel", selection_all(gk_sel))
+end
+
+def gallery_stock_order(state)
+  go_count = selection_count(selection_scoped(state["stock_sel"], "stock"), ERP_STOCK_COUNT)
+  return erp_say(state, "Nothing is chosen, so there is nothing to order") if go_count == 0
+
+  erp_say(state, "A purchase order for " + str(go_count) + " parts")
+end
+
+def erp_warehouse_options()
+  ERP_WAREHOUSES.map(fn(name) { {"id": name, "label": name} })
 end
 
 def erp_reorder_card(state, lay)
@@ -1785,6 +1864,24 @@ def erp_reorder_card(state, lay)
         )
       ]
     ),
+    # The single and the multiple, side by side and over the same three names:
+    # one warehouse the order is raised against, and any number it may be
+    # drawn from. Same panel, same rows; what differs is that picking here
+    # does not close it.
+    column(
+      {"gap": 1},
+      [
+        muted("Also draw from"),
+        multi_select(
+          erp_warehouse_options(),
+          selection_scoped(state["inv_whs"], "whs"),
+          state["inv_whs_open"] == true,
+          "whs_toggle",
+          "whs_pick",
+          {"key": "whs", "label": "Other warehouses", "placeholder": "None", "min_width": 200}
+        )
+      ]
+    ),
     column({"gap": 1, "width": 220}, [date_field({
       "label": "Wanted by",
       "value": state["inv_date"],
@@ -1806,36 +1903,88 @@ def erp_reorder_card(state, lay)
   )
 end
 
-# What is short, as a bar each: the figure that matters is how far under the
-# line it is, and a number cannot show that at a glance.
-def erp_shortages_card(state, lay)
-  short = erp_products(60).filter(fn(part) { part["short"] })
-  rows = range(0, short.length() > 6 ? 6 : short.length()).map(fn(i) {
-    part = short[i]
-    row(
-      {"gap": 3, "align": "center", "width": "100%"},
-      [
-        column(
-          {"gap": 0, "width": 170},
-          [
-            text(part["name"], {"size": 1, "weight": "semibold"}),
-            row(
-              {"gap": 2, "align": "center"},
-              [text_link(part["sku"], "inv_pick", {"sku": part["sku"]}), muted(part["warehouse"])]
-            )
-          ]
-        ),
-        progress(part["on_hand"] * 1.0 / part["reorder"]),
-        muted(str(part["on_hand"]) + " / " + str(part["reorder"])),
-        badge(part["on_hand"] * 2 < part["reorder"] ? "critical" : "low", part["on_hand"] * 2 < part["reorder"] ? "danger" : "warning")
-      ]
-    )
+# How many of the short ones are worth showing. Six fills the card; the rest
+# are what the ledger below is for.
+ERP_SHORT_SHOWN = 6
+
+# The parts under their reorder point, as selection items: `id` they already
+# have (it is the SKU), `label` is what a screen reader gets, since the row
+# itself is drawn from four separate nodes.
+def erp_shortage_rows(limit)
+  es_short = erp_products(60).filter(fn(part) { part["short"] })
+  es_take = es_short.length() > limit ? limit : es_short.length()
+  range(0, es_take).map(fn(i) {
+    es_short[i].merge({"label": es_short[i]["name"] + ", " + es_short[i]["sku"] + ", " + es_short[i]["warehouse"]})
   })
+end
+
+# What is short, as a bar each: the figure that matters is how far under the
+# line it is, and a number cannot show that at a glance. Tickable, because
+# "order these four" is the only thing anyone does with a list like this.
+#
+# The rows come from `o["row"]`, so one is a name, a warehouse, a bar and a
+# badge rather than a label — and nothing inside them carries a handler of its
+# own. There is no bubbling (06 §2): the SKU used to be a link here, and a link
+# in a row whose whole job is to be ticked is a dead patch in the middle of it.
+# Choosing the part and pressing the button does what the link did.
+def erp_shortages_card(state, lay)
+  short = erp_shortage_rows(ERP_SHORT_SHOWN)
   erp_card(
     "Under the reorder point",
-    [muted(str(rows.length()) + " of " + str(short.length()) + " · first sixty SKUs")],
-    rows
+    [secondary_button("Draft a reorder", "short_reorder")],
+    [multi_select_list(short, selection_scoped(state["short_sel"], "short"), "short_toggle", {
+      "key": "short",
+      "label": "Parts under their reorder point",
+      "all_label": "Select every part shown",
+      "on_all": "short_all",
+      "on_clear": "short_clear",
+      "row": fn(part, chosen) {
+        [
+          column(
+            {"gap": 0, "width": 170},
+            [
+              text(part["name"], {"size": 1, "weight": "semibold"}),
+              row({"gap": 2, "align": "center"}, [muted(part["sku"]), muted(part["warehouse"])])
+            ]
+          ),
+          progress(part["on_hand"] * 1.0 / part["reorder"]),
+          text(str(part["on_hand"]) + " / " + str(part["reorder"]), {
+            "size": 1,
+            "fg": "text.muted",
+            "width": 64,
+            "shrink": 0,
+            "text_align": "end"
+          }),
+          badge(
+            part["on_hand"] * 2 < part["reorder"] ? "critical" : "low",
+            part["on_hand"] * 2 < part["reorder"] ? "danger" : "warning"
+          )
+        ]
+      }
+    })]
   )
+end
+
+# The header tick is tri-state, so one handler serves both halves of it: all
+# but the last row chosen still reads as "some", and pressing it means "all".
+def gallery_short_toggle(state, id)
+  set_key(state, "short_sel", selection_toggle(selection_scoped(state["short_sel"], "short"), id))
+end
+
+def gallery_short_all(state)
+  gs_total = erp_shortage_rows(ERP_SHORT_SHOWN).length()
+  gs_sel = selection_scoped(state["short_sel"], "short")
+  return set_key(state, "short_sel", selection_none(gs_sel)) if selection_mark(gs_sel, gs_total) == "all"
+
+  set_key(state, "short_sel", selection_all(gs_sel))
+end
+
+def gallery_short_reorder(state)
+  gr_total = erp_shortage_rows(ERP_SHORT_SHOWN).length()
+  gr_count = selection_count(selection_scoped(state["short_sel"], "short"), gr_total)
+  return erp_say(state, "Nothing is chosen, so nothing was ordered") if gr_count == 0
+
+  erp_say(state, str(gr_count) + " parts queued for reorder")
 end
 
 # ---- Reports ---------------------------------------------------------------
@@ -2368,7 +2517,11 @@ def erp_inventory_defaults
     "inv_date": "",
     "inv_date_open": false,
     "inv_date_month": "2026-09",
-    "inv_window": [0, 24]
+    "inv_window": [0, 24],
+    "short_sel": {"ids": [], "all": false, "scope": "short"},
+    "stock_sel": {"ids": [], "all": false, "scope": "stock"},
+    "inv_whs": {"ids": [], "all": false, "scope": "whs"},
+    "inv_whs_open": false
   }
 end
 
@@ -2507,7 +2660,16 @@ def gallery(event_data)
     "inv_wh_pick" => set_key(set_key(state, "inv_wh", props["value"]), "inv_wh_open", false),
     "inv_send" => erp_say(state, "Purchase order sent to " + (state["inv_wh"] ?? "")),
     "inv_window" => set_key(state, "inv_window", params["payload"]),
-    "inv_pick" => set_key(state, "inv_sku", props["sku"]),
+    "short_toggle" => gallery_short_toggle(state, props["id"]),
+    "short_all" => gallery_short_all(state),
+    "short_clear" => set_key(state, "short_sel", selection_none(state["short_sel"])),
+    "short_reorder" => gallery_short_reorder(state),
+    "stock_toggle" => gallery_stock_toggle(state, props["id"]),
+    "stock_all" => gallery_stock_all(state),
+    "stock_clear" => set_key(state, "stock_sel", selection_none(state["stock_sel"])),
+    "stock_order" => gallery_stock_order(state),
+    "whs_toggle" => set_key(state, "inv_whs_open", !(state["inv_whs_open"] ?? false)),
+    "whs_pick" => gallery_whs_pick(state, props["id"]),
     # Reports: the inline pickers, and the handbook.
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),

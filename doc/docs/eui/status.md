@@ -762,6 +762,14 @@ What this does not reach: roving focus and type-ahead, which a widget must
 still do over the wire at a round trip per arrow, and accelerators, which need
 the global key capture the specification still refuses.
 
+Nor does it reach a modifier-click. `key_down` carries the modifier bits;
+`click` carries `[x, y]` and nothing else (06 §1), and `double_click` and
+`long_press` are decodable but no client emits either. So the catalogue's
+multi-selection ticks one row at a time and offers select-all, and there is no
+shift-click range. The fix is small and is a protocol change rather than a
+catalogue one: a third element on `click`'s payload, mirroring the mouse
+button the pointer events already carry.
+
 **Files, in and out (01 §6, 03 §3.2).** The protocol had no way to move a
 file in either direction, and no amount of catalogue work could add one: an
 asset is named by its content and is the same for everyone, which is exactly
