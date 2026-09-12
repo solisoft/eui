@@ -2860,6 +2860,11 @@ fn a_card_is_carried_from_one_column_to_another() {
     assert!(at.w > 0.0 && at.h > 0.0, "and has a box: {at:?}");
     assert!((at.x + at.w / 2.0 - (to.x + to.w / 2.0)).abs() < 2.0, "centred on the hand: {at:?}");
     assert_eq!(d.session().text_of(keyed(&d, "kan_ghost_t")), Some("Reconcile October stock"), "carrying the card it holds");
+    // Laid out is not the same as drawn. It is on the top layer, so it is the
+    // last thing painted; what proves it is on screen is a quad inside its box.
+    let drawn = d.paint(1000, 3600);
+    let inside = drawn.quads.iter().filter(|q| q.rect[0] >= at.x - 1.0 && q.rect[1] >= at.y - 1.0 && q.rect[0] + q.rect[2] <= at.x + at.w + 1.0 && q.rect[1] + q.rect[3] <= at.y + at.h + 1.0).count();
+    assert!(inside > 0, "the ghost is painted, not merely placed: {at:?} among {} quads", drawn.quads.len());
     for f in d.take_pending() {
         conn.tx.send(f.encode()).unwrap();
     }
