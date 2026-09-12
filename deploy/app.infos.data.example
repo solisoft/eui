@@ -1,0 +1,30 @@
+# /home/rocky/sites/eui-data.solisoft.net/app.infos — declares the demo
+# application to soli-proxy. Copy it onto the server once; the CI never
+# sends this file.
+name = "eui-data"
+domain = "eui-data.solisoft.net"
+
+# --strict-port matters: without it `soli serve` slides onto the next free
+# port when its own is taken, the proxy probes the port it assigned, and
+# after three failures it quarantines the app.
+#
+# SOLI_WS_WORKERS=1 matters more, and it is not an optimisation. Atrium
+# keeps three things in the memory of the process that serves a session —
+# the seat that decides who a window is, who is present, and who is typing.
+# Everything else it has (messages, reactions, replies, read marks, links,
+# attachments) is in the database and crosses a worker without noticing.
+# With more than one realtime worker, two windows that land on different
+# ones are two people who cannot see each other type. HTTP still scales:
+# the other seven workers serve it.
+start_script = "SOLI_WS_WORKERS=1 soli serve . --port $PORT --workers $WORKERS --strict-port"
+workers = 8
+
+# /up, not /health: /up is Soli's own readiness probe (503 until the server
+# is actually ready to answer). The application does define /health, and it
+# would answer 200 a little too early.
+health_check = "/up"
+
+# `[apps] default_user` is commented out in the server's config.toml, so each
+# site names its own; without it the proxy refuses to drop privileges.
+user = "rocky"
+group = "rocky"
