@@ -22,8 +22,20 @@ SEED_PER_ROOM = 4000
 # parse. A thousand is neither.
 SEED_BATCH = 1000
 
+# A count against a collection nobody has made yet comes back as the error
+# **string**, not as a number and not as a raise — so the comparison below
+# used to die with "Cannot compare string and int", and a virgin database
+# could not be seeded at all. A room whose count cannot be read is a room with
+# nothing in it, which is exactly what needs filling.
+def seed_count(room_id)
+  seed_answer = ChatMessage.where({ "room": room_id }).count() rescue 0
+  return 0 unless seed_answer.class == "int"
+
+  seed_answer
+end
+
 def seed_room(room_id)
-  seed_have = ChatMessage.where({ "room": room_id }).count()
+  seed_have = seed_count(room_id)
   if seed_have >= SEED_PER_ROOM
     print("  " + room_id + ": " + str(seed_have) + " already, left alone")
     return 0

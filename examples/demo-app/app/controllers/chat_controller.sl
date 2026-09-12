@@ -80,7 +80,7 @@ def chat_link_of(url)
   chat_kept = CHAT_LINKS[url]
   return chat_kept unless chat_kept.nil?
 
-  chat_found = ChatLink.find_by("url", url) rescue nil
+  chat_found = chat_found_one(ChatLink.find_by("url", url) rescue nil)
   return nil if chat_found.nil?
 
   # Not `chat_seen`: that is the name of the function that records presence,
@@ -190,7 +190,7 @@ end
 # and a height table keyed on a number only this process knew would never
 # hear about it.
 def chat_read_meta
-  chat_meta = ChatMeta.find_by("key", "seq") rescue nil
+  chat_meta = chat_found_one(ChatMeta.find_by("key", "seq") rescue nil)
   CHAT_SEQ_MEMO = chat_meta.nil? ? 0 : (chat_meta.value ?? 0)
   CHAT_GEN_MEMO = chat_meta.nil? ? 0 : (chat_meta.gen ?? 0)
   CHAT_SEQ_MEMO
@@ -207,7 +207,7 @@ def chat_gen
 end
 
 def chat_bump
-  chat_meta = ChatMeta.find_by("key", "seq") rescue nil
+  chat_meta = chat_found_one(ChatMeta.find_by("key", "seq") rescue nil)
   if chat_meta.nil?
     ChatMeta.create({ "key": "seq", "value": 1 }) rescue nil
     return 1
@@ -249,7 +249,7 @@ end
 # are keyed on this and not on the sequence, because a sequence that every
 # keystroke moves is a cache that never hits.
 def chat_reshape
-  chat_meta = ChatMeta.find_by("key", "seq") rescue nil
+  chat_meta = chat_found_one(ChatMeta.find_by("key", "seq") rescue nil)
   return chat_bump() if chat_meta.nil?
 
   chat_meta.gen = (chat_meta.gen ?? 0) + 1
@@ -309,6 +309,35 @@ def chat_hold(room_id, chat_low, held)
   CHAT_CACHE[room_id]
 end
 
+# A query that fails hands the error back as a **string** rather than raising,
+# so the `rescue` beside it never fires. Raw `@sdbql` and `Model.all()` alike:
+# a 404 for a collection nobody has made, a 401 for a database that refuses
+# the credential. What dies instead is the
+# loop after it — "cannot iterate over string", pointing at the loop rather
+# than at the query — or, worse, `chat_next_n` quietly indexing a character
+# out of the message and adding one to it.
+#
+# It is not a rare path: a fresh database, or one where `db/seeds.sl` has not
+# been run, answers every read in this file with `CollectionNotFound`, and the
+# whole component dies on connect with a type error thirty lines away from the
+# cause. So every raw read goes through here. Anything that is not a list is a
+# failure, and a failure reads as no rows — which is what an empty room is.
+def chat_listed(chat_answer)
+  return [] unless chat_answer.class == "array"
+
+  chat_answer
+end
+
+# The same for a read that expects one record. A failure is a String, and a
+# String is not nil — so `chat_meta.nil?` is false and the next `.value` dies
+# on it. Anything that is not a String passes through untouched, so a genuine
+# miss stays a miss.
+def chat_found_one(chat_answer)
+  return null if chat_answer.class == "string"
+
+  chat_answer
+end
+
 # Rows read raw, between two indices.
 #
 # `ChatMessage.in_room(room).all()` is the same query and took **3.6
@@ -323,7 +352,7 @@ def chat_read_span(room_id, chat_low, chat_high)
     SORT m.n ASC
     RETURN { n: m.n, who: m.who, at: m.at, text: m.text, shape: m.shape, file: m.file, room: m.room, live: m.live }
   } rescue []
-  chat_docs.map(fn(d) { chat_doc(d) })
+  chat_listed(chat_docs).map(fn(d) { chat_doc(d) })
 end
 
 # The same, open at the end: a row, and everything the room has after it.
@@ -334,7 +363,7 @@ def chat_read_tail(room_id, chat_low)
     SORT m.n ASC
     RETURN { n: m.n, who: m.who, at: m.at, text: m.text, shape: m.shape, file: m.file, room: m.room, live: m.live }
   } rescue []
-  chat_docs.map(fn(d) { chat_doc(d) })
+  chat_listed(chat_docs).map(fn(d) { chat_doc(d) })
 end
 
 # A document as the view wants it. The database keeps what was said; `id` is
@@ -374,7 +403,7 @@ def chat_counts
     RETURN { room: room, n: n }
   } rescue []
   chat_by_room = {}
-  for chat_one in chat_rows_of
+  for chat_one in chat_listed(chat_rows_of)
     chat_by_room[chat_one["room"]] = chat_one["n"]
   end
   CHAT_COUNTS = { "at": chat_seq(), "by_room": chat_by_room }
@@ -411,7 +440,8 @@ def chat_next_n(room_id)
     LIMIT 1
     RETURN m.n
   } rescue []
-  chat_top.length() == 0 ? 0 : chat_top[0] + 1
+  chat_found = chat_listed(chat_top)
+  chat_found.length() == 0 ? 0 : chat_found[0] + 1
 end
 
 def chat_say(room_id, who, body, upload)
@@ -489,7 +519,7 @@ def chat_live
   return CHAT_LIVE_ROWS if CHAT_LIVE_MEMO == 1
 
   chat_seen_rows = {}
-  chat_all = ChatLive.all() rescue []
+  chat_all = chat_listed(ChatLive.all() rescue [])
   for chat_one in chat_all
     chat_seen_rows[chat_one["key"].to_s] = chat_one
   end
@@ -509,7 +539,7 @@ def chat_live_touch(key, every)
   return false if chat_stamp - chat_last < every
 
   CHAT_LIVE_WROTE[key] = chat_stamp
-  chat_slot = ChatLive.find_by("key", key) rescue nil
+  chat_slot = chat_found_one(ChatLive.find_by("key", key) rescue nil)
   if chat_slot.nil?
     ChatLive.create({ "key": key, "at": chat_stamp }) rescue nil
   else
@@ -584,7 +614,7 @@ def chat_marks(room_id)
   return chat_kept["by_id"] if !chat_kept.nil? && chat_kept["gen"] == chat_gen()
 
   chat_marks_of = {}
-  chat_docs = ChatReaction.where({ "room": room_id }).all() rescue []
+  chat_docs = chat_listed(ChatReaction.where({ "room": room_id }).all() rescue [])
   for chat_one in chat_docs
     chat_marks_of[chat_one["message_id"]] = chat_one["glyphs"] ?? {}
   end
@@ -631,7 +661,7 @@ def chat_reply_counts(room_id)
   return chat_kept["by_id"] if !chat_kept.nil? && chat_kept["gen"] == chat_gen()
 
   chat_marks_of = {}
-  chat_docs = ChatReply.where({ "room": room_id }).all() rescue []
+  chat_docs = chat_listed(ChatReply.where({ "room": room_id }).all() rescue [])
   for chat_one in chat_docs
     chat_key = chat_one["parent"]
     chat_marks_of[chat_key] = (chat_marks_of[chat_key] ?? 0) + 1
@@ -641,7 +671,7 @@ def chat_reply_counts(room_id)
 end
 
 def chat_replies(message_id)
-  chat_docs = ChatReply.under(message_id).all() rescue []
+  chat_docs = chat_listed(ChatReply.under(message_id).all() rescue [])
   chat_docs.map(fn(d) {
     {
       "id": message_id + "/" + str(d["n"]),
@@ -1165,7 +1195,7 @@ end
 # alternative is a lock held across a round trip on the path of every
 # arrival.
 def chat_take_seat
-  chat_slot = ChatLive.find_by("key", "seat") rescue nil
+  chat_slot = chat_found_one(ChatLive.find_by("key", "seat") rescue nil)
   if chat_slot.nil?
     ChatLive.create({ "key": "seat", "value": 1 }) rescue nil
     CHAT_LIVE_MEMO = -1

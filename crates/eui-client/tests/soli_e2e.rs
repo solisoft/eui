@@ -31,8 +31,81 @@ fn existing_port() -> Option<u16> {
     std::env::var("EUI_SOLI_PORT").ok().and_then(|p| p.parse().ok())
 }
 
+/// Atrium's rooms, once per test process.
+///
+/// The chat suite reads a seeded room — one of its tests asserts the room is
+/// deeper than a page — and a database that has never been seeded answers
+/// every read with `CollectionNotFound`. That used to reach the tests as a
+/// thirty-second timeout with the cause thirty lines away, on any machine
+/// whose SoliDB was not the one someone had already set up by hand: a fresh
+/// checkout, a build server's throwaway instance, CI.
+///
+/// Both steps are idempotent and are what `db/seeds.sl` documents. A fresh
+/// database costs about nine seconds here, an already-seeded one about one,
+/// and an operator who pointed the suite at their own server with
+/// `EUI_SOLI_PORT` owns its data and is left alone.
+fn seed_once(bin: &str, app: &str) {
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+    if existing_port().is_some() {
+        return;
+    }
+    SEEDED.call_once(|| {
+        // `db:migrate` wants admin rights the demo application's credentials
+        // do not have on a database nobody has provisioned, and it fails when
+        // a collection already exists. Neither is fatal: what matters is that
+        // the seed goes in, and writing a message makes its own collection.
+        // `db:seed` is idempotent — a room that has its four thousand is left
+        // alone — so this is nine seconds once and one second thereafter.
+        for args in [["db:migrate", "up"], ["db:seed", ""]] {
+            let name = args.join(" ");
+            let name = name.trim();
+            let out = std::env::temp_dir().join(format!("eui-e2e-{}.log", args[0].replace(':', "-")));
+            let Ok(file) = std::fs::File::create(&out) else { continue };
+            let Ok(errs) = file.try_clone() else { continue };
+            let mut cmd = Command::new(bin);
+            cmd.arg(args[0]).current_dir(app).stdout(Stdio::from(file)).stderr(Stdio::from(errs));
+            if !args[1].is_empty() {
+                cmd.arg(args[1]);
+            }
+            let Ok(mut child) = cmd.spawn() else {
+                eprintln!("note: could not run `soli {name}`");
+                continue;
+            };
+            // Bounded, because an unprovisioned database makes this crawl
+            // rather than fail, and a suite that hangs in its first test is
+            // worse than one that says what is missing. Nine seconds is the
+            // seeded case; the cap is for the one that will not work anyway.
+            let deadline = Instant::now() + Duration::from_secs(120);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(200)),
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        eprintln!("note: `soli {name}` outran its budget — the chat tests want a seeded room");
+                        break;
+                    }
+                }
+            }
+            // Both exit 0 whatever happened, so the status says nothing and
+            // the output is the only witness. Silence on success; one line
+            // when it did not work, because the alternative is five chat
+            // tests timing out thirty seconds apart with the reason nowhere
+            // on screen.
+            if let Ok(said) = std::fs::read_to_string(&out) {
+                if let Some(line) = said.lines().find(|l| l.contains("Error")) {
+                    eprintln!("note: `soli {name}` did not go through — {}", line.trim());
+                }
+            }
+            let _ = std::fs::remove_file(&out);
+        }
+    });
+}
+
 fn start_soli(bin: &str) -> (Server, u16) {
     let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
+    seed_once(bin, &app);
     let port = free_port();
     // EUI_SOLI_LOG=path captures the server's stderr for a post-mortem.
     let stderr = match std::env::var("EUI_SOLI_LOG") {
