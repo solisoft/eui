@@ -2917,4 +2917,9 @@ fn a_card_is_carried_from_one_column_to_another() {
     }
     pump(&mut d, &conn, &wake, |d| d.session().text_of(keyed(d, "kan_say")).is_some_and(|t| t.contains("moved to Backlog")));
     assert_eq!(column_of(&d, "t4"), "Backlog", "and it stayed there too");
+    // And it landed where the hand was, not merely in the right column. The
+    // announcement carries the place, which is what a screen reader is told
+    // and what this can read back.
+    let said = d.session().text_of(keyed(&d, "kan_say")).unwrap_or("").to_owned();
+    assert!(said.contains("1 of 3"), "dropped on the first card, so first of three: {said:?}");
 }

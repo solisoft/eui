@@ -1903,9 +1903,11 @@ impl Driver {
             }
             seen = seen.saturating_add(1);
         }
-        // Past the last row placed, the end of what there is: the whole list
-        // when it is windowed, the children when it is not.
-        let last = windowed.unwrap_or(seen).saturating_sub(1).max(0);
+        // Past the last item, the slot *after* it — there are n + 1 places in a
+        // list of n, and the last of them is what "drop this at the bottom"
+        // means. Clamping to n − 1 instead made the end of a list the one
+        // position a hand could not reach.
+        let last = windowed.unwrap_or(seen).max(0);
         slot.min(last)
     }
 

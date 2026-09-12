@@ -182,6 +182,43 @@ fn the_drop_names_the_slot_it_landed_in() {
     assert_eq!(slot(&drops[0].2), 3, "the fourth row's slot");
 }
 
+/// §6.2: every place in the list, and the last of them especially. There are
+/// n + 1 positions in a list of n, and the end is the one a clamp to n − 1
+/// quietly takes away — which reads, from the hand, as a card that always
+/// lands on top.
+#[test]
+fn every_place_in_the_list_can_be_reached_including_the_end() {
+    let mut d = open(4, false);
+    let at = centre(&mut d, 10);
+    let mut out = press_and_move(&mut d, at, (at.0, at.1 + 6.0));
+    // Down through every row, and then past the last of them.
+    let mut seen = Vec::new();
+    for step in 1..=5u8 {
+        out.extend(d.input(Input::PointerMove(at.0, at.1 + ROW_H * f32::from(step))));
+        if let Some((_, _, p)) = events(&out).into_iter().rfind(|(k, ..)| *k == EventKind::DragOver) {
+            seen.push(slot(&p));
+        }
+    }
+    seen.dedup();
+    assert_eq!(seen, vec![1, 2, 3, 4], "every slot below it, ending past the last row: {seen:?}");
+}
+
+/// The regression that produced it: a column resolves the slot from which of
+/// its own children can be picked up, so a card wrapped in something that
+/// cannot is a column with no draggable children — and every drop lands at
+/// the top. The prop has to be on the child the container holds.
+#[test]
+fn a_slot_is_counted_from_the_container_s_own_children() {
+    let mut d = open(4, false);
+    // Row 10 is the container's child and carries `drag`; its grip, 11, is a
+    // descendant and does not. Pressing the grip still grabs the row, and the
+    // slot is still resolved against the rows.
+    let at = centre(&mut d, 11);
+    let out = press_and_move(&mut d, at, (at.0, at.1 + ROW_H * 2.0));
+    let last = events(&out).into_iter().rfind(|(k, ..)| *k == EventKind::DragOver);
+    assert_eq!(last.map(|(_, _, p)| slot(&p)), Some(2), "the third row, not the top");
+}
+
 /// §2: `drag_over` is coalesced twice — per frame, and again against the last
 /// one sent. Crossing three rows is three events, however many samples it took.
 #[test]

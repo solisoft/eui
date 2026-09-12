@@ -2394,7 +2394,11 @@ def erp_board_card(id, card, held)
   }
   # The card says which card it is in its props, never in the event's name
   # (03 §4), and hears the grab so the server knows what is in the hand.
-  card_row = draggable(id, "card", style, [drag_grip("Move " + card["title"]), body], {
+  # The draggable node is the stack, not the row inside it. A column resolves
+  # the slot by looking at which of its own children can be picked up (06
+  # §6.2), so wrapping the card in something that could not was enough to make
+  # every drop land at the top.
+  built = draggable(id, "card", style.merge({"display": "stack"}), [{"k": "box", "s": {"display": "row", "gap": 2, "align": "center", "width": "100%"}, "c": [drag_grip("Move " + card["title"]), body]}, erp_board_ghost(id, card, held)], {
     "p": {"card": id, "label": card["title"]},
     # The grab reveals this card's own ghost rather than waiting for the
     # answer: a chunk cannot read the pointer, but it does not need to — it
@@ -2407,9 +2411,7 @@ def erp_board_card(id, card, held)
       }
     }
   })
-  # A popover hangs off its stack's first in-flow child (04 §5), so the card
-  # and the ghost of it live in a stack of their own.
-  stack({"width": "100%"}, [card_row, erp_board_ghost(id, card, held)])
+  built
 end
 
 def erp_board_column(state, name, ids, cards)
