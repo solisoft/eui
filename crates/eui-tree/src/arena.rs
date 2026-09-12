@@ -114,9 +114,17 @@ pub(crate) struct Arena {
     nodes: Vec<Node>,
     free: Vec<NodeIx>,
     by_id: HashMap<u32, NodeIx>,
-    /// Key atom -> first node carrying it, in placement order. Keys are
-    /// unique among siblings by contract and usually unique per component;
-    /// a local handler names a node by key, so the first match wins.
+    /// Key atom -> the node carrying it, most recently placed. Keys are unique
+    /// among siblings by contract and usually unique per component, so the two
+    /// are almost always the same node.
+    ///
+    /// Most recently placed, and not the first, because of one batch: moving a
+    /// child between parents is a removal and an insertion (02 §5), and which
+    /// of the two comes first depends on the order the two parents happen to
+    /// sit in. Insert-first, with "first wins", left the map pointing at the
+    /// node about to die, and the release then took the key away — so a live
+    /// node carrying a key had no entry, and every drag between containers
+    /// died in whichever direction put the insert first.
     by_key: HashMap<u32, NodeIx>,
     live: u32,
 }
@@ -178,7 +186,7 @@ impl Arena {
         };
         self.by_id.insert(id, ix);
         if key != 0 {
-            self.by_key.entry(key).or_insert(ix);
+            self.by_key.insert(key, ix);
         }
         self.live = self.live.saturating_add(1);
         Ok(ix)

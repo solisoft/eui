@@ -2816,7 +2816,11 @@ fn a_card_is_carried_from_one_column_to_another() {
     // Everything under a column, so "which column is this card in" is a
     // question the test can ask without knowing any ids.
     let column_of = |d: &Driver, card: &str| {
-        let ix = keyed(d, card);
+        // A poll runs between batches as well as after them, so a card may
+        // legitimately be in neither column for an instant.
+        let Some(ix) = d.session().atom_id(card).and_then(|a| d.session().lookup_key(a)) else {
+            return "in the air".to_owned();
+        };
         let mut cur = d.session().node(ix).map(|n| n.parent);
         while let Some(p) = cur.filter(|p| p.is_some()) {
             let names = texts(d, p);
@@ -2870,4 +2874,32 @@ fn a_card_is_carried_from_one_column_to_another() {
     assert_eq!(column_of(&d, "t1"), "Done", "and it stayed there");
     let _ = d.paint(1000, 3600);
     assert!(d.layout().rect(keyed(&d, "kan_ghost")).is_none(), "the ghost went with the drop");
+
+    // And back the other way. A drag is not a direction: the columns are a
+    // row, so right to left is the same gesture over different boxes, and the
+    // one that is easy to get wrong.
+    let back = keyed(&d, "t4");
+    assert_eq!(column_of(&d, "t4"), "In progress", "where it started");
+    let onto = keyed(&d, "t2");
+    let from = d.layout().rect(back).expect("laid out");
+    let to = d.layout().rect(onto).expect("laid out");
+    for f in d.input(Input::PointerMove(from.x + from.w / 2.0, from.y + from.h / 2.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerDown(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerMove(to.x + to.w / 2.0, to.y + to.h / 2.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 3600);
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| column_of(d, "t4") == "Backlog");
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().text_of(keyed(d, "kan_say")).is_some_and(|t| t.contains("moved to Backlog")));
+    assert_eq!(column_of(&d, "t4"), "Backlog", "and it stayed there too");
 }

@@ -513,3 +513,38 @@ fn media_and_wakers_are_kept_as_nodes_come_and_go() {
     one(&mut s, 6, Op::DefAtom { id: 40, value: "spans".into() }).unwrap();
     assert_eq!(s.atoms().spans, Some(40));
 }
+
+/// Moving a child between parents is a removal and an insertion (02 §5), and
+/// which of the two comes first depends on the order the parents sit in. The
+/// key must survive **both** orders: with "first placed wins" the insert-first
+/// case left the map pointing at the node about to die, the release took the
+/// key away with it, and a live node carrying a key had no entry at all.
+///
+/// What that cost, before it was found: a drag between columns worked left to
+/// right and died right to left, because the client holds what is in the hand
+/// by key.
+#[test]
+fn a_key_survives_a_move_between_parents_in_either_order() {
+    for insert_first in [false, true] {
+        let mut s = Session::new();
+        // root [ a [ x ], b [] ], where x is keyed.
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 0, key: 9, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        s.apply(&Batch { seq: 1, ops: vec![Op::DefAtom { id: 9, value: "x".into() }, Op::Mount(tree)] }).unwrap();
+        assert!(s.lookup_key(9).is_some(), "it starts with an entry");
+
+        let mut moved = Subtree::default();
+        moved.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 0, key: 9, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        let take = Op::RemoveChild { parent: 2, index: 0, count: 1 };
+        let put = Op::InsertChild { parent: 4, index: 0, subtree: moved };
+        let ops = if insert_first { vec![put, take] } else { vec![take, put] };
+        s.apply(&Batch { seq: 2, ops }).unwrap();
+
+        let found = s.lookup_key(9).unwrap_or_else(|| panic!("the key survived, insert_first={insert_first}"));
+        assert_eq!(s.node(found).map(|n| n.id), Some(5), "and names the node that is still there");
+        assert_eq!(s.node(found).map(|n| n.parent), s.lookup(4), "under its new parent");
+    }
+}
