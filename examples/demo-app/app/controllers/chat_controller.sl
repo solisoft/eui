@@ -844,6 +844,11 @@ end
 # a megabyte spent on something the size of a postage stamp.
 CHAT_THUMB_PX = 160
 
+# What one photograph off a camera may weigh. The client's own ceiling is
+# 64 MiB (10 §5) and a `pick` may only ask for less; eight is a generous
+# phone picture and a mean-spirited video.
+CHAT_SHOT_CEILING = 8388608
+
 def chat_thumb(kept, name)
   return "" unless chat_picture?(name)
 
@@ -864,6 +869,71 @@ def chat_shrink(source, target)
   chat_edge = chat_w < chat_h ? chat_w : chat_h
   chat_scale = CHAT_THUMB_PX * 1.0 / chat_edge
   chat_pic.resize(int(chat_w * chat_scale), int(chat_h * chat_scale)).format("png").to_file(target)
+end
+
+# ---- the phone's own three -----------------------------------------------
+#
+# All three follow the rule of 03 §3.2: a prop, a **server** handler, and a
+# capability the person granted. None of them opens anything because a tree
+# arrived, and none of them has a diagnostic when the grant is missing —
+# the button is simply a button that does nothing, which is what 08 §3 asks
+# for and what a client that could be talked out of it would not do.
+
+# A tag read off a label goes into the composer rather than straight onto
+# the wire: what was scanned is a suggestion, and the person still presses
+# Enter. `params["payload"]` is `[uid, [[kind, payload], ...]]`.
+def chat_tagged(state, params)
+  chat_read = params["payload"]
+  return state unless chat_read.is_a?("array") && chat_read.length() > 1
+
+  chat_records = chat_read[1]
+  return state unless chat_records.is_a?("array")
+
+  chat_said = ""
+  for chat_one in chat_records
+    next unless chat_one.is_a?("array") && chat_one.length() > 1
+    next if chat_one[0].to_s == "raw"
+
+    chat_said = chat_one[1].to_s
+    break
+  end
+  # Nothing a person would want to read: say what the tag was instead of
+  # pasting a hex dump into the box.
+  chat_said = "tag " + chat_read[0].to_s if chat_said.blank?
+  chat_join = state["draft"].to_s
+  state["draft"] = chat_join.blank? ? chat_said : chat_join + " " + chat_said
+  state
+end
+
+# Where the machine is, as the client rounded it: three decimal places and
+# an accuracy that does not claim to be better than that. Kept in the state
+# and drawn in the composer; nothing is posted until somebody says so.
+def chat_placed(state, params)
+  chat_at = params["payload"]
+  return state unless chat_at.is_a?("array") && chat_at.length() > 2
+
+  state["place"] = [chat_at[0], chat_at[1], chat_at[2]]
+  state
+end
+
+# The clock is the node: `locate` and its handler exist only while this is
+# on, so turning it off takes the node out of the next tree and the radio
+# with it (06 §1.2, as a `wake` stops when its prop goes).
+def chat_place_toggle(state)
+  chat_was = state["locating"] == true
+  state["locating"] = !chat_was
+  state["place"] = [] if chat_was
+  state
+end
+
+def chat_send_place(state)
+  chat_at = state["place"]
+  return state unless chat_at.is_a?("array") && chat_at.length() > 2
+
+  state["draft"] = "◎ " + chat_at[0].to_s + ", " + chat_at[1].to_s + " (±" + int(chat_at[2]).to_s + " m)"
+  state["locating"] = false
+  state["place"] = []
+  state
 end
 
 # ----------------------------------------------------------------- state
@@ -898,6 +968,8 @@ def chat_defaults
     "picker": "",
     "devbar": true,
     "attaching": "",
+    "locating": false,
+    "place": [],
     "trouble": "",
     "collapsed": [],
     "viewport": {
@@ -987,6 +1059,10 @@ def chat(event_data)
     "picker" => chat_toggle(state, "picker", props["id"].to_s),
     "file_pick" => chat_file_pick(state, params),
     "file_upload" => chat_file_upload(state, params),
+    "nfc_tag" => chat_tagged(state, params),
+    "location" => chat_placed(state, params),
+    "place" => chat_place_toggle(state),
+    "send_place" => chat_send_place(state),
     "jump" => chat_jump(state),
     "mark_read" => chat_mark_read(state),
     "dismiss" => chat_set(state, "trouble", ""),
@@ -2641,10 +2717,15 @@ def chat_composer_tools(state, roomy)
   attaching = state["attaching"].to_s
   left = [
     chat_attach_button(state),
+    chat_camera_button(state),
+    chat_record_button(state),
+    chat_place_button(state),
+    chat_tag_button(state),
     chat_tool("composer:roomy", roomy ? "⌄" : "⌃", "roomy", {}),
     chat_emoji_button(state)
   ]
   left = left.concat([chat_attaching_chip(attaching)]) unless attaching.blank?
+  left = left.concat([chat_place_chip(state)]) if state["locating"] == true
   right = roomy ? [button("Send", "send")] : [muted("Enter to send")]
   row({"gap": 1, "align": "center", "width": "100%"}, left.concat([spacer()]).concat(right))
 end
@@ -2676,6 +2757,110 @@ def chat_attach_button(state)
     "press": {"bg": "surface.sunken"}
   }, {"file_pick": "file_pick"})
   keyed("chat_attach", built)
+end
+
+# The shutter. The same `pick` and the same `file_pick` handler as the
+# paperclip beside it — what comes back is a file either way (01 §6) — with
+# bit 1 of the flags set, which is the whole of the difference. That bit is
+# what makes the client ask for `camera` instead of `fs.pick`: taking a
+# photograph and reading somebody's folder are not the same grant.
+def chat_camera_button(state)
+  chat_shutter = {
+    "k": "box",
+    "s": chat_tool_resting(),
+    "p": {"pick": ["jpg", 2, CHAT_SHOT_CEILING]},
+    "c": [text_interned("◉", {"size": 2})]
+  }
+  chat_shutter["on"] = stateful(chat_tool_resting(), {
+    "hover": {"bg": "surface.sunken", "fg": "text.default"},
+    "press": {"bg": "surface.sunken"}
+  }, {"file_pick": "file_pick"})
+  keyed("chat_camera", chat_shutter)
+end
+
+# The recorder. The third source `pick` knows about, and the third grant:
+# a finished recording is a file, so everything after the sheet closes is
+# the paperclip's path exactly. Bit 2 of the flags is the difference.
+def chat_record_button(state)
+  chat_rec = {
+    "k": "box",
+    "s": chat_tool_resting(),
+    "p": {"pick": ["m4a,mp3,ogg,wav", 4, CHAT_SHOT_CEILING]},
+    "c": [text_interned("●", {"size": 1})]
+  }
+  chat_rec["on"] = stateful(chat_tool_resting(), {
+    "hover": {"bg": "surface.sunken", "fg": "danger.base"},
+    "press": {"bg": "surface.sunken"}
+  }, {"file_pick": "file_pick"})
+  keyed("chat_record", chat_rec)
+end
+
+# The reader. `nfc` carries what iOS puts in its scan sheet; Android has
+# nowhere to show it, which is why the button says what it is beside the
+# glyph on a narrow screen.
+def chat_tag_button(state)
+  chat_reader = {
+    "k": "box",
+    "s": chat_tool_resting(),
+    "p": {"nfc": "Hold your phone near the label"},
+    "c": [text_interned("≋", {"size": 2})]
+  }
+  chat_reader["on"] = stateful(chat_tool_resting(), {
+    "hover": {"bg": "surface.sunken", "fg": "text.default"},
+    "press": {"bg": "surface.sunken"}
+  }, {"nfc_tag": "nfc_tag"})
+  keyed("chat_tag", chat_reader)
+end
+
+# The position. A plain toggle: the node that carries `locate` is the chip
+# below, and it is in the tree only while this is on.
+def chat_place_button(state)
+  chat_on = state["locating"] == true
+  chat_resting = chat_tool_resting()
+  chat_resting["fg"] = chat_on ? "accent.base" : "text.muted"
+  chat_pin = {
+    "k": "box",
+    "s": chat_resting,
+    "c": [text_interned("◎", {"size": 2})]
+  }
+  chat_pin["on"] = stateful(chat_resting, {
+    "hover": {"bg": "surface.sunken"},
+    "press": {"bg": "surface.sunken"}
+  }, {"click": "place"})
+  keyed("chat_place", chat_pin)
+end
+
+# What the toggle turns on, and the only node in Atrium that asks where the
+# machine is. Five seconds: the floor is one (06 §1.2) and a composer does
+# not need to follow anybody at walking pace.
+def chat_place_chip(state)
+  chat_at = state["place"]
+  chat_ready = chat_at.is_a?("array") && chat_at.length() > 2
+  chat_said = chat_ready ? chat_at[0].to_s + ", " + chat_at[1].to_s : "finding you"
+  chat_chip = {
+    "k": "box",
+    "s": {"display": "row", "gap": 2, "align": "center", "pad": [0, 2, 0, 2], "radius": 4, "bg": "surface.sunken", "cursor": "pointer"},
+    "p": {"locate": 5000},
+    "c": chat_ready ? [text(chat_said, {"size": 0, "clamp": 1, "fg": "text.default"}), text_interned("→", {"size": 1, "fg": "accent.base"})] : [spinner_sized(14), text(chat_said, {"size": 0, "fg": "text.muted"})]
+  }
+  chat_chip["on"] = chat_ready ? {"location": "location", "click": "send_place"} : {"location": "location"}
+  keyed("chat_place_chip", chat_chip)
+end
+
+# One resting style for the composer's round tool buttons, so the four of
+# them are the same object and a change to one is a change to all.
+def chat_tool_resting
+  {
+    "display": "row",
+    "justify": "center",
+    "align": "center",
+    "width": 28,
+    "height": 28,
+    "radius": 1,
+    "cursor": "pointer",
+    "transition": "fast",
+    "fg": "text.muted"
+  }
 end
 
 def chat_attaching_chip(name)

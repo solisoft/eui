@@ -524,6 +524,34 @@ fn conform() {
             std::process::exit(1);
         }
     }
+    // The shape a phone builds in, on whatever machine this is.
+    //
+    // Neither phone has a subprocess, so `no_subprocess` turns on a body of
+    // code that a desktop build never compiles — and a `cfg` nobody
+    // compiles is a `cfg` nobody checks. This cost three red CI runs the
+    // day a seam was written behind one: the module it called did not
+    // exist, every desktop build was happy, and both phone builds fell over
+    // on the name. A `check` here is seconds and says so at once.
+    //
+    // It is not a substitute for building for the targets — it has none of
+    // their platform crates in it — it only closes the gap that a
+    // conditional compiled nowhere leaves open.
+    //
+    // Its own target directory again, and a *different* one from the steps
+    // above: these flags are part of a build's fingerprint, so sharing a
+    // directory would have each run evict what the other left and turn a
+    // seconds-long check into a full rebuild, twice.
+    eprintln!("conform: cargo check -p eui-client --all-targets (no_subprocess)");
+    let phone = std::process::Command::new(&cargo)
+        .args(["check", "-p", "eui-client", "--all-targets"])
+        .env("CARGO_TARGET_DIR", target.with_file_name("conform-phone"))
+        .env("RUSTFLAGS", "--cfg no_subprocess")
+        .status()
+        .expect("cargo runs");
+    if !phone.success() {
+        eprintln!("conform: FAILED at the phone-shaped check");
+        std::process::exit(1);
+    }
     println!("conform: every vector passed");
 }
 

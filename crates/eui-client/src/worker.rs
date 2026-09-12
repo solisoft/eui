@@ -2301,10 +2301,13 @@ mod tests {
             mode: 1,
             audio: true,
             video: false,
+            wants_location: true,
             files: vec![
                 FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20, source: crate::driver::PickSource::Held } },
                 FileAsk { token: 4, node: 10, want: FileWant::Save { name: "export.csv".into() } },
+                FileAsk { token: 5, node: 11, want: FileWant::Open { accept: "jpg".into(), multiple: false, max: 1 << 23, source: crate::driver::PickSource::Camera } },
             ],
+            nfc: vec![crate::driver::NfcAsk { token: 6, node: 12, prompt: "Hold it near the label".into() }],
             writes: vec![FileWrite { token: 4, flag: eui_proto::Chunked::Last, bytes: vec![7, 7, 7] }],
         };
         let list = DrawList {

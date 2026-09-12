@@ -220,6 +220,29 @@ Nothing here is a stream: a transfer belongs to its session and does not
 survive it, and the memory it costs is fixed by the chunk size rather than
 by the file — the disk runs two chunks ahead of the socket and no further.
 
+## Where the machine is, and what it is held against
+
+| Measure | Budget |
+|---|---|
+| Nodes asking to be placed at once | 2, the rest ignored |
+| Fastest interval | 1 s, whatever `locate` asks for |
+| Coordinate resolution reported | 0.001°, about 110 m |
+| Accuracy reported, floor | 100 m |
+| Scans open per node | 1 |
+| Tags per scan | 1 |
+| Records kept off one tag | 64 |
+
+A fix costs a radio rather than a timer, which is battery on the only two
+platforms that have one — so the floor is a second and not the hundred
+milliseconds a clock gets, and the count is two and not four. Neither is
+negotiable by the tree: a `locate` of 10 is a `locate` of 1000, silently,
+because a server that could argue about it would.
+
+The resolution and the accuracy floor are in this table rather than in the
+client's judgement for the same reason every other number here is: a
+budget a reader cannot check is a promise, and this one is a privacy
+promise.
+
 ## Sound
 
 | Measure | Budget |

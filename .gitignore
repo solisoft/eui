@@ -18,6 +18,14 @@ examples/demo-app/public/covers/
 examples/demo-app/public/x/
 # What the tracker's Play button mixes: generated, never committed.
 examples/demo-app/public/tracker/
+# What somebody attached in Atrium, and the thumbnails made from it. These
+# are a *person's* files — a photograph off their phone, a document they
+# dragged in — sitting in a directory the application writes to at runtime.
+# Nothing here belongs in a repository, and the one thing worse than the
+# megabytes is committing somebody's holiday snap by accident.
+examples/demo-app/public/chat/
+# Where an upload lands before the application decides to keep it (01 §6).
+examples/demo-app/tmp/
 
 # `scripts/make-icons.py` is imported as a module when its PNG decoder is
 # wanted elsewhere, and Python leaves this behind when it is.

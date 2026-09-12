@@ -42,6 +42,8 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x19` | `wake` | `Null`, the node's `wake` interval elapsed (§1.1) | every `wake` ms, at most 10/s |
 | `0x1A` | `file_pick` | `List[Int upload, Str name, Int size]`, one per file the person chose (spec 03 §3.2); the bytes follow as `Upload` frames | |
 | `0x1B` | `file_save` | `Str`, the name the person chose; the bytes are owed as `Blob` frames (spec 03 §3.2) | |
+| `0x1C` | `location` | `List[Float latitude, Float longitude, Float accuracy_m]`, coarse (§1.2) | every `locate` ms, at most 1/s |
+| `0x1D` | `nfc_tag` | `List[Str uid, List[List[Str kind, Str payload]]]`, one tag for a scan the person started (spec 03 §3.3) | |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -77,6 +79,40 @@ for without anyone doing anything:
 The budget of `10-budgets.md` §1 — zero wakeups at rest — is about a
 window nobody asked to wake. A node with a `wake` prop is a window asked
 to wake, and it costs what it asked for.
+
+### 1.2 Being placed
+
+The second event an application asks for rather than receives. A node
+carrying a **`locate` prop** — an integer of milliseconds — **and a
+`location` handler** is told where the machine is on that interval, for as
+long as it carries both. Dropping either takes the node out of the next
+tree and the radio with it, exactly as a `wake` stops when its prop goes.
+
+Four things must hold, and a client MUST check every one:
+
+1. the `location` capability was granted
+   ([`01-transport.md`](01-transport.md) §2.1). Without it the tree is not
+   even read for `locate`, and a fix the platform offers is dropped rather
+   than kept;
+2. the window has the input. Nothing is reported while it does not — an
+   application does not get to follow somebody because its window is open
+   behind something else;
+3. the platform has actually produced a fix. Asking is not knowing, and a
+   client MUST NOT invent one;
+4. the node's interval has elapsed. The floor is **one second**, whatever
+   was asked for: no positioning hardware means anything faster, and the
+   cost of asking is a radio rather than a timer.
+
+**The answer is coarse and the client makes it so.** §2.1 grants the power
+to read a *coarse* location and there is no second capability for a fine
+one, so latitude and longitude are rounded to a thousandth of a degree —
+about 110 m at the equator and less everywhere else — and the reported
+accuracy is never better than 100 m, whatever the receiver claimed. The
+rounding happens in the client, on the side a server cannot argue with. A
+client MUST NOT offer a way to ask for more.
+
+The count has a ceiling as `wake` does: a page wants one fix, and a server
+that asks for a hundred gets two.
 
 ## 2. Emission rules
 
@@ -114,7 +150,14 @@ to wake, and it costs what it asked for.
   the person's business, and the client keeps it. Nor is a dismissed dialog
   reported: an application learns that a person opened a dialog and thought
   better of it only if it was told, and it is not told.
-- Anything about the machine beyond the `Viewport` frame.
+- Where the machine is, unless a node asked (§1.2) — and then only as
+  coarsely as §1.2 says, only while the window has the input, and never
+  more than once a second. A client MUST NOT report a fix to a node that
+  did not ask, and MUST NOT keep one when the capability is absent.
+- That a scan found nothing. A tag that was read is an event; a person who
+  held their phone up and changed their mind is not, for the reason a
+  dismissed dialog is not.
+- Anything else about the machine beyond the `Viewport` frame.
 
 ## 4. Server-side validation
 

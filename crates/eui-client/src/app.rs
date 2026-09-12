@@ -293,6 +293,9 @@ struct Shell {
     /// On a desktop it is `Some` from `open` until the window closes.
     surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
+    /// Whether the platform's positioning is running, so it is started and
+    /// stopped on the edge rather than told again every frame.
+    locating: bool,
     /// The tab strip and address bar, and the textures they draw into.
     /// `None` for a window opened on a URL: `eui <url>` is one application
     /// in one chromeless window, which is what an embedding host gets.
@@ -1036,6 +1039,7 @@ impl Shell {
             cursor: eui_proto::Cursor::Default,
             ime_area: None,
             chrome_mode: None,
+            locating: false,
             theme_watch: None,
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1499,6 +1503,34 @@ impl Shell {
             self.pump_uploads(i);
             // Bytes the server owes a save, put on disk.
             self.pump_writes(i);
+            // And where the machine is, if this tab asked. The driver owns
+            // the clock, the coarsening and the four conditions of 06 §1.2;
+            // the window's whole part is to run the platform while it is
+            // wanted and to hand over what arrives.
+            self.serve_location(i);
+        }
+    }
+
+    /// Run the platform's positioning while a tab wants it, and hand what
+    /// arrives to that tab's driver.
+    ///
+    /// Asked every pass, and a comparison when nothing has changed. The
+    /// start and stop are edges: a radio told to run twice is a radio that
+    /// was already running, and telling it so once a frame is how a phone
+    /// spends a battery on a page that is doing nothing.
+    fn serve_location(&mut self, i: usize) {
+        let wanted = self.tabs.get(i).is_some_and(|t| t.backend.wants_location());
+        if wanted != self.locating {
+            self.locating = wanted;
+            crate::place::running(wanted);
+        }
+        if !wanted {
+            return;
+        }
+        crate::place::dev_fix();
+        let Some(fix) = crate::place::take() else { return };
+        if let Some(t) = self.tabs.get_mut(i) {
+            t.backend.located(fix.latitude, fix.longitude, fix.accuracy_m);
         }
     }
 
@@ -1507,14 +1539,10 @@ impl Shell {
     /// Only the phones have a reader. Everywhere else this ends the scan at
     /// once, which is the same answer the person cancelling would give and
     /// leaves nothing in flight.
-    #[allow(unused_variables)]
     fn start_scan(&mut self, i: usize, ask: crate::driver::NfcAsk) {
         let Some(t) = self.tabs.get_mut(i) else { return };
-        #[cfg(has_nfc)]
-        {
-            if crate::nfc::start(&ask) {
-                return;
-            }
+        if crate::nfc::start(&ask) {
+            return;
         }
         eprintln!("eui: this build has no tag reader");
         t.backend.scan_ended(ask.token);
@@ -1546,8 +1574,8 @@ impl Shell {
                 // path on this platform yet, and offering the file system
                 // instead would spend a `camera` grant on `fs.pick`'s
                 // power. The phones are where this one lands.
-                FileWant::Open { source: crate::driver::PickSource::Camera, .. } => {
-                    eprintln!("eui: this build has no camera");
+                FileWant::Open { source: source @ (crate::driver::PickSource::Camera | crate::driver::PickSource::Microphone), .. } => {
+                    eprintln!("eui: this build has no {source:?}");
                     answer(Dialog::Dismissed(token));
                 }
                 FileWant::Open { accept, multiple, .. } => {

@@ -738,10 +738,12 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     assert_eq!(m.app_id, "demo-app", "the application folder's name");
     assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
     assert_eq!(m.entry, "/_eui/session");
-    // `fs.pick` joined it when the messenger learned to take an attachment:
-    // the manifest is the whole list an application ever asks for, and the
-    // client pins it, so a capability added to a route shows up here.
-    assert_eq!(eui_proto::caps::names(m.capabilities), vec!["clipboard.read", "fs.pick"], "what config/routes.sl asked for");
+    // `fs.pick` joined it when the messenger learned to take an attachment,
+    // and the other three when it learned to use a phone. The manifest is
+    // the whole list an application ever asks for and the client pins it,
+    // so a capability added to a route shows up here — which is the point:
+    // widening what an application may ask for should never be quiet.
+    assert_eq!(eui_proto::caps::names(m.capabilities), vec!["camera", "microphone", "clipboard.read", "location", "fs.pick", "nfc"], "what config/routes.sl asked for");
     // Pinned: the same server is accepted again; a stranger's key is not.
     assert!(eui_client::manifest::check(&origin, &pins, None).is_ok());
     let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
@@ -2431,7 +2433,11 @@ fn a_room_opens_on_a_hundred_and_unrolls_on_request() {
             })
             .expect("the river says how long it is")
     };
-    assert_eq!(river(&d), 100, "a hundred, whatever the room holds");
+    // A page, not the room. Not an exact hundred: the suite's other tests
+    // write into this same room, and a message that lands between the
+    // window opening and this line is one more row the river honestly has.
+    let opened = river(&d);
+    assert!((100..200).contains(&opened), "a page, not the room, got {opened}");
 
     // The rest is offered, and the offer says how much there is.
     let said = texts(&d, root(&d));
@@ -2449,8 +2455,110 @@ fn a_room_opens_on_a_hundred_and_unrolls_on_request() {
     click(&mut d, &conn, button);
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     let _ = d.paint(1200, 900);
-    assert_eq!(river(&d), 200, "one more page, not the whole room");
+    let unrolled = river(&d);
+    assert!(unrolled >= opened + 100, "one more page: {opened} then {unrolled}");
+    assert!(unrolled < opened + 200, "one page, not the whole room: {opened} then {unrolled}");
     let after = texts(&d, root(&d)).iter().find(|t| t.ends_with("earlier messages")).cloned().expect("still holding some back");
     let left: u32 = after.split(' ').next().and_then(|n| n.parse().ok()).unwrap();
-    assert_eq!(left, held - 100, "and the offer counted down by exactly a page");
+    assert!(left <= held - 100, "and the offer counted down by a page: {held} then {left}");
+}
+
+/// Spec 03 §3.3 and 06 §1.2 against a real server: a tag read off a label
+/// reaches the composer, and a page that asks where the machine is is told.
+///
+/// Neither has a platform behind it on a desktop, which is exactly why this
+/// is worth having: the driver's half — the activation rule, the capability,
+/// the coarsening, the clock — is the half the security of both rests on,
+/// and it is the same half on a phone.
+#[test]
+fn a_tag_and_a_fix_reach_the_room_they_were_asked_for() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let kept: Option<(Server, u16)> = match existing_port() {
+        Some(_) => None,
+        None => Some(start_soli(&bin)),
+    };
+    let port = existing_port().unwrap_or_else(|| kept.as_ref().expect("started").1);
+    let caps = eui_proto::caps::FS_PICK | eui_proto::caps::CAMERA | eui_proto::caps::LOCATION | eui_proto::caps::NFC;
+    let (mut d, conn, wake) = open_with(port, "chat", 1200.0, 900.0, caps);
+    let _ = d.paint(1200, 900);
+    pump(&mut d, &conn, &wake, |d| d.session().preorder(root(d)).any(|ix| d.session().text_of(ix) == Some("≋")));
+
+    // The composer's four tools, by the glyph each draws.
+    let tool = |d: &Driver, glyph: &str, kind: EventKind| -> eui_tree::NodeIx {
+        let mut ix = d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(glyph)).unwrap_or_else(|| panic!("no {glyph} in the composer"));
+        while d.session().handler(ix, kind).is_none() {
+            let up = d.session().node(ix).unwrap().parent;
+            assert_ne!(up, ix, "no ancestor of {glyph} handles {kind:?}");
+            ix = up;
+        }
+        ix
+    };
+
+    // ---- the reader. A scan starts on the activation and on nothing else.
+    assert!(d.take_nfc_asks().is_empty(), "the tree arrived and started nothing");
+    let reader = tool(&d, "≋", EventKind::NfcTag);
+    click(&mut d, &conn, reader);
+    let asks = d.take_nfc_asks();
+    assert_eq!(asks.len(), 1, "one scan, from one activation: {asks:?}");
+    assert_eq!(asks[0].prompt, "Hold your phone near the label");
+
+    // The platform read one. On a desktop there is none, so the test is it.
+    let label = "https://eui.example/crate/4471";
+    for f in d.scanned(asks[0].token, "04:a2:1f:7b", &[eui_client::NfcRecord { kind: "uri".into(), payload: label.into() }]) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t.contains(label)));
+
+    // ---- the radio. Nothing asks until the page says so.
+    assert!(!d.wants_location(), "no node has asked to be placed");
+    let pin = tool(&d, "◎", EventKind::Click);
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, pin);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1200, 900);
+    assert!(d.wants_location(), "the chip is in the tree and it carries `locate`");
+
+    // A fix off a receiver, precise to four metres. What reaches the server
+    // is three decimal places and an accuracy that admits as much.
+    // Painted in the loop, not only waited on: a `location` is emitted from
+    // a paint, as a `wake` is, so a wait that only reads frames waits for
+    // something nothing is going to produce.
+    d.located(eui_client::Fix { latitude: 48.858_372_1, longitude: 2.294_481_9, accuracy_m: 4.0 });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !texts(&d, root(&d)).iter().any(|t| t.contains("48.858")) {
+        assert!(Instant::now() < deadline, "the fix never reached the room");
+        d.tick(Instant::now());
+        let _ = d.paint(1200, 900);
+        for f in d.take_pending() {
+            conn.tx.send(f.encode()).unwrap();
+        }
+        let _ = wake.recv_timeout(Duration::from_millis(40));
+        while let Ok(msg) = conn.rx.try_recv() {
+            match msg {
+                Incoming::Message(bytes) => {
+                    let frame = Frame::decode(&bytes).expect("soli sent a well-formed frame");
+                    if let Frame::Error { code, message } = &frame {
+                        panic!("soli sent error {code}: {message}");
+                    }
+                    for out in d.handle_frame(frame) {
+                        conn.tx.send(out.encode()).unwrap();
+                    }
+                }
+                Incoming::Closed(e) => panic!("connection closed: {e}"),
+                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
+            }
+        }
+    }
+    let said = texts(&d, root(&d));
+    assert!(said.iter().any(|t| t.contains("48.858") && t.contains("2.294")), "the room was told where it is: {said:?}");
+    assert!(!said.iter().any(|t| t.contains("48.8583")), "and not more than that: {said:?}");
+
+    // Turning it off takes the node out of the tree, and the radio with it.
+    let seq = d.session().last_seq().unwrap();
+    click(&mut d, &conn, pin);
+    pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
+    let _ = d.paint(1200, 900);
+    assert!(!d.wants_location(), "the clock stops when its prop goes (06 §1.2)");
 }

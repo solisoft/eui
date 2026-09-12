@@ -292,10 +292,33 @@ the person's machine, and put one there.
 | `save` | `Str name` | activating this node opens the platform's save dialog |
 
 `accept` is a comma-separated list of extensions without dots (`"csv,pdf"`),
-empty for any file. `flags` bit 0 allows more than one file. `max` is the
-largest one file may be, in bytes, capped by
+empty for any file. `flags` bit 0 allows more than one file; **bit 1 asks
+for the camera** and **bit 2 for a recording**, rather than for something
+the person already has. `max` is
+the largest one file may be, in bytes, capped by
 [`10-budgets.md`](10-budgets.md) §5 and defaulting to it. `name` is the name
 to suggest, and a client MUST reduce it to its last path segment.
+
+Bits 1 and 2 change which capability the sheet needs and nothing else: a
+picture taken now, or a recording just made, is a file like any other —
+reported by the same `file_pick` and carried by the same `Upload` frames.
+Bit 1 needs **`camera`**, bit 2 needs **`microphone`**, and a node asking
+for either MUST NOT be opened on `fs.pick` alone: taking a photograph,
+making a recording and reading a folder are three different powers, and
+none implies another. Bits 1 and 2 together are a contradiction; a client
+MUST resolve it as the camera, so that two clients resolve it alike.
+
+The recording is a **finished** one, and that is the whole reason it fits
+here: it has an end, so it is a file, and files already have a transport
+([`01-transport.md`](01-transport.md) §6). Listening to a microphone as it
+runs is a stream, has no transport in this protocol, and is not this
+([`08-security.md`](08-security.md) §9.1).
+
+A client with no capture on its platform opens nothing, exactly as it would
+for a capability that was not granted. Bit 0 with either is one file:
+neither phone photographs or records several things in one sheet, and a
+`multiple` a client cannot honour is a promise to the server it would then
+break.
 
 A client opens a dialog when **all** of this holds, and never otherwise:
 
@@ -328,6 +351,41 @@ owed, and arrive as `Blob` frames addressed to the node. Nothing is written
 until the first chunk arrives, so a save the server never answers leaves
 nothing behind, and an aborted one leaves nothing either — half an export is
 worse than none, because it looks like a whole one until it is opened.
+
+### 3.3 What a node may claim of a reader
+
+One prop, for a thing that is neither a file nor a fact about the machine:
+a tag somebody holds against it.
+
+| Prop | Value | Means |
+|---|---|---|
+| `nfc` | `Str prompt` | activating this node starts a scan for one tag |
+
+`prompt` is what to tell the person the scan is for. A platform that raises
+a sheet of its own shows it; one that listens without a sheet has nowhere
+to put it, and the application should say it in the tree as well.
+
+The three conditions of §3.2 hold **word for word**: the person activated
+the node, the node carries the prop *and* a **server** handler for
+`nfc_tag`, and `nfc` was granted. A tree that merely arrives scans nothing,
+and neither does a batch, a timer, or a local handler. This is not a
+platform's rule reflected into the protocol — one of the two phones would
+happily listen for as long as its screen is on — it is the protocol's rule
+imposed on both, because a reader nobody started is the whole of what makes
+one dangerous.
+
+**What is read.** One tag gives one `nfc_tag` event
+([`06-events.md`](06-events.md) §1) and ends the scan: a reader that
+delivers twice is answered once. A scan that reads nothing before it ends
+is not an event — the person held their phone up and thought better of it,
+and an application learns that only if it is told, which it is not.
+
+A client MUST NOT ship a general NDEF model. Records are reduced to
+`(kind, payload)` pairs, where `kind` is `text`, `uri`, `mime:…` or `raw`,
+and `payload` is UTF-8 for the first three and lower-case hex for the last.
+Parsing a format a stranger wrote, in a process that on both phones has no
+worker to be confined to ([`08-security.md`](08-security.md) §10), is
+exactly the surface this protocol spends its effort avoiding.
 
 This is why a save costs a round trip rather than riding on an asset: the
 bytes are generated when the person asks for them, they are nobody else's,

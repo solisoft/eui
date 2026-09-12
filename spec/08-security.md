@@ -120,7 +120,35 @@ this feature follows from those two sentences.
   the driver enforces what it framed rather than trusting the size a
   dialog reported. *Enforced: `Driver::upload_chunk`, `Driver::blob`.*
 
-### 7.2 Resuming a session
+### 7.2 The camera, the radio and the reader
+
+- A camera sheet opens on an **activation and nothing else**, by the rule of
+  §7.1 and the same code path: `pick` with bit 1 of its flags, a server
+  handler for `file_pick`, and `camera` granted (spec 03 §3.2). A picture
+  taken this way is a file and travels as one; nothing new carries it.
+- The same for a recording: `pick` with bit 2, a server handler for
+  `file_pick`, and `microphone` granted. What comes back is a finished
+  recording — a file — and nothing here carries a live one.
+- `camera`, `microphone` and `fs.pick` are three separate grants and none
+  implies another. A node asking for the camera on `fs.pick` alone opens
+  nothing; so does one asking for a folder on `camera` alone.
+- A scan starts on an activation and nothing else (spec 03 §3.3), and reads
+  **one** tag. A reader that delivers twice is answered once, because the
+  scan is over after the first.
+- **Location is not asked for by activation** — a page that shows where you
+  are would be unusable if every fix needed a click — so its limits are
+  elsewhere and there are four of them: the capability, the window having
+  the input, a fix actually existing, and a floor of one second
+  (spec 06 §1.2). Without the capability the tree is not read for `locate`
+  at all and an offered fix is discarded rather than stored.
+- A location leaves the client **coarse**: a thousandth of a degree, and an
+  accuracy never better than 100 m. The rounding is the client's, before
+  anything is sent, because it is the only side of this that a server
+  cannot argue with. There is no capability that buys more.
+- A session that ended stops all three: no scan is in flight, no node is
+  asking to be placed, and the fix that was held is dropped (spec 01 §4).
+
+### 7.3 Resuming a session
 
 A session id is a bearer credential: whoever holds it can pick the session
 up. It MUST come from a CSPRNG, MUST NOT be logged, and MUST NOT be handed

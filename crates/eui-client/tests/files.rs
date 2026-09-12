@@ -332,6 +332,12 @@ fn a_pick_that_asks_for_the_camera_needs_the_camera() {
     click(&mut d, ATTACH);
     assert_eq!(d.take_file_asks().len(), 1, "and it still buys what it is for");
 
+    // A recording is the same bargain with a different bit and a different
+    // grant: `microphone` opens neither of the other two.
+    let mut d = driver(caps::MICROPHONE);
+    click(&mut d, SHOOT);
+    assert!(d.take_file_asks().is_empty(), "a microphone does not buy a camera");
+
     // `camera` alone: the other way round, exactly.
     let mut d = driver(caps::CAMERA);
     click(&mut d, ATTACH);
@@ -365,13 +371,7 @@ fn a_tag_is_read_once_for_the_node_that_asked() {
     });
     let event = event.expect("the tag reached the node that asked");
     assert_eq!(event.node, TAP);
-    assert_eq!(
-        event.payload,
-        Value::List(vec![
-            Value::Str("04:a2:1f:7b".into()),
-            Value::List(vec![Value::List(vec![Value::Str("uri".into()), Value::Str("https://eui.example/label/91".into())])]),
-        ])
-    );
+    assert_eq!(event.payload, Value::List(vec![Value::Str("04:a2:1f:7b".into()), Value::List(vec![Value::List(vec![Value::Str("uri".into()), Value::Str("https://eui.example/label/91".into())])]),]));
 
     // A reader that delivers twice is answered once: the token was spent.
     assert!(d.scanned(ask.token, "04:a2:1f:7b", &records).is_empty(), "one tag a scan");

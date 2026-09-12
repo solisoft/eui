@@ -55,6 +55,14 @@ pub enum PickSource {
     /// A picture taken now. Needs `camera`, and nothing on the filesystem
     /// is read.
     Camera,
+    /// A recording made now. Needs `microphone`.
+    ///
+    /// A *finished* recording, which is the whole reason this fits: what
+    /// comes back is a file with an end, carried by `Upload` like every
+    /// other file (01 §6). Listening to a microphone as it runs is a
+    /// stream, has no transport in this protocol and is not this
+    /// (08 §9.1).
+    Microphone,
 }
 
 impl PickSource {
@@ -63,6 +71,7 @@ impl PickSource {
         match self {
             Self::Held => caps::FS_PICK,
             Self::Camera => caps::CAMERA,
+            Self::Microphone => caps::MICROPHONE,
         }
     }
 
@@ -71,6 +80,7 @@ impl PickSource {
         match self {
             Self::Held => 0,
             Self::Camera => 1,
+            Self::Microphone => 2,
         }
     }
 
@@ -79,6 +89,7 @@ impl PickSource {
     pub const fn from_u8(v: u8) -> Self {
         match v {
             1 => Self::Camera,
+            2 => Self::Microphone,
             _ => Self::Held,
         }
     }
@@ -3136,12 +3147,22 @@ impl Driver {
                         }
                         _ => (String::new(), 0, DEFAULT_UPLOAD_BYTES),
                     };
-                    // Bit 1 asks for the camera. A node that asks for both
-                    // gets the camera and one picture: there is no taking
-                    // several photographs in one sheet on either platform,
+                    // Bit 1 asks for the camera, bit 2 for a recording.
+                    // Both together is a contradiction and the camera wins,
+                    // because a client that guessed would guess differently
+                    // from the next one.
+                    //
+                    // Either one gets exactly one file: neither platform
+                    // photographs or records several things in one sheet,
                     // and a `multiple` the sheet cannot honour is a promise
                     // to the server that the client would then break.
-                    let source = if flags & 2 != 0 { PickSource::Camera } else { PickSource::Held };
+                    let source = if flags & 2 != 0 {
+                        PickSource::Camera
+                    } else if flags & 4 != 0 {
+                        PickSource::Microphone
+                    } else {
+                        PickSource::Held
+                    };
                     FileWant::Open { accept, multiple: flags & 1 != 0 && source == PickSource::Held, max, source }
                 }
                 _ => {

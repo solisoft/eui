@@ -71,7 +71,13 @@ Strings are at most 256 bytes. The signature is Ed25519 over the record
 encoded with fields 0–9 only (`field_count` 10), which a decoder can rebuild
 exactly because the order is fixed. Capability names and bits: `camera` 1,
 `microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
-16, `location` 32, `fs.pick` 64, `fs.save` 128.
+16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256.
+
+The set grows from the top and a bit outside it is a decode error
+([`08-security.md`](08-security.md) §3). That is the point rather than a
+limitation: a client that does not know what a bit means must not agree to
+it, and an application that asks for one the client has never heard of
+finds out at the manifest rather than at the call.
 
 A client MUST verify the signature before acting on any other field, and
 MUST refuse a server whose protocol range excludes its own version. On first

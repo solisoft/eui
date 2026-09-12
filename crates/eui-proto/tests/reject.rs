@@ -140,7 +140,11 @@ fn unknown_capability_bit_is_rejected() {
     let mut p = Writer::new();
     p.varint32(1);
     Viewport::default().encode(&mut p);
-    p.varint32(caps::ALL | 0x100);
+    // The lowest bit above the set, whatever the set has grown to: this
+    // vector named `0x100` outright and went quiet the day that became
+    // `nfc` — it still passed, against a frame that was now perfectly
+    // legal and merely truncated.
+    p.varint32(caps::ALL | (caps::ALL + 1));
     assert_eq!(frame_err(&framed(0x01, p.as_slice())), E::IllegalValue("unknown capability bit"));
 }
 
