@@ -111,6 +111,11 @@ pub struct Layout {
     /// A `position: pointer` panel is placed here rather than against its
     /// anchor, and kept here between layouts by [`Self::track_pointer`].
     pointer: Option<(f32, f32)>,
+    /// Whether the hand is carrying something (06 §6). A panel at the pointer
+    /// is a tooltip the rest of the time and hangs *over* the cursor so a
+    /// fingertip does not cover it; during a drag it is the thing being
+    /// carried, and a carried thing hangs *from* the hand.
+    carrying: bool,
     /// The `position: pointer` panels laid out this frame. Unlike `anchored`
     /// these outlive the walk: the pointer moves far more often than the tree
     /// changes, and following it must not cost a layout.
@@ -746,6 +751,12 @@ impl Layout {
         self.pointer = at;
     }
 
+    /// Whether a drag is live, which decides which side of the cursor a panel
+    /// that follows it sits on (04 §5).
+    pub fn set_carrying(&mut self, carrying: bool) {
+        self.carrying = carrying;
+    }
+
     /// Follow the pointer without laying anything out again. The panels were
     /// measured this frame and only their origin moves, so this is a handful
     /// of additions per move rather than a walk of the tree. Returns whether
@@ -770,10 +781,21 @@ impl Layout {
     /// window on both axes either way.
     fn place_at_pointer(&mut self, s: &Session, panel: NodeIx, x: f32, y: f32, gap: f32) -> bool {
         let Some(p) = self.rect(panel) else { return false };
-        let above = y - gap - p.h;
-        let ty = if above >= 0.0 { above } else { y + gap };
+        // Two panels, two rules. A tooltip describes what is under the cursor,
+        // so it sits over it and centred — under the cursor it would be under
+        // the fingertip. A drag's panel *is* what is under the cursor, so it
+        // hangs from the hand, below and to the right, the way a carried thing
+        // hangs; it goes above only when there is no room below.
+        let (ty, tx) = if self.carrying {
+            let below = y + gap;
+            let ty = if below + p.h <= self.viewport.h { below } else { y - gap - p.h };
+            (ty, x + gap)
+        } else {
+            let above = y - gap - p.h;
+            (if above >= 0.0 { above } else { y + gap }, x - p.w / 2.0)
+        };
         let ty = ty.clamp(0.0, (self.viewport.h - p.h).max(0.0));
-        let tx = (x - p.w / 2.0).clamp(0.0, (self.viewport.w - p.w).max(0.0));
+        let tx = tx.clamp(0.0, (self.viewport.w - p.w).max(0.0));
         if (tx - p.x).abs() < 0.5 && (ty - p.y).abs() < 0.5 {
             return false;
         }

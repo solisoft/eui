@@ -1690,6 +1690,7 @@ impl Driver {
             // by the same hover that moved the pointer would otherwise land at
             // the origin for one frame.
             self.layout.set_pointer(self.pointer.inside.then_some((self.pointer.x, self.pointer.y)));
+            self.layout.set_carrying(self.pointer.drag.is_some_and(|d| d.grabbed));
             self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
             self.layout_valid = true;
             self.relayouts = self.relayouts.saturating_add(1);
@@ -2423,6 +2424,7 @@ impl Driver {
         // layout: the pointer moves many times a frame and the tree it is
         // moving over has not changed. Only the panel's origin does, which
         // is a shift of one subtree and a repaint.
+        self.layout.set_carrying(self.pointer.drag.is_some_and(|d| d.grabbed));
         if self.layout_valid && self.layout.track_pointer(&self.session, x, y) {
             self.redraw = true;
         }

@@ -177,6 +177,16 @@ viewport — it goes under the pointer instead, its top the pointer's `y` plus
 the same margin. It is then clamped into the viewport on both axes as any
 other panel is.
 
+Two panels want two rules, and the client tells them apart by what the hand is
+doing. A panel that follows the pointer while **nothing is being dragged**
+describes what is under the cursor, so it sits above it and centred on it — a
+chip under the fingertip is a chip the fingertip covers. While a drag is live
+([`06-events.md`](06-events.md) §6) the panel **is** what is under the cursor,
+so it hangs from the hand instead: below it and to the right, by the same
+margin, going above only when there is no room below. Either way it is clamped
+into the viewport, which is why a wide one ends against an edge rather than off
+it.
+
 A tooltip is the case this exists for, and it is a client's job for the same
 reason a scrollbar is: a local chunk has no access to the pointer (see
 [`07-bytecode.md`](07-bytecode.md) §1), and asking the server for a position

@@ -2855,11 +2855,21 @@ fn a_card_is_carried_from_one_column_to_another() {
     // overlay with `position: pointer`, which the client keeps under the
     // cursor without laying anything out again (04 §5). It is shown by the
     // grab's own local chunk, so it is up before the server has answered.
-    let ghost = keyed(&d, "kan_ghost");
+    // Every card carries its own, hidden, so that the grab reveals a whole
+    // block rather than a label a chunk had to write.
+    let ghost = keyed(&d, "gh_t1");
     let at = d.layout().rect(ghost).expect("the ghost is laid out while a card is held");
     assert!(at.w > 0.0 && at.h > 0.0, "and has a box: {at:?}");
-    assert!((at.x + at.w / 2.0 - (to.x + to.w / 2.0)).abs() < 2.0, "centred on the hand: {at:?}");
-    assert_eq!(d.session().text_of(keyed(&d, "kan_ghost_t")), Some("Reconcile October stock"), "carrying the card it holds");
+    // 04 §5: a carried thing hangs from the hand, below and to the right; a
+    // tooltip sits over it. These are different panels and different rules.
+    assert!(at.y >= to.y + to.h / 2.0, "below the hand: {at:?} under {}", to.y + to.h / 2.0);
+    // To the right of it, unless the window's edge got there first — a panel
+    // that follows the pointer is still clamped inside the viewport.
+    let px = to.x + to.w / 2.0;
+    assert!(at.x >= px || at.x + at.w >= 1000.0 - 1.0, "to the right of the hand, or against the edge: {at:?} for {px}");
+    assert!(texts(&d, ghost).iter().any(|t| t == "Reconcile October stock"), "carrying the card it holds: {:?}", texts(&d, ghost));
+    assert!(texts(&d, ghost).iter().any(|t| t == "Camille"), "the whole block, not a label: {:?}", texts(&d, ghost));
+    assert!(d.layout().rect(keyed(&d, "gh_t2")).is_none(), "and only the one in the hand");
     // Laid out is not the same as drawn. It is on the top layer, so it is the
     // last thing painted; what proves it is on screen is a quad inside its box.
     let drawn = d.paint(1000, 3600);
@@ -2878,7 +2888,7 @@ fn a_card_is_carried_from_one_column_to_another() {
     pump(&mut d, &conn, &wake, |d| d.session().text_of(keyed(d, "kan_say")).is_some_and(|t| t.contains("moved to Done")));
     assert_eq!(column_of(&d, "t1"), "Done", "and it stayed there");
     let _ = d.paint(1000, 3600);
-    assert!(d.layout().rect(keyed(&d, "kan_ghost")).is_none(), "the ghost went with the drop");
+    assert!(d.layout().rect(keyed(&d, "gh_t1")).is_none(), "the ghost went with the drop");
 
     // And back the other way. A drag is not a direction: the columns are a
     // row, so right to left is the same gesture over different boxes, and the

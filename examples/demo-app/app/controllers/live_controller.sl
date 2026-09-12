@@ -2394,19 +2394,22 @@ def erp_board_card(id, card, held)
   }
   # The card says which card it is in its props, never in the event's name
   # (03 §4), and hears the grab so the server knows what is in the hand.
-  draggable(id, "card", style, [drag_grip("Move " + card["title"]), body], {
+  card_row = draggable(id, "card", style, [drag_grip("Move " + card["title"]), body], {
     "p": {"card": id, "label": card["title"]},
-    # The grab shows the ghost here rather than waiting for the answer: a
-    # chunk cannot read the pointer, but it does not need to — it reveals, and
-    # the client places (04 §5).
+    # The grab reveals this card's own ghost rather than waiting for the
+    # answer: a chunk cannot read the pointer, but it does not need to — it
+    # reveals, and the client places (04 §5).
     "on": {
       "drag_start": {
-        "local": "kan_ghost.style = @up; kan_ghost_t.text = " + chart_quoted(card["title"]),
+        "local": "gh_" + id + ".style = @up",
         "styles": {"up": erp_board_ghost_style(true)},
         "then": "kan_grab"
       }
     }
   })
+  # A popover hangs off its stack's first in-flow child (04 §5), so the card
+  # and the ghost of it live in a stack of their own.
+  stack({"width": "100%"}, [card_row, erp_board_ghost(id, card, held)])
 end
 
 def erp_board_column(state, name, ids, cards)
@@ -2447,26 +2450,42 @@ end
 # in the layout would answer every `drag_over` meant for the column beneath.
 def erp_board_ghost_style(shown)
   shown ? {
-    "bg": "surface.overlay",
+    "display": "row",
+    "width": 240,
+    "bg": "surface.raised",
     "fg": "text.default",
     "border": 1,
     "border_color": "accent.base",
     "radius": 2,
     "shadow": 2,
-    "pad": [1, 2, 1, 2],
+    "pad": 3,
+    # Translucent, because it is a picture of the card and not the card: the
+    # column it is passing over goes on being readable underneath it, and the
+    # eye is told which of the two is the real one.
+    "opacity": 190,
     "position": "pointer",
     "margin": [2, 0, 0, 0],
     "z": 6
   } : {"display": "none", "position": "pointer"}
 end
 
-def erp_board_ghost(state, cards)
-  held = state["kan_held"] ?? ""
+# One a card, and hidden, because a chunk can only set text and a style — it
+# cannot build a card. The whole block is therefore drawn ahead of time and the
+# grab does nothing but reveal the right one, which is what makes it appear in
+# the same frame the hand moves rather than one round trip later. A hidden
+# overlay is `display: none`: no rect, no layout, nothing hit-tested.
+def erp_board_ghost(id, card, held)
   {
     "k": "overlay",
-    "key": "kan_ghost",
-    "s": erp_board_ghost_style(held != ""),
-    "c": [keyed("kan_ghost_t", text(held == "" ? " " : cards[held]["title"], {"size": 0, "weight": "semibold"}))]
+    "key": "gh_" + id,
+    "s": erp_board_ghost_style(held),
+    "c": [row(
+      {"gap": 2, "align": "center", "width": "100%"},
+      [
+        {"k": "icon", "s": {"width": 18, "height": 18, "fg": "text.muted"}, "p": {"name": "grip"}},
+        column({"gap": 1, "grow": 1}, [text(card["title"], {"weight": "semibold", "size": 1}), muted(card["who"])])
+      ]
+    )]
   }
 end
 
@@ -2483,7 +2502,7 @@ def erp_board(state, lay)
   erp_card(
     "The week's work",
     [muted("drag a card by its grip, or focus one and press Space")],
-    [stack({"width": "100%", "justify": "start", "align": "start"}, [grid, erp_board_ghost(state, cards)]), erp_board_say(state)]
+    [grid, erp_board_say(state)]
   )
 end
 
