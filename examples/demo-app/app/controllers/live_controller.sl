@@ -925,10 +925,10 @@ end
 # holds the active section; the rail and the top bar are outside it, so the
 # page moves under a header that stays.
 
-ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Reports", "Settings"]
+ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
-ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Reports": "chart", "Settings": "sliders"}
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Files": "folder", "Reports": "chart", "Settings": "sliders"}
 
 ERP_PER_PAGE = 7
 
@@ -2803,6 +2803,7 @@ def gallery_defaults(state)
     .merge(erp_inventory_defaults())
     .merge(erp_reports_defaults())
     .merge(erp_settings_defaults())
+    .merge(erp_files_defaults())
     .merge(erp_board_state_defaults())
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
@@ -2819,6 +2820,8 @@ def gallery(event_data)
   return erp_picker(state, picker, event, props) unless picker == ""
 
   return erp_board_event(state, event, params, props) if event == "kan_grab" || event == "kan_over" || event == "kan_drop"
+
+  return erp_files_event(state, event, params, props) if erp_files_owns?(event)
 
   match event {
     # The shell.
@@ -2974,6 +2977,7 @@ def gallery_view(raw_state)
   body = erp_orders_section(state, lay) if section == "Orders"
   body = erp_customers_section(state, lay) if section == "Customers"
   body = erp_inventory_section(state, lay) if section == "Inventory"
+  body = erp_files_section(state, lay) if section == "Files"
   body = erp_reports_section(state, lay) if section == "Reports"
   body = erp_settings_section(state, lay) if section == "Settings"
   page = scroll(

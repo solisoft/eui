@@ -359,6 +359,18 @@ const AUTOSCROLL_BAND: f32 = 48.0;
 /// from nothing at the band's inner edge.
 const AUTOSCROLL_MAX: f32 = 900.0;
 
+/// What a key means on the way to the focused node, per 03 §3.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Claim {
+    /// Nobody on the path is listening for this key — or one is, and named
+    /// the keys it wants, and this is not among them. It is not sent.
+    Ignored,
+    /// A keyed node hears it, and the client's own meaning stands as well.
+    Reported,
+    /// A keyed node hears it, and the client's own meaning is withheld.
+    Claimed,
+}
+
 /// A drag in flight (06 §6). The client owns the whole of the hand and tells
 /// the server only what changed: one `drag_start`, a `drag_over` per boundary
 /// crossed, one `drop`.
@@ -831,6 +843,10 @@ pub struct Driver {
     /// Effects of local-then-server handlers awaiting the server's answer.
     provisional: Vec<Undo>,
     granted: u32,
+    /// The node a dragged file is currently over, by id — so that leaving
+    /// it can be reported once, and entering another lights only the new
+    /// one (spec 03 §3.2).
+    drop_over: Option<u32>,
     welcomed: bool,
     /// The session the server named in `Welcome`, and what to offer it if
     /// the socket breaks (spec 01 §4.1).
@@ -1021,6 +1037,7 @@ impl Driver {
             chunks: HashMap::new(),
             provisional: Vec::new(),
             granted: granted & caps::ALL,
+            drop_over: None,
             welcomed: false,
             session_id: None,
             acked: 0,
@@ -3170,28 +3187,42 @@ impl Driver {
         None
     }
 
-    /// Whether `f` asked for this key itself, and so should not have the
-    /// client's meaning put on it.
+    /// What a key means on the way to `f`, per 03 §3.1. One walk, because the
+    /// two questions it answers are one question asked at one node: does
+    /// anybody hear this key, and does the client's own meaning still stand.
     ///
-    /// A node holding `key_down` used to claim *every* key, which made a
-    /// widget choose: take the arrows, or keep `Enter` and `Space` as the
-    /// press they stand for. A `keys` prop naming what it wants settles it —
-    /// a tab can take `ArrowLeft` and `ArrowRight` and still be activated by
-    /// `Enter`. Without the prop the old all-or-nothing rule stands, so a
-    /// tracker that wants `Space` for itself keeps it.
-    fn claims_key(&self, f: NodeIx, key: &str) -> bool {
-        let Some(node) = self.session.node(f) else {
-            return false;
+    /// They used to be two predicates over two different nodes — `wants_key`
+    /// walked the path, `claims_key` looked only at `f` — and a node could
+    /// therefore be sent a key whose meaning it had not taken, or take a
+    /// meaning at a node that was never sent it.
+    fn key_claim(&self, f: NodeIx, key: &str) -> Claim {
+        let Some(target) = self.ancestor_keyed(f) else {
+            return Claim::Ignored;
         };
-        if node.handler(EventKind::KeyDown).is_none() {
-            return false;
-        }
-        let Some(atom) = self.session.atom_id("keys") else {
-            return true;
-        };
-        match node.prop(atom) {
-            Some(Value::List(want)) => want.iter().any(|k| matches!(k, Value::Str(s) if s == key)),
-            _ => true,
+        let named = self.session.atom_id("keys").and_then(|atom| self.session.node(target).and_then(|n| n.prop(atom)).cloned());
+        match named {
+            // It said what it wants, so it hears that and nothing else — and
+            // what it named is its to mean, however far up the path it is.
+            // That is what lets a combobox claim `Enter` on behalf of the
+            // field inside it.
+            Some(Value::List(want)) => {
+                if want.iter().any(|k| matches!(k, Value::Str(s) if s == key)) {
+                    Claim::Claimed
+                } else {
+                    Claim::Ignored
+                }
+            }
+            // It named nothing, so it hears everything — but the old
+            // all-or-nothing meaning is kept narrow, to the node itself. A
+            // dialog carrying a bare `key_down` used to swallow `Enter` from
+            // every button inside it.
+            _ => {
+                if target == f {
+                    Claim::Claimed
+                } else {
+                    Claim::Reported
+                }
+            }
         }
     }
 
@@ -3791,6 +3822,98 @@ impl Driver {
         }
     }
 
+    /// The node under `at` that would take a dropped file: it carries the
+    /// `drop` prop and a **server** handler for `file_pick`. Both, or
+    /// nothing — the same rule the dialog follows, for the same reason
+    /// (spec 03 §3.2): a local chunk cannot be given a file, because both
+    /// ends of a transfer are the server's.
+    fn file_drop_target(&mut self, at: (f32, f32)) -> Option<(NodeIx, u32, u64)> {
+        let hit = self.hit_now(at.0, at.1)?;
+        let (ix, handler) = self.target(hit, EventKind::FilePick)?;
+        if !matches!(handler, Handler::Server(_)) {
+            return None;
+        }
+        let atom = self.session.atom_id("drop")?;
+        let node = self.session.node(ix)?;
+        let id = node.id;
+        let value = node.prop(atom).cloned()?;
+        // `drop` is the shape of `pick` (spec 03 §3.2) and only its ceiling
+        // matters here: a dialog's `accept` filters what can be chosen, and
+        // nothing filters what a hand lets go of. The application refuses
+        // what it does not want, and says why.
+        let max = match &value {
+            Value::List(l) => match l.get(2) {
+                Some(Value::Int(m)) if *m > 0 => (*m as u64).min(MAX_UPLOAD_BYTES),
+                _ => DEFAULT_UPLOAD_BYTES,
+            },
+            _ => DEFAULT_UPLOAD_BYTES,
+        };
+        Some((ix, id, max))
+    }
+
+    /// A file is being dragged over the window, or has left it. `at` is
+    /// where the pointer is, `None` when the drag ended or went away.
+    ///
+    /// Reports `file_drag` on the node that would take it — once on
+    /// entering, once on leaving — so the box can show it would. Nothing
+    /// is read and nothing is transferred: this is the announcement, and
+    /// [`Self::file_dropped`] is the act.
+    pub fn file_dragged(&mut self, at: Option<(f32, f32)>) -> Vec<Frame> {
+        let found = at.and_then(|p| self.file_drop_target(p));
+        let now = found.as_ref().map(|(_, id, _)| *id);
+        if now == self.drop_over {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if let Some(old) = self.drop_over.take() {
+            if let Some(ix) = self.session.lookup(old) {
+                out.extend(self.emit(ix, EventKind::FileDrag, Value::List(vec![Value::Bool(false)])));
+            }
+        }
+        if let Some((ix, id, _)) = found {
+            // Without the grant there is no drop to come, so there is no
+            // point lighting a box that will take nothing.
+            if self.granted & caps::FS_PICK != 0 {
+                self.drop_over = Some(id);
+                out.extend(self.emit(ix, EventKind::FileDrag, Value::List(vec![Value::Bool(true)])));
+            }
+        }
+        self.touched = true;
+        out
+    }
+
+    /// Files were let go over the window at `at`: one `file_pick` event
+    /// each and an upload id each, exactly as the dialog gives
+    /// ([`Self::picked`]) — a drop and a pick differ in the gesture and in
+    /// nothing after it.
+    ///
+    /// Needs `fs.pick`. A window that drops without it gets nothing and the
+    /// application is told nothing, which is the same silence a capability
+    /// that was not granted gives everywhere else (spec 08 §3).
+    pub fn file_dropped(&mut self, at: (f32, f32), files: Vec<(String, u64)>) -> (Vec<u32>, Vec<Frame>) {
+        let mut out = self.file_dragged(None);
+        if self.granted & caps::FS_PICK == 0 {
+            eprintln!("eui: a file was dropped, which needs `fs.pick`; the person did not grant it, so nothing arrives");
+            return (Vec::new(), out);
+        }
+        let Some((ix, node, max)) = self.file_drop_target(at) else { return (Vec::new(), out) };
+        self.touched = true;
+        let mut ids = Vec::new();
+        for (name, size) in files {
+            let id = self.mint();
+            let name = basename(&name).to_owned();
+            let payload = Value::List(vec![Value::Int(i64::from(id)), Value::Str(name), Value::Int(i64::try_from(size).unwrap_or(i64::MAX))]);
+            out.extend(self.emit(ix, EventKind::FilePick, payload));
+            if size > max {
+                out.push(Frame::Upload(Transfer { id, seq: 0, flag: Chunked::Abort, bytes: format!("file is {size} bytes; this one accepts {max}").into_bytes() }));
+            } else {
+                self.uploads.insert(id, Upload { node, seq: 0, sent: 0, max });
+            }
+            ids.push(id);
+        }
+        (ids, out)
+    }
+
     /// The person chose files in the dialog `token` opened: one `file_pick`
     /// event each, and an upload id each for the window to stream against.
     ///
@@ -4038,31 +4161,44 @@ impl Driver {
             // hears it, and focus stays where it is so the surface can put it
             // back where it belongs; with nothing listening, Escape means what
             // it always meant.
-            if self.ancestor_keyed(f).is_none() || !self.wants_key(f, key) {
+            if self.key_claim(f, key) == Claim::Ignored {
                 return self.set_focus(None, false);
             }
             return self.emit(f, EventKind::KeyDown, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))]));
         }
+        let claim = self.key_claim(f, key);
         let mut out = Vec::new();
         if down {
             let editable = self.is_editable(f);
             match key {
+                // 03 §3.1, the first tier: editing the text is never withheld.
+                // A field you cannot type into is not a field, and no prop may
+                // make one — so this arm runs before the claim is consulted,
+                // and `edit_key` declines when it has nothing to do.
                 _ if editable && self.edit_key(f, key, modifiers) => {}
                 "Enter" if self.session.node(f).map(|n| n.kind) == Some(NodeKind::Input) => {
+                    // The value goes either way. A server that claimed `Enter`
+                    // — to take the highlighted suggestion rather than the text
+                    // that was typed — still needs to know what was typed, and
+                    // needs it *before* the key that acts on it. What a claim
+                    // withholds is the `submit`, exactly as a claim on a button
+                    // withholds the `click` it stands for.
                     out.extend(self.commit_edit(f));
-                    out.extend(self.emit(f, EventKind::Submit, Value::Null));
+                    if claim != Claim::Claimed {
+                        out.extend(self.emit(f, EventKind::Submit, Value::Null));
+                    }
                 }
                 // A node that handles keys is not activated by `Enter` or
                 // `Space`: it asked for the keys, and in a tracker `Space`
                 // is what starts the song, not a click on the pattern.
-                "Enter" | " " if !editable && !self.claims_key(f, key) => {
+                "Enter" | " " if !editable && claim != Claim::Claimed => {
                     out.extend(self.activate(f));
                 }
                 _ => {}
             }
         }
         let kind = if down { EventKind::KeyDown } else { EventKind::KeyUp };
-        if self.wants_key(f, key) {
+        if claim != Claim::Ignored {
             out.extend(self.emit(f, kind, Value::List(vec![Value::Str(key.to_owned()), Value::Int(i64::from(modifiers))])));
         }
         out
@@ -4070,26 +4206,6 @@ impl Driver {
 
     /// Whether the node that would handle this key actually asked for it.
     ///
-    /// A `key_down` handler used to receive *every* key, which is why a
-    /// dialog could not simply listen for `Escape`: it would hear each letter
-    /// typed into the field inside it too, and a handler that closes on a key
-    /// press would close on all of them. A `keys` prop names what the node
-    /// wants and the rest are not sent — fewer round trips, and a server
-    /// handler that cannot fire on a key it never asked for. A node without
-    /// the prop still hears everything, so nothing that worked stops.
-    fn wants_key(&self, f: NodeIx, key: &str) -> bool {
-        let Some(target) = self.ancestor_keyed(f) else {
-            return true;
-        };
-        let Some(atom) = self.session.atom_id("keys") else {
-            return true;
-        };
-        match self.session.node(target).and_then(|n| n.prop(atom)) {
-            Some(Value::List(want)) => want.iter().any(|k| matches!(k, Value::Str(s) if s == key)),
-            _ => true,
-        }
-    }
-
     /// Spec 03 §3: the caret, the selection and the clipboard belong to the
     /// client. True when the key was an editing key and has been applied.
     fn edit_key(&mut self, f: NodeIx, key: &str, modifiers: u32) -> bool {
@@ -4098,6 +4214,16 @@ impl Driver {
         let Some(edit) = self.edit_mut(f) else {
             return false;
         };
+        // 03 §3.1, the third tier: a key the client's own editing would not
+        // act on is not the client's to keep. `Backspace` with nothing before
+        // the caret is not editing — it is a gesture the field has no answer
+        // for, so the field is not the one to answer it, and a tag list above
+        // can take it as "remove the last".
+        //
+        // A fingerprint rather than a predicate per arm, because a
+        // fingerprint cannot drift out of step with the arms it guards: every
+        // arm that changes the value changes its length.
+        let before = (edit.value.len(), edit.caret, edit.anchor);
         let mut copied = None;
         match key {
             "Backspace" => edit.delete(false),
@@ -4152,8 +4278,16 @@ impl Driver {
             "Enter" if multiline => edit.insert("\n"),
             _ => return false,
         }
-        if copied.is_some() {
+        let moved = (edit.value.len(), edit.caret, edit.anchor) != before;
+        let took = copied.is_some();
+        if took {
             self.clipboard = copied;
+        }
+        // Nothing moved and nothing was taken: the key was one of ours by
+        // name and none of ours in this position. Declining also skips the
+        // invalidate, so a dead key no longer costs a frame.
+        if !moved && !took {
+            return false;
         }
         self.show_edit(f);
         true

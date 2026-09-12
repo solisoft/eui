@@ -305,6 +305,7 @@ the person's machine, and put one there.
 | Prop | Value | Means |
 |---|---|---|
 | `pick` | `Str accept`, or `List[Str accept, Int flags, Int max]` | activating this node opens the platform's open dialog |
+| `drop` | as `pick` | a file let go over this node arrives as if it had been picked |
 | `save` | `Str name` | activating this node opens the platform's save dialog |
 
 `accept` is a comma-separated list of extensions without dots (`"csv,pdf"`),
@@ -360,6 +361,43 @@ follow as `Upload` frames against that id
 and then aborted, so the application can say why rather than leave the
 person watching nothing happen. A dismissed dialog is not an event: nothing
 happened.
+
+**What is dropped.** `drop` is the same prop as `pick` and the same
+arrival: a file let go over the node gives one `file_pick` carrying an
+upload id, the file's **name** — never its path — and its size, and the
+bytes follow as `Upload` frames. Nothing downstream can tell a drop from a
+pick, and nothing should: they are one act with two gestures, and an
+application that handles the dialog handles the drop for free.
+
+Three of the prop's parts do not survive the change of gesture. `accept`
+filters what a dialog will offer and filters nothing at all here — no
+platform lets a window refuse a file before it is let go — so a node that
+cares must look at the name it is given and say why. `flags` bit 0 is moot:
+a hand lets go of as many files as it is holding, and each is its own
+`file_pick`. Bits 1 and 2 are meaningless — a drop is never a camera — and
+a client MUST ignore them rather than treat the node as a capture. `max` is
+enforced exactly as it is for a pick: the event arrives, an `Abort` follows
+on that id, and the application says why.
+
+A client opens nothing and reads nothing unless **all** of this holds:
+
+1. a file was let go **over** the node — the position is the pointer's, and
+   a platform that reports a drop without one reports it where the pointer
+   last was;
+2. the node carries `drop` **and** a **server** handler for `file_pick`, the
+   same pair a dialog needs and for the same reason;
+3. the **`fs.pick`** capability was granted. A drop is reading a file the
+   person already has, which is what that grant is; it needs no second one.
+   Without it there is no transfer and no diagnostic the application can
+   see, exactly as for a dialog.
+
+**Showing that it would.** A node carrying `drop` may also carry a handler
+for `file_drag` ([`06-events.md`](06-events.md) §1), which reports `true`
+when a file comes over it and `false` when the file leaves, the drag ends,
+or it goes anywhere else. It is sent **only when the node under the file
+changes**, not once a frame: a box that flickers under a held file is worse
+than one that does not light at all. It is a report and nothing more —
+nothing is read, and a client that never sends it is still conformant.
 
 **What is saved.** The person choosing a place gives one `file_save` event
 carrying the name they chose. That event *is* the request: the bytes are

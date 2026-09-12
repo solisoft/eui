@@ -201,6 +201,20 @@ pub enum Request {
     /// The viewer's desktop palette (05 §5): its mode if it has one, and
     /// colours by role id. Empty means none: the theme's own colours.
     DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
+    /// A file is over a node carrying `drop`, or has left it. `None` when
+    /// the drag ended or went away (spec 03 §3.2).
+    FileDragged {
+        /// Where the pointer is, in page coordinates.
+        at: Option<(f32, f32)>,
+    },
+    /// Files were let go over the page: name and size each, exactly as
+    /// [`Self::Picked`]. The bytes follow as [`Request::UploadChunk`].
+    FileDropped {
+        /// Where they were let go, in page coordinates.
+        at: (f32, f32),
+        /// What was dropped.
+        files: Vec<(String, u64)>,
+    },
     /// The person chose files in the dialog `token` opened: name and size
     /// each. The bytes follow as [`Request::UploadChunk`].
     Picked {
@@ -315,6 +329,27 @@ impl Request {
                 w.u8(*channels);
                 w.u32(*rate);
             }
+            Request::FileDragged { at } => {
+                w.u8(23);
+                match at {
+                    Some((x, y)) => {
+                        w.u8(1);
+                        w.f32(*x);
+                        w.f32(*y);
+                    }
+                    None => w.u8(0),
+                }
+            }
+            Request::FileDropped { at, files } => {
+                w.u8(24);
+                w.f32(at.0);
+                w.f32(at.1);
+                w.u32(u32::try_from(files.len()).unwrap_or(u32::MAX));
+                for (name, size) in files {
+                    w.str(name);
+                    w.u64(*size);
+                }
+            }
             Request::Picked { token, files } => {
                 w.u8(14);
                 w.u32(*token);
@@ -417,6 +452,19 @@ impl Request {
                     files.push((r.str()?, r.u64()?));
                 }
                 Request::Picked { token, files }
+            }
+            23 => {
+                let at = if r.u8()? == 1 { Some((r.f32()?, r.f32()?)) } else { None };
+                Request::FileDragged { at }
+            }
+            24 => {
+                let at = (r.f32()?, r.f32()?);
+                let n = r.u32()?;
+                let mut files = Vec::new();
+                for _ in 0..n {
+                    files.push((r.str()?, r.u64()?));
+                }
+                Request::FileDropped { at, files }
             }
             15 => Request::Dismissed(r.u32()?),
             16 => Request::UploadChunk { id: r.u32()?, bytes: r.bytes()?.to_vec(), last: r.bool()? },
@@ -1245,6 +1293,16 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.pending_mut().extend(out);
                         Payload::Uploads(ids)
                     }
+                    Request::FileDragged { at } => {
+                        let out = d.file_dragged(at);
+                        d.pending_mut().extend(out);
+                        Payload::None
+                    }
+                    Request::FileDropped { at, files } => {
+                        let (ids, out) = d.file_dropped(at, files);
+                        d.pending_mut().extend(out);
+                        Payload::Uploads(ids)
+                    }
                     Request::Dismissed(token) => {
                         d.dialog_dismissed(token);
                         Payload::None
@@ -2035,6 +2093,39 @@ impl Backend {
             return writes;
         }
         self.with_worker(|w| std::mem::take(&mut w.status.writes)).unwrap_or_default()
+    }
+
+    /// A file is over the page, or is not: the frames that light the box.
+    pub fn file_dragged(&mut self, at: Option<(f32, f32)>) -> Vec<Vec<u8>> {
+        if let Some(out) = self.with_local(|d| d.file_dragged(at).iter().map(Frame::encode).collect::<Vec<_>>()) {
+            return out;
+        }
+        match self.with_worker(|w| w.call(&Request::FileDragged { at })) {
+            Some(Some(reply)) => reply.status.outbound,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Files were let go over the page: an upload id each, and the frames
+    /// that tell the server what is coming — the same arrival a dialog
+    /// gives.
+    pub fn file_dropped(&mut self, at: (f32, f32), files: Vec<(String, u64)>) -> (Vec<u32>, Vec<Vec<u8>>) {
+        if let Some(out) = self.with_local(|d| {
+            let (ids, frames) = d.file_dropped(at, files.clone());
+            (ids, frames.iter().map(Frame::encode).collect::<Vec<_>>())
+        }) {
+            return out;
+        }
+        match self.with_worker(|w| w.call(&Request::FileDropped { at, files })) {
+            Some(Some(reply)) => {
+                let ids = match reply.payload {
+                    Payload::Uploads(ids) => ids,
+                    _ => Vec::new(),
+                };
+                (ids, reply.status.outbound)
+            }
+            _ => (Vec::new(), Vec::new()),
+        }
     }
 
     /// The person chose files: an upload id each, and the frames that tell

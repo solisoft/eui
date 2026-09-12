@@ -164,6 +164,15 @@ pub enum EventKind {
     /// A tag was read for a node whose `nfc` scan the person started
     /// (spec 03 §3.3).
     NfcTag = 0x1D,
+    /// A file is being dragged over a node carrying `drop`, or has left it
+    /// (spec 03 §3.2). `List[Bool over]` — true on entering, false on
+    /// leaving or when the drag ends anywhere.
+    ///
+    /// Only a report, so that the node can show it would take the file. The
+    /// file itself arrives as [`Self::FilePick`], exactly as it would from
+    /// the dialog: a drop and a pick are the same act with a different
+    /// gesture, and an application that handles one handles the other.
+    FileDrag = 0x1E,
 }
 
 impl EventKind {
@@ -199,6 +208,7 @@ impl EventKind {
             0x1B => Ok(Self::FileSave),
             0x1C => Ok(Self::Location),
             0x1D => Ok(Self::NfcTag),
+            0x1E => Ok(Self::FileDrag),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

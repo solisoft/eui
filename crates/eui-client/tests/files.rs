@@ -20,16 +20,19 @@ const ATTACH: u32 = 2;
 const EXPORT: u32 = 3;
 const SHOOT: u32 = 4;
 const TAP: u32 = 5;
+const ZONE: u32 = 6;
 const ATOM_SHOOT: u32 = 5;
 const ATOM_TAP: u32 = 6;
 const ATOM_NFC: u32 = 7;
+const ATOM_ZONE: u32 = 8;
+const ATOM_DROP: u32 = 9;
 
-/// box(1) [ attach(2) with `pick`, export(3) with `save` ].
+/// box(1) [ attach(2) with `pick`, export(3) with `save`, … zone(6) with `drop` ].
 fn tree() -> Batch {
     let col = StyleRecord { display: Display::Column, gap: 4, ..Default::default() };
     let button = StyleRecord { display: Display::Row, padding: [3; 4], min_width: Dim::Px(80), min_height: Dim::Px(24), ..Default::default() };
     let mut t = Subtree::default();
-    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 4 });
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 5 });
     t.nodes.push(FlatNode { kind: NodeKind::Box, id: ATTACH, style: 2, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 0 });
     t.props.push((ATOM_PICK, Value::List(vec![Value::Str("csv,txt".into()), Value::Int(1), Value::Int(512 * 1024)])));
     t.handlers.push((EventKind::FilePick, Handler::Server(ATOM_ATTACH)));
@@ -44,6 +47,12 @@ fn tree() -> Batch {
     t.nodes.push(FlatNode { kind: NodeKind::Box, id: TAP, style: 2, key: 0, text: None, props: (3, 1), handlers: (3, 1), child_count: 0 });
     t.props.push((ATOM_NFC, Value::Str("Hold your phone near the label".into())));
     t.handlers.push((EventKind::NfcTag, Handler::Server(ATOM_TAP)));
+    // The drop zone: `drop` and a server handler for `file_pick`, which is
+    // the whole of what makes one (03 §3.2).
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: ZONE, style: 2, key: 0, text: None, props: (4, 1), handlers: (4, 2), child_count: 0 });
+    t.props.push((ATOM_DROP, Value::List(vec![Value::Str("csv,txt".into()), Value::Int(1), Value::Int(512 * 1024)])));
+    t.handlers.push((EventKind::FilePick, Handler::Server(ATOM_ZONE)));
+    t.handlers.push((EventKind::FileDrag, Handler::Server(ATOM_ZONE)));
     Batch {
         seq: 1,
         ops: vec![
@@ -54,6 +63,8 @@ fn tree() -> Batch {
             Op::DefAtom { id: ATOM_SHOOT, value: "shoot".into() },
             Op::DefAtom { id: ATOM_TAP, value: "tap".into() },
             Op::DefAtom { id: ATOM_NFC, value: "nfc".into() },
+            Op::DefAtom { id: ATOM_ZONE, value: "zone".into() },
+            Op::DefAtom { id: ATOM_DROP, value: "drop".into() },
             Op::DefStyle { id: 1, record: col },
             Op::DefStyle { id: 2, record: button },
             Op::Mount(t),
@@ -77,6 +88,13 @@ fn click(d: &mut Driver, id: u32) -> Vec<Frame> {
     out.extend(d.input(Input::PointerDown(0)));
     out.extend(d.input(Input::PointerUp(0)));
     out
+}
+
+/// The middle of a node, in page coordinates.
+fn middle_of(d: &mut Driver, id: u32) -> (f32, f32) {
+    let _ = d.paint(400, 300);
+    let r = d.layout().rect(d.session().lookup(id).unwrap()).unwrap();
+    (r.x + r.w / 2.0, r.y + r.h / 2.0)
 }
 
 fn one_ask(d: &mut Driver) -> FileAsk {
@@ -391,4 +409,102 @@ fn without_the_capability_nothing_scans() {
     d.scan_ended(token);
     assert!(d.take_pending().is_empty(), "somebody thought better of it, and nobody was told");
     assert!(d.scanned(token, "04:a2:1f:7b", &[]).is_empty(), "and the scan is over");
+}
+
+// ---- the drop half of 03 §3.2 -------------------------------------------
+
+/// A drop is a pick with a different gesture: the same `file_pick`, the
+/// same id, the same chunks after it. Nothing downstream can tell them
+/// apart, which is the point.
+#[test]
+fn a_file_let_go_over_a_drop_zone_arrives_as_a_pick() {
+    let mut d = driver(caps::FS_PICK);
+    let at = middle_of(&mut d, ZONE);
+    let (ids, out) = d.file_dropped(at, vec![("/home/someone/books/rows.csv".into(), 6)]);
+    assert_eq!(ids.len(), 1);
+    let Some(Frame::Event(e)) = out.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::FilePick)) else { panic!("{out:?}") };
+    assert_eq!((e.node, e.name), (ZONE, ATOM_ZONE));
+    // 06 §3: the name it had, never the path it came from.
+    let Value::List(p) = &e.payload else { panic!("{e:?}") };
+    assert_eq!(p[1], Value::Str("rows.csv".into()));
+    assert_eq!(p[2], Value::Int(6));
+}
+
+/// The capability stands between a window and a drop exactly as it stands
+/// between a click and a dialog. Without it the file is not read, and the
+/// application hears nothing at all.
+#[test]
+fn without_the_capability_a_drop_gives_nothing() {
+    let mut d = driver(0);
+    let at = middle_of(&mut d, ZONE);
+    let (ids, out) = d.file_dropped(at, vec![("rows.csv".into(), 6)]);
+    assert!(ids.is_empty());
+    assert!(out.iter().all(|f| !matches!(f, Frame::Event(_))), "{out:?}");
+}
+
+/// A node without the prop takes nothing, however squarely it is hit.
+#[test]
+fn a_node_that_did_not_ask_takes_no_drop() {
+    let mut d = driver(caps::FS_PICK);
+    let at = middle_of(&mut d, EXPORT);
+    let (ids, out) = d.file_dropped(at, vec![("rows.csv".into(), 6)]);
+    assert!(ids.is_empty());
+    assert!(out.iter().all(|f| !matches!(f, Frame::Event(_))), "{out:?}");
+}
+
+/// Entering lights it once and leaving unlights it once — not once a frame,
+/// which is what a box that flickers under a held file would be.
+#[test]
+fn dragging_over_the_zone_is_reported_once_each_way() {
+    let mut d = driver(caps::FS_PICK);
+    let at = middle_of(&mut d, ZONE);
+
+    let over = d.file_dragged(Some(at));
+    let lit: Vec<_> = over.iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::FileDrag)).collect();
+    assert_eq!(lit.len(), 1, "{over:?}");
+    let Frame::Event(e) = lit[0] else { panic!() };
+    assert_eq!((e.node, e.payload.clone()), (ZONE, Value::List(vec![Value::Bool(true)])));
+
+    // Still over it: nothing new to say.
+    assert!(d.file_dragged(Some(at)).is_empty());
+
+    let away = d.file_dragged(None);
+    let unlit: Vec<_> = away.iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::FileDrag)).collect();
+    assert_eq!(unlit.len(), 1, "{away:?}");
+    let Frame::Event(e) = unlit[0] else { panic!() };
+    assert_eq!(e.payload, Value::List(vec![Value::Bool(false)]));
+}
+
+/// A box that will take nothing must not say it would.
+#[test]
+fn without_the_capability_the_zone_does_not_light() {
+    let mut d = driver(0);
+    let at = middle_of(&mut d, ZONE);
+    assert!(d.file_dragged(Some(at)).is_empty());
+}
+
+/// The ceiling the node named is enforced on a drop as on a pick: the
+/// event still arrives, so the application can say why, and the id takes
+/// no bytes.
+#[test]
+fn a_dropped_file_past_the_ceiling_is_announced_then_aborted() {
+    let mut d = driver(caps::FS_PICK);
+    let at = middle_of(&mut d, ZONE);
+    let (ids, out) = d.file_dropped(at, vec![("huge.csv".into(), 512 * 1024 + 1)]);
+    assert_eq!(ids.len(), 1);
+    let aborted = out.iter().any(|f| matches!(f, Frame::Upload(t) if t.id == ids[0] && t.flag == Chunked::Abort));
+    assert!(aborted, "{out:?}");
+    assert!(d.upload_chunk(ids[0], b"x", true).iter().all(|f| !matches!(f, Frame::Upload(t) if t.flag != Chunked::Abort)));
+}
+
+/// Letting go puts the box out: a drop that leaves it lit is a box that
+/// stays lit for good, because no second leave is coming.
+#[test]
+fn a_drop_puts_the_zone_out() {
+    let mut d = driver(caps::FS_PICK);
+    let at = middle_of(&mut d, ZONE);
+    let _ = d.file_dragged(Some(at));
+    let (_, out) = d.file_dropped(at, vec![("rows.csv".into(), 6)]);
+    let off = out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::FileDrag && e.payload == Value::List(vec![Value::Bool(false)])));
+    assert!(off, "{out:?}");
 }

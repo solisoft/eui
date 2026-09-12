@@ -1712,6 +1712,34 @@ impl Shell {
     /// application was laid out as though it owned the window from the top,
     /// so the chrome's height comes off here — and an input over the chrome
     /// never reaches the application at all.
+    /// A file is over the page, or is not. Only a report — the box lights,
+    /// nothing is read (spec 03 §3.2).
+    fn files_dragged(&mut self, at: Option<(f32, f32)>) {
+        let Some(t) = self.tabs.get_mut(self.active) else { return };
+        let out = t.backend.file_dragged(at);
+        t.send(out);
+        self.window.request_redraw();
+    }
+
+    /// A file was let go over the page at `at`: the same arrival a dialog
+    /// gives — an id, a `file_pick`, and the bytes read off the same
+    /// reader thread ([`start_reading`]).
+    fn file_dropped_at(&mut self, at: (f32, f32), path: std::path::PathBuf) {
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let proxy = Arc::clone(&self.proxy);
+        let Some(t) = self.tabs.get_mut(self.active) else { return };
+        let (ids, frames) = t.backend.file_dropped(at, vec![(name, size)]);
+        t.send(frames);
+        // The driver refused anything past the ceiling and said so on the
+        // wire; the window does not read those either.
+        for id in ids {
+            start_reading(t, id, path.clone(), &proxy);
+        }
+        self.files_dirty = true;
+        self.window.request_redraw();
+    }
+
     fn send_to_tab(&mut self, i: Input) {
         // A click or a key is where a dialog comes from (03 §3.2).
         self.files_dirty = true;
@@ -2055,6 +2083,26 @@ impl Shell {
                 }
                 let (cw, ch) = self.content_size();
                 self.send_to_tab(Input::Resized(cw, ch, scale * zoom));
+            }
+            // Spec 03 §3.2, the drop half. winit reports a file over the
+            // window without telling us where — no platform gives a
+            // position with these — so the last pointer we saw is the
+            // position, which is what it is on every desktop that has a
+            // pointer at all. The chrome strip takes none of it: a file
+            // let go over the address bar is not for the page.
+            WindowEvent::HoveredFile(_) => {
+                let at = self.pointer_at.filter(|(_, y)| *y >= top).map(|(x, y)| Self::to_app(x, y, top, zoom));
+                self.files_dragged(at);
+            }
+            WindowEvent::HoveredFileCancelled => self.files_dragged(None),
+            WindowEvent::DroppedFile(path) => {
+                // One event per file, so one call per file: a hand that
+                // let go of six gives six of these, and each is a whole
+                // arrival — an id, an event and its own bytes.
+                let at = self.pointer_at.filter(|(_, y)| *y >= top).map(|(x, y)| Self::to_app(x, y, top, zoom));
+                if let Some(at) = at {
+                    self.file_dropped_at(at, path);
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let (x, y) = (position.x as f32 / scale, position.y as f32 / scale);
