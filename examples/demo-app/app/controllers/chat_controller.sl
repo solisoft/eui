@@ -148,10 +148,23 @@ CHAT_CACHE = {}
 # timestamps with a life measured in seconds, so they have no business in a
 # database that would outlive them by months. The counters they used to sit
 # beside have moved into `chat_meta`, because a background job moves them.
-CHAT_LOCAL = {
-  "presence": {},
-  "typing": {}
-}
+# Everything `chat_live` holds, read once per event.
+#
+# The collection is a few dozen rows — one per person, one per person per
+# room they are typing in, and the seat counter — so one read of all of it
+# beats a question per person, and the memo means a tick that asks about
+# eight people asks the database once.
+CHAT_LIVE_MEMO = -1
+CHAT_LIVE_ROWS = {}
+
+# When *this process* last wrote each key.
+#
+# Process-local on purpose, and it is not the thing that was wrong before:
+# it decides how often a worker refreshes a fact, never what the fact is.
+# With four workers the worst case is four writes per interval per person
+# instead of one, which is four rows a second across the whole server — and
+# the alternative, a write per event, is a write per tick per window.
+CHAT_LIVE_WROTE = {}
 
 # The counter, as the database has it — read **once** per event and
 # remembered for the rest of it.
@@ -167,6 +180,7 @@ CHAT_GEN_MEMO = -1
 def chat_forget_seq
   CHAT_SEQ_MEMO = -1
   CHAT_GEN_MEMO = -1
+  CHAT_LIVE_MEMO = -1
 end
 
 # Both counters, from the one document, in one query.
@@ -272,19 +286,22 @@ def chat_reach(room_id, want)
   return chat_hold(room_id, chat_floor, chat_read_tail(room_id, chat_floor)) if chat_kept.nil?
   return chat_kept if chat_kept["seq"] == chat_seq() && chat_floor >= chat_kept["from"]
 
-  chat_at = chat_kept["from"]
+  # `chat_from`, not `chat_at`: `chat_at` is a `def` in chat_sample.sl and
+  # the scope is flat, so this would replace it for the rest of the event —
+  # and the derived history calls it to date a row.
+  chat_from = chat_kept["from"]
   chat_have = chat_kept["rows"]
   # Someone unrolled: the head grows backwards, by what is missing and no
   # more.
-  if chat_floor < chat_at
-    chat_have = chat_read_span(room_id, chat_floor, chat_at).concat(chat_have)
-    chat_at = chat_floor
+  if chat_floor < chat_from
+    chat_have = chat_read_span(room_id, chat_floor, chat_from).concat(chat_have)
+    chat_from = chat_floor
   end
   # Something was written: the tail may have grown.
   unless chat_kept["seq"] == chat_seq()
-    chat_have = chat_have.concat(chat_read_tail(room_id, chat_at + chat_have.length()))
+    chat_have = chat_have.concat(chat_read_tail(room_id, chat_from + chat_have.length()))
   end
-  chat_hold(room_id, chat_at, chat_have)
+  chat_hold(room_id, chat_from, chat_have)
 end
 
 def chat_hold(room_id, chat_low, held)
@@ -438,40 +455,83 @@ end
 
 # ---- who is here, and who is mid-sentence -------------------------------
 #
-# These two stay in memory, and that is not an oversight. Both are timestamps
-# that stop being true on their own a few seconds after the last refresh, so
-# there is nothing to expire and no way to leave a ghost in a room — and a
-# fact with a four-second life has no business in a database that would
-# outlive it by months.
+# Both are timestamps that stop being true on their own a few seconds after
+# the last refresh, so there is nothing to expire and no way to leave a
+# ghost in a room.
 #
-# It does mean presence is per process: a server with more than one realtime
-# worker would have two of these, and two windows that landed on different
-# ones would not see each other type. Three things are process-local and
-# they are the whole list — this table, `CHAT_SEATS` (which decides who a
-# window is), and nothing else. Messages, reactions, replies, read marks,
-# links and attachments are all in the database and cross a worker without
-# noticing.
+# They used to live in the memory of the process serving the session, with
+# the seat counter, and those three were the whole reason Atrium needed
+# exactly one realtime worker: two windows that landed on different ones
+# could not see each other type and could be handed the same identity. Not
+# degraded — wrong.
 #
-# So `app.infos` asks the proxy for eight workers and pins the realtime one:
-#
-#   start_script = "SOLI_WS_WORKERS=1 soli serve . --port $PORT --workers $WORKERS"
-#   workers = 8
-#
-# HTTP scales; the room does not need to. Raising the realtime count is a
-# real piece of work and a bounded one — move these three into `chat_meta`
-# beside the counter, refreshed on a timer rather than on every event, since
-# a fact with a four-second life must not cost a write per tick.
+# They are in `chat_live` now (db/migrations), which is what lets
+# `SOLI_WS_WORKERS` be more than 1. The objection to putting a four-second
+# fact in a database that outlives it by months was never about the row; it
+# was about the *write rate*, and that is what `CHAT_PRESENCE_EVERY` and
+# `CHAT_TYPING_EVERY` answer: a fact is refreshed on its own rhythm rather
+# than on every event, so a window at rest costs no write at all between
+# refreshes.
 
 CHAT_PRESENCE_FOR = 12
 CHAT_TYPING_FOR = 4
 
+# How often a worker refreshes a fact it has already written. Presence
+# lasts twelve seconds and is refreshed every four; typing lasts four and
+# is refreshed every one. Without these, a fact with a four-second life
+# would cost a write per tick per window — which is the thing that makes
+# people put such facts in memory in the first place.
+CHAT_PRESENCE_EVERY = 4
+CHAT_TYPING_EVERY = 1
+
+# Every row of `chat_live`, once per event.
+def chat_live
+  return CHAT_LIVE_ROWS if CHAT_LIVE_MEMO == 1
+
+  chat_seen_rows = {}
+  chat_all = ChatLive.all() rescue []
+  for chat_one in chat_all
+    chat_seen_rows[chat_one["key"].to_s] = chat_one
+  end
+  CHAT_LIVE_ROWS = chat_seen_rows
+  CHAT_LIVE_MEMO = 1
+  CHAT_LIVE_ROWS
+end
+
+# Write a row, at most once every `every` seconds from this process.
+def chat_live_touch(key, every)
+  # `chat_stamp` and `chat_slot`, not `chat_now` and `chat_row`: both of
+  # those are `def`s in this file, the scope is flat, and a bare assignment
+  # here replaces the function for everyone. It fails later and elsewhere,
+  # as "Cannot call non-function value" from inside the view.
+  chat_stamp = DateTime.now().to_unix()
+  chat_last = CHAT_LIVE_WROTE[key] ?? 0
+  return false if chat_stamp - chat_last < every
+
+  CHAT_LIVE_WROTE[key] = chat_stamp
+  chat_slot = ChatLive.find_by("key", key) rescue nil
+  if chat_slot.nil?
+    ChatLive.create({ "key": key, "at": chat_stamp }) rescue nil
+  else
+    # `chat_slot.at = …`, not `chat_slot["at"] = …`: `find_by` hands back a
+    # model instance and an instance is not a hash.
+    chat_slot.at = chat_stamp
+    chat_slot.save() rescue nil
+  end
+  # The memo was taken before this write; the row it holds is now stale.
+  CHAT_LIVE_MEMO = -1
+  true
+end
+
 def chat_seen(who)
-  CHAT_LOCAL["presence"][str(who)] = DateTime.now().to_unix()
+  chat_live_touch("p:" + str(who), CHAT_PRESENCE_EVERY)
 end
 
 def chat_here?(who)
-  last = CHAT_LOCAL["presence"][str(who)] ?? 0
-  DateTime.now().to_unix() - last < CHAT_PRESENCE_FOR
+  chat_slot = chat_live()["p:" + str(who)]
+  return false if chat_slot.nil?
+
+  DateTime.now().to_unix() - (chat_slot["at"] ?? 0) < CHAT_PRESENCE_FOR
 end
 
 # Presence is only ever claimed for people a window is actually standing in
@@ -484,17 +544,25 @@ def chat_online?(who)
 end
 
 def chat_typing_now(room_id, who)
-  CHAT_LOCAL["typing"][room_id + ":" + str(who)] = DateTime.now().to_unix()
-  chat_bump()
+  # Only bump the counter when something was actually written: otherwise a
+  # keystroke inside the refresh window would wake every other session for
+  # a fact none of them can see change.
+  chat_bump() if chat_live_touch("t:" + room_id + ":" + str(who), CHAT_TYPING_EVERY)
 end
 
 def chat_typists(room_id, not_who)
-  now = DateTime.now().to_unix()
-  CHAT_LOCAL["typing"].keys().filter(fn(k) {
-    k.starts_with?(room_id + ":") && CHAT_LOCAL["typing"][k] > now - CHAT_TYPING_FOR
-  }).map(fn(k) {
-    int(k.split(":")[1])
-  }).filter(fn(w) { w != not_who })
+  chat_stamp = DateTime.now().to_unix()
+  chat_table = chat_live()
+  chat_prefix = "t:" + room_id + ":"
+  chat_found = []
+  for chat_key in chat_table.keys()
+    next unless chat_key.starts_with?(chat_prefix)
+    next unless (chat_table[chat_key]["at"] ?? 0) > chat_stamp - CHAT_TYPING_FOR
+
+    chat_one = int(chat_key.split(":")[2])
+    chat_found = chat_found.concat([chat_one]) unless chat_one == not_who
+  end
+  chat_found
 end
 
 # ---- reactions ----------------------------------------------------------
@@ -909,10 +977,10 @@ end
 # an accuracy that does not claim to be better than that. Kept in the state
 # and drawn in the composer; nothing is posted until somebody says so.
 def chat_placed(state, params)
-  chat_at = params["payload"]
-  return state unless chat_at.is_a?("array") && chat_at.length() > 2
+  chat_fix = params["payload"]
+  return state unless chat_fix.is_a?("array") && chat_fix.length() > 2
 
-  state["place"] = [chat_at[0], chat_at[1], chat_at[2]]
+  state["place"] = [chat_fix[0], chat_fix[1], chat_fix[2]]
   state
 end
 
@@ -927,10 +995,10 @@ def chat_place_toggle(state)
 end
 
 def chat_send_place(state)
-  chat_at = state["place"]
-  return state unless chat_at.is_a?("array") && chat_at.length() > 2
+  chat_fix = state["place"]
+  return state unless chat_fix.is_a?("array") && chat_fix.length() > 2
 
-  state["draft"] = "◎ " + chat_at[0].to_s + ", " + chat_at[1].to_s + " (±" + int(chat_at[2]).to_s + " m)"
+  state["draft"] = "◎ " + chat_fix[0].to_s + ", " + chat_fix[1].to_s + " (±" + int(chat_fix[2]).to_s + " m)"
   state["locating"] = false
   state["place"] = []
   state
@@ -1085,13 +1153,35 @@ end
 # same server is a second person and the room has two people in it. The
 # server decides, not the client: the session id is what tells them apart.
 
-CHAT_SEATS = {}
+# The next seat, from the database rather than from a counter in one
+# worker's memory.
+#
+# Counting the keys of a process-local hash gave the second worker's first
+# window the same identity as the first worker's first window — two people
+# who were the same person. The row is read and written in the same event,
+# which is not an atomic increment: two windows arriving in the same
+# millisecond on different workers can still collide. That is a race worth
+# having, because its cost is that two demo windows share a name, and the
+# alternative is a lock held across a round trip on the path of every
+# arrival.
+def chat_take_seat
+  chat_slot = ChatLive.find_by("key", "seat") rescue nil
+  if chat_slot.nil?
+    ChatLive.create({ "key": "seat", "value": 1 }) rescue nil
+    CHAT_LIVE_MEMO = -1
+    return 0
+  end
+
+  chat_taken = chat_slot.value ?? 0
+  chat_slot.value = chat_taken + 1
+  chat_slot.save() rescue nil
+  CHAT_LIVE_MEMO = -1
+  chat_taken
+end
 
 def chat_arrive(state, params)
   state["viewport"] = params["viewport"] ?? state["viewport"]
-  taken = CHAT_SEATS.keys().length()
-  state["me"] = taken % CHAT_PEOPLE.length()
-  CHAT_SEATS[str(taken)] = true
+  state["me"] = chat_take_seat() % CHAT_PEOPLE.length()
   chat_seen(state["me"])
   # Everything already in the room has been read; only what arrives from
   # here on is new.
@@ -1799,12 +1889,16 @@ end
 def chat_unroll(state)
   chat_win = state["window"] ?? [0, 0]
   chat_was = chat_base(state, chat_count(state["room"].to_s))
-  chat_now = chat_was - CHAT_OPEN
-  chat_now = 0 if chat_now < 0
-  chat_moved = chat_was - chat_now
+  # `chat_floor`, not `chat_now`: `chat_now` is a `def` in chat_sample.sl,
+  # the scope is flat, and this assignment would replace it for the rest of
+  # the event — a landmine that only goes off when the derived history is
+  # asked for a date in the same breath as somebody unrolls a page.
+  chat_floor = chat_was - CHAT_OPEN
+  chat_floor = 0 if chat_floor < 0
+  chat_moved = chat_was - chat_floor
   return state if chat_moved == 0
 
-  state["base"] = chat_now
+  state["base"] = chat_floor
   # A hundred rows appear *above* the ones on screen, so every index into
   # what is shown moves down by a hundred — and the pixel the client is
   # standing at now points a hundred messages further back than the one
@@ -1958,9 +2052,9 @@ def chat_build_river(state, lay)
   # Holding a place rather than following the foot. Left in the state on
   # purpose: `scroll_to` travels only when the number changes, so an anchor
   # that stays put is sent once and then costs nothing every tick after.
-  chat_at = state["anchor"] ?? -1
-  if state["foot"] == -1 && chat_at > 0
-    river["p"]["scroll_to"] = [0, chat_upto(heights, chat_at)]
+  chat_anchor = state["anchor"] ?? -1
+  if state["foot"] == -1 && chat_anchor > 0
+    river["p"]["scroll_to"] = [0, chat_upto(heights, chat_anchor)]
   end
   # Keyed, because a keyed node whose hash is *the same object* is kept by
   # the encoder and never converted again — and this node carries `heights`,
@@ -2834,9 +2928,9 @@ end
 # machine is. Five seconds: the floor is one (06 §1.2) and a composer does
 # not need to follow anybody at walking pace.
 def chat_place_chip(state)
-  chat_at = state["place"]
-  chat_ready = chat_at.is_a?("array") && chat_at.length() > 2
-  chat_said = chat_ready ? chat_at[0].to_s + ", " + chat_at[1].to_s : "finding you"
+  chat_fix = state["place"]
+  chat_ready = chat_fix.is_a?("array") && chat_fix.length() > 2
+  chat_said = chat_ready ? chat_fix[0].to_s + ", " + chat_fix[1].to_s : "finding you"
   chat_chip = {
     "k": "box",
     "s": {"display": "row", "gap": 2, "align": "center", "pad": [0, 2, 0, 2], "radius": 4, "bg": "surface.sunken", "cursor": "pointer"},

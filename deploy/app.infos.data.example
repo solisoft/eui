@@ -12,16 +12,20 @@ domain = "eui-data.solisoft.net"
 # prefix here is read as the name of the program to run, and the proxy says
 # so in the only way it can: `Failed to spawn SOLI_WS_WORKERS=1 … No such
 # file or directory`. Anything the application needs in its environment goes
-# in `.env` beside this file — which is where `SOLI_WS_WORKERS=1` lives, and
-# it is not an optimisation:
+# in `.env` beside this file, `SOLI_WS_WORKERS` included.
 #
-#   Atrium keeps three things in the memory of the process that serves a
-#   session — the seat that decides who a window is, who is present, and who
-#   is typing. Everything else (messages, reactions, replies, read marks,
-#   links, attachments) is in the database and crosses a worker without
-#   noticing. With more than one realtime worker, two windows that landed on
-#   different ones are two people who cannot see each other type. HTTP still
-#   scales: the other seven workers serve it.
+# That one used to have to be 1: the seat that decides who a window is, who
+# is present and who is typing lived in the memory of the process serving
+# the session, so two windows on different workers were two people who
+# could not see each other type and could be handed the same identity. All
+# three are in `chat_lives` now, so the count is a capacity choice again.
+#
+# It is a *pool*, split between HTTP and realtime — 8 here is 4 and 4 — so
+# giving it all to the realtime side leaves nobody to serve an asset. A
+# realtime worker carries its own copy of the application's caches, which
+# for Atrium is around 190 MB, so the count costs memory as well as
+# threads. One carries a couple of hundred windows; four is already far
+# more than a demonstration needs.
 start_script = "soli serve . --port $PORT --workers $WORKERS --strict-port"
 workers = 8
 

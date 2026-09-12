@@ -101,10 +101,16 @@ install -m 0600 deploy/env.production.example /home/rocky/sites/eui-data.solisof
 
 The `.env` needs the SoliDB connection (`SOLIDB_HOST`, `SOLIDB_DATABASE`,
 `SOLIDB_USERNAME`, `SOLIDB_PASSWORD`) on top of `APP_ENV`, `SOLI_APP_HOSTS`
-and `SOLI_SESSION_SECRET` — and `SOLI_WS_WORKERS=1`, which belongs there
-and nowhere else: `start_script` in `app.infos` is a program and its
-arguments, so an environment prefix on that line is read as the name of the
-program to run. Then, once, after the first deploy:
+and `SOLI_SESSION_SECRET` — and `SOLI_WS_WORKERS`, which belongs there and
+nowhere else: `start_script` in `app.infos` is a program and its arguments,
+so an environment prefix on that line is read as the name of the program to
+run.
+
+`SOLI_WS_WORKERS` no longer has to be `1`. It did while presence, typing
+and the seat counter lived in one process's memory; they are in
+`chat_lives` now. Raise it only *after* the code that reads that table is
+deployed — a server running the old code with two realtime workers hands
+two windows the same identity. Then, once, after the first deploy:
 
 ```sh
 cd /home/rocky/sites/eui-data.solisoft.net
