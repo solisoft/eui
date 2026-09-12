@@ -1275,6 +1275,14 @@ end
 
 # The filter bar. Every control here owns one key of the state and nothing
 # else, which is why the chips underneath can be built from the state alone.
+# The viewer's density, as a field's options hash. Every faux field — a
+# select, a date field, a multi_select — needs it to stand as tall as the real
+# text field beside it, because the client gives a real one a floor of one
+# control and gives a box built to look like one no way to ask for the same.
+def erp_dense(state)
+  {"density": erp_layout(state)["density"]}
+end
+
 def erp_filters(state, lay)
   controls = [
     column(
@@ -1286,13 +1294,14 @@ def erp_filters(state, lay)
           state["select_value"],
           state["select_open"],
           "select_toggle",
-          "select_pick"
+          "select_pick",
+          {"density": lay["density"]}
         )
       ]
     ),
     column(
       {"gap": 1, "width": 240},
-      [date_range_field({
+      [date_range_field(erp_dense(state).merge({
         "label": "Delivery window",
         "start": state["range_start"],
         "finish": state["range_end"],
@@ -1303,7 +1312,7 @@ def erp_filters(state, lay)
         "on_nav": "range_nav",
         "placeholder": "Any day",
         "hint": "Two clicks: a start, then an end"
-      })]
+      }))]
     ),
     column(
       {"gap": 1},
@@ -1487,7 +1496,7 @@ def erp_new_order(state)
       "on_step": "nf_qty_step",
       "hint": "Pallets, not pieces"
     }),
-    date_field({
+    date_field(erp_dense(state).merge({
       "label": "Delivery date",
       "value": state["nf_date"],
       "month": state["nf_date_month"],
@@ -1496,8 +1505,8 @@ def erp_new_order(state)
       "on_pick": "nf_date_pick",
       "on_nav": "nf_date_nav",
       "hint": "Working days only, in theory"
-    }),
-    datetime_field({
+    })),
+    datetime_field(erp_dense(state).merge({
       "label": "Pickup slot",
       "value": state["nf_slot"],
       "time": state["nf_slot_time"],
@@ -1512,7 +1521,7 @@ def erp_new_order(state)
       "on_min_toggle": "nf_slot_min_toggle",
       "on_hour": "nf_slot_hour",
       "on_min": "nf_slot_min"
-    }),
+    })),
     textarea_field("Notes", state["nf_notes"], "nf_notes", {
       "rows": 3,
       "hint": "Anything the warehouse should read"
@@ -1860,7 +1869,8 @@ def erp_reorder_card(state, lay)
           "inv_wh_toggle",
           "inv_wh_pick",
           160,
-          false
+          false,
+          {"density": lay["density"]}
         )
       ]
     ),
@@ -1878,11 +1888,17 @@ def erp_reorder_card(state, lay)
           state["inv_whs_open"] == true,
           "whs_toggle",
           "whs_pick",
-          {"key": "whs", "label": "Other warehouses", "placeholder": "None", "min_width": 200}
+          {
+            "key": "whs",
+            "label": "Other warehouses",
+            "placeholder": "None",
+            "min_width": 200,
+            "density": lay["density"]
+          }
         )
       ]
     ),
-    column({"gap": 1, "width": 220}, [date_field({
+    column({"gap": 1, "width": 220}, [date_field(erp_dense(state).merge({
       "label": "Wanted by",
       "value": state["inv_date"],
       "month": state["inv_date_month"],
@@ -1891,7 +1907,7 @@ def erp_reorder_card(state, lay)
       "on_pick": "inv_date_pick",
       "on_nav": "inv_date_nav",
       "placeholder": "Next delivery"
-    })])
+    }))])
   ]
   erp_card(
     "Raise a purchase order",
@@ -2129,7 +2145,7 @@ def erp_company_card(state, lay)
     })
   ]
   right = [
-    date_field({
+    date_field(erp_dense(state).merge({
       "label": "Fiscal year starts",
       "value": state["co_start"],
       "month": state["co_start_month"],
@@ -2138,7 +2154,7 @@ def erp_company_card(state, lay)
       "on_pick": "co_start_pick",
       "on_nav": "co_start_nav",
       "placeholder": "Pick a day"
-    }),
+    })),
     textarea_field("Invoice footer", state["co_footer"], "co_footer", {
       "rows": 4,
       "hint": "Printed under every total"
