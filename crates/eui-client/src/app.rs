@@ -928,9 +928,18 @@ impl Shell {
         #[cfg(has_a11y)]
         let access = (!std::env::var("EUI_A11Y").is_ok_and(|v| v == "0")).then(|| accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, EventLoopProxy::clone(&proxy)));
 
-        // Vulkan, Metal or DX12 — never GL: on Linux a GL instance loads
-        // Mesa's gallium and its LLVM (34 MB of the window's 64 MB PSS,
-        // measured), for a backend the primary ones make unneeded.
+        // Vulkan, Metal or DX12 — never GL on a desktop: on Linux a GL
+        // instance loads Mesa's gallium and its LLVM (34 MB of the window's
+        // 64 MB PSS, measured), for a backend the primary ones make
+        // unneeded.
+        //
+        // Android is the exception, and it is not a small one: there is no
+        // Mesa and no LLVM to load there — GLES *is* the system driver — and
+        // an emulator very often has no working Vulkan at all. Without GL in
+        // the set `request_adapter` answers `None`, and the only thing this
+        // function can then do is refuse to open, which ends the event loop
+        // and closes the activity. That reads as an application that does not
+        // start, and the whole of its report is one line in `logcat`.
         //
         // Once per process, along with the adapter and the device: the
         // second window's surface comes from the same instance and draws
@@ -945,7 +954,8 @@ impl Shell {
         let surface = match shared.as_ref() {
             Some(g) => make_surface(&g.instance)?,
             None => {
-                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
+                let backends = if cfg!(target_os = "android") { wgpu::Backends::PRIMARY | wgpu::Backends::GL } else { wgpu::Backends::PRIMARY };
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..Default::default() });
                 let surface = make_surface(&instance)?;
                 // The adapter is chosen for the first window's surface, so
                 // it is asked to be compatible with it.

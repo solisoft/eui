@@ -318,19 +318,29 @@ impl Renderer {
         // Timestamps only when asked, and only where they exist: a feature
         // asked for and absent is no device at all.
         let timed = timed && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("eui"),
-                required_features: if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
-                // Downlevel limits cap textures at 2048 px, which a
-                // high-DPI window exceeds on its first frame. Ask for the
-                // ordinary defaults, trimmed to what the adapter has.
-                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
-            },
-            None,
-        ))
-        .map_err(|e| RenderError::Device(e.to_string()))?;
+        let features = if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() };
+        let ask = |limits: wgpu::Limits| {
+            pollster::block_on(
+                adapter.request_device(&wgpu::DeviceDescriptor { label: Some("eui"), required_features: features, required_limits: limits, memory_hints: wgpu::MemoryHints::MemoryUsage }, None),
+            )
+        };
+        // Downlevel limits cap textures at 2048 px, which a high-DPI window
+        // exceeds on its first frame. Ask for the ordinary defaults, trimmed
+        // to what the adapter has.
+        //
+        // `using_resolution` only trims the texture dimensions, though, and
+        // the defaults are a desktop's on every other axis — so a GLES
+        // adapter, which is what an Android emulator has where it has no
+        // Vulkan, can refuse a set it cannot meet. Asking for exactly what
+        // the adapter reports is always satisfiable and is never less than
+        // downlevel, so the second attempt opens a device wherever one can
+        // be opened at all. Second and not first, because the defaults are
+        // the floor the renderer is written against and a device that meets
+        // them should be held to them.
+        let (device, queue) = match ask(wgpu::Limits::default().using_resolution(adapter.limits())) {
+            Ok(d) => d,
+            Err(first) => ask(adapter.limits()).map_err(|_| RenderError::Device(first.to_string()))?,
+        };
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("eui quad"), source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()) });
 
