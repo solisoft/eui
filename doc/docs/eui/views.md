@@ -202,6 +202,23 @@ reaches nothing at all while nothing is focused (`driver.rs`, `fn key`
 returns early on `self.focused`), so a shortcut wants an `autofocus`
 somewhere or a control you can click.
 
+**A view that owns its own caret must say `typing`, or a phone will not
+raise a keyboard for it.** An editor, a pattern grid or a game is built from
+a box and a `key_down` — spec 03 §3 asks for that, because a view wanting
+the gutter, the highlighting and the selection to be one thing cannot get it
+from `input`. On a desktop that works and nothing is missing. On a phone the
+soft keyboard is raised by the same call that welcomes a desktop input
+method, and that call is made only for the focused node that takes typing:
+`input`, `textarea`, or a node carrying `typing` (03 §3.1). Without the prop
+the view can be scrolled, read and tapped, and never written to — and
+nothing anywhere reports it, because the keys the handler is waiting for are
+simply never pressed. It is deliberately not inferred from holding a
+`key_down`: a page listening for one shortcut at its root would otherwise
+raise the keyboard over whatever the person was reading, with no way to
+decline. Nothing else changes for such a node — the client owns no caret
+here and sends no `text_input`; iOS delivers typing as ordinary key events,
+so what arrives is the `key_down` the view already handles.
+
 ## A local handler costs one chunk per key
 
 A chunk's `self` is compiled to the **key of the node it is on**, and the

@@ -4176,11 +4176,34 @@ impl Driver {
         self.invalidate();
     }
 
-    /// Where an input method should put its candidate window: the focused
-    /// editable node's box, if any.
+    /// Where an input method should put its candidate window: the box of the
+    /// focused node that takes typing, if any.
+    ///
+    /// That is an `input` or a `textarea`, and also any node carrying
+    /// `typing` (03 §3.1) — the node that owns its own caret. The second is
+    /// what raises the soft keyboard on a phone: there, the keyboard *is*
+    /// this call (`set_ime_allowed` is `becomeFirstResponder` on iOS), so a
+    /// code editor or a pattern grid built out of a box and `key_down` could
+    /// be looked at and never typed into. It reads as the view being
+    /// read-only, because nothing anywhere reports an error: the keys the
+    /// application is waiting for are simply never pressed.
+    ///
+    /// Nothing else changes for such a node. iOS sends typing as ordinary
+    /// key events — one `Key::Character` per character, `Backspace` named —
+    /// so what arrives once the keyboard is up is the `key_down` the view
+    /// already handles, and the client still owns no caret here.
     pub fn ime_area(&self) -> Option<eui_layout::Rect> {
-        let f = self.focused.filter(|f| self.is_editable(*f))?;
+        let f = self.focused.filter(|f| self.is_editable(*f) || self.takes_typing(*f))?;
         self.layout.rect(f)
+    }
+
+    /// Does this node declare `typing`?
+    ///
+    /// Opt-in, and deliberately not inferred from holding a `key_down`: a
+    /// page that handles a shortcut at its root would then raise the phone's
+    /// keyboard on any focus at all and have no way to decline it.
+    fn takes_typing(&self, ix: NodeIx) -> bool {
+        self.session.atom_id("typing").and_then(|atom| self.session.node(ix).and_then(|n| n.prop(atom))) == Some(&Value::Bool(true))
     }
 
     fn key(&mut self, key: &str, modifiers: u32, down: bool) -> Vec<Frame> {

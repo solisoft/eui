@@ -822,6 +822,49 @@ fn an_ime_composition_shows_in_the_field_and_reports_only_on_commit() {
     assert_eq!(d.ime_area(), None);
 }
 
+/// 03 §3.1: a view that owns its own caret can still be typed into.
+///
+/// The soft keyboard on a phone *is* `ime_area` — `set_ime_allowed` is
+/// `becomeFirstResponder` on iOS — so a code editor or a pattern grid built
+/// from a box and a `key_down`, which is what §3 asks such a view to be, was
+/// a thing that could be read and never written to. Nothing reported it: the
+/// keys the application waits for are simply never pressed.
+#[test]
+fn a_box_that_says_it_takes_typing_is_offered_the_keyboard_and_one_that_does_not_is_left_alone() {
+    let typing = |says: bool| {
+        let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+        // The editor's shape: one box, one `key_down`, no field anywhere.
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, u32::from(says)), handlers: (0, 1), child_count: 0 });
+        tree.handlers.push((EventKind::KeyDown, Handler::Server(1)));
+        if says {
+            tree.props.push((2, Value::Bool(true)));
+        }
+        let ops = vec![
+            Op::DefAtom { id: 1, value: "key".into() },
+            Op::DefAtom { id: 2, value: "typing".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], gap: 4, ..Default::default() } },
+            Op::Mount(tree),
+        ];
+        d.handle_frame(Frame::Batch(Batch { seq: 1, ops }));
+        let _ = d.paint(400, 300);
+        // A `key_down` makes it reachable either way (03 §3), so both get
+        // focus and only the answer about the keyboard differs.
+        tab(&mut d, false);
+        assert_eq!(d.focused(), d.session().lookup(2), "a node that asked for keys is in the Tab order");
+        (d.ime_area(), d.layout().rect(d.session().lookup(2).unwrap()))
+    };
+
+    let (area, rect) = typing(true);
+    assert_eq!(area, rect, "the box that says it takes typing is offered the input method");
+    assert!(rect.is_some(), "and it is a real box with a real rectangle");
+
+    let (area, _) = typing(false);
+    assert_eq!(area, None, "the same box without the prop is not — it is not inferred from `key_down`");
+}
+
 #[cfg(has_a11y)]
 #[test]
 fn the_accessibility_tree_names_buttons_fields_and_labels_and_follows_focus() {

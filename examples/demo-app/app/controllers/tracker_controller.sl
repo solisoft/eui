@@ -1326,7 +1326,10 @@ def tracker_pattern(state, skin)
       "overflow": "clip"
     },
     "on": {"click": "click", "key_down": "key"},
-    "p": {"top": top, "first": first},
+    # `typing`, for the same reason the editor carries it (03 §3.1): the
+    # pattern is a box and a `key_down`, so a phone raises no keyboard for
+    # it unless it says it takes one.
+    "p": {"top": top, "first": first, "typing": true},
     "c": [tracker_channel_heads(state, skin, first, across)].concat(lines)
   }
   tracker_frame(skin, {

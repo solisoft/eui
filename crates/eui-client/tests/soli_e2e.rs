@@ -1044,6 +1044,15 @@ fn the_editor_types_into_its_own_source() {
     pump(&mut d, &conn, &wake, |d| d.session().last_seq() > Some(seq));
     assert_eq!(d.focused(), Some(keyed), "clicking the buffer focuses it (03 §3)");
 
+    // And the focused buffer is offered the keyboard. On a desktop this
+    // costs nothing to be wrong about — the keys below arrive from a
+    // keyboard that was already there — but on a phone `ime_area` is the
+    // whole of how one is raised, so a `None` here is an editor that can be
+    // read and never typed into, silently. It is `Some` because the box
+    // carries `typing` (03 §3.1), which is also the proof that an ordinary
+    // prop survives the trip through Soli's encoder.
+    assert_eq!(d.ime_area(), d.layout().rect(keyed), "the buffer says it takes typing, so the keyboard is offered to it");
+
     // Type. The line under the cursor gains the character, and the header
     // stops claiming the file is as on disk.
     for key in ["Z", "Z", "Z"] {

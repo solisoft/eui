@@ -822,6 +822,13 @@ def ed_panel(state, opts)
     "k": "box",
     "s": panel_style,
     "on": {"key_down": opts["key"] ?? "key"},
+    # The box takes typing though it is not a field (03 §3.1). On a desktop
+    # this says nothing anyone notices — a keyboard is already there. On a
+    # phone it is the difference between an editor and a picture of one:
+    # the soft keyboard goes up for a field and for this, and for nothing
+    # else, so without it the buffer could be scrolled and read and never
+    # written to, with no error anywhere to say why.
+    "p": {"typing": true},
     "c": panel_rows
   }
   panel_frame = {"gap": 0, "width": "100%", "bg": "surface.base"}

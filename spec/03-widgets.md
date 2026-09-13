@@ -266,7 +266,7 @@ no shader, no tessellator and no allocation beyond its quads.
 
 ### 3.1 What a node may claim of the keyboard
 
-Three props, read by the client, for the things a server cannot do because it
+Four props, read by the client, for the things a server cannot do because it
 does not own them. §3.2 to §3.4 are the rest of that family.
 
 | Prop | Value | Means |
@@ -274,6 +274,7 @@ does not own them. §3.2 to §3.4 are the rest of that family.
 | `modal` | boolean | while this node is laid out, `Tab` order is **its subtree alone** |
 | `autofocus` | boolean | focus starts here when the surface holding it arrives |
 | `keys` | list of key names | the keys this node wants; it is sent no others |
+| `typing` | boolean | this node takes typed text, though it is not a field |
 
 - **`modal`.** A client MUST restrict its focus order to the subtree of the
   innermost laid-out node carrying `modal`. Innermost, so a dialog opened
@@ -285,6 +286,32 @@ does not own them. §3.2 to §3.4 are the rest of that family.
   there is one, or anywhere at all if there is not. A batch arriving while
   someone is tabbing through an open dialog MUST NOT pull them back to its
   first field.
+- **`typing`.** A node carrying `typing` takes typed text while it has focus,
+  and a client MUST treat it as it treats a field **for the one purpose of
+  making typing possible**: where a client would welcome an input method for
+  an `input`, it welcomes one for this, and where raising a soft keyboard is
+  what that amounts to — a phone, where there is no other keyboard — it
+  raises it.
+
+  Nothing else about the node changes. The client owns no caret here, no
+  selection, and no buffer; it inserts nothing and reports no `text_input`.
+  What the person types arrives as the `key_down` the node already asked for,
+  which is the whole point: an editor, a pattern grid or a game wants the
+  gutter, the highlighting and the selection to be one thing, and that thing
+  is the application's (§3). Such a view is built from a box and a handler,
+  and on a desktop it works because a keyboard is already there to be typed
+  on.
+
+  It is **opt-in and MUST NOT be inferred** from a node merely holding a
+  `key_down` handler. A page that listens for one shortcut at its root would
+  otherwise raise a phone's keyboard on any focus at all, over the view it
+  was reading, with no way to decline; and a client that guessed would leave
+  the application no way to say which of its boxes is the one being typed
+  into.
+
+  A client with no soft keyboard and no input method to welcome does nothing
+  for this prop, which is correct: there, the keyboard was never in the way.
+
 - **`keys`.** A node holding a `key_down` or `key_up` handler and carrying
   `keys` is sent **only** the keys it names, and only those are withheld from
   the client's own meaning. So a `tab` may take `ArrowLeft` and `ArrowRight`
