@@ -80,7 +80,7 @@ its operands. All varints are as in [`02-wire-format.md`](02-wire-format.md).
 | `0x1B` | `concat` | | `str str → str` | |
 | `0x20` | `jump` | `i16` | | relative to the next instruction |
 | `0x21` | `jump_if_false` | `i16` | `bool →` | |
-| `0x30` | `set_text` | `key:varint` | `str →` | the text of the first node whose key is atom `key` — or, for `0`, the node the chunk is on — locally |
+| `0x30` | `set_text` | `key:varint` | `str →` | the text of the first node whose key is atom `key` — or, for `0`, the node the chunk is on — locally. On an editable node this is also what it now holds: the caret goes to the end and the client's own buffer agrees, the same as a server's `SetText` (02 §5), so a handler may empty the field it was run from |
 | `0x31` | `set_prop` | `key:varint atom:varint` | `any →` | that node's prop, locally |
 | `0x33` | `set_style` | `key:varint style:varint` | | point that node at a style table id, locally |
 | `0x32` | `emit` | `atom:varint` | | queue a server event named by the atom, payload = the root props |

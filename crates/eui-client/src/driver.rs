@@ -1348,13 +1348,12 @@ impl Driver {
                 // a keystroke it was not told about.
                 for op in &batch.ops {
                     if let eui_proto::Op::SetText { node, text } = op {
-                        if let Some(edit) = self.edits.get_mut(node) {
-                            let value = match text {
-                                eui_proto::TextRef::Inline(t) => t.clone(),
-                                eui_proto::TextRef::Atom(a) => self.session.atom(*a).unwrap_or("").to_owned(),
-                            };
-                            let end = value.len();
-                            *edit = Edit { seed: value.clone(), value, caret: end, anchor: end, scroll_x: 0.0, typed_at: None };
+                        let value = match text {
+                            eui_proto::TextRef::Inline(t) => t.clone(),
+                            eui_proto::TextRef::Atom(a) => self.session.atom(*a).unwrap_or("").to_owned(),
+                        };
+                        if let Some(ix) = self.session.lookup(*node) {
+                            self.reseed_edit(ix, value);
                         }
                     }
                 }
@@ -2363,14 +2362,25 @@ impl Driver {
                 }
             }
         };
-        let mut host = SessionHost { session: &mut self.session, here: Some(here), emitted: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
+        let mut host =
+            SessionHost { session: &mut self.session, here: Some(here), emitted: Vec::new(), texts: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
         let repaint = host.repaint;
         let emitted = host.emitted;
+        let wrote = host.texts;
         let mode = host.mode;
         if let Some(undo) = host.undo {
             self.provisional.extend(undo);
+        }
+        // 07 §1: a chunk may set a node's text, and if that node is the one
+        // being typed in, the client's buffer has to agree. Without this the
+        // chunk emptied the tree and the next keystroke put the old value
+        // back — so the whole point of a field a handler can clear, which is
+        // a composer or a tag field, did not work.
+        for ix in wrote {
+            let value = self.session.text_of(ix).unwrap_or("").to_owned();
+            self.reseed_edit(ix, value);
         }
         if touched {
             self.audio_dirty = true;
@@ -2412,13 +2422,15 @@ impl Driver {
                     self.session.set_style_local(ix, style);
                 }
                 Undo::Text(ix, text) => {
-                    self.session.set_text_local(
-                        ix,
-                        text.map_or(String::new(), |t| match t {
-                            TextRef::Inline(s) => s,
-                            TextRef::Atom(a) => self.session.atom(a).unwrap_or("").to_owned(),
-                        }),
-                    );
+                    let value = text.map_or(String::new(), |t| match t {
+                        TextRef::Inline(s) => s,
+                        TextRef::Atom(a) => self.session.atom(a).unwrap_or("").to_owned(),
+                    });
+                    self.session.set_text_local(ix, value.clone());
+                    // The same rule the other way round: a provisional clear
+                    // that is taken back must take the buffer back with it, or
+                    // the tree holds the old text and the buffer holds none.
+                    self.reseed_edit(ix, value);
                 }
                 Undo::Prop(ix, atom, old) => {
                     self.session.set_prop_local(ix, atom, old.unwrap_or(Value::Null));
@@ -4321,6 +4333,23 @@ impl Driver {
     /// Only when something is listening: a field nobody asked about must not
     /// wake the process 300 ms after it was typed into, and `emit` would drop
     /// the event anyway (spec 10 §1).
+    /// The value under a local edit changed out from under it, so the buffer
+    /// has to agree — otherwise the next keystroke writes the old value back
+    /// over the new one. Three things can do it: a server's `SetText`, a local
+    /// chunk's, and the undo that takes a provisional one back.
+    ///
+    /// The caret lands at the end and the seed advances, so the change owes no
+    /// `change` of its own: this is the server, or a handler acting for it,
+    /// saying what the field now holds.
+    fn reseed_edit(&mut self, ix: NodeIx, value: String) {
+        let id = self.session.node(ix).map(|n| n.id).unwrap_or(0);
+        let Some(edit) = self.edits.get_mut(&id) else {
+            return;
+        };
+        let end = value.len();
+        *edit = Edit { seed: value.clone(), value, caret: end, anchor: end, scroll_x: 0.0, typed_at: None };
+    }
+
     fn note_typing(&mut self, f: NodeIx) {
         let now = self.now;
         let listening = self.target(f, EventKind::Change).is_some();
@@ -5340,6 +5369,11 @@ struct SessionHost<'a> {
     /// the table holds 4 095.
     here: Option<NodeIx>,
     emitted: Vec<u32>,
+    /// Editable nodes whose text the chunk wrote, so the client's own buffer
+    /// for them can be brought back into agreement afterwards. Without this a
+    /// chunk can empty the field it is in and the next keystroke writes the
+    /// old value straight back over it.
+    texts: Vec<NodeIx>,
     /// Something the layout reads changed.
     touched: bool,
     /// Something only the painter reads changed -- a hover lit a node --
@@ -5411,6 +5445,7 @@ impl eui_vm::Host for SessionHost<'_> {
         if let Some(undo) = &mut self.undo {
             undo.push(Undo::Text(ix, self.session.node(ix).and_then(|n| n.text.clone())));
         }
+        self.texts.push(ix);
         self.session.set_text_local(ix, text)
     }
     fn set_prop(&mut self, key: u32, atom: u32, value: eui_vm::Value) -> bool {

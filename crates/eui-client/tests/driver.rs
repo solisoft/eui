@@ -2551,3 +2551,51 @@ fn a_field_nobody_asked_about_arms_no_deadline() {
     let _ = d.take_pending();
     assert_eq!(d.next_frame_at(), None, "nothing to tell, nothing to wake for");
 }
+
+/// 07 §1 lets a chunk set a node's text, and until now that quietly excluded
+/// the one node it most wants to: the field being typed in. The chunk wrote
+/// the tree, the buffer kept the old value, and the next keystroke put it
+/// back — so a composer a handler empties on send, or a tag field that clears
+/// itself on Enter, did not work without a round trip.
+#[test]
+fn a_chunk_can_empty_the_field_it_is_in() {
+    use eui_vm::Asm;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    const EMPTY: u32 = 1;
+    const SENT: u32 = 2;
+    const FIELD_KEY: u32 = 3;
+    // push "" then set_text on the field's own key.
+    let chunk = Asm::new(2).push_str(EMPTY).set_text(FIELD_KEY).ret();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.handlers.push((EventKind::KeyDown, Handler::LocalThenServer { chunk: 1, name: SENT }));
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: FIELD_KEY, text: Some(TextRef::Inline(String::new())), props: (0, 0), handlers: (0, 1), child_count: 0 });
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: EMPTY, value: String::new() },
+            Op::DefAtom { id: SENT, value: "sent".into() },
+            Op::DefAtom { id: FIELD_KEY, value: "field".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [4; 4], ..Default::default() } },
+            Op::DefChunkBytes { id: 1, bytes: chunk },
+            Op::Mount(tree),
+        ],
+    };
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+
+    let field = |d: &Driver| d.session().text_of(d.session().lookup(2).unwrap()).unwrap_or("").to_owned();
+    d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true });
+    d.input(Input::Text("rust".into()));
+    assert_eq!(field(&d), "rust");
+
+    // Enter runs the chunk, which empties it. This half passed before.
+    d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
+    assert_eq!(field(&d), "", "the chunk emptied it");
+
+    // And this half is the test: the buffer agreed, so the next character
+    // starts a new value rather than reviving the old one.
+    d.input(Input::Text("g".into()));
+    assert_eq!(field(&d), "g", "not 'rustg'");
+}
