@@ -307,6 +307,12 @@ pub struct AccessNode {
     pub move_next: bool,
     /// Children, in order.
     pub children: Vec<u64>,
+    /// The node inside the set this one is *on*, for the combo box pattern:
+    /// a field keeps the keyboard while the arrows walk a panel beside it.
+    /// `0` is absent. It lives here and not on `AccessState` because it is a
+    /// node, not a value — the server names a key and the client resolves it
+    /// to an id, which only the walk over the whole tree can do.
+    pub active_descendant: u64,
     /// What the node declared about itself.
     pub state: AccessState,
 }
@@ -354,6 +360,7 @@ impl Driver {
             level: id("level"),
             orientation: id("orientation"),
             live: id("live"),
+            active_descendant: id("active_descendant"),
         }
     }
 
@@ -375,6 +382,7 @@ impl Driver {
             move_prev: false,
             move_next: false,
             children,
+            active_descendant: 0,
             state: AccessState::default(),
         };
         let Some(root) = session.root() else {
@@ -416,6 +424,7 @@ impl Driver {
                 move_prev: false,
                 move_next: false,
                 children: Vec::new(),
+                active_descendant: 0,
                 state,
             };
             let editable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea);
@@ -456,6 +465,20 @@ impl Driver {
             // A declared label overrides the text gathered from inside.
             if let Some(text) = at.label.and_then(|x| node.prop(x)).and_then(str_of) {
                 a.label = text.to_owned();
+            }
+            // 03 §6.1 rule 4: the node a field is *on* while the field keeps
+            // the keyboard. The server names it by its key, because a key is
+            // the only handle on a node it has; a key naming nothing laid out
+            // is dropped rather than refused, which is the same
+            // forward-compatibility rule the rest of the vocabulary keeps —
+            // and it is the ordinary case, since the panel is built and torn
+            // down as it opens and shuts.
+            if let Some(key) = at.active_descendant.and_then(|x| node.prop(x)).and_then(str_of) {
+                a.active_descendant = session
+                    .atom_id(key)
+                    .and_then(|k| session.lookup_key(k))
+                    .filter(|t| layout.rect(*t).is_some() && !layout.is_virtual(*t))
+                    .map_or(0, id_of);
             }
             // Unavailable: it keeps its role and its name, and accepts nothing.
             if a.state.disabled {
@@ -499,6 +522,7 @@ struct AccessAtoms {
     level: Option<u32>,
     orientation: Option<u32>,
     live: Option<u32>,
+    active_descendant: Option<u32>,
 }
 
 fn str_of(v: &eui_proto::Value) -> Option<&str> {
@@ -721,6 +745,9 @@ pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
             1 => a.set_live(Live::Polite),
             2 => a.set_live(Live::Assertive),
             _ => {}
+        }
+        if n.active_descendant != 0 {
+            a.set_active_descendant(NodeId(n.active_descendant));
         }
         if !n.children.is_empty() {
             a.set_children(n.children.iter().map(|c| NodeId(*c)).collect::<Vec<_>>());

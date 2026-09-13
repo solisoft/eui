@@ -272,3 +272,52 @@ fn a_row_that_can_be_moved_offers_the_two_moves_where_there_is_somewhere_to_go()
     assert!(last.move_prev && !last.move_next, "nothing after the last");
     assert!(first.focus, "and it can be reached without a pointer at all");
 }
+
+/// 03 §6.1 rule 4: the combo box pattern. The field keeps the keyboard while
+/// the arrows walk a panel that is not inside it — which is where ARIA 1.2
+/// puts the options, and is why "an editable node gets no children" is not in
+/// the way. The server names the option by its key, because a key is the only
+/// handle on a node a server has.
+fn combo_tree(names: &[&str], points_at: &str) -> Batch {
+    const A_ROLE: u32 = 1;
+    const A_ACTIVE: u32 = 2;
+    const A_LABEL: u32 = 3;
+    const A_OPT: u32 = 10;
+
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.props.push((A_ROLE, Value::Str("combo_box".into())));
+    tree.props.push((A_ACTIVE, Value::Str(points_at.into())));
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("con".into())), props: (0, 2), handlers: (0, 0), child_count: 0 });
+    tree.props.push((A_ROLE, Value::Str("option".into())));
+    tree.props.push((A_LABEL, Value::Str("Consignment".into())));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: A_OPT, text: None, props: (2, 2), handlers: (0, 0), child_count: 0 });
+
+    let mut ops: Vec<Op> = names.iter().enumerate().map(|(i, a)| Op::DefAtom { id: u32::try_from(i).unwrap() + 1, value: (*a).to_owned() }).collect();
+    ops.push(Op::DefAtom { id: A_OPT, value: "opt:consignment".into() });
+    ops.push(Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } });
+    ops.push(Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(200), height: Dim::Px(24), ..Default::default() } });
+    ops.push(Op::Mount(tree));
+    Batch { seq: 1, ops }
+}
+
+#[test]
+fn a_field_says_which_option_beside_it_the_arrows_are_on() {
+    let s = snap(combo_tree(&["role", "active_descendant", "label"], "opt:consignment"));
+    let field = child(&s);
+    assert_eq!(field.role, Role::ComboBox, "an input that declared itself one");
+    assert!(field.children.is_empty(), "an editable node still gets no children");
+    let option = s.nodes.iter().find(|n| n.label == "Consignment").expect("the option is in the tree");
+    assert_eq!(field.active_descendant, option.id, "and it points at the one beside it");
+    assert_ne!(field.active_descendant, 0);
+}
+
+#[test]
+fn a_name_pointing_at_nothing_is_dropped_and_not_refused() {
+    // The panel is built and torn down as it opens and shuts, so a stale name
+    // is the ordinary case and not a malformed tree. Refusing the batch for it
+    // would take the whole surface down over a shut dropdown.
+    let s = snap(combo_tree(&["role", "active_descendant", "label"], "opt:nothing-here"));
+    assert_eq!(child(&s).active_descendant, 0);
+    assert!(s.nodes.iter().any(|n| n.label == "Consignment"), "and the rest of the tree is untouched");
+}

@@ -1059,6 +1059,7 @@ fn put_access(w: &mut W, s: &AccessSnapshot) {
         for c in &n.children {
             w.u64(*c);
         }
+        w.u64(n.active_descendant);
         put_state(w, &n.state);
     }
     w.u64(s.focus);
@@ -1154,8 +1155,12 @@ fn get_access(r: &mut R<'_>) -> Wire<AccessSnapshot> {
         for _ in 0..k {
             children.push(r.u64()?);
         }
+        // Read in the order `put_access` writes: this and `get_state` below
+        // are one codec, and a field added to one and not the other desyncs
+        // the stream without a compile error.
+        let active_descendant = r.u64()?;
         let state = get_state(r)?;
-        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, move_prev: actions & 4 != 0, move_next: actions & 8 != 0, children, state });
+        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, move_prev: actions & 4 != 0, move_next: actions & 8 != 0, children, active_descendant, state });
     }
     Ok(AccessSnapshot { nodes, focus: r.u64()?, scale: r.f32()? })
 }

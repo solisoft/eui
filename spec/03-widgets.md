@@ -697,6 +697,7 @@ on the wire and an older client falls back to the mapping above.
 | `level` | integer ≥ 1 | depth, for a heading or a tree item |
 | `orientation` | `"horizontal"`, `"vertical"` | which way a set runs |
 | `live` | `"polite"`, `"assertive"` | how urgently a change should be read |
+| `active_descendant` | a node's **key** | which node in a set this one is *on*, while keeping the keyboard itself |
 
 The role names: `button`, `link`, `check_box`, `radio`, `radio_group`,
 `switch`, `tab`, `tab_list`, `tab_panel`, `menu`, `menu_item`, `menu_bar`,
@@ -720,3 +721,23 @@ Three rules follow from the table and are normative:
    *focus* action.
 3. **A number that is present and zero is not an absence.** `value_now: 0`
    is a slider at the bottom of its range, not a slider without a value.
+4. **`active_descendant` names a node, and a name pointing at nothing is
+   dropped.** The value is a *key*, because a key is the only handle on a
+   node a server has; the client resolves it and exposes the node it found.
+   The node named need not be a descendant and usually is not — a combo box
+   puts its options in an overlay beside the field, so that the field can
+   keep the keyboard while the arrows walk them, and rule 1's "an editable
+   node gets no children" does not stand in the way. A key that names
+   nothing laid out MUST be dropped and MUST NOT refuse the batch: the
+   panel is built and torn down as it opens and shuts, so a stale name is
+   the ordinary case.
+
+`active_descendant` is the one relation this vocabulary has, and it is here
+because the alternative is worse. A `live` node can be told *3 of 8,
+Consignment* as prose, but prose is the server's and structure is the
+client's — §6 already draws that line for the drag announcement — and a
+highlighted option is structure: it has a role, a position in its set, and
+a selected state that an assistive technology reads in the reader's own
+language. `controls` and the rest of the ARIA relation set are deliberately
+left out; each would be another way for a name to dangle, and this one
+earns its place by being the only way to express the widget at all.

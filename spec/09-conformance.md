@@ -170,6 +170,11 @@ range, including a present zero; an unknown role name falling back rather
 than failing; a live region's urgency; and every role discriminant surviving
 the `to_u8`/`from_u8` round trip the worker boundary makes of it.
 
+Rule 4: a field naming an option that is its *sibling* and not its child —
+which is where a combo box's panel is, and is the whole reason a relation
+exists here at all — and a name pointing at nothing being dropped without
+refusing the batch, because a panel that has shut leaves exactly that.
+
 The kind-mapping default of §6 is pinned separately, in `driver.rs`, so that
 a tree declaring nothing is provably exposed as it was before §6.1 existed.
 
@@ -199,4 +204,7 @@ by position and key; a changed cell is one `SetText`.
 
 With `EUI_SOLI_BIN` set, the client drives a real Soli server: the counter's
 local-first `+`, the todo's keyed rows and fetched avatar, ten thousand rows
-sorted by moves, and the gallery's select, slider, pickers, data grid and charts.
+sorted by moves, and the gallery's select, slider, pickers, data grid and
+charts. The tag field is there too, because it is where §3.1's three tiers
+meet: `Enter` arrives as a `submit` and the field empties itself, and the
+same `Backspace` deletes a character on one press and a whole tag on the next.

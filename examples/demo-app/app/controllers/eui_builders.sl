@@ -5329,6 +5329,11 @@ def tag_entry(draft, bad, o)
   # on every render, or the field would steal focus from whatever else the page
   # has since been given.
   tgn_props["autofocus"] = true if o["take_focus"] == true
+  # 03 §6.1 rule 4. The field keeps the keyboard while the arrows walk the
+  # panel, so the option is named rather than focused -- which is the only way
+  # to say "3 of 8, Consignment" with the option's own role and place in its
+  # set rather than as prose a `live` node would have had to spell out.
+  tgn_props["active_descendant"] = o["active"] unless o["active"].nil?
 
   input(draft, o["on_change"], {
     "key": o["key"].to_s + ":entry",
@@ -5437,12 +5442,18 @@ def tag_field(label, tags, draft, o = {})
 
   tgf_error = o["error"] ?? ""
   tgf_bad = field_bad(tgf_error, o)
-  tgf_o = o.merge({"label": o["label"] ?? label})
-  tgf_well = tag_well(tags, draft, tgf_bad, tgf_o)
   tgf_words = o["suggest"] ?? []
-  return field_shell(label, tgf_well, o) unless o["open"] == true && tgf_words.length() > 0
-
   tgf_at = o["at"] ?? -1
+  tgf_open = o["open"] == true && tgf_words.length() > 0
+  tgf_o = o.merge({"label": o["label"] ?? label})
+  # The key of the row the arrows are on, for the entry to point at. It has to
+  # be worked out before the well is built and cannot be worked out inside it,
+  # because the row it names is in the panel and the panel is the well's
+  # sibling, not its child -- which is the whole reason the prop exists.
+  tgf_o["active"] = o["key"].to_s + ":opt:" + tgf_words[tgf_at] if tgf_open && tgf_at >= 0 && tgf_at < tgf_words.length()
+  tgf_well = tag_well(tags, draft, tgf_bad, tgf_o)
+  return field_shell(label, tgf_well, o) unless tgf_open
+
   tgf_rows = range(0, tgf_words.length()).map(fn(i) {
     tag_option(tgf_words[i], i == tgf_at, i + 1, tgf_words.length(), tgf_o)
   })
