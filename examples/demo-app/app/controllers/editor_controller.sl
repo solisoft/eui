@@ -663,13 +663,24 @@ end
 
 # --------------------------------------------------------------------- view
 
+# One token, and never more than one line of it.
+#
+# A `text` node wraps to its box and shrinks to fit by default (03), which is
+# right for prose and wrong for code: in a row pinned to `ED_ROW_H` a 70-column
+# comment wrapped to four lines and painted them over the four lines below it,
+# and a long line of code was squeezed token by token until every one of them
+# broke mid-word. Neither shows up in a wide window, which is why it took a
+# phone to find. `shrink: 0` keeps a token its own width, `clamp: 1` keeps it
+# on one line, and `ed_line_row` trims what will not fit.
 def ed_mono(content, colour)
   text(
     content,
     {
       "font": "mono",
       "size": 1,
-      "fg": colour
+      "fg": colour,
+      "shrink": 0,
+      "clamp": 1
     }
   )
 end
@@ -696,7 +707,7 @@ end
 def ed_cursor_line(line, col)
   at = col < line.length() ? line.substring(col, col + 1) : " "
   row(
-    {"gap": 0, "align": "center"},
+    {"gap": 0, "align": "center", "shrink": 0},
     [
       ed_mono(line.substring(0, col), "text.default"),
       {
@@ -713,15 +724,20 @@ def ed_line_row(state, at, on_click)
   here = state["row"] == at
   line = ed_line(state, at)
   body = here ? ed_cursor_line(line, state["col"]) : row(
-    {"gap": 0, "align": "center"},
+    {"gap": 0, "align": "center", "shrink": 0},
     ed_tokens(line).map(fn(token) { ed_mono(token["t"], ed_colour(token["k"])) })
   )
+  # A line is exactly one row tall, so what runs past the right edge is cut
+  # there rather than painted over the line below. Without the clip a window
+  # narrower than the file is unreadable — five overstruck comments, which is
+  # what this looked like on a phone.
   line_row = row(
     {
       "gap": 0,
       "height": ED_ROW_H,
       "align": "center",
       "width": "100%",
+      "overflow": "clip",
       "bg": here ? "surface.raised" : "none",
       "cursor": "text"
     },
@@ -745,6 +761,10 @@ def ed_line_row(state, at, on_click)
   keyed("l" + str(at), line_row)
 end
 
+# Six things across the top. Given less width than they want, a row squeezes
+# each of them instead of running on to a second line — "sample.sl" came back
+# as "sample" over ".sl", and the Reload button as "Relo" over "ad". So the bar
+# wraps and its items do not: on a phone it is two lines of whole words.
 def ed_bar(state, on_reload, clean_label)
   where = "Ln " + str(state["row"] + 1) + ", Col " + str(state["col"] + 1)
   row(
@@ -752,18 +772,19 @@ def ed_bar(state, on_reload, clean_label)
       "gap": 3,
       "align": "center",
       "width": "100%",
+      "wrap": "wrap",
       "pad": [2, 3, 2, 3],
       "bg": "surface.raised",
       "border": [0, 0, 1, 0],
       "border_color": "border.subtle"
     },
     [
-      text(state["name"], {"weight": "semibold"}),
+      text(state["name"], {"weight": "semibold", "shrink": 0}),
       badge(state["dirty"] ? "modified" : clean_label, state["dirty"] ? "warning" : "success"),
       muted(str(state["lines"].length()) + " lines"),
       spacer(),
       muted(where),
-      secondary_button("Reload", on_reload)
+      {"k": "box", "s": {"display": "row", "shrink": 0}, "c": [secondary_button("Reload", on_reload)]}
     ]
   )
 end
@@ -816,13 +837,15 @@ def ed_panel(state, opts)
 end
 
 # What the window is doing, under the buffer: the last thing that happened,
-# and how much of the file the server actually sent.
+# and how much of the file the server actually sent. Two sentences, which wrap
+# onto two lines rather than into two narrow columns — `ed_bar`'s reason.
 def ed_status(state, sent)
   row(
     {
       "gap": 3,
       "align": "center",
       "width": "100%",
+      "wrap": "wrap",
       "pad": [1, 3, 1, 3],
       "bg": "surface.raised",
       "border": [1, 0, 0, 0],
