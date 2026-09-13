@@ -339,22 +339,29 @@ end
 # the catalogue's geometry, which is the same layout shift as a border that
 # only exists on hover, several times larger. This applies one patch to every
 # style a node declares, so all of its states keep the same shape.
+#
+# Every handler that declares styles, not a named four: a field also states a
+# `focus` and a `blur` look (`editable_states`), and patching only the pointer
+# events left the keyboard to undo the patch.
 def restyle(n, patch)
   n["s"] = n["s"].merge(patch)
   handlers = n["on"]
   return n if handlers.nil?
 
-  names = ["pointer_enter", "pointer_leave", "pointer_down", "pointer_up"]
-  for name in names
+  for name in handlers.keys()
     handler = handlers[name]
-    unless handler.nil?
-      styles = handler["styles"] ?? {}
-      for key in styles.keys()
-        styles[key] = styles[key].merge(patch)
-      end
-      handler["styles"] = styles
-      handlers[name] = handler
+    # A handler that is only an event name is a string, and a string declares
+    # no styles.
+    next if handler.nil? || handler.to_s == handler
+
+    styles = handler["styles"] ?? {}
+    next if styles.keys().length() == 0
+
+    for key in styles.keys()
+      styles[key] = styles[key].merge(patch)
     end
+    handler["styles"] = styles
+    handlers[name] = handler
   end
   n["on"] = handlers
   n
@@ -3336,10 +3343,14 @@ def datetime_picker(
   )
 end
 
+# An input of a stated width. The width goes in through the style `input` is
+# handed, not onto `box["s"]` afterwards: `input` builds its hover and focus
+# styles out of that style, and a width written on after the fact reaches the
+# resting state alone. The field then collapsed to its own text the moment the
+# pointer touched it — 200 px at rest, 78 hovered — and stayed collapsed,
+# because the style it goes back to on leaving had no width either.
 def sized_input(value, on_change, width)
-  box = input(value, on_change)
-  box["s"]["width"] = width
-  box
+  input(value, on_change, {"style": {"width": width}})
 end
 
 # Two selections on one calendar: the first click starts, the second ends,
