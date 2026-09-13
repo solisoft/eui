@@ -50,7 +50,7 @@ loading state), `link`, `icon_button`, `segmented_control`, `menu`,
 `context_menu`, `command_palette`, `toolbar`
 
 **Input.** `text_field`, `password_field`, `textarea`, `select`, `multi_select`,
-`combobox`, `checkbox`, `radio_group`, `switch`, `slider`, `date_picker`,
+`tag_field` (the combo box: free text with suggestions), `checkbox`, `radio_group`, `switch`, `slider`, `date_picker`,
 `datetime_picker`, `date_range_picker` (one calendar engine, two selections),
 `time_picker`, `calendar`, `color_picker`, `rating`, `file_drop`, `form` with
 error display

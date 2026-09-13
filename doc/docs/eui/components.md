@@ -413,6 +413,8 @@ press switch between style records the session already holds.
 | `select(options, value, open, on_toggle, on_pick)` | Closed, it is its anchor; open, a dropdown. **The server owns `open`**. A list too long for the panel scrolls inside it |
 | `select_option(label, selected, on_pick)` | One row of that dropdown, carrying `{"value": label}` |
 | `multi_select(options, sel, open, on_toggle, on_pick, o = {})` | Several of something. The anchor carries a chip per chosen option — each chip's × sends the same `on_pick`, because removing one *is* toggling it off — and the panel's rows are the listbox's. Picking does **not** shut it: that is the caller's handler, not the widget |
+| `tag_field(label, tags, draft, o = {})` | A line of chips you type into, and a panel of what is still worth choosing — the `combo_box`. Unlike `multi_select` the words are not a fixed set: whatever is typed becomes a tag. `o["key"]` is required; `o["suggest"]` is the narrowed list, `o["at"]` where the arrows are, `o["open"]` whether the panel is up, `o["take_focus"]` asks for the caret back for one batch. The entry claims `Backspace`, the arrows and `Escape` — not `Enter`, which arrives as a `submit` (03 §3.1) |
+| `tag_option(word, lit, pos, total, o)` | One row of that panel. `lit` is where the arrows have walked to, which is not a selection — nothing is chosen until Enter or a click |
 | `dropdown(anchor, content, open, max_px = 0)` | A panel positioned under its anchor; returns the anchor alone when closed. The content scrolls: the panel is as tall as its content, the window, or `max_px`, whichever is least |
 | `slider(value, min, max, on_set)` | A 240 px track. Press, drag, or click; arrows nudge once focused. `on_set` receives `params["kind"]` (`"click"`, `"pointer_down"`, `"pointer_move"`, `"pointer_up"`, `"key_down"`) |
 
@@ -516,6 +518,10 @@ arithmetic reaches the view.
 | `split_pane(o)` | Two panels and a divider that can be dragged. `dir` is `"row"` for a vertical divider with the panels side by side, `"column"` for a horizontal one with them stacked |
 | `split_sizes(extent, fraction, min_a, min_b, bar)` | The two panel extents in px, clamped to both minimums |
 | `split_at(extent, at, min_a, min_b, bar)` | A pointer position along the axis, as a fraction per mille |
+| `tag_add(tags, text, o = {})` | Trim, reject empty, reject a word already there in any case, and stop at `o["max"]`. Copies before it grows, so the list handed in is left alone |
+| `tag_remove(tags, at)` | Without the one at `at`; out of range removes nothing |
+| `tag_suggest(all, tags, draft, limit)` | The words that match the draft anywhere, minus the ones already chosen, capped at `limit` |
+| `tag_highlight(count, at, step)` | Where an arrow key lands, wrapping at both ends; `-1` in is "nowhere yet", and a highlight past a panel that shrank comes back inside |
 | `split_span(extent, bar)` | The room the panels share, once the divider has taken its own |
 | `split_event(state, params, name, dir, extent, min_a, min_b, bar)` | The four events a split sends, folded into a component's state |
 | `pane_bp(px)` / `pane_min(px, name)` / `pane_px(name)` | Breakpoints at the scale a *panel* lives at |
