@@ -20,6 +20,12 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, drag | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
 
+An edited field is the only thing an *input* arms a deadline for: 06 §2's idle
+`change`, one per burst of typing, disarmed by the event it produces and by the
+blur or `Enter` that would have produced it first. At rest there is none, so
+the zero-wakeup line above holds with a field on the screen and a caret in it.
+A field no handler is listening to arms nothing at all.
+
 A drag frame costs what a wheel notch costs: one hit test, one search for the
 slot, at most one scroll step, and a relayout of the rows that have boxes — not
 of the ten thousand that do not. The thing that can be slow is the **server's**

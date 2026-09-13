@@ -503,6 +503,13 @@ struct Edit {
     anchor: usize,
     /// Logical px the field's text is scrolled left to keep the caret in view.
     scroll_x: f32,
+    /// When the value last moved away from `seed`. `None` means the field
+    /// agrees with the server and owes it nothing (06 §2).
+    ///
+    /// Armed on *disagreement* rather than on "a key arrived", which is what
+    /// makes "never report a value that has not moved" true by construction:
+    /// type a character and take it back, and the deadline disarms itself.
+    typed_at: Option<Instant>,
 }
 
 impl Edit {
@@ -696,6 +703,11 @@ const SPIN_FRAME: Duration = Duration::from_millis(33);
 const BAR_HOLD: Duration = Duration::from_millis(800);
 const BAR_FADE: Duration = Duration::from_millis(400);
 const WINDOW_SETTLE: Duration = Duration::from_millis(120);
+/// How long a field must be quiet before it tells the server what is in it
+/// (06 §2). Long enough that a word typed at speed is one event and not
+/// eight; short enough that someone who stops to look at the screen has
+/// already been answered.
+const CHANGE_IDLE: Duration = Duration::from_millis(300);
 /// How long a drag waits for the server to answer its last move before
 /// sending another. A server that answers paces the drag itself, so this
 /// is only for one that says nothing at all -- two frames, which is slow
@@ -1342,7 +1354,7 @@ impl Driver {
                                 eui_proto::TextRef::Atom(a) => self.session.atom(*a).unwrap_or("").to_owned(),
                             };
                             let end = value.len();
-                            *edit = Edit { seed: value.clone(), value, caret: end, anchor: end, scroll_x: 0.0 };
+                            *edit = Edit { seed: value.clone(), value, caret: end, anchor: end, scroll_x: 0.0, typed_at: None };
                         }
                     }
                 }
@@ -3609,7 +3621,7 @@ impl Driver {
         let id = self.session.node(f).map(|n| n.id).unwrap_or(0);
         let seed = self.session.text_of(f).unwrap_or("").to_owned();
         let len = seed.len();
-        Some(self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed, caret: len, anchor: len, scroll_x: 0.0 }))
+        Some(self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed, caret: len, anchor: len, scroll_x: 0.0, typed_at: None }))
     }
 
     fn text_input(&mut self, t: &str) -> Vec<Frame> {
@@ -3621,6 +3633,7 @@ impl Driver {
         };
         edit.insert(t);
         self.show_edit(f);
+        self.note_typing(f);
         self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
     }
 
@@ -4094,6 +4107,7 @@ impl Driver {
         self.preedit = t;
         let _ = self.edit_mut(f);
         self.show_edit(f);
+        self.note_typing(f);
     }
 
     /// Put the field's value, with any composition at the caret, into the tree.
@@ -4297,7 +4311,57 @@ impl Driver {
             return false;
         }
         self.show_edit(f);
+        self.note_typing(f);
         true
+    }
+
+    /// The field owes the server a `change` exactly while it disagrees with
+    /// it — 06 §2's idle commit is armed here and nowhere else.
+    ///
+    /// Only when something is listening: a field nobody asked about must not
+    /// wake the process 300 ms after it was typed into, and `emit` would drop
+    /// the event anyway (spec 10 §1).
+    fn note_typing(&mut self, f: NodeIx) {
+        let now = self.now;
+        let listening = self.target(f, EventKind::Change).is_some();
+        if let Some(edit) = self.edit_mut(f) {
+            edit.typed_at = (listening && edit.value != edit.seed).then_some(now);
+        }
+    }
+
+    /// 06 §2: a field that has gone quiet says what is in it, without waiting
+    /// for a blur that may never come — a search box is typed into and looked
+    /// at, not tabbed out of.
+    ///
+    /// Run from `paint`, like `wake_events` and for the same reason: nothing
+    /// is arriving, so there is no input to hang it off.
+    fn idle_changes(&mut self) -> Vec<Frame> {
+        let now = self.now;
+        let due: Vec<u32> = self.edits.iter().filter(|(_, e)| e.typed_at.is_some_and(|t| now.saturating_duration_since(t) >= CHANGE_IDLE)).map(|(id, _)| *id).collect();
+        if due.is_empty() {
+            return Vec::new();
+        }
+        // A composition in progress is input. `show_edit` puts the preedit in
+        // the tree but not in `value`, so committing here would send a value
+        // with the composing text missing. The deadline is pushed *forward*
+        // rather than left in the past: a deadline already behind us makes
+        // every pass due, which is a spin.
+        if !self.preedit.is_empty() {
+            for id in due {
+                if let Some(edit) = self.edits.get_mut(&id) {
+                    edit.typed_at = Some(now);
+                }
+            }
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for id in due {
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
+            out.extend(self.commit_edit(ix));
+        }
+        out
     }
 
     /// `change`, if the field's value differs from what the server has.
@@ -4306,6 +4370,9 @@ impl Driver {
         let Some(edit) = self.edits.get_mut(&id) else {
             return Vec::new();
         };
+        // Either way the field no longer owes one: it has just been told, or
+        // it had nothing to tell.
+        edit.typed_at = None;
         if edit.value == edit.seed {
             return Vec::new();
         }
@@ -4490,6 +4557,8 @@ impl Driver {
         self.pending.extend(ticks);
         let woken = self.wake_events();
         self.pending.extend(woken);
+        let settled = self.idle_changes();
+        self.pending.extend(settled);
         let placed = self.location_events();
         self.pending.extend(placed);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
@@ -4611,7 +4680,14 @@ impl Driver {
         // instead of a real paint, and the event that was due is never
         // looked for. A clock nobody winds is not a clock.
         let locate_due = self.fix.and_then(|_| self.locators.iter().map(|(_, _, at)| *at).min());
-        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due];
+        // And the same again for a field that has been typed into (06 §2).
+        // This one is the easiest of the three to get half right: a keystroke
+        // sets `touched`, this frame clears it, and 300 ms later the field is
+        // untouched — so the deadline has to reach `until` as well as
+        // `next_due`, or the cached list is handed back and the `change` is
+        // never looked for. `others` feeds both, which is the whole of it.
+        let change_due = self.edits.values().filter_map(|e| e.typed_at).min().map(|t| t + CHANGE_IDLE);
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due];
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }

@@ -130,7 +130,12 @@ that asks for a hundred gets two.
 - A gesture that became a drag reports **no `pointer_up` and no `click`**: the
   lift is the `drop`. Without this, putting a card down also activates it.
 - `change` fires when an editable node's value settles — on blur, on `Enter`
-  in a single-line field, or after 300 ms of no input. `text_input` fires per
+  in a single-line field, or after 300 ms in which the value did not move. The
+  timer is armed only while the value differs from the one the server last
+  sent, so a character typed and taken back owes nothing and wakes nothing; a
+  composition in progress counts as input, and the timer does not run out
+  inside one. A client MUST NOT emit `change` for a value equal to the last it
+  sent, nor for a node that has left the tree. `text_input` fires per
   committed insertion and exists for local handlers; a server that subscribes
   to it across a wide-area link has misread the design.
 - A `Handler::Local` runs the chunk and emits nothing. A

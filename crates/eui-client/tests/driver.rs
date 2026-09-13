@@ -2422,3 +2422,132 @@ fn a_window_that_is_not_in_front_reports_no_location() {
     let _ = d.paint(400, 300);
     assert_eq!(fixes(&mut d).len(), 1, "and it is reported again");
 }
+
+// ------------------------------------------------- the idle commit, 06 §2
+//
+// `change` had two triggers, blur and `Enter`, and the spec promised three.
+// The third is the one a search box or a suggestion list lives on: a field is
+// typed into and *looked at*, not tabbed out of.
+
+use std::time::{Duration, Instant};
+
+fn welcomed_form() -> Driver {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    let _ = d.paint(400, 300);
+    d
+}
+
+/// Focus the first field and type into it at a named instant.
+fn type_at(d: &mut Driver, t: Instant, s: &str) {
+    let ix = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(ix).unwrap();
+    d.input_at(Input::PointerMove(r.x + 2.0, r.y + r.h / 2.0), t);
+    d.input_at(Input::PointerDown(0), t);
+    d.input_at(Input::PointerUp(0), t);
+    d.input_at(Input::Text(s.into()), t);
+}
+
+fn changes(frames: &[Frame]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == EventKind::Change => Some(format!("{:?}", e.payload)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The promise, and the budget half of it in the same test: after the commit
+/// the client owes nothing, so it asks for no further frame. A debounce that
+/// left a deadline behind would be a wakeup a second forever (spec 10 §1).
+#[test]
+fn a_field_that_goes_quiet_commits_itself() {
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    type_at(&mut d, t, "b");
+    let _ = d.paint(400, 300);
+    let _ = d.take_pending();
+    assert_eq!(d.next_frame_at(), Some(t + Duration::from_millis(300)), "one frame owed, at the deadline");
+
+    d.tick(t + Duration::from_millis(200));
+    let _ = d.paint(400, 300);
+    assert!(changes(&d.take_pending()).is_empty(), "not yet");
+
+    d.tick(t + Duration::from_millis(300));
+    let _ = d.paint(400, 300);
+    let said = changes(&d.take_pending());
+    assert_eq!(said.len(), 1, "and now: {said:?}");
+    assert_eq!(d.next_frame_at(), None, "and nothing is owed after it — this is the budget half");
+}
+
+/// Armed by disagreement, not by a keypress: a character typed and taken back
+/// leaves the field agreeing with the server, so there is nothing to report
+/// and no frame to wake for.
+#[test]
+fn a_value_typed_back_to_what_the_server_has_owes_nothing() {
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    type_at(&mut d, t, "b");
+    key(&mut d, "Backspace", 0);
+    let _ = d.paint(400, 300);
+    let _ = d.take_pending();
+    assert_eq!(d.next_frame_at(), None, "the deadline disarmed itself");
+    d.tick(t + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    assert!(changes(&d.take_pending()).is_empty());
+}
+
+/// The other two triggers still disarm it, so nothing fires twice.
+#[test]
+fn a_field_committed_by_enter_does_not_commit_again_when_it_goes_quiet() {
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    type_at(&mut d, t, "b");
+    let said = changes(&key(&mut d, "Enter", 0));
+    assert_eq!(said.len(), 1, "Enter committed it: {said:?}");
+    let _ = d.paint(400, 300);
+    let _ = d.take_pending();
+    d.tick(t + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    assert!(changes(&d.take_pending()).is_empty(), "and the deadline had nothing left to say");
+}
+
+/// A composition is input. Committing inside one would send a value with the
+/// composing text missing, because `show_edit` puts the preedit in the tree
+/// and not in the buffer.
+#[test]
+fn a_composition_in_progress_is_input() {
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    type_at(&mut d, t, "b");
+    d.input_at(Input::ImePreedit("にほ".into()), t + Duration::from_millis(50));
+    d.tick(t + Duration::from_millis(500));
+    let _ = d.paint(400, 300);
+    assert!(changes(&d.take_pending()).is_empty(), "not while it is being composed");
+
+    d.input_at(Input::ImeCommit("日本".into()), t + Duration::from_millis(600));
+    d.tick(t + Duration::from_millis(950));
+    let _ = d.paint(400, 300);
+    let said = changes(&d.take_pending());
+    assert_eq!(said.len(), 1, "and once, after it lands: {said:?}");
+    assert!(said[0].contains("日本"), "carrying what was committed: {said:?}");
+}
+
+/// A field nobody is listening to does not wake the process. The second field
+/// in this tree holds `focus` and no `change`.
+#[test]
+fn a_field_nobody_asked_about_arms_no_deadline() {
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    let ix = d.session().lookup(5).unwrap();
+    let r = d.layout().rect(ix).unwrap();
+    d.input_at(Input::PointerMove(r.x + 2.0, r.y + r.h / 2.0), t);
+    d.input_at(Input::PointerDown(0), t);
+    d.input_at(Input::PointerUp(0), t);
+    d.input_at(Input::Text("z".into()), t);
+    let _ = d.paint(400, 300);
+    let _ = d.take_pending();
+    assert_eq!(d.next_frame_at(), None, "nothing to tell, nothing to wake for");
+}
