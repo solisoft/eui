@@ -5255,6 +5255,205 @@ def tag_highlight(count, at, step)
   next_at
 end
 
+# ---- The tag field ---------------------------------------------------------
+
+# How many words the panel offers at once. It is capped in pixels too
+# (`DROPDOWN_MAX_PX`), but a panel that scrolls is one nobody reads to the end
+# of, and the arrow keys have to walk it.
+TAG_SUGGEST_MAX = 6
+
+# The keys the field hands back to the server instead of using itself.
+#
+# `Backspace` is the interesting one, and naming it does not make the field
+# undeletable: 03 §3.1's third tier sends a key only when the press moved
+# nothing in the text, which for `Backspace` means the caret was at the start
+# with nothing left to delete — which is exactly when it should take the last
+# chip instead. The other three the field has no use for at all.
+#
+# `Enter` is deliberately absent. It arrives as `submit`, and claiming it would
+# withhold that submit (03 §3.1, tier 2) — which is the one event this field
+# cannot do without.
+TAG_KEYS = ["Backspace", "ArrowDown", "ArrowUp", "Escape"]
+
+# The index a chip's × names. `chip_remove` keys itself from the `id` it is
+# given, so the id carries the field's key as well as the position — two tag
+# fields on one page would otherwise hand their first × the same key, which is
+# the bug `erp_filter_chips` has today.
+def tag_at(said)
+  tga_text = said.to_s
+  tga_cut = tga_text.index_of("/")
+  return -1 if tga_cut < 0
+
+  int(tga_text.substring(tga_cut + 1, tga_text.length()))
+end
+
+# The line you type into. Borderless and growing, because the well around it
+# is the field; this is only the last cell of it.
+def tag_entry(draft, bad, o)
+  tgn_style = {
+    "grow": 1,
+    "min_width": 80,
+    "border": 0,
+    "bg": "none",
+    "fg": "text.default",
+    "pad": [0, 0, 0, 0]
+  }
+  # A no-op restyle on all four states, so `editable_states` leaves them alone.
+  # It lights the node it is on, and here that node is a bare line of text
+  # between the last chip and the right edge — lighting *it* draws a pale bar
+  # inside the well rather than a field that has the keyboard. The well takes
+  # the focused border from the server instead, which it must do anyway:
+  # focus is what opens the panel, so the round trip is already happening.
+  tgn_flat = {"local": "self.style = @base", "styles": {"base": tgn_style}}
+  tgn_on = {"pointer_enter": tgn_flat, "pointer_leave": tgn_flat}
+  tgn_on["submit"] = o["on_submit"] unless o["on_submit"].nil?
+  tgn_on["key_down"] = o["on_key"] unless o["on_key"].nil?
+  tgn_on["focus"] = tgn_flat
+  tgn_on["blur"] = tgn_flat
+  tgn_on["focus"] = tgn_flat.merge({"then": o["on_focus"]}) unless o["on_focus"].nil?
+  tgn_on["blur"] = tgn_flat.merge({"then": o["on_blur"]}) unless o["on_blur"].nil?
+
+  tgn_props = {
+    "keys": TAG_KEYS,
+    "role": "combo_box",
+    "expanded": o["open"] == true,
+    "label": o["name"] ?? (o["label"] ?? "Tags")
+  }
+  tgn_note = o["error"] ?? ""
+  tgn_note = o["hint"] ?? "" if tgn_note == ""
+  tgn_props["description"] = tgn_note if tgn_note != ""
+  tgn_props["invalid"] = true if bad
+  tgn_props["required"] = true if o["required"] == true
+  # Clicking a suggestion blurs the field, so the server that took the word
+  # asks for the caret back on the batch that answers the click — once, and not
+  # on every render, or the field would steal focus from whatever else the page
+  # has since been given.
+  tgn_props["autofocus"] = true if o["take_focus"] == true
+
+  input(draft, o["on_change"], {
+    "key": o["key"].to_s + ":entry",
+    "style": tgn_style,
+    "props": tgn_props,
+    "on": tgn_on
+  })
+end
+
+# The well: the chips and the line, wrapping.
+#
+# `wrap` is what makes it a well rather than a row — chips are `shrink: 0`, so
+# without it a ninth tag pushes the line you type into out of the box.
+def tag_well(tags, draft, bad, o)
+  tgw_lit = o["open"] == true
+  tgw_edge = tgw_lit ? "accent.base" : "border.default"
+  tgw_edge = "danger.base" if bad == true
+  tgw_kids = range(0, tags.length()).map(fn(i) {
+    chip(tags[i], o["on_remove"], {"id": o["key"].to_s + "/" + str(i)})
+  })
+  {
+    "k": "box",
+    "key": o["key"].to_s + ":well",
+    "s": {
+      "display": "row",
+      "wrap": "wrap",
+      "align": "center",
+      "gap": 1,
+      "pad": [1, 2, 1, 2],
+      "width": o["width"] ?? "100%",
+      "min_height": field_height(o),
+      "border": 1,
+      "border_color": tgw_edge,
+      "radius": 2,
+      "bg": "surface.sunken",
+      "cursor": "text",
+      "transition": "fast"
+    },
+    "c": tgw_kids.concat([tag_entry(draft, bad, o)])
+  }
+end
+
+# One word in the panel. `lit` is where the arrows have walked to, which is not
+# a selection — nothing is chosen until Enter or a click — so it is `selected`
+# for the sake of an assistive technology reading the panel and a left border
+# for the sake of everyone else.
+def tag_option(word, lit, pos, total, o)
+  tgo_lit = lit == true
+  control({
+    "key": o["key"].to_s + ":opt:" + word,
+    "size": "sm",
+    "tone": "quiet",
+    "shape": {
+      "justify": "start",
+      "align": "center",
+      "width": "auto",
+      "min_width": o["min_width"] ?? 200,
+      "gap": 2,
+      "radius": 1,
+      "pad": [1, 2, 1, 2],
+      "bg": tgo_lit ? "surface.sunken" : "none",
+      "border": [0, 0, 0, 3],
+      "border_color": tgo_lit ? "accent.base" : "none"
+    },
+    "on": {"click": o["on_pick"]},
+    "props": {"id": word},
+    "a11y": {
+      "role": "option",
+      "selected": tgo_lit,
+      "label": word,
+      "pos_in_set": pos,
+      "set_size": total
+    },
+    "c": [text(word, {"weight": tgo_lit ? "semibold" : "regular"})]
+  })
+end
+
+# A line of chips you type into, and a panel of what is still worth choosing.
+#
+# `combo_box` has been on the widget list since the first draft and this is it.
+# What makes it one rather than a `multi_select` is that the words are not a
+# fixed set: `tag_add` takes whatever was typed, so the panel narrows the
+# familiar ones rather than enumerating the only ones.
+#
+# The caller owns everything. This is a view of four decisions it has already
+# made — the tags, the draft, the suggestions, and where the arrows are — and
+# the widget makes none of them, which is what lets `tests/tag_spec.sl` pin
+# them without a client.
+#
+# `o`, beyond the usual field keys (`hint`, `error`, `required`, `width`,
+# `density`, `name`):
+#
+#   "key"         (required) names every node in here
+#   "on_change"   the draft moved — narrow the suggestions
+#   "on_submit"   Enter — take the highlight, else commit the draft
+#   "on_key"      one of `TAG_KEYS`; `params["payload"][0]` says which
+#   "on_remove"   a chip's × — `tag_at(params["props"]["id"])` is the position
+#   "on_pick"     a word in the panel — `params["props"]["id"]` is the word
+#   "on_focus" / "on_blur"
+#   "suggest"     the words to offer, already narrowed by `tag_suggest`
+#   "at"          which of them the arrows are on, or -1
+#   "open"        whether the panel is shown
+#   "take_focus"  ask for the caret back on this batch and no other
+def tag_field(label, tags, draft, o = {})
+  throw "tag_field: o[\"key\"] names every node inside it" if o["key"].blank?
+
+  tgf_error = o["error"] ?? ""
+  tgf_bad = field_bad(tgf_error, o)
+  tgf_o = o.merge({"label": o["label"] ?? label})
+  tgf_well = tag_well(tags, draft, tgf_bad, tgf_o)
+  tgf_words = o["suggest"] ?? []
+  return field_shell(label, tgf_well, o) unless o["open"] == true && tgf_words.length() > 0
+
+  tgf_at = o["at"] ?? -1
+  tgf_rows = range(0, tgf_words.length()).map(fn(i) {
+    tag_option(tgf_words[i], i == tgf_at, i + 1, tgf_words.length(), tgf_o)
+  })
+  # The rows ask for their own width and the panel takes its size from them,
+  # for the reason `multi_select` gives: `width: 100%` inside an absolutely
+  # positioned overlay resolves against the window, not against the panel.
+  tgf_panel = column({"gap": 0}, tgf_rows)
+  tgf_panel["p"] = {"role": "list_box", "label": (o["label"] ?? label).to_s + " suggestions"}
+  field_shell(label, dropdown(tgf_well, [tgf_panel], true, DROPDOWN_MAX_PX), o)
+end
+
 # ---- Picking things up -----------------------------------------------------
 #
 # Spec 06 §6. The client owns the whole of the hand — how a press becomes a
