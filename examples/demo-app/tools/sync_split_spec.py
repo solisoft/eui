@@ -36,6 +36,12 @@ SPECS = {
         "selection_in?",
         "selection_ids",
     ],
+    ROOT / "tests" / "tag_spec.sl": [
+        "tag_add",
+        "tag_remove",
+        "tag_suggest",
+        "tag_highlight",
+    ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",
         "split_sizes",

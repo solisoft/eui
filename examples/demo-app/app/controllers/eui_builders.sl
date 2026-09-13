@@ -5185,6 +5185,76 @@ def stat_spark(label, value, hint, vals, w)
   )
 end
 
+# ---- Tags ------------------------------------------------------------------
+#
+# A list of short things somebody typed. Not a `multi_select`: that one keeps a
+# selection over a fixed set of options, and a selection cannot hold a word
+# nobody has an id for. A tag list is ordered, its members are strings, and the
+# set it draws from — if it draws from one at all — is only a suggestion.
+#
+# The four functions below are the whole of the model and none of them touches
+# a node, which is what lets `tests/tag_spec.sl` pin them without a client.
+
+# What a typed line becomes. Blank is nothing, the ends are trimmed, a repeat
+# is not a second tag — matched without case, because "Lyon" and "lyon" are the
+# same label to everyone but the machine — and `o["max"]` is a ceiling.
+def tag_add(tags, text, o = {})
+  said = (text ?? "").strip()
+  return tags if said == ""
+
+  for t in tags
+    return tags if t.downcase() == said.downcase()
+  end
+  cap = o["max"] ?? 0
+  return tags if cap > 0 && tags.length() >= cap
+
+  # `concat` grows the array it is called on, so copy before growing: the
+  # caller still holds `tags`, and the state hash it came out of holds it too.
+  tags.slice(0, tags.length()).concat([said])
+end
+
+def tag_remove(tags, at)
+  return tags if at < 0 || at >= tags.length()
+
+  tags.slice(0, at).concat(tags.slice(at + 1, tags.length()))
+end
+
+# What to offer. Anything already taken is not a suggestion, and neither is
+# anything that does not contain what has been typed so far — matched without
+# case for the same reason `tag_add` dedupes without it. An empty draft offers
+# everything left, because a panel that appears only once you have typed is a
+# panel most people never learn is there.
+def tag_suggest(all, tags, draft, limit)
+  said = (draft ?? "").strip().downcase()
+  out = []
+  for one in all
+    if out.length() < limit
+      taken = false
+      for t in tags
+        taken = true if t.downcase() == one.downcase()
+      end
+      fits = said == "" || one.downcase().index_of(said) >= 0
+      out = out.concat([one]) if !taken && fits
+    end
+  end
+  out
+end
+
+# Where the highlight goes. It wraps, because a list you can walk off the end
+# of is a list you have to look at to use; `-1` is "nothing highlighted", and
+# stepping from there lands on an end rather than nowhere.
+def tag_highlight(count, at, step)
+  return -1 if count <= 0
+
+  return step > 0 ? 0 : count - 1 if at < 0
+
+  next_at = at + step
+  return count - 1 if next_at < 0
+  return 0 if next_at >= count
+
+  next_at
+end
+
 # ---- Picking things up -----------------------------------------------------
 #
 # Spec 06 §6. The client owns the whole of the hand — how a press becomes a
