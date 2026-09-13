@@ -3635,6 +3635,157 @@ def textarea_field(label, value, on_change, o = {})
   )
 end
 
+# ---- Files -----------------------------------------------------------------
+#
+# The two things a server cannot do at all: reach a file on the person's
+# machine, and show one back.
+#
+# A picker is never one thing. 03 §3.2 asks for three at once and a node that
+# has only two of them opens nothing, silently: the `pick` prop, a **server**
+# handler for `file_pick`, and a capability the person granted. That is the
+# whole reason this is a builder — the prop and the handler are easy to write
+# and easy to write only one of, and the failure is a button that does
+# nothing with no diagnostic anywhere (08 §3, deliberately).
+#
+# The third is not ours to give. `fs.pick`, `camera` and `microphone` are
+# three different powers and none implies another, so a component asks for
+# what it uses in `eui_capabilities(...)` and the person still answers.
+
+# `flags` in a `pick`. Bit 0 takes more than one file; bit 1 asks the camera
+# for a picture that does not exist yet and bit 2 asks for a recording —
+# which is why they need their own grants. Together they are a contradiction
+# and a client resolves them as the camera, so do not send both.
+PICK_MANY = 1
+PICK_CAMERA = 2
+PICK_MICROPHONE = 4
+
+# `"png,jpg"` on its own, or `[accept, flags, max]` when anything else is
+# asked for. `max` of 0 means the client's own default (16 MiB), which is
+# also what it uses for a list that does not say.
+def pick_prop(accept, o)
+  pick_flags = o["flags"] ?? 0
+  pick_flags = pick_flags + PICK_MANY if o["multiple"] == true
+  return accept if pick_flags == 0 && o["max"].nil?
+
+  [accept, pick_flags, o["max"] ?? 0]
+end
+
+# A control that opens the platform's open dialog.
+#
+# Everything `control` gives every other control — tones, sizes, the
+# disabled and loading states, the a11y mapping — and two more options:
+#
+#   accept    "png,jpg,pdf", extensions without dots, empty for anything
+#   flags     PICK_CAMERA or PICK_MICROPHONE; omit for a file already there
+#   multiple  more than one file, which the two capture flags ignore
+#   max       the largest one file may be, in bytes
+#
+# `on_pick` is the **server** handler name for `file_pick`, and what it
+# receives is `[id, name, size]` — a name and a weight, never a path. The
+# bytes arrive later and separately, as the server's own `file_upload`.
+def file_field(label, accept, on_pick, o = {})
+  ff_node = control(o.merge({
+    "key": o["key"] ?? ("file:" + label),
+    "on": {"file_pick": on_pick},
+    "a11y": o["a11y"] ?? {"role": "button", "label": label},
+    "c": o["c"] ?? [text_interned(label, {"size": o["text_size"] ?? 1})]
+  }))
+  ff_node["p"] = (ff_node["p"] ?? {}).merge({"pick": pick_prop(accept, o)})
+
+  # A tool button is a glyph that lights rather than a surface that fills, so
+  # it wants a hover the TONES table has no name for. `control` looks its tone
+  # up by name, so the override is applied here, against the style `control`
+  # settled on — and only when there are handlers to replace, since `disabled`
+  # and `loading` mean there are deliberately none.
+  unless ff_node["on"].nil? || (o["hover"].nil? && o["press"].nil?)
+    ff_node["on"] = stateful(ff_node["s"], {
+      "hover": o["hover"] ?? {},
+      "press": o["press"] ?? {}
+    }, {"file_pick": on_pick})
+  end
+  ff_node
+end
+
+# What was attached, drawn as a card.
+#
+# Three cards, because there are three things there can be to show.
+#
+#   o["src"]    a small square of the file itself — an asset from
+#               `eui_asset(bytes)`, or a path under `public/`
+#   o["badge"]  a node for the square when there is no picture to put in it,
+#               usually the extension set in small bold type
+#   neither     the name and the note, in a row padded where the square
+#               would have been
+#
+# The last is not a fallback nobody reaches: it is what a picture whose bytes
+# have gone gets, and the reason the card survives that at all. A `src` that
+# names nothing is a view that cannot be encoded, which ends the session
+# (01 §4) — so the caller resolves the bytes first and passes what it got.
+#
+# The name is not decoration either. A picture the client cannot decode is an
+# error nowhere — the server puts bytes on the wire and the client fails to
+# make an image of them — so a card that was only a picture drew an empty box
+# and said nothing about what was in it.
+ATTACHMENT_PX = 74
+
+def attachment_card(name, note, o = {})
+  ac_edge = o["size"] ?? ATTACHMENT_PX
+  ac_square = {
+    "width": ac_edge - 2,
+    "height": ac_edge - 2,
+    "shrink": 0,
+    "overflow": "clip",
+    "bg": "surface.sunken",
+    "display": "row",
+    "justify": "center",
+    "align": "center"
+  }
+
+  ac_stamp = []
+  unless o["badge"].nil?
+    ac_stamp = [{
+      "k": "box",
+      "s": ac_square.merge({"width": 40, "height": 40, "radius": 1, "margin": [0, 0, 0, 3]}),
+      "c": [o["badge"]]
+    }]
+  end
+  unless o["src"].nil?
+    # `image` does not scale a picture to its box: it draws at the size the
+    # style asks for and anything larger is clipped, so what is handed here
+    # is a square made on the way in and not the file squeezed at render.
+    ac_stamp = [{"k": "box", "s": ac_square, "c": [image(o["src"], ac_edge - 2, ac_edge - 2)]}]
+  end
+
+  # A ternary's condition has to type as Bool and `.nil?` on a value out of
+  # an untyped hash is Any, so this is an `if` and not `?:`.
+  ac_pad = [0, 0, 0, 0]
+  ac_pad = [0, 3, 0, 3] if o["src"].nil?
+
+  row(
+    {
+      "gap": 3,
+      "align": "center",
+      "height": ac_edge,
+      "pad": ac_pad,
+      "radius": 2,
+      "overflow": "clip",
+      "border": 1,
+      "border_color": "border.subtle",
+      "bg": "surface.raised",
+      "margin": [1, 0, 0, 0]
+    },
+    ac_stamp.concat([
+      column(
+        {"gap": 0, "grow": 1, "shrink": 1, "min_width": 0, "pad": [0, 3, 0, 0]},
+        [
+          text(name.to_s, {"weight": "semibold", "size": 1, "clamp": 1, "fg": "text.default"}),
+          muted(note.to_s)
+        ]
+      )
+    ])
+  )
+end
+
 # ---- Fields that open a calendar -------------------------------------------
 #
 # A value that is picked rather than typed. The panel is the same calendar

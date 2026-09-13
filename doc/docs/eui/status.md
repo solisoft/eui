@@ -835,13 +835,15 @@ either runs out. Six vectors in `crates/eui-client/tests/resume.rs`, named
 in `spec/09` §7.5; the last drops a real socket mid-session and opens
 another, and the tree is still standing with the count where it was.
 
-*The Soli side of both is not done.* `lang/` pins the protocol crate by
-revision, so nothing there has changed or broken: `src/serve/eui/` still
-speaks the older `Hello`/`Welcome`, has no `pick`/`save` in its tree
-builder, and does nothing with `Upload`. Taking these into Soli means
-bumping that rev, adding the two event names to `tree.rs`, routing upload
-chunks to a handler, giving a `file_save` handler a way to answer with
-bytes, and keeping a LiveView session alive across sockets.
+*The Soli side of both has since been done*, and this paragraph used to say
+otherwise long after it stopped being true. `src/serve/eui/session.rs` spools
+an `Upload` to `tmp/eui-uploads/<session>/` and posts its own `file_upload`
+event when the last chunk lands; `tree.rs` carries `pick` and `save`; and
+`crates/eui-client/tests/soli_e2e.rs` drives the whole path against a live
+server. What an application does with a spooled file is its own decision —
+`uploaded_file_at` hands it to Soli's uploaders, and `eui_asset` puts the
+bytes back on the wire without their ever having been a file (see
+[components](components.md#files)).
 
 ## One thing that is worth knowing before it is rediscovered
 

@@ -444,7 +444,13 @@ def chat_next_n(room_id)
   chat_found.length() == 0 ? 0 : chat_found[0] + 1
 end
 
-def chat_say(room_id, who, body, upload)
+# `bytes` is what `uploaded_file_at` read, or null for a message with
+# nothing attached. It is separate from `upload` because `upload` is what
+# the message *says* about its attachment — the name, the weight, whether it
+# is a picture — and is written to the row, while the bytes are handed to
+# the store and never stored in a document.
+def chat_say(room_id, who, body, upload, bytes = null)
+  chat_bytes = bytes
   chat_n = chat_next_n(room_id)
   chat_written = {
     "room": room_id,
@@ -464,6 +470,20 @@ def chat_say(room_id, who, body, upload)
   chat_saved = ChatMessage.create(chat_written)
   chat_wrong = (chat_saved["_errors"] ?? {}).keys().join(", ") rescue ""
   return { "error": chat_wrong } unless chat_wrong.blank?
+
+  # The bytes go in after the row exists, because an uploader writes its
+  # blob id onto a record and there is no record to write to until now.
+  # What comes back is folded into the message's own `file` hash, so every
+  # read path that already carries `file` carries the attachment with it and
+  # none of them has to learn about columns.
+  unless chat_bytes.nil?
+    chat_put = chat_store(chat_saved, chat_bytes)
+    return { "error": chat_put["error"] } unless chat_put["error"].blank?
+
+    chat_written["file"]["blob"] = chat_put["blob"]
+    chat_written["file"]["thumb_blob"] = chat_put["thumb_blob"]
+    chat_saved.update({ "file": chat_written["file"] })
+  end
 
   # `chat_bump`, not `chat_reshape`: a send appends a row and changes no
   # existing one, so the height table only has to grow. Treating it as a
@@ -900,35 +920,14 @@ end
 
 # ---- the model ends ------------------------------------------------------
 
-# Where a file that is to outlive its session goes. This is the only thing
-# in the file that touches the disk, which is why it is on this side of the
-# line: `File` and `mkdir_p` are the server's, and a bare script running the
-# spec has neither.
-CHAT_UPLOAD_DIR = "public/chat"
-
-# Move a picked file out of the session's spool and into the application,
-# where it becomes an asset: served by content hash, fetched once, cached by
-# the client for ever. That promotion is the application's decision and not
-# the protocol's — spec 01 §6 is explicit that a file is not an asset — and
-# it is what makes a picture one window attached visible in the other.
+# Where a file that is to outlive its session goes — which is to say, not
+# here. `ChatMessage` declares two uploaders and they name the store; this
+# file does not know whether the bytes end up in SoliDB, on a disk or in a
+# bucket, and that is the whole of the change. Nothing below writes a file.
 #
-# `File.copy` and not `File.write(File.read(...))`. The read/write pair goes
-# through a string: it mangles anything that is not UTF-8 and raises on most
-# of it, so every attachment came back "could not be kept" and the reason
-# was swallowed by a `rescue`. A copy moves bytes.
-def chat_keep(path, name)
-  return { "error": "the upload arrived without a file" } if path.blank?
-  return { "error": "the upload was gone before it could be kept" } unless File.exists(path)
-
-  chat_dir = CHAT_UPLOAD_DIR
-  mkdir_p(chat_dir)
-  chat_leaf = str(DateTime.now().to_unix()) + "-" + name
-  chat_kept = chat_dir + "/" + chat_leaf
-  File.copy(path, chat_kept)
-  return { "error": "the copy into " + chat_dir + " did not land" } unless File.exists(chat_kept)
-
-  { "path": chat_kept, "thumb": chat_thumb(chat_kept, name) }
-end
+# The promotion itself is still the application's decision, not the
+# protocol's: spec 01 §6 is explicit that a file is not an asset, and a
+# picked file dies with the socket unless something keeps it.
 
 # A small square of a picture, for the card to draw.
 #
@@ -947,28 +946,78 @@ CHAT_THUMB_PX = 160
 # phone picture and a mean-spirited video.
 CHAT_SHOT_CEILING = 8388608
 
-def chat_thumb(kept, name)
-  return "" unless chat_picture?(name)
+# What the dialogs offer. These and `ChatMessage`'s `content_types` are two
+# halves of one list and they have to agree: the picker decides what a person
+# can choose, the uploader decides what is then kept, and a gap between them
+# is a file that is chosen, uploaded, and refused on arrival.
+CHAT_ACCEPT = "png,jpg,jpeg,gif,webp,pdf,txt,log,csv,md"
+CHAT_ACCEPT_AUDIO = "m4a,mp3,ogg,wav"
 
-  chat_small = kept + "-thumb.png"
-  return chat_small if File.exists(chat_small)
+# How many bytes a base64 string stands for, without decoding it.
+#
+# `Base64.decode` would build one 16-byte Int per byte to answer a question
+# about a length — a quarter of a megabyte of thumbnail becomes four
+# megabytes of array, per attachment, for a number. Base64 is four
+# characters per three bytes and the padding says how many of the last three
+# are real.
+def chat_b64_bytes(b64)
+  chat_n = b64.length()
+  return 0 if chat_n < 4
 
-  chat_shrink(kept, chat_small) rescue nil
-  File.exists(chat_small) ? chat_small : ""
+  chat_pad = 0
+  chat_pad = chat_pad + 1 if b64[chat_n - 1] == "="
+  chat_pad = chat_pad + 1 if b64[chat_n - 2] == "="
+  chat_n / 4 * 3 - chat_pad
 end
 
+# The stamp, made from the bytes rather than from a file.
+#
 # Cropped to a square rather than letterboxed: the card's box is square, and
 # a picture that keeps its shape inside it leaves bars of background that
 # read as part of the picture.
-def chat_shrink(source, target)
-  chat_pic = Image.new(source)
+def chat_shrink(file)
+  return null unless chat_picture?(file["filename"].to_s)
+
+  chat_pic = Image.from_buffer(file["data"])
   chat_w = chat_pic.width()
   chat_h = chat_pic.height()
   chat_edge = chat_w < chat_h ? chat_w : chat_h
   chat_scale = CHAT_THUMB_PX * 1.0 / chat_edge
-  chat_pic.resize(int(chat_w * chat_scale), int(chat_h * chat_scale)).format("png").to_file(target)
+  chat_made = chat_pic.resize(int(chat_w * chat_scale), int(chat_h * chat_scale)).format("png").to_buffer()
+  {
+    "name": "thumb.png",
+    "filename": "thumb.png",
+    "content_type": "image/png",
+    "size": chat_b64_bytes(chat_made),
+    "data": chat_made
+  }
 end
 
+# Keep what someone attached, and answer with what the message should carry.
+#
+# The record has to exist before anything can be attached to it —
+# `attach_upload` writes the blob id onto a row — so this runs after the
+# create and the ids it hands back are folded into the message afterwards.
+#
+# Two blobs, not one. Every message that scrolls past draws its thumbnail
+# and almost none are ever opened, so the stamp is stored beside the picture
+# rather than derived from it at render time.
+def chat_store(record, file)
+  chat_kept = { "blob": null, "thumb_blob": null, "error": "" }
+  unless record.attach_file(file)
+    chat_why = (record._errors[0] ?? { "message": "it could not be kept" })["message"]
+    chat_kept["error"] = chat_why.to_s
+    return chat_kept
+  end
+  chat_kept["blob"] = record["file_blob_id"]
+
+  # A thumbnail is a nicety: a picture that will not decode still gets its
+  # card and its name, which is the honest thing to show and better than
+  # losing the message to a failed resize.
+  chat_small = chat_shrink(file) rescue null
+  chat_kept["thumb_blob"] = record["thumb_blob_id"] if !chat_small.nil? && record.attach_thumb(chat_small)
+  chat_kept
+end
 # ---- the phone's own three -----------------------------------------------
 #
 # All three follow the rule of 03 §3.2: a prop, a **server** handler, and a
@@ -1434,25 +1483,31 @@ def chat_file_upload(state, params)
 
   name = payload["name"].to_s
   # A file is not an asset (01 §6): it lives in the session's spool and dies
-  # with the socket. Copying it under `public` is what makes it something
-  # the other window can be shown, and that is this application's decision.
-  chat_put = chat_keep(payload["path"].to_s, name)
-  unless (chat_put["error"] ?? "").blank?
-    state["trouble"] = name + ": " + chat_put["error"]
+  # with the socket. Reading it here is what makes it something the other
+  # window can be shown, and that is this application's decision.
+  #
+  # `uploaded_file_at` and not `slurp` + `Base64.encode`: the intermediate
+  # array is one boxed Int per byte, so an eight-megabyte photograph becomes
+  # a hundred and thirty of them for the length of the call. It also names
+  # the content type from the name, which is what the uploader's allow-list
+  # is checked against.
+  chat_bytes = uploaded_file_at(payload["path"].to_s, name) rescue null
+  if chat_bytes.nil?
+    state["trouble"] = name + ": the upload was gone before it could be kept"
     return state
   end
 
-  kept = chat_put["path"]
-
-  chat_say(state["room"], state["me"], state["draft"].to_s.trim(), {
+  chat_said = chat_say(state["room"], state["me"], state["draft"].to_s.trim(), {
     "name": name,
     "size": payload["size"] ?? 0,
-    "path": kept,
-    # What the card draws. The file itself stays where it is; this is the
-    # small square made from it.
-    "thumb": chat_put["thumb"],
     "picture": chat_picture?(name)
-  })
+  }, chat_bytes)
+  chat_trouble = (chat_said["error"] ?? "").to_s
+  unless chat_trouble.blank?
+    state["trouble"] = name + ": " + chat_trouble
+    return state
+  end
+
   state["draft"] = ""
   state["seen"] = chat_seq()
   state["at_foot"] = true
@@ -2534,13 +2589,76 @@ end
 
 # ---- attachments and links ----------------------------------------------
 
-# An attachment, drawn from what is still on disk.
+def slurp_b64(path)
+  chat_at = uploaded_file_at(path) rescue null
+  chat_at.nil? ? null : chat_at["data"]
+end
+
+# The bytes a message's attachment field holds, base64, or `null`.
 #
-# A picture is only drawn if the file is **there**. An `image` node names a
-# file by path and the server hashes it to put it on the wire, so a path that
-# no longer exists is not a blank square — it is a view that cannot be
-# encoded, which ends the session (01 §4) and takes the whole room with it.
-# One deleted file, one dead channel, for everybody.
+# Two things are worth saying about the shape of this.
+#
+# It caches the **bytes** and not the hash `eui_asset` answers with. The
+# asset store is an LRU and eviction is silent, so a hash remembered from an
+# earlier render can name bytes that are no longer there — and the client's
+# only report of that is a hole where the picture was. Re-putting bytes that
+# are already held costs a hash and a map touch, so the safe thing is also
+# the cheap one.
+#
+# And it goes through `read_upload`, which is the only line in this file that
+# knows the attachment is in a database at all. Point the uploader at disk or
+# at S3 and nothing here changes.
+CHAT_BLOBS = {}
+
+def chat_blob_of(file, field)
+  # Attached before there were uploaders: the bytes are a file under
+  # `public/`, and a message that still has one keeps working. Nothing
+  # writes these any more.
+  chat_was = field == "thumb" ? file["thumb"].to_s : file["path"].to_s
+  return slurp_b64(chat_was) if !chat_was.blank? && File.exists(chat_was)
+
+  chat_id = field == "thumb" ? file["thumb_blob"] : file["blob"]
+  return null if chat_id.nil?
+
+  chat_held = CHAT_BLOBS[chat_id]
+  return chat_held unless chat_held.nil?
+
+  chat_read = read_upload(ChatMessage, field, chat_id) rescue null
+  return null if chat_read.nil?
+
+  CHAT_BLOBS[chat_id] = chat_read["data"]
+  chat_read["data"]
+end
+
+# Is anything actually still held for this message?
+#
+# A card says "no longer on the server" on the strength of this, so it asks
+# the store rather than trusting the row: a blob id written when the message
+# was sent is not a promise that the blob survived.
+def chat_attached?(file)
+  !chat_blob_of(file, "thumb").nil? || !chat_blob_of(file, "file").nil?
+end
+
+# The stamp to draw for an attached picture — an asset, not a path.
+#
+# The thumbnail where there is one, the picture itself for anything attached
+# before thumbnails existed, and `null` when neither is still held.
+def chat_thumb_of(file)
+  chat_small = chat_blob_of(file, "thumb")
+  return eui_asset(chat_small) unless chat_small.nil?
+
+  chat_full = chat_blob_of(file, "file")
+  return null if chat_full.nil?
+
+  eui_asset(chat_full)
+end
+
+# An attachment, drawn from whatever store holds it.
+#
+# A picture is only drawn if the bytes are **there**. A `src` that names
+# nothing is not a blank square — it is a view that cannot be encoded, which
+# ends the session (01 §4) and takes the whole room with it. One purged blob,
+# one dead channel, for everybody.
 #
 # So a message whose file has gone keeps its card and loses its picture. That
 # is the honest thing to show: the file was attached, and it is not here any
@@ -2549,37 +2667,11 @@ def chat_attachment(message)
   file = message["file"]
   return chat_sample_file(message) if file.nil?
 
-  # The thumbnail where there is one, the file itself for anything attached
-  # before thumbnails existed.
-  chat_where = file["thumb"].to_s
-  chat_where = file["path"].to_s if chat_where.blank?
-  chat_there = !chat_where.blank? && File.exists(chat_where)
-  return chat_picture_card(file) if file["picture"] == true && chat_there
+  chat_drawn = chat_thumb_of(file)
+  return chat_picture_card(file, chat_drawn) if file["picture"] == true && !chat_drawn.nil?
 
-  chat_file_card(file["name"], chat_attachment_note(file, chat_there))
+  chat_file_card(file["name"], chat_attachment_note(file, chat_attached?(file)))
 end
-
-# The stamp to draw for an attached picture.
-#
-# A message stored before thumbnails existed carries none, and handing the
-# original over instead is 891 KB fetched by every window that ever scrolls
-# past it, to fill a box the size of a stamp — and, until the client learned
-# to shrink what will not fit its sheet, a picture off a phone drew as a
-# black square. So one is made here, once: what this writes is what the next
-# render finds, and `chat_thumb` hands back an existing file untouched.
-def chat_thumb_of(file)
-  chat_small = file["thumb"].to_s
-  return chat_small if !chat_small.blank? && File.exists(chat_small)
-
-  chat_full = file["path"].to_s
-  return chat_full if chat_full.blank? || !File.exists(chat_full)
-
-  chat_made = chat_thumb(chat_full, file["name"].to_s) rescue ""
-  return chat_full if chat_made.blank?
-
-  chat_made
-end
-
 def chat_attachment_note(file, there)
   return chat_weight(file["size"] ?? 0) if there
 
@@ -2592,91 +2684,24 @@ def chat_sample_file(message)
   chat_file_card("run-" + str(message["n"]) + ".log", chat_weight(2048 + message["n"] % 90000))
 end
 
-# A picture, with its name beside it.
-#
-# The name is not decoration. A picture that the client cannot decode is not
-# an error anywhere — the server hashes bytes and puts them on the wire, the
-# client fails to make an image of them — so a card that was only a picture
-# drew an empty box and said nothing at all about what was in it. With the
-# name there, the worst case reads as "a file called holiday.png that will
-# not display", which is a thing a person can act on.
-def chat_picture_card(file)
-  row(
-    {
-      "gap": 3,
-      "align": "center",
-      "height": CHAT_FILE_PX,
-      "radius": 2,
-      "overflow": "clip",
-      "border": 1,
-      "border_color": "border.subtle",
-      "bg": "surface.raised",
-      "margin": [1, 0, 0, 0]
-    },
-    [
-      {
-        "k": "box",
-        "s": {
-          "width": CHAT_FILE_PX - 2,
-          "height": CHAT_FILE_PX - 2,
-          "shrink": 0,
-          "overflow": "clip",
-          "bg": "surface.sunken",
-          "display": "row",
-          "justify": "center",
-          "align": "center"
-        },
-        # The thumbnail, drawn to fill the square. `image` does not scale a
-        # picture to its box: it draws at the size the style asks for, and
-        # anything larger is clipped — which is why this is a small square
-        # made on the way in rather than the file itself squeezed here.
-        "c": [image(chat_thumb_of(file), CHAT_FILE_PX - 2, CHAT_FILE_PX - 2)]
-      },
-      column(
-        {"gap": 0, "grow": 1, "shrink": 1, "min_width": 0, "pad": [0, 3, 0, 0]},
-        [
-          text(file["name"].to_s, {"weight": "semibold", "size": 1, "clamp": 1, "fg": "text.default"}),
-          muted(chat_weight(file["size"] ?? 0))
-        ]
-      )
-    ]
-  )
+# A picture, with its name beside it — and a file, with its extension in a
+# badge where the picture would be. Both are `attachment_card`, which is
+# where the reasoning about why a card keeps its name now lives.
+def chat_picture_card(file, drawn)
+  attachment_card(file["name"].to_s, chat_weight(file["size"] ?? 0), {
+    "size": CHAT_FILE_PX,
+    # `{"asset": "<hash>"}` and not a path: these bytes have no file. The
+    # caller resolved them, because it had to decide whether anything was
+    # still held before it could choose this card at all.
+    "src": drawn
+  })
 end
 
 def chat_file_card(name, weight)
-  row(
-    {
-      "gap": 3,
-      "align": "center",
-      "height": CHAT_FILE_PX,
-      "pad": [0, 3, 0, 3],
-      "radius": 2,
-      "border": 1,
-      "border_color": "border.subtle",
-      "bg": "surface.raised",
-      "margin": [1, 0, 0, 0]
-    },
-    [
-      {
-        "k": "box",
-        "s": {
-          "width": 40,
-          "height": 40,
-          "radius": 1,
-          "bg": "surface.sunken",
-          "display": "row",
-          "justify": "center",
-          "align": "center",
-          "shrink": 0
-        },
-        "c": [text(chat_extension(name).upcase(), {"size": 0, "weight": "bold", "fg": "text.muted"})]
-      },
-      column(
-        {"gap": 0, "grow": 1, "shrink": 1, "min_width": 0},
-        [text(name, {"weight": "semibold", "size": 1, "clamp": 1, "fg": "text.default"}), muted(weight)]
-      )
-    ]
-  )
+  attachment_card(name, weight, {
+    "size": CHAT_FILE_PX,
+    "badge": text(chat_extension(name).upcase(), {"size": 0, "weight": "bold", "fg": "text.muted"})
+  })
 end
 
 # The card a link draws: the picture the page offers, its title, and the
@@ -2858,30 +2883,36 @@ end
 # dialog accepts, and the node carries a *server* handler for `file_pick`.
 # Neither alone opens anything (03 §3.2), and neither does a tree that
 # merely arrives — the person has to activate it.
-def chat_attach_button(state)
-  resting = {
-    "display": "row",
-    "justify": "center",
-    "align": "center",
-    "width": 28,
-    "height": 28,
-    "radius": 1,
-    "cursor": "pointer",
-    "transition": "fast",
-    "fg": "text.muted"
-  }
-  built = {
-    "k": "box",
-    "s": resting,
-    "p": {"pick": "png,jpg,jpeg,gif,webp,pdf,txt,log,csv,md"},
-    "c": [text_interned("⊕", {"size": 2})]
-  }
-  built["on"] = stateful(resting, {
-    "hover": {"bg": "surface.sunken", "fg": "text.default"},
-    "press": {"bg": "surface.sunken"}
-  }, {"file_pick": "file_pick"})
-  keyed("chat_attach", built)
+def chat_picker_label(key)
+  return "Take a photograph" if key == "chat_camera"
+  return "Record a message" if key == "chat_record"
+
+  "Attach a file"
 end
+
+# What the three of them share. `file_field` is the catalogue's, and it is
+# what makes each of these one line instead of a prop, a handler and a look
+# that have to agree — the case where two of the three are right opens
+# nothing and says nothing (03 §3.2).
+def chat_picker(key, glyph, glyph_size, accept, flags, hover_fg)
+  file_field(glyph, accept, "file_pick", {
+    "key": key,
+    "flags": flags,
+    "max": CHAT_SHOT_CEILING,
+    "shape": chat_tool_resting(),
+    "tone": "quiet",
+    "hover": {"bg": "surface.sunken"}.merge(hover_fg),
+    "press": {"bg": "surface.sunken"},
+    "a11y": {"role": "button", "label": chat_picker_label(key)},
+    "c": [text_interned(glyph, {"size": glyph_size})]
+  })
+end
+
+def chat_attach_button(state)
+  chat_picker("chat_attach", "⊕", 2, CHAT_ACCEPT, 0, {"fg": "text.default"})
+end
+
+
 
 # The shutter. The same `pick` and the same `file_pick` handler as the
 # paperclip beside it — what comes back is a file either way (01 §6) — with
@@ -2889,34 +2920,14 @@ end
 # what makes the client ask for `camera` instead of `fs.pick`: taking a
 # photograph and reading somebody's folder are not the same grant.
 def chat_camera_button(state)
-  chat_shutter = {
-    "k": "box",
-    "s": chat_tool_resting(),
-    "p": {"pick": ["jpg", 2, CHAT_SHOT_CEILING]},
-    "c": [text_interned("◉", {"size": 2})]
-  }
-  chat_shutter["on"] = stateful(chat_tool_resting(), {
-    "hover": {"bg": "surface.sunken", "fg": "text.default"},
-    "press": {"bg": "surface.sunken"}
-  }, {"file_pick": "file_pick"})
-  keyed("chat_camera", chat_shutter)
+  chat_picker("chat_camera", "◉", 2, "jpg", PICK_CAMERA, {"fg": "text.default"})
 end
 
 # The recorder. The third source `pick` knows about, and the third grant:
 # a finished recording is a file, so everything after the sheet closes is
 # the paperclip's path exactly. Bit 2 of the flags is the difference.
 def chat_record_button(state)
-  chat_rec = {
-    "k": "box",
-    "s": chat_tool_resting(),
-    "p": {"pick": ["m4a,mp3,ogg,wav", 4, CHAT_SHOT_CEILING]},
-    "c": [text_interned("●", {"size": 1})]
-  }
-  chat_rec["on"] = stateful(chat_tool_resting(), {
-    "hover": {"bg": "surface.sunken", "fg": "danger.base"},
-    "press": {"bg": "surface.sunken"}
-  }, {"file_pick": "file_pick"})
-  keyed("chat_record", chat_rec)
+  chat_picker("chat_record", "●", 1, CHAT_ACCEPT_AUDIO, PICK_MICROPHONE, {"fg": "danger.base"})
 end
 
 # The reader. `nfc` carries what iOS puts in its scan sheet; Android has

@@ -2371,15 +2371,21 @@ fn a_split_pane_follows_the_hand_while_it_is_still_down() {
 /// The whole path, with only the dialog and the disk played by the test:
 /// the attach button asks the window for a picker, the client mints an
 /// upload and streams the bytes, the server reassembles them into the
-/// session's spool and posts `file_upload`, and the controller copies the
-/// file under `public` — where it becomes an asset the window fetches back
-/// by content hash.
+/// session's spool and posts `file_upload`, and the controller hands them to
+/// an uploader — which puts them wherever that uploader's service says, and
+/// answers the view with bytes rather than a path.
 ///
 /// It exists because this path failed three times for three different
 /// reasons, each one hidden behind the last: a binary file destroyed by a
 /// read/write round trip, an event whose fields sat somewhere no handler
 /// looks, and a row number taken from a stale cache. None of them was
 /// visible from either end alone.
+///
+/// What it can no longer do is read the result off the filesystem, because
+/// the point of the change was that there is nothing there to read. It
+/// follows the bytes the other way instead — the card names an asset, the
+/// window fetches that asset from the session's origin, and what comes back
+/// is a picture made from what was sent.
 #[test]
 fn atrium_keeps_a_picture_someone_attached() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
@@ -2416,9 +2422,8 @@ fn atrium_keeps_a_picture_someone_attached() {
 
     // The person chose. The client mints an id, tells the server, and
     // streams; the test plays the disk.
-    // A name this run alone will use. `public/chat` keeps what earlier runs
-    // attached, and a glob that matched them picked an older, different file
-    // and compared the wrong bytes.
+    // A name this run alone will use, so the message this test looks for is
+    // this test's and not one an earlier run left in the room.
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let name = format!("holiday-{stamp}.png");
     let (ids, out) = d.picked(asks[0].token, vec![(name.clone(), png.len() as u64)]);
@@ -2436,26 +2441,53 @@ fn atrium_keeps_a_picture_someone_attached() {
     let said = texts(&d, root(&d));
     assert!(!said.iter().any(|t| t.contains("did not arrive") || t.contains("could not be kept")), "the attachment was refused: {said:?}");
 
-    // And the bytes are on disk, byte for byte, under the application —
-    // which is what makes them an asset the other window can be shown.
+    // The card draws the picture, and it draws it as an asset. A `src` that
+    // is still a string would mean the controller had gone back to naming a
+    // file, which is the thing this path stopped doing.
+    let src = d.session().atom_id("src").expect("something in the room is a picture");
+    let drawn = d
+        .session()
+        .preorder(root(&d))
+        .filter(|ix| d.session().node(*ix).map(|n| n.kind) == Some(eui_proto::NodeKind::Image))
+        .filter_map(|ix| d.session().node(ix).and_then(|n| n.prop(src)).cloned())
+        .filter_map(|v| match v {
+            eui_proto::Value::Asset(h) => Some(h),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!drawn.is_empty(), "no picture in the room; the page says: {:?}", texts(&d, root(&d)));
+
+    // And the bytes behind the newest of them come back off the wire and are
+    // a picture. They are not the bytes that went in — the card draws a
+    // thumbnail, made from what was sent — so what is checked is that it is
+    // a real PNG of the size the composer asks for. That the original
+    // survives the trip byte for byte is `uploaded_file_at`'s own test; here
+    // the question is whether the store and the asset endpoint carry it.
+    let mut seen = None;
+    for hash in drawn {
+        let Ok(bytes) = eui_client::assets::fetch(&conn.origin, &hash, None) else { continue };
+        if bytes.starts_with(b"\x89PNG") {
+            seen = Some(bytes);
+        }
+    }
+    let thumb = seen.expect("the asset endpoint serves the picture the card names");
+    // Width and height out of the IHDR, which starts at byte 16.
+    let edge = |at: usize| u32::from_be_bytes([thumb[at], thumb[at + 1], thumb[at + 2], thumb[at + 3]]);
+    assert_eq!((edge(16), edge(20)), (160, 160), "a 160 px square made from the picture that was sent");
+
+    // Nothing was written under the application. This is the whole of the
+    // change: where the bytes live is the uploader's business now, and a
+    // copy landing here again would mean the seam had quietly come undone.
     let app = std::env::var("EUI_SOLI_APP").unwrap_or_else(|_| format!("{}/../../examples/demo-app", env!("CARGO_MANIFEST_DIR")));
-    let landed: Vec<std::path::PathBuf> = std::fs::read_dir(std::path::Path::new(&app).join("public/chat"))
-        .expect("public/chat exists once something has been attached")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.to_string_lossy().ends_with(&name))
-        .collect();
-    assert!(!landed.is_empty(), "the picture was not kept under public/chat; the page says: {:?}", texts(&d, root(&d)));
-    let on_disk = std::fs::read(&landed[0]).expect("read what was kept");
-    assert_eq!(on_disk, png, "the bytes changed on the way through");
+    let copied = std::fs::read_dir(std::path::Path::new(&app).join("public/chat")).map(|dir| dir.flatten().any(|e| e.path().to_string_lossy().ends_with(&name))).unwrap_or(false);
+    assert!(!copied, "the picture was copied under public/chat; it belongs in the store the uploader names");
 
     // What is left behind is left on purpose. The message stays in the room
-    // and its file stays beside it, because deleting the file and keeping
-    // the message is precisely the state that used to end the session: an
-    // `image` names a file by path, the server hashes it to put it on the
-    // wire, and a path that is gone is a view that cannot be encoded. The
-    // view tolerates it now, and a test that tidied up would be testing the
-    // tidy case only.
+    // and its blob stays beside it, because dropping the bytes and keeping
+    // the message is precisely the state that used to end the session: a
+    // `src` that names nothing is a view that cannot be encoded. The view
+    // tolerates it now, and a test that tidied up would be testing the tidy
+    // case only.
 }
 
 /// Spec 04 §6: writing a line into a room of four thousand messages costs a

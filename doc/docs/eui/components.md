@@ -418,6 +418,33 @@ press switch between style records the session already holds.
 | `dropdown(anchor, content, open, max_px = 0)` | A panel positioned under its anchor; returns the anchor alone when closed. The content scrolls: the panel is as tall as its content, the window, or `max_px`, whichever is least |
 | `slider(value, min, max, on_set)` | A 240 px track. Press, drag, or click; arrows nudge once focused. `on_set` receives `params["kind"]` (`"click"`, `"pointer_down"`, `"pointer_move"`, `"pointer_up"`, `"key_down"`) |
 
+## Files
+
+A picker is three things at once and a node with two of them opens nothing,
+silently (03 §3.2, and 08 §3 on why there is no diagnostic): the `pick` prop,
+a **server** handler for `file_pick`, and a capability the person granted.
+`file_field` writes the first two; the third is the component's own
+`eui_capabilities("fs.pick", ...)`, and `camera` and `microphone` are separate
+grants because taking a photograph, making a recording and reading a folder
+are three different powers.
+
+What `file_pick` receives is `[id, name, size]` — a name and a weight, never a
+path. The bytes arrive afterwards, as the server's own `file_upload` event,
+carrying `{upload, name, content_type, size, path, error}` where `path` is in
+the session's spool and dies with the socket. **A file is not an asset**
+(01 §6): keeping one is the application's decision, and `uploaded_file_at(path,
+name)` turns that path into the hash Soli's uploaders take, so the bytes go
+wherever `uploader("file", {"service": ...})` says — SoliDB, a disk, S3 —
+rather than under `public/`. Reading one back is `read_upload(Model, field,
+blob_id)`, and `eui_asset(bytes)` names those bytes for a `src`. Atrium
+(`chat_controller.sl`) is the worked example.
+
+| Signature | Notes |
+|---|---|
+| `file_field(label, accept, on_pick, o = {})` | A `control` that opens the platform's open dialog. `accept` is extensions without dots (`"png,jpg"`), empty for any file. `o["flags"]` takes `PICK_CAMERA` or `PICK_MICROPHONE`; `o["multiple"]` takes more than one file, which the capture flags ignore; `o["max"]` is the largest one file may be, in bytes, defaulting to the client's 16 MiB. `o["hover"]`/`o["press"]` override the tone's, for a glyph that lights rather than a surface that fills |
+| `attachment_card(name, note, o = {})` | What was attached. `o["src"]` draws a small square of it — an asset from `eui_asset(bytes)`, or a path; `o["badge"]` draws a node there instead, usually the extension; neither draws just the name and the note, which is what a file whose bytes have gone gets. Resolve the bytes *before* choosing: a `src` naming nothing is a view that cannot be encoded, and that ends the session (01 §4) |
+| `pick_prop(accept, o)` | The `pick` value itself, for a node built by hand — a string when nothing else is asked for, `[accept, flags, max]` otherwise |
+
 None of them keeps state. The handler does; the widget draws what it is told
 and carries the identity the handler will need.
 
