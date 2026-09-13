@@ -2493,8 +2493,29 @@ impl Shell {
         // millisecond meanwhile was a thousand wake-ups a second on macOS,
         // where the redraw comes with the next display refresh rather
         // than at once: a spinner alone kept a core a fifth busy.
+        //
+        // That last paragraph assumes something it does not say: that the
+        // loop passes through here *again* once the redraw is delivered, and
+        // re-arms then. True on Linux, and on Android, whose backend forces a
+        // zero timeout when a redraw was asked for during `AboutToWait`. On
+        // **iOS it is false**: `AboutToWait` is the last event of a pass.
+        // winit's UIKit backend dispatches the queued redraws, then
+        // `AboutToWait`, then parks the waker at `f64::MAX`
+        // (`ios/app_state.rs`, `events_cleared_transition`). The redraw asked
+        // for here is honoured — CoreAnimation's commit observer calls
+        // `drawRect:` later in the same pass — but nothing comes back to read
+        // the deadline that paint sets, so a window that threw its own away
+        // paints one more frame and then sleeps for ever. Which is exactly
+        // what an iOS spinner did: one frame, then still.
+        //
+        // Nor can it fall through to the arms below. `tick` has already taken
+        // `next_due` by the time this runs, so `due` is `None` here and there
+        // is no deadline left to return. Come back and look once the paint
+        // has set one, for the same reason and at the same cost as the arm
+        // below: a wake-up while a frame is pending, nothing at rest.
         let due = self.tabs.get(self.active).and_then(|t| t.backend.next_frame_at());
         match due {
+            _ if requested && cfg!(target_os = "ios") => Some(now + std::time::Duration::from_millis(1)),
             _ if requested => None,
             Some(at) if at > now => Some(at),
             Some(_) => Some(now + std::time::Duration::from_millis(1)),
