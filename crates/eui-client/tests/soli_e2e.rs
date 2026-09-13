@@ -2951,3 +2951,73 @@ fn a_card_is_carried_from_one_column_to_another() {
     let said = d.session().text_of(keyed(&d, "kan_say")).unwrap_or("").to_owned();
     assert!(said.contains("Backlog, 3 of 4"), "the third of four, where the hand was: {said:?}");
 }
+
+/// A word typed into the tag field becomes a chip, and `Backspace` on the
+/// empty field takes the last one back.
+///
+/// Both halves are the client keeping only what it has a use for (03 §3.1).
+/// `Enter` is not claimed, so it arrives as a `submit` and the field commits;
+/// `Backspace` *is* named in `keys`, and reaches the server only on the press
+/// that moved nothing in the text — which is why naming it does not make the
+/// field undeletable, and why the same key deletes a character one press and
+/// a whole tag the next.
+#[test]
+fn a_typed_word_becomes_a_tag_and_backspace_takes_it_back() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1200.0, 900.0);
+    for f in d.input(Input::Resized(1200.0, 2400.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+    goto(&mut d, &conn, &wake, "Inventory", "Stock ledger");
+    let _ = d.paint(1200, 2400);
+
+    let keyed = |d: &Driver, key: &str| d.session().atom_id(key).and_then(|a| d.session().lookup_key(a)).unwrap_or_else(|| panic!("a node keyed {key}"));
+    let entry = keyed(&d, "inv_tags:entry");
+    assert!(has(&d, "Urgent"), "the field starts with one tag");
+
+    // Into the field, which opens the panel — one round trip, because the
+    // caret is the server's news and the panel is its answer.
+    click(&mut d, &conn, entry);
+    pump(&mut d, &conn, &wake, |d| in_overlay(d, "Backorder"));
+
+    // A word nobody suggested. `Bonded` matches none of `ERP_TAGS`, so the
+    // panel empties as it is typed and the only thing that can read `Bonded`
+    // afterwards is a chip — which is what makes the assertion below
+    // unambiguous without walking the tree for it.
+    for f in d.input(Input::Text("Bonded".into())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| has(d, "Bonded"));
+
+    // The field emptied itself. The server set the text to "" in the same
+    // batch that grew the list, and the client reseeded the buffer behind it
+    // — without that the next keystroke would write `Bonded` back.
+    let entry = keyed(&d, "inv_tags:entry");
+    assert_eq!(d.session().text_of(entry), Some(""), "the draft went into the chip, not beside it");
+    for f in d.input(Input::Text("g".into())) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1200, 2400);
+    assert_eq!(d.session().text_of(keyed(&d, "inv_tags:entry")), Some("g"), "and the buffer under it emptied too");
+
+    // Back to empty, then the press that has nothing left to delete.
+    for f in d.input(Input::Key { key: "Backspace".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1200, 2400);
+    assert_eq!(d.session().text_of(keyed(&d, "inv_tags:entry")), Some(""), "that one deleted a character and stayed here");
+    assert!(has(&d, "Bonded"), "so the tag is untouched");
+
+    for f in d.input(Input::Key { key: "Backspace".into(), modifiers: 0, down: true }) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| !has(d, "Bonded"));
+    assert!(has(&d, "Urgent"), "one tag, not the lot");
+}

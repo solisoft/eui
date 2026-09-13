@@ -1910,6 +1910,30 @@ def erp_reorder_card(state, lay)
       "placeholder": "Next delivery"
     }))])
   ]
+  # The third of the three "several of something" fields in this card, and the
+  # only one that will take a word nobody thought of. `tag_suggest` is what
+  # narrows the panel and `erp_reorder_tags` is the whole of what the events
+  # do to the list -- the field itself decides nothing.
+  fields = fields.concat([
+    column({"gap": 1, "width": 260}, [
+      tag_field("Tags", state["inv_tags"] ?? [], state["inv_tag_draft"] ?? "", {
+        "key": "inv_tags",
+        "density": lay["density"],
+        "hint": "Enter to add · Backspace to take the last one back",
+        "suggest": tag_suggest(ERP_TAGS, state["inv_tags"] ?? [], state["inv_tag_draft"] ?? "", TAG_SUGGEST_MAX),
+        "at": state["inv_tag_at"] ?? -1,
+        "open": state["inv_tag_open"] == true,
+        "take_focus": state["inv_tag_focus"] == true,
+        "on_change": "inv_tag_draft",
+        "on_submit": "inv_tag_commit",
+        "on_key": "inv_tag_key",
+        "on_remove": "inv_tag_drop",
+        "on_pick": "inv_tag_pick",
+        "on_focus": "inv_tag_focus",
+        "on_blur": "inv_tag_blur"
+      })
+    ])
+  ])
   erp_card(
     "Raise a purchase order",
     [],
@@ -2618,6 +2642,84 @@ def erp_step(state, key, props, o)
   set_key(state, key, number_stepped(state[key], props["delta"], o))
 end
 
+# How many tags a purchase order may carry. A cap is the one thing `tag_add`
+# cannot decide for itself, and a field with no ceiling wraps to six lines.
+ERP_TAG_MAX = 12
+
+# Every event the tag field sends, in one function, in `erp_picker`'s shape.
+#
+# Six of the seven are a line each. Keeping them together is what makes the
+# seventh readable, because the rules worth knowing are relations between
+# them: a new draft is a new panel, so it voids the highlight; the panel is
+# open whenever the field has the caret; and `take_focus` is true for exactly
+# one batch, the one answering the click that took the caret away.
+#
+# The seventh is `inv_tag_pick`, and it is what it is because of the order the
+# client sends things in. A press on a suggestion moves focus off the field
+# before the click lands (03 §3), so the server hears `blur` — and a blur that
+# commits has already made a tag out of "urg" by the time "Urgent" arrives.
+# The blur records that it committed and the pick takes that tag back: the
+# word in the panel is the one that was meant, and the fragment was only how
+# it was found. `tag_add` appends, so "the one the blur made" is the last one.
+def erp_tag_event(state, name, params, props)
+  ety_tags = state["inv_tags"] ?? []
+  ety_draft = state["inv_tag_draft"] ?? ""
+  ety_words = tag_suggest(ERP_TAGS, ety_tags, ety_draft, TAG_SUGGEST_MAX)
+  ety_at = state["inv_tag_at"] ?? -1
+  ety_said = state["inv_tag_said"] == true
+  # Both are true for one event and then stop being true, so every path clears
+  # them and the two that want them set them again below.
+  state = set_key(set_key(state, "inv_tag_focus", false), "inv_tag_said", false)
+
+  if name == "inv_tag_draft"
+    state = set_key(state, "inv_tag_draft", params["payload"])
+    return set_key(set_key(state, "inv_tag_at", -1), "inv_tag_open", true)
+  end
+
+  if name == "inv_tag_commit"
+    ety_word = ety_draft
+    ety_word = ety_words[ety_at] if ety_at >= 0 && ety_at < ety_words.length()
+    state = set_key(state, "inv_tags", tag_add(ety_tags, ety_word, {"max": ERP_TAG_MAX}))
+    state = set_key(state, "inv_tag_draft", "")
+    return set_key(set_key(state, "inv_tag_at", -1), "inv_tag_open", true)
+  end
+
+  if name == "inv_tag_key"
+    ety_key = (params["payload"] ?? [""])[0]
+    # 03 §3.1 tier 3: `Backspace` only reaches a server when the press moved
+    # nothing in the text, so there is no guard here — the client already made
+    # the one that matters.
+    return set_key(state, "inv_tags", tag_remove(ety_tags, ety_tags.length() - 1)) if ety_key == "Backspace"
+    return set_key(set_key(state, "inv_tag_open", false), "inv_tag_at", -1) if ety_key == "Escape"
+    return set_key(set_key(state, "inv_tag_at", tag_highlight(ety_words.length(), ety_at, 1)), "inv_tag_open", true) if ety_key == "ArrowDown"
+    return set_key(set_key(state, "inv_tag_at", tag_highlight(ety_words.length(), ety_at, -1)), "inv_tag_open", true) if ety_key == "ArrowUp"
+
+    return state
+  end
+
+  return set_key(state, "inv_tags", tag_remove(ety_tags, tag_at(props["id"]))) if name == "inv_tag_drop"
+
+  if name == "inv_tag_pick"
+    ety_tags = tag_remove(ety_tags, ety_tags.length() - 1) if ety_said
+    state = set_key(state, "inv_tags", tag_add(ety_tags, props["id"], {"max": ERP_TAG_MAX}))
+    state = set_key(state, "inv_tag_draft", "")
+    state = set_key(state, "inv_tag_at", -1)
+    return set_key(set_key(state, "inv_tag_focus", true), "inv_tag_open", true)
+  end
+
+  return set_key(state, "inv_tag_open", true) if name == "inv_tag_focus"
+
+  if name == "inv_tag_blur"
+    ety_grown = tag_add(ety_tags, ety_draft, {"max": ERP_TAG_MAX})
+    state = set_key(state, "inv_tags", ety_grown)
+    state = set_key(state, "inv_tag_said", ety_grown.length() > ety_tags.length())
+    state = set_key(state, "inv_tag_draft", "")
+    return set_key(set_key(state, "inv_tag_at", -1), "inv_tag_open", false)
+  end
+
+  state
+end
+
 def erp_say(state, message)
   set_key(set_key(state, "toast", message), "toast_tone", "success")
 end
@@ -2760,7 +2862,17 @@ def erp_inventory_defaults
     "short_sel": {"ids": [], "all": false, "scope": "short"},
     "stock_sel": {"ids": [], "all": false, "scope": "stock"},
     "inv_whs": {"ids": [], "all": false, "scope": "whs"},
-    "inv_whs_open": false
+    "inv_whs_open": false,
+    "inv_tags": ["Urgent"],
+    "inv_tag_draft": "",
+    "inv_tag_open": false,
+    # Where the arrows are in the panel. Not a selection: nothing is chosen
+    # until Enter or a click, and -1 means Enter commits what was typed.
+    "inv_tag_at": -1,
+    # One batch's worth of "put the caret back", set by a click that stole it.
+    "inv_tag_focus": false,
+    # Whether the last blur turned the draft into a tag. See `erp_tag_event`.
+    "inv_tag_said": false
   }
 end
 
@@ -2915,6 +3027,13 @@ def gallery(event_data)
     "stock_order" => gallery_stock_order(state),
     "whs_toggle" => set_key(state, "inv_whs_open", !(state["inv_whs_open"] ?? false)),
     "whs_pick" => gallery_whs_pick(state, props["id"]),
+    "inv_tag_draft" => erp_tag_event(state, "inv_tag_draft", params, props),
+    "inv_tag_commit" => erp_tag_event(state, "inv_tag_commit", params, props),
+    "inv_tag_key" => erp_tag_event(state, "inv_tag_key", params, props),
+    "inv_tag_drop" => erp_tag_event(state, "inv_tag_drop", params, props),
+    "inv_tag_pick" => erp_tag_event(state, "inv_tag_pick", params, props),
+    "inv_tag_focus" => erp_tag_event(state, "inv_tag_focus", params, props),
+    "inv_tag_blur" => erp_tag_event(state, "inv_tag_blur", params, props),
     # Reports: the inline pickers, and the handbook.
     "cal_nav" => set_key(state, "cal_month", month_shift(state["cal_month"], props["delta"])),
     "cal_pick" => set_key(state, "cal_date", props["date"]),

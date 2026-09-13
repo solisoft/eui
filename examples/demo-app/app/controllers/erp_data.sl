@@ -17,6 +17,22 @@ ERP_DIGITS = "0123456789"
 
 ERP_WAREHOUSES = ["Lyon", "Rotterdam", "Katowice"]
 
+# What a purchase order has been tagged with before. A tag field offers these
+# and takes anything else typed, which is the whole difference between it and
+# the `multi_select` standing beside it in the same card.
+ERP_TAGS = [
+  "Urgent",
+  "Backorder",
+  "Consignment",
+  "Fragile",
+  "Hazardous",
+  "Oversize",
+  "Prepaid",
+  "Returnable",
+  "Sample",
+  "Temperature-controlled"
+]
+
 ERP_STATUSES = ["Draft", "Confirmed", "Picked", "Invoiced", "Late"]
 
 ERP_CHANNELS = ["Web", "Phone", "EDI", "Rep"]
