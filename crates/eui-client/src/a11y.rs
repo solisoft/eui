@@ -474,11 +474,7 @@ impl Driver {
             // and it is the ordinary case, since the panel is built and torn
             // down as it opens and shuts.
             if let Some(key) = at.active_descendant.and_then(|x| node.prop(x)).and_then(str_of) {
-                a.active_descendant = session
-                    .atom_id(key)
-                    .and_then(|k| session.lookup_key(k))
-                    .filter(|t| layout.rect(*t).is_some() && !layout.is_virtual(*t))
-                    .map_or(0, id_of);
+                a.active_descendant = session.atom_id(key).and_then(|k| session.lookup_key(k)).filter(|t| layout.rect(*t).is_some() && !layout.is_virtual(*t)).map_or(0, id_of);
             }
             // Unavailable: it keeps its role and its name, and accepts nothing.
             if a.state.disabled {

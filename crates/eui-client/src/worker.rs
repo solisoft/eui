@@ -1160,7 +1160,20 @@ fn get_access(r: &mut R<'_>) -> Wire<AccessSnapshot> {
         // the stream without a compile error.
         let active_descendant = r.u64()?;
         let state = get_state(r)?;
-        nodes.push(AccessNode { id, role, bounds, label, value, click: actions & 1 != 0, focus: actions & 2 != 0, move_prev: actions & 4 != 0, move_next: actions & 8 != 0, children, active_descendant, state });
+        nodes.push(AccessNode {
+            id,
+            role,
+            bounds,
+            label,
+            value,
+            click: actions & 1 != 0,
+            focus: actions & 2 != 0,
+            move_prev: actions & 4 != 0,
+            move_next: actions & 8 != 0,
+            children,
+            active_descendant,
+            state,
+        });
     }
     Ok(AccessSnapshot { nodes, focus: r.u64()?, scale: r.f32()? })
 }
@@ -2434,6 +2447,11 @@ mod tests {
                     move_prev: false,
                     move_next: false,
                     children: vec![],
+                    // Non-zero on one node and 0 on the other, so the round
+                    // trip covers a set the field is on *and* the absent
+                    // case — a dropped field would survive a fixture that
+                    // was 0 everywhere.
+                    active_descendant: 7,
                     state: AccessState::default(),
                 },
                 AccessNode {
@@ -2447,6 +2465,7 @@ mod tests {
                     move_prev: false,
                     move_next: false,
                     children: vec![1],
+                    active_descendant: 0,
                     state: AccessState::default(),
                 },
             ],
