@@ -165,6 +165,129 @@ fn a_handle_grabs_without_waiting_for_the_slop() {
     assert!(kinds(&out).contains(&EventKind::DragStart), "one pixel was enough: {:?}", kinds(&out));
 }
 
+// ------------------------------------------------------------- the ghost
+
+const A_GHOST: u32 = 30;
+const S_HIDDEN: u32 = 4;
+const S_SHOWN: u32 = 5;
+
+/// One draggable row with a grip, and the ghost 06 §6.3 describes: an
+/// `overlay` at `position: pointer`, drawn hidden and revealed by the
+/// `drag_start` handler's own local chunk — which is what the kanban does.
+///
+/// `hears_drop` is whether the column carries a `drop` handler at all. Without
+/// one the gesture ends with nothing emitted, which is the case the reveal
+/// used to be stranded by.
+fn ghosted(hears_drop: bool) -> Driver {
+    let col = StyleRecord { display: Display::Column, ..Default::default() };
+    let row = StyleRecord { display: Display::Row, height: Dim::Px(ROW_H as u16), ..Default::default() };
+    let grip = StyleRecord { width: Dim::Px(20), height: Dim::Px(20), ..Default::default() };
+    let hidden = StyleRecord { display: Display::None, position: Position::Pointer, ..Default::default() };
+    let shown = StyleRecord { display: Display::Row, position: Position::Pointer, width: Dim::Px(60), height: Dim::Px(20), ..Default::default() };
+
+    let mut tree = Subtree::default();
+    tree.props.push((A_ACCEPTS, Value::Str("task".into())));
+    tree.handlers.push((EventKind::DragOver, Handler::Server(A_OVER)));
+    if hears_drop {
+        tree.handlers.push((EventKind::Drop, Handler::Server(A_DROP)));
+    }
+    let col_handlers = if hears_drop { 2 } else { 1 };
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, col_handlers), child_count: 1 });
+
+    tree.props.push((A_DRAG, Value::Str("task".into())));
+    // The grab reveals this row's own ghost and *then* tells the server —
+    // `LocalThenServer`, so the chunk's effects are provisional (07 §6).
+    tree.handlers.push((EventKind::DragStart, Handler::LocalThenServer { chunk: 1, name: A_GRAB }));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 10, style: 2, key: A_TASK + 1, text: None, props: (1, 1), handlers: (col_handlers, 1), child_count: 2 });
+    tree.props.push((A_HANDLE, Value::Bool(true)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 11, style: 3, key: 0, text: None, props: (2, 1), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 12, style: S_HIDDEN, key: A_GHOST, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+
+    let ops = vec![
+        Op::DefAtom { id: A_DRAG, value: "drag".into() },
+        Op::DefAtom { id: A_ACCEPTS, value: "accepts".into() },
+        Op::DefAtom { id: A_HANDLE, value: "drag_handle".into() },
+        Op::DefAtom { id: A_GRAB, value: "grabbed".into() },
+        Op::DefAtom { id: A_OVER, value: "moved".into() },
+        Op::DefAtom { id: A_DROP, value: "dropped".into() },
+        Op::DefAtom { id: A_TASK + 1, value: "task-1".into() },
+        Op::DefAtom { id: A_GHOST, value: "ghost".into() },
+        Op::DefStyle { id: 1, record: col },
+        Op::DefStyle { id: 2, record: row },
+        Op::DefStyle { id: 3, record: grip },
+        Op::DefStyle { id: S_HIDDEN, record: hidden },
+        Op::DefStyle { id: S_SHOWN, record: shown },
+        // `ghost.style = @shown`.
+        Op::DefChunkBytes { id: 1, bytes: eui_vm::Asm::new(1).set_style(A_GHOST, S_SHOWN).ret() },
+        Op::Mount(tree),
+    ];
+
+    let mut d = Driver::new(400.0, 600.0, 1.0, 0);
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 600);
+    d
+}
+
+/// The style the ghost is wearing now.
+fn ghost_style(d: &Driver) -> Option<u32> {
+    d.session().node(d.session().lookup(12)?).map(|n| n.style)
+}
+
+/// 06 §6.3: the `drag_start` chunk reveals what the hand carries, and the end
+/// of the gesture is what puts it away.
+///
+/// A tap on a grip is a whole drag — a handle crosses no slop (§6.1 step 2),
+/// and on a touch screen the lift itself carries the move that grabs. Until
+/// the reveal was taken back here it was taken back nowhere: the only undo a
+/// provisional change had was an incoming server batch, and a drop that
+/// changes nothing the server draws sends none.
+#[test]
+fn the_lift_takes_back_what_the_grab_revealed() {
+    let mut d = ghosted(true);
+    assert_eq!(ghost_style(&d), Some(S_HIDDEN), "the ghost starts hidden");
+
+    let at = centre(&mut d, 11);
+    let mut out = press_and_move(&mut d, at, (at.0 + 1.0, at.1 + 1.0));
+    assert!(kinds(&out).contains(&EventKind::DragStart), "grabbed: {:?}", kinds(&out));
+    assert_eq!(ghost_style(&d), Some(S_SHOWN), "and the chunk revealed the ghost");
+
+    out.extend(d.input(Input::PointerUp(0)));
+    assert!(kinds(&out).contains(&EventKind::Drop), "dropped: {:?}", kinds(&out));
+    assert_eq!(ghost_style(&d), Some(S_HIDDEN), "and the ghost went with the lift, without waiting for a batch");
+}
+
+/// The same, for the exit where the drag ends and **nothing at all is
+/// emitted** — here because no ancestor of the target carries a `drop`
+/// handler. There is then no round trip to hope a batch from, so a reveal
+/// left standing would follow the pointer for the rest of the session.
+#[test]
+fn a_drag_that_tells_nobody_still_puts_the_ghost_away() {
+    let mut d = ghosted(false);
+    let at = centre(&mut d, 11);
+    let mut out = press_and_move(&mut d, at, (at.0 + 1.0, at.1 + 1.0));
+    assert_eq!(ghost_style(&d), Some(S_SHOWN), "revealed: {:?}", kinds(&out));
+
+    out.extend(d.input(Input::PointerUp(0)));
+    assert!(!kinds(&out).contains(&EventKind::Drop), "nobody heard the drop: {:?}", kinds(&out));
+    assert_eq!(ghost_style(&d), Some(S_HIDDEN), "and the ghost still went away");
+}
+
+/// A cancel is an ordinary end (§6.1 step 5), and takes the reveal with it.
+#[test]
+fn escape_takes_the_ghost_away_too() {
+    let mut d = ghosted(true);
+    let at = centre(&mut d, 11);
+    let _ = press_and_move(&mut d, at, (at.0 + 1.0, at.1 + 1.0));
+    assert_eq!(ghost_style(&d), Some(S_SHOWN), "revealed");
+
+    let out = d.input(Input::Key { key: "Escape".into(), modifiers: 0, down: true });
+    let drops: Vec<_> = events(&out).into_iter().filter(|(k, ..)| *k == EventKind::Drop).collect();
+    assert_eq!(drops.len(), 1, "cancelled with a drop: {:?}", kinds(&out));
+    assert_eq!(slot(&drops[0].2), -1, "carrying the sentinel slot");
+    assert_eq!(ghost_style(&d), Some(S_HIDDEN), "and the ghost went with it");
+}
+
 // --------------------------------------------------------------- the slot
 
 /// §6.1 step 4: the drop names the slot the hand was over, counted among the

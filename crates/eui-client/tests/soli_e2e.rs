@@ -2984,6 +2984,69 @@ fn a_card_is_carried_from_one_column_to_another() {
     assert!(said.contains("Backlog, 3 of 4"), "the third of four, where the hand was: {said:?}");
 }
 
+/// Spec 06 §6.3 against the real board: a *tap* on a grip leaves nothing
+/// behind.
+///
+/// A grip crosses no slop (§6.1 step 2), so a press on one and a lift from the
+/// same spot is a whole drag — and on a touch screen it is the ordinary way to
+/// miss, because the lift itself carries the move that grabs. The grab reveals
+/// the ghost through its own local chunk, and until the end of the gesture
+/// took that back the only undo it had was an incoming batch. Here the card
+/// does not move, so nothing on the board changes; on a phone, with no
+/// `Escape`, nothing to unfocus and no pointer to move away, the ghost stayed
+/// under the hand for the rest of the session.
+///
+/// The assertion that matters is made **before** the server answers: this is
+/// the client's own tidying, not a round trip's.
+#[test]
+fn a_tap_on_a_grip_leaves_no_ghost_behind() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1000.0, 900.0);
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+    let _ = d.paint(1000, 3600);
+
+    let keyed = |d: &Driver, key: &str| d.session().atom_id(key).and_then(|a| d.session().lookup_key(a)).unwrap_or_else(|| panic!("a node keyed {key}"));
+    let card = keyed(&d, "t1");
+    // The grip is the one node under the card carrying `drag_handle` (03 §3.4).
+    let handle = d.session().atom_id("drag_handle").expect("the board has grips");
+    let grip = d.session().preorder(card).find(|n| d.session().node(*n).and_then(|x| x.prop(handle)).is_some()).expect("the card has a grip");
+    let at = d.layout().rect(grip).expect("the grip is laid out");
+    let (px, py) = (at.x + at.w / 2.0, at.y + at.h / 2.0);
+
+    for f in d.input(Input::PointerMove(px, py)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    for f in d.input(Input::PointerDown(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // The lift's own move, which is where a finger's grab actually happens.
+    for f in d.input(Input::PointerMove(px, py)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 3600);
+    assert!(d.layout().rect(keyed(&d, "gh_t1")).is_some(), "the grip grabbed at once and the chunk revealed the ghost");
+
+    for f in d.input(Input::PointerUp(0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    let _ = d.paint(1000, 3600);
+    assert!(d.layout().rect(keyed(&d, "gh_t1")).is_none(), "and the lift took it back, without waiting for an answer");
+
+    // The server hears the gesture out, and the board is where it was.
+    for f in d.take_pending() {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| d.session().text_of(keyed(d, "kan_say")).is_some_and(|t| t.contains("Reconcile October stock")));
+    let _ = d.paint(1000, 3600);
+    assert!(d.layout().rect(keyed(&d, "gh_t1")).is_none(), "and it stays gone once the answer lands");
+}
+
 /// A word typed into the tag field becomes a chip, and `Backspace` on the
 /// empty field takes the last one back.
 ///

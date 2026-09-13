@@ -356,7 +356,13 @@ folder into itself is not a move, and a panel that follows the pointer
   (spec 04 §5), which the client keeps under the hand without laying anything
   out again, revealed by the `drag_start` handler's own local chunk so that it
   is up before the server has answered. A chunk cannot read the pointer and
-  does not need to: it reveals, and the client places.
+  does not need to: it reveals, and the client places. **The end of the gesture
+  takes that reveal back.** A local-then-server chunk's effects are provisional
+  (spec 07 §6), and the client MUST undo the ones its own `drag_start` made
+  when the drag ends, by either route of §6.1 and whether or not anything was
+  emitted — a drop with no handler above it, or one the server answers with no
+  diff, sends back no batch, and an application that had to wait for one would
+  leave the ghost under the hand for ever.
 - **It does not announce.** Announcing is prose, prose is content, and content
   is the server's. What the client owes is that focus stays on the moved node,
   that `pos_in_set` and `set_size` (spec 03 §6.1) stay true, and that the node

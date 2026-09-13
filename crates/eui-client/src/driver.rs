@@ -854,6 +854,11 @@ pub struct Driver {
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     /// Effects of local-then-server handlers awaiting the server's answer.
     provisional: Vec<Undo>,
+    /// Where in `provisional` the running drag's own `drag_start` began, so
+    /// the end of the gesture can take back exactly what the grab put up —
+    /// the ghost of 06 §6.3 — and leave anyone else's alone. `None` when no
+    /// drag is grabbed, and whenever a batch has already reverted the lot.
+    drag_provisional: Option<usize>,
     granted: u32,
     /// The node a dragged file is currently over, by id — so that leaving
     /// it can be reported once, and entering another lights only the new
@@ -1048,6 +1053,7 @@ impl Driver {
             clipboard: None,
             chunks: HashMap::new(),
             provisional: Vec::new(),
+            drag_provisional: None,
             granted: granted & caps::ALL,
             drop_over: None,
             welcomed: false,
@@ -1178,6 +1184,7 @@ impl Driver {
         self.preedit.clear();
         self.chunks.clear();
         self.provisional.clear();
+        self.drag_provisional = None;
         self.anims.clear();
         self.scroll_anim = None;
         self.windows.clear();
@@ -1964,6 +1971,11 @@ impl Driver {
         let (x, y) = (self.pointer.x, self.pointer.y);
         let payload = self.button_payload(src, EventKind::DragStart, x, y, 0);
         trace(|| format!("drag: grabbed node {:?}", self.session.node(src).map(|n| n.id)));
+        // Where this gesture's own provisional changes begin. 06 §6.3 says the
+        // `drag_start` handler's local chunk is what reveals the ghost; what it
+        // does not say, and what nothing did, is that the end of the gesture
+        // puts it away. See `finish_drag`.
+        self.drag_provisional = Some(self.provisional.len());
         self.emit(src, EventKind::DragStart, payload)
     }
 
@@ -2012,6 +2024,24 @@ impl Driver {
             return Vec::new();
         }
         self.redraw = true;
+        // The hand is empty: take back what the grab's own chunk put up.
+        //
+        // 06 §6.3 gives the reveal to the `drag_start` handler and never says
+        // who takes it back, and until now nobody did — the only undo a
+        // provisional change had was an incoming server batch (07 §6), so the
+        // ghost stayed up until one arrived. A drag can end without one: two
+        // of the returns below emit nothing at all, a target with no `drop`
+        // handler above it emits nothing, and a drop that changes nothing the
+        // server draws is answered with no diff. On a desktop the next thing
+        // that produced a batch cleared it; on a phone, where there is no
+        // `Escape`, nothing to unfocus and no pointer to move away, the ghost
+        // simply stayed, following the last touch for the rest of the session.
+        //
+        // Before the returns, because every way out of a gesture is the end of
+        // one. Only this gesture's own changes go (see `begin_drag`).
+        if let Some(mark) = self.drag_provisional.take() {
+            self.revert_provisional_from(mark);
+        }
         // Whatever the hand was dragging the view along by, it has stopped.
         // The `scroll` that owes its landing goes with the drop.
         let mut out = match self.pointer.autoscroll.take() {
@@ -2412,10 +2442,22 @@ impl Driver {
     /// since the last one. Put the old values back, newest first, before
     /// the batch applies — its ops are relative to the tree the server has.
     fn revert_provisional(&mut self) {
-        let changes = std::mem::take(&mut self.provisional);
-        if changes.is_empty() {
+        // Nothing of the drag's is left to take back once the lot has gone,
+        // and a mark kept past that would point into somebody else's changes.
+        self.drag_provisional = None;
+        self.revert_provisional_from(0);
+    }
+
+    /// The same, for the changes made since `mark` only.
+    ///
+    /// The end of a drag takes back what its own `drag_start` put up (06 §6.3)
+    /// and must leave every other outstanding chunk exactly where it is, so it
+    /// cannot use the whole-vector form above.
+    fn revert_provisional_from(&mut self, mark: usize) {
+        if mark >= self.provisional.len() {
             return;
         }
+        let changes = self.provisional.split_off(mark);
         for change in changes.into_iter().rev() {
             match change {
                 Undo::Style(ix, style) => {
