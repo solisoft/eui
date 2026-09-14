@@ -148,7 +148,7 @@ describe("Meridian's Files section") do
   # The builders themselves — `erp_files_section` and the two nodes that
   # carry `pick` and `drop` — cannot be reached from here: they live in
   # app/controllers, which a spec does not load, and they call the catalogue
-  # in eui_builders.sl, which does not either. `split_spec.sl` copies its
+  # in the eui_builders files, which it does not either. `split_spec.sl` copies its
   # subject in to get around that; this file will not, because a copy drifts.
   # They are checked by rendering the component instead — see
   # `snapshot --soli`, which mounts it for real and draws it off-screen.

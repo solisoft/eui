@@ -4,7 +4,7 @@
 #
 # The definitions are copied in by `tools/sync_split_spec.py`.
 
-# ---- copied from app/controllers/eui_builders.sl, do not edit ----
+# ---- copied from the catalogue, do not edit ----
 
 def combo_filter(options, query)
   said = (query ?? "").strip().downcase()

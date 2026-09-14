@@ -15,7 +15,7 @@
 # bare script. When the catalogue becomes a package this file imports it
 # instead and the copy goes away.
 
-# ---- copied from app/controllers/eui_builders.sl, do not edit ----
+# ---- copied from the catalogue, do not edit ----
 
 def selection(ids = [], scope = "")
   {"ids": ids, "all": false, "scope": scope}

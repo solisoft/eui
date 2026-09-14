@@ -846,8 +846,9 @@ catalogue implementation MUST:
   event name.
 
 The reference catalogue ships with `examples/demo-app` as
-`app/controllers/eui_builders.sl`, and `soli new <app> --eui` writes that
-same file into a new application beside a component that uses it. Its
+`app/controllers/eui_builders.sl` and its `_forms`, `_charts` and `_feed`
+companions, and `soli new <app> --eui` writes those same files into a new
+application beside a component that uses them. Its
 families: actions (button variants,
 split button, segmented control, toggle group, menu, context menu, command palette,
 popconfirm, toolbar), input (field, password field, currency field, checkbox, switch, select,

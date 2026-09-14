@@ -32,7 +32,7 @@ examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table, a gallery and Atrium —
                   a team messenger — as a Soli app; the catalogue (buttons to
-                  date pickers to charts) is app/controllers/eui_builders.sl
+                  date pickers to charts) is app/controllers/eui_builders*.sl
   snapshot        render the counter, or any live Soli component, off-screen
 doc/         the documentation site, itself a Soli app
 www/         the public site, itself a Soli app
@@ -191,9 +191,12 @@ EUI_SOLI_BIN=../lang/target/debug/soli cargo test -p eui-client --test soli_e2e
 A new application starts with the catalogue in it:
 
 ```sh
-soli new my-app --eui     # + app/controllers/eui_builders.sl and a component
+soli new my-app --eui     # + app/controllers/eui_builders*.sl and a component
 ```
 
-That copy comes from `examples/demo-app/app/controllers/eui_builders.sl`,
-which is where the catalogue is edited; `scripts/sync-catalogue.sh` puts it
-in the language repository, and `--check` says whether the two have drifted.
+Those copies come from `examples/demo-app/app/controllers/`, where the
+catalogue is edited. It is four files — `eui_builders.sl` and its `_forms`,
+`_charts` and `_feed` halves — cut where the calls stopped crossing, and they
+load into one namespace in no particular order. `scripts/sync-catalogue.sh`
+puts them in the language repository, and `--check` says whether they have
+drifted.

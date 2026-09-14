@@ -4,7 +4,7 @@
 # nothing, or dragging a scrollbar or selecting text inside a panel would
 # move the divider instead.
 
-# ---- copied from app/controllers/eui_builders.sl, do not edit ----
+# ---- copied from the catalogue, do not edit ----
 
 def split_span(extent, bar)
   span = extent - bar

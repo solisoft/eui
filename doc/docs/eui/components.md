@@ -1,9 +1,9 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders.sl` — 260 functions, all of
-> them plain Soli, none of them native, and what `soli new <app> --eui`
-> writes into a new application — and the server that reads what they
+> `examples/demo-app/app/controllers/eui_builders*.sl` — 343 functions over
+> four files, all of them plain Soli, none of them native, and what
+> `soli new <app> --eui` writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
 

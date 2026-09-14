@@ -4,7 +4,7 @@
 #
 # Copied in by `tools/sync_split_spec.py`.
 
-# ---- copied from app/controllers/eui_builders.sl, do not edit ----
+# ---- copied from the catalogue, do not edit ----
 
 def otp_clean(text, o = {})
   n = o["digits"] ?? 6

@@ -14,7 +14,7 @@
 # imported, because `app/controllers` is loaded by the server and not by a
 # bare script.
 
-# ---- copied from app/controllers/eui_builders.sl, do not edit ----
+# ---- copied from the catalogue, do not edit ----
 
 def tag_add(tags, text, o = {})
   said = (text ?? "").strip()
