@@ -61,38 +61,24 @@ def erp_files_add(state)
   keyed("erp_files_add", built)
 end
 
-# The drop target. `drop` is the same prop as `pick` and answers the same
-# `file_pick`, so a file arrives identically whether it was chosen in the
-# dialog or let go over this box (03 §3.2). `pick` rides along so that
+# The drop target. `file_drop` is the catalogue widget for 03 §3.2: `drop`
+# is the same prop as `pick`, so a file arrives identically whether it was
+# chosen in the dialog or let go over this box. `pick` rides along so that
 # clicking it opens the dialog too — one box, both gestures.
-#
-# `file_drag` is only a report: it says a file is over the box, so the box
-# can show it would take it. It arrives when the node under the file
-# changes, not once a frame.
 def erp_files_drop(state, lay)
-  over = state["file_over"] ?? false
-  resting = {
-    "display": "column", "gap": 1, "align": "center", "justify": "center",
-    "width": "100%", "pad": 5, "radius": 3,
-    "border": 1,
-    "border_color": over ? "accent.base" : "border.subtle",
-    "bg": over ? "accent.hover" : "surface.sunken",
-    "transition": "fast"
-  }
-  built = {
-    "k": "box",
-    "s": resting,
-    "p": {
-      "drop": [ERP_FILES_ACCEPT, ERP_FILES_PICK_FLAGS, ERP_FILES_MAX],
-      "pick": [ERP_FILES_ACCEPT, ERP_FILES_PICK_FLAGS, ERP_FILES_MAX]
-    },
-    "c": [
-      text(over ? "Let go to add them" : "Drop files here", {"weight": "semibold"}),
-      muted(lay["wide"] ? "or use Add files · " + erp_files_size(ERP_FILES_MAX) + " each" : "or use Add files")
-    ]
-  }
-  built["on"] = {"file_pick": "file_pick", "file_drag": "file_drag"}
-  keyed("erp_files_drop", built)
+  file_drop(
+    "Drop files here",
+    ERP_FILES_ACCEPT,
+    "file_pick",
+    {
+      "key": "erp_files_drop",
+      "over": state["file_over"] == true,
+      "on_drag": "file_drag",
+      "flags": ERP_FILES_PICK_FLAGS,
+      "max": ERP_FILES_MAX,
+      "hint": lay["wide"] ? "or use Add files · " + erp_files_size(ERP_FILES_MAX) + " each" : "or use Add files"
+    }
+  )
 end
 
 # Why a file did not arrive. A refusal the person can read beats a dialog

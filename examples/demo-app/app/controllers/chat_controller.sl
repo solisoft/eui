@@ -2590,8 +2590,9 @@ end
 # ---- attachments and links ----------------------------------------------
 
 def slurp_b64(path)
-  chat_at = uploaded_file_at(path) rescue null
-  chat_at.nil? ? null : chat_at["data"]
+  # Not `chat_at`: it is a function in chat_sample.sl, and this would rebind it.
+  found = uploaded_file_at(path) rescue null
+  found.nil? ? null : found["data"]
 end
 
 # The bytes a message's attachment field holds, base64, or `null`.

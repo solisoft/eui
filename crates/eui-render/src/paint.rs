@@ -1007,6 +1007,9 @@ impl Painter<'_, '_> {
         let Some(text) = self.scene.session.text_of(ix) else {
             return;
         };
+        let secret = self.scene.session.is_secret(ix);
+        let masked = secret.then(|| eui_tree::secret_display(text));
+        let shown = masked.as_deref().unwrap_or(text);
         let scale = self.scene.scale;
         let editing = self.scene.editing.filter(|e| e.node == ix);
         // The quads of last frame, if this node did not change and paints
@@ -1035,7 +1038,7 @@ impl Painter<'_, '_> {
             }
         }
         let max_w = (rect.w - style.inset_h()).max(0.0);
-        let shaped = self.scene.text.shape(text, style.font, Some(max_w), style.line_clamp);
+        let shaped = self.scene.text.shape(shown, style.font, Some(max_w), style.line_clamp);
         // An edited field clips to its box and scrolls its text to the caret.
         let saved = self.clip;
         if editing.is_some() {

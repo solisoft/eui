@@ -101,6 +101,12 @@ const USERS: Icon = &[
 /// A carton seen from the front, with the seam down it: stock on a shelf.
 const BOX: Icon = &[&[(3.5, 7.5), (12.0, 3.5), (20.5, 7.5), (20.5, 16.5), (12.0, 20.5), (3.5, 16.5), (3.5, 7.5)], &[(3.5, 7.5), (12.0, 11.5), (20.5, 7.5)], &[(12.0, 11.5), (12.0, 20.5)]];
 
+/// A folder seen from the front, its tab raised on the left: files. Drawn
+/// wide where `doc` is tall, so the two do not read as the same rectangle in
+/// a rail that carries both — the tab is a three-unit rise, which is the
+/// least that survives 16 px.
+const FOLDER: Icon = &[&[(3.5, 19.0), (3.5, 5.0), (9.5, 5.0), (11.5, 8.0), (20.5, 8.0), (20.5, 19.0), (3.5, 19.0)]];
+
 /// Three bars standing on a floor: a report. The bars rise left to right so
 /// the shape has a direction, which a report generally does.
 const CHART: Icon = &[&[(4.0, 20.0), (20.5, 20.0)], &[(7.5, 20.0), (7.5, 14.0)], &[(12.0, 20.0), (12.0, 9.5)], &[(16.5, 20.0), (16.5, 5.0)]];
@@ -152,6 +158,7 @@ pub fn icon(name: &str) -> Option<Icon> {
         "doc" | "orders" => DOC,
         "users" | "customers" => USERS,
         "box" | "inventory" => BOX,
+        "folder" | "files" => FOLDER,
         "chart" | "reports" => CHART,
         "sliders" | "settings" => SLIDERS,
         _ => return None,
@@ -194,6 +201,8 @@ pub const NAMES: &[&str] = &[
     "customers",
     "box",
     "inventory",
+    "folder",
+    "files",
     "chart",
     "reports",
     "sliders",

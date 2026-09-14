@@ -512,6 +512,20 @@ fn media_and_wakers_are_kept_as_nodes_come_and_go() {
     assert_eq!(s.atoms().spans, None);
     one(&mut s, 6, Op::DefAtom { id: 40, value: "spans".into() }).unwrap();
     assert_eq!(s.atoms().spans, Some(40));
+    one(&mut s, 7, Op::DefAtom { id: 41, value: "secret".into() }).unwrap();
+    assert_eq!(s.atoms().secret, Some(41));
+}
+
+#[test]
+fn secret_offsets_round_trip_per_scalar_not_per_byte() {
+    let text = "café"; // 5 bytes, 4 scalars
+    assert_eq!(eui_tree::secret_display(text).chars().count(), 4);
+    assert_eq!(eui_tree::secret_offset(text, 0), 0);
+    assert_eq!(eui_tree::secret_offset(text, 3), 3 * eui_tree::SECRET_MARK.len_utf8());
+    assert_eq!(eui_tree::secret_offset(text, 5), 4 * eui_tree::SECRET_MARK.len_utf8());
+    let end = eui_tree::secret_offset(text, text.len());
+    assert_eq!(eui_tree::secret_unoffset(text, end), text.len());
+    assert_eq!(eui_tree::secret_unoffset(text, 0), 0);
 }
 
 /// Moving a child between parents is a removal and an insertion (02 §5), and

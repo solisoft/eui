@@ -264,6 +264,14 @@ no shader, no tessellator and no allocation beyond its quads.
   caret in view. A paste is the person's act on their own clipboard;
   `clipboard.read` (08 §7) governs reads the application would initiate.
 
+- An `input` carrying **`secret: true`** is a password field. The client
+  paints one mark per character (`•`), measures that string, and copies
+  nothing from a selection — `Ctrl+C` is consumed and the clipboard is left
+  alone; `Ctrl+X` deletes and still copies nothing. The value on the wire,
+  and in the node's text, is what was typed. A `textarea` MUST ignore the
+  prop: a secret that wraps is not a password. An assistive technology is
+  handed a password field whose value is empty, never the text.
+
 ### 3.1 What a node may claim of the keyboard
 
 Four props, read by the client, for the things a server cannot do because it
@@ -579,8 +587,8 @@ The reference catalogue ships with `examples/demo-app` as
 `app/controllers/eui_builders.sl`, and `soli new <app> --eui` writes that
 same file into a new application beside a component that uses it. Its
 families: actions (button variants,
-segmented control, menu, toolbar), input (field, checkbox, switch, select,
-multi select, slider, date and time, file drop, form), structure (card, panel, sheet,
+segmented control, menu, context menu, command palette, toolbar), input (field, password field, checkbox, switch, select,
+combobox, multi select, slider, date and time, file drop, form), structure (card, panel, sheet,
 dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 grid, multi-select list, list item, chart, stat, code block, markdown), feedback (toast,
@@ -731,7 +739,7 @@ The role names: `button`, `link`, `check_box`, `radio`, `radio_group`,
 `combo_box`, `list_box`, `option`, `slider`, `spin_button`, `progress`,
 `dialog`, `alert_dialog`, `alert`, `status`, `tooltip`, `tree`, `tree_item`,
 `toolbar`, `navigation`, `table`, `row`, `cell`, `grid`, `grid_cell`,
-`column_header`, `heading`, `separator`, `group`, `label`, `image`.
+`column_header`, `heading`, `separator`, `password`, `group`, `label`, `image`.
 
 Three rules follow from the table and are normative:
 

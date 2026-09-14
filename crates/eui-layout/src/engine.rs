@@ -550,7 +550,9 @@ impl Layout {
         let (content, baseline) = match kind {
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea => {
                 let text = f.session.text_of(ix).unwrap_or("");
-                let tm = f.text.measure(text, st.font, inner_w.bound(), st.line_clamp);
+                let masked = f.session.is_secret(ix).then(|| eui_tree::secret_display(text));
+                let shown = masked.as_deref().unwrap_or(text);
+                let tm = f.text.measure(shown, st.font, inner_w.bound(), st.line_clamp);
                 let mut size = Size::new(tm.width, tm.height);
                 if kind != NodeKind::Text {
                     // An editable field is at least one control tall and never

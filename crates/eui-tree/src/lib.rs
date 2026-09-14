@@ -30,4 +30,7 @@ pub use arena::{dirty, Node, NodeIx};
 pub use error::{ApplyError, Result, Table};
 pub use eui_proto::Batch;
 pub use limits::Limits;
-pub use session::{same_layout, Chunk, Preorder, Session, WellKnown};
+pub use session::{same_layout, secret_display, secret_offset, secret_unoffset, Chunk, Preorder, Session, WellKnown};
+
+/// One disc per Unicode scalar, so `i` and `W` occupy the same width.
+pub const SECRET_MARK: char = '•';

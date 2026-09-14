@@ -2499,6 +2499,106 @@ fn atrium_keeps_a_picture_someone_attached() {
     // case only.
 }
 
+/// Hovering a file card lights it and leaves the grid where it was.
+///
+/// The cards are tiles of a wrapping row: each gives up its own width for a
+/// flex basis, and each swaps in a whole style of its own on `pointer_enter`.
+/// That style was built from the card *before* it was tiled, so it still
+/// carried `width: 100%` — the first hover dropped the basis, the card grew
+/// to the width of the row, and the two cards beside it were pushed onto the
+/// next line under the pointer. What the rect proves is that it did not move.
+#[test]
+fn hovering_a_file_card_lights_it_without_moving_the_grid() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1400.0, 900.0);
+    for f in d.input(Input::Resized(1400.0, 3600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    goto(&mut d, &conn, &wake, "Files", "Drop files here");
+    let _ = d.paint(1400, 3600);
+
+    // The card is the nearest ancestor of the name that answers a click,
+    // which is the node the hover is declared on.
+    let name = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("DWG-2231-flange-DN80.pdf")).expect("the first seeded file");
+    let mut card = name;
+    while d.session().handler(card, EventKind::Click).is_none() {
+        let up = d.session().node(card).map(|n| n.parent).expect("a parent");
+        assert_ne!(up, card, "no card around the name");
+        card = up;
+    }
+    let before = d.layout().rect(card).expect("the card is laid out");
+    // Its neighbour on the same line: the one that gets pushed off.
+    let other = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("DWG-2240-bracket.pdf")).expect("the second seeded file");
+    let beside = d.layout().rect(other).expect("laid out");
+
+    // Stand the pointer in the card, above its buttons, and let the style
+    // the local handler swaps in settle.
+    d.input(Input::PointerMove(before.x + before.w / 2.0, before.y + 20.0));
+    let mut clock = Instant::now();
+    for _ in 0..8 {
+        clock += Duration::from_millis(60);
+        d.tick(clock);
+        let _ = d.paint(1400, 3600);
+    }
+
+    let after = d.layout().rect(card).expect("still laid out");
+    assert_eq!((after.x, after.y, after.w, after.h), (before.x, before.y, before.w, before.h), "the hovered card moved or resized");
+    let beside_after = d.layout().rect(other).expect("still laid out");
+    assert_eq!((beside_after.x, beside_after.y), (beside.x, beside.y), "the card beside it was pushed");
+}
+
+/// A file held over the Files section's box, end to end.
+///
+/// That box is the one view in the application that declares `file_drag`,
+/// and a name only one side knows is not a box that fails to light — it is a
+/// section that never arrives. The server maps every name in a node's `on`
+/// before it will encode the node at all, so a Soli without `file_drag`
+/// answers the whole view with `EUI: unknown event 'file_drag'` and a 400,
+/// which is what an older server did here. Nothing caught it: the client
+/// knows the event (`files.rs`), the controller knows it (`files_spec.sl`),
+/// and nothing made the two meet over a wire.
+///
+/// So this walks to Files, holds a file over the box, and reads what the
+/// server sends back — held, it says it would take them; taken away, it goes
+/// back to asking.
+#[test]
+fn a_file_held_over_the_files_box_lights_it_and_taking_it_away_puts_it_out() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    // Without the grant the client reports no drag at all, and the box would
+    // sit there correctly doing nothing (03 §3.2).
+    let (mut d, conn, wake) = open_with(port, "gallery", 1000.0, 900.0, eui_proto::caps::FS_PICK);
+    for f in d.input(Input::Resized(1000.0, 3600.0, 1.0)) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // Arriving at all is half the test: on a server that does not know the
+    // name, this is where the section fails to mount.
+    goto(&mut d, &conn, &wake, "Files", "Drop files here");
+
+    // A point inside the box. The client hit-tests from there to the nearest
+    // node carrying `drop`, the way a window does with a file under the
+    // pointer, so the label's own middle is as good as the box's.
+    let _ = d.paint(1000, 3600);
+    let label = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("Drop files here")).expect("the box says what it is for");
+    let r = d.layout().rect(label).expect("the box is laid out");
+    let at = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+
+    let over = d.file_dragged(Some(at));
+    assert!(over.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::FileDrag)), "the client reports the file is over it: {over:?}");
+    for f in over {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "Let go to add them"));
+
+    for f in d.file_dragged(None) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    pump(&mut d, &conn, &wake, |d| texts(d, root(d)).iter().any(|t| t == "Drop files here"));
+}
+
 /// Spec 04 §6: writing a line into a room of four thousand messages costs a
 /// handful of ops, not a redraw of the room.
 ///

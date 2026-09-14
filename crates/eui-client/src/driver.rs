@@ -3699,11 +3699,14 @@ impl Driver {
         let rect = self.layout.rect(e)?;
         let style = eui_layout::Style::resolve(&self.session.style_of(e), &self.resolved);
         let text = self.session.text_of(e).unwrap_or("").to_owned();
+        let secret = self.session.is_secret(e);
+        let display = if secret { eui_tree::secret_display(&text) } else { text.clone() };
         let scroll_x = self.edits.get(&self.session.node(e)?.id).map_or(0.0, |ed| ed.scroll_x);
-        let shaped = self.text.shape(&text, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
+        let shaped = self.text.shape(&display, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
         let lx = x - (rect.x + style.border.l + style.padding.l) + scroll_x;
         let ly = y - (rect.y + style.border.t + style.padding.t);
-        Some(shaped.byte_at(lx, ly).min(text.len()))
+        let at = shaped.byte_at(lx, ly).min(display.len());
+        Some(if secret { eui_tree::secret_unoffset(&text, at) } else { at.min(text.len()) })
     }
 
     // -------------------------------------------------------------- files
@@ -4126,18 +4129,28 @@ impl Driver {
         let rect = self.layout.rect(f)?;
         let style = eui_layout::Style::resolve(&self.session.style_of(f), &self.resolved);
         let text = self.session.text_of(f).unwrap_or("").to_owned();
-        let shaped = self.text.shape(&text, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
+        let secret = self.session.is_secret(f);
+        let display = if secret { eui_tree::secret_display(&text) } else { text.clone() };
+        let shaped = self.text.shape(&display, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
         let pre = self.preedit.len();
         let id = self.session.node(f)?.id;
         let edit = self.edits.get_mut(&id)?;
         let shown = |o: usize| {
-            if o > edit.caret {
-                o.saturating_add(pre)
+            let at = if o > edit.caret { o.saturating_add(pre) } else { o };
+            if secret {
+                eui_tree::secret_offset(&text, at)
             } else {
-                o
+                at
             }
         };
-        let caret = edit.caret.saturating_add(pre);
+        let caret = {
+            let at = edit.caret.saturating_add(pre);
+            if secret {
+                eui_tree::secret_offset(&text, at)
+            } else {
+                at
+            }
+        };
         let inner_w = (rect.w - style.inset_h()).max(0.0);
         let cx = shaped.caret(caret).0;
         if cx - edit.scroll_x > inner_w {
@@ -4309,6 +4322,7 @@ impl Driver {
     fn edit_key(&mut self, f: NodeIx, key: &str, modifiers: u32) -> bool {
         let (shift, ctrl) = (modifiers & 1 != 0, modifiers & (2 | 8) != 0);
         let multiline = self.session.node(f).map(|n| n.kind) == Some(NodeKind::TextArea);
+        let secret = self.session.is_secret(f);
         let Some(edit) = self.edit_mut(f) else {
             return false;
         };
@@ -4323,6 +4337,7 @@ impl Driver {
         // arm that changes the value changes its length.
         let before = (edit.value.len(), edit.caret, edit.anchor);
         let mut copied = None;
+        let mut hid = false;
         match key {
             "Backspace" => edit.delete(false),
             "Delete" => edit.delete(true),
@@ -4363,13 +4378,19 @@ impl Driver {
             "c" | "C" if ctrl => {
                 let r = edit.selection();
                 if !r.is_empty() {
-                    copied = Some(edit.value[r].to_owned());
+                    if secret {
+                        hid = true;
+                    } else {
+                        copied = Some(edit.value[r].to_owned());
+                    }
                 }
             }
             "x" | "X" if ctrl => {
                 let r = edit.selection();
                 if !r.is_empty() {
-                    copied = Some(edit.value[r].to_owned());
+                    if !secret {
+                        copied = Some(edit.value[r].to_owned());
+                    }
                     edit.delete(false);
                 }
             }
@@ -4384,7 +4405,9 @@ impl Driver {
         // Nothing moved and nothing was taken: the key was one of ours by
         // name and none of ours in this position. Declining also skips the
         // invalidate, so a dead key no longer costs a frame.
-        if !moved && !took {
+        // A secret field still consumes copy: the key is ours, the clipboard
+        // is not.
+        if !moved && !took && !hid {
             return false;
         }
         self.show_edit(f);

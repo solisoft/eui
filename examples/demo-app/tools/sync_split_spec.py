@@ -42,6 +42,12 @@ SPECS = {
         "tag_suggest",
         "tag_highlight",
     ],
+    ROOT / "tests" / "combo_spec.sl": [
+        "combo_filter",
+        "command_row",
+        "command_match",
+        "tag_highlight",
+    ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",
         "split_sizes",

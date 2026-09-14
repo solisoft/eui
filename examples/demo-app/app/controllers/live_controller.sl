@@ -783,7 +783,7 @@ def gallery_doc(state)
       "on": {"click": "lazy_close"},
       "c": [text("Close", {"weight": "semibold"})]
     }],
-    {"width": doc_width}
+    {"width": doc_width, "on_close": "lazy_close", "props": {"id": "doc"}}
   )
 end
 
@@ -926,6 +926,8 @@ end
 # page moves under a header that stays.
 
 ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings"]
+ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"]
+ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
 ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Files": "folder", "Reports": "chart", "Settings": "sliders"}
@@ -980,12 +982,99 @@ def erp_topbar(state, lay)
     [icon_button("≡", "nav_toggle", {}, {"icon": "menu", "name": "Sections", "key": "erp_nav"}), crumbs]
   )
   tail = [
+    icon_button("⌘K", "palette_toggle", {}, {
+      "icon": "search",
+      "name": "Commands",
+      "key": "erp_palette",
+      "expanded": state["palette"] == true
+    }),
     segmented(["Day", "Week", "Month"], state["seg"], "seg"),
     theme_toggle(),
     account
   ]
   tail = [sized_input(state["search"] ?? "", "search", 200)].concat(tail) if lay["wide"]
   toolbar([head, spacer()].concat(tail))
+end
+
+# What the palette offers. Navigation first, then the two verbs the page
+# actually has. A command is an id the handler already knows.
+def erp_commands
+  ERP_SECTIONS.map(fn(s) {
+    {"id": "nav:" + s, "label": s, "group": "Go to", "hint": ""}
+  }).concat([
+    {"id": "export", "label": "Export orders", "group": "Orders", "hint": ""},
+    {"id": "order_new", "label": "New order", "group": "Orders", "hint": ""}
+  ])
+end
+
+def erp_palette_pick(state, id)
+  state = set_key(set_key(set_key(state, "palette", false), "palette_query", ""), "palette_at", -1)
+  return set_key(state, "section", id.substring(4, id.length())) if id.index_of("nav:") == 0
+  return erp_say(state, "Sixty-three orders exported") if id == "export"
+  return set_key(set_key(state, "nf_open", true), "nf_tried", false) if id == "order_new"
+
+  state
+end
+
+def erp_palette_key(state, params)
+  key = (params["payload"] ?? [""])[0]
+  words = command_match(erp_commands(), state["palette_query"] ?? "")
+  return set_key(state, "palette_at", tag_highlight(words.length(), state["palette_at"] ?? -1, 1)) if key == "ArrowDown"
+  return set_key(state, "palette_at", tag_highlight(words.length(), state["palette_at"] ?? -1, -1)) if key == "ArrowUp"
+  return set_key(set_key(state, "palette", false), "palette_query", "") if key == "Escape"
+
+  state
+end
+
+def erp_combo_key(state, params)
+  key = (params["payload"] ?? [""])[0]
+  words = combo_filter(ERP_STATUSES, state["combo_query"] ?? "")
+  return set_key(state, "combo_at", tag_highlight(words.length(), state["combo_at"] ?? -1, 1)) if key == "ArrowDown"
+  return set_key(state, "combo_at", tag_highlight(words.length(), state["combo_at"] ?? -1, -1)) if key == "ArrowUp"
+  return set_key(set_key(state, "select_open", false), "combo_query", "") if key == "Escape"
+
+  state
+end
+
+def erp_combo_submit(state)
+  words = combo_filter(ERP_STATUSES, state["combo_query"] ?? "")
+  at = state["combo_at"] ?? -1
+  picked = ""
+  picked = words[at] if at >= 0 && at < words.length()
+  picked = words[0] if picked == "" && words.length() == 1
+  return set_key(set_key(state, "select_open", false), "combo_query", "") if picked == ""
+
+  set_key(set_key(set_key(set_key(state, "select_value", picked), "select_open", false), "combo_query", ""), "page", 1)
+end
+
+def erp_demo_wh_key(state, params)
+  key = (params["payload"] ?? [""])[0]
+  words = combo_filter(ERP_DEMO_WH, state["demo_wh_query"] ?? "")
+  return set_key(state, "demo_wh_at", tag_highlight(words.length(), state["demo_wh_at"] ?? -1, 1)) if key == "ArrowDown"
+  return set_key(state, "demo_wh_at", tag_highlight(words.length(), state["demo_wh_at"] ?? -1, -1)) if key == "ArrowUp"
+  return set_key(set_key(state, "demo_wh_open", false), "demo_wh_query", "") if key == "Escape"
+
+  state
+end
+
+def erp_demo_wh_submit(state)
+  words = combo_filter(ERP_DEMO_WH, state["demo_wh_query"] ?? "")
+  at = state["demo_wh_at"] ?? -1
+  picked = ""
+  picked = words[at] if at >= 0 && at < words.length()
+  picked = words[0] if picked == "" && words.length() == 1
+  return set_key(set_key(state, "demo_wh_open", false), "demo_wh_query", "") if picked == ""
+
+  set_key(set_key(set_key(state, "demo_wh", picked), "demo_wh_open", false), "demo_wh_query", "")
+end
+
+def erp_palette_submit(state)
+  words = command_match(erp_commands(), state["palette_query"] ?? "")
+  at = state["palette_at"] ?? -1
+  return erp_palette_pick(state, words[at]["id"]) if at >= 0 && at < words.length()
+  return erp_palette_pick(state, words[0]["id"]) if words.length() == 1
+
+  state
 end
 
 # The rail: where you are, what you can reach from here, and whose session
@@ -1083,6 +1172,7 @@ def erp_dashboard(state, lay)
     {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
     [
       erp_kpis(state, lay),
+      erp_catalogue_card(state, lay),
       banner(
         "Three invoices are past due and six parts are under their reorder point.",
         "warning",
@@ -1098,6 +1188,91 @@ def erp_dashboard(state, lay)
       lay["wide"] ? row({"gap": 4, "align": "start", "width": "100%"}, panels) : column({"gap": 4, "width": "100%"}, panels),
       erp_forecast(state, lay),
       erp_release(state, lay)
+    ]
+  )
+end
+
+# The four widgets that were missing, on the first screen, so a visitor
+# does not have to know to right-click an order or open Settings. They
+# still live in those places too — this card is how you find them.
+def erp_catalogue_card(state, lay)
+  pass = password_field("API token", state["demo_pass"] ?? "", "demo_pass", {
+    "hint": "Typed as marks. Show paints the text.",
+    "on_reveal": "demo_pass_reveal",
+    "shown": state["demo_pass_shown"] == true
+  })
+  combo = column(
+    {"gap": 1},
+    [
+      muted("Warehouse"),
+      combobox(
+        ERP_DEMO_WH,
+        state["demo_wh"] ?? "Lyon dock",
+        erp_dense(state).merge({
+          "query": state["demo_wh_query"] ?? "",
+          "open": state["demo_wh_open"] == true,
+          "at": state["demo_wh_at"] ?? -1,
+          "on_toggle": "demo_wh_toggle",
+          "on_change": "demo_wh_change",
+          "on_pick": "demo_wh_pick",
+          "on_key": "demo_wh_key",
+          "on_submit": "demo_wh_submit",
+          "label": "Warehouse",
+          "key": "demo_wh",
+          "width": "100%"
+        })
+      ),
+      muted("Open it and type. A select cannot do that.")
+    ]
+  )
+  sample = {
+    "k": "box",
+    "key": "demo_ctx_row",
+    "s": {
+      "display": "row",
+      "gap": 3,
+      "align": "center",
+      "pad": [2, 3, 2, 3],
+      "radius": 2,
+      "bg": "surface.sunken",
+      "cursor": "pointer",
+      "width": "100%"
+    },
+    "on": {"click": "demo_ctx"},
+    "c": [
+      text("PO-1042", {"weight": "semibold", "grow": 1}),
+      muted("Lyon dock"),
+      badge("open", "info")
+    ]
+  }
+  ctx = context_menu(
+    sample,
+    ["Assign", "Print pick list", "Archive"],
+    state["demo_ctx"] == true,
+    "demo_ctx",
+    "demo_ctx_pick",
+    {"on_close": "demo_ctx_close"}
+  )
+  pal = column(
+    {"gap": 2},
+    [
+      muted("Command palette"),
+      secondary_button("Open command palette", "palette_toggle"),
+      muted("Same overlay as the search icon in the bar.")
+    ]
+  )
+  left = column({"gap": 3, "grow": 1, "basis": 280}, [pass, combo])
+  right = column({"gap": 3, "grow": 1, "basis": 280}, [
+    column({"gap": 1}, [muted("Right-click the row — or click it"), ctx]),
+    pal
+  ])
+  body = lay["wide"] ? row({"gap": 5, "align": "start", "width": "100%"}, [left, right]) : column({"gap": 4, "width": "100%"}, [left, right])
+  erp_card(
+    "New catalogue",
+    [badge("try these", "info")],
+    [
+      muted("Password field, combobox, context menu, command palette. The rest of the page uses them too."),
+      body
     ]
   )
 end
@@ -1290,13 +1465,22 @@ def erp_filters(state, lay)
       {"gap": 1},
       [
         muted("Status"),
-        select(
-          ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"],
+        combobox(
+          ERP_STATUSES,
           state["select_value"],
-          state["select_open"],
-          "select_toggle",
-          "select_pick",
-          {"density": lay["density"]}
+          erp_dense(state).merge({
+            "query": state["combo_query"] ?? "",
+            "open": state["select_open"] == true,
+            "at": state["combo_at"] ?? -1,
+            "on_toggle": "select_toggle",
+            "on_change": "combo_change",
+            "on_pick": "select_pick",
+            "on_key": "combo_key",
+            "on_submit": "combo_submit",
+            "on_close": "select_close",
+            "label": "Status",
+            "key": "erp_status"
+          })
         )
       ]
     ),
@@ -1390,7 +1574,8 @@ def erp_order_row(order, state, lay)
   line["p"] = {"ref": order["ref"]}
   line["s"]["cursor"] = "pointer"
   line["s"]["bg"] = "info.subtle" if state["order_sel"] == order["ref"]
-  line
+  ctx = state["order_ctx"] == true && state["order_sel"] == order["ref"]
+  context_menu(line, ["Duplicate", "Print", "Delete"], ctx, "order_ctx", "row_action", {"on_close": "order_ctx_close"})
 end
 
 def erp_orders_card(state, lay)
@@ -1399,7 +1584,9 @@ def erp_orders_card(state, lay)
   page = state["page"] ?? 1
   page = pages if page > pages
   body = erp_page_of(rows, page).map(fn(order) { erp_order_row(order, state, lay) })
-  table = rows.length() == 0 ? empty_state(
+  # Not `table`: `table()` is the builder at line 260 and a bare assignment
+  # rebinds it for everything that runs after.
+  grid = rows.length() == 0 ? empty_state(
     "Nothing matches",
     "No order answers those filters. Clear them to see all sixty-three.",
     "Clear filters",
@@ -1414,7 +1601,7 @@ def erp_orders_card(state, lay)
       loading_button("Export", "export", "export"),
       button("New order", "order_new")
     ],
-    [table, row({"gap": 3, "align": "center", "justify": "center"}, [pagination(page, pages, "page")])]
+    [grid, muted("Right-click a row for Duplicate, Print, Delete."), row({"gap": 3, "align": "center", "justify": "center"}, [pagination(page, pages, "page")])]
   )
 end
 
@@ -2157,6 +2344,11 @@ end
 def erp_company_card(state, lay)
   left = [
     text_field("Legal name", state["co_name"], "co_name", {"required": true}),
+    password_field("SMTP password", state["co_pass"], "co_pass", {
+      "hint": "Never leaves this window. Show paints the text; Hide paints marks.",
+      "on_reveal": "co_pass_reveal",
+      "shown": state["co_pass_shown"] == true
+    }),
     email_field("Billing address", state["co_email"], "co_email", {
       "required": true,
       "hint": "Where invoices are sent"
@@ -2771,6 +2963,16 @@ def erp_chrome_defaults
     "nav_open": false,
     "acct_open": false,
     "search": "",
+    "palette": false,
+    "palette_query": "",
+    "palette_at": -1,
+    "demo_pass": "hunter2",
+    "demo_pass_shown": false,
+    "demo_wh": "Lyon dock",
+    "demo_wh_open": false,
+    "demo_wh_query": "",
+    "demo_wh_at": -1,
+    "demo_ctx": false,
     "seg": "Week",
     "sheet": false,
     "toast": "",
@@ -2800,11 +3002,14 @@ def erp_orders_defaults
     "page": 1,
     "select_open": false,
     "select_value": "Any status",
+    "combo_query": "",
+    "combo_at": -1,
     "sort_by": "Due date",
     "unpaid": false,
     "group": false,
     "order_sel": "",
     "order_menu": false,
+    "order_ctx": false,
     "range_month": "2026-09",
     "range_start": "",
     "range_end": "",
@@ -2892,6 +3097,8 @@ def erp_settings_defaults
   {
     "co_name": "Meridian Industrial SAS",
     "co_email": "billing@meridian.test",
+    "co_pass": "hunter2",
+    "co_pass_shown": false,
     "co_vat": "20",
     "co_footer": "Meridian Industrial SAS · 14 rue des Docks, Lyon · VAT FR-88-402-113",
     "co_start": "2026-01-01",
@@ -2964,17 +3171,23 @@ def gallery(event_data)
     "sound_ended" => set_key(state, "sound", false),
     # Orders: the filter bar owns one key each, so the chips can be built
     # from the state alone and dropping one is a single assignment.
-    "select_toggle" => set_key(state, "select_open", !state["select_open"]),
-    "select_pick" => set_key(set_key(set_key(state, "select_value", props["value"]), "select_open", false), "page", 1),
+    "select_toggle" => set_key(set_key(set_key(state, "select_open", !(state["select_open"] ?? false)), "combo_query", ""), "combo_at", -1),
+    "select_close" => set_key(set_key(state, "select_open", false), "combo_query", ""),
+    "combo_change" => set_key(set_key(state, "combo_query", params["payload"].to_s), "combo_at", -1),
+    "combo_key" => erp_combo_key(state, params),
+    "combo_submit" => erp_combo_submit(state),
+    "select_pick" => set_key(set_key(set_key(set_key(state, "select_value", props["value"]), "select_open", false), "combo_query", ""), "page", 1),
     "sort_pick" => set_key(state, "sort_by", props["value"]),
     "unpaid" => set_key(set_key(state, "unpaid", !(state["unpaid"] ?? false)), "page", 1),
     "group" => set_key(state, "group", !(state["group"] ?? false)),
     "chip_drop" => set_key(erp_drop_filter(state, props["key"]), "page", 1),
     "clear_filters" => erp_clear_filters(state),
     "page" => set_key(state, "page", props["page"]),
-    "order_pick" => set_key(set_key(state, "order_sel", props["ref"]), "order_menu", false),
+    "order_pick" => set_key(set_key(set_key(state, "order_sel", props["ref"]), "order_menu", false), "order_ctx", false),
+    "order_ctx" => set_key(set_key(state, "order_sel", props["ref"]), "order_ctx", true),
+    "order_ctx_close" => set_key(state, "order_ctx", false),
     "row_menu" => set_key(state, "order_menu", !(state["order_menu"] ?? false)),
-    "row_action" => erp_say(set_key(state, "order_menu", false), props["item"] + " " + (state["order_sel"] ?? "")),
+    "row_action" => erp_say(set_key(set_key(state, "order_menu", false), "order_ctx", false), props["item"] + " " + (state["order_sel"] ?? "")),
     "export" => erp_say(state, "Sixty-three orders exported"),
     "range_toggle" => set_key(state, "range_open", !(state["range_open"] ?? false)),
     "range_nav" => set_key(state, "range_month", month_shift(state["range_month"], props["delta"])),
@@ -3052,7 +3265,25 @@ def gallery(event_data)
     "doc_window" => set_key(state, "doc_window", params["payload"]),
     # Settings.
     "co_name" => erp_field(state, "co_name", params),
+    "co_pass" => erp_field(state, "co_pass", params),
+    "co_pass_reveal" => set_key(state, "co_pass_shown", !(state["co_pass_shown"] ?? false)),
     "co_email" => erp_field(state, "co_email", params),
+    "palette_toggle" => set_key(set_key(set_key(state, "palette", !(state["palette"] ?? false)), "palette_query", ""), "palette_at", -1),
+    "palette_change" => set_key(set_key(state, "palette_query", params["payload"].to_s), "palette_at", -1),
+    "palette_key" => erp_palette_key(state, params),
+    "palette_submit" => erp_palette_submit(state),
+    "palette_pick" => erp_palette_pick(state, (props["id"] ?? "").to_s),
+    "palette_close" => set_key(set_key(state, "palette", false), "palette_query", ""),
+    "demo_pass" => erp_field(state, "demo_pass", params),
+    "demo_pass_reveal" => set_key(state, "demo_pass_shown", !(state["demo_pass_shown"] ?? false)),
+    "demo_wh_toggle" => set_key(set_key(set_key(state, "demo_wh_open", !(state["demo_wh_open"] ?? false)), "demo_wh_query", ""), "demo_wh_at", -1),
+    "demo_wh_change" => set_key(set_key(state, "demo_wh_query", params["payload"].to_s), "demo_wh_at", -1),
+    "demo_wh_pick" => set_key(set_key(set_key(state, "demo_wh", props["value"]), "demo_wh_open", false), "demo_wh_query", ""),
+    "demo_wh_key" => erp_demo_wh_key(state, params),
+    "demo_wh_submit" => erp_demo_wh_submit(state),
+    "demo_ctx" => set_key(state, "demo_ctx", true),
+    "demo_ctx_close" => set_key(state, "demo_ctx", false),
+    "demo_ctx_pick" => erp_say(set_key(state, "demo_ctx", false), (props["item"] ?? "").to_s + " PO-1042"),
     "co_vat" => erp_field(state, "co_vat", params),
     "co_vat_step" => erp_step(state, "co_vat", props, {"min": 0, "max": 30, "step": 1}),
     "co_footer" => erp_field(state, "co_footer", params),
@@ -3138,6 +3369,19 @@ def gallery_view(raw_state)
     "dialog_close",
     {"ok": "Good"}
   )]) if asking == "alert"
+  layers = layers.concat([command_palette(
+    state["palette_query"] ?? "",
+    erp_commands(),
+    state["palette_at"] ?? -1,
+    {
+      "on_change": "palette_change",
+      "on_key": "palette_key",
+      "on_pick": "palette_pick",
+      "on_submit": "palette_submit",
+      "on_close": "palette_close",
+      "key": "erp_cmd"
+    }
+  )]) if state["palette"] == true
   layers = layers.concat([erp_toast(state)]) unless (state["toast"] ?? "") == ""
   layers = layers.concat([dev_bar(eui_stats(), state["devbar"] ?? true)])
   stack({"gap": 0}, layers)

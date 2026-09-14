@@ -1055,6 +1055,26 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
     assert!(glyph_x < r.x + 4.0 + 4.0, "{glyph_x} vs {}", r.x);
 }
 
+#[test]
+fn a_secret_field_paints_one_mark_per_character() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let field = StyleRecord { width: Dim::Px(160), padding: [2; 4], ..Default::default() };
+    let paint_secret = |value: &str| {
+        let mut n = node(NodeKind::Input, 2, 2, 0);
+        n.text = Some(TextRef::Inline(value.into()));
+        n.props = (0, 1);
+        let mut fx = fixture(vec![col, field], vec![node(NodeKind::Box, 1, 1, 1), n], vec![(1, Value::Bool(true))], &["secret"], 200.0, 100.0);
+        draw(&mut fx, 200, 100, 1.0)
+    };
+    let glyphs = |list: &DrawList| list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED).count();
+    let hello = paint_secret("hello");
+    let wide = paint_secret("WWWWW");
+    assert_eq!(glyphs(&hello), 5, "one mark per character: {hello:#?}");
+    assert_eq!(glyphs(&wide), 5, "W is still one mark");
+    let width = |list: &DrawList| list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED).map(|q| q.rect[2]).sum::<f32>();
+    assert!((width(&hello) - width(&wide)).abs() < 1.0, "marks are the same width whatever was typed");
+}
+
 /// Spec 04 §7.1: a windowed list's rows in view without a child are drawn
 /// as placeholders in `surface.sunken`; rows with a child, and rows out
 /// of view, are not.

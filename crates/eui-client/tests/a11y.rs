@@ -193,6 +193,7 @@ fn every_role_survives_the_worker_boundary() {
         "column_header",
         "heading",
         "separator",
+        "password",
         "group",
         "label",
         "image",

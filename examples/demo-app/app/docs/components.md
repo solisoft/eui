@@ -445,6 +445,8 @@ press switch between style records the session already holds.
 | `form(children, submit_label, on_submit)` | The children, then a right-aligned submit |
 | `sized_input(value, on_change, width)` | An input of a fixed width |
 | `select(options, value, open, on_toggle, on_pick)` | Closed, it is its anchor; open, a dropdown. **The server owns `open`**. A list too long for the panel scrolls inside it |
+| `combobox(options, value, o = {})` | A select you type into. Closed, the value and a chevron; open, a field at the top of the panel filters the options. `combo_filter` is the narrowing; `o` carries `query`, `open`, `at`, `on_toggle`, `on_change`, `on_pick`, `on_key`, `on_submit` |
+| `combo_filter(options, query)` | What of a fixed list still belongs under the draft |
 | `select_option(label, selected, on_pick)` | One row of that dropdown, carrying `{"value": label}` |
 | `multi_select(options, sel, open, on_toggle, on_pick, o = {})` | Several of something. The anchor carries a chip per chosen option — each chip's × sends the same `on_pick`, because removing one *is* toggling it off — and the panel's rows are the listbox's. Picking does **not** shut it: that is the caller's handler, not the widget |
 | `tag_field(label, tags, draft, o = {})` | A line of chips you type into, and a panel of what is still worth choosing — the `combo_box`. Unlike `multi_select` the words are not a fixed set: whatever is typed becomes a tag. `o["key"]` is required; `o["suggest"]` is the narrowed list, `o["at"]` where the arrows are, `o["open"]` whether the panel is up, `o["take_focus"]` asks for the caret back for one batch. The entry claims `Backspace`, the arrows and `Escape` — not `Enter`, which arrives as a `submit` (03 §3.1) |
@@ -478,6 +480,7 @@ is what says the person has had their turn.
 | Signature | Notes |
 |---|---|
 | `text_field(label, value, on_change, o = {})` | A line of anything. It judges nothing on its own |
+| `password_field(label, value, on_change, o = {})` | The same, with `secret: true` so the client paints marks. `o["shown"]` reveals the text; `o["on_reveal"]` is Show/Hide. The value on the wire is still what was typed |
 | `email_field(label, value, on_change, o = {})` | One local part, one `@`, a domain with a dot in it, no spaces. Everything a field can honestly check — the only test of an address is a message sent to it |
 | `number_field(label, value, on_change, o = {})` | `o["min"]`, `o["max"]` and `o["step"]` are the bounds and the stride; `o["on_step"]` adds − and + buttons that send the direction in `params["props"]["delta"]`. The handler does the arithmetic — `number_stepped` is it — because the value is the server's |
 | `textarea_field(label, value, on_change, o = {})` | The multi-line one; `o["rows"]` is the floor the empty box keeps |
@@ -542,6 +545,9 @@ arithmetic reaches the view.
 | `accordion(sections, open_id, on_toggle)` | Sections of `{id, title, body}`; the open one shows its body |
 | `stepper(steps, current)` | Numbered dots — done ones filled, the current one ringed |
 | `menu(items, on_pick)` | A raised column; each item carries `{"item": it}` |
+| `context_menu(anchor, items, open, on_open, on_pick, o = {})` | Right-click opens `menu` over the anchor. The client already emits `context_menu` on button 1; `on_open` is that event. `o["on_close"]` is Escape |
+| `command_palette(query, items, at, o = {})` | Overlay, a field, a list. `items` are `{id, label, hint, group}` or strings. `command_match` narrows them. Include it in the tree only while it is up |
+| `command_match(items, query)` / `command_row(it)` | What of the palette still belongs under the draft, and the shape of one command |
 | `tooltip(content)` | Inverted text on the default ink |
 | `segmented(options, selected, on_select)` | One sunken row, the selected option raised |
 

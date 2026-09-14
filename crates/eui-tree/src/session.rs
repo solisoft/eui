@@ -178,6 +178,22 @@ impl Session {
         &self.known
     }
 
+    /// Spec 03 §3: an `input` carrying `secret: true` is a password field.
+    /// The client paints marks, measures those, and copies nothing from it.
+    /// A `textarea` ignores the prop: a secret that wraps is not a password.
+    pub fn is_secret(&self, ix: NodeIx) -> bool {
+        let Some(node) = self.node(ix) else {
+            return false;
+        };
+        if node.kind != NodeKind::Input {
+            return false;
+        }
+        let Some(atom) = self.known.secret else {
+            return false;
+        };
+        matches!(node.prop(atom), Some(Value::Bool(true)))
+    }
+
     /// The `audio` and `video` nodes in the tree (03 §7, §8).
     pub fn media(&self) -> &[NodeIx] {
         &self.media
@@ -877,6 +893,8 @@ pub struct WellKnown {
     pub position: Option<u32>,
     /// How loud.
     pub volume: Option<u32>,
+    /// An `input` that hides what was typed (03 §3).
+    pub secret: Option<u32>,
 }
 
 impl WellKnown {
@@ -902,10 +920,32 @@ impl WellKnown {
             "loop" => &mut self.loop_,
             "position" => &mut self.position,
             "volume" => &mut self.volume,
+            "secret" => &mut self.secret,
             _ => return,
         };
         slot.get_or_insert(id);
     }
+}
+
+/// One disc per Unicode scalar. A password of `i`s and a password of `W`s
+/// occupy the same width, which is the whole point of masking.
+pub fn secret_display(text: &str) -> String {
+    text.chars().map(|_| crate::SECRET_MARK).collect()
+}
+
+/// A byte offset in `text` as a byte offset in [`secret_display`].
+pub fn secret_offset(text: &str, byte: usize) -> usize {
+    let mut n = byte.min(text.len());
+    while n > 0 && !text.is_char_boundary(n) {
+        n = n.saturating_sub(1);
+    }
+    text[..n].chars().count().saturating_mul(crate::SECRET_MARK.len_utf8())
+}
+
+/// A byte offset in [`secret_display`] as a byte offset in `text`.
+pub fn secret_unoffset(text: &str, display_byte: usize) -> usize {
+    let i = display_byte.checked_div(crate::SECRET_MARK.len_utf8()).unwrap_or(0);
+    text.char_indices().nth(i).map(|(b, _)| b).unwrap_or(text.len())
 }
 
 /// Whether two records lay out alike: everything but what only the

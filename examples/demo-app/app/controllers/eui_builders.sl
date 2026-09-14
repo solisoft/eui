@@ -1092,6 +1092,18 @@ def lazy(id, shown, placeholder, make)
   make()
 end
 
+# A panel that a click stops at.
+#
+# An event goes to the nearest ancestor that handles it (06 §2), so once a
+# scrim carries `click` to close, every click *inside* the panel would reach
+# it too and shut the thing the person is using. An empty local chunk is the
+# cheapest way to stop one: it handles the click, runs no instruction and
+# sends nothing, so the click dies at the panel without a round trip.
+def swallow_clicks(node)
+  node["on"] = (node["on"] ?? {}).merge({"click": {"local": []}})
+  node
+end
+
 def dialog(title, body_children, actions, opts = {})
   panel = card(
     {
@@ -1105,6 +1117,7 @@ def dialog(title, body_children, actions, opts = {})
       actions
     )])
   )
+  panel = swallow_clicks(panel)
   n = {
     "k": "overlay",
     "key": opts["key"] ?? ("dialog:" + title),
@@ -1126,16 +1139,23 @@ def dialog(title, body_children, actions, opts = {})
     # a server cannot do either, because it does not own Tab. `keys` claims
     # Escape alone, so the buttons inside keep Enter as the press they stand
     # for — and Escape now reaches the server, which is what closes it.
+    # `opts["props"]` rides on the overlay itself, so that a caller whose
+    # close event reads `params["props"]` — the handbook's `lazy_close`
+    # wants an `id` — gets the same props from Escape and from the scrim as
+    # it gets from its own Close button.
     "p": {
       "role": opts["alert"] == true ? "alert_dialog" : "dialog",
       "label": title,
       "modal": true,
       "autofocus": true,
       "keys": ["Escape"]
-    },
+    }.merge(opts["props"] ?? {}),
     "c": [panel]
   }
-  n["on"] = {"key_down": opts["on_close"]} unless opts["on_close"].nil?
+  # Escape and the scrim say the same thing: this is over. 03 §5 — the
+  # page behind is out of reach, and a click on it is a person reaching
+  # for the way out.
+  n["on"] = {"key_down": opts["on_close"], "click": opts["on_close"]} unless opts["on_close"].nil?
   n
 end
 # The page behind is put out of play twice over: blurred, so nothing
@@ -1867,12 +1887,16 @@ end
 # share of whatever the line has left: three tiles across on a desktop,
 # two on a tablet, one on a phone, decided by the width itself rather
 # than by a breakpoint, and with no hole at the end of the last line.
+#
+# It goes through `restyle`, because the patch has to reach the styles the
+# node's local handlers declare as well as its resting one. A `stateful`
+# card builds its hover out of the style it had *before* it was tiled, so a
+# tile that only touched `node["s"]` left a hover carrying the old
+# `width: 100%`: the first pointer_enter dropped the basis, the card grew to
+# the whole row, and the grid reflowed under the pointer. Every style on a
+# node is a whole style, so every one of them has to be tiled.
 def tile(basis, node)
-  node["s"]["width"] = "auto"
-  node["s"]["basis"] = basis
-  node["s"]["grow"] = 1
-  node["s"]["shrink"] = 1
-  node
+  restyle(node, {"width": "auto", "basis": basis, "grow": 1, "shrink": 1})
 end
 
 def stat(label, value, hint)
@@ -2131,11 +2155,162 @@ def menu(items, on_pick)
           "cursor": "pointer"
         },
         "on": {"click": on_pick},
-        "p": {"item": it},
+        "p": {"item": it, "role": "menu_item", "label": it.to_s},
         "c": [text(it, {})]
       }
     })
   )
+end
+
+# The menu that a right-click opens. The client already emits `context_menu`
+# on button 1 (06 §1); this is the overlay it opens, the same column `menu`
+# draws, hung off the node that was pointed at.
+#
+# `on_open` is the event the right-click sends. `on_pick` is what a row
+# sends, with `params["props"]["item"]` the label. `o["on_close"]` is Escape.
+# The server owns `open`, as it owns a popover's.
+def context_menu(anchor, items, open, on_open, on_pick, o = {})
+  on = (anchor["on"] ?? {}).merge({"context_menu": on_open})
+  on["key_down"] = o["on_close"] unless o["on_close"].nil?
+  anchor["on"] = on
+  props = anchor["p"] ?? {}
+  props["keys"] = ["Escape"] unless o["on_close"].nil?
+  anchor["p"] = props
+  return anchor unless open == true
+
+  popover(anchor, [menu(items, on_pick)], true)
+end
+
+# A command is `{id, label, hint, group}`. A string is a label that is its
+# own id. The four functions below are the whole of the model, so a spec
+# can pin them without a client.
+def command_row(it)
+  return {"id": it.to_s, "label": it.to_s, "hint": "", "group": ""} unless it.class == "hash"
+
+  {
+    "id": (it["id"] ?? it["label"]).to_s,
+    "label": (it["label"] ?? it["id"]).to_s,
+    "hint": (it["hint"] ?? "").to_s,
+    "group": (it["group"] ?? "").to_s
+  }
+end
+
+def command_match(items, query)
+  said = (query ?? "").strip().downcase()
+  out = []
+  for it in items
+    # Not `row`: a bare assignment rebinds the global, and `row()` is the
+    # builder half this file is made of (line 28). Opening the palette once
+    # turned it into a node and every later view raised.
+    hit = command_row(it)
+    hay = (hit["label"] + " " + hit["hint"] + " " + hit["group"]).downcase()
+    out = out.concat([hit]) if said == "" || hay.index_of(said) >= 0
+  end
+  out
+end
+
+PALETTE_KEYS = ["ArrowDown", "ArrowUp", "Escape"]
+
+# Overlay, a field, a list. Type to narrow, arrows to walk, Enter to take.
+# The caller owns `query` and `at`; this is a view of them. Closed, it
+# draws nothing — include it in the tree only while it is up, the way a
+# dialog is.
+#
+# `o`: `on_change`, `on_key`, `on_pick`, `on_submit`, `on_close`, `key`.
+def command_palette(query, items, at, o = {})
+  pal_key = (o["key"] ?? "palette").to_s
+  pal_at = at ?? -1
+  pal_rows = command_match(items, query)
+  pal_entry = input(query ?? "", o["on_change"], {
+    "key": pal_key + ":entry",
+    "style": {"width": "100%"},
+    "props": {
+      "keys": PALETTE_KEYS,
+      "role": "combo_box",
+      "expanded": true,
+      "label": "Command",
+      "autofocus": true
+    },
+    "on": {
+      "key_down": o["on_key"],
+      "submit": o["on_submit"]
+    }
+  })
+  if pal_at >= 0 && pal_at < pal_rows.length()
+    pal_entry["p"]["active_descendant"] = pal_key + ":opt:" + pal_rows[pal_at]["id"]
+  end
+  pal_list = []
+  pal_group = ""
+  i = 0
+  while i < pal_rows.length()
+    pal_row = pal_rows[i]  # not `row`: it is the builder at line 28
+    if pal_row["group"] != "" && pal_row["group"] != pal_group
+      pal_group = pal_row["group"]
+      pal_list = pal_list.concat([muted(pal_group)])
+    end
+    lit = i == pal_at
+    kids = [text(pal_row["label"], {"grow": 1, "weight": lit ? "semibold" : "regular"})]
+    kids = kids.concat([muted(pal_row["hint"])]) unless pal_row["hint"] == ""
+    pal_list = pal_list.concat([control({
+      "key": pal_key + ":opt:" + pal_row["id"],
+      "size": "sm",
+      "tone": "quiet",
+      "shape": {
+        "justify": "start",
+        "width": "100%",
+        "gap": 3,
+        "bg": lit ? "surface.sunken" : "none",
+        "border": [0, 0, 0, 3],
+        "border_color": lit ? "accent.base" : "none"
+      },
+      "on": {"click": o["on_pick"]},
+      "props": {"id": pal_row["id"], "item": pal_row["label"]},
+      "a11y": {
+        "role": "option",
+        "selected": lit,
+        "label": pal_row["label"],
+        "pos_in_set": i + 1,
+        "set_size": pal_rows.length()
+      },
+      "c": kids
+    })])
+    i = i + 1
+  end
+  pal_body = pal_list.length() == 0 ? [muted("Nothing matches")] : pal_list
+  panel = card(
+    {
+      "width": o["width"] ?? 480,
+      "max_width": "100%",
+      "gap": 3,
+      "self": "center"
+    },
+    [pal_entry, scroll({"max_height": 360}, pal_body)]
+  )
+  panel = swallow_clicks(panel)
+  n = {
+    "k": "overlay",
+    "key": pal_key,
+    "s": {
+      "display": "stack",
+      "justify": "center",
+      "align": "center",
+      "pad": [10, 4, 4, 4],
+      "blur": 16,
+      "bg": "#00000073",
+      "animation": "enter",
+      "transition": "slow"
+    },
+    "p": {
+      "role": "dialog",
+      "label": "Command palette",
+      "modal": true,
+      "autofocus": true,
+      "keys": ["Escape"]
+    },
+    "c": [panel]
+  }
+  n["on"] = {"key_down": o["on_close"], "click": o["on_close"]} unless o["on_close"].nil?
+  n
 end
 
 def tooltip(content)
@@ -2165,6 +2340,7 @@ def sheet(side, children, opts = {})
     },
     children
   )
+  panel = swallow_clicks(panel)
   n = {
     "k": "overlay",
     "key": opts["key"] ?? ("sheet:" + side),
@@ -2184,7 +2360,7 @@ def sheet(side, children, opts = {})
     },
     "c": [panel]
   }
-  n["on"] = {"key_down": opts["on_close"]} unless opts["on_close"].nil?
+  n["on"] = {"key_down": opts["on_close"], "click": opts["on_close"]} unless opts["on_close"].nil?
   n
 end
 # Lighter than a dialog's, and blurred less: a sheet is somewhere you
@@ -2528,6 +2704,8 @@ end
 # is not a list of options — a calendar, say — passes no ceiling and is
 # bounded by the window alone.
 DROPDOWN_MAX_PX = 280
+# How wide a popover may get. See the note in `dropdown`.
+DROPDOWN_MAX_W = 320
 
 # A popover that opens under its anchor rather than over it.
 # An open list floats: it is an `overlay`, so it paints in the top layer
@@ -2568,11 +2746,134 @@ def dropdown(anchor, content, open, max_px = 0)
         "border": 1,
         "border_color": "border.subtle",
         "display": "column",
+        # A cap, because a popover with no width of its own comes out as wide
+        # as the window: it is measured against the window (03 §5, so its
+        # options are not clipped to a narrow field) and an `auto` width then
+        # fills that bound instead of shrinking to the options. Left alone the
+        # panel spanned all 1400 px and `settle_anchored` clamped it to x=0,
+        # so it hung under the whole page rather than under its field. The cap
+        # is a stopgap over a layout question, not the answer to it: the panel
+        # should shrink-wrap and take the field's width as its floor.
+        "max_width": DROPDOWN_MAX_W,
         "z": 5
       },
       "c": [scroll(pane, content)]
     }
   ])
+end
+
+# The keys the filter field hands back: arrows walk the panel, Escape
+# shuts it. `Enter` is a `submit`, same as `tag_field`.
+COMBO_KEYS = ["ArrowDown", "ArrowUp", "Escape"]
+
+# What of a fixed list still belongs under the draft. An empty draft offers
+# everything, because a panel that appears only once you have typed is a
+# panel most people never learn is there — the same reason `tag_suggest`
+# does.
+def combo_filter(options, query)
+  said = (query ?? "").strip().downcase()
+  return options if said == ""
+
+  options.filter(fn(o) { o.to_s.downcase().index_of(said) >= 0 })
+end
+
+# A select you can type into. Closed, it is its value and a chevron;
+# open, a field at the top of the panel filters the options. The caller
+# owns `open`, `query` and `at`, the way it owns a select's `open`.
+#
+# `o`: `query`, `open`, `at`, `on_toggle`, `on_change`, `on_pick`, `on_key`,
+# `on_submit`, `on_close`, `key`, `label`, `density`, `width`, `min_width`.
+def combobox(options, value, o = {})
+  cb_key = (o["key"] ?? ("combo:" + (o["label"] ?? value).to_s)).to_s
+  cb_open = o["open"] == true
+  cb_query = o["query"] ?? ""
+  cb_at = o["at"] ?? -1
+  cb_min = o["min_width"] ?? 160
+  words = combo_filter(options, cb_query)
+  s = {
+    "display": "row",
+    "align": "center",
+    "gap": 2,
+    "pad": [2, 3, 2, 3],
+    "min_width": cb_min,
+    "min_height": field_height(o),
+    "border": 1,
+    "border_color": "border.default",
+    "radius": 2,
+    "bg": "surface.sunken",
+    "cursor": "pointer",
+    "transition": "fast"
+  }
+  s["width"] = o["width"] unless o["width"].nil?
+  s["grow"] = 1 if o["grow"] == true
+  anchor = {
+    "k": "box",
+    "key": cb_key,
+    "s": s,
+    "p": {
+      "role": "combo_box",
+      "expanded": cb_open,
+      "label": o["label"] ?? value.to_s
+    },
+    "on": stateful(s, TONES["neutral"], {"click": o["on_toggle"]}),
+    "c": [text(value, {"grow": 1}), icon(
+      "chevron_down",
+      {"fg": "text.muted", "width": 14, "height": 14}
+    )]
+  }
+  return anchor unless cb_open
+
+  cb_props = {
+    "keys": COMBO_KEYS,
+    "role": "combo_box",
+    "expanded": true,
+    "label": o["label"] ?? value.to_s,
+    "autofocus": true
+  }
+  cb_props["active_descendant"] = cb_key + ":opt:" + words[cb_at].to_s if cb_at >= 0 && cb_at < words.length()
+  cb_on = {}
+  cb_on["key_down"] = o["on_key"] unless o["on_key"].nil?
+  cb_on["submit"] = o["on_submit"] unless o["on_submit"].nil?
+  cb_entry = input(cb_query, o["on_change"], {
+    "key": cb_key + ":entry",
+    "style": {
+      "width": "100%",
+      "border": 0,
+      "bg": "none",
+      "pad": [1, 2, 1, 2]
+    },
+    "props": cb_props,
+    "on": cb_on
+  })
+  cb_rows = range(0, words.length()).map(fn(i) {
+    word = words[i]
+    lit = i == cb_at
+    control({
+      "key": cb_key + ":opt:" + word.to_s,
+      "size": "sm",
+      "tone": "quiet",
+      "shape": {
+        "justify": "start",
+        "min_width": cb_min,
+        "bg": lit ? "surface.sunken" : "none",
+        "border": [0, 0, 0, 3],
+        "border_color": lit ? "accent.base" : "none"
+      },
+      "on": {"click": o["on_pick"]},
+      "props": {"value": word, "id": word},
+      "a11y": {
+        "role": "option",
+        "selected": lit,
+        "label": word.to_s,
+        "pos_in_set": i + 1,
+        "set_size": words.length()
+      },
+      "c": [text(word.to_s, {"weight": lit ? "semibold" : "regular"})]
+    })
+  })
+  cb_panel = column({"gap": 0}, [cb_entry].concat(cb_rows.length() == 0 ? [muted("Nothing matches")] : cb_rows))
+  cb_panel["p"] = {"role": "list_box", "label": (o["label"] ?? "Options").to_s}
+  dropdown(anchor, [cb_panel], true, DROPDOWN_MAX_PX)
 end
 
 # ---- Multi-selection --------------------------------------------------------
@@ -3564,6 +3865,37 @@ def text_field(label, value, on_change, o = {})
   )
 end
 
+# A line of anything, painted as marks. The client reads `secret` (03 §3);
+# without it this is a text field whose value is on screen, which is the
+# whole of why a login cannot be composed from `text_field`.
+#
+# `o["shown"]` is the reveal: true paints the text, false (the default)
+# paints the marks. `o["on_reveal"]` is the event the Show/Hide control
+# sends. The handler owns both; this widget holds neither.
+def password_field(label, value, on_change, o = {})
+  error = field_error(value, fn(said) { true }, "", o)
+  bad = field_bad(error, o)
+  shown = o["shown"] == true
+  props = field_props(label, error, bad, o)
+  props["secret"] = true unless shown
+  reveal = o["on_reveal"] ?? ""
+  box = input(value, on_change, {
+    "style": field_style(bad, o).merge(reveal == "" ? {} : {"width": "auto", "grow": 1}),
+    "props": props
+  })
+  # Not `control`: a bare assignment rebinds the global of that name, and
+  # `control` is the function every widget below is built on (line 564). The
+  # first field with a Show button turned it into a node, and the next
+  # `control(...)` — `ghost_button`, `icon_button`, anything — raised
+  # "Cannot call non-function value" from inside a view, which reaches a
+  # window as a blank screen and no error.
+  body = reveal == "" ? box : row(
+    {"gap": 2, "align": "center", "width": o["width"] ?? "100%"},
+    [box, ghost_button(shown ? "Hide" : "Show", reveal)]
+  )
+  field_shell(label, body, o.merge({"error": error}))
+end
+
 def email_field(label, value, on_change, o = {})
   error = field_error(value, fn(said) { email_valid?(said) }, "That does not look like an email address", o)
   bad = field_bad(error, o)
@@ -3704,6 +4036,53 @@ def file_field(label, accept, on_pick, o = {})
     }, {"file_pick": on_pick})
   end
   ff_node
+end
+
+# A surface a file can be let go over. `drop` is the same prop as `pick`
+# (03 §3.2), so a file arrives as `file_pick` whether it was chosen in the
+# dialog or dropped here. `o["on_drag"]` is `file_drag`, whose payload is
+# `[over]`: the box lights when a file is over it and goes dark when it
+# leaves. `o["pick"]` (default true) also opens the dialog on a click, so
+# one box is both gestures.
+#
+# `o["over"]` is whether a file is over it *now* — the handler stores what
+# `file_drag` said; this widget holds no state.
+def file_drop(label, accept, on_pick, o = {})
+  over = o["over"] == true
+  hint = o["hint"] ?? ""
+  resting = {
+    "display": "column",
+    "gap": 1,
+    "align": "center",
+    "justify": "center",
+    "width": "100%",
+    "pad": 5,
+    "radius": 3,
+    "border": 1,
+    "border_color": over ? "accent.base" : "border.subtle",
+    "bg": over ? "accent.hover" : "surface.sunken",
+    "transition": "fast"
+  }
+  on = {"file_pick": on_pick}
+  on["file_drag"] = o["on_drag"] unless o["on_drag"].nil?
+  pick = o["pick"] != false
+  props = {
+    "drop": pick_prop(accept, o),
+    "role": "button",
+    "label": label
+  }
+  props["pick"] = pick_prop(accept, o) if pick
+  n = {
+    "k": "box",
+    "key": o["key"] ?? ("drop:" + label),
+    "s": resting,
+    "p": props,
+    "on": on,
+    "c": [
+      text(over ? (o["over_label"] ?? "Let go to add them") : label, {"weight": "semibold"})
+    ].concat(hint == "" ? [] : [muted(hint)])
+  }
+  n
 end
 
 # What was attached, drawn as a card.

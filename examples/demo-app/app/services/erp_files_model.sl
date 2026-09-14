@@ -63,6 +63,11 @@ def erp_files_defaults
     "folder": "all",
     "folder_open": ["all"],
     "file_sel": "",
+    # A file is over the drop box. `gallery_defaults` keeps only the keys it
+    # names, so a flag missing from here is a flag the handler sets and the
+    # view never sees: the box could not light however well the event
+    # travelled.
+    "file_over": false,
     "attaching": "",
     "file_trouble": "",
     "file_gone": ""

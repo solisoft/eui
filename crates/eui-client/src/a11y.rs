@@ -118,6 +118,8 @@ pub enum AccessRole {
     Heading = 41,
     /// A separator, including a split-pane divider.
     Separator = 42,
+    /// An `input` carrying `secret`: the value is never exposed.
+    PasswordInput = 43,
 }
 
 impl AccessRole {
@@ -167,6 +169,7 @@ impl AccessRole {
             40 => Self::ColumnHeader,
             41 => Self::Heading,
             42 => Self::Separator,
+            43 => Self::PasswordInput,
             _ => return None,
         })
     }
@@ -210,6 +213,7 @@ impl AccessRole {
             "column_header" => Self::ColumnHeader,
             "heading" => Self::Heading,
             "separator" => Self::Separator,
+            "password" => Self::PasswordInput,
             "group" => Self::Container,
             "label" => Self::Label,
             "image" => Self::Image,
@@ -405,6 +409,7 @@ impl Driver {
             let activatable = node.handler(EventKind::Click).is_some();
             let role = declared.unwrap_or(match node.kind {
                 _ if activatable => AccessRole::Button,
+                NodeKind::Input if session.is_secret(ix) => AccessRole::PasswordInput,
                 NodeKind::Input => AccessRole::TextInput,
                 NodeKind::TextArea => AccessRole::MultilineTextInput,
                 NodeKind::Text => AccessRole::Label,
@@ -429,7 +434,9 @@ impl Driver {
             };
             let editable = matches!(node.kind, NodeKind::Input | NodeKind::TextArea);
             if editable {
-                a.value = session.text_of(ix).unwrap_or("").to_owned();
+                // 03 §3: a secret field's value never leaves the client as
+                // prose. The role already says what it is.
+                a.value = if session.is_secret(ix) { String::new() } else { session.text_of(ix).unwrap_or("").to_owned() };
                 a.focus = !a.state.disabled;
             } else if role.is_leaf() {
                 // A leaf is named by everything written inside it: the text
@@ -645,6 +652,7 @@ pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
             AccessRole::ColumnHeader => Role::ColumnHeader,
             AccessRole::Heading => Role::Heading,
             AccessRole::Separator => Role::Splitter,
+            AccessRole::PasswordInput => Role::PasswordInput,
         };
         let mut a = Node::new(role);
         if n.role == AccessRole::Window {
@@ -656,7 +664,7 @@ pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
             if !n.label.is_empty() {
                 a.set_label(n.label.as_str());
             }
-            if !n.value.is_empty() || matches!(n.role, AccessRole::TextInput | AccessRole::MultilineTextInput) {
+            if !n.value.is_empty() || matches!(n.role, AccessRole::TextInput | AccessRole::MultilineTextInput | AccessRole::PasswordInput) {
                 a.set_value(n.value.as_str());
             }
         }

@@ -954,6 +954,58 @@ fn the_caret_selection_and_clipboard_belong_to_the_client() {
 }
 
 #[test]
+fn a_secret_field_keeps_the_value_and_copies_nothing() {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("ab".into())), props: (0, 1), handlers: (0, 1), child_count: 0 });
+    tree.props.push((1, Value::Bool(true)));
+    tree.handlers.push((EventKind::Change, Handler::Server(2)));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "secret".into() },
+            Op::DefAtom { id: 2, value: "changed".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    };
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(batch));
+    let _ = d.paint(400, 300);
+    tab(&mut d, false);
+    d.input(Input::Text("cd".into()));
+    assert_eq!(field_text(&d), "abcd", "the value is still the text");
+    key(&mut d, "a", 2);
+    key(&mut d, "c", 2);
+    assert_eq!(d.take_clipboard(), None, "copy does not leak a secret");
+    key(&mut d, "x", 2);
+    assert_eq!(field_text(&d), "", "cut still deletes");
+    assert_eq!(d.take_clipboard(), None, "and still copies nothing");
+}
+
+#[cfg(has_a11y)]
+#[test]
+fn a_secret_field_is_a_password_to_an_assistive_technology() {
+    use eui_client::a11y::AccessRole as Role;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("secret".into())), props: (0, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Bool(true)));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![Op::DefAtom { id: 1, value: "secret".into() }, Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], ..Default::default() } }, Op::Mount(tree)],
+    };
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(batch));
+    let _ = d.paint(400, 300);
+    let tree = d.access_snapshot();
+    let field = tree.nodes.iter().find(|n| n.role == Role::PasswordInput).expect("inferred from secret");
+    assert_eq!(field.value, "", "the value is never exposed");
+}
+
+#[test]
 fn a_click_places_the_caret_and_a_drag_selects() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
     d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
