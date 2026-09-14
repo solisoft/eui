@@ -28,9 +28,12 @@ def command_match(items, query)
   said = (query ?? "").strip().downcase()
   out = []
   for it in items
-    row = command_row(it)
-    hay = (row["label"] + " " + row["hint"] + " " + row["group"]).downcase()
-    out = out.concat([row]) if said == "" || hay.index_of(said) >= 0
+    # Not `row`: a bare assignment rebinds the global, and `row()` is the
+    # builder half this file is made of (line 28). Opening the palette once
+    # turned it into a node and every later view raised.
+    hit = command_row(it)
+    hay = (hit["label"] + " " + hit["hint"] + " " + hit["group"]).downcase()
+    out = out.concat([hit]) if said == "" || hay.index_of(said) >= 0
   end
   out
 end

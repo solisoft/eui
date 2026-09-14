@@ -48,6 +48,18 @@ SPECS = {
         "command_match",
         "tag_highlight",
     ],
+    ROOT / "tests" / "catalogue_spec.sl": [
+        "filter_at",
+        "filter_edit",
+        "filter_drop",
+        "filter_blank",
+        "filter_group_blank",
+        "filter_group?",
+        "range_takes?",
+        "range_holding?",
+        "range_moved",
+        "diff_tally",
+    ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",
         "split_sizes",

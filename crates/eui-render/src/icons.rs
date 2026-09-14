@@ -107,6 +107,16 @@ const BOX: Icon = &[&[(3.5, 7.5), (12.0, 3.5), (20.5, 7.5), (20.5, 16.5), (12.0,
 /// least that survives 16 px.
 const FOLDER: Icon = &[&[(3.5, 19.0), (3.5, 5.0), (9.5, 5.0), (11.5, 8.0), (20.5, 8.0), (20.5, 19.0), (3.5, 19.0)]];
 
+/// A five-pointed star, for a rating. Drawn as one closed run of ten points
+/// -- five out, five in -- because a stroked set has no fill to hide a seam
+/// in: the outline *is* the shape, and it has to close on the point it
+/// started from or the topmost tip shows a notch at 16 px.
+const STAR: Icon = &[&[(12.0, 3.2), (14.3, 9.2), (20.6, 9.5), (15.7, 13.5), (17.3, 19.6), (12.0, 16.1), (6.7, 19.6), (8.3, 13.5), (3.4, 9.5), (9.7, 9.2), (12.0, 3.2)]];
+
+/// A funnel: two rails closing on a stem. What a filter does to a list, and
+/// what a filter builder is named by.
+const FILTER: Icon = &[&[(3.5, 5.0), (20.5, 5.0), (13.5, 13.0), (13.5, 20.0), (10.5, 18.0), (10.5, 13.0), (3.5, 5.0)]];
+
 /// Three bars standing on a floor: a report. The bars rise left to right so
 /// the shape has a direction, which a report generally does.
 const CHART: Icon = &[&[(4.0, 20.0), (20.5, 20.0)], &[(7.5, 20.0), (7.5, 14.0)], &[(12.0, 20.0), (12.0, 9.5)], &[(16.5, 20.0), (16.5, 5.0)]];
@@ -159,6 +169,8 @@ pub fn icon(name: &str) -> Option<Icon> {
         "users" | "customers" => USERS,
         "box" | "inventory" => BOX,
         "folder" | "files" => FOLDER,
+        "star" => STAR,
+        "filter" | "funnel" => FILTER,
         "chart" | "reports" => CHART,
         "sliders" | "settings" => SLIDERS,
         _ => return None,
@@ -203,6 +215,9 @@ pub const NAMES: &[&str] = &[
     "inventory",
     "folder",
     "files",
+    "star",
+    "filter",
+    "funnel",
     "chart",
     "reports",
     "sliders",

@@ -925,12 +925,12 @@ end
 # holds the active section; the rail and the top bar are outside it, so the
 # page moves under a header that stays.
 
-ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings"]
+ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings", "Catalogue"]
 ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"]
 ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
-ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Files": "folder", "Reports": "chart", "Settings": "sliders"}
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
 
 ERP_PER_PAGE = 7
 
@@ -1045,6 +1045,165 @@ def erp_combo_submit(state)
   return set_key(set_key(state, "select_open", false), "combo_query", "") if picked == ""
 
   set_key(set_key(set_key(set_key(state, "select_value", picked), "select_open", false), "combo_query", ""), "page", 1)
+end
+
+# Sample data for the second catalogue card. Flat literals rather than
+# generated rows: what these show is a widget, and a widget is easier to
+# judge against figures you can read than against a loop.
+ERP_DEMO_PEOPLE = [
+  {"initial": "C", "tone": "accent.base"},
+  {"initial": "G", "tone": "success.base"},
+  {"initial": "T", "tone": "warning.base"},
+  {"initial": "N", "tone": "info.base"},
+  {"initial": "R", "tone": "danger.base"},
+  {"initial": "P", "tone": "accent.base"}
+]
+
+ERP_DEMO_LINES = [
+  {"id": "o1", "ref": "SO-24003", "who": "Linus GmbH", "amount": "12 480 €",
+   "lines": ["3 × DN80 flange · 4 160 €", "12 × gasket set · 0 €", "Delivery 18 Sep, Lyon dock"]},
+  {"id": "o2", "ref": "SO-24004", "who": "Ateliers Roche", "amount": "3 900 €",
+   "lines": ["1 × bracket 2240 · 3 900 €", "Delivery 21 Sep, Nantes"]},
+  {"id": "o3", "ref": "SO-24005", "who": "Nordwerk", "amount": "27 010 €",
+   "lines": ["6 × DN80 flange · 8 320 €", "2 × pump housing · 18 690 €", "Part shipped 12 Sep"]}
+]
+
+ERP_DEMO_BOM = [
+  {"id": "asm", "cells": ["Pump assembly 2231", "1", "ea"], "children": [
+    {"id": "hous", "cells": ["Housing, cast", "1", "ea"], "children": [
+      {"id": "raw", "cells": ["Iron, GG25", "6.4", "kg"], "children": []},
+      {"id": "mach", "cells": ["Machining", "0.8", "h"], "children": []}
+    ]},
+    {"id": "flg", "cells": ["Flange DN80", "2", "ea"], "children": []},
+    {"id": "seal", "cells": ["Seal kit", "1", "set"], "children": [
+      {"id": "ring", "cells": ["O-ring 80×3", "2", "ea"], "children": []}
+    ]}
+  ]},
+  {"id": "pack", "cells": ["Crate, 600×400", "1", "ea"], "children": []}
+]
+
+ERP_DEMO_DIFF = [
+  {"kind": "hunk", "text": "@@ erp_files_defaults", "old": "", "new": ""},
+  {"kind": "same", "text": "    \"file_sel\": \"\",", "old": "63", "new": "63"},
+  {"kind": "add", "text": "    \"file_over\": false,", "old": "", "new": "64"},
+  {"kind": "same", "text": "    \"attaching\": \"\",", "old": "64", "new": "65"},
+  {"kind": "hunk", "text": "@@ tile", "old": "", "new": ""},
+  {"kind": "del", "text": "  node[\"s\"][\"width\"] = \"auto\"", "old": "1871", "new": ""},
+  {"kind": "del", "text": "  node[\"s\"][\"basis\"] = basis", "old": "1872", "new": ""},
+  {"kind": "add", "text": "  restyle(node, {\"width\": \"auto\", \"basis\": basis})", "old": "", "new": "1871"}
+]
+
+ERP_DEMO_EVENTS = [
+  {"at": "09:12", "title": "Warehouse Lyon picked 34 lines", "body": "against SO-24003", "tone": "success.base", "icon": "check"},
+  {"at": "08:40", "title": "Invoice FA-1003 sent", "body": "Linus GmbH · 12 480 €", "tone": "accent.base"},
+  {"at": "Yesterday", "title": "Reorder point reached", "body": "Flange DN80 · 6 left", "tone": "warning.base", "icon": "warning"},
+  {"at": "Yesterday", "title": "Quote QT-8871 accepted", "tone": "accent.base"},
+  {"at": "11 Sep", "title": "Supplier price list updated", "body": "Nordwerk · 41 lines", "tone": "info.base"}
+]
+
+ERP_DEMO_FUNNEL = [
+  {"label": "Quoted", "value": 1284},
+  {"label": "Confirmed", "value": 863},
+  {"label": "Picked", "value": 704},
+  {"label": "Invoiced", "value": 651}
+]
+
+ERP_DEMO_BRIDGE = [
+  {"label": "Opening", "delta": 128940, "total": true},
+  {"label": "Invoiced", "delta": 412380},
+  {"label": "Paid", "delta": 0 - 361200},
+  {"label": "Credited", "delta": 0 - 18420},
+  {"label": "Written off", "delta": 0 - 4100},
+  {"label": "Closing", "delta": 157600, "total": true}
+]
+
+ERP_DEMO_SPREAD = [
+  {"label": "Lyon dock", "min": 4, "q1": 7, "median": 9, "q3": 12, "max": 21},
+  {"label": "Lyon-Sud", "min": 5, "q1": 8, "median": 11, "q3": 14, "max": 19},
+  {"label": "Nantes", "min": 3, "q1": 6, "median": 8, "q3": 10, "max": 26},
+  {"label": "Antwerp", "min": 6, "q1": 11, "median": 14, "q3": 18, "max": 24}
+]
+
+ERP_SHORTCUTS = [
+  {"name": "Everywhere", "keys": [
+    {"keys": ["Ctrl", "K"], "does": "Open the command palette"},
+    {"keys": ["?"], "does": "This sheet"},
+    {"keys": ["Escape"], "does": "Close what is open"}
+  ]},
+  {"name": "Lists", "keys": [
+    {"keys": ["↑", "↓"], "does": "Walk the rows"},
+    {"keys": ["Enter"], "does": "Open the row"},
+    {"keys": ["Space"], "does": "Pick up a card"}
+  ]}
+]
+
+ERP_FILTER_FIELDS = ["Status", "Customer", "Amount", "Warehouse"]
+ERP_FILTER_CMPS = ["is", "is not", "contains", ">", "<"]
+
+def erp_demo_mark(state, props)
+  mark = (props["option"] ?? "").to_s
+  marks = state["demo_marks"] ?? []
+  set_key(state, "demo_marks", marks.includes?(mark) ? marks.filter(fn(m) { m != mark }) : marks.concat([mark]))
+end
+
+def erp_demo_row(state, props)
+  id = (props["id"] ?? "").to_s
+  open = state["demo_rows"] ?? []
+  set_key(state, "demo_rows", open.includes?(id) ? open.filter(fn(x) { x != id }) : open.concat([id]))
+end
+
+def erp_demo_tree(state, props)
+  id = (props["id"] ?? "").to_s
+  open = state["demo_tree"] ?? []
+  set_key(state, "demo_tree", open.includes?(id) ? open.filter(fn(x) { x != id }) : open.concat([id]))
+end
+
+# The track reports where the pointer is; `range_moved` says which end that
+# asks to move and where, and `range_takes?` says whether it should move at
+# all -- a bare move over the track is a pointer passing by, not a hand on a
+# handle. The drag flag is this handler's, because the widget holds no state.
+def erp_demo_range(state, params, props)
+  kind = (params["kind"] ?? "").to_s
+  payload = params["payload"] ?? [0, 0]
+  return erp_demo_range_key(state, (payload[0] ?? "").to_s) if kind == "key_down"
+
+  return state unless range_takes?(kind, state["demo_range_drag"] ?? false)
+
+  moved = range_moved(props, payload[0] ?? 0)
+  out = set_key(set_key(state, "demo_low", int(moved["low"])), "demo_high", int(moved["high"]))
+  set_key(out, "demo_range_drag", range_holding?(kind))
+end
+
+# The arrows nudge the low end, Shift is not read: a range with one keyboard
+# and two handles has to say which it is moving, and the low one is the one
+# a person reaches for first. Home and End take it to the ends.
+def erp_demo_range_key(state, key)
+  low = state["demo_low"] ?? 0
+  high = state["demo_high"] ?? 10000
+  step = 250
+  low = low + step if key == "ArrowRight" || key == "ArrowUp"
+  low = low - step if key == "ArrowLeft" || key == "ArrowDown"
+  low = 0 if key == "Home"
+  low = high if key == "End"
+  low = 0 if low < 0
+  low = high if low > high
+  set_key(state, "demo_low", low)
+end
+
+def erp_demo_filter_slot(state, props)
+  want = (props["path"] ?? "").to_s + ":" + (props["slot"] ?? "").to_s
+  (state["demo_filter_open"] ?? "").to_s == want ? "" : want
+end
+
+def erp_demo_filter_set(state, props, slot, value)
+  path = (props["path"] ?? "").to_s
+  # `{slot: value}` would be a literal key named "slot"; a hash takes a
+  # dynamic one by assignment.
+  set_key(set_key(state, "demo_filter", filter_edit(state["demo_filter"], path, fn(leaf) {
+    edited = leaf
+    edited[slot] = value
+    edited
+  })), "demo_filter_open", "")
 end
 
 def erp_demo_wh_key(state, params)
@@ -1172,7 +1331,6 @@ def erp_dashboard(state, lay)
     {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
     [
       erp_kpis(state, lay),
-      erp_catalogue_card(state, lay),
       banner(
         "Three invoices are past due and six parts are under their reorder point.",
         "warning",
@@ -1195,6 +1353,166 @@ end
 # The four widgets that were missing, on the first screen, so a visitor
 # does not have to know to right-click an order or open Settings. They
 # still live in those places too — this card is how you find them.
+# The second half of the catalogue: what was added after the first card was
+# written, and what the first card had no room for.
+#
+# It is a card and not a section because these are widgets rather than work:
+# a person looking at Meridian to see what EUI can draw should not have to
+# know that "Inventory" is where the tree table lives.
+# The catalogue, on its own page.
+#
+# These cards were on the dashboard, which was the wrong place twice over: a
+# dashboard is what an application shows someone who opened it to do their
+# job, and every widget parked there was a row between them and their
+# figures. Here they are the page, and the rail says so.
+def erp_catalogue_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_catalogue_card(state, lay),
+      erp_catalogue2_card(state, lay),
+      erp_shapes_card(state, lay)
+    ]
+  )
+end
+
+def erp_catalogue2_card(state, lay)
+  actions = column({"gap": 1}, [
+    muted("Split button"),
+    split_button("Save", "demo_save", {
+      "key": "demo_split",
+      "items": ["Save and new", "Save and close", "Save as draft"],
+      "open": state["demo_split"] == true,
+      "on_toggle": "demo_split_toggle",
+      "on_pick": "demo_split_pick"
+    }),
+    muted("One default, and the rest behind the caret.")
+  ])
+  marks = column({"gap": 1}, [
+    muted("Toggle group"),
+    row({"justify": "start", "width": "100%"}, [toggle_group(["Late", "Unpaid", "Backorder", "Hold"], state["demo_marks"] ?? [], "demo_mark", {"key": "demo_marks"})]),
+    muted("Several at once, where `segmented` takes one.")
+  ])
+  stars = column({"gap": 1}, [
+    muted("Rating"),
+    rating(state["demo_rating"] ?? 0, "demo_rate", {"key": "demo_rate", "max": 5}),
+    muted("Five controls, not one with five meanings.")
+  ])
+  faces = column({"gap": 1}, [
+    muted("Avatar group"),
+    avatar_group(ERP_DEMO_PEOPLE, {"size": 28, "max": 4, "label": "Assigned"}),
+    muted("Roughly who, in the space of one and a half faces.")
+  ])
+  archive = column({"gap": 1}, [
+    muted("Popconfirm"),
+    row({"justify": "start", "width": "100%"}, [popconfirm(
+      control({
+        "key": "demo_arch",
+        "tone": "danger",
+        "size": "md",
+        "on": {"click": "demo_confirm_open"},
+        "a11y": {"role": "button", "label": "Archive PO-1042"},
+        "c": [text("Archive PO-1042", {"weight": "semibold"})]
+      }),
+      state["demo_confirm"] == true,
+      {
+        "key": "demo_confirm",
+        "question": "Archive PO-1042?",
+        "detail": "It leaves the open list and keeps its lines.",
+        "confirm": "Archive",
+        "on_confirm": "demo_confirm_yes",
+        "on_cancel": "demo_confirm_no"
+      }
+    )]),
+    muted("Asked beside the thing, not over the page.")
+  ])
+  span = column({"gap": 1}, [
+    muted("Range slider"),
+    range_slider(state["demo_low"] ?? 0, state["demo_high"] ?? 0, 0, 10000, "demo_range", {"key": "demo_range", "label": "Amount"}),
+    muted(grouped_number(state["demo_low"] ?? 0) + " to " + grouped_number(state["demo_high"] ?? 0) + " €")
+  ])
+  money = column({"gap": 1}, [
+    currency_field("Credit limit", (state["demo_amount"] ?? "").to_s, "demo_amount", {
+      "key": "demo_amount",
+      "hint": "What is typed is what is sent.",
+      "width": "100%"
+    })
+  ])
+  keys = column({"gap": 1}, [
+    muted("Shortcut sheet"),
+    row({"justify": "start", "width": "100%"}, [secondary_button("Keyboard shortcuts", "shortcuts_open")]),
+    muted("What the application claims of the keyboard (03 §3.1).")
+  ])
+  lines = ERP_DEMO_LINES.map(fn(l) {
+    expandable_row(
+      "demo_row_" + l["id"],
+      [l["ref"], l["who"], l["amount"]],
+      lay["wide"] ? [140, 200, 100] : [110, 120, 90],
+      (state["demo_rows"] ?? []).includes?(l["id"]),
+      "demo_row",
+      [column({"gap": 1, "width": "100%"}, (l["lines"] ?? []).map(fn(x) { muted(x) }))],
+      {"props": {"id": l["id"]}, "label": l["ref"]}
+    )
+  })
+  rows = column({"gap": 1}, [
+    muted("Expandable rows"),
+    column({"gap": 0, "width": "100%"}, [table_header(["Order", "Customer", "Amount"], lay["wide"] ? [140, 200, 100] : [110, 120, 90])].concat(lines))
+  ])
+  bom = column({"gap": 1}, [
+    muted("Tree table"),
+    tree_table(
+      ["Part", "Qty", "Unit"],
+      lay["wide"] ? [260, 80, 100] : [180, 60, 80],
+      ERP_DEMO_BOM,
+      state["demo_tree"] ?? [],
+      "demo_tree",
+      0,
+      {"key": "bom", "label": "Bill of materials"}
+    )
+  ])
+  patch = column({"gap": 1}, [
+    muted("Diff"),
+    diff_view(ERP_DEMO_DIFF, {"key": "demo_diff", "label": "erp_files.sl"})
+  ])
+  said = column({"gap": 1}, [
+    muted("Timeline"),
+    timeline(ERP_DEMO_EVENTS, {"key": "demo_tl"})
+  ])
+  built = column({"gap": 1}, [
+    muted("Filter builder"),
+    filter_builder(state["demo_filter"], {
+      "fields": ERP_FILTER_FIELDS,
+      "cmps": ERP_FILTER_CMPS,
+      "open": (state["demo_filter_open"] ?? "").to_s,
+      "on_op": "fb_op",
+      "on_add": "fb_add",
+      "on_add_group": "fb_group",
+      "on_remove": "fb_remove",
+      "on_open": "fb_open",
+      "on_field": "fb_field",
+      "on_cmp": "fb_cmp",
+      "on_value": "fb_value"
+    }),
+    muted("A question the author never wrote down.")
+  ])
+  left = column({"gap": 4, "grow": 1, "basis": 300}, [actions, marks, stars, faces, archive])
+  right = column({"gap": 4, "grow": 1, "basis": 300}, [span, money, keys])
+  top = lay["wide"] ? row({"gap": 5, "align": "start", "width": "100%"}, [left, right]) : column({"gap": 4, "width": "100%"}, [left, right])
+  erp_card(
+    "More catalogue",
+    [badge("new", "success")],
+    [
+      muted("Split button, toggle group, rating, avatar group, popconfirm, range slider, currency field, shortcut sheet, expandable rows, tree table, diff, timeline and a filter builder."),
+      top,
+      rows,
+      bom,
+      built,
+      patch,
+      said
+    ]
+  )
+end
+
 def erp_catalogue_card(state, lay)
   pass = password_field("API token", state["demo_pass"] ?? "", "demo_pass", {
     "hint": "Typed as marks. Show paints the text.",
@@ -2229,6 +2547,24 @@ def erp_reports_section(state, lay)
   )
 end
 
+# Three questions the other fourteen charts cannot answer: where the orders
+# are lost, what moved the balance, and how spread the picking times are.
+def erp_shapes_card(state, lay)
+  w = lay["wide"] ? 460 : 320
+  erp_card(
+    "Shapes",
+    [badge("new", "success")],
+    [
+      muted("A funnel, a bridge and a distribution. The first two are read against the totals beside them; the third is read against itself."),
+      row({"gap": 5, "wrap": "wrap", "width": "100%"}, [
+        column({"gap": 2}, [muted("Quote to invoice"), chart_funnel("fn1", ERP_DEMO_FUNNEL, w, 190)]),
+        column({"gap": 2}, [muted("September, opening to closing"), chart_waterfall("wf1", ERP_DEMO_BRIDGE, w, 190)]),
+        column({"gap": 2}, [muted("Minutes to pick, by warehouse"), chart_box("bx1", ERP_DEMO_SPREAD, w, 190)])
+      ])
+    ]
+  )
+end
+
 def erp_month_end(state, lay)
   erp_card(
     "Month end",
@@ -2973,6 +3309,19 @@ def erp_chrome_defaults
     "demo_wh_query": "",
     "demo_wh_at": -1,
     "demo_ctx": false,
+    "demo_split": false,
+    "demo_marks": ["Late"],
+    "demo_rating": 4,
+    "demo_confirm": false,
+    "demo_low": 2000,
+    "demo_range_drag": false,
+    "demo_high": 8000,
+    "demo_amount": "1500",
+    "demo_rows": [],
+    "demo_tree": ["asm"],
+    "demo_filter": {"op": "and", "items": [{"field": "Status", "cmp": "is", "value": "Late"}]},
+    "demo_filter_open": "",
+    "shortcuts": false,
     "seg": "Week",
     "sheet": false,
     "toast": "",
@@ -3284,6 +3633,28 @@ def gallery(event_data)
     "demo_ctx" => set_key(state, "demo_ctx", true),
     "demo_ctx_close" => set_key(state, "demo_ctx", false),
     "demo_ctx_pick" => erp_say(set_key(state, "demo_ctx", false), (props["item"] ?? "").to_s + " PO-1042"),
+    "demo_split_toggle" => set_key(state, "demo_split", !(state["demo_split"] ?? false)),
+    "demo_split_pick" => erp_say(set_key(state, "demo_split", false), (props["item"] ?? "").to_s),
+    "demo_save" => erp_say(state, "Saved"),
+    "demo_mark" => erp_demo_mark(state, props),
+    "demo_rate" => set_key(state, "demo_rating", props["value"] ?? 0),
+    "demo_confirm_open" => set_key(state, "demo_confirm", true),
+    "demo_confirm_no" => set_key(state, "demo_confirm", false),
+    "demo_confirm_yes" => erp_say(set_key(state, "demo_confirm", false), "Archived PO-1042"),
+    "demo_range" => erp_demo_range(state, params, props),
+    "demo_amount" => erp_field(state, "demo_amount", params),
+    "demo_row" => erp_demo_row(state, props),
+    "demo_tree" => erp_demo_tree(state, props),
+    "shortcuts_open" => set_key(state, "shortcuts", true),
+    "shortcuts_close" => set_key(state, "shortcuts", false),
+    "fb_op" => set_key(state, "demo_filter", filter_edit(state["demo_filter"], (props["path"] ?? "").to_s, fn(g) { g.merge({"op": props["option"]}) })),
+    "fb_add" => set_key(state, "demo_filter", filter_edit(state["demo_filter"], (props["path"] ?? "").to_s, fn(g) { g.merge({"items": (g["items"] ?? []).concat([filter_blank(ERP_FILTER_FIELDS, ERP_FILTER_CMPS)])}) })),
+    "fb_group" => set_key(state, "demo_filter", filter_edit(state["demo_filter"], (props["path"] ?? "").to_s, fn(g) { g.merge({"items": (g["items"] ?? []).concat([filter_group_blank(ERP_FILTER_FIELDS, ERP_FILTER_CMPS)])}) })),
+    "fb_remove" => set_key(state, "demo_filter", filter_drop(state["demo_filter"], (props["path"] ?? "").to_s)),
+    "fb_open" => set_key(state, "demo_filter_open", erp_demo_filter_slot(state, props)),
+    "fb_field" => erp_demo_filter_set(state, props, "field", props["value"]),
+    "fb_cmp" => erp_demo_filter_set(state, props, "cmp", props["value"]),
+    "fb_value" => erp_demo_filter_set(state, props, "value", params["payload"].to_s),
     "co_vat" => erp_field(state, "co_vat", params),
     "co_vat_step" => erp_step(state, "co_vat", props, {"min": 0, "max": 30, "step": 1}),
     "co_footer" => erp_field(state, "co_footer", params),
@@ -3330,6 +3701,7 @@ def gallery_view(raw_state)
   body = erp_files_section(state, lay) if section == "Files"
   body = erp_reports_section(state, lay) if section == "Reports"
   body = erp_settings_section(state, lay) if section == "Settings"
+  body = erp_catalogue_section(state, lay) if section == "Catalogue"
   page = scroll(
     {"grow": 1},
     [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])]
@@ -3382,6 +3754,7 @@ def gallery_view(raw_state)
       "key": "erp_cmd"
     }
   )]) if state["palette"] == true
+  layers = layers.concat([shortcut_sheet(ERP_SHORTCUTS, "shortcuts_close")]) if state["shortcuts"] == true
   layers = layers.concat([erp_toast(state)]) unless (state["toast"] ?? "") == ""
   layers = layers.concat([dev_bar(eui_stats(), state["devbar"] ?? true)])
   stack({"gap": 0}, layers)

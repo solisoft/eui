@@ -587,12 +587,15 @@ The reference catalogue ships with `examples/demo-app` as
 `app/controllers/eui_builders.sl`, and `soli new <app> --eui` writes that
 same file into a new application beside a component that uses it. Its
 families: actions (button variants,
-segmented control, menu, context menu, command palette, toolbar), input (field, password field, checkbox, switch, select,
-combobox, multi select, slider, date and time, file drop, form), structure (card, panel, sheet,
-dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper),
+split button, segmented control, toggle group, menu, context menu, command palette,
+popconfirm, toolbar), input (field, password field, currency field, checkbox, switch, select,
+combobox, multi select, slider, range slider, rating, date and time, file drop, form),
+structure (card, panel, sheet,
+dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper, shortcut sheet),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
-grid, multi-select list, list item, chart, stat, code block, markdown), feedback (toast,
-banner, progress, spinner, skeleton, empty state, avatar, badge, chip).
+expandable row, tree table, grid, multi-select list, list item, chart, stat, code block,
+diff, markdown, filter builder), feedback (toast,
+banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip).
 
 ## 7. Sound
 

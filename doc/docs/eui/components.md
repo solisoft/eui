@@ -393,6 +393,9 @@ everything.
 | `loading_button(label, on_click, key)` | Reveals a spinner and changes the label **locally** on press, then sends the event |
 | `local_button(label, program, after)` | A primary button whose click runs `program` locally, then sends `after` |
 | `theme_toggle()` | Light/dark, entirely on the client (`theme.toggle()`), no round trip and nothing told to the server |
+| `split_button(label, on_click, o = {})` | The default and the rest: a primary that clicks, a caret that opens `o["items"]` through `context_menu`. One decision, one tab stop |
+| `popconfirm(anchor, open, o = {})` | The question asked beside the control that raised it. `o["props"]` ride on the confirming button, because the question is always about a particular thing |
+| `toggle_group(options, chosen, on_toggle, o = {})` | `segmented` asks which one; this asks which ones. `chosen` is a list and the server owns it |
 
 Feedback that costs no network is the point of the variant engine: hover and
 press switch between style records the session already holds.
@@ -419,6 +422,10 @@ press switch between style records the session already holds.
 | `tag_option(word, lit, pos, total, o)` | One row of that panel. `lit` is where the arrows have walked to, which is not a selection — nothing is chosen until Enter or a click |
 | `dropdown(anchor, content, open, max_px = 0)` | A panel positioned under its anchor; returns the anchor alone when closed. The content scrolls: the panel is as tall as its content, the window, or `max_px`, whichever is least |
 | `slider(value, min, max, on_set)` | A 240 px track. Press, drag, or click; arrows nudge once focused. `on_set` receives `params["kind"]` (`"click"`, `"pointer_down"`, `"pointer_move"`, `"pointer_up"`, `"key_down"`) |
+| `rating(value, on_set, o = {})` | Stars, one control each — a `radio_group`, not one node with five meanings |
+| `range_slider(low, high, min, max, on_set, o = {})` | Two handles, one track. `range_moved(props, x)` says which end a pointer asks to move and where; `range_takes?(kind, dragging)` says whether it should move at all, and `range_holding?(kind)` keeps the caller's drag flag. Without the gate the handles follow the pointer across the track, pressed or not |
+| `currency_field(label, value, on_change, o = {})` | The unit inside the border, so it reads as part of the value. What is typed is what is sent — grouping a number under a live caret moves the caret |
+| `kbd(key)` / `shortcut_sheet(groups, on_close, o = {})` | What the application claims of the keyboard (§3.1), on one screen |
 
 ## Files
 
@@ -450,6 +457,7 @@ blob_id)`, and `eui_asset(bytes)` names those bytes for a `src`. Atrium
 
 None of them keeps state. The handler does; the widget draws what it is told
 and carries the identity the handler will need.
+
 
 ## Typed fields
 
@@ -1076,3 +1084,25 @@ That is a component. It composes from primitives, so it needs no client
 release and no protocol version; it takes its colours from roles, so it
 follows the viewer into dark mode; and it holds no state, so the handler stays
 the only place where anything is decided.
+
+## The second catalogue
+
+What the first pass had no room for. Each of these is in Meridian: the small
+ones in "More catalogue" on the dashboard, the three charts under Reports.
+
+| Signature | What it is for |
+|---|---|
+| `avatar_group(people, o = {})` | Roughly who, in the space of one and a half faces. `margin` is `[u8; 4]` in the protocol, so there is no negative margin to overlap with — every face but the last gets a slot narrower than it is, and spills over the next |
+| `timeline(entries, o = {})` | What happened, in order. The rail is continuous and the dots are on it, so it reads as one thread; the last entry draws no line, because a thread that continues says more is coming |
+| `expandable_row(key, values, widths, open, on_toggle, detail, o = {})` | A row that opens onto what is inside it, in the flow, under the row — not in a dialog that covers the rows you wanted to compare against |
+| `tree_table(labels, widths, rows, open_ids, on_toggle, depth = 0, o = {})` | `tree_view` is a rail and `data_grid` is flat; this is the hierarchy that also has columns. Indentation lives in the first cell, so the numbers stay in theirs however deep it goes |
+| `diff_view(lines, o = {})` / `diff_tally(lines)` | A patch as one column. Unified and not side by side: the removed line belongs directly above the line that replaced it. The sign carries the meaning and the tint repeats it |
+| `filter_builder(tree, o = {})` | A question the author never wrote down. The condition is a tree the server owns; every control sends the dotted `path` of the item it belongs to, and `filter_at`, `filter_edit` and `filter_drop` walk it |
+| `chart_funnel(id, stages, w, h)` | A ranked bar chart that gave up its baseline, so the eye reads the narrowing. The drop is put beside the lower stage, where it is wanted |
+| `chart_waterfall(id, steps, w, h)` | Every bar starts where the last ended, so the gap between opening and closing is visible rather than asserted. A step marked `{"total": true}` stands on the floor |
+| `chart_box(id, groups, w, h)` | Five numbers: the middle half as a box, the median as a line in it — not the mean, which one bad day drags — and the ends as whiskers |
+
+A `select` now takes `o["key"]` and `o["props"]`. Without them its key is the
+event name, so a second select answering the same event silently restyles the
+first (§7), and neither the toggle nor the pick can say which row it came
+from — which is exactly what a list of rows with a select in it has to say.
