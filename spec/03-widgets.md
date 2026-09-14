@@ -68,6 +68,20 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    among themselves in tree order, clipped by the window and by no ancestor —
    so a dialog inside a card and a popover inside a scroller are both whole.
    Hit-testing asks the top layer first, and in the same order.
+
+   **A press outside an open overlay dismisses it**, and the client does
+   that, because the client owns the hand. An overlay carrying a `blur`
+   handler hears `blur` when a press lands outside it; one carrying none
+   hears nothing and is not dismissible, so an application opts in per panel
+   and says for itself what closing means. Nothing is added to the wire:
+   `blur` already means "this stopped being the thing being used".
+
+   **Outside means outside the overlay's parent**, not outside the overlay.
+   A panel and the control that raised it are siblings under one box — which
+   is what a `stack` with an absolute overlay in it is — so a press on the
+   control is a press on the widget. Were the rule the overlay alone, a
+   select would shut on the press and its own click would open it again, and
+   no select could ever be closed by clicking it.
 5. `scroll` and `list` clip their children to their border box, and one
    whose content is taller than its box wears a vertical scrollbar along
    its right edge: a thumb in `text.muted` at 45 % opacity, as long as

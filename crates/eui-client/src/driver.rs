@@ -3737,19 +3737,25 @@ impl Driver {
         let Some(ix) = self.hit_now(x, y) else {
             return Vec::new();
         };
+        // 03 §1: whatever else this press turns out to be, it is a press
+        // somewhere — and somewhere is outside every open panel but the one
+        // it landed in. A scrollbar is outside a menu too, so this comes
+        // before the strip below rather than after it.
+        let dismissed = self.dismiss_overlays(ix);
         // Spec 03 §2: the scrollbar strip belongs to the client. A press on
         // the thumb takes hold of it; a press on the track pages.
         if button == 0 {
             if let Some(scroller) = self.scroller_strip_at(ix, x) {
                 let rect = self.layout.rect(scroller).unwrap_or_default();
                 if let Some(thumb) = scrollbar_thumb(&self.session, &self.layout, scroller, rect) {
+                    let mut out = dismissed;
                     if y >= thumb.y && y <= thumb.y + thumb.h {
                         self.pointer.dragging_thumb = Some((scroller, y - thumb.y));
                     } else {
                         let page = if y < thumb.y { -rect.h } else { rect.h };
-                        return self.scroll_by(scroller, 0.0, page);
+                        out.extend(self.scroll_by(scroller, 0.0, page));
                     }
-                    return Vec::new();
+                    return out;
                 }
             }
         }
@@ -3773,7 +3779,8 @@ impl Driver {
         // Nowhere, if the path has neither; a pointer never shows the ring.
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
         let takes_keys = editable.or_else(|| self.ancestor_keyed(ix));
-        let mut out = self.set_focus(takes_keys, false);
+        let mut out = dismissed;
+        out.extend(self.set_focus(takes_keys, false));
         // A press on a track is one deliberate event, so it goes now rather
         // than waiting on the brake -- which is there for the stream of
         // moves that follows, not for this.
@@ -4240,6 +4247,66 @@ impl Driver {
             cur = if node.parent.is_some() { Some(node.parent) } else { None };
         }
         None
+    }
+
+    /// Spec 03 §1: a press outside an open overlay dismisses it.
+    ///
+    /// The client owns the hand, so the client owns this. Nothing new is
+    /// invented on the wire: an overlay that carries a `blur` handler hears
+    /// `blur`, which already means "this stopped being the thing being
+    /// used", and one that carries none hears nothing at all. So an
+    /// application opts in per panel and says for itself what closing means
+    /// — no application can get it wrong by forgetting, and none is closed
+    /// behind its back.
+    ///
+    /// **Outside is outside the overlay's parent**, not outside the overlay.
+    /// A panel and the control that raised it are siblings under one box —
+    /// that is what `stack` plus an absolute overlay is — and a press on the
+    /// control is a press on the widget, not outside it. Were it the overlay
+    /// alone, a select would shut on the press and its own click would open
+    /// it again, and no select could ever be closed by clicking it.
+    fn dismiss_overlays(&mut self, pressed: NodeIx) -> Vec<Frame> {
+        let Some(root) = self.session.root() else {
+            return Vec::new();
+        };
+        let mut shut = Vec::new();
+        for ix in self.session.preorder(root) {
+            let Some(node) = self.session.node(ix) else {
+                continue;
+            };
+            if node.kind != NodeKind::Overlay || node.handler(EventKind::Blur).is_none() {
+                continue;
+            }
+            // An overlay the layout never placed is not on the screen, so
+            // there is nothing a press can be outside of.
+            if self.layout.rect(ix).is_none() || self.layout.is_virtual(ix) {
+                continue;
+            }
+            let widget = if node.parent == ix { ix } else { node.parent };
+            if !self.under(widget, pressed) {
+                shut.push(ix);
+            }
+        }
+        let mut out = Vec::new();
+        for ix in shut {
+            out.extend(self.emit(ix, EventKind::Blur, Value::Null));
+        }
+        out
+    }
+
+    /// Whether `ix` is `top` or stands somewhere under it.
+    fn under(&self, top: NodeIx, ix: NodeIx) -> bool {
+        let mut cur = Some(ix);
+        while let Some(at) = cur {
+            if at == top {
+                return true;
+            }
+            let Some(node) = self.session.node(at) else {
+                return false;
+            };
+            cur = if node.parent.is_some() && node.parent != at { Some(node.parent) } else { None };
+        }
+        false
     }
 
     /// The nearest node on the path — itself first — that asked for keys.

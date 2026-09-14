@@ -3198,3 +3198,81 @@ fn a_chunk_can_empty_the_field_it_is_in() {
     d.input(Input::Text("g".into()));
     assert_eq!(field(&d), "g", "not 'rustg'");
 }
+
+/// Spec 03 §1: a press outside an open overlay dismisses it.
+///
+/// The tree is a select: a `stack` holding the button that raises the panel
+/// and the panel itself, with a page beside it to press on. The panel is the
+/// overlay, and it is the only thing carrying a `blur` handler.
+#[test]
+fn a_press_outside_an_open_overlay_shuts_it_and_one_on_its_own_button_does_not() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    // 1 root ▸ 2 stack ▸ 3 button, 4 panel; 5 the page beside it.
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 4, style: 4, key: 0, text: None, props: (0, 0), handlers: (1, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Blur, Handler::Server(2)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 5, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let stack = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(30), ..Default::default() };
+    let button = StyleRecord { width: Dim::Px(100), height: Dim::Px(30), ..Default::default() };
+    let panel = StyleRecord { position: eui_proto::Position::Absolute, margin: [30, 0, 0, 0], width: Dim::Px(100), height: Dim::Px(60), ..Default::default() };
+    let page = StyleRecord { width: Dim::Px(200), height: Dim::Px(200), ..Default::default() };
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "toggle".into() },
+            Op::DefAtom { id: 2, value: "close".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 2, record: stack },
+            Op::DefStyle { id: 3, record: button },
+            Op::DefStyle { id: 4, record: panel },
+            Op::DefStyle { id: 5, record: page },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(400, 300);
+
+    let press = |d: &mut Driver, x: f32, y: f32| {
+        d.input(Input::PointerMove(x, y));
+        let out = d.input(Input::PointerDown(0));
+        d.input(Input::PointerUp(0));
+        events(&out).into_iter().filter(|(k, _, _)| *k == EventKind::Blur).collect::<Vec<_>>()
+    };
+
+    // The button that raised it is the widget, not outside it: a press there
+    // must not shut the panel, or its own click would open it straight back.
+    assert!(press(&mut d, 50.0, 15.0).is_empty(), "the button is inside the widget");
+    // And neither is the panel.
+    assert!(press(&mut d, 50.0, 45.0).is_empty(), "the panel is the widget too");
+    // The page beside it is outside, and that is a dismissal.
+    assert_eq!(press(&mut d, 50.0, 150.0), vec![(EventKind::Blur, 4, 2)], "one blur, to the overlay, naming `close`");
+}
+
+/// An overlay with no `blur` handler is not dismissible, and hears nothing:
+/// a panel closed behind an application's back is worse than one left open.
+#[test]
+fn an_overlay_that_does_not_ask_to_be_dismissed_is_not() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Overlay, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(30), ..Default::default() } },
+            Op::DefStyle { id: 3, record: StyleRecord { width: Dim::Px(200), height: Dim::Px(200), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(400, 300);
+    d.input(Input::PointerMove(50.0, 150.0));
+    let out = d.input(Input::PointerDown(0));
+    assert!(events(&out).iter().all(|(k, _, _)| *k != EventKind::Blur), "nothing to say: {:?}", events(&out));
+}
