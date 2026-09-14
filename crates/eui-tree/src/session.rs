@@ -927,6 +927,23 @@ pub struct WellKnown {
     pub drag_handle: Option<u32>,
     /// Which way a container's slots run, and so which arrows move them.
     pub drag_axis: Option<u32>,
+    /// A node that is a value on a line: a slider, a range, a scrubber
+    /// (03 §3.4). Its presence is the declaration, and its value says
+    /// which way the line runs. The client resolves the whole gesture
+    /// against it and reports only the value, so unlike `drag_only` there
+    /// is no `pointer_move` here to gate.
+    pub track: Option<u32>,
+    /// The value at the start of the line.
+    pub track_min: Option<u32>,
+    /// The value at its end.
+    pub track_max: Option<u32>,
+    /// The quantum the value lands on, and the arrows move by.
+    pub track_step: Option<u32>,
+    /// Where the handle is, or both handles.
+    pub track_value: Option<u32>,
+    /// Which piece of a track a descendant draws: the groove, the fill, or
+    /// a thumb.
+    pub track_part: Option<u32>,
     /// A media node's asset.
     pub src: Option<u32>,
     /// Whether it plays.
@@ -959,6 +976,12 @@ impl WellKnown {
             "accepts" => &mut self.accepts,
             "drag_handle" => &mut self.drag_handle,
             "drag_axis" => &mut self.drag_axis,
+            "track" => &mut self.track,
+            "track_min" => &mut self.track_min,
+            "track_max" => &mut self.track_max,
+            "track_step" => &mut self.track_step,
+            "track_value" => &mut self.track_value,
+            "track_part" => &mut self.track_part,
             "src" => &mut self.src,
             "playing" => &mut self.playing,
             "loop" => &mut self.loop_,

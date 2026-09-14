@@ -582,44 +582,20 @@ def set_key(state, key, value)
   state
 end
 
+# The client owns the track; this owns the value.
+#
+# One event carries the whole of it now. The client resolves the press, the
+# hold and the thumb, and sends a `change` only when the quantised value has
+# moved -- so what arrives is the number, not a pointer offset to invert
+# against a width this side only thought it knew.
+#
+# It is still not believed. 06 §4 has the server re-derive everything it is
+# told, and the clamp is that.
 def set_slider(state, params)
-  payload = params["payload"]
-  kind = params["kind"]
-  props = params["props"] ?? {}
-  sw = props["width"] ?? 240
-  dragging = state["slider_drag"] ?? false
-  # The thumb is the handle; the bar is a track you can jump to. A press
-  # anywhere sets the value — that is what a track is for, and what every
-  # slider has ever done — but only a press that landed **on the thumb**
-  # takes hold, so only the thumb can be carried. A stroke that begins on the
-  # track jumps once and then belongs to the view, which is what stops a
-  # finger reaching past a slider from dragging it the length of the screen.
-  #
-  # Worked out only for a press: an arrow key's payload is the key's *name*,
-  # and asking how far a string is from the thumb is a type error that takes
-  # the whole handler down with it.
-  took = false
-  if kind == "pointer_down"
-    at = (state["slider"] ?? 0) * sw / 100
-    reach = payload[0] - at
-    took = reach * reach <= 144
-  end
-  from_pointer = kind == "click" || kind == "pointer_down" || kind == "pointer_up"
-  from_pointer = true if kind == "pointer_move" && dragging
-  if from_pointer
-    x = payload[0]
-    x = 0 if x < 0
-    x = sw if x > sw
-    state["slider"] = int(x * 100 / sw)
-    state["slider_drag"] = took || (dragging && kind == "pointer_move")
-  elsif payload[0] == "ArrowRight"
-    state["slider"] = state["slider"] + 5
-  elsif payload[0] == "ArrowLeft"
-    state["slider"] = state["slider"] - 5
-  end
-  state["slider"] = 0 if state["slider"] < 0
-  state["slider"] = 100 if state["slider"] > 100
-  state
+  at = int(params["payload"] ?? 0)
+  at = 0 if at < 0
+  at = 100 if at > 100
+  set_key(state, "slider", at)
 end
 
 def pick_range(state, iso)
@@ -1231,36 +1207,22 @@ def erp_demo_tree(state, props)
   set_key(state, "demo_tree", open.includes?(id) ? open.filter(fn(x) { x != id }) : open.concat([id]))
 end
 
-# The track reports where the pointer is; `range_moved` says which end that
-# asks to move and where, and `range_takes?` says whether it should move at
-# all -- a bare move over the track is a pointer passing by, not a hand on a
-# handle. The drag flag is this handler's, because the widget holds no state.
+# Both ends arrive together, because the client moved one of them and knows
+# what the other is. `range_moved`, `range_takes?` and `range_holding?` were
+# all the inference this used to need, and the drag flag was the state that
+# inference ran on; the client resolves the gesture now and there is nothing
+# left here but the pair.
+#
+# The keyboard went with them: each handle is its own focus stop, so the
+# arrows move the one the ring is on and no longer have to pick a side.
 def erp_demo_range(state, params, props)
-  kind = (params["kind"] ?? "").to_s
-  payload = params["payload"] ?? [0, 0]
-  return erp_demo_range_key(state, (payload[0] ?? "").to_s) if kind == "key_down"
-
-  return state unless range_takes?(kind, state["demo_range_drag"] ?? false)
-
-  moved = range_moved(props, payload[0] ?? 0)
-  out = set_key(set_key(state, "demo_low", int(moved["low"])), "demo_high", int(moved["high"]))
-  set_key(out, "demo_range_drag", range_holding?(kind))
-end
-
-# The arrows nudge the low end, Shift is not read: a range with one keyboard
-# and two handles has to say which it is moving, and the low one is the one
-# a person reaches for first. Home and End take it to the ends.
-def erp_demo_range_key(state, key)
-  low = state["demo_low"] ?? 0
-  high = state["demo_high"] ?? 10000
-  step = 250
-  low = low + step if key == "ArrowRight" || key == "ArrowUp"
-  low = low - step if key == "ArrowLeft" || key == "ArrowDown"
-  low = 0 if key == "Home"
-  low = high if key == "End"
+  pair = params["payload"] ?? []
+  low = int(pair[0] ?? state["demo_low"] ?? 0)
+  high = int(pair[1] ?? state["demo_high"] ?? 10000)
   low = 0 if low < 0
+  high = 10000 if high > 10000
   low = high if low > high
-  set_key(state, "demo_low", low)
+  set_key(set_key(state, "demo_low", low), "demo_high", high)
 end
 
 # The selection, scoped to this demo. `selection_scoped` empties it when the
@@ -1633,11 +1595,13 @@ def erp_inputs_card(state, lay)
       spec_of("switch", switch("Nightly digest", state["cat_switch"] == true, "cat_switch", {})),
       spec_of("radio_group", radio_group(["Standard", "Express"], (state["cat_radio"] ?? "").to_s, "cat_radio", {"key": "cat_radio"})),
       spec_of("rating", rating(state["demo_rating"] ?? 0, "demo_rate", {"key": "cat_rate"})),
-      spec_of("slider", slider(state["slider"] ?? 40, 0, 100, "slider", {"dragging": state["slider_drag"] == true})),
+      spec_of("slider", slider(state["slider"] ?? 40, 0, 100, "slider", {"step": 5})),
       spec_of("range_slider", column({"gap": 1}, [
         range_slider(state["demo_low"] ?? 0, state["demo_high"] ?? 0, 0, 10000, "demo_range", {
           "key": "cat_range",
-          "dragging": state["demo_range_drag"] == true
+          "step": 250,
+          "low_label": "From",
+          "high_label": "To"
         }),
         muted(grouped_number(state["demo_low"] ?? 0) + " to " + grouped_number(state["demo_high"] ?? 0) + " €")
       ]))
@@ -3143,13 +3107,20 @@ def erp_preferences_card(state, lay)
       switch("Email me on low stock", state["notify"] == true, "notify", {"id": "notify"})
     ]
   )
-  # The slider's key is the one the client looks for: it updates the caption
-  # locally, without a round trip, and the atom it looks up is this name.
+  # The caption is the server's, and one quantised step behind the thumb.
+  #
+  # It used to be the client's: it looked this key up *by name* -- the demo's
+  # own atom, compiled into the client -- and rewrote the text locally while
+  # the drag ran, because the drag was a round trip per mouse move and no
+  # caption could keep up with one. The client owns the thumb now and speaks
+  # only when the step changes, so the caption trails by one of those, which
+  # is the lag every other value in this application has. The key stays
+  # because it is a diff key: the text is patched, not rebuilt.
   right = column(
     {"gap": 2, "grow": 1, "basis": 260},
     [
       muted("Low stock threshold"),
-      keyed("gallery_slider", slider(state["slider"], 0, 100, "slider")),
+      keyed("gallery_slider", slider(state["slider"], 0, 100, "slider", {"step": 5})),
       keyed("gallery_slider_value", muted("Value " + str(state["slider"])))
     ]
   )
@@ -3754,7 +3725,6 @@ def erp_chrome_defaults
     "demo_rating": 4,
     "demo_confirm": false,
     "demo_low": 2000,
-    "demo_range_drag": false,
     "demo_high": 8000,
     "demo_amount": "1500",
     "demo_rows": [],
@@ -3923,7 +3893,6 @@ def erp_settings_defaults
     "digest": true,
     "notify": false,
     "slider": 40,
-    "slider_drag": false,
     # The editor's buffer. Seeded on the first look rather than here, so the
     # sample is split once a session and not once an event.
     "ed": {}

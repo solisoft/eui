@@ -277,6 +277,28 @@ struct Tab {
     /// beside each other were not written at the same size, and a person
     /// who made one readable did not ask for the other to change.
     zoom: f32,
+    /// The addresses this tab has been at, oldest first, and where in them
+    /// it is standing. Opening a new one from anywhere but the end drops
+    /// everything after it, which is what every back button has always done.
+    ///
+    /// It survives `open_url`, which replaces the whole `Tab`: a history
+    /// that a step through it threw away would be a back button that works
+    /// once. Carried across the replacement beside the zoom, and for the
+    /// same reason — neither belongs to the session, both belong to the tab.
+    history: Vec<String>,
+    /// Where in `history` this tab is standing.
+    at: usize,
+}
+
+/// What opening an address does to the tab's trail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trail {
+    /// A new destination: it goes on the end, and anything ahead is dropped.
+    Push,
+    /// A reload: the trail is untouched and the tab stands where it stood.
+    Stay,
+    /// A step through it: this entry, without adding one.
+    At(usize),
 }
 
 /// One window: the surface, the chrome, and the applications in it.
@@ -593,6 +615,8 @@ impl Tab {
             files: Files::default(),
             shown_link: None,
             zoom: 1.0,
+            history: Vec::new(),
+            at: 0,
         };
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
@@ -724,7 +748,7 @@ impl Tab {
         let (origin, path) = split_origin(&self.url);
         let component = crate::chrome::component_of(&self.url);
         let title = if component.is_empty() { self.title.as_str() } else { component };
-        crate::chrome::TabView { title, origin, path, trust: Some(self.trust), link: self.link_word() }
+        crate::chrome::TabView { title, origin, path, trust: Some(self.trust), link: self.link_word(), can_back: self.at > 0, can_forward: self.at + 1 < self.history.len() }
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {
@@ -1215,7 +1239,7 @@ impl Shell {
         // An empty shell still shows one tab, so there is something to
         // click and something to type into.
         if views.is_empty() {
-            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None };
+            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false };
             chrome.set_trouble(None);
             chrome.rebuild(&[blank], 0);
         } else {
@@ -1237,15 +1261,43 @@ impl Shell {
 
     /// Open `url` in the active tab, or in a new one if there is none.
     fn open_url(&mut self, url: String, renderer: &eui_render::Renderer) {
+        self.go_to(url, renderer, Trail::Push);
+    }
+
+    /// Open `url` in the active tab, and what that does to the tab's trail.
+    fn go_to(&mut self, url: String, renderer: &eui_render::Renderer, trail: Trail) {
         let (w, h) = self.content_size();
         // The zoom stays with the tab, not with the session in it: a reload
         // — which comes through here — would otherwise throw it away, and
         // so would typing the same address again.
         let zoom = self.zoom();
         let scale = self.app_scale();
+        // Likewise the trail. `Tab::open` makes a new tab and the old one is
+        // dropped below, so anything that belongs to the tab rather than to
+        // the session in it has to be carried over by hand.
+        let (mut history, mut at) = self.tabs.get(self.active).map_or_else(|| (Vec::new(), 0), |t| (t.history.clone(), t.at));
+        match trail {
+            Trail::Push => {
+                // Opening from the middle drops what was ahead: the forward
+                // half of a trail is a guess about where somebody was going,
+                // and going somewhere else is the answer to it.
+                if !history.is_empty() {
+                    history.truncate(at.saturating_add(1));
+                }
+                // The same address twice running is a reload, not a step.
+                if history.last().map(String::as_str) != Some(url.as_str()) {
+                    history.push(url.clone());
+                }
+                at = history.len().saturating_sub(1);
+            }
+            Trail::Stay => {}
+            Trail::At(n) => at = n,
+        }
         let launch = Launch::new(url, 0);
         let mut tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
         tab.zoom = zoom;
+        tab.history = history;
+        tab.at = at;
         if let Some(slot) = self.tabs.get_mut(self.active) {
             let old = std::mem::replace(slot, tab);
             old.close("replaced");
@@ -1256,6 +1308,21 @@ impl Shell {
         let at = self.active;
         self.theme_one(at);
         self.rebuild_chrome();
+    }
+
+    /// A step back or forward through the active tab's trail. Nothing at
+    /// either end: the buttons are drawn dim there and this is the guard
+    /// behind them.
+    fn step(&mut self, back: bool, renderer: &eui_render::Renderer) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(to) = (if back { t.at.checked_sub(1) } else { (t.at + 1 < t.history.len()).then(|| t.at + 1) }) else {
+            return;
+        };
+        let Some(url) = t.history.get(to).cloned() else { return };
+        if let Some((c, _)) = &mut self.chrome {
+            c.leave_address();
+        }
+        self.go_to(url, renderer, Trail::At(to));
     }
 
     /// Close tab `n`. The last one takes the window with it.
@@ -1301,10 +1368,16 @@ impl Shell {
                 self.rebuild_chrome();
             }
             A::Reload => {
+                // The same address from nothing, standing where it stands: a
+                // reload is not a step, and a trail that grew an entry every
+                // time a server was restarted would be a back button that
+                // goes nowhere.
                 if let Some(url) = self.tabs.get(self.active).map(|t| t.url.clone()) {
-                    self.open_url(url, renderer);
+                    self.go_to(url, renderer, Trail::Stay);
                 }
             }
+            A::Back => self.step(true, renderer),
+            A::Forward => self.step(false, renderer),
             A::Open(url) => {
                 if let Some((c, _)) = &mut self.chrome {
                     c.leave_address();

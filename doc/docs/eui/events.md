@@ -72,9 +72,12 @@ and on a phone.
 One contact is followed at a time; a second is ignored while the first is
 live. What it becomes depends on what it landed on:
 
-- A node that asked to hear `pointer_move` — a slider, a split bar, a
-  scrollbar thumb — **takes** the stroke. Every move is a `pointer_move` at
-  the finger, the lift is a `pointer_up`, and the view does not scroll.
+- A node that asked to hear `pointer_move` — a split bar, a scrollbar
+  thumb — **takes** the stroke. Every move is a `pointer_move` at the finger,
+  the lift is a `pointer_up`, and the view does not scroll. So does a node
+  carrying `track` (03 §3.4), which takes the stroke on the strength of the
+  prop and reports no moves at all: a slider on a phone must not scroll the
+  page, and that is the only thing its old `pointer_move` handler was for.
 - Anything else leaves it **undecided**, and the pointer stays where it
   landed. Lift it and that is a tap: `pointer_up` and `click`, so a tap
   that wobbles a few pixels still reaches what it was aimed at. Move it

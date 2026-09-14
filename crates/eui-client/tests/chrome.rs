@@ -15,9 +15,9 @@ const H: f32 = 560.0;
 
 fn tabs() -> Vec<TabView<'static>> {
     vec![
-        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None },
-        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned), link: None },
-        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local), link: None },
+        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false },
+        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false },
+        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local), link: None, can_back: false, can_forward: false },
     ]
 }
 
@@ -61,7 +61,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
     // A tab with no application: the chrome owns the window below the
     // strip and gives its own field the focus, so the first keystroke is
     // already part of an address.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
     assert!(chrome.is_blank());
     assert!(!chrome.content_top().is_finite(), "no application has room in an empty tab");
 
@@ -77,7 +77,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
 #[test]
 fn an_empty_address_opens_nothing() {
     let mut chrome = Chrome::new(W, H, 1.0);
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
     let _ = chrome.input(Input::Text("   ".to_owned()));
     let out = chrome.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
     assert!(out.is_empty(), "whitespace is not an address");
@@ -168,7 +168,7 @@ fn the_keyboard_changes_hands_with_the_address_bar() {
     assert!(!chrome.holds_keys(), "leaving gives it back");
 
     // An empty tab always holds it: its page is the chrome's own.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
     assert!(chrome.holds_keys(), "an empty tab has no application to give it to");
 }
 
@@ -200,7 +200,7 @@ fn the_chromes_ground_follows_the_palette_it_is_put_in() {
 }
 
 fn blank() -> Vec<TabView<'static>> {
-    vec![TabView { title: "New tab", origin: "", path: "", trust: None, link: None }]
+    vec![TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }]
 }
 
 fn recents() -> Vec<eui_client::recent::Recent> {
@@ -277,4 +277,31 @@ fn typing_takes_the_keyboard_back_and_keeps_what_was_typed() {
     assert_eq!(out, vec![Action::Rebuild], "the highlight goes");
     chrome.rebuild(&blank(), 0);
     assert_eq!(press(&mut chrome, "Enter"), vec![Action::Open("wss://c.exam".to_owned())], "the address survived");
+}
+
+fn one_tab(back: bool, forward: bool) -> Vec<TabView<'static>> {
+    vec![TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: back, can_forward: forward }]
+}
+
+/// Back and forward sit before the address, in that order, and keep their
+/// place when there is nowhere to go — an arrow that vanishes takes the
+/// address bar sideways with it.
+#[test]
+fn the_arrows_before_the_address_step_through_the_tabs_trail() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    chrome.rebuild(&one_tab(true, true), 0);
+    // The address row is the 44 px band under the 36 px strip; the two boxes
+    // are 28 px wide from the row's 6 px padding, with a 4 px gap.
+    let (back, forward) = ((20.0, 58.0), (52.0, 58.0));
+    assert_eq!(click(&mut chrome, back.0, back.1), vec![Action::Back]);
+    assert_eq!(click(&mut chrome, forward.0, forward.1), vec![Action::Forward]);
+
+    // Nowhere to go: the same two points answer nothing, and the address
+    // field has not moved.
+    let field = click(&mut chrome, 300.0, 58.0);
+    chrome.rebuild(&one_tab(false, false), 0);
+    assert!(click(&mut chrome, back.0, back.1).is_empty(), "no trail behind");
+    assert!(click(&mut chrome, forward.0, forward.1).is_empty(), "none ahead");
+    assert_eq!(click(&mut chrome, 300.0, 58.0), field, "and the address is where it was");
+    assert_eq!(field, vec![Action::EditAddress], "which is the address bar");
 }

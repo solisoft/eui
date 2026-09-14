@@ -634,8 +634,9 @@ and no one who is not on this session can fetch them.
 
 ### 3.4 What a node may claim of the pointer
 
-Five props, for the gesture a server cannot resolve because it does not own
-the hand: picking something up and putting it somewhere else.
+Five props and a family, for the two gestures a server cannot resolve
+because it does not own the hand: picking something up and putting it
+somewhere else, and running a value along a line.
 
 | Prop | Value | Means |
 |---|---|---|
@@ -644,6 +645,7 @@ the hand: picking something up and putting it somewhere else.
 | `drag_handle` | boolean | a press here grabs at once, without the slop or the hold |
 | `drag_axis` | `"x"`, `"y"` or `"both"` | which way a slot moves, and which arrows move it |
 | `drag_only` | boolean | this node hears `pointer_move` only while a button is down |
+| `track` | `"x"` or `"y"` | this node is a value on a line, running that way |
 
 **There is no "reorder me".** Reordering is the case where the item's own
 parent is the target, so a container that `accepts` what its children `drag`
@@ -681,6 +683,92 @@ The pointer's shape follows from `drag` without any style: **`grab` over a node
 resolving `drag`**, and `grabbing` over everything while a drag is live. Both
 already exist in the `cursor` scale, and an application that wants a different
 shape still says so in the style, which wins as it does for everything else.
+
+**The track.** A slider is the widget a server is told a hundred times what it
+needed to be told five times. The hand moves continuously along a line; the
+value moves in steps. So a node carrying `track` says which way its line runs,
+and the client resolves the whole of the hand along it — which handle a press
+takes, where it goes, which step the pointer is in — and reports only what a
+person would call a change: a `change` event ([`06-events.md`](06-events.md)
+§1) carrying the new value, and nothing at all for the samples in between. It
+is §6 of [`06-events.md`](06-events.md)'s argument one widget further:
+**the client owns the hand, the server owns the value.**
+
+Four props say what the line means, read from the node carrying `track`:
+
+| Prop | Value | Means |
+|---|---|---|
+| `track_min` | integer | the value at the start of the line; default `0` |
+| `track_max` | integer | the value at its end; default `100` |
+| `track_step` | integer above zero | the quantum the value lands on; default `1` |
+| `track_value` | integer, or `List` of two | where the handle is, or both handles |
+
+and one names the parts the client places, on any **descendant** of the track:
+
+| `track_part` | Means |
+|---|---|
+| `"groove"` | the line itself, stretched along the whole track |
+| `"fill"` | the part of the line the value covers |
+| `"thumb"` | a handle: one, or two in document order |
+
+A track with two `thumb` parts is a range: `track_value` then carries two
+numbers, and the `fill` runs between the handles rather than from the start.
+A track with no parts at all still resolves a value and draws nothing.
+
+**The geometry is the client's and is fixed here**, because a widget whose
+thumb sits in a different place on two clients is not one widget. Along the
+axis the handles' centres travel the track's extent **less one thumb's**, so a
+handle at either end is inside the line rather than half outside it.
+`track_min` is at the left of an `"x"` track and at the **bottom** of a `"y"`
+one. The value under a pointer is the value at the centre of the handle it
+holds, quantised to the nearest whole `track_step` from `track_min` and
+clamped to the ends; the same arithmetic run backwards places the handle, so
+**the value read at a handle is the value that put it there**. The server
+sends `track_value` and nothing about geometry — no fill width, no baked-in
+track width — because the only width that was ever true is the one the client
+laid out.
+
+A press on a handle takes that handle and holds it at the offset it was
+grabbed at, so nothing jumps to centre itself under the finger. A press
+anywhere else takes the handle nearer the value pressed, moves it there at
+once, and reports it. Two handles on the same value are told apart by which
+side the press is on, and a press on neither side takes the second — so a pair
+closed at the minimum can still be opened. **A gesture keeps the handle its
+press chose**, however far it travels: a handle that changed identity under a
+finger that never left it would be a different thing in the hand. A handle
+dragged into the other stops against it; they may meet and they never swap.
+
+A press that lands on a track does not also arm a drag
+([`06-events.md`](06-events.md) §6.1): the track is the more specific claim,
+and a card with a slider on it is moved by its handle or by its margin. A
+`track_part` node's own descendants are **not** carried with it — a part draws
+its own box, and a handle with a label inside it is outside what this version
+places locally.
+
+**No handler appears or disappears for the gesture.** A track declares
+`change` once and keeps it, and declares no `pointer_move` at all — which is
+what `drag_only` above exists to work around, and which this makes unnecessary
+for the case `drag_only` was invented for. The warning above applies in full: a
+track that gained a handler on its press would lose the events already in
+flight when it lost it again.
+
+**A track is reached without a pointer.** Each `thumb` is focusable (§3), so
+`Tab` steps through a range's two handles and the arrows always mean the one
+the ring is on — there is no modifier to say which, and no state remembering
+which moved last. The arrows along the axis move the focused handle one
+`track_step`, the page keys ten, `Home` and `End` go to the ends, and none of
+those keys is reported: only the `change` they make
+([`06-events.md`](06-events.md) §3). On a touch screen a contact landing on a
+track takes the stroke, so the view beneath it does not scroll (§5 there) —
+that is the one thing a `pointer_move` handler used to be declared for.
+
+**Accessibility follows without being said twice.** `value_now`, `value_min`
+and `value_max` (§6.1) fall back to `track_value`, `track_min` and `track_max`,
+and while a hand is on the track the value exposed is the one the client is
+drawing rather than the one the last batch carried. Five props on the track and
+one per part, against the `min`, `max` and `width` they replace, leave
+`MAX_PROPS` ([`02-wire-format.md`](02-wire-format.md) §6) further from its
+ceiling than before.
 
 
 ## 4. The catalogue contract

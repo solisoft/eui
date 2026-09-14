@@ -357,6 +357,9 @@ impl Driver {
             busy: id("busy"),
             modal: id("modal"),
             value_now: id("value_now"),
+            track_value: id("track_value"),
+            track_min: id("track_min"),
+            track_max: id("track_max"),
             value_min: id("value_min"),
             value_max: id("value_max"),
             pos_in_set: id("pos_in_set"),
@@ -518,6 +521,11 @@ struct AccessAtoms {
     busy: Option<u32>,
     modal: Option<u32>,
     value_now: Option<u32>,
+    /// 03 §3.4's track props, so a slider need not say everything twice:
+    /// `value_now`/`value_min`/`value_max` fall back to them.
+    track_value: Option<u32>,
+    track_min: Option<u32>,
+    track_max: Option<u32>,
     value_min: Option<u32>,
     value_max: Option<u32>,
     pos_in_set: Option<u32>,
@@ -588,9 +596,12 @@ impl AccessAtoms {
             invalid: self.flag(node, self.invalid),
             busy: self.flag(node, self.busy),
             modal: self.flag(node, self.modal),
-            value_now: self.value_now.and_then(|a| node.prop(a)).and_then(num_of),
-            value_min: self.value_min.and_then(|a| node.prop(a)).and_then(num_of),
-            value_max: self.value_max.and_then(|a| node.prop(a)).and_then(num_of),
+            // A track declares its value once. `track_value` may be a pair
+            // on a range; the group reports no single number for that, and
+            // each thumb carries its own (03 §3.4).
+            value_now: self.value_now.and_then(|a| node.prop(a)).and_then(num_of).or_else(|| self.track_value.and_then(|a| node.prop(a)).and_then(num_of)),
+            value_min: self.value_min.and_then(|a| node.prop(a)).and_then(num_of).or_else(|| self.track_min.and_then(|a| node.prop(a)).and_then(num_of)),
+            value_max: self.value_max.and_then(|a| node.prop(a)).and_then(num_of).or_else(|| self.track_max.and_then(|a| node.prop(a)).and_then(num_of)),
             pos_in_set: self.count(node, self.pos_in_set),
             set_size: self.count(node, self.set_size),
             level: self.count(node, self.level),

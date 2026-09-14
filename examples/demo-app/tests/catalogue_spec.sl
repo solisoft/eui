@@ -68,38 +68,86 @@ def filter_group?(it)
   !(it["items"]).nil?
 end
 
-def range_takes?(kind, dragging)
-  said = (kind ?? "").to_s
-  return true if said == "click" || said == "pointer_down" || said == "pointer_up"
-
-  said == "pointer_move" && dragging == true
+def track_part(part, style)
+  {"k": "box", "s": style, "p": {"track_part": part}, "c": []}
 end
 
-def range_holding?(kind)
-  said = (kind ?? "").to_s
-  said == "pointer_down" || said == "pointer_move"
+def track_thumb(label, at, floor_v, ceil_v)
+  {
+    "k": "box",
+    "s": {
+      "width": 14, "height": 14, "radius": 4, "shrink": 0,
+      "bg": "accent.base", "border": 2, "border_color": "surface.base"
+    },
+    "p": {
+      "track_part": "thumb",
+      "role": "slider",
+      "label": label,
+      "value_now": at,
+      "value_min": floor_v,
+      "value_max": ceil_v,
+      "orientation": "horizontal"
+    },
+    "c": []
+  }
 end
 
-def range_moved(props, x)
-  # Not `min`/`max`: both are builtins, and a bare assignment rebinds the
-  # global -- the static checker rejects the file outright, which is the one
-  # mercy in this family of mistakes.
-  floor_v = props["min"] ?? 0
-  ceil_v = props["max"] ?? 100
-  width = props["width"] ?? 240
-  width = 1 if width <= 0
-  at = floor_v + (ceil_v - floor_v) * x / width
-  at = floor_v if at < floor_v
-  at = ceil_v if at > ceil_v
-  low = props["low"] ?? floor_v
-  high = props["high"] ?? ceil_v
-  near_low = (at - low) < 0 ? low - at : at - low
-  near_high = (at - high) < 0 ? high - at : at - high
-  return {"low": at, "high": high} if near_low <= near_high && at <= high
+def slider(value, min, max, on_set, o = {})
+  {
+    "k": "box",
+    "s": {"display": "row", "align": "center", "width": o["width"] ?? 240, "height": 24, "cursor": "grab"},
+    "p": {
+      "track": "x",
+      "track_min": min,
+      "track_max": max,
+      "track_step": o["step"] ?? 1,
+      "track_value": value,
+      "role": "slider",
+      "label": o["label"] ?? "Value",
+      "value_now": value,
+      "value_min": min,
+      "value_max": max,
+      "orientation": "horizontal"
+    },
+    "on": {"change": on_set},
+    "c": [
+      track_part("groove", {"height": 4, "bg": "surface.sunken", "radius": 4}),
+      track_part("fill", {"height": 4, "bg": "accent.base", "radius": 4}),
+      {
+        "k": "box",
+        "s": {
+          "width": 16, "height": 16, "radius": 4, "shrink": 0,
+          "bg": "accent.base", "border": 2, "border_color": "surface.base"
+        },
+        "p": {"track_part": "thumb"},
+        "c": []
+      }
+    ]
+  }
+end
 
-  return {"low": low, "high": at} if at >= low
-
-  at <= low ? {"low": at, "high": high} : {"low": low, "high": at}
+def range_slider(low, high, min, max, on_set, o = {})
+  {
+    "k": "box",
+    "key": o["key"] ?? "range",
+    "s": {"display": "row", "align": "center", "width": o["width"] ?? 240, "height": 24, "cursor": "grab"},
+    "p": {
+      "track": "x",
+      "track_min": min,
+      "track_max": max,
+      "track_step": o["step"] ?? 1,
+      "track_value": [low, high],
+      "role": "group",
+      "label": o["label"] ?? "Range"
+    },
+    "on": {"change": on_set},
+    "c": [
+      track_part("groove", {"height": 4, "bg": "surface.sunken", "radius": 4}),
+      track_thumb(o["low_label"] ?? "From", low, min, high),
+      track_part("fill", {"height": 4, "bg": "accent.base", "radius": 4}),
+      track_thumb(o["high_label"] ?? "To", high, low, max)
+    ]
+  }
 end
 
 def diff_tally(lines)
@@ -109,11 +157,7 @@ def diff_tally(lines)
 end
 
 def check(label, got, want)
-  if got == want
-    print("ok   " + label)
-  else
-    print("FAIL " + label + " got " + got.to_s + " want " + want.to_s)
-  end
+  assert_eq(got, want)
 end
 
 # ---- the tree the filter builder walks ----
@@ -164,36 +208,50 @@ check("a blank condition takes the first field", filter_blank(FIELDS, CMPS)["fie
 check("and the first comparator", filter_blank(FIELDS, CMPS)["cmp"], "is")
 check("a blank group starts with one condition", (filter_group_blank(FIELDS, CMPS)["items"]).length(), 1)
 
-# ---- when a range moves at all ----
+# ---- what a track declares ----
 #
-# The bug this pins: a track reports `pointer_move` whenever the pointer
-# crosses it, so a handler that takes every move has handles that follow the
-# pointer without anybody pressing anything.
+# The arithmetic these used to check is the client's now: `range_takes?`
+# gated a `pointer_move` the widget no longer declares, and `range_moved`
+# inverted a pointer offset against a `width` baked into the props. Both are
+# gone, and what is checked here is that the tree still says what a track is
+# -- the client reads nothing else (03 §3.4).
+#
+# The behaviour they pinned did not go with them: it is in
+# `crates/eui-client/tests/driver.rs`, where the hand that resolves it is.
 
-check("a press takes", range_takes?("pointer_down", false), true)
-check("a click takes", range_takes?("click", false), true)
-check("a release takes", range_takes?("pointer_up", true), true)
-check("a move with a hand down takes", range_takes?("pointer_move", true), true)
-check("a move with no hand down does not", range_takes?("pointer_move", false), false)
-check("a key is not a pointer", range_takes?("key_down", true), false)
-check("nothing is not a pointer", range_takes?(null, true), false)
+RS = range_slider(2000, 8000, 0, 10000, "demo_range", {"step": 250})
 
-check("a press means a hand is on it", range_holding?("pointer_down"), true)
-check("a gated move means it is still on it", range_holding?("pointer_move"), true)
-check("a release means it is gone", range_holding?("pointer_up"), false)
-check("a click is not a hand held down", range_holding?("click"), false)
+check("a range declares its axis", RS["p"]["track"], "x")
+check("and what it measures", RS["p"]["track_max"], 10000)
+check("and how finely", RS["p"]["track_step"], 250)
+check("both ends travel together", RS["p"]["track_value"], [2000, 8000])
+check("it carries no width to invert against", RS["p"]["width"], null)
+check("and no pointer handler to gate", RS["on"]["pointer_move"], null)
+check("one handler, and it is the value", (RS["on"].keys()).length(), 1)
+check("which is `change`", RS["on"]["change"], "demo_range")
 
-# ---- which end of a range a pointer asks for ----
+RS_PARTS = RS["c"].map(fn(c) { (c["p"] ?? {})["track_part"] })
 
-SPAN = {"min": 0, "max": 100, "width": 200, "low": 20, "high": 80}
+check("the parts are named, not counted", RS_PARTS, ["groove", "thumb", "fill", "thumb"])
+check("two handles make a range", RS_PARTS.filter(fn(x) { x == "thumb" }).length(), 2)
 
-check("a press near the low handle moves it", range_moved(SPAN, 50)["low"], 25)
-check("and leaves the high one", range_moved(SPAN, 50)["high"], 80)
-check("a press near the high handle moves it", range_moved(SPAN, 170)["high"], 85)
-check("and leaves the low one", range_moved(SPAN, 170)["low"], 20)
-check("past the right edge clamps to max", range_moved(SPAN, 400)["high"], 100)
-check("past the left edge clamps to min", range_moved(SPAN, 0 - 50)["low"], 0)
-check("the ends never cross", range_moved(SPAN, 0)["low"] <= range_moved(SPAN, 0)["high"], true)
+# Each handle is its own stop and its own slider, bounded by the one beside
+# it -- which is how two of them cannot cross without a line of code here.
+RS_LOW = RS["c"][1]
+RS_HIGH = RS["c"][3]
+
+check("a handle is a slider to a reader", RS_LOW["p"]["role"], "slider")
+check("the low end stops at the high one", RS_LOW["p"]["value_max"], 8000)
+check("and the high end starts at the low one", RS_HIGH["p"]["value_min"], 2000)
+check("each says which it is", RS_HIGH["p"]["label"], "To")
+
+SL = slider(40, 0, 100, "slider", {"step": 5})
+
+SL_THUMBS = SL["c"].filter(fn(c) { (c["p"] ?? {})["track_part"] == "thumb" })
+
+check("a slider is the same thing with one handle", SL_THUMBS.length(), 1)
+check("its value is a number, not a pair", SL["p"]["track_value"], 40)
+check("and it too has one handler", (SL["on"].keys()).length(), 1)
 
 # ---- what a patch adds and takes away ----
 

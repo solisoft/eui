@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use eui_client::{connect, Driver, Incoming, Input};
-use eui_proto::{EventKind, Frame};
+use eui_proto::{EventKind, Frame, Value};
 
 struct Server(Child);
 impl Drop for Server {
@@ -671,32 +671,55 @@ fn the_gallery_mounts_and_its_widgets_respond() {
     pump(&mut d, &conn, &wake, |d| has(d, "October 2026"));
     assert!(has(&d, "2026-09-15"), "the pick survives turning the month");
 
-    // ---- Settings: the typed fields, and the slider the client captions.
+    // ---- Settings: the typed fields, and the track the client resolves.
     goto(&mut d, &conn, &wake, "Settings", "Legal name");
     assert!(!has(&d, "A tooltip"), "the tooltip belongs to the dashboard");
     let value = within(&d, "Low stock threshold", "Value 40");
     let track = slider_track(&d, value);
+    let thumb = track_thumb(&d, track);
     let _ = d.paint(1000, 3600);
     let r = d.layout().rect(track).unwrap();
+    // Three quarters along the *travel*, which is the track less a thumb:
+    // 172 of 224 is 76.8, and the step of 5 puts it on 75.
     d.input(Input::PointerMove(r.x + r.w * 0.75, r.y + r.h / 2.0));
-    d.input(Input::PointerDown(0));
-    for f in d.input(Input::PointerUp(0)) {
+    let said = d.input(Input::PointerDown(0));
+    for f in said.iter().cloned().chain(d.input(Input::PointerUp(0))) {
         conn.tx.send(f.encode()).unwrap();
     }
+    // The press is the change, and it carries the value rather than a
+    // pointer offset for the server to invert.
+    assert!(said.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Change && matches!(&e.payload, Value::Int(75)))), "the press said the value: {said:?}");
     pump(&mut d, &conn, &wake, |d| has(d, "Value 75"));
     for _ in 0..400 {
-        if d.focused() == Some(track) {
+        if d.focused() == Some(thumb) {
             break;
         }
         for f in d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true }) {
             conn.tx.send(f.encode()).unwrap();
         }
     }
-    assert_eq!(d.focused(), Some(track), "Tab reaches the slider: it has a click handler");
+    assert_eq!(d.focused(), Some(thumb), "Tab reaches the handle: a thumb is the stop (03 §3.4)");
     for f in d.input(Input::Key { key: "ArrowRight".into(), modifiers: 0, down: true }) {
         conn.tx.send(f.encode()).unwrap();
     }
     pump(&mut d, &conn, &wake, |d| has(d, "Value 80"));
+
+    // The whole point: a sweep of the track costs one event per step it
+    // crosses, and none at all for the samples between them. This used to
+    // be one round trip and one whole re-rendered page per mouse position.
+    let _ = d.paint(1000, 3600);
+    let r = d.layout().rect(track).unwrap();
+    let mid = r.y + r.h / 2.0;
+    d.input(Input::PointerMove(r.x + 8.0, mid));
+    let mut sent = d.input(Input::PointerDown(0)).len();
+    for k in 0..60 {
+        let at = r.x + 8.0 + (r.w - 16.0) * k as f32 / 60.0;
+        sent += d.input(Input::PointerMove(at, mid)).len();
+        let _ = d.paint(1000, 3600);
+        sent += d.take_pending().len();
+    }
+    sent += d.input(Input::PointerUp(0)).len();
+    assert!(sent <= 24, "sixty samples across twenty steps cost {sent} frames, not one per sample");
 
     // A field keeps what was typed across server round trips the app does
     // not care about, and a later click lands the caret in that text.
@@ -733,15 +756,20 @@ fn the_gallery_mounts_and_its_widgets_respond() {
 
 /// The node showing `text` inside the titled card `title` — the card is the
 /// title's parent, so two calendars showing "15" never collide.
-/// The slider's row, found from its value label: it is the sibling just
-/// above it. The column carries a heading too, so the track is not simply
-/// the first child.
+/// The track beside a value label: the node that says it is one (03 §3.4).
+///
+/// Found by its prop rather than by counting siblings, so the test stops
+/// knowing how the builder ordered the column.
 fn slider_track(d: &Driver, value: eui_tree::NodeIx) -> eui_tree::NodeIx {
     let parent = d.session().node(value).unwrap().parent;
-    let kids = d.session().children(parent).to_vec();
-    let at = kids.iter().position(|c| *c == value).expect("a label is one of its parent's children");
-    assert!(at > 0, "the value label follows the track it belongs to");
-    kids[at - 1]
+    let atom = d.session().atom_id("track").expect("the catalogue declares a track");
+    d.session().preorder(parent).find(|ix| d.session().node(*ix).is_some_and(|n| n.prop(atom).is_some())).expect("a track beside the value label")
+}
+
+/// A track's first handle: the focus stop, and what the arrows move.
+fn track_thumb(d: &Driver, track: eui_tree::NodeIx) -> eui_tree::NodeIx {
+    let atom = d.session().atom_id("track_part").expect("the catalogue names its parts");
+    d.session().preorder(track).find(|ix| d.session().node(*ix).and_then(|n| n.prop(atom)).is_some_and(|v| matches!(v, Value::Str(s) if s == "thumb"))).expect("a track has a thumb")
 }
 
 /// The node showing `text` in the region `title` names — the smallest

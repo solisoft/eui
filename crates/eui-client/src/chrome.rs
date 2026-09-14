@@ -46,6 +46,10 @@ pub enum Action {
     Open(String),
     /// Open the active tab's address again, from nothing.
     Reload,
+    /// A step back through the active tab's trail.
+    Back,
+    /// A step forward through it.
+    Forward,
     /// Leave the address bar and show the address again. Enter on an
     /// unchanged address produces this and nothing else: the driver emits
     /// `Change` only when the text actually moved, so without this a person
@@ -81,6 +85,13 @@ pub struct TabView<'a> {
     pub path: &'a str,
     /// `None` for a tab with no application in it yet.
     pub trust: Option<Trust>,
+    /// Whether this tab has somewhere to go back to, and somewhere to go
+    /// forward to. The chrome draws the arrows dim and inert otherwise —
+    /// rather than hiding them, which would move the address bar sideways
+    /// every time a page was opened.
+    pub can_back: bool,
+    /// See `can_back`.
+    pub can_forward: bool,
     /// What the socket is doing, when that is worth a word: `reconnecting`
     /// while the client is getting the session back, `offline` once it has
     /// given up. `None` while it is simply talking.
@@ -131,6 +142,10 @@ const PLUS: u32 = 3;
 const PLUS_TEXT: u32 = 17;
 const RELOAD: u32 = 18;
 const RELOAD_TEXT: u32 = 19;
+const BACK: u32 = 22;
+const BACK_TEXT: u32 = 23;
+const FWD: u32 = 24;
+const FWD_TEXT: u32 = 25;
 const LINK: u32 = 20;
 const LINK_TEXT: u32 = 21;
 const ADDR: u32 = 4;
@@ -697,6 +712,20 @@ impl Chrome {
             ..Default::default()
         });
         let s_reload_text = b.style(StyleRecord { font_size: 2, ..Default::default() });
+        // Back and forward. The same box as reload, so the three read as one
+        // row of controls; the one with nowhere to go keeps its place and
+        // loses its pointer, because an arrow that vanishes takes the
+        // address bar sideways with it every time a page is opened.
+        let s_step_off = b.style(StyleRecord {
+            display: Display::Row,
+            width: Dim::Px(28),
+            height: Dim::Px(28),
+            justify: Justify::Center,
+            align_items: AlignItems::Center,
+            radius: 2,
+            fg: ColorRef::role(Role::BorderSubtle.id()),
+            ..Default::default()
+        });
         let s_recents = b.style(StyleRecord { display: Display::Column, gap: 1, width: Dim::Px(520), max_width: Dim::Percent(10000), ..Default::default() });
         let s_recent = b.style(StyleRecord {
             display: Display::Row,
@@ -816,7 +845,19 @@ impl Chrome {
             b.close();
         } else {
             let Some(t) = tabs.get(active) else { return };
-            b.open(NodeKind::Box, ADDR, s_addr, 2);
+            b.open(NodeKind::Box, ADDR, s_addr, 4);
+            // Before the address, where a browser has always put them, and
+            // in that order: back, forward, then where you are.
+            for (id, text_id, on, action) in [(BACK, BACK_TEXT, t.can_back, Action::Back), (FWD, FWD_TEXT, t.can_forward, Action::Forward)] {
+                if on {
+                    self.actions.insert(id, action.clone());
+                    self.actions.insert(text_id, action);
+                    b.click();
+                }
+                b.open(NodeKind::Box, id, if on { s_reload } else { s_step_off }, 1);
+                b.text(text_id, s_reload_text, if id == BACK { "\u{2039}" } else { "\u{203a}" });
+                b.close();
+            }
             let chip = t.trust.map(|tr| match tr {
                 Trust::Pinned => ("pinned", s_chip_ok),
                 Trust::Local => ("local", s_chip_local),

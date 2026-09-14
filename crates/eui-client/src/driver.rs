@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use eui_audio::Control;
 use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
-use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_UPLOAD_BYTES};
+use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_TREE_DEPTH, MAX_UPLOAD_BYTES};
 use eui_proto::{
     caps, AlignItems, Batch, Chunked, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, Resume, StyleRecord, Subtree,
     TextAlign, TextRef, ThemeMode, Transfer, Value, Viewport, PROTOCOL_VERSION,
@@ -526,6 +526,103 @@ impl Touch {
     }
 }
 
+/// Which way a track's line runs (03 §3.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrackAxis {
+    X,
+    Y,
+}
+
+/// A node declaring `track`, with what its line measures.
+#[derive(Debug, Clone, Copy)]
+struct Track {
+    node: NodeIx,
+    axis: TrackAxis,
+    min: i64,
+    max: i64,
+    step: i64,
+}
+
+impl Track {
+    /// The nearest whole `step` from `min`, inside the ends. The one place
+    /// a value is quantised, so the pointer, the keyboard and the server's
+    /// own number all land on the same set.
+    fn snap(&self, v: i64) -> i64 {
+        let (lo, hi) = (self.min.min(self.max), self.min.max(self.max));
+        let v = v.clamp(lo, hi);
+        let step = self.step.max(1);
+        let k = (v - self.min).saturating_add(step / 2).div_euclid(step);
+        (self.min + k.saturating_mul(step)).clamp(lo, hi)
+    }
+}
+
+/// Where a track's handles are. `hi` is `None` for a one-thumb track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrackValue {
+    lo: i64,
+    hi: Option<i64>,
+}
+
+/// The pieces of a track the client places.
+#[derive(Debug, Default, Clone)]
+struct TrackParts {
+    groove: Option<NodeIx>,
+    fill: Option<NodeIx>,
+    thumbs: Vec<NodeIx>,
+}
+
+/// The travel a track's handles have, measured this frame.
+#[derive(Debug, Clone, Copy)]
+struct TrackGeom {
+    /// The track's leading edge along the axis.
+    start: f32,
+    /// Its whole extent along the axis.
+    extent: f32,
+    /// Where the centres begin: half a thumb in from `start`.
+    origin: f32,
+    /// How far they travel: the extent less one thumb.
+    span: f32,
+    /// A thumb's size along the axis.
+    thick: f32,
+    /// The middle of the line across the axis.
+    cross_mid: f32,
+}
+
+/// Which handle of a range a gesture took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Handle {
+    Lo,
+    Hi,
+}
+
+/// The track the client is driving -- under the hand, or under the arrows.
+///
+/// 06 §6's argument, for a value rather than a position: the client owns
+/// the gesture and the server is told the number it landed on.
+#[derive(Debug, Clone)]
+struct TrackDrag {
+    track: Track,
+    /// Chosen by the press and kept for the gesture: a handle that changed
+    /// identity mid-drag would be a different thing under a finger that
+    /// never left it.
+    handle: Handle,
+    /// Where in the thumb the pointer took hold, so nothing jumps to centre
+    /// itself under the hand.
+    grab: f32,
+    /// What the client is drawing.
+    value: TrackValue,
+    /// 06 §2's "the last it sent" -- this track's `Edit::seed`.
+    ///
+    /// What was *sent*, never what the server last said. Re-seeding this
+    /// from an answering batch is a livelock: a server that clamps 80 to 75
+    /// would be told 80 again by a hand still at 80, once per round trip,
+    /// for as long as the hand stayed there.
+    sent: Option<TrackValue>,
+    /// A hand is on it. False for a keyboard-only change, and what decides
+    /// whether an answering batch may move the value (07 §6).
+    holding: bool,
+}
+
 /// A field's local edit: the value the server last saw (`seed`), the value
 /// typed since, and the caret and selection anchor as byte offsets into it.
 /// `change` fires only when seed and value differ.
@@ -965,6 +1062,9 @@ pub struct Driver {
     now: Instant,
     next_due: Option<Instant>,
     edits: HashMap<u32, Edit>,
+    /// The track the client is drawing for itself, if any. While it is set
+    /// and held, a server batch does not move it (07 §6).
+    track: Option<TrackDrag>,
     /// The composition an input method is building in the focused field.
     preedit: String,
     /// Text the person copied or cut, for the window to hand the clipboard.
@@ -1181,6 +1281,7 @@ impl Driver {
             now: Instant::now(),
             next_due: None,
             edits: HashMap::new(),
+            track: None,
             preedit: String::new(),
             clipboard: None,
             caret_since: Instant::now(),
@@ -1317,6 +1418,7 @@ impl Driver {
         self.focused = None;
         self.focus_visible = false;
         self.edits.clear();
+        self.track = None;
         self.preedit.clear();
         self.chunks.clear();
         self.provisional.clear();
@@ -1480,6 +1582,20 @@ impl Driver {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
+                // 03 §3.4 and 07 §6: a batch does not move a track under the
+                // hand. The client draws its own value until the gesture ends
+                // and adopts the server's after it, so a server that clamps is
+                // obeyed at the end of the gesture rather than in the middle
+                // of it -- a handle that jumped back under a finger that had
+                // not moved would be the widget fighting the person using it.
+                //
+                // `sent` is deliberately *not* re-seeded from the batch: it is
+                // what was sent, not what the server said. Re-seeding it would
+                // have a hand still at 80 tell a server that clamps to 75 about
+                // 80 again, once per round trip, for as long as it stayed there.
+                if self.track.as_ref().is_some_and(|d| !d.holding || self.session.node(d.track.node).is_none()) {
+                    self.track = None;
+                }
                 self.forget_released();
                 // A `SetText` on a field the person is editing is the server
                 // saying what that field now holds, and the client's buffer
@@ -2091,6 +2207,7 @@ impl Driver {
                 // hand with it, and a drag it cannot see the end of must not
                 // be left open.
                 let mut out = self.finish_drag(true);
+                out.extend(self.track_cancel());
                 out.extend(self.set_focus(None, false));
                 if let Some(pressed) = self.pointer.pressed_on.take() {
                     let (x, y) = (self.pointer.x, self.pointer.y);
@@ -3005,6 +3122,11 @@ impl Driver {
         if self.layout_valid && self.layout.track_pointer(&self.session, x, y) {
             self.redraw = true;
         }
+        // A track resolves its own gesture (03 §3.4): the value moves, the
+        // parts are placed next frame, and no `pointer_move` is emitted.
+        if let Some(out) = self.track_move(x, y) {
+            return out;
+        }
         // A thumb drag needs no layout: the scroller's box does not move.
         if let Some((scroller, grip)) = self.pointer.dragging_thumb {
             return self.drag_thumb(scroller, grip, y);
@@ -3201,100 +3323,412 @@ impl Driver {
         self.emit(from, EventKind::PointerMove, payload)
     }
 
-    /// Place a slider's fill and thumb on the pointer this frame, so a drag
-    /// is not waiting for the server's next tree. The press is often a child
-    /// of the track; the handler node is the row with the three parts.
-    fn follow_slider_drag(&mut self) {
-        let Some(pressed) = self.pointer.pressed_on else {
-            return;
+    /// The props of a node declaring `track` (03 §3.4), read once per
+    /// gesture: they do not change under a hand, and the role sniffing this
+    /// replaced paid for four atom lookups a frame.
+    fn track_of(&self, from: NodeIx) -> Option<Track> {
+        let w = self.session.atoms();
+        let axis = match self.session.node(from)?.prop(w.track?)? {
+            Value::Str(s) if s == "x" => TrackAxis::X,
+            Value::Str(s) if s == "y" => TrackAxis::Y,
+            _ => return None,
         };
-        let Some((ix, _)) = self.target(pressed, EventKind::PointerMove) else {
-            return;
+        let num = |atom: Option<u32>, or: i64| -> i64 {
+            let Some(a) = atom else { return or };
+            match self.session.node(from).and_then(|n| n.prop(a)) {
+                Some(Value::Int(i)) => *i,
+                Some(Value::Float(f)) => *f as i64,
+                _ => or,
+            }
         };
-        // Only a slider. Three children under a `pointer_move` handler is
-        // not enough to know one: a split pane is a panel, a divider and a
-        // panel, dragged by the same handler, and laying its three out as
-        // a track, a thumb and the rest leaves it somewhere it never asked
-        // to be. The node says what it is (03 §9), so ask it.
-        if !self.declares_role(ix, "slider") {
-            return;
-        }
-        let (lead, thumb, rest) = {
-            let kids = self.session.children(ix);
-            let [lead, thumb, rest] = kids[..] else {
-                return;
-            };
-            (lead, thumb, rest)
-        };
-        let Some(track) = self.layout.rect(ix) else {
-            return;
-        };
-        if track.w <= 0.0 {
-            return;
-        }
-        let thumb_w = self.layout.rect(thumb).map(|r| r.w).unwrap_or(16.0);
-        let thumb_h = self.layout.rect(thumb).map(|r| r.h).unwrap_or(16.0);
-        let lead_h = self.layout.rect(lead).map(|r| r.h).unwrap_or(4.0);
-        let rest_h = self.layout.rect(rest).map(|r| r.h).unwrap_or(4.0);
-        let max_lead = (track.w - thumb_w).max(0.0);
-        let at = ((self.pointer.x - track.x) - thumb_w / 2.0).clamp(0.0, max_lead);
-        let mid_y = track.y + track.h / 2.0;
-        self.layout.set_rect(lead, Rect::new(track.x, mid_y - lead_h / 2.0, at, lead_h));
-        self.layout.set_rect(thumb, Rect::new(track.x + at, mid_y - thumb_h / 2.0, thumb_w, thumb_h));
-        let rest_x = track.x + at + thumb_w;
-        self.layout.set_rect(rest, Rect::new(rest_x, mid_y - rest_h / 2.0, (track.x + track.w - rest_x).max(0.0), rest_h));
-        if let Some(value) = self.slider_value_at(ix, track) {
-            self.update_slider_caption(ix, value);
-        }
+        let step = num(w.track_step, 1).max(1);
+        Some(Track { node: from, axis, min: num(w.track_min, 0), max: num(w.track_max, 100), step })
     }
 
-    /// Whether the node declares this accessibility `role` (03 §9).
-    fn declares_role(&self, ix: NodeIx, role: &str) -> bool {
-        let Some(atom) = self.session.atom_id("role") else {
-            return false;
-        };
-        self.session.node(ix).and_then(|n| n.prop(atom)).is_some_and(|v| matches!(v, Value::Str(s) if s == role))
+    /// The track at or above `from`, which is where a press lands: the
+    /// pointer is almost always over a groove or a thumb, not the track.
+    fn track_above(&self, from: NodeIx) -> Option<Track> {
+        let mut at = from;
+        for _ in 0..MAX_TREE_DEPTH {
+            if let Some(t) = self.track_of(at) {
+                return Some(t);
+            }
+            let up = self.session.node(at)?.parent;
+            if up == at {
+                return None;
+            }
+            at = up;
+        }
+        None
     }
 
-    fn slider_value_at(&self, ix: NodeIx, track: Rect) -> Option<i64> {
-        let n = self.session.node(ix)?;
-        let int_prop = |name: &str| {
-            let atom = self.session.atom_id(name)?;
-            match n.prop(atom)? {
+    /// The value the server last put on the track.
+    fn track_value_of(&self, t: &Track) -> TrackValue {
+        let lo_hi = |v: &Value| -> Option<i64> {
+            match v {
                 Value::Int(i) => Some(*i),
                 Value::Float(f) => Some(*f as i64),
                 _ => None,
             }
         };
-        let min = int_prop("min").unwrap_or(0);
-        let max = int_prop("max").unwrap_or(100);
-        let w = track.w.max(1.0);
-        let x = (self.pointer.x - track.x).clamp(0.0, w);
-        let span = (max - min) as f32;
-        Some((min + (x / w * span).round() as i64).clamp(min.min(max), min.max(max)))
+        let at = self.session.atoms().track_value.and_then(|a| self.session.node(t.node).and_then(|n| n.prop(a)));
+        match at {
+            // A pair is a range; one number, or a bare number, is a slider.
+            Some(Value::List(items)) => match &items[..] {
+                [lo, hi, ..] => TrackValue { lo: t.snap(lo_hi(lo).unwrap_or(t.min)), hi: Some(t.snap(lo_hi(hi).unwrap_or(t.max))) },
+                [lo] => TrackValue { lo: t.snap(lo_hi(lo).unwrap_or(t.min)), hi: None },
+                [] => TrackValue { lo: t.min, hi: None },
+            },
+            Some(v) => TrackValue { lo: t.snap(lo_hi(v).unwrap_or(t.min)), hi: None },
+            None => TrackValue { lo: t.min, hi: None },
+        }
     }
 
-    fn update_slider_caption(&mut self, slider: NodeIx, value: i64) {
-        let want = format!("Value {value}");
-        if let Some(atom) = self.session.atom_id("gallery_slider_value") {
-            if let Some(label) = self.session.lookup_key(atom) {
-                let cur = self.session.text_of(label).map(str::to_owned);
-                if cur.as_deref() != Some(want.as_str()) {
-                    self.session.set_text_local(label, want);
+    /// The groove, the fill and the thumbs, in document order. Descendants
+    /// rather than children: a builder may wrap a thumb to position it.
+    fn track_parts(&self, t: &Track) -> TrackParts {
+        let mut parts = TrackParts::default();
+        let Some(atom) = self.session.atoms().track_part else { return parts };
+        for ix in self.session.preorder(t.node) {
+            let Some(v) = self.session.node(ix).and_then(|n| n.prop(atom)) else { continue };
+            match v {
+                Value::Str(s) if s == "groove" => parts.groove = Some(ix),
+                Value::Str(s) if s == "fill" => parts.fill = Some(ix),
+                // Two at most: a third handle has no meaning the client
+                // could resolve, and silently placing it on the second is
+                // less confusing than placing it anywhere.
+                Value::Str(s) if s == "thumb" && parts.thumbs.len() < 2 => parts.thumbs.push(ix),
+                _ => {}
+            }
+        }
+        parts
+    }
+
+    /// Where the handles travel, and how thick the line is across it.
+    ///
+    /// The centres run the track's extent **less one thumb**, so a handle
+    /// at either end is inside the line rather than half outside it. The
+    /// value map and the placement share this one span; the pair they
+    /// replaced did not, which is why a thumb parked on `max` used to read
+    /// back as something less.
+    fn track_geom(&self, t: &Track, parts: &TrackParts) -> Option<TrackGeom> {
+        let r = self.layout.rect(t.node)?;
+        let thumb = parts.thumbs.first().and_then(|ix| self.layout.rect(*ix));
+        let (extent, start, cross_mid) = match t.axis {
+            TrackAxis::X => (r.w, r.x, r.y + r.h / 2.0),
+            TrackAxis::Y => (r.h, r.y, r.x + r.w / 2.0),
+        };
+        if extent <= 0.0 {
+            return None;
+        }
+        let thick = thumb.map(|tr| match t.axis {
+            TrackAxis::X => tr.w,
+            TrackAxis::Y => tr.h,
+        });
+        let thick = thick.filter(|v| *v > 0.0).unwrap_or(0.0);
+        Some(TrackGeom { start, extent, origin: start + thick / 2.0, span: (extent - thick).max(0.0), thick, cross_mid })
+    }
+
+    /// The quantised value at a pointer coordinate, holding a thumb that
+    /// was grabbed `grab` from its centre.
+    fn track_value_at(t: &Track, g: &TrackGeom, p: f32, grab: f32) -> i64 {
+        if g.span <= 0.0 || t.max == t.min {
+            return t.min;
+        }
+        let frac = (((p - grab) - g.origin) / g.span).clamp(0.0, 1.0);
+        // `min` at the bottom of a vertical track: down the screen is less.
+        let frac = match t.axis {
+            TrackAxis::X => frac,
+            TrackAxis::Y => 1.0 - frac,
+        };
+        t.snap(t.min + (frac as f64 * (t.max - t.min) as f64).round() as i64)
+    }
+
+    /// The centre of a handle at `v` -- [`Self::track_value_at`] run
+    /// backwards, so the value read at a handle is the value that put it
+    /// there.
+    fn track_centre(t: &Track, g: &TrackGeom, v: i64) -> f32 {
+        if t.max == t.min {
+            return g.origin;
+        }
+        let frac = (v - t.min) as f64 / (t.max - t.min) as f64;
+        let frac = match t.axis {
+            TrackAxis::X => frac,
+            TrackAxis::Y => 1.0 - frac,
+        };
+        g.origin + g.span * frac.clamp(0.0, 1.0) as f32
+    }
+
+    /// Lay every track's parts on its own value, each frame, after layout.
+    ///
+    /// Every track and not only the one under the hand: the server sends a
+    /// value and no geometry at all, so a track the server just moved wants
+    /// placing exactly as much as one a finger is on. The pass is
+    /// idempotent and tracks are few.
+    fn place_tracks(&mut self) {
+        let Some(track_atom) = self.session.atoms().track else { return };
+        let Some(root) = self.session.root() else { return };
+        let tracks: Vec<NodeIx> = self.session.preorder(root).filter(|ix| self.session.node(*ix).is_some_and(|n| n.prop(track_atom).is_some())).collect();
+        for ix in tracks {
+            let Some(t) = self.track_of(ix) else { continue };
+            let parts = self.track_parts(&t);
+            let Some(g) = self.track_geom(&t, &parts) else { continue };
+            // The hand's value while it is on this track, the server's
+            // otherwise.
+            let v = match self.track.as_ref().filter(|d| d.track.node == ix) {
+                Some(d) => d.value,
+                None => self.track_value_of(&t),
+            };
+            let lo_c = Self::track_centre(&t, &g, v.lo);
+            let hi_c = v.hi.map(|h| Self::track_centre(&t, &g, h));
+            if let Some(groove) = parts.groove {
+                self.place_part(groove, &t, &g, g.start, g.start + g.extent);
+            }
+            if let Some(fill) = parts.fill {
+                // Up to the handle with one; between them with two.
+                let (a, b) = match hi_c {
+                    Some(hi) => (lo_c, hi),
+                    None => (g.start, lo_c),
+                };
+                self.place_part(fill, &t, &g, a, b);
+            }
+            for (i, thumb) in parts.thumbs.iter().enumerate() {
+                let c = if i == 0 { lo_c } else { hi_c.unwrap_or(lo_c) };
+                self.place_part(*thumb, &t, &g, c - g.thick / 2.0, c + g.thick / 2.0);
+            }
+        }
+    }
+
+    /// One part's box, from `a` to `b` along the axis, keeping the cross
+    /// thickness the layout gave it and centred on the line.
+    ///
+    /// Only this node: a part draws its own box and its descendants are not
+    /// carried with it (03 §3.4), which is what keeps this one `set_rect`
+    /// rather than a subtree walk.
+    fn place_part(&mut self, ix: NodeIx, t: &Track, g: &TrackGeom, a: f32, b: f32) {
+        let Some(r) = self.layout.rect(ix) else { return };
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let len = (b - a).max(0.0);
+        let rect = match t.axis {
+            TrackAxis::X => Rect::new(a, g.cross_mid - r.h / 2.0, len, r.h),
+            TrackAxis::Y => Rect::new(g.cross_mid - r.w / 2.0, a, r.w, len),
+        };
+        self.layout.set_rect(ix, rect);
+    }
+
+    /// Take a press for a track, if it landed on one. `true` when it did:
+    /// the track is the more specific claim, so the press does not also arm
+    /// a drag (03 §3.4).
+    fn track_press(&mut self, ix: NodeIx, x: f32, y: f32) -> bool {
+        let Some(t) = self.track_above(ix) else { return false };
+        let parts = self.track_parts(&t);
+        let Some(g) = self.track_geom(&t, &parts) else { return false };
+        let value = self.track_value_of(&t);
+        let p = match t.axis {
+            TrackAxis::X => x,
+            TrackAxis::Y => y,
+        };
+        let lo_c = Self::track_centre(&t, &g, value.lo);
+        let hi_c = value.hi.map(|h| Self::track_centre(&t, &g, h));
+        // A press inside a thumb holds it where it was grabbed; anywhere
+        // else takes the nearer handle and moves it there at once.
+        let on_thumb = |c: f32| (p - c).abs() <= g.thick / 2.0;
+        let (handle, grab) = match hi_c {
+            Some(hi_c) => {
+                if on_thumb(lo_c) && (!on_thumb(hi_c) || p <= lo_c) {
+                    (Handle::Lo, p - lo_c)
+                } else if on_thumb(hi_c) {
+                    (Handle::Hi, p - hi_c)
+                } else {
+                    // Which is nearer -- and when both sit on the same
+                    // value, which side of them the press is on. A pair
+                    // closed at the minimum has to be openable, so a press
+                    // at or past them takes the high one.
+                    let (d_lo, d_hi) = ((p - lo_c).abs(), (p - hi_c).abs());
+                    if d_lo < d_hi || (d_lo == d_hi && p < lo_c) {
+                        (Handle::Lo, 0.0)
+                    } else {
+                        (Handle::Hi, 0.0)
+                    }
                 }
-                return;
             }
+            None => (Handle::Lo, if on_thumb(lo_c) { p - lo_c } else { 0.0 }),
+        };
+        let mut drag = TrackDrag { track: t, handle, grab, value, sent: None, holding: true };
+        Self::track_put(&mut drag, Self::track_value_at(&t, &g, p, grab));
+        self.track = Some(drag);
+        // The handle is the focus stop, not the track: a range then has two,
+        // and the arrows always mean the one the ring is on.
+        let thumb = match handle {
+            Handle::Lo => parts.thumbs.first().copied(),
+            Handle::Hi => parts.thumbs.get(1).copied(),
+        };
+        let _ = self.set_focus(thumb.or(Some(t.node)), false);
+        self.publish_track();
+        self.redraw = true;
+        true
+    }
+
+    /// The hand's move, if it is on a track. `Some` swallows the move: a
+    /// track emits no `pointer_move` at all, and does not hover.
+    fn track_move(&mut self, x: f32, y: f32) -> Option<Vec<Frame>> {
+        let d = self.track.as_ref().filter(|d| d.holding)?;
+        let (t, grab) = (d.track, d.grab);
+        let parts = self.track_parts(&t);
+        let g = self.track_geom(&t, &parts)?;
+        let p = match t.axis {
+            TrackAxis::X => x,
+            TrackAxis::Y => y,
+        };
+        let at = Self::track_value_at(&t, &g, p, grab);
+        let d = self.track.as_mut()?;
+        Self::track_put(d, at);
+        self.publish_track();
+        self.redraw = true;
+        Some(self.flush_track_change(false))
+    }
+
+    /// The lift. Whatever is still owed goes now, brake or no brake: a
+    /// released track sitting at a value the server has not heard is a
+    /// thumb drawn where the server does not think it is.
+    fn track_release(&mut self) -> Vec<Frame> {
+        let Some(d) = self.track.as_mut() else { return Vec::new() };
+        if !d.holding {
+            return Vec::new();
         }
-        let parent = self.session.node(slider).map(|n| n.parent).filter(|p| p.is_some());
-        let Some(parent) = parent else { return };
-        let kids: Vec<_> = self.session.children(parent).to_vec();
-        for c in kids {
-            let cur = self.session.text_of(c).map(str::to_owned);
-            if cur.as_deref().is_some_and(|t| t.starts_with("Value ") && t != want) {
-                self.session.set_text_local(c, want);
-                break;
+        d.holding = false;
+        self.flush_track_change(true)
+    }
+
+    /// The gesture did not happen: put the value back to the tree's, and
+    /// say so only if that is not what was last sent.
+    fn track_cancel(&mut self) -> Vec<Frame> {
+        let Some(d) = self.track.as_ref() else { return Vec::new() };
+        let t = d.track;
+        if self.session.node(t.node).is_none() {
+            self.track = None;
+            return Vec::new();
+        }
+        let back = self.track_value_of(&t);
+        if let Some(d) = self.track.as_mut() {
+            d.value = back;
+            d.holding = false;
+        }
+        self.publish_track();
+        self.redraw = true;
+        let out = self.flush_track_change(true);
+        self.track = None;
+        out
+    }
+
+    /// Move the held handle to `at`, keeping the pair in order.
+    ///
+    /// They may meet and they never swap: a handle that swapped would change
+    /// identity under a finger that never left it, and would report a change
+    /// in which both numbers moved for one gesture.
+    fn track_put(d: &mut TrackDrag, at: i64) {
+        match (d.handle, d.value.hi) {
+            (Handle::Lo, Some(hi)) => d.value.lo = at.min(hi),
+            (Handle::Hi, Some(_)) => d.value.hi = Some(at.max(d.value.lo)),
+            (_, None) => d.value.lo = at,
+        }
+    }
+
+    /// Write the live value into the node's `track_value`, so the
+    /// accessibility tree and the thumb under the hand are one number
+    /// rather than two that agree once a round trip (03 §3.4).
+    fn publish_track(&mut self) {
+        let Some(atom) = self.session.atoms().track_value else { return };
+        let Some(d) = self.track.as_ref() else { return };
+        let (node, v) = (d.track.node, d.value);
+        let value = match v.hi {
+            Some(hi) => Value::List(vec![Value::Int(v.lo), Value::Int(hi)]),
+            None => Value::Int(v.lo),
+        };
+        self.session.set_prop_local(node, atom, value);
+    }
+
+    /// 06 §2, for a track: say the value when it has moved, and never say
+    /// one equal to the last sent.
+    ///
+    /// The quantiser does for a hand what the 300 ms idle does for a field,
+    /// so there is no timer here. The brake stays, though: the step bounds
+    /// events per unit *distance*, not per unit *time*, and a flick across
+    /// forty steps in a third of a second would otherwise queue forty whole
+    /// page renders. While one is unanswered the latest value waits -- the
+    /// latest, never a backlog, because the comparison is against `sent`.
+    fn flush_track_change(&mut self, force: bool) -> Vec<Frame> {
+        let Some(d) = self.track.as_ref() else { return Vec::new() };
+        if d.sent == Some(d.value) {
+            return Vec::new();
+        }
+        let node = d.track.node;
+        // 06 §2: nothing is owed for a node that has left the tree.
+        if self.session.node(node).is_none() {
+            self.track = None;
+            return Vec::new();
+        }
+        if !force && self.pointer.move_in_flight.is_some_and(|at| self.now.saturating_duration_since(at) < DRAG_ANSWER_WAIT) {
+            self.redraw = true;
+            return Vec::new();
+        }
+        let value = d.value;
+        let payload = match value.hi {
+            Some(hi) => Value::List(vec![Value::Int(value.lo), Value::Int(hi)]),
+            None => Value::Int(value.lo),
+        };
+        if let Some(d) = self.track.as_mut() {
+            d.sent = Some(value);
+        }
+        self.pointer.move_in_flight = Some(self.now);
+        self.emit(node, EventKind::Change, payload)
+    }
+
+    /// The arrows, the page keys and the ends, on a focused thumb. `Some`
+    /// consumes the key: nothing is reported but the `change` it makes.
+    fn track_key(&mut self, key: &str, _modifiers: u32) -> Option<Vec<Frame>> {
+        let focused = self.focused?;
+        let part = self.session.atoms().track_part?;
+        if !matches!(self.session.node(focused)?.prop(part)?, Value::Str(s) if s == "thumb") {
+            return None;
+        }
+        let t = self.track_above(focused)?;
+        let parts = self.track_parts(&t);
+        let handle = if parts.thumbs.first() == Some(&focused) { Handle::Lo } else { Handle::Hi };
+        // Seed from the tree unless this very handle is already in hand.
+        let fresh = !matches!(self.track.as_ref(), Some(d) if d.track.node == t.node && d.handle == handle);
+        if fresh {
+            self.track = Some(TrackDrag { track: t, handle, grab: 0.0, value: self.track_value_of(&t), sent: None, holding: false });
+        }
+        let d = self.track.as_ref()?;
+        let now = match (handle, d.value.hi) {
+            (Handle::Hi, Some(hi)) => hi,
+            _ => d.value.lo,
+        };
+        let step = t.step.max(1);
+        let at = match key {
+            "ArrowRight" | "ArrowUp" => now.saturating_add(step),
+            "ArrowLeft" | "ArrowDown" => now.saturating_sub(step),
+            "PageUp" => now.saturating_add(step.saturating_mul(10)),
+            "PageDown" => now.saturating_sub(step.saturating_mul(10)),
+            "Home" => t.min,
+            "End" => t.max,
+            _ => {
+                if fresh {
+                    self.track = None;
+                }
+                return None;
             }
-        }
+        };
+        let at = t.snap(at);
+        let d = self.track.as_mut()?;
+        Self::track_put(d, at);
+        self.publish_track();
+        self.redraw = true;
+        // Not braked: a key press is one change, and autorepeat is bounded
+        // by the keyboard. The brake is for a hand that crosses forty steps
+        // in a third of a second.
+        Some(self.flush_track_change(true))
     }
 
     fn pointer_down(&mut self, button: u8) -> Vec<Frame> {
@@ -3320,12 +3754,16 @@ impl Driver {
             }
         }
         self.pointer.pressed_on = Some(ix);
+        // 03 §3.4: a track is the more specific claim on a press, so a
+        // slider on a draggable card is moved by its handle and the card by
+        // its margin.
+        let on_track = self.track_press(ix, x, y);
         // 06 §6.1: a press whose path reaches a `drag` node *arms* the
         // gesture, and nothing more. Nothing is emitted and the server is told
         // nothing — an arming press that turns out to be a click must be
         // indistinguishable from one that never armed. A handle skips the
         // slop and grabs here.
-        self.pointer.drag = self.drag_source(ix).map(|(_, key)| Drag { source: key, from: (self.pointer.x, self.pointer.y), grabbed: false, sent: None });
+        self.pointer.drag = (!on_track).then(|| self.drag_source(ix).map(|(_, key)| Drag { source: key, from: (self.pointer.x, self.pointer.y), grabbed: false, sent: None })).flatten();
         trace(|| format!("press on node {:?}, moves go to {:?}", self.session.node(ix).map(|n| n.id), self.target(ix, EventKind::PointerMove).and_then(|(t, _)| self.session.node(t)).map(|n| n.id)));
         // A new drag starts owing nothing, whatever the last one left.
         self.pointer.move_in_flight = None;
@@ -3336,6 +3774,12 @@ impl Driver {
         let editable = self.ancestor_where(ix, |k| matches!(k, NodeKind::Input | NodeKind::TextArea));
         let takes_keys = editable.or_else(|| self.ancestor_keyed(ix));
         let mut out = self.set_focus(takes_keys, false);
+        // A press on a track is one deliberate event, so it goes now rather
+        // than waiting on the brake -- which is there for the stream of
+        // moves that follows, not for this.
+        if on_track {
+            out.extend(self.flush_track_change(true));
+        }
         if let Some(e) = editable {
             let at = self.byte_at_pointer(e, x, y);
             trace(|| {
@@ -3371,7 +3815,8 @@ impl Driver {
             return self.finish_drag(false);
         }
         self.pointer.drag = None;
-        let mut out = self.flush_coalesced_move();
+        let mut out = self.track_release();
+        out.extend(self.flush_coalesced_move());
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
         let hit = self.hit_now(x, y);
@@ -3433,7 +3878,13 @@ impl Driver {
         // what lets a finger carry a row out of a list it could otherwise only
         // scroll — a draggable row carries a *prop*, not a `pointer_move`
         // handler, precisely so that the stroke stays the list's.
-        let taken = self.pointer.dragging_thumb.is_some() || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some() || self.on_drag_handle(ix));
+        // 03 §3.4: a track takes the stroke because it declared `track`, where
+        // it used to take it because it declared `pointer_move`. The prop
+        // replaces the handler in the one place the handler was being used as
+        // a prop -- otherwise a slider on a phone scrolls the page.
+        let taken = self.pointer.dragging_thumb.is_some()
+            || self.track.as_ref().is_some_and(|d| d.holding)
+            || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some() || self.on_drag_handle(ix));
         // 06 §5: a contact that lands on the leading edge of a page that can
         // be gone back from is the navigator's, whatever it landed on.
         //
@@ -3577,6 +4028,7 @@ impl Driver {
         // 06 §5 step 7 and §6.1 step 5: a gesture the platform took away ends
         // the drag it had become, with the sentinel slot.
         let mut out = self.finish_drag(true);
+        out.extend(self.track_cancel());
         out.extend(self.cancel_press());
         self.pointer.dragging_thumb = None;
         out.extend(self.clear_hover());
@@ -3690,7 +4142,11 @@ impl Driver {
                 // pointer. Without this a draggable row with no `click` is
                 // unreachable by keyboard — and by 03 §6's ceiling rule, that
                 // would forbid the assistive action too.
-                || self.session.atoms().drag.is_some_and(|a| node.prop(a).is_some_and(|v| !matches!(v, Value::Bool(false))));
+                || self.session.atoms().drag.is_some_and(|a| node.prop(a).is_some_and(|v| !matches!(v, Value::Bool(false))))
+                // 03 §3.4: a track's handle is the stop, not the track. A
+                // range then has two, and the arrows always mean the one the
+                // ring is on -- no modifier, and no "the handle moved last".
+                || self.session.atoms().track_part.is_some_and(|a| node.prop(a).is_some_and(|v| matches!(v, Value::Str(s) if s == "thumb")));
             if focusable && self.layout.rect(ix).is_some() && !self.layout.is_virtual(ix) {
                 order.push(ix);
             }
@@ -4825,6 +5281,15 @@ impl Driver {
         // pattern editor, a grid or a game that asked for `key_down` — an
         // application that cannot use the arrows is not much of one, and a
         // scroller anywhere in the tree used to be enough to take them.
+        // 03 §3.4: a focused track handle takes the arrows, the page keys and
+        // the ends, and they are consumed -- only the `change` is reported.
+        // Before the scrolling keys, or a slider near the bottom of a page
+        // would scroll it instead of moving.
+        if down {
+            if let Some(out) = self.track_key(key, modifiers) {
+                return out;
+            }
+        }
         let claimed = self.focused.is_some_and(|f| self.is_editable(f) || self.ancestor_keyed(f).is_some());
         if down && modifiers & 0b1110 == 0 && matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End") && !claimed {
             if let Some(out) = self.scroll_key(key) {
@@ -4836,6 +5301,11 @@ impl Driver {
         // was — usually nowhere — and the guard below would swallow the key.
         if down && key == "Escape" && self.pointer.drag.is_some_and(|d| d.grabbed) {
             return self.finish_drag(true);
+        }
+        // The same for a hand on a track: the gesture did not happen.
+        if down && key == "Escape" && self.track.as_ref().is_some_and(|d| d.holding) {
+            self.pointer.pressed_on = None;
+            return self.track_cancel();
         }
         // 03 §3: a thing that can be moved is picked up with `Space` and put
         // down with it, and the arrows move it in between. Nothing is claimed
@@ -5118,6 +5588,7 @@ impl Driver {
         self.nfc_asks.clear();
         self.anims.clear();
         self.edits.clear();
+        self.track = None;
         self.windows.clear();
         self.focused = None;
         self.pointer = Pointer::default();
@@ -5236,6 +5707,10 @@ impl Driver {
         // shape only the server knows could not follow the hand -- a
         // slider hides that by moving its own thumb locally, a split pane
         // has nothing to hide it with and sat where it started.
+        // 06 §2: a value the brake held goes out now, and it is the latest
+        // -- never a backlog, because the comparison is against `sent`.
+        let told = self.flush_track_change(false);
+        self.pending.extend(told);
         let dragged = self.flush_drag_move();
         self.pending.extend(dragged);
         // A scroll in flight moves the view before layout; what it emits when
@@ -5254,7 +5729,7 @@ impl Driver {
             self.pending.extend(settled);
         }
         self.ensure_layout();
-        self.follow_slider_drag();
+        self.place_tracks();
         // 06 §5.1: a contact held still long enough to mean something. It
         // sends nothing while it is being held, so the clock is read here.
         let held = self.touch_hold();

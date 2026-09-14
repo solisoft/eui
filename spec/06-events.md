@@ -27,7 +27,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x0A` | `text_input` | `Str`, the committed text | |
 | `0x0B` | `focus` | `Null` | |
 | `0x0C` | `blur` | `Null` | |
-| `0x0D` | `change` | `Str`, the editable node's whole value | |
+| `0x0D` | `change` | `Str`, the editable node's whole value; for a track (spec 03 §3.4) `Int`, or `List[Int lo, Int hi]` for two handles | per frame |
 | `0x0E` | `submit` | `Null` | |
 | `0x0F` | `scroll` | `List[Int x, Int y]`, the new offsets | per frame |
 | `0x10` | `resize` | `List[Float w, Float h]` | per frame |
@@ -167,6 +167,26 @@ for anything provisional — it has to be able to put it back.
   sent, nor for a node that has left the tree. `text_input` fires per
   committed insertion and exists for local handlers; a server that subscribes
   to it across a wide-area link has misread the design.
+- A **track** (spec 03 §3.4) reports `change` the moment the value under the
+  hand crosses into another `track_step`, and not once more. The quantiser has
+  already done for a hand what the 300 ms does for a field, so the timer does
+  not run and nothing is held for it. The same sentence above still governs —
+  a client MUST NOT emit `change` for a value equal to the last it sent — so a
+  hand crossing a hundred steps owes a hundred events and a hand shaking on
+  one owes none. At most one is in flight at a time: while one is unanswered
+  the latest value waits, and it is the latest that then goes, never a queue
+  of the ones it passed. A press and the lift each report at once, being one
+  event and not a stream; the arrows do too.
+- **A server batch does not move a track under the hand.** The client draws
+  its own value until the gesture ends and adopts the next batch's
+  `track_value` after it — [`07-bytecode.md`](07-bytecode.md) §6's provisional
+  rule, for state the client holds rather than a tree it edited. A server that
+  clamps a value it was sent is obeyed at the end of the gesture and not in
+  the middle of it, because a handle that jumped back under a finger that had
+  not moved is a widget fighting the person using it. What the client compares
+  against is **what it last sent**, not what the server last said: re-seeding
+  it from the answer would have a hand still at 80 tell a server that clamps
+  to 75 about 80 again, once per round trip, for as long as it stayed there.
 - A `Handler::Local` runs the chunk and emits nothing. A
   `Handler::LocalThenServer` runs the chunk, then emits.
 
@@ -181,7 +201,8 @@ for anything provisional — it has to be able to put it back.
 - `Tab`, `Shift+Tab` and `Escape`: they move or drop focus (spec 03 §3) and
   are consumed by the client. So are the scrolling keys — the arrows, page
   keys, `Home` and `End` — outside an editable node: they scroll, and only
-  the resulting `scroll` is reported. `Enter` and `Space` on a focused activatable
+  the resulting `scroll` is reported. On a focused track handle (spec 03 §3.4)
+  they move it instead, and only the resulting `change` is reported. `Enter` and `Space` on a focused activatable
   node arrive as the `click` they stand for, at the node's centre.
 - Pointer position while the window is unfocused or the pointer is outside it.
 - Clipboard contents without the `clipboard.read` capability.
@@ -234,9 +255,12 @@ The first contact is followed like this:
    `pointer_move` then `pointer_down`, exactly as a mouse would.
 2. The gesture is then **taken** or **undecided**. It is taken if the node
    the press landed on resolves a `pointer_move` handler, or carries
-   `drag_handle` (spec 03 §3.4), or if the press took hold of a scrollbar
-   thumb (spec 03 §2) — a slider, a split bar, a drag of any kind. Otherwise
-   it is undecided.
+   `track` or `drag_handle` (spec 03 §3.4), or if the press took hold of a
+   scrollbar thumb (spec 03 §2) — a slider, a split bar, a drag of any kind.
+   A track is named by its prop rather than by a handler, which is the point
+   of §3.4 there: it is the one case where the prop replaced a `pointer_move`
+   handler that only ever existed to claim the stroke. Otherwise it is
+   undecided.
 3. **Taken**: every move is a `pointer_move` at the contact, coalesced by
    §2 like any other, and the lift is a `pointer_up`. The view does not
    scroll, and no fling follows.

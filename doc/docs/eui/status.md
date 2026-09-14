@@ -422,7 +422,10 @@ inside the scroll is still out — layout §9 has no sticky. Column resize was
 recorded here as out for the same reason, and that was wrong: what a local
 handler cannot do is set a width from `pointer_move`, which is a limit on
 *latency*, not on capability. A server-driven drag has always been available —
-the slider has used one from the start — and `split_pane` now does the same.
+`split_pane` uses one — and the slider used one until `track` (03 §3.4) gave
+it the other answer: a declared prop the client resolves itself, drawing every
+frame from its own value and reporting one `change` per step rather than one
+round trip per mouse position.
 What column resize still needs is the re-emitting of every row's styles that a
 width change touches, since a table is rows with per-cell widths rather than a
 grid with tracks.

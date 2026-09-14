@@ -1423,56 +1423,328 @@ fn a_hit_during_a_glide_finds_the_moved_row() {
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
 }
 
-/// The client lays a slider's three parts out itself while one is being
-/// dragged, so the thumb does not wait for the server's next tree. Three
-/// children under a `pointer_move` handler is not enough to know a slider
-/// from anything else, though: a split pane is a panel, a divider and a
-/// panel under exactly such a handler, and laid out as a track, a thumb
-/// and the rest it lands somewhere it never asked to be. The node says
-/// what it is.
+/// A track is declared, not sniffed (03 §3.4).
+///
+/// This used to key off `role: "slider"` and a count of three children,
+/// because there was nothing else to go on. A split pane is a panel, a
+/// divider and a panel under exactly such a handler, and laid out as a
+/// track, a thumb and the rest it lands somewhere it never asked to be. A
+/// node carrying `track` says what it is, and a node without one is left
+/// with the box the layout gave it.
 #[test]
-fn only_a_node_that_says_it_is_a_slider_is_laid_out_as_one() {
-    const ROLE: u32 = 40;
-    let three = |d: &mut Driver, role: Option<&str>| {
-        let mut tree = Subtree::default();
-        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
-        let props = if role.is_some() { (0, 1) } else { (0, 0) };
-        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props, handlers: (0, 1), child_count: 3 });
-        tree.handlers.push((EventKind::PointerMove, Handler::Server(ATOM_INC)));
-        if let Some(r) = role {
-            tree.props.push((ROLE, Value::Str(r.into())));
-        }
-        for id in 3..6u32 {
-            tree.nodes.push(FlatNode { kind: NodeKind::Box, id, style: 12, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
-        }
-        let ops = vec![
-            Op::DefAtom { id: ROLE, value: "role".into() },
-            Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
-            Op::DefStyle { id: 11, record: StyleRecord { display: Display::Row, width: Dim::Px(240), height: Dim::Px(24), ..Default::default() } },
-            Op::DefStyle { id: 12, record: StyleRecord { width: Dim::Px(80), height: Dim::Px(24), ..Default::default() } },
-            Op::Mount(tree),
-        ];
-        d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
-        let _ = d.paint(400, 300);
-    };
-    // The middle child's box before and after a drag that stays inside it.
-    let middle_after_a_drag = |role: Option<&str>| -> (eui_layout::Rect, eui_layout::Rect) {
-        let mut d = welcomed();
-        three(&mut d, role);
-        let mid = d.session().lookup(4).unwrap();
-        let before = d.layout().rect(mid).expect("laid out");
-        d.input(Input::PointerMove(before.x + 4.0, before.y + 4.0));
-        d.input(Input::PointerDown(0));
-        d.input(Input::PointerMove(before.x + 60.0, before.y + 4.0));
-        let _ = d.paint(400, 300);
-        (before, d.layout().rect(mid).expect("still laid out"))
-    };
-    let (before, after) = middle_after_a_drag(Some("slider"));
-    assert!((after.x - before.x).abs() > 8.0, "a slider's thumb follows the hand at once: {before:?} -> {after:?}");
-    let (before, after) = middle_after_a_drag(None);
+fn only_a_node_that_declares_a_track_is_laid_out_as_one() {
+    let (before, after) = thumb_after_a_drag(Some("x"), 0, 100, 1, 0);
+    assert!((after.x - before.x).abs() > 8.0, "a thumb follows the hand at once: {before:?} -> {after:?}");
+    let (before, after) = thumb_after_a_drag(None, 0, 100, 1, 0);
     assert_eq!(after, before, "anything else keeps the box the layout gave it");
-    let (before, after) = middle_after_a_drag(Some("separator"));
-    assert_eq!(after, before, "including a node that says it is something else");
+    let (before, after) = thumb_after_a_drag(Some("z"), 0, 100, 1, 0);
+    assert_eq!(after, before, "including a node whose axis is not one");
+}
+
+/// The value read at a handle is the value that put it there.
+///
+/// The pair this replaced did not agree: the thumb was placed over the
+/// track's width less a thumb, and the value read over the whole width, so
+/// a handle parked on `max` read back as something short of it and the ends
+/// were not reachable. One span now, used both ways.
+#[test]
+fn a_handle_is_placed_where_its_value_says_and_reads_back_the_same() {
+    for (want, at) in [(0i64, 0.0f32), (50, 0.5), (100, 1.0)] {
+        let mut d = welcomed();
+        track(&mut d, Some("x"), 0, 100, 1, 0);
+        let t = d.session().lookup(2).unwrap();
+        let r = d.layout().rect(t).expect("laid out");
+        // Press at the fraction of the travel, allowing for the half thumb
+        // at each end that the centres do not reach.
+        let thumb_w = 16.0;
+        let x = r.x + thumb_w / 2.0 + (r.w - thumb_w) * at;
+        d.input(Input::PointerMove(x, r.y + r.h / 2.0));
+        let out = d.input(Input::PointerDown(0));
+        let got = track_said(&out);
+        assert_eq!(got, vec![want], "a press at {at} of the travel is {want}");
+    }
+}
+
+/// 06 §2, the whole point: a sweep says the value when it changes and never
+/// when it has not.
+#[test]
+fn a_track_speaks_only_when_the_step_changes() {
+    let mut d = welcomed();
+    // Ten steps across 224 px of travel: ~22 px a step, so a one-pixel
+    // tremor is well inside one.
+    track(&mut d, Some("x"), 0, 100, 10, 0);
+    let t = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(t).expect("laid out");
+    let mid = r.y + r.h / 2.0;
+    d.input(Input::PointerMove(r.x + 8.0, mid));
+    let _ = d.input(Input::PointerDown(0));
+    // Shake on the spot: every sample is a new pointer position and none
+    // is a new value.
+    let mut said = Vec::new();
+    for i in 0..20 {
+        let jitter = if i % 2 == 0 { 1.0 } else { -1.0 };
+        said.extend(track_said(&d.input(Input::PointerMove(r.x + 8.0 + jitter, mid))));
+        said.extend(collect(&mut d));
+    }
+    assert!(said.is_empty(), "a hand that shakes on one step owes nothing, said {said:?}");
+    // And a track emits no `pointer_move` at all, ever.
+    assert!(!said_any_move(&mut d, r, mid), "a track reports the value, never the position");
+}
+
+/// A flick that crosses many steps inside one answer is one event carrying
+/// the latest value, not a queue of the ones it passed.
+///
+/// The step bounds events per unit *distance*, not per unit *time*, so
+/// without the brake forty steps crossed in a third of a second would be
+/// forty whole page renders.
+#[test]
+fn a_track_holds_one_change_in_flight_and_sends_the_latest() {
+    let mut d = welcomed();
+    track(&mut d, Some("x"), 0, 100, 1, 0);
+    let t = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(t).expect("laid out");
+    let mid = r.y + r.h / 2.0;
+    d.input(Input::PointerMove(r.x + 8.0, mid));
+    let first = track_said(&d.input(Input::PointerDown(0)));
+    assert_eq!(first.len(), 1, "the press itself reports, {first:?}");
+    // Cross the whole track in four samples, with nothing answering.
+    let mut said = Vec::new();
+    for k in 1..=4 {
+        said.extend(track_said(&d.input(Input::PointerMove(r.x + 8.0 + (r.w - 16.0) * k as f32 / 4.0, mid))));
+        said.extend(collect(&mut d));
+    }
+    assert!(said.len() <= 1, "held while one was unanswered, said {said:?}");
+    // The lift always lands the final value, brake or no brake.
+    let last = track_said(&d.input(Input::PointerUp(0)));
+    assert_eq!(last.last().copied().or_else(|| said.last().copied()), Some(100), "the release says where it ended up");
+}
+
+/// 03 §3.4 and 07 §6: a batch does not move a track under the hand.
+///
+/// The server re-renders with the value it had when the event left, which
+/// is behind where the hand already is. Adopting it would snap the thumb
+/// back under a finger that had not moved.
+///
+/// And `sent` is not re-seeded from the batch, or a server that clamps
+/// would be told the same refused number once per round trip for as long
+/// as the hand stayed there.
+#[test]
+fn the_server_does_not_move_a_track_under_the_hand() {
+    let mut d = welcomed();
+    track(&mut d, Some("x"), 0, 100, 1, 0);
+    let t = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(t).expect("laid out");
+    let mid = r.y + r.h / 2.0;
+    d.input(Input::PointerMove(r.x + r.w - 8.0, mid));
+    let _ = d.input(Input::PointerDown(0));
+    let _ = d.paint(400, 300);
+    let held = d.layout().rect(d.session().lookup(4).unwrap()).expect("laid out");
+    // The server answers with a value well behind the hand -- a clamp.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetProp { node: 2, prop: TRACK_VALUE, value: Value::Int(25) }] }));
+    let _ = d.paint(400, 300);
+    let still = d.layout().rect(d.session().lookup(4).unwrap()).expect("laid out");
+    assert_eq!(still, held, "the hand keeps the thumb: {held:?} vs {still:?}");
+    // It does not go on re-sending the number the server refused.
+    let mut chatter = Vec::new();
+    for _ in 0..5 {
+        chatter.extend(collect(&mut d));
+    }
+    assert!(chatter.is_empty(), "nothing is owed for a value already sent, said {chatter:?}");
+    // The lift does not snap it back by itself: the released value stands
+    // until the server answers, or every release would flicker back and
+    // forward across one round trip.
+    let _ = d.input(Input::PointerUp(0));
+    let _ = d.paint(400, 300);
+    let released = d.layout().rect(d.session().lookup(4).unwrap()).expect("laid out");
+    assert_eq!(released, still, "the released value stands until the server answers");
+    // The next batch is the adoption, and the server wins it.
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetProp { node: 2, prop: TRACK_VALUE, value: Value::Int(25) }] }));
+    let _ = d.paint(400, 300);
+    let adopted = d.layout().rect(d.session().lookup(4).unwrap()).expect("laid out");
+    assert!(adopted.x < still.x, "once the hand has gone the server wins: {still:?} -> {adopted:?}");
+}
+
+/// Two handles: a press takes the nearer, a gesture keeps the one it took,
+/// and they meet without ever swapping.
+#[test]
+fn two_handles_take_the_nearer_and_never_swap() {
+    let mut d = welcomed();
+    track(&mut d, Some("x"), 0, 100, 1, 2);
+    let t = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(t).expect("laid out");
+    let mid = r.y + r.h / 2.0;
+    // Press near the left: the low handle, and it does not drag the high one.
+    d.input(Input::PointerMove(r.x + 20.0, mid));
+    let said = pairs(&d.input(Input::PointerDown(0)));
+    assert_eq!(said.first().map(|p| p.1), Some(80), "the high end stayed put: {said:?}");
+    // Push it past the high one: it stops against it.
+    let said = pairs(&d.input(Input::PointerMove(r.x + r.w, mid)));
+    let (lo, hi) = said.last().copied().unwrap_or((0, 0));
+    assert_eq!(lo, hi, "they meet");
+    assert!(lo <= hi, "and never cross: {lo} > {hi}");
+}
+
+/// 03 §3.4: the handle is the focus stop, and the arrows move it by a step
+/// and are not reported.
+#[test]
+fn the_arrows_move_a_focused_handle_by_a_step() {
+    let mut d = welcomed();
+    track(&mut d, Some("x"), 0, 100, 5, 0);
+    let _ = d.paint(400, 300);
+    for _ in 0..8 {
+        if d.focused() == Some(d.session().lookup(4).unwrap()) {
+            break;
+        }
+        let _ = d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true });
+    }
+    assert_eq!(d.focused(), Some(d.session().lookup(4).unwrap()), "Tab reaches the thumb: a handle is a stop");
+    let said = d.input(Input::Key { key: "ArrowRight".into(), modifiers: 0, down: true });
+    assert_eq!(track_said(&said), vec![45], "one step right from 40");
+    assert!(!said.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::KeyDown)), "the key is consumed, only the change is reported");
+    let said = d.input(Input::Key { key: "Home".into(), modifiers: 0, down: true });
+    assert_eq!(track_said(&said), vec![0], "Home is the floor");
+}
+
+/// The window draws the hand, not just the driver's arithmetic.
+///
+/// `paint` serves a cached draw list whenever nothing "touched" the tree and
+/// no drag-and-drop gesture is live. A track is neither, so the value moved,
+/// the rects were recomputed -- and the window went on showing the frame
+/// before. The old slider hid this: every move was a round trip, and the
+/// answering batch was what marked the tree touched. Taking the round trip
+/// away took the repaint with it.
+#[test]
+fn a_track_drag_repaints_the_window() {
+    let mut d = welcomed();
+    track(&mut d, Some("x"), 0, 100, 1, 0);
+    let t = d.session().lookup(2).unwrap();
+    let r = d.layout().rect(t).expect("laid out");
+    let mid = r.y + r.h / 2.0;
+    let thumb = d.session().lookup(4).unwrap();
+    d.input(Input::PointerMove(r.x + 8.0, mid));
+    let _ = d.input(Input::PointerDown(0));
+    let _ = d.paint(400, 300);
+    let mut seen = Vec::new();
+    // Several moves in a row, each with its own frame and nothing from the
+    // server in between -- which is the whole point of the change.
+    for k in 1..=4 {
+        d.input(Input::PointerMove(r.x + 8.0 + (r.w - 16.0) * k as f32 / 4.0, mid));
+        let list = d.paint(400, 300);
+        let at = d.layout().rect(thumb).expect("laid out").x;
+        seen.push((at, list.serial));
+    }
+    let moved = seen.windows(2).all(|w| w[1].0 > w[0].0);
+    assert!(moved, "the thumb follows every move: {seen:?}");
+    let redrawn = seen.windows(2).all(|w| w[1].1 != w[0].1);
+    assert!(redrawn, "and every one of them is a fresh draw list, not the cached one: {seen:?}");
+}
+
+// ---- the fixtures the track tests share ----
+
+const TRACK: u32 = 40;
+const TRACK_MIN: u32 = 41;
+const TRACK_MAX: u32 = 42;
+const TRACK_STEP: u32 = 43;
+const TRACK_VALUE: u32 = 44;
+const TRACK_PART: u32 = 45;
+
+/// A track of `thumbs` handles (0 means one) inside a column, with a fill
+/// and a groove. Node 2 is the track; node 4 is the first thumb.
+fn track(d: &mut Driver, axis: Option<&str>, min: i64, max: i64, step: i64, thumbs: usize) {
+    let two = thumbs == 2;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    let n_props = if axis.is_some() { 5 } else { 4 };
+    let kids = if two { 4 } else { 3 } as u32;
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props: (0, n_props), handlers: (0, 1), child_count: kids });
+    tree.handlers.push((EventKind::Change, Handler::Server(ATOM_INC)));
+    if let Some(a) = axis {
+        tree.props.push((TRACK, Value::Str(a.into())));
+    }
+    tree.props.push((TRACK_MIN, Value::Int(min)));
+    tree.props.push((TRACK_MAX, Value::Int(max)));
+    tree.props.push((TRACK_STEP, Value::Int(step)));
+    tree.props.push((TRACK_VALUE, if two { Value::List(vec![Value::Int(20), Value::Int(80)]) } else { Value::Int(40) }));
+    // 3 groove, 4 thumb, [5 thumb,] last fill.
+    let parts: Vec<&str> = if two { vec!["groove", "thumb", "thumb", "fill"] } else { vec!["groove", "thumb", "fill"] };
+    for (i, part) in parts.iter().enumerate() {
+        let at = tree.props.len() as u32;
+        tree.props.push((TRACK_PART, Value::Str((*part).into())));
+        let style = if *part == "thumb" { 12 } else { 13 };
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3 + i as u32, style, key: 0, text: None, props: (at, 1), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefAtom { id: TRACK, value: "track".into() },
+        Op::DefAtom { id: TRACK_MIN, value: "track_min".into() },
+        Op::DefAtom { id: TRACK_MAX, value: "track_max".into() },
+        Op::DefAtom { id: TRACK_STEP, value: "track_step".into() },
+        Op::DefAtom { id: TRACK_VALUE, value: "track_value".into() },
+        Op::DefAtom { id: TRACK_PART, value: "track_part".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Row, width: Dim::Px(240), height: Dim::Px(24), ..Default::default() } },
+        Op::DefStyle { id: 12, record: StyleRecord { width: Dim::Px(16), height: Dim::Px(16), ..Default::default() } },
+        Op::DefStyle { id: 13, record: StyleRecord { width: Dim::Px(40), height: Dim::Px(4), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+}
+
+/// The first thumb's box before and after a drag that stays inside it.
+fn thumb_after_a_drag(axis: Option<&str>, min: i64, max: i64, step: i64, thumbs: usize) -> (eui_layout::Rect, eui_layout::Rect) {
+    let mut d = welcomed();
+    track(&mut d, axis, min, max, step, thumbs);
+    let thumb = d.session().lookup(4).unwrap();
+    let before = d.layout().rect(thumb).expect("laid out");
+    d.input(Input::PointerMove(before.x + 4.0, before.y + 4.0));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerMove(before.x + 60.0, before.y + 4.0));
+    let _ = d.paint(400, 300);
+    (before, d.layout().rect(thumb).expect("still laid out"))
+}
+
+/// The single values in the `change` frames of `out`.
+fn track_said(out: &[Frame]) -> Vec<i64> {
+    out.iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == EventKind::Change => match &e.payload {
+                Value::Int(i) => Some(*i),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The pairs in the `change` frames of `out`.
+fn pairs(out: &[Frame]) -> Vec<(i64, i64)> {
+    out.iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == EventKind::Change => match &e.payload {
+                Value::List(v) if v.len() == 2 => match (&v[0], &v[1]) {
+                    (Value::Int(a), Value::Int(b)) => Some((*a, *b)),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// A frame's worth of whatever the driver had queued.
+fn collect(d: &mut Driver) -> Vec<i64> {
+    let _ = d.paint(400, 300);
+    track_said(&d.take_pending())
+}
+
+/// Whether a drag over the track produced any `pointer_move` at all.
+fn said_any_move(d: &mut Driver, r: eui_layout::Rect, mid: f32) -> bool {
+    let out = d.input(Input::PointerMove(r.x + r.w / 2.0, mid));
+    let _ = d.paint(400, 300);
+    let mut all = out;
+    all.extend(d.take_pending());
+    all.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::PointerMove))
 }
 
 /// A press on a `pointer_move` handler captures the pointer, and the move

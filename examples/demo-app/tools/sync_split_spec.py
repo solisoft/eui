@@ -62,9 +62,10 @@ SPECS = {
         "filter_blank",
         "filter_group_blank",
         "filter_group?",
-        "range_takes?",
-        "range_holding?",
-        "range_moved",
+        "track_part",
+        "track_thumb",
+        "slider",
+        "range_slider",
         "diff_tally",
     ],
     ROOT / "tests" / "drag_spec.sl": [
