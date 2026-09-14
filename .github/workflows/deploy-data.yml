@@ -189,8 +189,10 @@ jobs:
           if [ "$installed" != "$SOLI_VERSION" ]; then
             echo "" >&2
             echo "The server runs Soli $installed; this application needs $SOLI_VERSION." >&2
-            echo "It asks for the 'nfc' capability, which an older soli refuses at" >&2
-            echo "boot: eui_capabilities: unknown capability 'nfc'." >&2
+            echo "It asks for the 'scene' capability and draws a 'scene' node," >&2
+            echo "and an older soli refuses the first at boot -- eui_capabilities:" >&2
+            echo "unknown capability 'scene' -- and the second at render, because" >&2
+            echo "its kind_of does not know the kind either." >&2
             echo "Upgrade the server, or align SOLI_VERSION in this file." >&2
             exit 1
           fi
