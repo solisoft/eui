@@ -43,7 +43,14 @@ fn main() {
                 .map(|(n, u)| eui_client::recent::Recent { url: (*u).to_owned(), name: (*n).to_owned() })
                 .collect(),
             );
+            // CHROME_PICK=<n> — the keyboard standing on the nth recent, as
+            // ArrowDown leaves it.
+            let pick: usize = std::env::var("CHROME_PICK").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
             chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
+            for _ in 0..pick {
+                let _ = chrome.input(eui_client::Input::Key { key: "ArrowDown".into(), modifiers: 0, down: true });
+                chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None }], 0);
+            }
         } else {
             let views: Vec<TabView<'_>> = tabs.iter().map(|(t, o, p, tr)| TabView { title: t, origin: o, path: p, trust: Some(*tr), link: None }).collect();
             if std::env::var("CHROME_EDIT").is_ok() {

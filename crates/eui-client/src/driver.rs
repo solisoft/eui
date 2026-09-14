@@ -265,6 +265,14 @@ pub enum Input {
         /// `true` on press.
         down: bool,
     },
+    /// The person asked to go back (06 §1.3).
+    ///
+    /// One input for four gestures — a system back button, the mouse's
+    /// fourth button, `Alt+Left`, and a swipe from the leading edge — because
+    /// §5's rule that a server cannot tell a finger from a mouse holds just
+    /// as well here, and 00 refuses the fingerprinting surface that telling
+    /// them apart would be.
+    Back,
     /// The window is now `w × h` logical px at `scale` device px per logical.
     ///
     /// `scale` is what the *page* is drawn at, which is the display's own
@@ -401,6 +409,24 @@ struct Drag {
 /// view and the press it began with is taken back.
 const TOUCH_SLOP: f32 = 8.0;
 
+/// How far in from the leading edge a contact may land and still belong to
+/// the navigator rather than to what is under it, in logical px (06 §5).
+///
+/// Twenty, which is the width of the bezel a thumb finds without being
+/// aimed, and narrow enough that what it takes from the application is a
+/// strip nobody puts a control against. Wider would take sliders; narrower
+/// would have to be looked at to be hit, and a gesture you have to look at
+/// is a button with extra steps.
+const TOUCH_EDGE: f32 = 20.0;
+
+/// How fast a back-swipe has to be still moving when the finger leaves the
+/// glass for the page to go anyway, in logical px per millisecond.
+///
+/// The same shape as a fling (06 §5 step 6): a stroke that was still going
+/// carries on, and one that was placed and held does not. Half a pixel a
+/// millisecond is a deliberate flick and not a hand coming to rest.
+const POP_FLING: f32 = 0.5;
+
 /// The time constant of a fling, in milliseconds. A finger that leaves the
 /// glass at `v` logical px/ms carries the view `v * TOUCH_FLING_TAU_MS`
 /// further, settling over three times that — the shape an exponential
@@ -434,6 +460,10 @@ enum TouchPhase {
     /// It went past the slop without being taken: the finger carries the
     /// view, and the press it began with has been given back.
     Scrolling,
+    /// It landed on the leading edge of a page that can be gone back from,
+    /// and went inwards: the finger is carrying that page off, and the back
+    /// is reported when it lets go past halfway (06 §5).
+    Popping,
 }
 
 /// One finger, followed from the glass to the pointer (spec 06 §5).
@@ -459,6 +489,10 @@ struct Touch {
     /// When an undecided contact becomes a held one (06 §5.1). Cleared the
     /// moment it wanders or lifts, because neither of those is a hold.
     hold: Option<Instant>,
+    /// It landed inside the leading-edge strip of a page that can be gone
+    /// back from, so a stroke inwards is a back rather than whatever is
+    /// under it (06 §5).
+    edge: bool,
 }
 
 impl Touch {
@@ -590,6 +624,65 @@ fn line_bounds(s: &str, at: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// A page that has left the tree and is still being drawn (03 §5).
+///
+/// The quads it painted, not the nodes it was made of. Nothing here can be
+/// laid out, hit-tested, focused, woken, played or read out, because there is
+/// nothing here to do any of that to — "a departing page is inert" is a fact
+/// about the representation rather than a rule anything has to enforce. The
+/// memory is what was on screen, so a ten-thousand-row table costs its forty
+/// visible rows.
+#[derive(Debug, Clone)]
+struct Departing {
+    /// What it painted, exactly as it painted it.
+    quads: Vec<eui_render::Quad>,
+    /// The clip rectangle those quads were drawn under.
+    clip: [u32; 4],
+    /// Where it is going, and when.
+    go: Move,
+    /// Over the page arriving, or under it. A pop uncovers what was beneath,
+    /// so the page leaving is on top; a push covers it, so it is not.
+    over: bool,
+    /// The atlas generation its glyph uvs were taken from. An atlas that
+    /// grows or is cleared forgets every glyph in it and hands the same
+    /// coordinates to different pixels, so a page frozen before that has to
+    /// be let go rather than drawn wrong.
+    atlas: u32,
+    /// The framebuffer it was painted for. A window resized mid-transition
+    /// has nowhere sensible to put a picture of the old one.
+    size: (u32, u32),
+}
+
+/// One subtree on the move (03 §5), as the driver keeps it: where it starts,
+/// where it ends, and either a clock or the hand.
+///
+/// `from` and `to` are `dx`, `dy` in logical px, a uniform scale and an
+/// opacity — the four the vertex stage interpolates. Absolute times, like
+/// every other animation here: there is no delta, so a frame that is skipped
+/// costs nothing and a frame that is repeated is still right.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Move {
+    from: [f32; 4],
+    to: [f32; 4],
+    start: std::time::Instant,
+    duration: Duration,
+    /// `0` standard, `1` decelerate (arriving), `3` accelerate (leaving).
+    curve: u32,
+    /// Set while a gesture is driving it: the fraction the hand is holding
+    /// it at, and the clock is not read at all (06 §5).
+    held: Option<f32>,
+}
+
+impl Move {
+    fn done(&self, now: std::time::Instant) -> bool {
+        self.held.is_none() && now.saturating_duration_since(self.start) >= self.duration
+    }
+
+    fn to_paint(self, now: std::time::Instant) -> eui_render::Mover {
+        eui_render::Mover { from: self.from, to: self.to, t0: -now.saturating_duration_since(self.start).as_secs_f32(), dur: self.duration.as_secs_f32(), curve: self.curve, held: self.held }
+    }
+}
+
 /// One running transition: the colours it left, the colours it reaches,
 /// and when.
 #[derive(Debug, Clone, Copy)]
@@ -695,6 +788,21 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// runs at 60, but a spinner is a mark at rest, and the machine it is on
 /// should be too (10 §1).
 const SPIN_FRAME: Duration = Duration::from_millis(33);
+/// Half the caret's blink, in seconds: up for this long, down for this
+/// long. The number every desktop uses, and the one the caret is up for
+/// after each keystroke.
+const CARET_BLINK: f32 = 0.53;
+/// How long the caret goes on blinking with nothing happening, before it
+/// settles and stays up.
+///
+/// A blink is a wake-up twice a second, and 10 §1's idle budget is zero of
+/// them; a caret that blinked for as long as a field was focused would turn
+/// every window left open on a form into a process that never sleeps. So it
+/// blinks while somebody is plainly there and stops when they are not,
+/// which is GTK's `gtk-cursor-blink-time` and its default to the second.
+/// A caret left up is the honest resting state: it still says where typing
+/// would land.
+const CARET_BLINK_FOR: f32 = 10.0;
 /// How long a scrollbar stays up once the scrolling stops, and how long it
 /// then takes to go. A bar reports a movement, so there is nothing for one
 /// to say about a page that is sitting still — and a strip of furniture
@@ -834,6 +942,17 @@ pub struct Driver {
     /// Running transitions (spec 03 §5), the clock they run on, and when the
     /// next frame is due — the only reason the window ever wakes itself.
     anims: Vec<(NodeIx, Anim)>,
+    /// Subtrees on the move (03 §5): a page arriving or leaving, and the
+    /// shared elements flying between them. The counterpart to `anims`, for
+    /// the half of a lifecycle that is geometry rather than colour.
+    movers: Vec<(NodeIx, Move)>,
+    /// The page that has left the tree and is still on screen (03 §5).
+    ///
+    /// Its painting and not its tree. One at a time: a second navigation
+    /// finishes the first at once, which makes the memory a constant instead
+    /// of a function of how fast someone taps — the same shape as one contact
+    /// at a time and one drag at a time.
+    departing: Option<Departing>,
     /// A wheel notch in flight: the offset it left, the one it reaches.
     scroll_anim: Option<ScrollAnim>,
     /// When the driver was made: `spin` phases count from here.
@@ -850,6 +969,17 @@ pub struct Driver {
     preedit: String,
     /// Text the person copied or cut, for the window to hand the clipboard.
     clipboard: Option<String>,
+    /// What the caret's blink is timed from: the moment it last moved.
+    caret_since: Instant,
+    /// Where it was then — node, selection and offset — so that a caret that
+    /// has not moved keeps the clock it already had.
+    caret_was: Option<(NodeIx, usize, usize, usize)>,
+    /// When the blink next turns over, `None` with no field focused.
+    caret_due: Option<Instant>,
+    /// The focused field's caret, as a 1 px box, for the IME cursor area.
+    /// The platform draws its own caret at this origin; passing the whole
+    /// field put it on the left of a centred run.
+    ime_spot: Option<eui_layout::Rect>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     /// Effects of local-then-server handlers awaiting the server's answer.
@@ -1042,6 +1172,8 @@ impl Driver {
             focused: None,
             focus_visible: false,
             anims: Vec::new(),
+            movers: Vec::new(),
+            departing: None,
             scroll_anim: None,
             epoch: Instant::now(),
             pending: Vec::new(),
@@ -1051,6 +1183,10 @@ impl Driver {
             edits: HashMap::new(),
             preedit: String::new(),
             clipboard: None,
+            caret_since: Instant::now(),
+            caret_was: None,
+            caret_due: None,
+            ime_spot: None,
             chunks: HashMap::new(),
             provisional: Vec::new(),
             drag_provisional: None,
@@ -1344,6 +1480,7 @@ impl Driver {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
+                self.forget_released();
                 // A `SetText` on a field the person is editing is the server
                 // saying what that field now holds, and the client's buffer
                 // has to agree — otherwise a composer that the handler
@@ -1439,21 +1576,228 @@ impl Driver {
     /// This is the only thing a mount animates, and it has to be asked for.
     /// A node that is restyled mid-entrance is left to `note_style_changes`,
     /// which picks the animation up from wherever it visibly is.
+    /// Drop what is keyed by the id of a node the tree no longer has.
+    ///
+    /// These four hang off the server's node id rather than an index, so
+    /// nothing prunes them when the node goes: until now only `start_over`
+    /// emptied them, and a mount is once a session. Under a navigator a page
+    /// leaves on every interaction, and the entries of every list and every
+    /// player it held stay behind for the life of the socket.
+    ///
+    /// Against the reference server that is a leak and nothing worse, because
+    /// its ids only ever count up (`fresh_id`). 02 §4 permits a server to
+    /// reuse an id once its node is gone, though, and against one that does,
+    /// a stale entry is not merely wasted space — it is this client's answer
+    /// about whichever later node was given the same number. Pruned exactly
+    /// as `edits` is, a line above the call.
+    fn forget_released(&mut self) {
+        self.windows.retain(|id, _| self.session.lookup(*id).is_some());
+        self.video_at.retain(|id, _| self.session.lookup(*id).is_some());
+        self.audio_at.retain(|id, _| self.session.lookup(*id).is_some());
+        self.audio_src.retain(|id, _| self.session.lookup(*id).is_some());
+    }
+
+    /// Put the page that has left back into the frame, on its way out.
+    ///
+    /// Its quads are added whole and given a transform slot of their own, so
+    /// the list is right for every frame of the leaving and not just this
+    /// one: the vertex stage moves them from the clock the window hands it,
+    /// nothing is walked again, and across a worker's pipe nothing more is
+    /// sent. Which is the same bargain a spin, a transition and a glide all
+    /// strike, one subtree larger.
+    fn splice_departing(&mut self, list: &mut DrawList, now: Instant, device: (u32, u32)) {
+        let Some(d) = self.departing.as_ref() else { return };
+        // Let it go rather than draw it wrong. A grown or cleared atlas has
+        // handed every glyph in it a different place, and a resized window
+        // has nowhere to put a picture of the old one.
+        if d.go.done(now) || d.atlas != self.atlas.generation() || d.size != (self.size.w.max(0.0) as u32, self.size.h.max(0.0) as u32) {
+            self.departing = None;
+            return;
+        }
+        if list.xforms.len() >= eui_render::MAX_XFORMS {
+            return;
+        }
+        let s = self.scale;
+        let dev = |v: [f32; 4]| [v[0] * s, v[1] * s, v[2], v[3]];
+        let pivot = [device.0 as f32 / 2.0, device.1 as f32 / 2.0, 0.0, 0.0];
+        let m = d.go.to_paint(now);
+        list.xforms.push(eui_render::Xform { from: dev(m.from), to: dev(m.to), clock: [m.t0, m.dur, m.curve as f32, 0.0], pivot });
+        let Ok(slot) = u32::try_from(list.xforms.len()) else { return };
+        let first = u32::try_from(list.quads.len()).unwrap_or(u32::MAX);
+        let count = u32::try_from(d.quads.len()).unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        let flag = slot << eui_render::XFORM_SHIFT;
+        list.quads.extend(d.quads.iter().map(|q| {
+            let mut q = *q;
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
+            let flags = q.params[2] as u32;
+            // It kept whatever slot it had when it was painted, and that
+            // slot belonged to a list that is gone. The page it is now part
+            // of is the only thing left moving it.
+            q.params[2] = ((flags & !eui_render::XFORM_MASK) | flag) as f32;
+            q
+        }));
+        let clip = u32::try_from(list.clips.len()).unwrap_or(0);
+        list.clips.push(d.clip);
+        let run = eui_render::Run { clip, chain: 0, first, count };
+        // A pop uncovers what was beneath, so the page leaving is drawn last
+        // and is on top; a push covers it, so it goes first and the arriving
+        // page is drawn over it. Runs are drawn in order, and putting one at
+        // the front means every other run's instances have moved along by
+        // the count.
+        if d.over {
+            list.runs.push(run);
+        } else {
+            // Everything already in the list is drawn over it, so it has to
+            // come first — and moving instances to the front moves every
+            // index that pointed into them: each run's, and the backdrop's
+            // (03 §2), which names the first instance that samples it.
+            for r in &mut list.runs {
+                r.first = r.first.saturating_add(count);
+            }
+            if let Some(b) = list.backdrop.as_mut() {
+                b.first = b.first.saturating_add(count);
+            }
+            list.quads.rotate_right(count as usize);
+            list.runs.insert(0, eui_render::Run { clip, chain: 0, first: 0, count });
+        }
+    }
+
+    /// Take the painting of a page the tree has just let go (03 §5).
+    ///
+    /// The list it is taken from is the one painted *before* the batch, which
+    /// is the last frame that still had the page in it — so the quads are
+    /// where the page was, which is where it has to leave from.
+    ///
+    /// Where it goes is the mirror of where the page arriving beside it came
+    /// from: a push sends the old page the way the new one did not come, and
+    /// a pop is the same sentence read backwards. So the leaving record never
+    /// has to name a direction, and a server never has to decide one.
+    fn note_exits(&mut self) {
+        let exits = self.session.take_exits();
+        if exits.is_empty() {
+            return;
+        }
+        let Some(cached) = self.cached.as_ref() else { return };
+        let list = Arc::clone(&cached.list);
+        // A second navigation while one is running finishes the first at
+        // once. Anything else makes the memory a function of how fast a
+        // person can tap.
+        self.departing = None;
+        for (id, motion) in exits {
+            let Some(d) = list.departures.iter().find(|d| d.id == id).copied() else { continue };
+            // Not all of it is here: a menu was open, and its quads are in
+            // the top layer outside this span. Let the page go at once
+            // rather than slide it out and leave the menu behind.
+            if !d.whole || d.count == 0 {
+                continue;
+            }
+            let Some(clip) = list.clips.get(d.clip as usize).copied() else { continue };
+            let first = d.first as usize;
+            let end = first.saturating_add(d.count as usize).min(list.quads.len());
+            let Some(leaving_quads) = list.quads.get(first..end).map(<[_]>::to_vec) else { continue };
+            if leaving_quads.is_empty() {
+                continue;
+            }
+            let leaving = motion.mirrored();
+            let Some(to) = self.leaving_towards(leaving) else { continue };
+            let ms = self.resolved.motion.get(1).copied().unwrap_or(180);
+            self.departing = Some(Departing {
+                quads: leaving_quads,
+                clip,
+                // Accelerate: 05 §2 names that curve for something leaving,
+                // and until now nothing had ever used it.
+                go: Move { from: [0.0, 0.0, 1.0, 1.0], to, start: self.now, duration: Duration::from_millis(u64::from(ms)), curve: 3, held: None },
+                over: matches!(leaving, eui_proto::Motion::Trailing | eui_proto::Motion::Bottom),
+                atlas: self.atlas.generation(),
+                size: (self.size.w.max(0.0) as u32, self.size.h.max(0.0) as u32),
+            });
+            self.next_due = Some(self.now);
+            self.redraw = true;
+            break;
+        }
+    }
+
+    /// Where a page leaving in this direction ends up, in logical px.
+    ///
+    /// A third of the way, not the whole way. The page underneath is not
+    /// being replaced, it is being uncovered — and something that slides out
+    /// at the same speed as the thing covering it reads as two slides rather
+    /// than as a stack with a depth to it. A third is what every platform
+    /// that got this right settled on, and it is prose here rather than a
+    /// field because it is not a decision an application should be making.
+    fn leaving_towards(&mut self, motion: eui_proto::Motion) -> Option<[f32; 4]> {
+        use eui_proto::Motion as M;
+        let (vw, vh) = (self.size.w.max(0.0), self.size.h.max(0.0));
+        let (w, h) = (vw / 3.0, vh / 3.0);
+        Some(match motion {
+            M::Leading => [-w, 0.0, 1.0, 1.0],
+            M::Trailing => [vw, 0.0, 1.0, 1.0],
+            M::Top => [0.0, -h, 1.0, 1.0],
+            M::Bottom => [0.0, vh, 1.0, 1.0],
+            M::Scale => [0.0, 0.0, 0.92, 0.0],
+            M::Fade => [0.0, 0.0, 1.0, 0.0],
+            M::Paired => return None,
+        })
+    }
+
+    /// Where a node wearing this motion stands at the start of its
+    /// entrance, in logical px plus a scale and an opacity.
+    ///
+    /// A slide is the node's own box, so a page comes in from exactly its
+    /// own width away and a sheet from its own height — measured rather than
+    /// named, which is what keeps a half-height sheet from travelling a
+    /// whole screen. A scale is 92 % and a fade with it, which is what a
+    /// fade-through between two siblings is made of.
+    fn arriving_from(&mut self, ix: NodeIx, motion: eui_proto::Motion) -> Option<[f32; 4]> {
+        use eui_proto::Motion as M;
+        self.ensure_layout();
+        let r = self.layout.rect(ix)?;
+        Some(match motion {
+            M::Leading => [-r.w, 0.0, 1.0, 1.0],
+            M::Trailing => [r.w, 0.0, 1.0, 1.0],
+            M::Top => [0.0, -r.h, 1.0, 1.0],
+            M::Bottom => [0.0, r.h, 1.0, 1.0],
+            M::Scale => [0.0, 0.0, 0.92, 0.0],
+            // A fade is the entrance this client has always had, and a
+            // pairing is resolved against its partner rather than from a
+            // direction; neither is a mover.
+            M::Fade | M::Paired => return None,
+        })
+    }
+
     fn note_entrances(&mut self) {
         for ix in self.session.take_entrances() {
             if self.session.node(ix).is_none() {
                 continue;
             }
             let record = self.session.style_of(ix);
-            let ms = record.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))).or_else(|| self.resolved.motion.get(1));
+            let ms = record.transition.checked_sub(1).and_then(|i| self.resolved.motion.get(usize::from(i))).or_else(|| self.resolved.motion.get(1)).copied();
             let Some(ms) = ms else { continue };
+            // 03 §5: an entrance that names a direction arrives from it.
+            // The movement and the opacity are one transform on the whole
+            // subtree, so a page slides with its contents and a fade-through
+            // dims them with it — and neither goes near the entrance fade
+            // below, which is what a `fade` entrance has always been and
+            // stays, byte for byte.
+            if record.motion != eui_proto::Motion::Fade {
+                if let Some(from) = self.arriving_from(ix, record.motion) {
+                    self.movers.retain(|(n, _)| *n != ix);
+                    self.movers.push((ix, Move { from, to: [0.0, 0.0, 1.0, 1.0], start: self.now, duration: Duration::from_millis(u64::from(ms)), curve: 1, held: None }));
+                    self.next_due = Some(self.now);
+                    self.redraw = true;
+                }
+                continue;
+            }
             let to = colors_of(&self.session, &self.resolved, &record);
             // `mix` fades an absent colour through transparent, so leaving
             // the three of them `None` is what makes this a fade rather than
             // a wash through some arbitrary starting colour.
             let from = Colors { bg: None, fg: None, border: None, opacity: 0.0, blur: 0.0 };
             self.anims.retain(|(n, _)| *n != ix);
-            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)), curve: eui_theme::Curve::DECELERATE }));
+            self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(ms)), curve: eui_theme::Curve::DECELERATE }));
             self.next_due = Some(self.now);
             self.redraw = true;
         }
@@ -1461,11 +1805,23 @@ impl Driver {
 
     /// Advance the clock. True when a transition frame is due, so the window
     /// should redraw; false at rest, which is almost always.
+    ///
+    /// The deadline that fired is **taken**. A redraw asked for is not a
+    /// redraw delivered — the compositor brings it at the next refresh — and
+    /// until then the window's loop passes through here again, and again,
+    /// and a deadline left behind fires on every one of them. Measured on a
+    /// 60 Hz screen with a page sliding: six hundred passes a second, every
+    /// one asking for the same frame, and thirty-four frames delivered out
+    /// of sixty. The next deadline is `paint`'s to set, which is where every
+    /// other line in this file already expects it to come from.
     pub fn tick(&mut self, now: Instant) -> bool {
         self.now = now;
         match [self.next_due, self.viewport_due].into_iter().flatten().min() {
             Some(due) if now >= due => {
                 self.redraw = true;
+                if self.next_due.is_some_and(|d| now >= d) {
+                    self.next_due = None;
+                }
                 true
             }
             _ => false,
@@ -1480,7 +1836,25 @@ impl Driver {
 
     /// True while any transition runs.
     pub fn animating(&self) -> bool {
-        !self.anims.is_empty() || self.scroll_anim.is_some()
+        !self.anims.is_empty() || !self.nothing_on_the_clock() || self.scroll_anim.is_some()
+    }
+
+    /// Whether nothing in flight is owed a frame — every transform there is
+    /// being held by a hand rather than run by a clock (06 §5).
+    ///
+    /// A held one owes nothing: the finger asks for the next frame by moving,
+    /// so a drag held still costs what an idle window costs, which is what
+    /// 01 §5 requires of anything that is not a `wake`.
+    ///
+    /// **The page on its way out counts.** It is not in `movers` — it has no
+    /// node to hang off — and leaving it out here was a freeze you could
+    /// watch: a page removed on its own, or one whose replacement finished
+    /// arriving first, stopped being owed frames while it was still half way
+    /// off the screen. Nothing then dropped it either, because the only thing
+    /// that drops it is a paint, so both pages sat there until some unrelated
+    /// event woke the window.
+    fn nothing_on_the_clock(&self) -> bool {
+        self.movers.iter().all(|(_, m)| m.held.is_some()) && self.departing.as_ref().map_or(true, |d| d.go.held.is_some())
     }
 
     /// Whether a glide from `from` to `to` can be the vertex stage's (04
@@ -1633,6 +2007,7 @@ impl Driver {
         self.touched = true;
         self.now = now;
         match input {
+            Input::Back => self.go_back(),
             Input::Resized(w, h, scale) => {
                 let rescaled = (self.scale - scale).abs() > f32::EPSILON;
                 self.size = Size::new(w, h);
@@ -2310,6 +2685,96 @@ impl Driver {
     /// and spec 07 §6: a local chunk runs first and may queue events; a
     /// `LocalThenServer` then sends its named event; an aborted chunk sends
     /// nothing.
+    /// The topmost node that has said how it leaves (03 §5): what a
+    /// back-swipe carries off.
+    ///
+    /// Deepest-last in preorder, so a sheet over a page is taken before the
+    /// page under it — the thing on top is the thing a stroke means. A node
+    /// that never said how it leaves is not dragged anywhere: knowing how to
+    /// go is how a page volunteers for this, and it is the same byte that
+    /// makes a push look like a push.
+    fn topmost_leaver(&mut self) -> Option<NodeIx> {
+        self.ensure_layout();
+        let root = self.session.root()?;
+        let mut best = None;
+        for ix in self.session.preorder(root) {
+            if self.layout.rect(ix).is_some() && self.session.style_of(ix).animation & eui_proto::ANIMATION_EXIT != 0 {
+                best = Some(ix);
+            }
+        }
+        best
+    }
+
+    /// How far along the back-swipe is, as a fraction of the window's width.
+    fn pop_fraction(&self, x: f32) -> f32 {
+        let w = self.size.w.max(1.0);
+        ((x - self.touch.from.0) / w).clamp(0.0, 1.0)
+    }
+
+    /// Put the page where the finger has it.
+    ///
+    /// Held rather than timed: the transform's fraction is written straight
+    /// in, so the list does not change and the driver asks for no frames of
+    /// its own — the finger asks for the next one by moving, and a hand held
+    /// still costs what an idle window costs (01 §5).
+    fn hold_pop(&mut self, x: f32) {
+        let Some(ix) = self.topmost_leaver() else { return };
+        let Some(to) = self.leaving_towards(eui_proto::Motion::Trailing) else { return };
+        let k = self.pop_fraction(x);
+        self.movers.retain(|(n, _)| *n != ix);
+        self.movers.push((ix, Move { from: [0.0, 0.0, 1.0, 1.0], to, start: self.now, duration: Duration::from_millis(1), curve: 1, held: Some(k) }));
+        self.redraw = true;
+    }
+
+    /// Let go of a back-swipe: finish it, or put the page back.
+    ///
+    /// Either way the hand's fraction becomes a clock's, starting from where
+    /// the finger left it — so the movement is continuous through the
+    /// release rather than jumping to an end the hand never reached. The
+    /// duration is scaled by what is left to travel, because a page released
+    /// at nine tenths must not take the full time to cross the last tenth.
+    fn release_pop(&mut self, commit: bool) {
+        let Some(ix) = self.topmost_leaver() else { return };
+        let Some((_, m)) = self.movers.iter().find(|(n, _)| *n == ix).copied() else { return };
+        let k = m.held.unwrap_or(0.0).clamp(0.0, 1.0);
+        let at = [m.from[0] + (m.to[0] - m.from[0]) * k, m.from[1] + (m.to[1] - m.from[1]) * k, 1.0, 1.0];
+        let (to, left) = if commit { (m.to, 1.0 - k) } else { (m.from, k) };
+        let full = self.resolved.motion.get(1).copied().unwrap_or(180);
+        let ms = (f32::from(full) * left).round().max(1.0) as u64;
+        self.movers.retain(|(n, _)| *n != ix);
+        self.movers.push((ix, Move { from: at, to, start: self.now, duration: Duration::from_millis(ms), curve: if commit { 3 } else { 1 }, held: None }));
+        self.next_due = Some(self.now);
+        self.redraw = true;
+    }
+
+    /// Report that the person asked to go back (06 §1.3).
+    ///
+    /// To the mounted root or to nobody. §2's walk to the nearest handler
+    /// has nothing to walk from — there is no node under a system back — and
+    /// the root is the one node a server always knows, which is already where
+    /// a component's own state lives (07 §1).
+    ///
+    /// A session whose root holds no `back` handler hears nothing, and the
+    /// window is expected to let the platform have the gesture instead. That
+    /// is not politeness: on Android the alternative is an application nobody
+    /// can leave.
+    pub fn go_back(&mut self) -> Vec<Frame> {
+        let Some(root) = self.session.root() else { return Vec::new() };
+        if self.session.handler(root, EventKind::Back).is_none() {
+            return Vec::new();
+        }
+        self.emit(root, EventKind::Back, Value::Null)
+    }
+
+    /// Whether this session would do anything with a back.
+    ///
+    /// The window asks so that it can decide whether to keep the gesture or
+    /// hand it to the platform, and it asks *here* rather than across the
+    /// pipe per keystroke — which is what `Status` is for.
+    pub fn takes_back(&self) -> bool {
+        self.session.root().is_some_and(|r| self.session.handler(r, EventKind::Back).is_some())
+    }
+
     fn emit(&mut self, from: NodeIx, kind: EventKind, payload: Value) -> Vec<Frame> {
         let Some((target, handler)) = self.target(from, kind) else {
             return Vec::new();
@@ -2392,12 +2857,22 @@ impl Driver {
                 }
             }
         };
-        let mut host =
-            SessionHost { session: &mut self.session, here: Some(here), emitted: Vec::new(), texts: Vec::new(), touched: false, repaint: false, undo: provisional.then(Vec::new), mode: None };
+        let mut host = SessionHost {
+            session: &mut self.session,
+            here: Some(here),
+            emitted: Vec::new(),
+            went_back: false,
+            texts: Vec::new(),
+            touched: false,
+            repaint: false,
+            undo: provisional.then(Vec::new),
+            mode: None,
+        };
         let result = eui_vm::run(&verified, &mut host);
         let touched = host.touched;
         let repaint = host.repaint;
         let emitted = host.emitted;
+        let went_back = host.went_back;
         let wrote = host.texts;
         let mode = host.mode;
         if let Some(undo) = host.undo {
@@ -2418,6 +2893,13 @@ impl Driver {
             self.invalidate();
         } else if repaint {
             self.redraw = true;
+        }
+        // 07 §3 `go_back`: a tapped back button and a swipe from the edge
+        // take the same path from here on, so the two cannot come to mean
+        // different things.
+        if went_back {
+            let back = self.go_back();
+            self.pending.extend(back);
         }
         // The viewer's choice, made through the application's own control:
         // never provisional, never undone by a batch.
@@ -2930,7 +3412,7 @@ impl Driver {
         if self.touch.id.is_some() {
             return Vec::new();
         }
-        self.touch = Touch { id: Some(id), from: (x, y), last: (x, y), at: Some(self.now), speed: (0.0, 0.0), phase: TouchPhase::Undecided, hold: None };
+        self.touch = Touch { id: Some(id), from: (x, y), last: (x, y), at: Some(self.now), speed: (0.0, 0.0), phase: TouchPhase::Undecided, hold: None, edge: false };
         // The pointer arrives before it presses, so the press lands on the
         // node under the finger and not on wherever the last one was.
         let mut out = self.pointer_move(x, y);
@@ -2942,8 +3424,22 @@ impl Driver {
         // scroll — a draggable row carries a *prop*, not a `pointer_move`
         // handler, precisely so that the stroke stays the list's.
         let taken = self.pointer.dragging_thumb.is_some() || self.pointer.pressed_on.is_some_and(|ix| self.target(ix, EventKind::PointerMove).is_some() || self.on_drag_handle(ix));
-        if taken {
+        // 06 §5: a contact that lands on the leading edge of a page that can
+        // be gone back from is the navigator's, whatever it landed on.
+        //
+        // This is the one place a gesture outranks the tree, and it costs
+        // what it costs: a slider or a split bar within the strip loses its
+        // stroke. That is why the strip is twenty pixels and not a thumb's
+        // width — wide enough to be found without looking, narrow enough that
+        // what it takes is an edge nobody puts a control against. An
+        // application that wants the whole edge says so by not taking back.
+        self.touch.edge = x <= TOUCH_EDGE && self.takes_back();
+        if taken && !self.touch.edge {
             self.touch.phase = TouchPhase::Dragging;
+        } else if self.touch.edge {
+            // No hold on the edge: a long press there would be a menu on
+            // whatever the strip happens to cover, and the strip is not
+            // aimed at anything.
         } else {
             // 06 §5.1: undecided is also held. The clock runs from where the
             // contact landed, and a frame is owed when it elapses.
@@ -2967,6 +3463,32 @@ impl Driver {
         match self.touch.phase {
             TouchPhase::Dragging => self.pointer_move(x, y),
             TouchPhase::Scrolling => self.wheel(-dx, -dy),
+            TouchPhase::Popping => {
+                self.hold_pop(x);
+                Vec::new()
+            }
+            // The edge, decided before the slop below and by the same
+            // measure: inwards is a back, along is a scroll, and a lift
+            // inside the slop is still the tap it was aimed at.
+            TouchPhase::Undecided if self.touch.edge && self.touch.wandered(x, y) > TOUCH_SLOP => {
+                let (fx, fy) = (x - self.touch.from.0, y - self.touch.from.1);
+                if fx > 0.0 && fx.abs() > fy.abs() {
+                    trace(|| format!("touch {id} became a back at {x},{y}"));
+                    self.touch.phase = TouchPhase::Popping;
+                    self.touch.hold = None;
+                    // Given back exactly as a scroll gives it back: whatever
+                    // it landed on hears `pointer_up` and no `click`.
+                    let out = self.cancel_press();
+                    self.hold_pop(x);
+                    return out;
+                }
+                self.touch.edge = false;
+                self.touch.phase = TouchPhase::Scrolling;
+                self.touch.hold = None;
+                let mut out = self.cancel_press();
+                out.extend(self.wheel(-fx, -fy));
+                out
+            }
             TouchPhase::Undecided if self.touch.wandered(x, y) > TOUCH_SLOP => {
                 trace(|| format!("touch {id} became a scroll at {x},{y}"));
                 self.touch.phase = TouchPhase::Scrolling;
@@ -3010,6 +3532,20 @@ impl Driver {
             // A stroke that was carrying the view: no press is outstanding,
             // and the view goes on if the finger was still moving.
             TouchPhase::Scrolling => self.fling(speed),
+            // Past halfway, or still moving inwards when it left the glass:
+            // the page goes, and the server is told. Otherwise it springs
+            // back and **nothing is reported at all** — an abandoned gesture
+            // is not an event, for the same reason a dismissed dialog is not.
+            TouchPhase::Popping => {
+                let k = self.pop_fraction(x);
+                if k > 0.5 || speed.0 > POP_FLING {
+                    self.release_pop(true);
+                    self.go_back()
+                } else {
+                    self.release_pop(false);
+                    Vec::new()
+                }
+            }
             TouchPhase::Off => Vec::new(),
         };
         self.touch.end();
@@ -3702,8 +4238,9 @@ impl Driver {
         let secret = self.session.is_secret(e);
         let display = if secret { eui_tree::secret_display(&text) } else { text.clone() };
         let scroll_x = self.edits.get(&self.session.node(e)?.id).map_or(0.0, |ed| ed.scroll_x);
-        let shaped = self.text.shape(&display, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
-        let lx = x - (rect.x + style.border.l + style.padding.l) + scroll_x;
+        let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let shaped = self.text.shape(&display, style.font, Some(inner_w), style.line_clamp);
+        let lx = x - (rect.x + style.border.l + style.padding.l) - style.text_pad_x(inner_w, shaped.metrics.width) + scroll_x;
         let ly = y - (rect.y + style.border.t + style.padding.t);
         let at = shaped.byte_at(lx, ly).min(display.len());
         Some(if secret { eui_tree::secret_unoffset(&text, at) } else { at.min(text.len()) })
@@ -4125,7 +4662,43 @@ impl Driver {
     /// selection, with the scroll that keeps the caret in view — updated
     /// here, once per paint.
     fn editing(&mut self) -> Option<Editing> {
-        let f = self.focused.filter(|f| self.is_editable(*f))?;
+        let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else {
+            self.ime_spot = None;
+            self.caret_due = None;
+            return None;
+        };
+        let out = self.editing_of(f);
+        if out.is_none() {
+            self.ime_spot = None;
+            self.caret_due = None;
+        }
+        out
+    }
+
+    /// Spec 03 §3: the caret blinks. Half a period on, half off — and the
+    /// clock starts again every time the caret moves, so it is up for the
+    /// whole of that first half and typing is never interrupted by a bar
+    /// that happens not to be there.
+    ///
+    /// The `until` this puts on the frame is what makes the window come
+    /// back: a focused field costs two paints a second, which is what a
+    /// blinking caret costs anywhere.
+    fn caret_blink(&mut self, at: (NodeIx, usize, usize, usize)) -> bool {
+        if self.caret_was != Some(at) {
+            self.caret_was = Some(at);
+            self.caret_since = self.now;
+        }
+        let elapsed = self.now.saturating_duration_since(self.caret_since).as_secs_f32();
+        if elapsed >= CARET_BLINK_FOR {
+            self.caret_due = None;
+            return true;
+        }
+        let into = elapsed.rem_euclid(CARET_BLINK);
+        self.caret_due = Some(self.now + Duration::from_secs_f32((CARET_BLINK - into).max(0.001)));
+        elapsed.rem_euclid(CARET_BLINK * 2.0) < CARET_BLINK
+    }
+
+    fn editing_of(&mut self, f: NodeIx) -> Option<Editing> {
         let rect = self.layout.rect(f)?;
         let style = eui_layout::Style::resolve(&self.session.style_of(f), &self.resolved);
         let text = self.session.text_of(f).unwrap_or("").to_owned();
@@ -4152,6 +4725,7 @@ impl Driver {
             }
         };
         let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let inner_h = (rect.h - style.inset_v()).max(0.0);
         let cx = shaped.caret(caret).0;
         if cx - edit.scroll_x > inner_w {
             edit.scroll_x = cx - inner_w;
@@ -4161,8 +4735,17 @@ impl Driver {
         if shaped.metrics.width <= inner_w {
             edit.scroll_x = 0.0;
         }
+        let pad = style.text_pad_x(inner_w, shaped.metrics.width);
+        let (cx, cy) = shaped.caret(caret);
+        let origin_x = rect.x + style.border.l + style.padding.l - edit.scroll_x + pad;
+        let origin_y = rect.y + style.border.t + style.padding.t + if inner_h > shaped.metrics.height { (inner_h - shaped.metrics.height) * 0.5 } else { 0.0 };
+        let above = style.font.size * 0.9;
+        let below = style.font.size * 0.25;
+        self.ime_spot = Some(eui_layout::Rect::new(origin_x + cx, origin_y + cy - above, 1.0, above + below));
         let r = edit.selection();
-        Some(Editing { node: f, start: shown(r.start), end: shown(r.end), caret, scroll_x: edit.scroll_x })
+        let (start, end) = (shown(r.start), shown(r.end));
+        let caret_on = self.caret_blink((f, start, end, caret));
+        Some(Editing { node: f, start, end, caret, scroll_x: self.edits.get(&id).map_or(0.0, |e| e.scroll_x), caret_on })
     }
 
     /// Spec 06 §3: a composition is local. The field shows its buffer plus
@@ -4207,6 +4790,9 @@ impl Driver {
     /// already handles, and the client still owns no caret here.
     pub fn ime_area(&self) -> Option<eui_layout::Rect> {
         let f = self.focused.filter(|f| self.is_editable(*f) || self.takes_typing(*f))?;
+        if self.is_editable(f) {
+            return self.ime_spot.or_else(|| self.layout.rect(f));
+        }
         self.layout.rect(f)
     }
 
@@ -4622,6 +5208,10 @@ impl Driver {
         }
         self.show_stopped();
         self.note_style_changes();
+        // Before the entrances: the page leaving takes its painting from the
+        // list that still had it, and the page arriving has not been laid out
+        // yet, so the two must not be resolved in the other order.
+        self.note_exits();
         self.note_entrances();
         // Spec 03 §7 and §8: the tree says what should be playing, and a
         // picture that just decoded has a size the layout must know before
@@ -4705,6 +5295,8 @@ impl Driver {
         // A transition that has run its course paints its final colours
         // this frame -- the record's own, with no clock on them.
         self.anims.retain(|(ix, a)| !a.done(now) && self.session.node(*ix).is_some());
+        self.movers.retain(|(ix, m)| !m.done(now) && self.session.node(*ix).is_some());
+        let movers: Vec<(NodeIx, eui_render::Mover)> = self.movers.iter().map(|(ix, m)| (*ix, m.to_paint(now))).collect();
         let anims: Vec<(NodeIx, GpuAnim)> = self.anims.iter().map(|(ix, a)| (*ix, a.to_gpu(now))).collect();
         // A glide the vertex stage carries (04 §7): the content starts as
         // far from where the layout put it as the landing is from where
@@ -4739,6 +5331,7 @@ impl Driver {
             size: (device_w, device_h),
             focus: if self.focus_visible { self.focused } else { None },
             anims: &anims,
+            movers: &movers,
             glides: &glides,
             cache: &mut self.paint_cache,
             editing,
@@ -4746,6 +5339,7 @@ impl Driver {
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
             scrollbars: &bars,
         });
+        self.splice_departing(&mut list, now, (device_w, device_h));
         if list.wants_frame && self.next_due.is_none() {
             self.next_due = Some(now + SPIN_FRAME);
         }
@@ -4772,7 +5366,8 @@ impl Driver {
         });
         self.last_text_stats = text_stats;
         self.last_paint_stats = self.paint_cache.stats();
-        self.next_due = if self.anims.is_empty() && self.scroll_anim.is_none() && !list.wants_frame {
+        let moving = !self.nothing_on_the_clock();
+        self.next_due = if self.anims.is_empty() && !moving && self.scroll_anim.is_none() && !list.wants_frame {
             None
         } else if self.scroll_anim.is_some() {
             // A glide at sixty, not a hundred and twenty-five. Every frame
@@ -4782,7 +5377,7 @@ impl Driver {
             // often as the eye needs, and a glide through the docs dialog
             // was a fifth of a core on macOS.
             Some(now + Duration::from_millis(16))
-        } else if self.anims.is_empty() {
+        } else if self.anims.is_empty() && !moving {
             // Only a spin: half the frames a transition gets. A revolution
             // is 1.2 s (03 §5), which is 12° a frame at thirty — smooth —
             // and thirty frames is half the work of sixty, on a display
@@ -4804,7 +5399,7 @@ impl Driver {
         // `next_due`, or the cached list is handed back and the `change` is
         // never looked for. `others` feeds both, which is the whole of it.
         let change_due = self.edits.values().filter_map(|e| e.typed_at).min().map(|t| t + CHANGE_IDLE);
-        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due];
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due, self.caret_due];
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
@@ -4819,7 +5414,14 @@ impl Driver {
         // or not at all. Anything that reaches the driver puts an end to
         // that, because it may change what the tree paints.
         let cpu_owed = self.anims.iter().any(|(_, a)| !a.gpu()) || self.scroll_anim.is_some_and(|a| !a.gpu) || list.cpu_bound;
-        let motion_end = self.anims.iter().map(|(_, a)| a.start + a.duration).chain(self.scroll_anim.map(|a| a.start + a.duration)).max();
+        let motion_end = self
+            .anims
+            .iter()
+            .map(|(_, a)| a.start + a.duration)
+            .chain(self.movers.iter().filter(|(_, m)| m.held.is_none()).map(|(_, m)| m.start + m.duration))
+            .chain(self.departing.as_ref().filter(|d| d.go.held.is_none()).map(|d| d.go.start + d.go.duration))
+            .chain(self.scroll_anim.map(|a| a.start + a.duration))
+            .max();
         // A sound or a picture playing reports its position four times a
         // second (03 §7, §8), from a paint: the list holds until the next
         // report, whenever the window next draws it, and no frame is asked
@@ -4827,7 +5429,7 @@ impl Driver {
         // not have before.
         let report_due = (!self.mixer.is_empty() || !self.players.is_empty()).then(|| self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)));
         let until = others.into_iter().flatten().chain(report_due).chain(motion_end).min();
-        let cadence = if !self.anims.is_empty() || self.scroll_anim.is_some() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
+        let cadence = if !self.anims.is_empty() || moving || self.scroll_anim.is_some() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
         list.gpu_only = !cpu_owed;
         list.repeat_until_ms = until.map_or(u32::MAX, |u| u32::try_from(u.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX));
         list.serial = next_serial();
@@ -5457,6 +6059,9 @@ struct SessionHost<'a> {
     /// the table holds 4 095.
     here: Option<NodeIx>,
     emitted: Vec<u32>,
+    /// The chunk asked to go back (07 §3). Once, however often it asked: a
+    /// request repeated is still one request.
+    went_back: bool,
     /// Editable nodes whose text the chunk wrote, so the client's own buffer
     /// for them can be brought back into agreement afterwards. Without this a
     /// chunk can empty the field it is in and the next keystroke writes the
@@ -5568,6 +6173,9 @@ impl eui_vm::Host for SessionHost<'_> {
     }
     fn emit(&mut self, atom: u32) {
         self.emitted.push(atom);
+    }
+    fn go_back(&mut self) {
+        self.went_back = true;
     }
     fn set_mode(&mut self, mode: &str) -> bool {
         if !matches!(mode, "light" | "dark" | "high_contrast" | "toggle") {

@@ -1311,6 +1311,14 @@ impl Shell {
                 }
                 self.open_url(url, renderer);
             }
+            A::Forget(url) => {
+                let list = crate::recent::forget(&url);
+                if let Some((c, _)) = &mut self.chrome {
+                    c.set_recents(list);
+                }
+                self.rebuild_chrome();
+            }
+            A::Rebuild => self.rebuild_chrome(),
         }
         true
     }
@@ -1750,6 +1758,25 @@ impl Shell {
         self.window.request_redraw();
     }
 
+    /// Hand a back to the page, and say whether it took it (06 §1.3).
+    ///
+    /// Asked of `Status` rather than of the driver, so the question does not
+    /// cross the worker pipe on every keystroke — which is the whole reason
+    /// that struct exists.
+    ///
+    /// `false` means the page has nowhere to go back to, and the caller then
+    /// does whatever the platform would have: nothing on a desktop, and
+    /// leaving the application on a phone.
+    fn back(&mut self) -> bool {
+        let Some(t) = self.tabs.get_mut(self.active) else { return false };
+        if !t.backend.takes_back() {
+            return false;
+        }
+        let out = t.backend.input(Input::Back);
+        t.send(out);
+        true
+    }
+
     fn send_to_tab(&mut self, i: Input) {
         // A click or a key is where a dialog comes from (03 §3.2).
         self.files_dirty = true;
@@ -1966,6 +1993,11 @@ impl Shell {
                 clear: self.chrome.is_none(),
                 now,
                 age: tab.backend.list_age(at),
+                // Where it was laid out, at its own size: a page on its way
+                // somewhere says otherwise here (03 §5).
+                shift: (0.0, 0.0),
+                scale: 1.0,
+                alpha: 1.0,
             };
             landed = l;
             let tex = &mut tab.textures;
@@ -1981,6 +2013,26 @@ impl Shell {
             }
         }
         frame.present();
+        // Still moving? Ask for the next frame here, not on a timer.
+        //
+        // A deadline of `now + 16 ms` is armed at the *start* of a paint,
+        // and the present at the end of it waits for the display. By the
+        // time this returns, the deadline is already in the past, so the
+        // loop asked for the frame again, and again, and the one it got
+        // landed on the refresh after the one it wanted: 34 frames of 60
+        // with a page sliding, and six hundred passes a second to get them
+        // (measured on a 60 Hz screen, 2026-09-14). Asking now hands the
+        // pacing to the compositor's own frame callback, which is the
+        // clock an animation should be keeping anyway.
+        //
+        // Only for a frame that is due within a refresh: a caret's blink is
+        // half a second away and a spin asks for thirty a second, and
+        // neither wants to be woken sixty times for it.
+        let by_now = std::time::Instant::now();
+        let soon = self.tabs.get(self.active).and_then(|t| t.backend.next_frame_at()).is_some_and(|at| at.saturating_duration_since(by_now) <= std::time::Duration::from_millis(20));
+        if soon {
+            self.window.request_redraw();
+        }
         crate::driver::trace(|| {
             format!(
                 "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}{}",
@@ -2133,6 +2185,16 @@ impl Shell {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // The fourth button is a back, not a press on a node: 06 §1
+                // defines buttons 0, 1 and 2 and nothing else, so widening
+                // `pointer_down` to carry this would be inventing a button
+                // the protocol does not have.
+                if button == MouseButton::Back {
+                    if state == ElementState::Pressed {
+                        self.back();
+                    }
+                    return true;
+                }
                 let b = match button {
                     MouseButton::Left => 0,
                     MouseButton::Right => 1,
@@ -2226,6 +2288,28 @@ impl Shell {
                     Key::Character(c) => c.to_string(),
                     _ => return true,
                 };
+                // Going back (06 §1.3). The window takes it before the
+                // application hears a keystroke, because 08 §7 says an
+                // application never sees one it did not ask for, and
+                // `BrowserBack` would otherwise reach it as a key named
+                // after a browser this client is not.
+                //
+                // On Android the system back arrives here and nowhere else:
+                // winit maps `KEYCODE_BACK` to `NamedKey::BrowserBack` and
+                // reports the event **handled**, so the platform's own
+                // "leave the app" is already suppressed by the time this
+                // runs. A session that does not take back therefore has to
+                // be let go of deliberately, or there is no way out of the
+                // application at all.
+                if down && (name == "BrowserBack" || (name == "ArrowLeft" && self.modifiers & 0b0100 != 0)) {
+                    if self.back() {
+                        return true;
+                    }
+                    if name == "BrowserBack" {
+                        request_exit();
+                        return true;
+                    }
+                }
                 // Escape leaves the address bar and puts the address back,
                 // which is the only way out for someone who clicked into it
                 // and changed nothing.

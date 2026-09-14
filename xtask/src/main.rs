@@ -174,6 +174,7 @@ fn bench() -> Vec<Row> {
                 size: (800, 600),
                 focus: None,
                 anims: &[],
+                movers: &[],
                 glides: &[],
                 cache: &mut cache,
                 editing: None,
@@ -340,6 +341,52 @@ fn motion_rows(driver: &mut Driver) -> Vec<Row> {
         .collect();
     let d = median(t);
     rows.push(Row { what: "driver: transition frame (median)", value: format!("{d:?}, {} relayouts", driver.relayouts() - laid), budget: "< 0.2 ms", ok: d < Duration::from_micros(200) });
+    // A page change: one page released wearing `exit` and another grafted
+    // wearing `enter`, which is what a keyed child list reports when the
+    // page a navigator is on changes (03 §5.1). Two pages are on screen for
+    // the whole of it, and neither is laid out again — the one arriving was
+    // laid out once where it lands, and the one leaving is a picture.
+    let page = StyleRecord {
+        display: Display::Column,
+        width: Dim::Percent(10000),
+        height: Dim::Percent(10000),
+        bg: ColorRef::role(eui_theme::Role::SurfaceBase.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Trailing,
+        transition: 3,
+        ..Default::default()
+    };
+    let page_tree = |id: u32| {
+        let mut t = Subtree::default();
+        t.nodes.push(FlatNode { kind: NodeKind::Box, id, style: 6, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        t
+    };
+    let tp = Instant::now();
+    driver.tick(tp);
+    driver.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::DefStyle { id: 6, record: page }, Op::InsertChild { parent: 1, index: 0, subtree: page_tree(900_001) }] }));
+    driver.tick(tp + Duration::from_millis(400));
+    let _ = driver.paint(800, 600);
+    driver.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }, Op::InsertChild { parent: 1, index: 0, subtree: page_tree(900_002) }] }));
+    let tq = tp + Duration::from_millis(400);
+    let _ = driver.paint(800, 600);
+    let laid = driver.relayouts();
+    let t: Vec<Duration> = (1..=5)
+        .map(|i| {
+            driver.tick(tq + Duration::from_millis(16 * i));
+            let s = Instant::now();
+            let _ = driver.paint(800, 600);
+            s.elapsed()
+        })
+        .collect();
+    let both = driver.paint(800, 600).quads.iter().filter(|q| q.rect[2] > 700.0).count();
+    let d = median(t);
+    let relaid = driver.relayouts() - laid;
+    rows.push(Row {
+        what: "driver: page transition frame (median of 5)",
+        value: format!("{d:?}, {relaid} relayouts, {both} pages"),
+        budget: "< 0.2 ms, no layout",
+        ok: d < Duration::from_micros(200) && relaid == 0 && both == 2,
+    });
     // A wheel notch glides for `motion[0]`, 100 ms: the frames of the
     // glide. An input stamps the driver's clock with the wall's, so the
     // ticks here are the wall's too.

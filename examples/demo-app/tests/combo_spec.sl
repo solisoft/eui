@@ -20,7 +20,11 @@ def command_row(it)
     "id": (it["id"] ?? it["label"]).to_s,
     "label": (it["label"] ?? it["id"]).to_s,
     "hint": (it["hint"] ?? "").to_s,
-    "group": (it["group"] ?? "").to_s
+    "group": (it["group"] ?? "").to_s,
+    # Optional, and blank when a command does not name one: a palette row
+    # without an icon should hold the same left edge as one with it, or the
+    # labels of a mixed list zig-zag down the panel.
+    "icon": (it["icon"] ?? "").to_s
   }
 end
 

@@ -17,11 +17,27 @@ struct Uniforms {
     // transitioning node does not make the frame a different draw list.
     // Two spare.
     clock: vec4<f32>,
+    // What the whole list is doing, as a layer of the frame: xy the shift in
+    // device px, z a uniform scale about the target's own centre, w the
+    // opacity everything in it is drawn at. Identity is (0, 0, 1, 1).
+    //
+    // A page slides as a layer and not as a list of moved quads: the window
+    // already holds the list it drew last frame, so a transition costs it
+    // one more `render` with a different four floats, and nothing is walked,
+    // repainted or sent. It is deliberately *not* `viewport.zw` -- a blurred
+    // fragment reads that back to find its backdrop texel, and a frosted bar
+    // on a sliding page would then sample at twice the shift.
+    frame: vec4<f32>,
     // The scrolls in flight (04 §7), two entries a slot from slot one: the
     // shift the content starts from and ends at, device px, as xy and zw;
     // then when it began relative to the list's clock, how long it takes,
     // and its curve. Slot zero is no scroll, and is never read.
     scroll: array<vec4<f32>, 32>,
+    // The subtrees on the move (03 §5), four entries a slot from slot one:
+    // where it starts (dx, dy, scale, opacity), where it ends, the clock
+    // (t0, duration, curve, and the fraction to use outright when the curve
+    // is `held`), and the point the scale is about. Slot zero is nothing.
+    xform: array<vec4<f32>, 64>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
@@ -37,6 +53,7 @@ const BLURRED: u32 = 4u;        // fill over the blurred backdrop
 const SPINNING: u32 = 8u;       // turns about its node's centre, 03 §5
 const ANIMATED: u32 = 16u;      // fill, stroke, opacity mix from `*_from`
 const DECELERATE: u32 = 32u;    // along the entrance curve, not the standard
+const HELD: u32 = 4u;           // a transform the hand is driving, not the clock
 const TAU: f32 = 6.2831855;
 
 // y of cubic-bezier(x1, 0, x2, 1) at time t, the curve solved for its
@@ -56,7 +73,8 @@ fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 }
 
 // The eased fraction at t: 0 the theme's standard curve, 1 decelerate (an
-// entrance), 2 smooth (a keyboard scroll, from rest to rest).
+// entrance), 2 smooth (a keyboard scroll, from rest to rest), 3 accelerate
+// (something leaving).
 fn ease(t: f32, curve: u32) -> f32 {
     let c = clamp(t, 0.0, 1.0);
     if (c <= 0.0 || c >= 1.0) {
@@ -67,6 +85,10 @@ fn ease(t: f32, curve: u32) -> f32 {
     }
     if (curve == 2u) {
         return bezier(c, 0.45, 0.0, 0.55, 1.0);
+    }
+    // 05 §2 accelerate, for something leaving.
+    if (curve == 3u) {
+        return bezier(c, 0.4, 0.0, 1.0, 1.0);
     }
     return bezier(c, 0.2, 0.0, 0.0, 1.0);
 }
@@ -92,6 +114,12 @@ struct VOut {
     @location(4) stroke: vec4<f32>,
     @location(5) uv: vec2<f32>,
     @location(6) extra: vec4<f32>,
+    // The layer scale this quad was drawn at. The SDF below works in the
+    // quad's own unscaled local space, so every distance it computes comes
+    // out `1 / scale` device pixels wide -- including the half-pixel the
+    // antialiasing ramp is supposed to be. Dividing by it there is what keeps
+    // a shrinking page soft-edged and a growing one from going hard.
+    @location(7) scale: f32,
 };
 
 @vertex
@@ -126,10 +154,38 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
         centre = (centre - o) + vec2<f32>(o.x * sc.x - o.y * sc.y, o.x * sc.y + o.y * sc.x);
         angle = angle + a;
     }
-    let local = (c - vec2<f32>(0.5, 0.5)) * inst.rect.zw;
+    // 03 §5: the page this quad is on, or the shared element it belongs to.
+    // Outside the scroller above -- a list mid-glide on a page mid-slide does
+    // both -- and inside the frame below.
+    var lscale = 1.0;
+    var lalpha = 1.0;
+    let xslot = (flags >> 12u) & 15u;
+    if (xslot != 0u) {
+        let base = xslot * 4u;
+        let a = u.xform[base];
+        let b = u.xform[base + 1u];
+        let ck = u.xform[base + 2u];
+        let pivot = u.xform[base + 3u].xy;
+        var k = 0.0;
+        if (u32(ck.z) >= HELD) {
+            k = clamp(ck.w, 0.0, 1.0);
+        } else {
+            k = ease((u.clock.x - ck.x) / max(ck.y, 1e-3), u32(ck.z));
+        }
+        let v = mix(a, b, k);
+        centre = (centre - pivot) * v.z + pivot + v.xy;
+        lscale = v.z;
+        lalpha = v.w;
+    }
+    let local = (c - vec2<f32>(0.5, 0.5)) * inst.rect.zw * lscale;
     let ca = cos(angle);
     let sa = sin(angle);
-    let px = centre + vec2<f32>(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
+    var px = centre + vec2<f32>(local.x * ca - local.y * sa, local.x * sa + local.y * ca);
+    // The layer, last: everything above moved this quad within its list, and
+    // this moves the list. About the target's own centre, so a page scaling
+    // to 92 % shrinks towards the middle of the window rather than its corner.
+    let half = u.viewport.xy * 0.5;
+    px = (px - half) * u.frame.z + half + u.frame.xy;
     let t = px - u.viewport.zw;
     let ndc = vec2<f32>(t.x / u.viewport.x * 2.0 - 1.0, 1.0 - t.y / u.viewport.y * 2.0);
     var out: VOut;
@@ -141,6 +197,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     out.stroke = inst.stroke;
     out.uv = mix(inst.uv.xy, inst.uv.zw, c);
     out.extra = inst.extra;
+    out.scale = lscale * u.frame.z;
     // 03 §5: a transition is both its ends and a clock. The instance holds
     // the ends; the clock is the list's age, so the same list is right for
     // every frame of it.
@@ -151,6 +208,11 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
         out.stroke = mix(inst.stroke_from, inst.stroke, k);
         out.params.w = mix(inst.extra.w, inst.params.w, k);
     }
+    // The layer's opacity multiplies whatever the quad arrived at, so a page
+    // can fade while the things inside it are mid-transition. It is applied
+    // after the mix above rather than folded into either end of it, which is
+    // what keeps the two from having to share one timeline.
+    out.params.w = out.params.w * lalpha * u.frame.w;
     return out;
 }
 
@@ -161,11 +223,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let r = min(in.params.x, min(half.x, half.y));
     let q = abs(p) - half + vec2<f32>(r, r);
     let d = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
-    var coverage = 1.0 - clamp(d + 0.5, 0.0, 1.0);
+    // `d` is in the quad's own units; the ramp wants half a *device* pixel,
+    // so it is scaled by the layer before it is compared against one.
+    let s = max(in.scale, 1e-4);
+    var coverage = 1.0 - clamp(d * s + 0.5, 0.0, 1.0);
     // A shadow: the rect was grown by the blur; fade from opaque one blur
-    // inside the true edge to nothing at the grown edge.
+    // inside the true edge to nothing at the grown edge. The blur is in
+    // device px and `d` is not, so the same correction applies.
     if (in.extra.y > 0.0) {
-        coverage = 1.0 - smoothstep(-2.0 * in.extra.y, 0.0, d);
+        coverage = 1.0 - smoothstep(-2.0 * in.extra.y / s, 0.0, d);
     }
 
     let flags = u32(in.params.z);

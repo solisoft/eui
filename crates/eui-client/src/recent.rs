@@ -80,26 +80,42 @@ pub fn load() -> Vec<Recent> {
 /// Put `url` at the front, under `name`, and write the list back.
 ///
 /// Returns the list as it now stands, so a caller that is about to redraw
-/// does not have to read the file again. A failure to write is not reported:
-/// losing this list costs a little convenience and nothing else, and there
-/// is nowhere useful to say so from.
+/// does not have to read the file again.
 pub fn remember(url: &str, name: &str) -> Vec<Recent> {
     let mut list = load();
     list.retain(|r| r.url != url);
     list.insert(0, Recent { url: url.to_owned(), name: name.to_owned() });
     list.truncate(KEEP);
-    if let Some(p) = path() {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        // A tab or a newline in either field would make a second line out of
-        // one entry, so neither is allowed through.
-        let body: String = list.iter().map(|r| format!("{}\t{}\n", clean(&r.url), clean(&r.name))).collect();
-        if let Ok(mut f) = std::fs::File::create(&p) {
-            let _ = f.write_all(body.as_bytes());
-        }
-    }
+    save(&list);
     list
+}
+
+/// Drop `url` from the list and write it back.
+///
+/// The list is somewhere to click, so a person has to be able to take
+/// something off it: an address opened once by mistake would otherwise sit
+/// on the new-tab page until ten more pushed it off.
+pub fn forget(url: &str) -> Vec<Recent> {
+    let mut list = load();
+    list.retain(|r| r.url != url);
+    save(&list);
+    list
+}
+
+/// One line per application, the newest first. A failure to write is not
+/// reported: losing this list costs a little convenience and nothing else,
+/// and there is nowhere useful to say so from.
+fn save(list: &[Recent]) {
+    let Some(p) = path() else { return };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // A tab or a newline in either field would make a second line out of
+    // one entry, so neither is allowed through.
+    let body: String = list.iter().map(|r| format!("{}\t{}\n", clean(&r.url), clean(&r.name))).collect();
+    if let Ok(mut f) = std::fs::File::create(&p) {
+        let _ = f.write_all(body.as_bytes());
+    }
 }
 
 fn clean(s: &str) -> String {

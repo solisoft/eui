@@ -3165,6 +3165,67 @@ fn a_tap_on_a_grip_leaves_no_ghost_behind() {
 /// that moved nothing in the text — which is why naming it does not make the
 /// field undeletable, and why the same key deletes a character one press and
 /// a whole tag the next.
+/// The demo's page-transition picker opens and picks.
+///
+/// It defaults to `none`, which is the whole point of it — nothing the client
+/// would not have done before is on the wire until someone asks for it — so
+/// the only way to know the rest works is to ask.
+#[test]
+fn the_page_transition_picker_opens_and_picks() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1600.0, 900.0);
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+    assert!(has(&d, "none"), "the picker starts at none");
+    assert!(!has(&d, "trailing"), "and is shut");
+
+    let anchor = d.session().atom_id("erp_motion").and_then(|a| d.session().lookup_key(a)).expect("the picker");
+    click(&mut d, &conn, anchor);
+    pump(&mut d, &conn, &wake, |d| has(d, "trailing"));
+
+    let option = d.session().preorder(root(&d)).find(|ix| d.session().text_of(*ix) == Some("trailing")).expect("an option");
+    click(&mut d, &conn, option);
+    pump(&mut d, &conn, &wake, |d| !has(d, "scale"));
+    assert!(has(&d, "trailing"), "the picker now reads what was picked");
+}
+
+/// 06 §1.3 end to end: the platform's own back reaches the server.
+///
+/// Every other event this client sends is aimed at a node the server put
+/// there. `back` is aimed at the root and comes from a gesture no tree knows
+/// about — a phone's button, `Alt+Left`, a mouse's fourth button, a swipe
+/// from the edge — so nothing on the way validates the name for it. The
+/// server either knows the word or answers `400 unknown event 'back'` and
+/// ends the session, and a client change alone cannot tell which. That is
+/// what this test is for.
+#[test]
+fn the_platforms_back_reaches_the_server_and_moves_the_page() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    let (mut d, conn, wake) = open(port, "gallery", 1200.0, 900.0);
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+
+    // The root took `back`, which is how an application says it has somewhere
+    // to go back to. Without this the window would let the platform have the
+    // gesture instead — on a phone, "leave the application".
+    assert!(d.takes_back(), "the gallery's root holds a back handler");
+
+    goto(&mut d, &conn, &wake, "Orders", "Delivery window");
+    let _ = d.paint(1200, 900);
+
+    for f in d.input(Input::Back) {
+        conn.tx.send(f.encode()).unwrap();
+    }
+    // A session the server ended over an unknown event never gets here: the
+    // pump would time out, and `closed` would say why.
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+    assert_eq!(d.closed(), None, "the session is still up");
+}
+
 #[test]
 fn a_typed_word_becomes_a_tag_and_backspace_takes_it_back() {
     let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };

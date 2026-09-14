@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::atlas::{Atlas, ImageAtlas};
-use crate::paint::{Backdrop, DrawList, Quad, MAX_SCROLLERS};
+use crate::paint::{Backdrop, DrawList, Quad, MAX_SCROLLERS, MAX_XFORMS};
 
 /// Why the renderer could not start or draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,24 +170,68 @@ fn reduce_factor(sigma: f32) -> u32 {
     1u32 << (k as u32)
 }
 
-/// The uniform block of `shader.wgsl`: three vec4 then thirty-two for the
-/// scrollers (two a slot, sixteen slots).
-const UNIFORMS_BYTES: u64 = 16 * (3 + 32);
+/// The uniform block of `shader.wgsl`: four vec4, then thirty-two for the
+/// scrollers (two a slot, sixteen slots), then sixty-four for the subtrees
+/// on the move (four a slot, sixteen slots).
+const UNIFORMS_BYTES: u64 = 16 * (4 + 32 + 64);
 
-/// The uniform block as the shader reads it, from the frame's clock and
-/// the list's scrollers.
-fn uniforms(head: [f32; 8], clock: [f32; 4], list: &DrawList) -> Vec<f32> {
+/// The uniform block as the shader reads it, from the frame's clock, the
+/// layer transform and the list's scrollers.
+fn uniforms(head: [f32; 8], clock: [f32; 4], frame: [f32; 4], list: &DrawList) -> Vec<f32> {
     let mut u = Vec::with_capacity((UNIFORMS_BYTES / 4) as usize);
     u.extend_from_slice(&head);
     u.extend_from_slice(&clock);
+    u.extend_from_slice(&frame);
     // Slot zero is nothing, and is never read.
     u.extend_from_slice(&[0.0; 8]);
     for s in list.scrollers.iter().take(MAX_SCROLLERS) {
         u.extend_from_slice(&[s.from[0], s.from[1], s.to[0], s.to[1], s.t0, s.dur, s.curve as f32, 0.0]);
     }
+    // The scroller array is a fixed sixteen slots whether they are all used
+    // or not, so the transforms start where the shader expects them.
+    u.resize(((16 * (4 + 32)) / 4) as usize, 0.0);
+    // Slot zero is nothing, and takes its four vec4 all the same so that
+    // slot one starts where the shader's `xslot * 4` says it does.
+    u.extend_from_slice(&[0.0; 16]);
+    for x in list.xforms.iter().take(MAX_XFORMS) {
+        u.extend_from_slice(&x.from);
+        u.extend_from_slice(&x.to);
+        u.extend_from_slice(&x.clock);
+        u.extend_from_slice(&x.pivot);
+    }
     u.resize((UNIFORMS_BYTES / 4) as usize, 0.0);
     u
 }
+
+/// A clip rectangle where the layer transform puts it, in the same device
+/// pixels it arrived in.
+///
+/// Rounded **outward** and clamped at the near edge. Outward because a clip
+/// is a promise that nothing outside it is drawn, and half a pixel of slack
+/// costs a seam nobody sees where half a pixel of bite costs a visible one;
+/// clamped because the part of a sliding page that has gone off the leading
+/// edge is off the screen, which is exactly what a scissor of zero width
+/// says.
+fn layer_clip(r: [u32; 4], size: (u32, u32), shift: (f32, f32), scale: f32) -> [u32; 4] {
+    if shift == (0.0, 0.0) && scale == 1.0 {
+        return r;
+    }
+    let half = (size.0 as f32 * 0.5, size.1 as f32 * 0.5);
+    let at = |v: f32, h: f32, d: f32| (v - h) * scale + h + d;
+    let x0 = at(r[0] as f32, half.0, shift.0);
+    let y0 = at(r[1] as f32, half.1, shift.1);
+    let x1 = at((r[0] + r[2]) as f32, half.0, shift.0);
+    let y1 = at((r[1] + r[3]) as f32, half.1, shift.1);
+    let lo = |v: f32| v.floor().max(0.0) as u32;
+    let hi = |v: f32| v.ceil().max(0.0) as u32;
+    [lo(x0), lo(y0), hi(x1).saturating_sub(lo(x0)), hi(y1).saturating_sub(lo(y0))]
+}
+
+/// A layer that is where it was laid out, at its own size and its own
+/// opacity. The backdrop's snapshot pass always draws at it: a blur samples
+/// what the frame actually holds, and the frame holds the page where the
+/// layer put it.
+const IDENTITY_LAYER: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 /// One `Params` in `blur.wgsl`, padded to a dynamic-offset stride.
 const BLUR_PARAMS: u64 = 32;
@@ -231,19 +275,53 @@ pub struct Target<'a> {
     /// start time is relative to that, so the list and the clock agree
     /// whatever process painted it.
     pub age: f32,
+    /// How far this whole list is moved from where it was laid out, in
+    /// device pixels, and which way.
+    ///
+    /// Signed and fractional, which is why it is not `origin`: `origin` ends
+    /// up in `set_viewport` and in every scissor rect, and wgpu refuses a
+    /// viewport that leaves the attachment — so a page cannot be slid off the
+    /// leading edge by moving it. `origin` says where the rectangle is;
+    /// `shift` says where its contents have got to.
+    pub shift: (f32, f32),
+    /// A uniform scale about the rectangle's own centre; `1.0` is none.
+    ///
+    /// Uniform, and never two factors. The rounded-rect distance field the
+    /// fragment stage works in is a true Euclidean distance only under a
+    /// conformal map: scale x and y differently and the corner arcs become
+    /// ellipses the field no longer describes, and the antialiasing ramp
+    /// comes out a different width on the vertical edges than the horizontal
+    /// ones, which shows as a kink at every corner. Nothing a page does
+    /// wants anisotropy.
+    pub scale: f32,
+    /// The opacity everything in the list is drawn at; `1.0` is none.
+    pub alpha: f32,
 }
 
 impl<'a> Target<'a> {
     /// A target that is the whole view: no offset, and it clears. The list
     /// is as old as the paint: `age` zero.
     pub fn whole(view: &'a wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), now: f64) -> Self {
-        Self { view, format, size, origin: (0, 0), clear: true, now, age: 0.0 }
+        Self { view, format, size, origin: (0, 0), clear: true, now, age: 0.0, shift: (0.0, 0.0), scale: 1.0, alpha: 1.0 }
     }
 
     /// The same target, for a list this old.
     #[must_use]
     pub fn aged(self, age: f32) -> Self {
         Self { age, ..self }
+    }
+
+    /// The same target with the list moved, scaled and faded as one layer:
+    /// a page on its way in or out (03 §5).
+    #[must_use]
+    pub fn layered(self, shift: (f32, f32), scale: f32, alpha: f32) -> Self {
+        Self { shift, scale, alpha, ..self }
+    }
+
+    /// Whether this layer is anywhere other than where it was laid out.
+    #[must_use]
+    pub fn moved(&self) -> bool {
+        self.shift != (0.0, 0.0) || self.scale != 1.0
     }
 }
 
@@ -718,7 +796,8 @@ impl Renderer {
     /// Draw a list into a target. Returns what the frame cost the GPU's
     /// queue, for the trace and the budgets (10 §1).
     pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
-        let Target { view, format, size, origin, clear, now, age } = target;
+        let Target { view, format, size, origin, clear, now, age, shift, scale, alpha } = target;
+        let frame = [shift.0, shift.1, scale, alpha];
         let clock = [age, spin_phase(now), 0.0, 0.0];
         let mut stats = RenderStats { quads: list.quads.len(), runs: list.runs.len(), ..RenderStats::default() };
         stats.atlas_bytes = self.sync_atlas(tex, atlas, images);
@@ -764,7 +843,7 @@ impl Renderer {
             None => Vec::new(),
         };
         let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3]], clock, list)));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3]], clock, frame, list)));
         stats.gpu_ms = self.read_timing();
         let Some(pipeline) = self.pipelines.get(&format) else {
             return stats;
@@ -814,6 +893,11 @@ impl Renderer {
                 let Some(r) = list.clips.get(run.clip as usize) else {
                     continue;
                 };
+                // A clip says where the layout put a scroller's window. The
+                // layer moved everything in it, so the window moves too --
+                // otherwise a page at 92 % keeps full-size scissors and shows
+                // the over-scrolled rows either side of its own edge.
+                let r = layer_clip(*r, size, shift, scale);
                 let w = r[2].min(size.0.saturating_sub(r[0]));
                 let h = r[3].min(size.1.saturating_sub(r[1]));
                 if w == 0 || h == 0 {
@@ -936,7 +1020,7 @@ impl Renderer {
         self.queue.write_buffer(&self.blur_params, 0, bytemuck::cast_slice(&params));
         // The snapshot draws a sub-rect of the frame, so the vertex stage is
         // told where the target's own origin sits in it.
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0], clock, list)));
+        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0], clock, IDENTITY_LAYER, list)));
 
         let src_bind = |t: &wgpu::Texture| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1049,6 +1133,24 @@ impl Renderer {
     pub fn render_offscreen_at(&mut self, tex: &mut SessionTextures, target: &Offscreen, now: f64, age: f32, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
         let view = target.texture.create_view(&Default::default());
         self.render(tex, Target::whole(&view, FORMAT, (target.width, target.height), now).aged(age), list, atlas, images)
+    }
+
+    /// Draw into an off-screen target as one layer of a frame: moved,
+    /// scaled and faded as a page mid-transition is (03 §5).
+    #[expect(clippy::too_many_arguments, reason = "a test's view of render(): the layer, two clocks and the four things a frame is drawn from")]
+    pub fn render_offscreen_layered(
+        &mut self,
+        tex: &mut SessionTextures,
+        target: &Offscreen,
+        age: f32,
+        layer: ((f32, f32), f32, f32),
+        list: &DrawList,
+        atlas: &mut Atlas,
+        images: &mut ImageAtlas,
+    ) -> RenderStats {
+        let view = target.texture.create_view(&Default::default());
+        let t = Target::whole(&view, FORMAT, (target.width, target.height), 0.0).aged(age).layered(layer.0, layer.1, layer.2);
+        self.render(tex, t, list, atlas, images)
     }
 
     /// Read an off-screen target back as tightly packed sRGB RGBA8.

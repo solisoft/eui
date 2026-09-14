@@ -16,6 +16,7 @@ struct Mem {
     styles: HashMap<u32, u32>,
     refuse_nodes: bool,
     mode: Option<String>,
+    went_back: bool,
 }
 
 impl Host for Mem {
@@ -53,6 +54,9 @@ impl Host for Mem {
         }
         self.mode = Some(mode.to_owned());
         true
+    }
+    fn go_back(&mut self) {
+        self.went_back = true;
     }
 }
 

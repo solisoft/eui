@@ -35,7 +35,7 @@ them unchanged.
 |---|---|
 | `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
-| `reject.rs` | 55 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, reserved bits, oversized lists, depth |
+| `reject.rs` | 59 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
 
@@ -78,7 +78,24 @@ node, press and release on different targets, focus by pointer and by `Tab`
 with wrapping, `Enter` and `Space` as clicks, `Escape`, the ring for keyboard
 and server focus only, editing and commit, wheel and scroll offsets, local
 handlers with and without a following server event, resync on a bad batch,
-transitions on a style change.
+transitions on a style change, a back reaching the mounted root and a back
+reaching nobody when the root holds no handler for one.
+
+### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
+
+03 §5's two lifecycles, which are exactly the kind of thing two clients would
+diverge on: `animation` read as a bit set, so `enter | exit` still enters; an
+entrance that names a direction arriving from it rather than fading; a
+released page painting on after the tree has let it go, with the way it goes
+being the mirror of the way its replacement came, along the accelerate curve;
+one kept painting at a time; and the frame after it is over holding one page,
+with the driver at rest and no frame owed.
+
+06 §5's edge clause — `crates/eui-client/tests/touch.rs`: a stroke inwards
+from the leading edge carrying the page and reporting a `back` when it is let
+go past halfway; the press given back with no `click`; a stroke let go early
+springing back and reporting nothing at all; a stroke along the edge still
+scrolling; and a tap inside the slop still being the tap it was aimed at.
 
 ### 7.1 Keyboard — `crates/eui-client/tests/keyboard.rs`
 

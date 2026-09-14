@@ -30,3 +30,6 @@ examples/demo-app/tmp/
 # `scripts/make-icons.py` is imported as a module when its PNG decoder is
 # wanted elsewhere, and Python leaves this behind when it is.
 __pycache__/
+
+# Where scripts/make-android-apk.sh leaves the package it built.
+dist/

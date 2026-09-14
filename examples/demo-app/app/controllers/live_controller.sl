@@ -588,6 +588,22 @@ def set_slider(state, params)
   props = params["props"] ?? {}
   sw = props["width"] ?? 240
   dragging = state["slider_drag"] ?? false
+  # The thumb is the handle; the bar is a track you can jump to. A press
+  # anywhere sets the value — that is what a track is for, and what every
+  # slider has ever done — but only a press that landed **on the thumb**
+  # takes hold, so only the thumb can be carried. A stroke that begins on the
+  # track jumps once and then belongs to the view, which is what stops a
+  # finger reaching past a slider from dragging it the length of the screen.
+  #
+  # Worked out only for a press: an arrow key's payload is the key's *name*,
+  # and asking how far a string is from the thumb is a type error that takes
+  # the whole handler down with it.
+  took = false
+  if kind == "pointer_down"
+    at = (state["slider"] ?? 0) * sw / 100
+    reach = payload[0] - at
+    took = reach * reach <= 144
+  end
   from_pointer = kind == "click" || kind == "pointer_down" || kind == "pointer_up"
   from_pointer = true if kind == "pointer_move" && dragging
   if from_pointer
@@ -595,7 +611,7 @@ def set_slider(state, params)
     x = 0 if x < 0
     x = sw if x > sw
     state["slider"] = int(x * 100 / sw)
-    state["slider_drag"] = kind == "pointer_down" || kind == "pointer_move"
+    state["slider_drag"] = took || (dragging && kind == "pointer_move")
   elsif payload[0] == "ArrowRight"
     state["slider"] = state["slider"] + 5
   elsif payload[0] == "ArrowLeft"
@@ -926,6 +942,14 @@ end
 # page moves under a header that stays.
 
 ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings", "Catalogue"]
+# The page transitions to try, as `motion` names (03 §5.2). `none` is first
+# and is the default: every one of the others is the client's rendering of a
+# change it was going to make anyway, so turning them all off has to leave an
+# application that still works exactly as it did.
+#
+# Only the arriving page's direction is named. The one leaving goes the other
+# way without being told, which is why "Slide" is one entry and not two.
+ERP_MOTIONS = ["none", "fade", "scale", "trailing", "bottom"]
 ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"]
 ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
@@ -989,6 +1013,14 @@ def erp_topbar(state, lay)
       "expanded": state["palette"] == true
     }),
     segmented(["Day", "Week", "Month"], state["seg"], "seg"),
+    select(
+      ERP_MOTIONS,
+      state["page_motion"] ?? "none",
+      state["page_motion_open"] == true,
+      "page_motion_toggle",
+      "page_motion_pick",
+      {"key": "erp_motion", "name": "Page transition"}
+    ),
     theme_toggle(),
     account
   ]
@@ -1000,10 +1032,10 @@ end
 # actually has. A command is an id the handler already knows.
 def erp_commands
   ERP_SECTIONS.map(fn(s) {
-    {"id": "nav:" + s, "label": s, "group": "Go to", "hint": ""}
+    {"id": "nav:" + s, "label": s, "group": "Go to", "hint": "", "icon": ERP_SECTION_ICONS[s] ?? "dot"}
   }).concat([
-    {"id": "export", "label": "Export orders", "group": "Orders", "hint": ""},
-    {"id": "order_new", "label": "New order", "group": "Orders", "hint": ""}
+    {"id": "export", "label": "Export orders", "group": "Orders", "hint": "", "icon": "arrow_down"},
+    {"id": "order_new", "label": "New order", "group": "Orders", "hint": "", "icon": "plus"}
   ])
 end
 
@@ -1137,8 +1169,49 @@ ERP_SHORTCUTS = [
   ]}
 ]
 
+# Rows keyed by the very names the builder offers, so `filter_match?` reads
+# them without a schema in between.
+ERP_DEMO_ROWS = [
+  {"id": "r1", "Status": "Late", "Customer": "Linus GmbH", "Amount": "12480", "Warehouse": "Lyon dock"},
+  {"id": "r2", "Status": "Unpaid", "Customer": "Ateliers Roche", "Amount": "3900", "Warehouse": "Nantes"},
+  {"id": "r3", "Status": "Late", "Customer": "Nordwerk", "Amount": "27010", "Warehouse": "Antwerp"},
+  {"id": "r4", "Status": "Picked", "Customer": "Linus GmbH", "Amount": "8120", "Warehouse": "Lyon-Sud"},
+  {"id": "r5", "Status": "Invoiced", "Customer": "Vialta", "Amount": "1450", "Warehouse": "Lyon dock"},
+  {"id": "r6", "Status": "Late", "Customer": "Vialta", "Amount": "34900", "Warehouse": "Nantes"},
+  {"id": "r7", "Status": "Unpaid", "Customer": "Nordwerk", "Amount": "760", "Warehouse": "Antwerp"},
+  {"id": "r8", "Status": "Picked", "Customer": "Ateliers Roche", "Amount": "19300", "Warehouse": "Lyon dock"}
+]
+
 ERP_FILTER_FIELDS = ["Status", "Customer", "Amount", "Warehouse"]
 ERP_FILTER_CMPS = ["is", "is not", "contains", ">", "<"]
+
+# Every icon `crates/eui-render/src/icons.rs` draws, in the order it defines
+# them. An unknown name draws nothing and keeps its box (03 §1), so a name
+# this list has and the client does not leaves a labelled gap -- which is the
+# right way for a catalogue to be wrong.
+ERP_ICON_NAMES = [
+  "chevron_down", "chevron_up", "chevron_left", "chevron_right",
+  "check", "minus", "plus", "close", "menu", "grip",
+  "arrow_up", "arrow_down", "arrow_left", "arrow_right",
+  "more_h", "more_v", "dot", "search", "circle", "calendar",
+  "logout", "warning", "grid", "doc", "users", "box",
+  "folder", "star", "filter", "chart", "sliders"
+]
+
+ERP_DEMO_BULK = [
+  {"label": "Chase", "event": "demo_bulk", "icon": "arrow_right"},
+  {"label": "Export", "event": "demo_bulk", "icon": "doc"},
+  {"label": "Archive", "event": "demo_bulk", "tone": "danger"}
+]
+
+def erp_demo_otp(state, params, props)
+  was = (state["demo_otp"] ?? "").to_s
+  next_otp = otp_apply(was, (params["kind"] ?? "").to_s, params["payload"], props, {})
+  state = set_key(set_key(set_key(state, "demo_otp", next_otp), "demo_otp_focus", true), "demo_otp_gen", (state["demo_otp_gen"] ?? 0) + 1)
+  return erp_say(state, "Code accepted") if next_otp.length() == 6 && was.length() < 6
+
+  state
+end
 
 def erp_demo_mark(state, props)
   mark = (props["option"] ?? "").to_s
@@ -1190,6 +1263,57 @@ def erp_demo_range_key(state, key)
   set_key(state, "demo_low", low)
 end
 
+# The selection, scoped to this demo. `selection_scoped` empties it when the
+# scope it was made under is not the one being asked about, which is what
+# stops "all except these" meaning a different set of rows than it did.
+# The width the catalogue's split pane is laid out across, which is what
+# `split_event` turns a pointer offset into a fraction against.
+def lay_extent_for_cat(state)
+  erp_layout(state)["wide"] ? 700 : 320
+end
+
+def erp_cat_pick(state)
+  selection_scoped(state["cat_pick_sel"], "cat")
+end
+
+def erp_demo_sel(state)
+  selection_scoped(state["demo_sel"], "demo")
+end
+
+def erp_demo_shown(state)
+  filter_apply(ERP_DEMO_ROWS, state["demo_filter"])
+end
+
+def erp_demo_bulk(state, props)
+  bulk_n = props["count"] ?? 0
+  bulk_what = (props["action"] ?? "Done").to_s
+  erp_say(set_key(state, "demo_sel", selection([], "demo")), bulk_what + " " + bulk_n.to_s + (bulk_n == 1 ? " row" : " rows"))
+end
+
+def erp_demo_view_pick(state, props)
+  view = views_find(state["demo_views"], (props["id"] ?? "").to_s)
+  return state if view.nil?
+
+  set_key(set_key(set_key(state, "demo_filter", view["filter"]), "demo_view", view["id"]), "demo_view_dirty", false)
+end
+
+# The name is the question, which saves anybody typing one: `filter_says`
+# already has to read the tree back for the chip, and a view called
+# "Status is Late and Amount > 10000" is a view you can pick out of a row of
+# them. A field to name it by hand is what a real application adds next.
+def erp_demo_view_save(state)
+  id = "v" + ((state["demo_views"] ?? []).length() + 1).to_s
+  name = filter_says(state["demo_filter"])
+  name = name.substring(0, 40) + "…" if name.length() > 40
+  set_key(set_key(set_key(state, "demo_views", views_add(state["demo_views"], id, name, state["demo_filter"])), "demo_view", id), "demo_view_dirty", false)
+end
+
+def erp_demo_view_drop(state, props)
+  id = (props["id"] ?? "").to_s
+  out = set_key(state, "demo_views", views_drop(state["demo_views"], id))
+  (state["demo_view"] ?? "").to_s == id ? set_key(out, "demo_view", "") : out
+end
+
 def erp_demo_filter_slot(state, props)
   want = (props["path"] ?? "").to_s + ":" + (props["slot"] ?? "").to_s
   (state["demo_filter_open"] ?? "").to_s == want ? "" : want
@@ -1199,11 +1323,12 @@ def erp_demo_filter_set(state, props, slot, value)
   path = (props["path"] ?? "").to_s
   # `{slot: value}` would be a literal key named "slot"; a hash takes a
   # dynamic one by assignment.
-  set_key(set_key(state, "demo_filter", filter_edit(state["demo_filter"], path, fn(leaf) {
+  out = set_key(set_key(state, "demo_filter", filter_edit(state["demo_filter"], path, fn(leaf) {
     edited = leaf
     edited[slot] = value
     edited
   })), "demo_filter_open", "")
+  set_key(out, "demo_view_dirty", (state["demo_view"] ?? "") != "")
 end
 
 def erp_demo_wh_key(state, params)
@@ -1365,121 +1490,52 @@ end
 # dashboard is what an application shows someone who opened it to do their
 # job, and every widget parked there was a row between them and their
 # figures. Here they are the page, and the rail says so.
-def erp_catalogue_section(state, lay)
-  column(
-    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
-    [
-      erp_catalogue_card(state, lay),
-      erp_catalogue2_card(state, lay),
-      erp_shapes_card(state, lay)
-    ]
-  )
-end
-
-def erp_catalogue2_card(state, lay)
-  actions = column({"gap": 1}, [
-    muted("Split button"),
-    split_button("Save", "demo_save", {
-      "key": "demo_split",
-      "items": ["Save and new", "Save and close", "Save as draft"],
-      "open": state["demo_split"] == true,
-      "on_toggle": "demo_split_toggle",
-      "on_pick": "demo_split_pick"
-    }),
-    muted("One default, and the rest behind the caret.")
-  ])
-  marks = column({"gap": 1}, [
-    muted("Toggle group"),
-    row({"justify": "start", "width": "100%"}, [toggle_group(["Late", "Unpaid", "Backorder", "Hold"], state["demo_marks"] ?? [], "demo_mark", {"key": "demo_marks"})]),
-    muted("Several at once, where `segmented` takes one.")
-  ])
-  stars = column({"gap": 1}, [
-    muted("Rating"),
-    rating(state["demo_rating"] ?? 0, "demo_rate", {"key": "demo_rate", "max": 5}),
-    muted("Five controls, not one with five meanings.")
-  ])
-  faces = column({"gap": 1}, [
-    muted("Avatar group"),
-    avatar_group(ERP_DEMO_PEOPLE, {"size": 28, "max": 4, "label": "Assigned"}),
-    muted("Roughly who, in the space of one and a half faces.")
-  ])
-  archive = column({"gap": 1}, [
-    muted("Popconfirm"),
-    row({"justify": "start", "width": "100%"}, [popconfirm(
-      control({
-        "key": "demo_arch",
-        "tone": "danger",
-        "size": "md",
-        "on": {"click": "demo_confirm_open"},
-        "a11y": {"role": "button", "label": "Archive PO-1042"},
-        "c": [text("Archive PO-1042", {"weight": "semibold"})]
-      }),
-      state["demo_confirm"] == true,
-      {
-        "key": "demo_confirm",
-        "question": "Archive PO-1042?",
-        "detail": "It leaves the open list and keeps its lines.",
-        "confirm": "Archive",
-        "on_confirm": "demo_confirm_yes",
-        "on_cancel": "demo_confirm_no"
-      }
-    )]),
-    muted("Asked beside the thing, not over the page.")
-  ])
-  span = column({"gap": 1}, [
-    muted("Range slider"),
-    range_slider(state["demo_low"] ?? 0, state["demo_high"] ?? 0, 0, 10000, "demo_range", {"key": "demo_range", "label": "Amount"}),
-    muted(grouped_number(state["demo_low"] ?? 0) + " to " + grouped_number(state["demo_high"] ?? 0) + " €")
-  ])
-  money = column({"gap": 1}, [
-    currency_field("Credit limit", (state["demo_amount"] ?? "").to_s, "demo_amount", {
-      "key": "demo_amount",
-      "hint": "What is typed is what is sent.",
-      "width": "100%"
+# The three of them together, because apart they are each half a thing: a
+# builder that filters nothing, a bar over rows nobody chose, and a name for
+# a question that was never asked.
+def erp_demo_query(state, lay)
+  q_shown = erp_demo_shown(state)
+  q_sel = erp_demo_sel(state)
+  q_index = selection_index(q_sel)
+  q_widths = lay["wide"] ? [110, 190, 110, 130] : [90, 120, 90, 100]
+  q_rows = q_shown.map(fn(q_r) {
+    q_ticked = selection_in?(q_index, q_sel, q_r["id"])
+    control({
+      "key": "demo_q:" + q_r["id"].to_s,
+      "kind": "box",
+      "tone": "quiet",
+      "selected": q_ticked,
+      "shape": {
+        "display": "row", "gap": 4, "align": "center", "width": "100%",
+        "justify": "start", "pad": [1, 3, 1, 3], "radius": 0,
+        "border": [0, 0, 1, 0], "border_color": "border.subtle", "min_width": 0
+      },
+      "on": {"click": "demo_row_pick"},
+      "props": {"id": q_r["id"]},
+      "a11y": {"role": "row", "label": q_r["Customer"].to_s, "checked": q_ticked},
+      "c": [check_mark(q_ticked, false, false, "sm"),
+            text(q_r["Status"], {"width": q_widths[0]}),
+            text(q_r["Customer"], {"width": q_widths[1]}),
+            text(grouped_number(int(q_r["Amount"].to_f)) + " €", {"width": q_widths[2]}),
+            text(q_r["Warehouse"], {"width": q_widths[3]})]
     })
-  ])
-  keys = column({"gap": 1}, [
-    muted("Shortcut sheet"),
-    row({"justify": "start", "width": "100%"}, [secondary_button("Keyboard shortcuts", "shortcuts_open")]),
-    muted("What the application claims of the keyboard (03 §3.1).")
-  ])
-  lines = ERP_DEMO_LINES.map(fn(l) {
-    expandable_row(
-      "demo_row_" + l["id"],
-      [l["ref"], l["who"], l["amount"]],
-      lay["wide"] ? [140, 200, 100] : [110, 120, 90],
-      (state["demo_rows"] ?? []).includes?(l["id"]),
-      "demo_row",
-      [column({"gap": 1, "width": "100%"}, (l["lines"] ?? []).map(fn(x) { muted(x) }))],
-      {"props": {"id": l["id"]}, "label": l["ref"]}
-    )
   })
-  rows = column({"gap": 1}, [
-    muted("Expandable rows"),
-    column({"gap": 0, "width": "100%"}, [table_header(["Order", "Customer", "Amount"], lay["wide"] ? [140, 200, 100] : [110, 120, 90])].concat(lines))
+  q_head = row({"gap": 4, "align": "center", "width": "100%", "pad": [2, 3, 2, 3], "border": [0, 0, 1, 0], "border_color": "border.default"}, [
+    node("box", {"width": checkbox_box_px("sm"), "shrink": 0}, []),
+    text("Status", {"width": q_widths[0], "size": 1, "weight": "semibold", "fg": "text.muted"}),
+    text("Customer", {"width": q_widths[1], "size": 1, "weight": "semibold", "fg": "text.muted"}),
+    text("Amount", {"width": q_widths[2], "size": 1, "weight": "semibold", "fg": "text.muted"}),
+    text("Warehouse", {"width": q_widths[3], "size": 1, "weight": "semibold", "fg": "text.muted"})
   ])
-  bom = column({"gap": 1}, [
-    muted("Tree table"),
-    tree_table(
-      ["Part", "Qty", "Unit"],
-      lay["wide"] ? [260, 80, 100] : [180, 60, 80],
-      ERP_DEMO_BOM,
-      state["demo_tree"] ?? [],
-      "demo_tree",
-      0,
-      {"key": "bom", "label": "Bill of materials"}
-    )
-  ])
-  patch = column({"gap": 1}, [
-    muted("Diff"),
-    diff_view(ERP_DEMO_DIFF, {"key": "demo_diff", "label": "erp_files.sl"})
-  ])
-  said = column({"gap": 1}, [
-    muted("Timeline"),
-    timeline(ERP_DEMO_EVENTS, {"key": "demo_tl"})
-  ])
-  built = column({"gap": 1}, [
-    muted("Filter builder"),
+  q_empty = q_shown.length() == 0 ? [muted("No row answers that.")] : q_rows
+  column({"gap": 2, "width": "100%"}, [
+    muted("Filter builder, saved views and a bulk bar"),
+    saved_views(state["demo_views"], state["demo_view"], "demo_view_pick", {
+      "key": "demo_view",
+      "on_save": "demo_view_save",
+      "on_drop": "demo_view_drop",
+      "dirty": state["demo_view_dirty"] == true
+    }),
     filter_builder(state["demo_filter"], {
       "fields": ERP_FILTER_FIELDS,
       "cmps": ERP_FILTER_CMPS,
@@ -1493,107 +1549,385 @@ def erp_catalogue2_card(state, lay)
       "on_cmp": "fb_cmp",
       "on_value": "fb_value"
     }),
-    muted("A question the author never wrote down.")
+    muted(q_shown.length() == 1 ? "1 of 8 rows answers it" : q_shown.length().to_s + " of 8 rows answer it"),
+    bulk_bar(q_sel, q_shown.length(), ERP_DEMO_BULK, "demo_row_clear", {"key": "demo_bulk", "on_all": "demo_row_all"}),
+    column({"gap": 0, "width": "100%"}, [q_head].concat(q_empty))
   ])
-  left = column({"gap": 4, "grow": 1, "basis": 300}, [actions, marks, stars, faces, archive])
-  right = column({"gap": 4, "grow": 1, "basis": 300}, [span, money, keys])
-  top = lay["wide"] ? row({"gap": 5, "align": "start", "width": "100%"}, [left, right]) : column({"gap": 4, "width": "100%"}, [left, right])
-  erp_card(
-    "More catalogue",
-    [badge("new", "success")],
+end
+
+# A labelled specimen. Every widget on this page is shown the same way --
+# its name, then the thing itself -- so the page reads as a list of what
+# exists rather than as a screen that happens to contain some controls.
+def spec_of(name, node)
+  # `self: start` and no width: a specimen is as wide as the thing it shows.
+  # With `width: 100%` every button became a banner and every row of them a
+  # column, which is a catalogue that tells you nothing about how big
+  # anything is.
+  column({"gap": 1, "shrink": 0, "self": "start"}, [muted(name), node])
+end
+
+# For the ones whose whole point is that they fill the width they are given.
+def spec_wide(name, node)
+  column({"gap": 1, "width": "100%"}, [muted(name), node])
+end
+
+def erp_actions_card(state, lay)
+  erp_card("Actions", [badge("family", "info")], [
+    muted("Everything that answers a press."),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      spec_of("button", button("Primary", "cat_say")),
+      spec_of("secondary_button", secondary_button("Secondary", "cat_say")),
+      spec_of("danger_button", danger_button("Delete", "cat_say")),
+      spec_of("ghost_button", ghost_button("Ghost", "cat_say")),
+      spec_of("loading_button", loading_button("Export", "cat_say", "cat_load")),
+      spec_of("icon_button", icon_button("+", "cat_say", {}, {"icon": "plus", "name": "Add"})),
+      spec_of("theme_toggle", theme_toggle()),
+      spec_of("split_button", split_button("Save", "demo_save", {
+        "key": "cat_split", "items": ["Save and new", "Save and close"],
+        "open": state["demo_split"] == true, "on_toggle": "demo_split_toggle", "on_pick": "demo_split_pick"
+      })),
+      spec_of("segmented", segmented(["Day", "Week", "Month"], state["seg"] ?? "Week", "seg")),
+      spec_of("toggle_group", toggle_group(["Late", "Unpaid", "Hold"], state["demo_marks"] ?? [], "demo_mark", {"key": "cat_toggles"})),
+      spec_of("menu (in a popover)", popover(
+        secondary_button("Open menu", "cat_menu"),
+        [menu(["Duplicate", "Print", "Delete"], "cat_menu_pick")],
+        state["cat_menu"] == true
+      )),
+      spec_of("popconfirm", popconfirm(
+        danger_button("Archive", "demo_confirm_open"),
+        state["demo_confirm"] == true,
+        {"key": "cat_confirm", "question": "Archive it?", "confirm": "Archive",
+         "on_confirm": "demo_confirm_yes", "on_cancel": "demo_confirm_no"}
+      ))
+    ]),
+    spec_wide("toolbar", toolbar([
+      ghost_button("Cut", "cat_say"), ghost_button("Copy", "cat_say"), ghost_button("Paste", "cat_say"),
+      spacer(), badge("read only", "warning")
+    ]))
+  ])
+end
+
+def erp_inputs_card(state, lay)
+  narrow = {"width": lay["wide"] ? 260 : "100%"}
+  erp_card("Input", [badge("family", "info")], [
+    muted("Everything that takes a value. None of them keeps it: the handler does."),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(text_field("Legal name", (state["cat_text"] ?? "").to_s, "cat_text", {"key": "cat_text"}), narrow),
+      restyle(email_field("Email", "sales@meridian.test", "cat_say", {"key": "cat_mail"}), narrow),
+      restyle(number_field("Quantity", (state["cat_num"] ?? "").to_s, "cat_num", {"key": "cat_num", "min": 0, "max": 99}), narrow),
+      restyle(currency_field("Amount", (state["demo_amount"] ?? "").to_s, "demo_amount", {"key": "cat_money"}), narrow),
+      restyle(password_field("Token", (state["demo_pass"] ?? "").to_s, "demo_pass", {
+        "key": "cat_pass", "on_reveal": "demo_pass_reveal", "shown": state["demo_pass_shown"] == true
+      }), narrow),
+      restyle(otp_field("Sign-in code", (state["demo_otp"] ?? "").to_s, {
+        "key": "cat_otp",
+        "on_input": "demo_otp",
+        "take_focus": state["demo_otp_focus"] == true,
+        "gen": state["demo_otp_gen"] ?? 0,
+        "hint": "Paste a code, or type. Backspace walks back."
+      }), {"width": "100%"}),
+      restyle(textarea_field("Note", (state["cat_note"] ?? "").to_s, "cat_note", {"key": "cat_note", "rows": 3}), narrow)
+    ]),
+    row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      spec_of("checkbox", checkbox("Send a copy", state["cat_check"] == true, "cat_check", {})),
+      spec_of("switch", switch("Nightly digest", state["cat_switch"] == true, "cat_switch", {})),
+      spec_of("radio_group", radio_group(["Standard", "Express"], (state["cat_radio"] ?? "").to_s, "cat_radio", {"key": "cat_radio"})),
+      spec_of("rating", rating(state["demo_rating"] ?? 0, "demo_rate", {"key": "cat_rate"})),
+      spec_of("slider", slider(state["slider"] ?? 40, 0, 100, "slider", {"dragging": state["slider_drag"] == true})),
+      spec_of("range_slider", column({"gap": 1}, [
+        range_slider(state["demo_low"] ?? 0, state["demo_high"] ?? 0, 0, 10000, "demo_range", {
+          "key": "cat_range",
+          "dragging": state["demo_range_drag"] == true
+        }),
+        muted(grouped_number(state["demo_low"] ?? 0) + " to " + grouped_number(state["demo_high"] ?? 0) + " €")
+      ]))
+    ]),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      # Both of these were hardcoded `open: false` with their handlers pointed
+      # at a toast, so neither could be opened -- a catalogue showing a select
+      # that is not a select. They own their state now.
+      restyle(spec_of("select", select(
+        ERP_STATUSES,
+        (state["cat_select"] ?? "Any status").to_s,
+        state["cat_select_open"] == true,
+        "cat_select_toggle", "cat_select_pick",
+        {"key": "cat_select"}
+      )), narrow),
+      restyle(spec_of("combobox", combobox(ERP_DEMO_WH, (state["demo_wh"] ?? "").to_s, erp_dense(state).merge({
+        "key": "cat_combo",
+        "query": (state["demo_wh_query"] ?? "").to_s,
+        "open": state["demo_wh_open"] == true,
+        "at": state["demo_wh_at"] ?? -1,
+        "on_toggle": "demo_wh_toggle", "on_change": "demo_wh_change", "on_pick": "demo_wh_pick",
+        "on_key": "demo_wh_key", "on_submit": "demo_wh_submit"
+      }))), narrow),
+      # The same tags and the same events as the one under Inventory: a tag
+      # field needs seven handlers, and a second copy of them would be a
+      # second thing to keep right for no gain. Editing it here edits it
+      # there, which is the truthful thing for a catalogue to show anyway.
+      restyle(spec_of("tag_field", tag_field("Tags", state["inv_tags"] ?? [], (state["inv_tag_draft"] ?? "").to_s, {
+        "key": "cat_tags",
+        "hint": "Enter to add · Backspace to take the last one back",
+        "suggest": tag_suggest(ERP_TAGS, state["inv_tags"] ?? [], (state["inv_tag_draft"] ?? "").to_s, TAG_SUGGEST_MAX),
+        "at": state["inv_tag_at"] ?? -1,
+        "open": state["inv_tag_open"] == true,
+        "on_change": "inv_tag_draft",
+        "on_submit": "inv_tag_commit",
+        "on_key": "inv_tag_key",
+        "on_remove": "inv_tag_drop",
+        "on_pick": "inv_tag_pick",
+        "on_focus": "inv_tag_focus",
+        "on_blur": "inv_tag_blur"
+      })), narrow)
+    ]),
+    spec_wide("file_drop", file_drop("Drop a file here", ERP_FILES_ACCEPT, "file_pick", {"key": "cat_drop", "hint": "or click to choose"}))
+  ])
+end
+
+def erp_feedback_card(state, lay)
+  erp_card("Feedback", [badge("family", "info")], [
+    muted("Everything that tells you something without being asked."),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      spec_of("badge", row({"gap": 2}, [badge("draft", "info"), badge("late", "danger"), badge("paid", "success"), badge("held", "warning")])),
+      spec_of("chip", row({"gap": 2}, [chip("Lyon", "cat_say", {}), chip("excl. rebates", "cat_say", {})])),
+      spec_of("avatar", avatar_group(ERP_DEMO_PEOPLE.slice(0, 2), {"size": 28, "max": 2})),
+      spec_of("avatar_group", avatar_group(ERP_DEMO_PEOPLE, {"size": 28, "max": 4})),
+      spec_of("spinner", spinner()),
+      spec_of("progress", restyle(progress(0.62), {"width": 180}))
+    ]),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(spec_of("skeleton", column({"gap": 1}, [skeleton(180, 12), skeleton(140, 12), skeleton(160, 12)])), {"width": 200}),
+      restyle(spec_of("stat", stat("Open invoices", "37", "128 940 € outstanding")), {"width": 220}),
+      restyle(spec_of("stat_spark", stat_spark("Revenue", "412 380 €", "+8.4 %", erp_revenue()["line"], 150)), {"width": 240})
+    ]),
+    spec_wide("banner", banner("Three invoices are past due.", "warning", "Open the queue", "cat_say")),
+    spec_wide("empty_state", empty_state("Nothing here yet", "When something arrives it will be listed here.", "Add one", "cat_say")),
+    spec_wide("timeline", timeline(ERP_DEMO_EVENTS.slice(0, 3), {"key": "cat_tl"}))
+  ])
+end
+
+def erp_structure_card(state, lay)
+  erp_card("Structure and navigation", [badge("family", "info")], [
+    muted("Everything that holds something else, and everything that says where you are."),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(spec_of("breadcrumb", breadcrumb([{"label": "Meridian", "path": "Dashboard"}, {"label": "Orders", "path": "Orders"}, {"label": "SO-24003", "path": "Orders"}], "cat_say")), {"width": 280}),
+      restyle(spec_of("pagination", pagination(state["cat_page"] ?? 1, 9, "cat_page")), {"width": 260}),
+      spec_of("stepper", stepper(["Quote", "Confirmed", "Picked", "Invoiced"], 2))
+    ]),
+    spec_wide("tabs", tabs(["Overview", "Lines", "History"], (state["cat_tab"] ?? "").to_s, "cat_tab", {"key": "cat_tabs"})),
+    spec_wide("accordion", accordion([
+      {"id": "a", "title": "What a component is", "children": [muted("Two functions: a handler and a view.")]},
+      {"id": "b", "title": "What a node is", "children": [muted("A kind, a style, props, children.")]},
+      {"id": "c", "title": "What a handler owns", "children": [muted("All of the state, and none of the drawing.")]}
+    ], (state["cat_open"] ?? "").to_s, "cat_open")),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(spec_of("tooltip", tooltip("What this would say under the pointer")), {"width": 280}),
+      restyle(spec_of("code_block", code_block("def price_tag(amount)\n  text(amount, {\"weight\": \"bold\"})\nend")), {"width": 360})
+    ]),
+    spec_wide("sheet, drawer, dialog and the palette", row({"gap": 2, "wrap": "wrap"}, [
+      secondary_button("Open the queue", "sheet"),
+      # The rail's own drawer only exists below `sm` -- above it the rail is
+      # the navigation -- so a button here wired to `nav_toggle` could never
+      # open anything. This one is the catalogue's own.
+      secondary_button("Open the drawer", "cat_drawer"),
+      # `lazy_toggle` toggles the id in `props`, and a plain button sends
+      # none: the handbook's own button carries `{"id": "doc"}` and so must
+      # this one, or it toggles nothing and looks broken.
+      control({
+        "key": "cat_handbook",
+        "tone": "neutral",
+        "on": {"click": "lazy_toggle"},
+        "props": {"id": "doc"},
+        "a11y": {"role": "button", "label": "Open the handbook"},
+        "c": [text("Open the handbook", {"weight": "semibold"})]
+      }),
+      secondary_button("Open the palette", "palette_toggle"),
+      secondary_button("Keyboard shortcuts", "shortcuts_open")
+    ]))
+  ])
+end
+
+# Everything that names a moment. They share the New order form's state and
+# events rather than carrying a second copy: a date field needs a value, a
+# month, an open flag and three handlers, and two sets of them would be two
+# things to keep right for no gain.
+def erp_dates_card(state, lay)
+  dt_narrow = {"width": lay["wide"] ? 260 : "100%"}
+  erp_card("Dates and times", [badge("family", "info")], [
+    muted("A picker is a field with a panel under it. The server owns `open`, the month on show, and what has been picked."),
+    row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(date_field(erp_dense(state).merge({
+        "label": "Delivery date", "value": state["nf_date"], "month": state["nf_date_month"],
+        "open": state["nf_date_open"] == true, "on_toggle": "nf_date_toggle",
+        "on_pick": "nf_date_pick", "on_nav": "nf_date_nav", "key": "cat_date"
+      })), dt_narrow),
+      restyle(date_range_field(erp_dense(state).merge({
+        "label": "Delivery window", "start": state["range_start"], "finish": state["range_end"],
+        "month": state["range_month"], "open": state["range_open"] == true,
+        "on_toggle": "range_toggle", "on_pick": "range_pick", "on_nav": "range_nav",
+        "placeholder": "Any day", "key": "cat_range_d"
+      })), dt_narrow),
+      restyle(datetime_field(erp_dense(state).merge({
+        "label": "Pickup slot", "value": state["nf_slot"], "time": state["nf_slot_time"],
+        "month": state["nf_slot_month"], "open": state["nf_slot_open"] == true,
+        "hour_open": state["nf_slot_hour_open"] == true, "min_open": state["nf_slot_min_open"] == true,
+        "on_toggle": "nf_slot_toggle", "on_pick": "nf_slot_pick", "on_nav": "nf_slot_nav",
+        "on_hour_toggle": "nf_slot_hour_toggle", "on_min_toggle": "nf_slot_min_toggle",
+        "on_hour": "nf_slot_hour", "on_min": "nf_slot_min", "key": "cat_slot"
+      })), dt_narrow)
+    ]),
+    spec_of("time_select", time_select(
+      (state["nf_slot_time"] ?? "09:00").to_s,
+      state["nf_slot_hour_open"] == true, state["nf_slot_min_open"] == true,
+      "nf_slot_hour_toggle", "nf_slot_min_toggle", "nf_slot_hour", "nf_slot_min"
+    )),
+    spec_of("calendar", calendar(
+      (state["nf_date_month"] ?? "2026-09").to_s,
+      (state["nf_date"] ?? "").to_s == "" ? [] : [state["nf_date"]],
+      "", "", "nf_date_pick", "nf_date_nav"
+    ))
+  ])
+end
+
+def erp_data_card(state, lay)
+  dg_items = ERP_TAGS.map(fn(t) { {"id": t, "label": t} })
+  erp_card("Data", [badge("family", "info")], [
+    muted("Everything that shows more than one of something."),
+    spec_wide("data_grid", data_grid(
+      gallery_grid_visible_columns(lay["w"]),
+      state["grid_rows"],
+      state["grid_row"].present? ? {"row": state["grid_row"], "col": state["grid_col"]} : {},
+      {},
+      state["grid_sort"].present? ? {"col": state["grid_sort"], "dir": state["grid_dir"]} : {},
+      "grid_select", "grid_sort", "grid_change", "grid_key"
+    )),
+    row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      restyle(spec_of("tree_view", tree_view(erp_files_tree_nodes(state, ""), state["folder_open"] ?? ["all"], "folder_toggle", 0)), {"width": 240}),
+      restyle(spec_of("multi_select_list", multi_select_list(dg_items, erp_cat_pick(state), "cat_pick", {"key": "cat_msl", "height": 160})), {"width": 260}),
+      restyle(spec_of("list", list({"height": 160, "width": 240, "gap": 0}, 26, ERP_DEMO_ROWS.map(fn(r) {
+        row({"gap": 2, "align": "center", "pad": [0, 2, 0, 2], "height": 26}, [text(r["Customer"], {"grow": 1, "clamp": 1}), muted(r["Status"])])
+      }))), {"width": 260})
+    ]),
+    spec_wide("split_pane", split_pane({
+      "key": "cat_split_pane",
+      "dir": "row",
+      "fraction": state["cat_pane"] ?? 500,
+      "size": lay["wide"] ? 700 : 320,
+      "cross": 140,
+      "min_a": 120,
+      "min_b": 120,
+      # Ten rather than the default six: the bar is the only place the resize
+      # cursor lives when nothing is being dragged, and six pixels is a
+      # target you have to aim at.
+      "bar": 10,
+      "on_drag": "cat_pane",
+      # `split_event` keeps the drag flag under `<name>_drag`, and the bar
+      # only follows a pointer that is down: without handing that flag back
+      # the divider never moves.
+      "dragging": state["cat_pane_drag"],
+      "label": "Resize the panes",
+      # A pane is a function of its own width, not a node: `split_panel`
+      # calls `build(px)` so the content can answer the size it was given
+      # rather than the size of the window.
+      "a": fn(px) { card({"gap": 1, "grow": 1}, [muted("Left"), text(px.to_s + " px wide, and it was told so.", {})]) },
+      "b": fn(px) { card({"gap": 1, "grow": 1}, [muted("Right"), text("Drag the bar between them.", {})]) }
+    })),
+    spec_wide("expandable_row and tree_table are above; diff_view too", muted("See More catalogue."))
+  ])
+end
+
+# The things everything else is made of.
+def erp_basics_card(state, lay)
+  erp_card("Text and icons", [badge("family", "info")], [
+    muted("The primitives. `text` takes a size from the scale, and only `fg` inherits -- which is why a label takes its size from its own style and not from the control around it."),
+    row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      spec_of("h1", h1("Heading one")),
+      spec_of("h2", h2("Heading two")),
+      spec_of("text", text("Body text", {})),
+      spec_of("muted", muted("Muted text")),
+      spec_of("kbd", row({"gap": 1}, [kbd("Ctrl"), kbd("K")]))
+    ]),
+    spec_wide("icon — every name the client draws", row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"},
+      ERP_ICON_NAMES.map(fn(n) {
+        column({"gap": 1, "align": "center", "width": 76, "shrink": 0}, [
+          icon(n, {"width": 20, "height": 20, "fg": "text.default"}),
+          text(n, {"size": 0, "fg": "text.muted", "clamp": 1})
+        ])
+      })
+    ))
+  ])
+end
+
+def erp_catalogue_section(state, lay)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
     [
-      muted("Split button, toggle group, rating, avatar group, popconfirm, range slider, currency field, shortcut sheet, expandable rows, tree table, diff, timeline and a filter builder."),
-      top,
-      rows,
-      bom,
-      built,
-      patch,
-      said
+      erp_basics_card(state, lay),
+      erp_actions_card(state, lay),
+      erp_inputs_card(state, lay),
+      erp_dates_card(state, lay),
+      erp_structure_card(state, lay),
+      erp_data_card(state, lay),
+      erp_feedback_card(state, lay),
+      erp_catalogue2_card(state, lay),
+      erp_shapes_card(state, lay)
     ]
   )
 end
 
-def erp_catalogue_card(state, lay)
-  pass = password_field("API token", state["demo_pass"] ?? "", "demo_pass", {
-    "hint": "Typed as marks. Show paints the text.",
-    "on_reveal": "demo_pass_reveal",
-    "shown": state["demo_pass_shown"] == true
+# What only reads as itself next to something else.
+#
+# Everything that stands alone is in a family card above; what is left here
+# are the three that need a table around them and the three that are one
+# tool between them. Keeping a second copy of the split button beside its
+# first was not a catalogue, it was a page rendering every widget twice --
+# and on a page that rebuilds entirely on every pointer event, twice is what
+# you feel in your hand when you drag something.
+def erp_catalogue2_card(state, lay)
+  c2_lines = ERP_DEMO_LINES.map(fn(l) {
+    expandable_row(
+      "demo_row_" + l["id"],
+      [l["ref"], l["who"], l["amount"]],
+      lay["wide"] ? [140, 200, 100] : [110, 120, 90],
+      (state["demo_rows"] ?? []).includes?(l["id"]),
+      "demo_row",
+      [column({"gap": 1, "width": "100%"}, (l["lines"] ?? []).map(fn(x) { muted(x) }))],
+      {"props": {"id": l["id"]}, "label": l["ref"]}
+    )
   })
-  combo = column(
-    {"gap": 1},
-    [
-      muted("Warehouse"),
-      combobox(
-        ERP_DEMO_WH,
-        state["demo_wh"] ?? "Lyon dock",
-        erp_dense(state).merge({
-          "query": state["demo_wh_query"] ?? "",
-          "open": state["demo_wh_open"] == true,
-          "at": state["demo_wh_at"] ?? -1,
-          "on_toggle": "demo_wh_toggle",
-          "on_change": "demo_wh_change",
-          "on_pick": "demo_wh_pick",
-          "on_key": "demo_wh_key",
-          "on_submit": "demo_wh_submit",
-          "label": "Warehouse",
-          "key": "demo_wh",
-          "width": "100%"
-        })
-      ),
-      muted("Open it and type. A select cannot do that.")
-    ]
-  )
-  sample = {
-    "k": "box",
-    "key": "demo_ctx_row",
-    "s": {
-      "display": "row",
-      "gap": 3,
-      "align": "center",
-      "pad": [2, 3, 2, 3],
-      "radius": 2,
-      "bg": "surface.sunken",
-      "cursor": "pointer",
-      "width": "100%"
-    },
-    "on": {"click": "demo_ctx"},
-    "c": [
-      text("PO-1042", {"weight": "semibold", "grow": 1}),
-      muted("Lyon dock"),
-      badge("open", "info")
-    ]
-  }
-  ctx = context_menu(
-    sample,
-    ["Assign", "Print pick list", "Archive"],
-    state["demo_ctx"] == true,
-    "demo_ctx",
-    "demo_ctx_pick",
-    {"on_close": "demo_ctx_close"}
-  )
-  pal = column(
-    {"gap": 2},
-    [
-      muted("Command palette"),
-      secondary_button("Open command palette", "palette_toggle"),
-      muted("Same overlay as the search icon in the bar.")
-    ]
-  )
-  left = column({"gap": 3, "grow": 1, "basis": 280}, [pass, combo])
-  right = column({"gap": 3, "grow": 1, "basis": 280}, [
-    column({"gap": 1}, [muted("Right-click the row — or click it"), ctx]),
-    pal
+  c2_rows = column({"gap": 1}, [
+    muted("expandable_row"),
+    column({"gap": 0, "width": "100%"}, [table_header(["Order", "Customer", "Amount"], lay["wide"] ? [140, 200, 100] : [110, 120, 90])].concat(c2_lines))
   ])
-  body = lay["wide"] ? row({"gap": 5, "align": "start", "width": "100%"}, [left, right]) : column({"gap": 4, "width": "100%"}, [left, right])
+  c2_bom = column({"gap": 1}, [
+    muted("tree_table"),
+    tree_table(
+      ["Part", "Qty", "Unit"],
+      lay["wide"] ? [260, 80, 100] : [180, 60, 80],
+      ERP_DEMO_BOM,
+      state["demo_tree"] ?? [],
+      "demo_tree",
+      0,
+      {"key": "bom", "label": "Bill of materials"}
+    )
+  ])
+  c2_patch = column({"gap": 1}, [
+    muted("diff_view"),
+    diff_view(ERP_DEMO_DIFF, {"key": "demo_diff", "label": "erp_files.sl"})
+  ])
   erp_card(
-    "New catalogue",
-    [badge("try these", "info")],
+    "Together",
+    [badge("new", "success")],
     [
-      muted("Password field, combobox, context menu, command palette. The rest of the page uses them too."),
-      body
+      muted("A row that opens, a table that nests, a patch read as one column -- and below them the three that are one tool: a filter builder, the views that remember a question, and the bar over the rows it found."),
+      c2_rows,
+      c2_bom,
+      c2_patch,
+      erp_demo_query(state, lay)
     ]
   )
 end
+
 
 def erp_kpis(state, lay)
   row(
@@ -2053,10 +2387,24 @@ def erp_customers_section(state, lay)
   ) if lay["wide"]
 
   # Narrow: the list *or* the detail, because a split pane at 500 px is two
-  # columns of nothing.
+  # columns of nothing. Which makes this the one place in the application that
+  # is a **stack** rather than a set of siblings — you go *into* a customer and
+  # come back out — so it is the one that pushes and pops.
+  #
+  # Neither page is told which way the other went. The detail arrives from the
+  # trailing edge and the list from the leading one, and whichever is leaving
+  # takes the mirror of the one arriving (03 §5.2): going in, the list slides
+  # off towards leading; coming back, the detail slides off towards trailing.
+  # One direction each, and the push and the pop fall out of it.
+  deep = (state["cust_sel"] ?? "") != ""
+  motion = (state["page_motion"] ?? "none") == "none" ? "none" : (deep ? "trailing" : "leading")
   column(
     {"gap": 3, "width": "100%"},
-    [(state["cust_sel"] ?? "") == "" ? erp_customer_list(state, 0) : erp_customer_detail(state, lay, 0)]
+    [nav_page(
+      deep ? "cust:detail" : "cust:list",
+      deep ? erp_customer_detail(state, lay, 0) : erp_customer_list(state, 0),
+      {"motion": motion}
+    )]
   )
 end
 
@@ -2119,6 +2467,12 @@ def erp_customer_detail(state, lay, px)
       row(
         {"gap": 3, "align": "center", "width": "100%"},
         [
+          # Narrow, this is a page you went *into*, so it needs the way out
+          # that a wide split does not. `back()` is the same request the
+          # platform's own gesture makes (06 §1.3), run on the client first
+          # so the page starts moving on the tap rather than after a round
+          # trip — and then told to the server, which is what actually pops.
+          px > 0 ? spacer_none() : back_button("nav_back"),
           initial_avatar(one["initial"], one["tone"], 36),
           column(
             {"gap": 0, "grow": 1},
@@ -2550,19 +2904,64 @@ end
 # Three questions the other fourteen charts cannot answer: where the orders
 # are lost, what moved the balance, and how spread the picking times are.
 def erp_shapes_card(state, lay)
-  w = lay["wide"] ? 460 : 320
-  erp_card(
-    "Shapes",
-    [badge("new", "success")],
-    [
-      muted("A funnel, a bridge and a distribution. The first two are read against the totals beside them; the third is read against itself."),
-      row({"gap": 5, "wrap": "wrap", "width": "100%"}, [
-        column({"gap": 2}, [muted("Quote to invoice"), chart_funnel("fn1", ERP_DEMO_FUNNEL, w, 190)]),
-        column({"gap": 2}, [muted("September, opening to closing"), chart_waterfall("wf1", ERP_DEMO_BRIDGE, w, 190)]),
-        column({"gap": 2}, [muted("Minutes to pick, by warehouse"), chart_box("bx1", ERP_DEMO_SPREAD, w, 190)])
-      ])
-    ]
-  )
+  # Three across, then two, then one. A canvas is painted at the size the
+  # *server* chose (04 §6), so the columns cannot be left to the layout: the
+  # number of them is worked out here and each chart is drawn to fit.
+  #
+  # Derived from what a chart needs to stay readable rather than from a
+  # breakpoint, because the rail comes and goes with the window and a page
+  # that watched the window alone would put three charts in the space of two
+  # the moment the sidebar appeared. `erp_inner_px` already accounts for it.
+  sh_inner = erp_inner_px(lay)
+  sh_gap = space_px(5, lay["density"])
+  sh_min = 320
+  sh_cols = 3
+  sh_cols = 2 if sh_inner < 3 * sh_min + 2 * sh_gap
+  sh_cols = 1 if sh_inner < 2 * sh_min + sh_gap
+  sh_w = int((sh_inner - (sh_cols - 1) * sh_gap) / sh_cols)
+  sh_h = 170
+  # Alone on a row, a specimen takes the whole of it. `spec_of` sizes a cell
+  # to the thing it shows — right when three sit side by side, wrong when one
+  # is alone with six hundred pixels of nothing beside it.
+  sh_spec = fn(name, node) { sh_cols == 1 ? spec_wide(name, node) : spec_of(name, node) }
+  # The two that are not drawn to `sh_w`: a donut is square because a wheel
+  # is, and a sparkline is a glance rather than a chart. Given a row to
+  # themselves they take it — the donut keeps its wheel centred and bounded by
+  # the height, and gains a legend the width of the row.
+  sh_dw = sh_cols == 1 ? sh_w : sh_h
+  sh_sw = sh_cols == 1 ? sh_w : 150
+  sh_series = erp_revenue()
+  sh_rows = erp_regions()
+  sh_names = erp_region_names()
+  sh_weeks = erp_weeks()
+  # Seventeen canvases is the most expensive thing on this page, and a page
+  # rebuilds entirely on every event -- so with them always built, dragging
+  # the range slider two cards up cost 39 ms a frame against 9 for the
+  # dashboard. `lazy` is the answer the catalogue already had: built when
+  # asked for, a button until then.
+  erp_card("Charts", [badge("family", "info")], [
+    muted("Every shape the catalogue draws. All of them are a `canvas` of paths (03 §1.1) -- no shader, no font, no asset fetch -- and every one takes its colours from roles, so they follow the viewer into dark mode."),
+    lazy("on", state["cat_charts"] ?? [], secondary_button("Draw the seventeen charts", "cat_charts"), fn() {
+    row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
+      sh_spec("chart_line", chart_line("cl", sh_series["line"], sh_w, sh_h, erp_days(sh_series["line"].length()))),
+      sh_spec("chart_area", chart_area("ca", sh_series["area"], sh_w, sh_h, erp_days(sh_series["area"].length()))),
+      sh_spec("chart_bar", chart_bar("cb", sh_series["bars"], sh_w, sh_h, erp_days(sh_series["bars"].length()))),
+      sh_spec("chart_multi_line", chart_multi_line("cml", sh_rows, sh_names, sh_w, sh_h, sh_weeks)),
+      sh_spec("chart_grouped_bar", chart_grouped_bar("cgb", sh_rows, sh_names, sh_weeks, sh_w, sh_h)),
+      sh_spec("chart_stacked_bar", chart_stacked_bar("csb", sh_rows, sh_names, sh_weeks, sh_w, sh_h)),
+      sh_spec("chart_ranked_bar", chart_ranked_bar("crb", erp_top_products(), sh_w, sh_h)),
+      sh_spec("chart_diverging_bar", chart_diverging_bar("cdb", erp_variance(), sh_w, sh_h)),
+      sh_spec("chart_dumbbell", chart_dumbbell("cdm", erp_lead_times(), sh_w, sh_h)),
+      sh_spec("chart_donut", chart_donut("cdo", sh_series["mix"], erp_mix_labels(), sh_dw, sh_h)),
+      sh_spec("chart_heatmap", chart_heatmap("chm", erp_load(), erp_load_cols(), erp_load_rows(), sh_w, 130)),
+      sh_spec("chart_candle", chart_candle("cca", erp_sessions(), sh_w, sh_h)),
+      sh_spec("chart_gantt", chart_gantt("cga", erp_plan(), sh_w, sh_h)),
+      sh_spec("chart_funnel", chart_funnel("cfn", ERP_DEMO_FUNNEL, sh_w, sh_h)),
+      sh_spec("chart_waterfall", chart_waterfall("cwf", ERP_DEMO_BRIDGE, sh_w, sh_h)),
+      sh_spec("chart_box", chart_box("cbx", ERP_DEMO_SPREAD, sh_w, sh_h)),
+      sh_spec("chart_sparkline", chart_sparkline(sh_series["line"], sh_sw, 40))
+    ]) })
+  ])
 end
 
 def erp_month_end(state, lay)
@@ -3293,9 +3692,31 @@ end
 # editor, on every keystroke — and a list of eighty in one place is a list
 # nobody checks against the section that owns them.
 
+# What a back means here (06 §1.3). The order is the order a person went in.
+#
+# The customer is only *inside* anything on a narrow Customers page: that is
+# the one place this application stacks rather than switching between
+# siblings. Wide, the list and the detail are two halves of one split and
+# there is nothing to come back out of — and a back from Orders that quietly
+# deselected a customer nobody was looking at would be a back that did
+# nothing anyone could see.
+def erp_back(state)
+  lay = erp_layout(state)
+  deep = (state["section"] ?? "Dashboard") == "Customers" && !lay["wide"] && (state["cust_sel"] ?? "") != ""
+  return set_key(state, "cust_sel", "") if deep
+  return set_key(state, "section", "Dashboard") if (state["section"] ?? "Dashboard") != "Dashboard"
+
+  state
+end
+
 def erp_chrome_defaults
   {
     "section": "Dashboard",
+    # Which page transition the sections change with (03 §5). `none` by
+    # default: a cut is what this application did before there was a choice,
+    # and a demonstration should start from what everyone already has.
+    "page_motion": "none",
+    "page_motion_open": false,
     "nav_open": false,
     "acct_open": false,
     "search": "",
@@ -3304,6 +3725,9 @@ def erp_chrome_defaults
     "palette_at": -1,
     "demo_pass": "hunter2",
     "demo_pass_shown": false,
+    "demo_otp": "",
+    "demo_otp_focus": false,
+    "demo_otp_gen": 0,
     "demo_wh": "Lyon dock",
     "demo_wh_open": false,
     "demo_wh_query": "",
@@ -3321,6 +3745,32 @@ def erp_chrome_defaults
     "demo_tree": ["asm"],
     "demo_filter": {"op": "and", "items": [{"field": "Status", "cmp": "is", "value": "Late"}]},
     "demo_filter_open": "",
+    # One row ticked on arrival, so the bulk bar is on screen: a widget that
+    # only exists after you have found out how to make it appear is a widget
+    # a catalogue has not shown you.
+    "demo_sel": {"ids": ["r1"], "all": false, "scope": "demo"},
+    "demo_views": [],
+    "demo_view": "",
+    "demo_view_dirty": false,
+    "cat_check": true,
+    "cat_switch": false,
+    "cat_radio": "Standard",
+    "cat_tab": "Overview",
+    "cat_open": "a",
+    "cat_page": 2,
+    "cat_text": "Meridian SA",
+    "cat_num": "12",
+    "cat_note": "",
+    "cat_tags": ["urgent"],
+    "cat_tag_draft": "",
+    "cat_menu": false,
+    "cat_pane": 500,
+    "cat_pane_drag": false,
+    "cat_select": "Any status",
+    "cat_select_open": false,
+    "cat_charts": [],
+    "cat_drawer": false,
+    "cat_pick_sel": {"ids": [], "all": false, "scope": "cat"},
     "shortcuts": false,
     "seg": "Week",
     "sheet": false,
@@ -3494,12 +3944,21 @@ def gallery(event_data)
   match event {
     # The shell.
     "nav" => set_key(set_key(state, "section", props["path"]), "nav_open", false),
+    # Back is not a button here, it is the platform's: the section goes back
+    # to the one it opens on, and a person on a phone gets out of the
+    # application from there rather than being held in it.
+    # Back pops the deepest thing there is: out of a customer first, then out
+    # of the section, and then nothing — at which point the window lets the
+    # platform have the gesture, which on a phone is how you leave.
+    "nav_back" => erp_back(state),
     "nav_toggle" => set_key(state, "nav_open", !(state["nav_open"] ?? false)),
     "acct_toggle" => set_key(state, "acct_open", !(state["acct_open"] ?? false)),
     "acct_pick" => erp_say(set_key(state, "acct_open", false), props["item"] + " — not in a demonstration"),
     "sign_out" => erp_say(set_key(state, "acct_open", false), "Signed out. Not really: there is nothing to sign out of."),
     "search" => set_key(erp_field(state, "search", params), "page", 1),
     "seg" => set_key(state, "seg", props["option"]),
+    "page_motion_toggle" => set_key(state, "page_motion_open", !(state["page_motion_open"] ?? false)),
+    "page_motion_pick" => set_key(set_key(state, "page_motion", props["value"] ?? "none"), "page_motion_open", false),
     "sheet" => set_key(state, "sheet", !state["sheet"]),
     "toast_done" => set_key(state, "toast", ""),
     # The dashboard.
@@ -3625,6 +4084,7 @@ def gallery(event_data)
     "palette_close" => set_key(set_key(state, "palette", false), "palette_query", ""),
     "demo_pass" => erp_field(state, "demo_pass", params),
     "demo_pass_reveal" => set_key(state, "demo_pass_shown", !(state["demo_pass_shown"] ?? false)),
+    "demo_otp" => erp_demo_otp(state, params, props),
     "demo_wh_toggle" => set_key(set_key(set_key(state, "demo_wh_open", !(state["demo_wh_open"] ?? false)), "demo_wh_query", ""), "demo_wh_at", -1),
     "demo_wh_change" => set_key(set_key(state, "demo_wh_query", params["payload"].to_s), "demo_wh_at", -1),
     "demo_wh_pick" => set_key(set_key(set_key(state, "demo_wh", props["value"]), "demo_wh_open", false), "demo_wh_query", ""),
@@ -3655,6 +4115,31 @@ def gallery(event_data)
     "fb_field" => erp_demo_filter_set(state, props, "field", props["value"]),
     "fb_cmp" => erp_demo_filter_set(state, props, "cmp", props["value"]),
     "fb_value" => erp_demo_filter_set(state, props, "value", params["payload"].to_s),
+    "demo_row_pick" => set_key(state, "demo_sel", selection_toggle(erp_demo_sel(state), (props["id"] ?? "").to_s)),
+    "demo_row_all" => set_key(state, "demo_sel", selection_all(erp_demo_sel(state))),
+    "demo_row_clear" => set_key(state, "demo_sel", selection([], "demo")),
+    "demo_bulk" => erp_demo_bulk(state, props),
+    "demo_view_pick" => erp_demo_view_pick(state, props),
+    "demo_view_save" => erp_demo_view_save(state),
+    "demo_view_drop" => erp_demo_view_drop(state, props),
+    "cat_check" => set_key(state, "cat_check", !(state["cat_check"] ?? false)),
+    "cat_switch" => set_key(state, "cat_switch", !(state["cat_switch"] ?? false)),
+    "cat_radio" => set_key(state, "cat_radio", props["option"] ?? props["value"] ?? ""),
+    "cat_tab" => set_key(state, "cat_tab", props["tab"] ?? ""),
+    "cat_open" => set_key(state, "cat_open", (state["cat_open"] ?? "") == (props["id"] ?? "").to_s ? "" : (props["id"] ?? "").to_s),
+    "cat_page" => set_key(state, "cat_page", props["page"] ?? 1),
+    "cat_text" => erp_field(state, "cat_text", params),
+    "cat_num" => erp_field(state, "cat_num", params),
+    "cat_note" => erp_field(state, "cat_note", params),
+    "cat_menu" => set_key(state, "cat_menu", !(state["cat_menu"] ?? false)),
+    "cat_pane" => split_event(state, params, "cat_pane", "row", lay_extent_for_cat(state), 120, 120, 6),
+    "cat_select_toggle" => set_key(state, "cat_select_open", !(state["cat_select_open"] ?? false)),
+    "cat_pick" => set_key(state, "cat_pick_sel", selection_toggle(erp_cat_pick(state), (props["id"] ?? "").to_s)),
+    "cat_select_pick" => set_key(set_key(state, "cat_select", props["value"]), "cat_select_open", false),
+    "cat_charts" => set_key(state, "cat_charts", (state["cat_charts"] ?? []).includes?("on") ? [] : ["on"]),
+    "cat_drawer" => set_key(state, "cat_drawer", !(state["cat_drawer"] ?? false)),
+    "cat_menu_pick" => erp_say(set_key(state, "cat_menu", false), (props["item"] ?? "").to_s),
+    "cat_say" => erp_say(state, (props["said"] ?? "Done").to_s),
     "co_vat" => erp_field(state, "co_vat", params),
     "co_vat_step" => erp_step(state, "co_vat", props, {"min": 0, "max": 30, "step": 1}),
     "co_footer" => erp_field(state, "co_footer", params),
@@ -3702,11 +4187,17 @@ def gallery_view(raw_state)
   body = erp_reports_section(state, lay) if section == "Reports"
   body = erp_settings_section(state, lay) if section == "Settings"
   body = erp_catalogue_section(state, lay) if section == "Catalogue"
-  page = scroll(
-    {"grow": 1},
-    [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])]
+  # One keyed page per section. The key is the section's name, so switching
+  # sections removes a child and inserts another — which is what a client
+  # renders as one leaving and one arriving (03 §5). `scale` is the
+  # fade-through: the sections are siblings, neither is deeper than the other,
+  # and a slide would claim a direction that does not exist between them.
+  body_page = nav_page(
+    section,
+    scroll({"grow": 1}, [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])]),
+    {"motion": state["page_motion"] ?? "none"}
   )
-  layers = [erp_shell(state, lay, page)]
+  layers = [erp_shell(state, lay, body_page)]
   layers = layers.concat([drawer(
     [
       h2("Meridian"),
@@ -3755,9 +4246,20 @@ def gallery_view(raw_state)
     }
   )]) if state["palette"] == true
   layers = layers.concat([shortcut_sheet(ERP_SHORTCUTS, "shortcuts_close")]) if state["shortcuts"] == true
+  layers = layers.concat([drawer(
+    [h2("A drawer"), muted("A sheet from the left edge. Escape closes it, and so does the scrim."), spacer(), button("Close", "cat_drawer")],
+    {"label": "Drawer", "on_close": "cat_drawer", "key": "cat_drawer"}
+  )]) if state["cat_drawer"] == true
   layers = layers.concat([erp_toast(state)]) unless (state["toast"] ?? "") == ""
   layers = layers.concat([dev_bar(eui_stats(), state["devbar"] ?? true)])
-  stack({"gap": 0}, layers)
+  root = stack({"gap": 0}, layers)
+  # 06 §1.3: back belongs to the root or to nobody, so this is the only place
+  # it can be asked for. With it, Android's own back button, `Alt+Left`, the
+  # mouse's fourth button and a swipe from the leading edge all arrive here as
+  # the same event — and without it they go on meaning what they meant to the
+  # platform, which on a phone is "leave the application".
+  root["on"] = {"back": "nav_back"}
+  root
 end
 
 # What the last action did, in the top corner, until it is clicked away. A

@@ -49,9 +49,11 @@ it.
 - No native code, no JIT, no `eval`. The only executable content is a chunk
   that passed the verifier in [`07-bytecode.md`](07-bytecode.md) §4.
   *Enforced: `eui-vm::Chunk::verify`.*
-- A chunk's reachable surface is the six methods of the host trait: local
-  state, node text and props by key, and an event queue. *Enforced by the
-  type: `eui-vm::Host`.*
+- A chunk's reachable surface is the nine methods of the host trait: local
+  state, node text, props and style by key, the viewer's palette, an event
+  queue, and a request to go back. *Enforced by the type: `eui-vm::Host`.*
+  `go_back` carries no data in either direction and reaches no state: it asks,
+  and the tree that results is the server's (06 §1.3).
 - A run is fuel-metered and string-bounded; an abort has no further effect
   and sends nothing. *Enforced: `eui-vm::run`, `Driver::emit`.*
 

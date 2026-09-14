@@ -147,7 +147,8 @@ fn full_style_record_survives() {
         z: 9,
         cursor: Cursor::NotAllowed,
         transition: 2,
-        animation: 1,
+        animation: ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_EXIT,
+        motion: Motion::Trailing,
         blur: 24,
     };
     let mut w = Writer::new();

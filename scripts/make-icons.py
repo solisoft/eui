@@ -5,6 +5,8 @@
 
 Writes, all under assets/icon/:
 
+    crates/eui-android/res/mipmap-<density>/ic_launcher.png
+                      the Android launcher icon, 48 … 192
     png/eui-<n>.png   16 … 512, full bleed: Linux hicolor, and the 64 the
                       client embeds for the window itself
     eui.icns          the macOS bundle icon, and the DMG's volume icon
@@ -38,6 +40,10 @@ OUT = ROOT / "assets/icon"
 # Full bleed, for Linux and Windows and the window's own icon. macOS gets
 # its own canvas below.
 PNG_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
+# Android takes its launcher icon from resources compiled into the package,
+# not from a file beside the binary, so it gets a tree of its own -- one
+# density per bucket, which is what every launcher on the platform asks for.
+ANDROID_MIPMAPS = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 # What iOS asks for on a home screen: 60pt at @2x and @3x for a phone, 76pt
 # and 83.5pt at @2x for the two iPads, and 1024 for the store. Named for the
 # point size because that is how `CFBundleIconFiles` resolves them.
@@ -84,6 +90,7 @@ MAC_TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1
 
 def render(svg: pathlib.Path, size: int, dst: pathlib.Path) -> bytes:
     """One PNG at `size`, through librsvg."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["rsvg-convert", "-w", str(size), "-h", str(size), str(svg), "-o", str(dst)],
         check=True,
@@ -250,6 +257,11 @@ def main() -> None:
     for size in PNG_SIZES:
         render(SRC, size, OUT / f"png/eui-{size}.png")
     print(f"make-icons: {len(PNG_SIZES)} PNGs in {OUT / 'png'}")
+
+    android = ROOT / "crates/eui-android/res"
+    for density, size in ANDROID_MIPMAPS.items():
+        render(SRC, size, android / f"mipmap-{density}/ic_launcher.png")
+    print(f"make-icons: {len(ANDROID_MIPMAPS)} Android mipmaps in {android}")
 
     (OUT / "ios").mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:

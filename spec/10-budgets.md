@@ -20,11 +20,14 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, drag | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
 
-An edited field is the only thing an *input* arms a deadline for: 06 §2's idle
+An edited field is what an *input* arms a deadline for: 06 §2's idle
 `change`, one per burst of typing, disarmed by the event it produces and by the
-blur or `Enter` that would have produced it first. At rest there is none, so
-the zero-wakeup line above holds with a field on the screen and a caret in it.
-A field no handler is listening to arms nothing at all.
+blur or `Enter` that would have produced it first, and 03 §3's caret blink,
+twice a second while somebody is plainly there. Both stop — the `change` when
+it fires, the blink after ten seconds with nothing moving the caret — so the
+zero-wakeup line above holds with a field on the screen and a caret in it,
+which is the state a window left open on a form is actually in. A field no
+handler is listening to arms no `change` at all.
 
 A drag frame costs what a wheel notch costs: one hit test, one search for the
 slot, at most one scroll step, and a relayout of the rows that have boxes — not
@@ -85,13 +88,32 @@ renderer uploads (the gallery is about 760 quads, its documentation dialog
 about 3 900). A frame owed to a spin, a transition or a glide alone is not
 sent at all: the window draws the last list again, and answers the
 driver's ticks itself meanwhile. `xtask bench` holds those frames to their
-budget: a repeated frame, a transition frame and a glide frame each under
-0.2 ms of driver time — they measure at tens of nanoseconds — and a glide
-with no layout after its first. The rest is layout and paint, which the boundary does
+budget: a repeated frame, a transition frame, a **page** transition frame and
+a glide frame each under 0.2 ms of driver time — they measure at tens of
+nanoseconds — and a glide with no layout after its first. A page transition
+is measured with both pages on screen and no layout at all: the one arriving
+was laid out once where it lands, and the one leaving is a picture. The rest is layout and paint, which the boundary does
 not change; the in-process figure is steady and the worker's is not,
 because it includes two process wake-ups. Both sides are inside the 2 ms
 budget, and folding an input into the paint that follows it would make it
 one wake-up a frame.
+
+**Going somewhere** (03 §5.1, 06 §5). A page that leaves keeps its painting,
+and these are what stop that from being unbounded:
+
+| Limit | Value | Why |
+|---|---:|---|
+| Kept paintings per session | 1 | a second supersedes the first, so the memory is a constant and not a function of how fast a person can tap |
+| Pairs resolved per change | 8 | a shared element is a slot in a small fixed table, as a scroll in flight is |
+| Leading-edge strip | ~20 logical px | a bezel's width: wide enough to find without looking, narrow enough that what it takes from the application is an edge nobody puts a control against |
+
+What is kept is the quads and not the nodes, so the cost is what was on
+screen rather than what the page was made of: a departing ten-thousand-row
+table costs its forty visible rows. A client MUST let a kept painting go
+rather than draw it wrong when the glyph atlas, the frame size or the
+viewer's palette has moved under it, and a page mid-transition owes the
+window no more than a transition frame does — the list does not change while
+it runs, so nothing is walked, repainted, or sent across a worker's pipe.
 
 A scroll step was 1.75 ms in this process and 2.03 ms through a worker
 until 2026-09-08, when the row tops of a virtualised list stopped being

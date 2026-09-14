@@ -121,6 +121,13 @@ pub enum Instr {
     /// Set the viewer's palette mode from the string on the stack:
     /// `light`, `dark`, `high_contrast` or `toggle` (light ⇄ dark).
     SetMode,
+    /// Ask to go back, as the platform's own gesture would (06 §1.3).
+    ///
+    /// Takes nothing and leaves nothing: it is a request, not a change. What
+    /// it asks for is the server's to grant — a back button and a swipe from
+    /// the edge go the same way, so they cannot disagree about what back
+    /// means.
+    GoBack,
     Return,
 }
 
@@ -130,7 +137,7 @@ impl Instr {
         match self {
             Self::PushInt(_) | Self::PushStr(_) | Self::PushBool(_) | Self::Load(_) => (0, 1),
             Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) | Self::SetMode => (1, 0),
-            Self::SetStyle(..) => (0, 0),
+            Self::SetStyle(..) | Self::GoBack => (0, 0),
             Self::Dup => (1, 2),
             Self::Add | Self::Sub | Self::Mul | Self::Eq | Self::Lt | Self::Gt | Self::And | Self::Or | Self::Concat => (2, 1),
             Self::Neg | Self::Not | Self::ToStr => (1, 1),
@@ -215,6 +222,7 @@ impl Chunk {
                 }
                 0x32 => Instr::Emit(r.varint32().map_err(trunc)?),
                 0x34 => Instr::SetMode,
+                0x35 => Instr::GoBack,
                 0x33 => {
                     let key = r.varint32().map_err(trunc)?;
                     let style = r.varint32().map_err(trunc)?;
@@ -310,6 +318,9 @@ pub trait Host {
     /// Set the viewer's palette mode: `light`, `dark`, `high_contrast`, or
     /// `toggle` between light and dark. False for any other string.
     fn set_mode(&mut self, mode: &str) -> bool;
+    /// Ask to go back (06 §1.3). At most one per run: a chunk that asks
+    /// twice asks once.
+    fn go_back(&mut self);
 }
 
 /// Run a verified chunk against a host with the default fuel.
@@ -445,6 +456,7 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
                     return Err(VmError::Host("set_mode refused"));
                 }
             }
+            Instr::GoBack => host.go_back(),
             Instr::Return => return Ok(()),
         }
     }
@@ -539,6 +551,11 @@ impl Asm {
     /// `set_mode`.
     pub fn set_mode(mut self) -> Self {
         self.code.push(0x34);
+        self
+    }
+    /// `go_back`.
+    pub fn go_back(mut self) -> Self {
+        self.code.push(0x35);
         self
     }
     /// `return`, and the finished bytes.

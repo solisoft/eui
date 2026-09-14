@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eui_proto::{Frame, ThemeMode};
-use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller};
+use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller, Xform};
 
 use crate::a11y::{AccessNode, AccessRole, AccessSnapshot, AccessState, Checked};
 use crate::assets::Hash;
@@ -549,6 +549,7 @@ fn put_input(w: &mut W, i: &Input) {
         }
         Input::Unfocused => w.u8(12),
         Input::Refocused => w.u8(18),
+        Input::Back => w.u8(19),
         Input::PointerOut => w.u8(13),
         Input::TouchDown(id, x, y) => {
             w.u8(14);
@@ -596,6 +597,7 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         16 => Input::TouchUp(r.u64()?, r.f32()?, r.f32()?),
         17 => Input::TouchCancel(r.u64()?),
         18 => Input::Refocused,
+        19 => Input::Back,
         _ => return Err("unknown input"),
     })
 }
@@ -638,6 +640,14 @@ pub struct Status {
     /// the window has the input — so the platform's positioning should be
     /// running, and should not be a moment longer than this stays true.
     pub wants_location: bool,
+    /// The root holds a `back` handler, so this session would do something
+    /// with a back (06 §1.3).
+    ///
+    /// Here rather than asked for, because the window has to decide on every
+    /// `Alt+Left` and every press of a phone's back button whether the
+    /// gesture is the page's or the platform's, and a question asked that
+    /// often must not be a round trip.
+    pub takes_back: bool,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -711,6 +721,7 @@ impl Reply {
         w.bool(s.audio);
         w.bool(s.video);
         w.bool(s.wants_location);
+        w.bool(s.takes_back);
         w.u32(u32::try_from(s.files.len()).unwrap_or(u32::MAX));
         for a in &s.files {
             w.u32(a.token);
@@ -830,6 +841,7 @@ impl Reply {
         let audio = r.bool()?;
         let video = r.bool()?;
         let wants_location = r.bool()?;
+        let takes_back = r.bool()?;
         let n = r.u32()? as usize;
         let mut files = Vec::with_capacity(n.min(64));
         for _ in 0..n {
@@ -853,7 +865,7 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, files, nfc, writes };
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, files, nfc, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -982,6 +994,17 @@ fn put_list(w: &mut W, list: &DrawList) {
         w.f32(s.dur);
         w.u32(s.curve);
     }
+    // Sixteen floats a slot and at most fifteen slots, so a page transition
+    // costs the pipe 960 bytes once and nothing at all per frame after it:
+    // the list does not change while it runs, so the window redraws the one
+    // it already has.
+    w.u32(u32::try_from(list.xforms.len()).unwrap_or(u32::MAX));
+    for x in &list.xforms {
+        w.f4(x.from);
+        w.f4(x.to);
+        w.f4(x.clock);
+        w.f4(x.pivot);
+    }
     w.bool(list.wants_frame);
     w.bool(list.gpu_only);
     w.u32(list.repeat_until_ms);
@@ -1027,6 +1050,11 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
         let [fx, fy, tx, ty] = r.f4()?;
         scrollers.push(Scroller { from: [fx, fy], to: [tx, ty], t0: r.f32()?, dur: r.f32()?, curve: r.u32()?, pad: 0 });
     }
+    let n = r.u32()? as usize;
+    let mut xforms = Vec::with_capacity(n.min(1 << 8));
+    for _ in 0..n {
+        xforms.push(Xform { from: r.f4()?, to: r.f4()?, clock: r.f4()?, pivot: r.f4()? });
+    }
     let wants_frame = r.bool()?;
     let gpu_only = r.bool()?;
     let repeat_until_ms = r.u32()?;
@@ -1043,7 +1071,11 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
         }
         Some(Backdrop { rect, first, sigmas })
     };
-    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, scrollers, backdrop })
+    // `departures` does not cross: it says where a page that asked to leave
+    // painted itself, and the only reader is the driver that recorded it —
+    // on this side of the pipe. The window draws the quads; it never has to
+    // know which of them were a page.
+    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, departures: Vec::new(), xforms, scrollers, backdrop })
 }
 
 fn put_access(w: &mut W, s: &AccessSnapshot) {
@@ -1371,6 +1403,7 @@ fn status_of(d: &mut Driver) -> Status {
         audio: d.audio_playing(),
         video: d.video_playing(),
         wants_location: d.wants_location(),
+        takes_back: d.takes_back(),
         files: d.take_file_asks(),
         nfc: d.take_nfc_asks(),
         writes: d.take_writes(),
@@ -2236,6 +2269,15 @@ impl Backend {
         self.with_worker(|w| w.call(&Request::AccessAction(id, action)).map(|r| r.status.outbound).unwrap_or_default()).unwrap_or_default()
     }
 
+    /// Whether this session would do anything with a back (06 §1.3).
+    ///
+    /// Asked on every `Alt+Left` and every press of a phone's back button,
+    /// and answered without a round trip either way: the worker put it in
+    /// its last reply, and a driver in this process answers from the tree.
+    pub fn takes_back(&self) -> bool {
+        self.with_local(|d| d.takes_back()).or_else(|| self.with_worker(|w| w.status.takes_back)).unwrap_or(false)
+    }
+
     /// True while the platform's positioning should be running (06 §1.2).
     ///
     /// Asked on every pass of the loop, and it is a comparison either way:
@@ -2328,6 +2370,8 @@ mod tests {
             repeat_until_ms: u32::MAX,
             serial: 7,
             cpu_bound: false,
+            departures: Vec::new(),
+            xforms: Vec::new(),
             scrollers: Vec::new(),
             backdrop: None,
         };
@@ -2413,6 +2457,7 @@ mod tests {
             audio: true,
             video: false,
             wants_location: true,
+            takes_back: true,
             files: vec![
                 FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20, source: crate::driver::PickSource::Held } },
                 FileAsk { token: 4, node: 10, want: FileWant::Save { name: "export.csv".into() } },
@@ -2431,6 +2476,8 @@ mod tests {
             repeat_until_ms: 250,
             serial: 0x1234_5678_9abc,
             cpu_bound: false,
+            departures: Vec::new(),
+            xforms: vec![Xform { from: [320.0, 0.0, 1.0, 1.0], to: [0.0, 0.0, 1.0, 1.0], clock: [-0.02, 0.18, 1.0, 0.0], pivot: [160.0, 240.0, 0.0, 0.0] }],
             scrollers: vec![Scroller { from: [0.0, -40.0], to: [0.0, 0.0], t0: -0.05, dur: 0.1, curve: 2, pad: 0 }],
             backdrop: None,
         };

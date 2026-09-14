@@ -82,16 +82,97 @@ echo "make-android-apk: signing with $CARGO_APK_RELEASE_KEYSTORE"
 
 echo "make-android-apk: building${ABIS:+ for }$ABIS"
 # shellcheck disable=SC2086
+# Link against the C++ runtime. `oboe` — the audio backend — is C++, and its
+# objects come into the shared object with undefined libc++ symbols; nothing
+# adds a dependency on a library to resolve them from, so the result declares
+# `libandroid`, `libdl`, `liblog`, `libOpenSLES`, `libm`, `libc` and no libc++
+# at all. The application then installs and dies on its first frame:
+#
+#   UnsatisfiedLinkError … dlopen failed: cannot locate symbol
+#   "__cxa_pure_virtual" referenced by "…/libeui.so"
+#
+# which reads like a packaging fault and is a linking one. Neither `CXXSTDLIB`
+# nor `-static-libstdc++` answers it — the symbol stays undefined under both —
+# and packing `libc++_shared.so` beside ours is not enough on its own either,
+# because the dynamic linker only looks in libraries the object says it needs.
+# It has to be named here, and carried below.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-lc++_shared"
+
 cargo apk build --release -p eui-android $BUILD_TARGETS
 
 mkdir -p "$OUT_DIR"
 # Where cargo-apk drops the file has moved between its versions, so it is
 # looked for rather than assumed: the newest .apk under target/ is the one
 # just built.
-APK="$(find "$ROOT/target" -name '*.apk' -newer "$ROOT/crates/eui-android/Cargo.toml" -print 2>/dev/null | head -1)"
-[ -n "$APK" ] || APK="$(find "$ROOT/target" -name '*.apk' -print 2>/dev/null | head -1)"
+# Newest, and never the `-unaligned` intermediate `cargo apk` leaves beside
+# the real one: `find | head -1` returns whatever the directory happens to
+# yield first, which was the unaligned, unsigned copy about half the time.
+newest_apk() {
+  find "$ROOT/target" -name '*.apk' ! -name '*-unaligned.apk' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-
+}
+APK="$(newest_apk)"
 [ -n "$APK" ] || { echo "make-android-apk: cargo apk produced no .apk under target/" >&2; exit 1; }
 cp "$APK" "$OUT_DIR/eui.apk"
+
+# The C++ runtime, carried in the package. `oboe` — the audio backend — is
+# C++, so the shared object references libc++ symbols; `cargo apk` bundles no
+# `libc++_shared.so`, and Android's own libc++ is a platform-private library
+# that does not export them. The application then installs and dies on its
+# first frame:
+#
+#   UnsatisfiedLinkError … dlopen failed: cannot locate symbol
+#   "__cxa_pure_virtual" referenced by "…/libeui.so"
+#
+# which reads like a packaging fault and is a linking one. Static linking does
+# not answer it — the symbol stays undefined however `CXXSTDLIB` and
+# `-static-libstdc++` are set — so the library goes in beside ours, which is
+# what the NDK intends and what every other Android build does.
+SYSROOT="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+for abi_dir in $(unzip -Z1 "$OUT_DIR/eui.apk" 'lib/*/*' 2>/dev/null | cut -d/ -f2 | sort -u); do
+  case "$abi_dir" in
+    arm64-v8a)   triple=aarch64-linux-android ;;
+    armeabi-v7a) triple=arm-linux-androideabi ;;
+    x86_64)      triple=x86_64-linux-android ;;
+    x86)         triple=i686-linux-android ;;
+    *)           continue ;;
+  esac
+  [ -f "$SYSROOT/$triple/libc++_shared.so" ] || continue
+  mkdir -p "$STAGE/lib/$abi_dir"
+  cp "$SYSROOT/$triple/libc++_shared.so" "$STAGE/lib/$abi_dir/"
+done
+if [ -d "$STAGE/lib" ]; then
+  (cd "$STAGE" && zip -q -r "$OUT_DIR/eui.apk" lib)
+  echo "make-android-apk: libc++_shared.so packed for $(cd "$STAGE" && ls lib | tr '\n' ' ')"
+fi
+
+# Aligned after that, because adding to the archive undoes it, and before the
+# signature, because aligning after would break it.
+ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name zipalign -print 2>/dev/null | sort | tail -1)"
+if [ -n "$ZIPALIGN" ]; then
+  "$ZIPALIGN" -f 4 "$OUT_DIR/eui.apk" "$OUT_DIR/eui-aligned.apk" && mv "$OUT_DIR/eui-aligned.apk" "$OUT_DIR/eui.apk"
+fi
+
+# Sign it ourselves. `cargo apk` prints that it is signing and, with
+# build-tools 34, leaves the package without so much as a `META-INF` — which
+# Android refuses at install time with `INSTALL_PARSE_FAILED_NO_CERTIFICATES`.
+# Rather than depend on which of its versions signs and which only says so,
+# the signature is applied here and verified, so a package that leaves this
+# script is installable or the script fails.
+APKSIGNER="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner -print 2>/dev/null | sort | tail -1)"
+if [ -n "$APKSIGNER" ]; then
+  "$APKSIGNER" sign \
+    --ks "$CARGO_APK_RELEASE_KEYSTORE" \
+    --ks-pass "pass:${CARGO_APK_RELEASE_KEYSTORE_PASSWORD:-android}" \
+    --ks-key-alias androiddebugkey \
+    --key-pass "pass:${CARGO_APK_RELEASE_KEYSTORE_PASSWORD:-android}" \
+    "$OUT_DIR/eui.apk"
+  "$APKSIGNER" verify "$OUT_DIR/eui.apk" >/dev/null
+  echo "make-android-apk: signed and verified"
+else
+  echo "make-android-apk: no apksigner under $ANDROID_HOME/build-tools; the package is unsigned" >&2
+fi
 
 echo "make-android-apk: $OUT_DIR/eui.apk"
 echo "  adb install -r '$OUT_DIR/eui.apk'   # 'adb uninstall org.eui.client' first if the key changed"

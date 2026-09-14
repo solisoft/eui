@@ -459,3 +459,95 @@ fn a_held_mouse_button_is_not_a_long_press() {
     assert!(events(&out, EventKind::DragStart).is_empty(), "nothing was grabbed by waiting");
     assert!(events(&out, EventKind::LongPress).is_empty());
 }
+
+/// A page that can be gone back from, with the leading-edge strip live.
+fn pages() -> Driver {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::Back, Handler::Server(ATOM)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (1, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(ATOM)));
+    let ops = vec![
+        Op::DefAtom { id: ATOM, value: "went".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(400), height: Dim::Px(300), ..Default::default() } },
+        Op::DefStyle {
+            id: 2,
+            record: StyleRecord {
+                width: Dim::Px(400),
+                height: Dim::Px(300),
+                bg: ColorRef::role(Role::SurfaceBase.id()),
+                animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+                motion: eui_proto::Motion::Trailing,
+                transition: 2,
+                ..Default::default()
+            },
+        },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops }));
+    // Let its own entrance finish: a page still arriving is already being
+    // carried by a transform, and a test about the hand should not be
+    // reading the clock's.
+    d.tick(Instant::now() + Duration::from_millis(500));
+    let _ = d.paint(400, 300);
+    assert!(!d.animating(), "the fixture starts at rest");
+    d
+}
+
+/// 06 §5: a contact on the leading edge of a page that can be gone back from
+/// belongs to the navigator, and a stroke inwards carries the page off.
+#[test]
+fn a_stroke_from_the_leading_edge_carries_the_page_off_and_reports_a_back() {
+    let mut d = pages();
+    d.input(Input::TouchDown(1, 4.0, 150.0));
+    // Past the slop, inwards.
+    d.input(Input::TouchMove(1, 30.0, 152.0));
+    // The press is given back, exactly as a scroll gives it back.
+    let list = d.paint(400, 300);
+    let page = list.quads.iter().find(|q| q.rect[2] == 400.0 && q.rect[3] == 300.0).expect("the page");
+    let slot = (page.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_ne!(slot, 0, "the page is being carried");
+    // Held by the hand, not run by a clock: a finger standing still owes no
+    // frames at all.
+    assert_eq!(list.xforms[slot as usize - 1].clock[2], eui_render::CURVE_HELD as f32);
+    assert_eq!(d.next_frame_at(), None, "a hand held still asks for nothing");
+
+    // Let go past halfway: the page goes and the server is told.
+    d.input(Input::TouchMove(1, 300.0, 152.0));
+    let out = d.input(Input::TouchUp(1, 300.0, 152.0));
+    assert_eq!(events(&out, EventKind::Back), vec![1], "the root hears it");
+    assert!(events(&out, EventKind::Click).is_empty(), "and nothing was clicked on the way");
+}
+
+/// Let go before halfway and the page comes back, with nothing reported: an
+/// abandoned gesture is not an event.
+#[test]
+fn a_back_swipe_let_go_early_springs_back_and_says_nothing() {
+    let mut d = pages();
+    d.input(Input::TouchDown(1, 4.0, 150.0));
+    d.input(Input::TouchMove(1, 40.0, 150.0));
+    let out = d.input(Input::TouchUp(1, 40.0, 150.0));
+    assert!(events(&out, EventKind::Back).is_empty(), "nothing is reported");
+    assert!(d.animating(), "but it does not snap: it goes back the way it came");
+}
+
+/// The edge takes a stroke inwards and nothing else. A stroke *along* the
+/// edge is the scroll it always was.
+#[test]
+fn a_stroke_along_the_leading_edge_still_scrolls() {
+    let mut d = pages();
+    d.input(Input::TouchDown(1, 4.0, 150.0));
+    d.input(Input::TouchMove(1, 5.0, 100.0));
+    let list = d.paint(400, 300);
+    assert!(list.xforms.is_empty(), "nothing is being carried off");
+}
+
+/// And a tap inside the slop is still the tap it was aimed at, edge or not.
+#[test]
+fn a_tap_on_the_leading_edge_is_still_a_tap() {
+    let mut d = pages();
+    d.input(Input::TouchDown(1, 4.0, 150.0));
+    let out = d.input(Input::TouchUp(1, 6.0, 151.0));
+    assert_eq!(events(&out, EventKind::Click), vec![2], "the node under it hears the click");
+}

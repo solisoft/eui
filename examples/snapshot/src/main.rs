@@ -4,9 +4,10 @@
 //! `snapshot <out-dir> --soli <session-url> <name> <w> <h>` — connect to a
 //! running Soli, mount `<name>`'s component, fetch its assets, and render it
 //! in light and dark. `EUI_ALLOW_INSECURE_LOOPBACK=1` for a `ws://` URL.
-//! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL` and `SNAPSHOT_HOVER` drive it first,
-//! so a pane two clicks in, a card below the fold, or a state that only
-//! exists under the pointer can be looked at without a screen.
+//! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL`, `SNAPSHOT_HOVER`, `SNAPSHOT_KEYS` and
+//! `SNAPSHOT_TEXT` drive it first, so a pane two clicks in, a card below the
+//! fold, a state that only exists under the pointer, or a field that has been
+//! typed into can be looked at without a screen.
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -210,6 +211,77 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 }
             }
         }
+        // SNAPSHOT_NAV="Orders" — click a label that changes the page, then
+        // time every frame of the transition it starts: the one that applies
+        // the server's batch and lays the new page out, and the ones after
+        // it, which should cost nothing because the vertex stage is carrying
+        // both pages (03 §5). A number that is not near zero on the frames
+        // after the first is a transition the CPU is drawing.
+        if let Ok(label) = std::env::var("SNAPSHOT_NAV") {
+            // Rects come from a paint; without one the layout has nothing.
+            let _ = driver.paint(dw, dh);
+            // The first one with a box: a label also appears in the drawer,
+            // which is not laid out while it is closed.
+            let root = driver.session().root().expect("a tree");
+            let hits: Vec<_> = driver.session().preorder(root).filter(|ix| driver.session().text_of(*ix) == Some(label.as_str())).collect();
+            let mut r = None;
+            for hit in hits {
+                let mut ix = hit;
+                while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
+                    let Some(up) = driver.session().node(ix).map(|n| n.parent) else { break };
+                    if up == ix {
+                        break;
+                    }
+                    ix = up;
+                }
+                r = driver.layout().rect(ix).filter(|r| r.w > 0.0 && r.h > 0.0);
+                if r.is_some() {
+                    break;
+                }
+            }
+            let r = r.expect("a box");
+            driver.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+            driver.input(Input::PointerDown(0));
+            for f in driver.input(Input::PointerUp(0)) {
+                conn.tx.send(f.encode()).unwrap();
+            }
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let mut batches = 0u32;
+            while Instant::now() < deadline {
+                let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                let mut answered = false;
+                while let Ok(Incoming::Message(b)) = conn.rx.try_recv() {
+                    answered = true;
+                    batches += 1;
+                    for f in driver.handle_frame(Frame::decode(&b).expect("frame")) {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
+                }
+                if answered {
+                    break;
+                }
+            }
+            let laid = driver.relayouts();
+            let target = renderer.offscreen(dw, dh);
+            for i in 0..14 {
+                driver.tick(Instant::now());
+                let t = Instant::now();
+                let list = driver.paint(dw, dh);
+                let painted = t.elapsed();
+                let (atlas, images) = driver.atlases_mut();
+                renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
+                let drawn = t.elapsed() - painted;
+                println!(
+                    "nav {label:?} frame {i}: layout+paint {:.3} ms, render {:.3} ms, {} quads, {} relayouts, {} batches",
+                    painted.as_secs_f64() * 1e3,
+                    drawn.as_secs_f64() * 1e3,
+                    list.quads.len(),
+                    driver.relayouts() - laid,
+                    batches
+                );
+                std::thread::sleep(Duration::from_millis(16).saturating_sub(t.elapsed()));
+            }
+        }
         // SNAPSHOT_SCROLL=<px> — wheel the page down before the last paint,
         // so a card below the fold can be looked at at all.
         if let Some(dy) = std::env::var("SNAPSHOT_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
@@ -299,6 +371,39 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 }
             }
         }
+        // SNAPSHOT_TEXT="1;2;3" — committed text, typed one entry at a time
+        // into whatever holds focus, each waiting for the server's answer.
+        // A field that only looks right once something has been typed into
+        // it cannot be photographed any other way.
+        if let Ok(runs) = std::env::var("SNAPSHOT_TEXT") {
+            for run in runs.split(';').filter(|r| !r.is_empty()) {
+                let _ = driver.paint(dw, dh);
+                for f in driver.input(Input::Text(run.to_owned())) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if Instant::now() > deadline {
+                        break;
+                    }
+                    let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                    let mut answered = false;
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        if let Incoming::Message(b) = msg {
+                            answered = true;
+                            let frame = Frame::decode(&b).expect("frame");
+                            for f in driver.handle_frame(frame) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                    }
+                    let _ = driver.paint(dw, dh);
+                    if answered {
+                        break;
+                    }
+                }
+            }
+        }
         // SNAPSHOT_HOVER="x,y" — logical px, where the pointer is left
         // standing before the last paint, so a state that only exists under
         // it (a chart's band, a button) can be looked at. Hover settles at
@@ -316,10 +421,79 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
             std::thread::sleep(Duration::from_millis(200));
             driver.tick(Instant::now());
         }
+        // SNAPSHOT_CLICK="x,y" — a click before the last paint, for a state a
+        // page only reaches by being used: the section a link opens, the panel
+        // a button raises. Several, separated by `;`, for a state that takes
+        // more than one — a card behind a section behind a button.
+        //
+        // Each waits for the answer before the next is aimed, because the
+        // second one is usually at a place the first one's answer created.
+        // A step is `x,y` to click there, or `s<dy>` to wheel the view down
+        // first — what is worth photographing is often below the fold, and a
+        // click is aimed at where a thing is *on screen*.
+        let steps: Vec<(f32, f32, bool)> = std::env::var("SNAPSHOT_CLICK")
+            .ok()
+            .map(|at| {
+                at.split(';')
+                    .filter_map(|one| {
+                        let one = one.trim();
+                        if let Some(dy) = one.strip_prefix('s') {
+                            return Some((0.0, dy.trim().parse::<f32>().ok()?, true));
+                        }
+                        let (x, y) = one.split_once(',')?;
+                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?, false))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (x, y, scroll) in steps {
+            let _ = driver.paint(dw, dh);
+            if scroll {
+                driver.input(Input::PointerMove(w / 2.0, h / 2.0));
+                driver.input(Input::Wheel(0.0, y));
+                let mut clock = Instant::now();
+                for _ in 0..40 {
+                    clock += Duration::from_millis(16);
+                    driver.tick(clock);
+                    let _ = driver.paint(dw, dh);
+                }
+                continue;
+            }
+            for i in [Input::PointerMove(x, y), Input::PointerDown(0), Input::PointerUp(0)] {
+                for f in driver.input(i) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+            }
+            // Drain for a fixed spell rather than stopping at the first frame
+            // back. The first frame is usually an `Ack` for the press, not the
+            // batch answering the click — stopping there photographs the page
+            // as it was, which is a lie that looks exactly like a handler that
+            // does nothing.
+            let until = Instant::now() + Duration::from_millis(800);
+            while Instant::now() < until {
+                let _ = wake_rx.recv_timeout(Duration::from_millis(8));
+                while let Ok(msg) = conn.rx.try_recv() {
+                    if let Incoming::Message(b) = msg {
+                        if let Ok(f) = Frame::decode(&b) {
+                            for out in driver.handle_frame(f) {
+                                conn.tx.send(out.encode()).unwrap();
+                            }
+                        }
+                    }
+                }
+                let _ = driver.paint(dw, dh);
+            }
+            driver.tick(Instant::now());
+        }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
+        // SNAPSHOT_AGE=<ms> — draw the list as it will look this long after
+        // the paint that produced it. Everything the vertex stage animates
+        // from the clock (03 §5) is then visible off-screen: a transition
+        // part way, a page mid-slide, a spinner at an angle.
+        let age = std::env::var("SNAPSHOT_AGE").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(0.0, |ms| ms / 1000.0);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
+        renderer.render_offscreen_at(&mut textures, &target, 0.0, age, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {

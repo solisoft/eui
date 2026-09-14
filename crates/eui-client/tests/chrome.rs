@@ -198,3 +198,83 @@ fn the_chromes_ground_follows_the_palette_it_is_put_in() {
     let _ = chrome.input(Input::Mode(eui_proto::ThemeMode::Dark));
     assert_eq!(chrome.paint(W as u32, H as u32).clear, dark);
 }
+
+fn blank() -> Vec<TabView<'static>> {
+    vec![TabView { title: "New tab", origin: "", path: "", trust: None, link: None }]
+}
+
+fn recents() -> Vec<eui_client::recent::Recent> {
+    [("Vitrine", "wss://a.example/_eui/session/gallery"), ("Needle", "wss://b.example/_eui/session/music"), ("Feedx", "ws://127.0.0.1:5090/_eui/session/feed")]
+        .into_iter()
+        .map(|(n, u)| eui_client::recent::Recent { url: u.to_owned(), name: n.to_owned() })
+        .collect()
+}
+
+fn press(chrome: &mut Chrome, key: &str) -> Vec<Action> {
+    chrome.input(Input::Key { key: key.into(), modifiers: 0, down: true })
+}
+
+#[test]
+fn the_arrows_walk_the_recent_list_and_enter_opens_what_they_are_on() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    chrome.set_recents(recents());
+    chrome.rebuild(&blank(), 0);
+
+    // Enter with the keyboard still in the field opens nothing: there is
+    // nothing typed and nothing picked.
+    assert!(press(&mut chrome, "Enter").is_empty());
+
+    assert_eq!(press(&mut chrome, "ArrowDown"), vec![Action::Rebuild], "onto the first");
+    chrome.rebuild(&blank(), 0);
+    assert_eq!(press(&mut chrome, "ArrowDown"), vec![Action::Rebuild], "onto the second");
+    chrome.rebuild(&blank(), 0);
+    assert_eq!(press(&mut chrome, "Enter"), vec![Action::Open("wss://b.example/_eui/session/music".to_owned())]);
+
+    // Up off the first row gives the keyboard back to the field, and Enter
+    // there is the field's again.
+    chrome.rebuild(&blank(), 0);
+    let _ = press(&mut chrome, "ArrowDown");
+    chrome.rebuild(&blank(), 0);
+    let _ = press(&mut chrome, "ArrowUp");
+    chrome.rebuild(&blank(), 0);
+    assert!(press(&mut chrome, "Enter").is_empty(), "back in an empty field");
+}
+
+#[test]
+fn delete_takes_the_picked_entry_off_the_list() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    chrome.set_recents(recents());
+    chrome.rebuild(&blank(), 0);
+    assert!(press(&mut chrome, "Delete").is_empty(), "nothing picked, nothing deleted");
+
+    let _ = press(&mut chrome, "ArrowDown");
+    chrome.rebuild(&blank(), 0);
+    let _ = press(&mut chrome, "ArrowDown");
+    chrome.rebuild(&blank(), 0);
+    assert_eq!(press(&mut chrome, "Delete"), vec![Action::Forget("wss://b.example/_eui/session/music".to_owned())]);
+
+    // The shell answers a `Forget` by writing the list back and handing it
+    // over; the pick stands on what moved up into the gap.
+    let mut left = recents();
+    left.remove(1);
+    chrome.set_recents(left);
+    chrome.rebuild(&blank(), 0);
+    assert_eq!(press(&mut chrome, "Enter"), vec![Action::Open("ws://127.0.0.1:5090/_eui/session/feed".to_owned())]);
+}
+
+#[test]
+fn typing_takes_the_keyboard_back_and_keeps_what_was_typed() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+    chrome.set_recents(recents());
+    chrome.rebuild(&blank(), 0);
+    let _ = chrome.input(Input::Text("wss://c.exa".to_owned()));
+    let _ = press(&mut chrome, "ArrowDown");
+    chrome.rebuild(&blank(), 0);
+
+    // A character now means the field, not the list — and the rebuild that
+    // drops the highlight must not drop the address with it.
+    let out = chrome.input(Input::Text("m".to_owned()));
+    assert_eq!(out, vec![Action::Rebuild], "the highlight goes");
+    chrome.rebuild(&blank(), 0);
+    assert_eq!(press(&mut chrome, "Enter"), vec![Action::Open("wss://c.exam".to_owned())], "the address survived");
+}

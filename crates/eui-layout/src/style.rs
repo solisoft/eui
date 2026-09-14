@@ -1,6 +1,6 @@
 //! A `StyleRecord` with its scale indices resolved to px for one viewer.
 
-use eui_proto::{AlignItems, AlignSelf, Dim, Display, Justify, Position, StyleRecord, Wrap};
+use eui_proto::{AlignItems, AlignSelf, Dim, Display, Justify, Position, StyleRecord, TextAlign, Wrap};
 use eui_theme::Resolved;
 
 use crate::geom::Constraint;
@@ -112,6 +112,9 @@ pub struct Style {
     pub font: FontSpec,
     /// Text: line clamp.
     pub line_clamp: u8,
+    /// How a run sits in its content box: start, centre, end. `justify` is
+    /// painted as start — a short line has no extra to distribute.
+    pub text_align: TextAlign,
 }
 
 impl Style {
@@ -144,6 +147,19 @@ impl Style {
             scroll_both: r.overflow == eui_proto::Overflow::Scroll,
             font: FontSpec { family: r.font_family, weight: r.font_weight, size, line_height },
             line_clamp: r.line_clamp,
+            text_align: r.text_align,
+        }
+    }
+
+    /// Extra left inset so a run of width `text_w` sits as `text_align`
+    /// asked inside a content box of `inner_w`. Zero when the run is
+    /// wider than the box: overflow still starts at the left and scrolls.
+    pub fn text_pad_x(self, inner_w: f32, text_w: f32) -> f32 {
+        let extra = (inner_w - text_w).max(0.0);
+        match self.text_align {
+            TextAlign::Center => extra * 0.5,
+            TextAlign::End => extra,
+            TextAlign::Start | TextAlign::Justify => 0.0,
         }
     }
 

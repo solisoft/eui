@@ -317,6 +317,64 @@ pub const ANIMATION_SPIN: u8 = 1;
 /// button that carries a transition for its hover should not fade in every
 /// time a resync rebuilds the tree.
 pub const ANIMATION_ENTER: u8 = 2;
+/// `animation`: the node's painting is kept after it is released, and leaves
+/// over its `transition` duration, along the accelerate curve (03 §5).
+///
+/// The mirror of [`ANIMATION_ENTER`], and the reason `animation` is a bit set
+/// rather than an enumeration: a node has to say how it will leave while it
+/// is still there to say it. There is no later chance — the op that removes a
+/// node is the op that removes it, and a `SetStyle` aimed at one on its way
+/// out would be a style change on something already gone.
+pub const ANIMATION_EXIT: u8 = 4;
+/// Every `animation` bit this revision defines. A record setting anything
+/// outside it is refused, so a bit meaning something later cannot be read as
+/// nothing today.
+pub const ANIMATION_MASK: u8 = ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_EXIT;
+
+u8_enum!(
+    /// Which way an [`ANIMATION_ENTER`] arrives, and an [`ANIMATION_EXIT`]
+    /// leaves (03 §5).
+    ///
+    /// A direction and never a duration: the duration is `transition`, and
+    /// keeping the two apart is what stops a page from carrying a timing
+    /// nobody gets right twice (05 §2).
+    Motion, "motion", {
+        /// No movement: the fade an entrance has always been.
+        Fade = 0,
+        /// From, or to, beyond the leading edge of the parent's content box.
+        Leading = 1,
+        /// Likewise the trailing edge.
+        Trailing = 2,
+        /// Likewise the top.
+        Top = 3,
+        /// Likewise the bottom.
+        Bottom = 4,
+        /// From, or to, 92 % about the node's own centre.
+        Scale = 5,
+        /// This node pairs with the one carrying the same `key` on the other
+        /// side of the change, and flies between their two boxes.
+        Paired = 6,
+    }
+);
+
+impl Motion {
+    /// The way out that matches this way in, and the other way about.
+    ///
+    /// A page that leaves is never told where to go: it goes wherever the
+    /// page arriving beside it did not come from. That is the whole of what
+    /// makes a push and a pop mirror each other, and it is why the leaving
+    /// record needs no direction of its own.
+    #[must_use]
+    pub const fn mirrored(self) -> Self {
+        match self {
+            Self::Leading => Self::Trailing,
+            Self::Trailing => Self::Leading,
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+            other => other,
+        }
+    }
+}
 
 /// The 64-byte computed style record.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -392,11 +450,19 @@ pub struct StyleRecord {
     /// `0` none, else a `motion` scale index + 1: colours and opacity
     /// animate into this record when a node's style changes to it.
     pub transition: u8,
-    /// `0` none, `1` [`ANIMATION_SPIN`], `2` [`ANIMATION_ENTER`] (03 §5).
+    /// A bit set: [`ANIMATION_SPIN`], [`ANIMATION_ENTER`], [`ANIMATION_EXIT`]
+    /// (03 §5). Bits outside [`ANIMATION_MASK`] are refused.
     pub animation: u8,
     /// Backdrop blur: the standard deviation, in device-independent px, of
     /// the Gaussian the node sees its backdrop through; `0` is none (03 §2).
     pub blur: u8,
+    /// Which way this record's entrance arrives and its exit leaves (03 §5).
+    ///
+    /// Offset 63, which was the record's last reserved byte. §3 of 02 fixes
+    /// the record at 64 bytes, so there was never more than one further field
+    /// in it; this is that field, and the next one is a wider record and a
+    /// version bump.
+    pub motion: Motion,
 }
 
 impl Default for StyleRecord {
@@ -442,6 +508,7 @@ impl Default for StyleRecord {
             transition: 0,
             animation: 0,
             blur: 0,
+            motion: Motion::Fade,
         }
     }
 }
@@ -490,22 +557,23 @@ impl StyleRecord {
             transition: f.u8()?,
             animation: f.u8()?,
             blur: f.u8()?,
+            motion: Motion::from_u8(f.u8()?)?,
         };
         if out.transition > 3 {
             return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
         }
-        if out.animation > ANIMATION_ENTER {
-            return Err(DecodeError::IllegalValue("animation is 0, 1 (spin) or 2 (enter)"));
+        if out.animation & !ANIMATION_MASK != 0 {
+            return Err(DecodeError::IllegalValue("animation is a bit set of 1 (spin), 2 (enter) and 4 (exit)"));
+        }
+        // A direction with nothing to direct. Refusing it costs a server one
+        // more interned record in the rare mixed case, and is what keeps two
+        // implementations from disagreeing about a byte one of them ignored.
+        if out.motion != Motion::Fade && out.animation & (ANIMATION_ENTER | ANIMATION_EXIT) == 0 {
+            return Err(DecodeError::IllegalValue("motion needs an entrance or an exit to belong to"));
         }
 
         if out.text_decoration & !0b11 != 0 {
             return Err(DecodeError::IllegalValue("text_decoration has unknown bits"));
-        }
-        // One byte of the tail is left. Accepting garbage there today would
-        // make that last field unusable, because some deployed server would
-        // already be putting something else in it.
-        if f.array::<1>()? != [0; 1] {
-            return Err(DecodeError::IllegalValue("the reserved byte must be zero"));
         }
         f.finish()?;
         Ok(out)
@@ -539,6 +607,6 @@ impl StyleRecord {
             .u8(self.transition)
             .u8(self.animation)
             .u8(self.blur)
-            .raw(&[0; 1]);
+            .u8(self.motion.to_u8());
     }
 }

@@ -98,14 +98,20 @@ resolution against a parent.
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
 | 60 | 1 | `transition` | 0 none, else `motion` scale index + 1: colours and opacity animate into this record (03 §5) |
-| 61 | 1 | `animation` | 0 none, 1 `spin`: the node turns about its centre while on screen; 2 `enter`: it fades and frosts in when mounted (03 §5) |
+| 61 | 1 | `animation` | bit set: 1 `spin` (the node turns about its centre while on screen), 2 `enter` (it arrives when mounted), 4 `exit` (its painting is kept while it leaves) — 03 §5 |
 | 62 | 1 | `blur` | backdrop blur, as the standard deviation of a Gaussian in device-independent px; 0 none (03 §2) |
-| 63 | 1 | — | reserved, MUST be zero |
+| 63 | 1 | `motion_kind` | 0 `fade`, 1 `leading`, 2 `trailing`, 3 `top`, 4 `bottom`, 5 `scale`, 6 `paired`: which way an `enter` arrives and an `exit` leaves (03 §5.2) |
 
-A decoder MUST reject a record whose reserved byte is non-zero, and MUST
-reject any enumerated field whose value is outside the range defined above.
-Rejecting unknown enum values rather than clamping them is what keeps two
-implementations from silently diverging.
+A decoder MUST reject any enumerated field whose value is outside the range
+defined above, any `animation` bit this revision does not define, and a
+`motion_kind` on a record carrying neither `enter` nor `exit` — a direction
+with nothing going that way. Rejecting unknown values rather than clamping
+them is what keeps two implementations from silently diverging.
+
+Offset 63 was this record's last reserved byte, and `motion_kind` is what it
+was kept for. §3 fixes the record at 64 bytes, so there was never more than
+one further field in it; the next one is a wider record and a version bump,
+and that was always the price.
 
 ### 3.1 `Dim`
 
