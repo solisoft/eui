@@ -885,6 +885,11 @@ fn a_page_that_asked_to_leave_goes_on_painting_on_its_way_out() {
     assert_eq!(arriving.from[0], 120.0, "the new page comes in from the trailing edge");
     assert!(leaving.to[0] < 0.0, "so the old one goes out towards the leading edge: {:?}", leaving.to);
     assert_eq!(leaving.clock[2], 3.0, "along the accelerate curve, which is what 05 §2 keeps it for");
+    // 03 §5: and it fades while it goes, so the eye has one page to follow.
+    assert_eq!(leaving.from[3], 1.0, "solid where it starts");
+    assert_eq!(leaving.to[3], 0.0, "gone where it ends");
+    assert_eq!(arriving.from[3], 1.0, "the arriving page slides at full opacity, and does not fade in");
+    assert_eq!(arriving.to[3], 1.0);
 
     // And when it is over the leaving page is gone, with the driver at rest.
     d.tick(t0 + Duration::from_millis(1000));

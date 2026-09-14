@@ -223,11 +223,17 @@ its own record's direction. So a push and a pop are the same sentence read in
 the two directions, a server interns two records for a page rather than four,
 and the question "which way is back" is never asked on the wire at all.
 
-The one leaving travels **a third** of the distance the one arriving does.
-That is prose here and not a field, because the page underneath is not being
-replaced, it is being uncovered, and something sliding out as fast as the
-thing covering it reads as two slides rather than as a stack with a depth to
-it. A client that moved both the same distance would be conforming and wrong.
+The one leaving travels **a third** of the distance the one arriving does,
+and **fades to nothing while it goes**. Both are prose here and not fields.
+A third, because the page underneath is not being replaced, it is being
+uncovered, and something sliding out as fast as the thing covering it reads
+as two slides rather than as a stack with a depth to it. Fading, because a
+page leaving at full opacity is a second page competing with the one
+arriving — and on the `accelerate` curve §5 already gives an exit it stays
+nearly solid for the first half of the move and only then lets go, which
+reads as a departure rather than as a dissolve. A client that moved both the
+same distance, or that slid a page out without fading it, would be
+conforming and wrong.
 
 As with an entrance, the movement descends to **everything painted for the
 node**. That is the second place anything descends, and the justification

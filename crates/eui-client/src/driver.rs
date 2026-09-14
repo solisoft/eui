@@ -1728,15 +1728,25 @@ impl Driver {
     /// than as a stack with a depth to it. A third is what every platform
     /// that got this right settled on, and it is prose here rather than a
     /// field because it is not a decision an application should be making.
+    ///
+    /// **And it fades while it goes.** A page sliding out at full opacity is
+    /// a second page competing with the one arriving; fading it hands the
+    /// eye one thing to follow. The `accelerate` curve is what makes this
+    /// read well rather than look like a dissolve: it holds the page nearly
+    /// solid for the first half of the move and then lets it go. All four
+    /// directions, not only the one that prompted it — a push wearing
+    /// `trailing` sends the old page out `leading` (the motion is mirrored
+    /// in `note_exits`), so fading one direction alone would fade the case
+    /// nobody asked about and leave the one they did.
     fn leaving_towards(&mut self, motion: eui_proto::Motion) -> Option<[f32; 4]> {
         use eui_proto::Motion as M;
         let (vw, vh) = (self.size.w.max(0.0), self.size.h.max(0.0));
         let (w, h) = (vw / 3.0, vh / 3.0);
         Some(match motion {
-            M::Leading => [-w, 0.0, 1.0, 1.0],
-            M::Trailing => [vw, 0.0, 1.0, 1.0],
-            M::Top => [0.0, -h, 1.0, 1.0],
-            M::Bottom => [0.0, vh, 1.0, 1.0],
+            M::Leading => [-w, 0.0, 1.0, 0.0],
+            M::Trailing => [vw, 0.0, 1.0, 0.0],
+            M::Top => [0.0, -h, 1.0, 0.0],
+            M::Bottom => [0.0, vh, 1.0, 0.0],
             M::Scale => [0.0, 0.0, 0.92, 0.0],
             M::Fade => [0.0, 0.0, 1.0, 0.0],
             M::Paired => return None,
