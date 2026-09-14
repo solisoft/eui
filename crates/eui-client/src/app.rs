@@ -354,6 +354,10 @@ struct Shell {
     /// all. Kept on a tab, the shell — which has no tabs — could never
     /// record what it had said, so every pass of the loop said it again.
     ime_area: Option<[f32; 4]>,
+    /// How much of the window's bottom the platform's soft keyboard is
+    /// over, last time it was asked. The window's, for the same reason as
+    /// `ime_area`: there is one keyboard, and it is the window's.
+    covered: f32,
     /// The desktop theme watcher, alive as long as the window.
     theme_watch: Option<Box<dyn std::any::Any + Send>>,
     /// The palette the chrome was last put in, or `None` while it has not
@@ -1144,6 +1148,7 @@ impl Shell {
             clip: None,
             cursor: eui_proto::Cursor::Default,
             ime_area: None,
+            covered: 0.0,
             chrome_mode: None,
             locating: false,
             theme_watch: None,
@@ -1947,6 +1952,7 @@ impl Shell {
             }
         }
         self.settle_ime();
+        self.settle_covered();
         if self.tabs.get(self.active).is_some_and(|t| t.backend.needs_redraw()) {
             self.window.request_redraw();
         }
@@ -2028,6 +2034,45 @@ impl Shell {
         self.chrome_mode = Some(mode);
         crate::driver::trace(|| format!("chrome follows the page into {mode:?}"));
         self.chrome_input(Input::Mode(mode), renderer);
+    }
+
+    /// Tell the page how much of the window a soft keyboard is standing on.
+    ///
+    /// Asked once a pass, beside [`Self::settle_ime`] and for the same
+    /// reason: the keyboard goes up and down because focus moved, and focus
+    /// moves for reasons the transport never hears. `Input::Covered` returns
+    /// at once when the number has not changed, so asking costs a
+    /// comparison.
+    ///
+    /// Only a phone answers. A desktop keyboard is a thing on a desk and
+    /// stands on nothing, so this is zero there and the page is the size of
+    /// the window, as it has always been.
+    fn settle_covered(&mut self) {
+        let covered = self.platform_covered();
+        if (self.covered - covered).abs() < 0.5 {
+            return;
+        }
+        self.covered = covered;
+        crate::driver::trace(|| format!("the keyboard stands on {covered:.0} px of the page"));
+        self.send_to_tab(Input::Covered(covered));
+    }
+
+    /// What the platform says its soft keyboard is over, in logical px.
+    #[allow(clippy::unused_self)]
+    fn platform_covered(&self) -> f32 {
+        #[cfg(target_os = "android")]
+        {
+            crate::android::covered(self.scale())
+        }
+        #[cfg(target_os = "ios")]
+        {
+            crate::ios::covered(&self.window)
+        }
+        // A keyboard on a desk stands on nothing.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            0.0
+        }
     }
 
     /// Make the platform agree with [`Self::ime_target`].
@@ -3122,6 +3167,7 @@ impl ApplicationHandler<Wake> for App {
             // local handler moving focus. On a phone that is the difference
             // between a keyboard and none.
             s.settle_ime();
+            s.settle_covered();
         }
         // A socket that is due to be tried again.
         let retry = self.shells.values_mut().filter_map(|s| s.serve_links(now)).min();

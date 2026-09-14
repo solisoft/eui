@@ -547,6 +547,10 @@ fn put_input(w: &mut W, i: &Input) {
             w.u8(11);
             w.u8(*m as u8);
         }
+        Input::Covered(px) => {
+            w.u8(20);
+            w.f32(*px);
+        }
         Input::Unfocused => w.u8(12),
         Input::Refocused => w.u8(18),
         Input::Back => w.u8(19),
@@ -598,6 +602,7 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         17 => Input::TouchCancel(r.u64()?),
         18 => Input::Refocused,
         19 => Input::Back,
+        20 => Input::Covered(r.f32()?),
         _ => return Err("unknown input"),
     })
 }

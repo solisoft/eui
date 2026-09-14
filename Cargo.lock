@@ -1099,6 +1099,8 @@ dependencies = [
  "landlock",
  "libc",
  "notify",
+ "objc2 0.5.2",
+ "objc2-ui-kit",
  "png",
  "pollster",
  "rfd",

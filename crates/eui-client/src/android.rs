@@ -75,6 +75,32 @@ pub fn soft_input(show: bool) {
     }
 }
 
+/// How much of the window's bottom edge the soft keyboard is over, in
+/// logical px, for [`crate::driver::Input::Covered`].
+///
+/// The platform is asked rather than told: `content_rect` is where Android
+/// says this window's content belongs, and what is left below it is what
+/// the keyboard took. Zero when the keyboard is down, and zero as well on
+/// the happy path where `adjustResize` shortened the window itself — the
+/// content then reaches the bottom of a window that is already shorter, and
+/// the `Resized` winit sent says everything there is to say.
+///
+/// `adjustResize` is declared in `crates/eui-android/Cargo.toml`, but
+/// Android ignores it for a window holding `FLAG_FULLSCREEN`, and the theme
+/// there asks for a fullscreen one. This is the path that carries the
+/// keyboard when the platform declines to.
+pub fn covered(scale: f32) -> f32 {
+    let Some(app) = app() else { return 0.0 };
+    let Some(window) = app.native_window() else { return 0.0 };
+    let rect = app.content_rect();
+    let below = window.height().saturating_sub(rect.bottom.max(0));
+    if below <= 0 {
+        return 0.0;
+    }
+    // Both are device px; the driver counts in logical ones.
+    below as f32 / if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+}
+
 /// The address this package was built for, baked in at build time.
 ///
 /// An APK is one application, not a browser: there is no command line to

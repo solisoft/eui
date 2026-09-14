@@ -71,4 +71,12 @@ theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 # so the activity must not be restarted for a rotation or a keyboard.
 config_changes = "orientation|screenSize|screenLayout|keyboardHidden|density|uiMode"
 # The soft keyboard resizes the window rather than covering the field.
+#
+# Android ignores this for a window holding `FLAG_FULLSCREEN`, which is what
+# the `.Fullscreen` on the theme above asks for — so on this package the
+# window does not in fact resize, and the keyboard lands on top of whatever
+# had focus. `android::covered` reads `content_rect` and tells the driver
+# what is underneath it, which is the client answering for itself; dropping
+# `.Fullscreen` from the theme would let the platform answer instead, at the
+# price of a visible status bar.
 window_soft_input_mode = "adjustResize"

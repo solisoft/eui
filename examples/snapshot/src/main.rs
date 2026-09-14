@@ -4,10 +4,11 @@
 //! `snapshot <out-dir> --soli <session-url> <name> <w> <h>` — connect to a
 //! running Soli, mount `<name>`'s component, fetch its assets, and render it
 //! in light and dark. `EUI_ALLOW_INSECURE_LOOPBACK=1` for a `ws://` URL.
-//! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL`, `SNAPSHOT_HOVER`, `SNAPSHOT_KEYS` and
-//! `SNAPSHOT_TEXT` drive it first, so a pane two clicks in, a card below the
-//! fold, a state that only exists under the pointer, or a field that has been
-//! typed into can be looked at without a screen.
+//! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL`, `SNAPSHOT_HOVER`, `SNAPSHOT_KEYS`,
+//! `SNAPSHOT_TEXT` and `SNAPSHOT_COVERED` drive it first, so a pane two
+//! clicks in, a card below the fold, a state that only exists under the
+//! pointer, a field that has been typed into, or a page with a phone's
+//! keyboard standing on it can be looked at without a screen.
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -466,6 +467,17 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     }
                 }
             }
+        }
+        // SNAPSHOT_COVERED=<px> — a soft keyboard standing on the bottom of
+        // the window, which is what a phone does the moment a field takes
+        // focus and what no desktop can be made to do. Sent after the keys,
+        // so `SNAPSHOT_KEYS=Tab SNAPSHOT_COVERED=340` is "the field a Tab
+        // landed on, with a keyboard over it" — the case being looked at.
+        if let Some(px) = std::env::var("SNAPSHOT_COVERED").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+            for f in driver.input(Input::Covered(px)) {
+                conn.tx.send(f.encode()).unwrap();
+            }
+            let _ = driver.paint(dw, dh);
         }
         // SNAPSHOT_TEXT="1;2;3" — committed text, typed one entry at a time
         // into whatever holds focus, each waiting for the server's answer.

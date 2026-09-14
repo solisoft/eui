@@ -280,6 +280,22 @@ pub enum Input {
     /// notion of zoom and does not need one, because everything it would
     /// change is already a function of this number.
     Resized(f32, f32, f32),
+    /// The bottom `px` logical px of the window are underneath something
+    /// the platform put there, and a soft keyboard is the only thing that
+    /// ever is.
+    ///
+    /// The page is laid out into what is left, exactly as though the window
+    /// had got shorter — which is what Android does for itself when
+    /// `adjustResize` is allowed to work, and what iOS never does. Scrolling
+    /// alone cannot answer this: a field at the end of a page is at the end
+    /// of its scroller's travel too, and no amount of scrolling lifts it out
+    /// from under a keyboard. Shortening the page is what gives the scroller
+    /// the room to.
+    ///
+    /// A platform whose window really does get shorter sends nothing: the
+    /// `Resized` it already sends says all of it, and the bottom of a window
+    /// that shrank is not covered by anything.
+    Covered(f32),
     /// The viewer changed palette.
     Mode(ThemeMode),
     /// The window lost focus.
@@ -407,6 +423,11 @@ struct Drag {
 /// rather than a scroll, in logical pixels. Below this a tap that wobbles
 /// still clicks what it landed on; above it, the finger is carrying the
 /// view and the press it began with is taken back.
+/// The gap [`Driver::reveal`] leaves between what it reveals and the edge it
+/// reveals it from. A field flush against the top of a soft keyboard reads
+/// as half covered even when every pixel of it is there.
+const REVEAL_MARGIN: f32 = 8.0;
+
 const TOUCH_SLOP: f32 = 8.0;
 
 /// How far in from the leading edge a contact may land and still belong to
@@ -1052,6 +1073,17 @@ pub struct Driver {
     focused: Option<NodeIx>,
     /// Focus came from the keyboard or the server: draw the ring (spec 03 §3).
     focus_visible: bool,
+    /// How much of the window's bottom edge a soft keyboard is over
+    /// ([`Input::Covered`]). Zero everywhere a keyboard is a piece of
+    /// hardware.
+    ///
+    /// `size` is the window less this, because that is the part a page may
+    /// use; `window_h` is what the window actually is, kept so that a
+    /// keyboard arriving and leaving can be taken off and put back without
+    /// asking the window its size again.
+    covered: f32,
+    /// The window's own height, before [`Self::covered`] is taken off it.
+    window_h: f32,
     /// Running transitions (spec 03 §5), the clock they run on, and when the
     /// next frame is due — the only reason the window ever wakes itself.
     anims: Vec<(NodeIx, Anim)>,
@@ -1288,6 +1320,8 @@ impl Driver {
             touch: Touch::default(),
             focused: None,
             focus_visible: false,
+            covered: 0.0,
+            window_h: h,
             anims: Vec::new(),
             movers: Vec::new(),
             departing: None,
@@ -2153,7 +2187,11 @@ impl Driver {
             Input::Back => self.go_back(),
             Input::Resized(w, h, scale) => {
                 let rescaled = (self.scale - scale).abs() > f32::EPSILON;
-                self.size = Size::new(w, h);
+                self.window_h = h;
+                // A window that got shorter for the keyboard itself reports
+                // no covering, so this takes nothing off; one that did not
+                // has the covering applied over whatever size it now is.
+                self.size = Size::new(w, (h - self.covered).max(0.0));
                 self.scale = scale;
                 // A new size is not new text. What a node measures depends
                 // on the constraints it was given, and those are in the
@@ -2181,6 +2219,7 @@ impl Driver {
                 self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
                 Vec::new()
             }
+            Input::Covered(px) => self.set_covered(px),
             Input::Mode(mode) => self.set_mode(mode),
             Input::PointerMove(x, y) => self.pointer_move(x, y),
             Input::PointerDown(button) => self.pointer_down(button),
@@ -4160,7 +4199,8 @@ impl Driver {
     /// says whether the ring is drawn: keyboard and server yes, pointer no.
     fn set_focus(&mut self, new: Option<NodeIx>, visible: bool) -> Vec<Frame> {
         let mut out = Vec::new();
-        if new != self.focused {
+        let moved = new != self.focused;
+        if moved {
             if let Some(old) = self.focused.take() {
                 self.preedit.clear();
                 self.show_edit(old);
@@ -4170,6 +4210,15 @@ impl Driver {
             if let Some(n) = new {
                 self.focused = Some(n);
                 out.extend(self.emit(n, EventKind::Focus, Value::Null));
+            }
+        }
+        // Whatever took focus is brought into view, however it took it: the
+        // `Tab` that walked past the fold and the tap that raised a phone's
+        // keyboard are the same problem, and a node already on the screen
+        // scrolls nothing.
+        if moved {
+            if let Some(n) = new {
+                out.extend(self.reveal(n));
             }
         }
         if self.focus_visible != (visible && new.is_some()) || new != self.focused {
@@ -4518,6 +4567,86 @@ impl Driver {
         self.scroll_touched = Some(Instant::now());
         self.scrolled = Some((scroller, Instant::now()));
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
+    }
+
+    /// A soft keyboard came up, went away, or changed size ([`Input::Covered`]).
+    ///
+    /// The field that has focus is the one the keyboard was raised for, so
+    /// it is the one it lands on: revealed again here, because the covering
+    /// arrives *after* the focus that caused it and the reveal done then
+    /// was measured against a window with nothing over it.
+    fn set_covered(&mut self, px: f32) -> Vec<Frame> {
+        let px = if px.is_finite() { px.clamp(0.0, self.window_h) } else { 0.0 };
+        if (self.covered - px).abs() < 0.5 {
+            return Vec::new();
+        }
+        trace(|| format!("{px:.0} px of the window's bottom are covered"));
+        self.covered = px;
+        self.size = Size::new(self.size.w, (self.window_h - px).max(0.0));
+        self.invalidate();
+        match self.focused {
+            Some(f) => self.reveal(f),
+            None => Vec::new(),
+        }
+    }
+
+    /// Bring `ix` where it can be seen: every `scroll` or `list` between it
+    /// and the root moves just far enough, and no further, to put the node's
+    /// rectangle inside what that scroller actually shows.
+    ///
+    /// *Actually shows* is the scroller's own rectangle with whatever a soft
+    /// keyboard is over taken off the bottom ([`Input::Covered`]). A phone
+    /// raises the keyboard **because** a field took focus, which means the
+    /// field it was raised for is the one it lands on top of; without this,
+    /// the typing lands somewhere the person cannot see.
+    ///
+    /// Innermost scroller first, and the node's rectangle is read again
+    /// after each one: scrolling a pane moves what is inside the pane, and
+    /// the next scroller out has to be told where the node ended up.
+    ///
+    /// Moved at once rather than eased. A scroll in flight is a scroll that
+    /// has not happened yet, and the keystroke after this one must not have
+    /// to race it to decide what is on the screen.
+    fn reveal(&mut self, ix: NodeIx) -> Vec<Frame> {
+        self.ensure_layout();
+        let mut out = Vec::new();
+        // `size` is already the window less whatever covers it, so the page
+        // ends where the keyboard begins and a scroller's own rectangle is
+        // the whole of the question.
+        let mut cur = self.session.node(ix).and_then(|n| n.parent.is_some().then_some(n.parent));
+        while let Some(s) = cur {
+            let Some(node) = self.session.node(s) else { break };
+            let up = node.parent.is_some().then_some(node.parent);
+            if matches!(node.kind, NodeKind::Scroll | NodeKind::List) {
+                if let (Some(r), Some(v)) = (self.layout.rect(ix), self.layout.rect(s)) {
+                    let (top, bottom) = (v.y, (v.y + v.h).min(self.size.h));
+                    // Never so far that the top of the node leaves to bring
+                    // its bottom in: a field taller than what is left of the
+                    // window is read from its first line, not its last.
+                    let dy = if r.y < top {
+                        r.y - top - REVEAL_MARGIN
+                    } else if r.y + r.h > bottom {
+                        (r.y + r.h - bottom + REVEAL_MARGIN).min((r.y - top).max(0.0))
+                    } else {
+                        0.0
+                    };
+                    let (left, right) = (v.x, v.x + v.w);
+                    let dx = if r.x < left {
+                        r.x - left
+                    } else if r.x + r.w > right {
+                        (r.x + r.w - right).min((r.x - left).max(0.0))
+                    } else {
+                        0.0
+                    };
+                    if dx != 0.0 || dy != 0.0 {
+                        out.extend(self.scroll_by(s, dx, dy));
+                        self.ensure_layout();
+                    }
+                }
+            }
+            cur = up;
+        }
+        out
     }
 
     /// Spec 03 §3: `ArrowUp`/`ArrowDown` land on the previous/next row of a

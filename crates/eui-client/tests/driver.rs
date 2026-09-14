@@ -3276,3 +3276,88 @@ fn an_overlay_that_does_not_ask_to_be_dismissed_is_not() {
     let out = d.input(Input::PointerDown(0));
     assert!(events(&out).iter().all(|(k, _, _)| *k != EventKind::Blur), "nothing to say: {:?}", events(&out));
 }
+
+/// A page with a `scroll` of 200 px holding twelve 24 px rows and a field
+/// at the bottom of them: the field is a long way below the fold.
+fn scrolled_form() -> Driver {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 13 });
+    tree.handlers.push((EventKind::Scroll, Handler::Server(ATOM_INC)));
+    for i in 0..12 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 10 + i, style: 12, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 50, style: 12, key: 0, text: Some(TextRef::Inline("".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![
+        Op::DefAtom { id: ATOM_INC, value: "scrolled".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 11, record: StyleRecord { display: Display::Column, height: Dim::Px(200), ..Default::default() } },
+        Op::DefStyle { id: 12, record: StyleRecord { display: Display::Column, height: Dim::Px(24), ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
+    let _ = d.paint(400, 300);
+    d
+}
+
+/// 03 §3: what takes focus is brought into view. `Tab` walked past the fold
+/// and left the caret somewhere nobody could see it.
+#[test]
+fn a_field_below_the_fold_is_scrolled_into_view_when_it_takes_focus() {
+    let mut d = scrolled_form();
+    let scroll = d.session().lookup(2).unwrap();
+    let field = d.session().lookup(50).unwrap();
+    let view = d.layout().rect(scroll).unwrap();
+    let before = d.layout().rect(field).unwrap();
+    assert!(before.y + before.h > view.y + view.h, "the field starts below the fold: {before:?} in {view:?}");
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 0));
+
+    tab(&mut d, false);
+    assert_eq!(d.focused(), Some(field), "the only focusable node");
+    let after = d.layout().rect(field).unwrap();
+    assert!(d.session().node(scroll).unwrap().scroll.1 > 0, "the scroller moved");
+    assert!(after.y >= view.y && after.y + after.h <= view.y + view.h, "and the field is inside it now: {after:?} in {view:?}");
+}
+
+/// A field already on the screen is on the screen no longer once a phone
+/// raises its keyboard over the bottom of the window — and the keyboard was
+/// raised *because* that field took focus, so it is always the one covered.
+#[test]
+fn a_soft_keyboard_lifts_the_focused_field_out_from_under_itself() {
+    let mut d = scrolled_form();
+    let scroll = d.session().lookup(2).unwrap();
+    let field = d.session().lookup(50).unwrap();
+    tab(&mut d, false);
+    let settled = d.session().node(scroll).unwrap().scroll.1;
+    let seen = d.layout().rect(field).unwrap();
+
+    // 140 px of a 300 px window: the field sat at the bottom of the
+    // scroller, which is under the keyboard now.
+    let out = d.input(Input::Covered(140.0));
+    let lifted = d.layout().rect(field).unwrap();
+    assert!(d.session().node(scroll).unwrap().scroll.1 > settled, "the scroller moved further");
+    assert!(lifted.y + lifted.h <= 300.0 - 140.0, "the whole field is above the keyboard: {lifted:?}");
+    assert!(lifted.y < seen.y, "by moving up, not down");
+    assert!(!out.is_empty(), "and the server hears the scroll it caused");
+
+    // The keyboard going away scrolls nothing back: where the page is left
+    // is where the person left it, and yanking it about is not a courtesy.
+    let settled = d.session().node(scroll).unwrap().scroll.1;
+    assert!(d.input(Input::Covered(0.0)).is_empty());
+    assert_eq!(d.session().node(scroll).unwrap().scroll.1, settled);
+}
+
+/// Nothing to reveal, nothing to do: a keyboard over a window whose field is
+/// nowhere near it leaves the page alone, and so does one told twice.
+#[test]
+fn a_keyboard_that_covers_nothing_scrolls_nothing() {
+    let mut d = scrolled_form();
+    let scroll = d.session().lookup(2).unwrap();
+    assert!(d.input(Input::Covered(10.0)).is_empty(), "nothing has focus");
+    tab(&mut d, false);
+    let settled = d.session().node(scroll).unwrap().scroll.1;
+    assert!(d.input(Input::Covered(10.0)).is_empty(), "the same covering, said again");
+    assert_eq!(d.session().node(scroll).unwrap().scroll.1, settled);
+}

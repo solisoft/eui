@@ -73,6 +73,22 @@ arboard = { version = "3", optional = true, default-features = false, features =
 # a file the way everything else does.
 rfd = { version = "0.17.2", optional = true }
 
+# iOS. UIKit is asked exactly one question — how much of the window its soft
+# keyboard is standing on — and `UIKeyboardLayoutGuide` is the public way to
+# ask it, so `crates/eui-client/src/ios.rs` stays the file with no
+# Objective-C of its own that it has always been. Only the classes that one
+# question needs are compiled in; `objc2-ui-kit` is a feature per class and
+# the default is all of UIKit.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.5"
+objc2-ui-kit = { version = "0.2", default-features = false, features = [
+  "UIResponder",
+  "UIView",
+  "UILayoutGuide",
+  "UITrackingLayoutGuide",
+  "UIKeyboardLayoutGuide",
+] }
+
 # Android. `android-native-activity` is what makes winit's event loop take
 # an `AndroidApp` instead of starting from `main`; the crate itself is here
 # for the soft keyboard and the application's own data directory, neither of
