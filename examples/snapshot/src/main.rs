@@ -127,6 +127,12 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         }
         // SNAPSHOT_CLICK="Some label;Another" — click each in turn before
         // rendering, so a pane that is two clicks in can be looked at.
+        //
+        // This is the only place the variable is read. A second loop further
+        // down used to read it again, so every `x,y` step was clicked twice —
+        // the second one landing wherever the first one's answer had moved
+        // things to. A panel a click opened and the repeat then shut
+        // photographed as a panel that never opened at all.
         // The label is matched on a node's text; the click goes to the
         // nearest ancestor that has a handler for it, the way an event does.
         //
@@ -138,6 +144,55 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         if let Ok(labels) = std::env::var("SNAPSHOT_CLICK") {
             for label in labels.split(';').map(str::trim).filter(|l| !l.is_empty()) {
                 let _ = driver.paint(dw, dh);
+                // An entry beginning with `+` is typed into whatever holds
+                // focus rather than clicked, so one variable can drive a
+                // sequence that alternates — click a field, type enough to
+                // narrow a panel, click what the panel then offers.
+                if let Some(typed) = label.strip_prefix('+') {
+                    for f in driver.input(Input::Text(typed.to_owned())) {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while Instant::now() < deadline {
+                        let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                        let mut answered = false;
+                        while let Ok(Incoming::Message(b)) = conn.rx.try_recv() {
+                            answered = true;
+                            for f in driver.handle_frame(Frame::decode(&b).expect("frame")) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                        // 06 §2's `change` is owed 300 ms after the last
+                        // keystroke and fires on a *tick*; a loop that only
+                        // painted would wait for an answer that was never
+                        // going to be asked for.
+                        driver.tick(Instant::now());
+                        let _ = driver.paint(dw, dh);
+                        // And a `change` a paint produced leaves through the
+                        // pending queue, not through `input`'s return.
+                        for f in driver.take_pending() {
+                            conn.tx.send(f.encode()).unwrap();
+                        }
+                        if answered {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                // An entry reading `s<dy>` wheels the view down first: what
+                // is worth photographing is often below the fold, and a
+                // click is aimed at where a thing is *on screen*.
+                if let Some(dy) = label.strip_prefix('s').and_then(|d| d.trim().parse::<f32>().ok()) {
+                    driver.input(Input::PointerMove(w / 2.0, h / 2.0));
+                    driver.input(Input::Wheel(0.0, dy));
+                    let mut clock = Instant::now();
+                    for _ in 0..40 {
+                        clock += Duration::from_millis(16);
+                        driver.tick(clock);
+                        let _ = driver.paint(dw, dh);
+                    }
+                    continue;
+                }
                 let point = label.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)));
                 let at = match point {
                     Some(at) => Some(at),
@@ -162,10 +217,16 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 let Some((px, py)) = at else {
                     continue;
                 };
-                driver.input(Input::PointerMove(px, py));
-                driver.input(Input::PointerDown(0));
-                for f in driver.input(Input::PointerUp(0)) {
-                    conn.tx.send(f.encode()).unwrap();
+                // Every one of the three, not just the last. A press is
+                // what moves focus, so the `blur` of the field being left
+                // and the `focus` of the thing being pressed both leave on
+                // `PointerDown` — and a tool that threw those away made a
+                // field that opens its panel on focus look like a field
+                // that does not.
+                for i in [Input::PointerMove(px, py), Input::PointerDown(0), Input::PointerUp(0)] {
+                    for f in driver.input(i) {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
                 }
                 // The answer, and whatever pictures it names.
                 let deadline = Instant::now() + Duration::from_secs(20);
@@ -197,7 +258,17 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                             Incoming::Closed(e) => panic!("closed: {e}"),
                         }
                     }
+                    driver.tick(Instant::now());
                     let _ = driver.paint(dw, dh);
+                    // Everything a paint decided to say: an idle `change`,
+                    // and the `focus` of a field the answering batch asked
+                    // for with `autofocus`. Both leave through the queue and
+                    // not through `input`, and a tool that never drained it
+                    // stopped one round trip short of what a window does.
+                    for f in driver.take_pending() {
+                        conn.tx.send(f.encode()).unwrap();
+                        answered = false;
+                    }
                     for hash in driver.pending_assets() {
                         conn.request_asset(hash);
                         outstanding += 1;
@@ -397,7 +468,11 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                             }
                         }
                     }
+                    driver.tick(Instant::now());
                     let _ = driver.paint(dw, dh);
+                    for f in driver.take_pending() {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
                     if answered {
                         break;
                     }
@@ -419,70 +494,6 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
             }
             let _ = driver.paint(dw, dh);
             std::thread::sleep(Duration::from_millis(200));
-            driver.tick(Instant::now());
-        }
-        // SNAPSHOT_CLICK="x,y" — a click before the last paint, for a state a
-        // page only reaches by being used: the section a link opens, the panel
-        // a button raises. Several, separated by `;`, for a state that takes
-        // more than one — a card behind a section behind a button.
-        //
-        // Each waits for the answer before the next is aimed, because the
-        // second one is usually at a place the first one's answer created.
-        // A step is `x,y` to click there, or `s<dy>` to wheel the view down
-        // first — what is worth photographing is often below the fold, and a
-        // click is aimed at where a thing is *on screen*.
-        let steps: Vec<(f32, f32, bool)> = std::env::var("SNAPSHOT_CLICK")
-            .ok()
-            .map(|at| {
-                at.split(';')
-                    .filter_map(|one| {
-                        let one = one.trim();
-                        if let Some(dy) = one.strip_prefix('s') {
-                            return Some((0.0, dy.trim().parse::<f32>().ok()?, true));
-                        }
-                        let (x, y) = one.split_once(',')?;
-                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?, false))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (x, y, scroll) in steps {
-            let _ = driver.paint(dw, dh);
-            if scroll {
-                driver.input(Input::PointerMove(w / 2.0, h / 2.0));
-                driver.input(Input::Wheel(0.0, y));
-                let mut clock = Instant::now();
-                for _ in 0..40 {
-                    clock += Duration::from_millis(16);
-                    driver.tick(clock);
-                    let _ = driver.paint(dw, dh);
-                }
-                continue;
-            }
-            for i in [Input::PointerMove(x, y), Input::PointerDown(0), Input::PointerUp(0)] {
-                for f in driver.input(i) {
-                    conn.tx.send(f.encode()).unwrap();
-                }
-            }
-            // Drain for a fixed spell rather than stopping at the first frame
-            // back. The first frame is usually an `Ack` for the press, not the
-            // batch answering the click — stopping there photographs the page
-            // as it was, which is a lie that looks exactly like a handler that
-            // does nothing.
-            let until = Instant::now() + Duration::from_millis(800);
-            while Instant::now() < until {
-                let _ = wake_rx.recv_timeout(Duration::from_millis(8));
-                while let Ok(msg) = conn.rx.try_recv() {
-                    if let Incoming::Message(b) = msg {
-                        if let Ok(f) = Frame::decode(&b) {
-                            for out in driver.handle_frame(f) {
-                                conn.tx.send(out.encode()).unwrap();
-                            }
-                        }
-                    }
-                }
-                let _ = driver.paint(dw, dh);
-            }
             driver.tick(Instant::now());
         }
         let list = driver.paint(dw, dh);

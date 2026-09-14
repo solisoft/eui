@@ -3594,6 +3594,11 @@ def erp_tag_event(state, name, params, props)
   ety_words = tag_suggest(ERP_TAGS, ety_tags, ety_draft, TAG_SUGGEST_MAX)
   ety_at = state["inv_tag_at"] ?? -1
   ety_said = state["inv_tag_said"] == true
+  # True while this batch asked for the caret back, which is to say: the
+  # `focus` that arrives next is the one we asked for and not one the person
+  # gave. `inv_tag_focus` already says exactly that and nothing else, so it
+  # is read here rather than a second flag being invented for it.
+  ety_asked = state["inv_tag_focus"] == true
   # Both are true for one event and then stop being true, so every path clears
   # them and the two that want them set them again below.
   state = set_key(set_key(state, "inv_tag_focus", false), "inv_tag_said", false)
@@ -3631,10 +3636,21 @@ def erp_tag_event(state, name, params, props)
     state = set_key(state, "inv_tags", tag_add(ety_tags, props["id"], {"max": ERP_TAG_MAX}))
     state = set_key(state, "inv_tag_draft", "")
     state = set_key(state, "inv_tag_at", -1)
-    return set_key(set_key(state, "inv_tag_focus", true), "inv_tag_open", true)
+    # The panel shuts. A word picked out of it is a choice made, and a panel
+    # still standing there afterwards — showing every other familiar word,
+    # because the draft it was narrowing is gone — is the widget asking a
+    # question nobody asked it. The caret comes back so the next tag can be
+    # typed, and typing is what opens the panel again.
+    return set_key(set_key(state, "inv_tag_focus", true), "inv_tag_open", false)
   end
 
-  return set_key(state, "inv_tag_open", true) if name == "inv_tag_focus"
+  # A focus this handler asked for is not a person arriving at the field, so
+  # it does not reopen what the pick just shut.
+  if name == "inv_tag_focus"
+    return state if ety_asked
+
+    return set_key(state, "inv_tag_open", true)
+  end
 
   if name == "inv_tag_blur"
     ety_grown = tag_add(ety_tags, ety_draft, {"max": ERP_TAG_MAX})
