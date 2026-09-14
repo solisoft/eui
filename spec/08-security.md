@@ -51,6 +51,11 @@ it.
   [`07-bytecode.md`](07-bytecode.md) §4, and — only where the `scene`
   capability was granted — a WGSL module that passed the verifier in
   [`11-shaders.md`](11-shaders.md) §2.
+- The grant is on the **module**, not on the node kind. A `scene` that names
+  no shader runs the client's own program and is drawn without it: what a
+  person is asked to allow is somebody else's code, and a picture the client
+  computed for itself is not that. Charging for it would have been a toll on
+  nothing, and a toll on nothing teaches people to grant without reading.
   *Enforced: `eui-vm::Chunk::verify`, `eui-shader::verify`.*
 - Both are **total by construction**, and differently. A chunk's steps are
   bounded at run time by fuel; a shader's are bounded *before it is compiled*,

@@ -256,13 +256,15 @@ fn a_scene_asks_for_its_shader_and_its_mesh() {
 }
 
 /// 08 §3: a session that was never granted `scene` does not so much as ask
-/// for the module.
+/// for the **module** — and still asks for the mesh.
 ///
-/// This is the difference between deny-by-default and a check. Refusing to
-/// *compile* a shader would still have fetched it, and a server would have
-/// learned that the request went out. Here there is no request, so there is
-/// nothing to learn — and it is decidable on a machine with no GPU, which is
-/// what makes it a conformance vector rather than a hope.
+/// The line the grant draws is not the node kind, it is a program the server
+/// wrote. A mesh is vertices, checked in the worker like any other asset;
+/// withholding it would have been a toll on nothing. The module is the case
+/// the capability exists for, and refusing to *compile* it later would still
+/// have fetched it and told the server the request went out. Here there is no
+/// request, so there is nothing to learn — decidable on a machine with no
+/// GPU, which is what makes it a vector rather than a hope.
 #[test]
 fn a_scene_asks_for_nothing_without_the_grant() {
     let (shader, mesh) = ([5u8; 32], [6u8; 32]);
@@ -282,8 +284,11 @@ fn a_scene_asks_for_nothing_without_the_grant() {
             Op::Mount(tree),
         ],
     }));
-    assert!(d.pending_assets().is_empty(), "nothing is asked for");
-    // And the frame still arrives, with the node drawn as an ordinary box.
+    let asked = d.pending_assets();
+    assert!(!asked.contains(&shader), "the module is not fetched: {asked:?}");
+    assert!(asked.contains(&mesh), "the mesh is, because it is data and not a program");
+    // The node still draws nothing: it named a module, and that module is
+    // the thing the person did not allow.
     let list = d.paint(300, 200);
     assert!(list.scenes.is_empty());
 }

@@ -249,8 +249,9 @@ What is pinned instead:
    textured quad, at its box, in a run that names its target; a scene that is
    not `playing` adds no pass to the frame after the one that drew it; a frame
    whose only change is the clock uploads no instances; the target carries no
-   `COPY_SRC`; and a session that was not granted `scene` fetches no module
-   and builds no scene at all.
+   `COPY_SRC`; a session that was not granted `scene` fetches no module and
+   builds no scene for a node that names one — and **does** draw one that
+   names none, whose mesh it fetches either way.
 4. **Three tolerant pixel vectors, and three only**: a flat triangle from the
    client's own shader, checked to ±2/255; depth order, which is a boolean and
    so insensitive to precision; and the fallback a refused module draws. A

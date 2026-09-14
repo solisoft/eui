@@ -29,6 +29,11 @@ permission to run a graphics program the application wrote. What the person
 is told is both halves of that — it spends their graphics card and can slow
 the machine down, and it still cannot read what is on their screen.
 
+And it guards the program, not the feature. A `scene` that names no shader
+draws without the grant: it is the client's own program over the client's own
+shape, and asking someone to allow that would be a toll on nothing — which is
+how people learn to grant without reading.
+
 An application asks for them in its routes, and asking grants nothing:
 
 ```soli

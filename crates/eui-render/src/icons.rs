@@ -101,6 +101,49 @@ const USERS: Icon = &[
 /// A carton seen from the front, with the seam down it: stock on a shelf.
 const BOX: Icon = &[&[(3.5, 7.5), (12.0, 3.5), (20.5, 7.5), (20.5, 16.5), (12.0, 20.5), (3.5, 16.5), (3.5, 7.5)], &[(3.5, 7.5), (12.0, 11.5), (20.5, 7.5)], &[(12.0, 11.5), (12.0, 20.5)]];
 
+/// A sphere with its equator drawn round it: a scene (03 §1.2).
+///
+/// Not a cube, even though a cube is what the client's own scene draws, and
+/// even though `BOX` above already *is* an isometric cube to the point. Two
+/// sections in one rail wearing the same mark is a rail that cannot be read
+/// at a glance, and inventory had the box first. A sphere with one ellipse
+/// across it says "something solid, seen in perspective" without saying
+/// "container", and the ellipse is what makes it read as a sphere rather
+/// than a circle — flattened to two fifths, which is the shallowest that
+/// still reads at 16 px and the deepest that does not touch the outline.
+const SPHERE: Icon = &[
+    &[
+        (21.00, 12.00),
+        (19.79, 16.50),
+        (16.50, 19.79),
+        (12.00, 21.00),
+        (7.50, 19.79),
+        (4.21, 16.50),
+        (3.00, 12.00),
+        (4.21, 7.50),
+        (7.50, 4.21),
+        (12.00, 3.00),
+        (16.50, 4.21),
+        (19.79, 7.50),
+        (21.00, 12.00),
+    ],
+    &[
+        (21.00, 12.00),
+        (19.79, 13.80),
+        (16.50, 15.12),
+        (12.00, 15.60),
+        (7.50, 15.12),
+        (4.21, 13.80),
+        (3.00, 12.00),
+        (4.21, 10.20),
+        (7.50, 8.88),
+        (12.00, 8.40),
+        (16.50, 8.88),
+        (19.79, 10.20),
+        (21.00, 12.00),
+    ],
+];
+
 /// A folder seen from the front, its tab raised on the left: files. Drawn
 /// wide where `doc` is tall, so the two do not read as the same rectangle in
 /// a rail that carries both — the tab is a three-unit rise, which is the
@@ -170,6 +213,7 @@ pub fn icon(name: &str) -> Option<Icon> {
         "box" | "inventory" => BOX,
         "folder" | "files" => FOLDER,
         "star" => STAR,
+        "sphere" | "scene" => SPHERE,
         "filter" | "funnel" => FILTER,
         "chart" | "reports" => CHART,
         "sliders" | "settings" => SLIDERS,
@@ -216,6 +260,8 @@ pub const NAMES: &[&str] = &[
     "folder",
     "files",
     "star",
+    "sphere",
+    "scene",
     "filter",
     "funnel",
     "chart",

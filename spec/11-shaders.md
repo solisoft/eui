@@ -3,9 +3,11 @@
 Status: **normative** for version 1 of the shader contract; implemented by
 `crates/eui-shader` and `crates/eui-render/src/scene.rs`.
 
-A `scene` (03 §1.2) is drawn by a program the **server** chose. That is the
-second exception to `00-rationale.md`'s refusal of code from the network, and
-the only one besides the bytecode of 07. This document is what makes it an
+A `scene` (03 §1.2) **may** be drawn by a program the **server** chose, and
+only then does any of this document apply: a scene that names no `shader` runs
+the client's own module, needs no grant, and reaches nothing here. When one is
+named, that is the second exception to `00-rationale.md`'s refusal of code from
+the network, and the only one besides the bytecode of 07. This document is what makes it an
 exception rather than a hole: the rules a module must satisfy, where they are
 checked, and — in §6 — what is given up even when every one of them holds.
 

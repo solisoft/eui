@@ -80,10 +80,16 @@ exactly because the order is fixed. Capability names and bits: `camera` 1,
 16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256, `scene` 512.
 
 `scene` is named for what the person agrees to and not for the hardware it
-uses: that this application may put on screen a surface whose pixels it
-computed itself. Both halves of that are worth telling them — it spends their
-graphics card and can slow the machine down, and it still cannot read what is
-on their screen (03 §1.2, 08 §8). An application that asks for it MUST
+uses: that this application may run **a graphics program of its own** on their
+machine. Both halves of that are worth telling them — it spends their graphics
+card and can slow the machine down, and it still cannot read what is on their
+screen (03 §1.2, 08 §8).
+
+Requesting it and being granted it are separate acts. A `scene` that names no
+shader draws either way: it is the client's own program over the client's own
+shape, and there is nothing third-party in it to allow. The **request** is
+what raises the floor below, because an older client cannot decode the kind
+however the scene is drawn; the **grant** is about running somebody's code. An application that asks for it MUST
 advertise `protocol_min` of at least 2, because a client that cannot decode
 `0x11` cannot be shown it at all; the refusal then happens at the handshake,
 with a reason, rather than mid-session on a batch.

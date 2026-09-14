@@ -39,6 +39,19 @@ fn load_scene_assets(driver: &mut Driver, renderer: &mut Renderer, textures: &mu
     }
 }
 
+/// `SNAPSHOT_ALLOW=scene,clipboard.read` — what to grant the session.
+///
+/// Nothing by default, which is the right default for a tool that renders
+/// somebody else's application. But a capability-gated node draws its own
+/// background and nothing else without the grant (08 §3), so the only pixel
+/// harness in the repository could not look at a `scene` at all until this
+/// existed. An unknown name is a mistake worth stopping for, not worth
+/// guessing at.
+fn granted() -> u32 {
+    let Ok(list) = std::env::var("SNAPSHOT_ALLOW") else { return 0 };
+    list.split(',').map(str::trim).filter(|n| !n.is_empty()).map(|n| eui_proto::caps::from_name(n).unwrap_or_else(|| panic!("SNAPSHOT_ALLOW: no capability called {n:?}"))).fold(0, |a, b| a | b)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = args.get(1).cloned().unwrap_or_else(|| ".".into());
@@ -58,7 +71,7 @@ fn main() {
     eprintln!("adapter: {}", renderer.adapter_name());
 
     for (name, mode, clicks) in [("light-0", ThemeMode::Light, 0), ("light-3", ThemeMode::Light, 3), ("dark-3", ThemeMode::Dark, 3)] {
-        let mut driver = Driver::new(w, h, scale, 0);
+        let mut driver = Driver::new(w, h, scale, granted());
         let mut counter = counter_server::Counter::default();
         driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
         let first = counter.first();
@@ -106,7 +119,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     let mut renderer = Renderer::new_headless().expect("a GPU adapter");
     let mut textures = renderer.session();
     for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {
-        let mut driver = Driver::new(w, h, scale, 0);
+        let mut driver = Driver::new(w, h, scale, granted());
         let (wake_tx, wake_rx) = mpsc::channel::<()>();
         let conn = connect(url, driver.hello().encode(), cookie.clone(), false, move || {
             let _ = wake_tx.send(());

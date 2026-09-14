@@ -2321,28 +2321,30 @@ impl Driver {
     /// `src` props and chunks defined by hash. The caller fetches them from
     /// the session's origin and calls [`Self::asset_ready`].
     pub fn pending_assets(&mut self) -> Vec<Hash> {
-        let scenes = self.granted & caps::SCENE != 0;
+        // What the grant actually guards is **a program the server wrote**,
+        // not the node kind (08 §4). A scene that names no `shader` draws
+        // with the client's own module, so nothing third-party is compiled
+        // and there is nothing for a person to consent to; its mesh is
+        // vertices, checked in the worker like any other asset. A scene that
+        // names one is the case the capability exists for, and without the
+        // grant the module is not even fetched -- an absent code path rather
+        // than a check that fails, which is what 08 §3 asks for.
+        let shader_atom = self.session.atoms().shader;
+        let modules = self.granted & caps::SCENE != 0;
         if let Some(root) = self.session.root() {
             let wanted: Vec<Hash> = self
                 .session
                 .preorder(root)
                 .filter_map(|ix| self.session.node(ix))
-                // A scene is here too, and its `shader` and `mesh` are both
-                // assets -- the same `Value::Asset` sweep below finds them
-                // without knowing which is which.
-                //
-                // Only where the capability was granted, and that is 08 §3
-                // taken literally: without the grant the client does not ask
-                // for the module at all, so a server learns nothing from
-                // having offered one. Refusing to *compile* it later would
-                // have been a check; refusing to fetch it is an absent code
-                // path, which is what the rule asks for.
-                .filter(|n| match n.kind {
-                    NodeKind::Image | NodeKind::Audio | NodeKind::Video => true,
-                    NodeKind::Scene => scenes,
-                    _ => false,
+                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video | NodeKind::Scene))
+                .flat_map(|n| {
+                    let scene = n.kind == NodeKind::Scene;
+                    n.props.iter().filter_map(move |(a, v)| {
+                        let Value::Asset(h) = v else { return None };
+                        let module = scene && Some(*a) == shader_atom;
+                        (!module || modules).then_some(*h)
+                    })
                 })
-                .flat_map(|n| n.props.iter().filter_map(|(_, v)| if let Value::Asset(h) = v { Some(*h) } else { None }))
                 .collect();
             for h in wanted {
                 self.assets.want(h);

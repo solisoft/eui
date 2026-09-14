@@ -917,7 +917,7 @@ end
 # holds the active section; the rail and the top bar are outside it, so the
 # page moves under a header that stays.
 
-ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Files", "Reports", "Settings", "Catalogue"]
+ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Scene", "Files", "Reports", "Settings", "Catalogue"]
 # The page transitions to try, as `motion` names (03 §5.2). `none` is first
 # and is the default: every one of the others is the client's rendering of a
 # change it was going to make anyway, so turning them all off has to leave an
@@ -930,7 +930,7 @@ ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"
 ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
-ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Scene": "scene", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
 
 ERP_PER_PAGE = 7
 
@@ -3040,6 +3040,67 @@ end
 
 # ---- Settings --------------------------------------------------------------
 
+# The 3D scene (03 §1.2). Nothing here names a shader or a mesh: both props
+# are optional, and with neither the client draws its own cube with its own
+# module — so this section needs no asset endpoint and no WGSL in the repo,
+# and it is the shortest honest demonstration of the kind.
+#
+# The radius on the node is the *quad's*, applied by the client when it
+# composites the scene's target. The shader knows nothing about it, and that
+# is the whole design: a scene inherits the corner, the opacity, the scissor
+# of any scroller and the slide of any page transition from a quad it never
+# sees.
+def erp_scene_section(state, lay)
+  playing = state["scene"] ?? false
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [
+      erp_card(
+        "A picture the client computed",
+        [badge("needs the scene capability", "info")],
+        [
+          muted(
+            "The server names a graphics program and a shape, both by content hash. " +
+            "The client checks the program before it compiles it, renders it into a " +
+            "target of its own, and draws that target as a single quad."
+          ),
+          # This one names no module, so it draws whatever the viewer allowed:
+          # the grant is on somebody else's program, and the cube below is the
+          # client's own. Said here because the distinction is the whole point
+          # of the capability, and because nothing on this side could report it
+          # anyway — 08 §8 is that the server is never told what was allowed.
+          muted(
+            "This one names no program of ours, so it draws the client's own cube and needs "
+            + "no permission. A scene that names a shader does: without --allow scene the "
+            + "client will not even fetch it, and the node draws its background instead. "
+            + "Nothing here can tell which happened — the server is never told what a viewer allowed."
+          ),
+          row(
+            {"gap": 5, "align": "center", "wrap": "wrap"},
+            [
+              scene(
+                {"playing": playing, "uniforms": [0, 0, 0, 0, 0.36, 0.72, 0.95, 1]},
+                {"width": 260, "height": 200, "radius": 4, "bg": "surface.sunken"}
+              ),
+              column(
+                {"gap": 3},
+                [
+                  media_button(playing, "scene", {}),
+                  muted(
+                    playing
+                      ? "Turning on the client's own clock. The tree is not sent again, and the server is not asked for a frame."
+                      : "Still. It draws once and wakes nothing — which is what keeps a window with a scene in it at rest."
+                  )
+                ]
+              )
+            ]
+          )
+        ]
+      )
+    ]
+  )
+end
+
 def erp_settings_section(state, lay)
   column(
     {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
@@ -3783,6 +3844,7 @@ def erp_chrome_defaults
     "devbar": true,
     "sound": false,
     "video": false,
+    "scene": false,
     "video_at": 0,
     "video_seek": 0,
     "viewport": {
@@ -3963,6 +4025,7 @@ def gallery(event_data)
     # The dashboard.
     "forecast_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], "forecast")),
     "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
+    "scene" => set_key(state, "scene", !(state["scene"] ?? false)),
     "video" => set_key(
       set_key(state, "video", !(state["video"] ?? false)),
       "video_at",
@@ -4182,6 +4245,7 @@ def gallery_view(raw_state)
   body = erp_orders_section(state, lay) if section == "Orders"
   body = erp_customers_section(state, lay) if section == "Customers"
   body = erp_inventory_section(state, lay) if section == "Inventory"
+  body = erp_scene_section(state, lay) if section == "Scene"
   body = erp_files_section(state, lay) if section == "Files"
   body = erp_reports_section(state, lay) if section == "Reports"
   body = erp_settings_section(state, lay) if section == "Settings"

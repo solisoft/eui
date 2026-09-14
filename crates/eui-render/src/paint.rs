@@ -1140,11 +1140,20 @@ impl Painter<'_, '_> {
                     }
                 }
                 let playing = matches!(prop(well.playing), Some(Value::Bool(true)));
-                // Only emitted when it is on screen, and only where the
-                // capability was granted. A scene culled by its scroller
-                // must not cost a render target -- a virtualised list of
-                // them would otherwise ask for one per row.
-                if self.scene.scenes_allowed && self.visible(dev) {
+                // Only emitted when it is on screen: a scene culled by its
+                // scroller must not cost a render target, or a virtualised
+                // list of them would ask for one per row.
+                //
+                // And only with the grant **when it names a module** (08 §4).
+                // What a person consents to is running a program the server
+                // wrote, not seeing a picture the client drew for itself: a
+                // scene with no `shader` compiles nothing third-party, so
+                // withholding it would have been a toll on nothing. The mesh
+                // is not the hazard either -- it is vertices, checked in the
+                // worker like every other asset.
+                let module = hash(prop(well.shader));
+                let allowed = module == [0u8; 32] || self.scene.scenes_allowed;
+                if allowed && self.visible(dev) {
                     let msaa = match prop(well.msaa) {
                         Some(Value::Int(n)) => *n >= 4,
                         // Absent is on: a scene is a picture of edges, and

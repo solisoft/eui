@@ -341,9 +341,19 @@ A client that cannot multisample this format MUST draw the scene once rather
 than refuse it. A slightly harder silhouette is better than no picture, and
 the alternative is a validation error on a machine the author never had.
 
-A scene MUST NOT be drawn at all unless the `scene` capability was granted
-(08 §3). Without it the client does not fetch the module, and a `scene` node
-paints its own background like any node with no content.
+**The `scene` capability guards the module, not the kind.** A scene that
+names a `shader` MUST NOT be drawn unless the capability was granted (08 §3):
+without it the client does not fetch the module, and the node paints its own
+background like any node with no content. A scene that names none draws — it
+is the client's own program over the client's own shape, so there is nothing
+third-party to consent to, and its `mesh` is fetched either way because
+vertices are data and not a program.
+
+An application that uses a `scene` at all SHOULD still *request* the
+capability, whether or not it names a module: the request is what raises the
+manifest's `protocol_min` (01 §2.1), and an older client cannot decode the
+kind however the scene is drawn. Requesting and granting are separate acts,
+and only the second is about running somebody's code.
 
 **No readback, and no picking.** A scene's target is not readable: 08 §8's
 "no canvas readback" is kept by construction here, not by rule. It follows

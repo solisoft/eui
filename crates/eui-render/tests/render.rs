@@ -1832,7 +1832,8 @@ fn a_scene_that_is_not_playing_asks_for_no_frame() {
     assert!(!list.wants_frame, "a still scene wakes nothing");
 }
 
-/// 08 §3: a session that was not granted `scene` has no scene.
+/// 08 §4: a session that was not granted `scene` cannot run a module the
+/// server wrote.
 ///
 /// Not "the scene fails to draw" — there is nothing to fail. No `SceneDraw`
 /// is built, so no target is made, no module is fetched and nothing is
@@ -1840,7 +1841,7 @@ fn a_scene_that_is_not_playing_asks_for_no_frame() {
 /// no content does. This is the vector that makes deny-by-default a property
 /// of the code path rather than of a check somewhere in it.
 #[test]
-fn a_session_without_the_grant_has_no_scene_at_all() {
+fn a_session_without_the_grant_cannot_run_a_module_the_server_wrote() {
     let root = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(100), ..Default::default() };
     let box_ = StyleRecord { bg: ColorRef::role(Role::SurfaceBase.id()), width: Dim::Px(60), height: Dim::Px(40), ..Default::default() };
     let mut fx = fixture(
@@ -2082,4 +2083,32 @@ fn a_scene_may_be_multisampled_and_still_arrives() {
         };
         assert!(shades(&soft) > shades(&hard), "four samples give more shades across the edge: {} against {}", shades(&soft), shades(&hard));
     }
+}
+
+/// And the other half of that line: a scene that names **no** module draws
+/// without the grant.
+///
+/// What a person consents to is running a program the server wrote. A scene
+/// with no `shader` compiles nothing third-party — it is the client's own
+/// module over the client's own cube — so asking for consent would have been
+/// a toll on nothing, and the demonstration of the kind would be invisible
+/// to anyone who had not read a manual.
+#[test]
+fn a_scene_that_names_no_module_draws_without_the_grant() {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(100), ..Default::default() };
+    let box_ = StyleRecord { width: Dim::Px(60), height: Dim::Px(40), ..Default::default() };
+    let mut fx = fixture(
+        vec![root, box_],
+        // `playing` and a mesh, and pointedly no `shader`.
+        vec![node(NodeKind::Box, 1, 1, 1), FlatNode { props: (0, 2), ..node(NodeKind::Scene, 2, 2, 0) }],
+        vec![(1, Value::Bool(true)), (2, Value::Asset([9; 32]))],
+        &["playing", "mesh"],
+        100.0,
+        100.0,
+    );
+    let list = draw_ungranted(&mut fx, 100, 100);
+    assert_eq!(list.scenes.len(), 1, "it draws");
+    assert_eq!(list.scenes[0].shader, [0; 32], "with the client's own module");
+    assert_eq!(list.scenes[0].mesh, [9; 32], "and the shape the server sent, which is data and not a program");
+    assert!(list.quads.iter().any(|q| q.params[2] as u32 & eui_render::SCENE != 0), "and a quad samples it");
 }
