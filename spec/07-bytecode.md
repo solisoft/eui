@@ -85,6 +85,7 @@ its operands. All varints are as in [`02-wire-format.md`](02-wire-format.md).
 | `0x33` | `set_style` | `key:varint style:varint` | | point that node at a style table id, locally |
 | `0x32` | `emit` | `atom:varint` | | queue a server event named by the atom, payload = the root props |
 | `0x34` | `set_mode` | | `str →` | the viewer's palette mode: `light`, `dark`, `high_contrast`, or `toggle` (light ⇄ dark); any other string stops the run. The viewer's choice made through the app's own control — never provisional, and the server learns it as the next `Viewport` |
+| `0x35` | `go_back` | | | ask to go back, as the platform's own gesture would (06 §1.3). At most one per run: a chunk that asks twice asks once |
 | `0x40` | `return` | | | stop |
 
 Type errors at run time — `add` on a string, `set_text` with an int — abort

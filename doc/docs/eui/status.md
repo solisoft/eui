@@ -1000,10 +1000,19 @@ note where a target's standard library is missing.
   shape for a phone. An APK built with `EUI_ANDROID_URL` is chromeless and
   right; one built without it opens the shell, which works and looks like a
   desktop.
-- The system back button on Android, and safe-area insets around a notch on
-  either. winit's `WindowExtIOS` exposes what iOS needs for the second —
-  the home indicator, the status bar, and which screen edges defer system
-  gestures — and none of it is called yet.
+- Safe-area insets around a notch, on either phone. winit's `WindowExtIOS`
+  exposes what iOS needs — the home indicator, the status bar, and which
+  screen edges defer system gestures — and none of it is called yet.
+
+  The system back button **is** wired: winit maps Android's `KEYCODE_BACK` to
+  `NamedKey::BrowserBack`, so it arrives as an ordinary key event and needs no
+  JNI and no `android-activity` code of our own. The shell takes it before the
+  application sees a keystroke (08 §7) and hands it to the page as `back`
+  (06 §1.3); a page that holds no `back` handler does not get it, and the
+  window closes instead — which matters more than it sounds, because winit
+  reports every key but volume as *handled*, and a client that swallowed the
+  gesture without somewhere to send it would leave a person inside an
+  application with no way out.
 - The platform trust store. `rustls-native-certs` finds nothing useful on
   Android, so the client falls back to the public roots and a development
   CA is not honoured — `EUI_CA_FILE` is the way in until it is.

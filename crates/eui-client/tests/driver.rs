@@ -713,6 +713,187 @@ fn a_node_that_asks_to_enter_fades_and_frosts_in() {
     assert_eq!(d.next_frame_at(), None);
 }
 
+/// A page says how it arrives and how it leaves in the one record it is
+/// grafted with, so `animation` is a bit set and every reader of it has to be
+/// a mask test — an equality test would have read `enter | exit` as neither.
+/// And an entrance that names a direction arrives from it (03 §5).
+#[test]
+fn a_page_that_asks_to_enter_and_to_leave_slides_in_from_where_it_says() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+    let page = StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(80),
+        height: Dim::Px(40),
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Trailing,
+        transition: 2,
+        ..Default::default()
+    };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: page }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+    assert!(d.animating(), "the graft started an entrance");
+    // It names a direction, so it arrives from it rather than fading in: the
+    // quad carries a transform slot, and the transform starts one width out
+    // along the trailing edge and ends where the layout put it.
+    let list = d.paint(400, 300);
+    let quad = *list.quads.iter().find(|q| q.rect[2] == 80.0 && q.rect[3] == 40.0).expect("the page");
+    let slot = (quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_eq!(slot, 1, "the page is carried by the list's first transform");
+    let x = list.xforms[slot as usize - 1];
+    assert_eq!((x.from[0], x.to[0]), (80.0, 0.0), "in from its own width away");
+    assert_eq!((x.from[2], x.to[2]), (1.0, 1.0), "a slide does not scale");
+    assert_eq!(x.clock[2], 1.0, "along the decelerate curve, as something arriving does");
+    // And nothing was asked to fade: a page that slides in does not also
+    // wash in, which is the difference between a push and a dialog.
+    assert_eq!(quad.params[2] as u32 & eui_render::ANIMATED, 0);
+}
+
+/// A page leaving on its own is still owed the frames it takes to go.
+///
+/// It is not in the driver's list of things on the move — it has no node left
+/// to hang off — so anything that decides "is a frame owed" from that list
+/// alone stops asking the moment the page arriving beside it has finished,
+/// or at once when nothing arrived at all. And nothing drops it either: the
+/// only thing that lets a departing page go is a paint. Both pages then sit
+/// on the screen, half way through, until some unrelated event wakes the
+/// window — which is a freeze you can watch, and did.
+#[test]
+fn a_page_leaving_on_its_own_still_owes_the_frames_it_takes() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let sheet = StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(120),
+        height: Dim::Px(60),
+        bg: ColorRef::role(Role::SurfaceRaised.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Bottom,
+        transition: 2,
+        ..Default::default()
+    };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: sheet }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+    d.tick(t0 + Duration::from_millis(400));
+    let _ = d.paint(400, 300);
+    assert!(!d.animating(), "it has arrived and nothing is running");
+
+    // Taken away with nothing put in its place, which is what closing a sheet
+    // is. There is no arriving page, so there is nothing on the move except
+    // the one leaving.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }] }));
+    let mid = d.paint(400, 300);
+    assert_eq!(mid.quads.iter().filter(|q| q.rect[2] == 120.0).count(), 1, "it is still painted on its way out");
+    assert!(d.animating(), "and it is owed the frames to get there");
+    assert!(d.next_frame_at().is_some(), "so one is asked for");
+
+    // And it does get there, rather than standing still until something else
+    // happens to wake the window.
+    d.tick(t0 + Duration::from_millis(1000));
+    let after = d.paint(400, 300);
+    assert_eq!(after.quads.iter().filter(|q| q.rect[2] == 120.0).count(), 0, "gone");
+    assert!(!d.animating());
+    assert_eq!(d.next_frame_at(), None, "and the window is back at rest");
+}
+
+/// 06 §1.3: a back goes to the mounted root, or to nobody.
+///
+/// There is no node under a system back, so §2's walk to the nearest handler
+/// has nothing to walk from. A root that holds a handler hears it; a root
+/// that does not hears nothing and says so, which is how the window knows to
+/// let the platform have the gesture — on Android, the difference between an
+/// application you can leave and one you cannot.
+#[test]
+fn a_back_reaches_the_root_or_nobody() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Back, Handler::Server(1)));
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops: vec![Op::DefAtom { id: 1, value: "went_back".into() }, Op::Mount(tree)] }));
+    // A handler on a child is not a handler on the root: a back is not
+    // aimed at anything, so nothing catches it on the way past.
+    assert!(!d.takes_back(), "the root holds none");
+    assert!(d.input(Input::Back).is_empty(), "and nothing is reported");
+
+    // Put one on the root and it is heard.
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Back, Handler::Server(1)));
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::Mount(tree)] }));
+    assert!(d.takes_back());
+    let out = d.input(Input::Back);
+    assert_eq!(events(&out), vec![(EventKind::Back, 1, 1)], "the root hears it, by name");
+}
+
+/// 03 §5: a page that asked to leave keeps painting after the tree has let
+/// it go, and goes the way the page arriving beside it did not come from.
+///
+/// The painting and not the tree: there is nothing left to lay out, focus,
+/// wake or hit-test, which is what makes "a departing page is inert" a fact
+/// about how it is kept rather than a rule anything has to check.
+#[test]
+fn a_page_that_asked_to_leave_goes_on_painting_on_its_way_out() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let page = |motion| StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(120),
+        height: Dim::Px(60),
+        bg: ColorRef::role(Role::SurfaceBase.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion,
+        transition: 2,
+        ..Default::default()
+    };
+    let subtree = |id| {
+        let mut t = Subtree::default();
+        t.nodes.push(FlatNode { kind: NodeKind::Box, id, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+        t
+    };
+    // The first page is up, and its entrance is over.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: page(eui_proto::Motion::Trailing) }, Op::InsertChild { parent: 1, index: 0, subtree: subtree(9) }] }));
+    d.tick(t0 + Duration::from_millis(400));
+    let settled = d.paint(400, 300);
+    assert_eq!(settled.quads.iter().filter(|q| q.rect[2] == 120.0).count(), 1, "one page, where it belongs");
+    assert!(!d.animating(), "and nothing left running");
+
+    // Now the push: the old page is removed and a new one arrives in the
+    // same batch, which is how a keyed child list reports a page change.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 1 }, Op::InsertChild { parent: 1, index: 0, subtree: subtree(10) }] }));
+    assert!(d.animating(), "the change started a transition");
+    assert_eq!(d.session().lookup(9), None, "the old page is out of the tree");
+
+    let mid = d.paint(400, 300);
+    let pages: Vec<_> = mid.quads.iter().filter(|q| q.rect[2] == 120.0).collect();
+    assert_eq!(pages.len(), 2, "both are on screen: one leaving, one arriving");
+    // The arriving page is drawn over the leaving one, because a push covers
+    // what it lands on rather than uncovering it.
+    let slots: Vec<u32> = pages.iter().map(|q| (q.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT).collect();
+    assert!(slots.iter().all(|s| *s != 0), "each is carried by its own transform: {slots:?}");
+    assert_ne!(slots[0], slots[1], "and not by the same one");
+    let leaving = mid.xforms[slots[0] as usize - 1];
+    let arriving = mid.xforms[slots[1] as usize - 1];
+    assert_eq!(arriving.from[0], 120.0, "the new page comes in from the trailing edge");
+    assert!(leaving.to[0] < 0.0, "so the old one goes out towards the leading edge: {:?}", leaving.to);
+    assert_eq!(leaving.clock[2], 3.0, "along the accelerate curve, which is what 05 §2 keeps it for");
+
+    // And when it is over the leaving page is gone, with the driver at rest.
+    d.tick(t0 + Duration::from_millis(1000));
+    let after = d.paint(400, 300);
+    assert_eq!(after.quads.iter().filter(|q| q.rect[2] == 120.0).count(), 1, "only the page that arrived");
+    assert!(!d.animating());
+    assert_eq!(d.next_frame_at(), None, "and no frame is owed");
+}
+
 /// 03 §5: an entrance dims everything painted for the node, not just the
 /// node's own quads — otherwise a dialog's text is at full strength before
 /// the card under it has arrived.

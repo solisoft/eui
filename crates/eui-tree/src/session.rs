@@ -36,10 +36,21 @@ pub struct Session {
     root: NodeIx,
     focused: NodeIx,
     /// Nodes grafted since the last [`Session::take_entrances`] whose style
-    /// asks to be animated in (`animation` = `ANIMATION_ENTER`, 03 §5).
+    /// asks to be animated in (`animation` carries `ANIMATION_ENTER`, 03 §5).
     /// Only those: a mount is the whole tree, and a list that recorded all
     /// of it would hand the client a hundred thousand indices to discard.
     entrances: Vec<NodeIx>,
+    /// The **ids** of nodes released since the last [`Session::take_exits`]
+    /// whose style asked to leave rather than vanish (`animation` carries
+    /// `ANIMATION_EXIT`, 03 §5), with the direction they asked to leave in.
+    ///
+    /// Ids and not indices, because the node is gone: an index would already
+    /// have been handed to whatever was grafted next. What a client does with
+    /// this is keep the *painting* it made of that subtree for as long as the
+    /// leaving takes — the tree is not kept, and cannot be, which is what
+    /// makes a departing page inert by construction rather than by a check at
+    /// every door.
+    exits: Vec<(u32, eui_proto::Motion)>,
     /// The `audio` and `video` nodes in the tree, in the order they were
     /// grafted: what the client's players are told to agree with (03 §7,
     /// §8), kept here so agreeing is a look at these rather than a walk of
@@ -99,6 +110,7 @@ impl Session {
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
             entrances: Vec::new(),
+            exits: Vec::new(),
             media: Vec::new(),
             wakers: Vec::new(),
             locators: Vec::new(),
@@ -379,6 +391,34 @@ impl Session {
         std::mem::take(&mut self.entrances)
     }
 
+    /// The nodes released since the last call whose style asked to leave
+    /// rather than vanish (03 §5), as `(id, direction)`.
+    pub fn take_exits(&mut self) -> Vec<(u32, eui_proto::Motion)> {
+        std::mem::take(&mut self.exits)
+    }
+
+    /// Record a subtree about to be released, if its root asked to leave.
+    ///
+    /// Only the root. A page is one node as far as leaving is concerned, and
+    /// walking the subtree would hand a client a hundred thousand ids to
+    /// throw away — the same reason `entrances` records only what was
+    /// grafted wearing the bit.
+    fn note_exit(&mut self, ix: NodeIx) {
+        if ix.is_none() {
+            return;
+        }
+        let Some(node) = self.arena.get(ix) else { return };
+        let (id, style) = (node.id, node.style);
+        if style == 0 {
+            return;
+        }
+        if let Some(r) = self.styles.get(style) {
+            if r.animation & eui_proto::ANIMATION_EXIT != 0 {
+                self.exits.push((id, r.motion));
+            }
+        }
+    }
+
     /// True when any node changed since the dirty bits were last cleared.
     pub fn is_dirty(&self) -> bool {
         self.root().and_then(|r| self.arena.get(r)).is_some_and(|n| n.dirty != 0)
@@ -559,6 +599,7 @@ impl Session {
                     if self.focused_within(ix) {
                         self.focused = NodeIx::NONE;
                     }
+                    self.note_exit(ix);
                     self.arena.release(ix)?;
                     self.prune_sets();
                 }
@@ -635,6 +676,7 @@ impl Session {
 
     fn mount(&mut self, subtree: &Subtree) -> Result<()> {
         if self.root.is_some() {
+            self.note_exit(self.root);
             self.arena.release(self.root)?;
             self.prune_sets();
             self.root = NodeIx::NONE;
@@ -653,6 +695,7 @@ impl Session {
             self.focused = NodeIx::NONE;
         }
         if parent.is_none() {
+            self.note_exit(old);
             self.arena.release(old)?;
             self.prune_sets();
             self.root = NodeIx::NONE;
@@ -661,6 +704,7 @@ impl Session {
             return self.arena.mark_dirty(root);
         }
         let position = self.arena.require(parent)?.children.iter().position(|c| *c == old).ok_or(ApplyError::Internal)?;
+        self.note_exit(old);
         self.arena.release(old)?;
         self.prune_sets();
         let depth = self.arena.depth(parent)?;
@@ -736,7 +780,7 @@ impl Session {
             // Every new node in the session passes through here — `Mount`,
             // `Replace` and `InsertChild` all graft — so this is the one
             // place an entrance can be noticed.
-            if flat.style != 0 && self.styles.get(flat.style).is_some_and(|r| r.animation == eui_proto::ANIMATION_ENTER) {
+            if flat.style != 0 && self.styles.get(flat.style).is_some_and(|r| r.animation & eui_proto::ANIMATION_ENTER != 0) {
                 self.entrances.push(ix);
             }
             if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {

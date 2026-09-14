@@ -35,7 +35,7 @@ pub mod retained;
 pub use atlas::{Atlas, ImageAtlas, Region};
 pub use gpu::{Offscreen, RenderError, RenderStats, Renderer, SessionTextures, Target, FORMAT};
 pub use paint::{
-    colors_of, linear, pack4, paint, resolve_color, scrollbar_thumb, unpack4, Backdrop, Colors, DrawList, Editing, Glide, GpuAnim, Quad, Run, Scene, Scroller, ANIMATED, BLURRED, DECELERATE,
-    MAX_SCROLLERS, SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA,
+    colors_of, linear, pack4, paint, resolve_color, scrollbar_thumb, unpack4, Backdrop, Colors, Departure, DrawList, Editing, Glide, GpuAnim, Mover, Quad, Run, Scene, Scroller, Xform, ANIMATED,
+    BLURRED, CURVE_HELD, DECELERATE, MAX_SCROLLERS, MAX_XFORMS, SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA, XFORM_MASK, XFORM_SHIFT,
 };
 pub use retained::{PaintCache, PaintStats};

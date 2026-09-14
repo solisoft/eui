@@ -173,6 +173,18 @@ pub enum EventKind {
     /// the dialog: a drop and a pick are the same act with a different
     /// gesture, and an application that handles one handles the other.
     FileDrag = 0x1E,
+    /// The person asked to go back (spec 06 §1.3). `Null`.
+    ///
+    /// The one event with nothing under it. A system back button, a mouse's
+    /// fourth button, `Alt+Left` and a swipe from the leading edge are the
+    /// same event and MUST stay indistinguishable — a server cannot tell a
+    /// finger from a mouse (§5) and has no more business telling these four
+    /// apart. So it is not dispatched by §2's walk to the nearest handler:
+    /// there is no node to walk up from. It is delivered to the mounted root
+    /// when the root holds a handler for it, and to nothing otherwise — and
+    /// "nothing" means the platform keeps the gesture, which is how a person
+    /// gets out of an application that has nowhere left to go back to.
+    Back = 0x1F,
 }
 
 impl EventKind {
@@ -209,6 +221,7 @@ impl EventKind {
             0x1C => Ok(Self::Location),
             0x1D => Ok(Self::NfcTag),
             0x1E => Ok(Self::FileDrag),
+            0x1F => Ok(Self::Back),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

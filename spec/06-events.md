@@ -45,6 +45,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x1C` | `location` | `List[Float latitude, Float longitude, Float accuracy_m]`, coarse (§1.2) | every `locate` ms, at most 1/s |
 | `0x1D` | `nfc_tag` | `List[Str uid, List[List[Str kind, Str payload]]]`, one tag for a scan the person started (spec 03 §3.3) | |
 | `0x1E` | `file_drag` | `List[Bool over]`, a file is over a node carrying `drop`, or has left it (spec 03 §3.2) | **only when the node under the file changes** |
+| `0x1F` | `back` | `Null`, the person asked to go back (§1.3) | |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -115,6 +116,34 @@ client MUST NOT offer a way to ask for more.
 The count has a ceiling as `wake` does: a page wants one fix, and a server
 that asks for a hundred gets two.
 
+### 1.3 Going back
+
+`back` is the one event with nothing under it. A system back button, a
+mouse's fourth button, `Alt+Left` and a swipe from the leading edge of the
+screen are all the same request, and a conforming client MUST report them
+identically: a server cannot tell a finger from a mouse (§5) and has no more
+business telling these four apart, and a field that said which would be the
+fingerprinting surface [`00-rationale.md`](00-rationale.md) refuses.
+
+Because nothing is under it, §2's walk to the nearest handler has nothing to
+walk from. `back` is delivered to the **mounted root** when the root holds a
+handler for it, and **to nothing at all** otherwise. The root is the one node
+a server always knows, and is already where a component's own state lives
+([`07-bytecode.md`](07-bytecode.md) §1).
+
+A session whose root holds no `back` handler MUST have the gesture left to
+the platform. This is not a courtesy. On a phone the platform's own meaning
+for back is "leave this application", a client that consumes the gesture
+without a handler to give it to has taken that away, and a person is then
+inside an application with no way out. Holding a handler is how an
+application says it has somewhere to go back to; the absence of one is how
+everyone else gets out.
+
+A back is a request and not a change: what it does is the server's to decide,
+and the client MUST NOT assume it was granted. A client MAY show the movement
+before the answer arrives, under [`07-bytecode.md`](07-bytecode.md) §6's rule
+for anything provisional — it has to be able to put it back.
+
 ## 2. Emission rules
 
 - A client emits an event only for a node that has a handler for that kind.
@@ -170,6 +199,10 @@ that asks for a hundred gets two.
   dismissed dialog is not.
 - Anything else about the machine beyond the `Viewport` frame.
 
+- that a back gesture (§5) was begun and abandoned. A stroke from the edge
+  that springs back changed nothing, and reporting it would make a hand that
+  changed its mind indistinguishable from one that did not.
+
 ## 4. Server-side validation
 
 The server validates every event against the node it names: the node exists
@@ -214,6 +247,27 @@ The first contact is followed like this:
      in §2, since press and release resolve to the same handler;
    - the contact passes the **slop**, a client-chosen distance from where
      it landed which SHOULD be about 8 logical px — a scroll.
+4a. **The edge.** A contact that landed within a short distance of the
+   window's **leading edge** — about 20 logical px, mirrored under a
+   right-to-left reading order — in a session whose root holds a `back`
+   handler (§1.3) is the navigator's, whatever it landed on: it is undecided
+   even over a node that asked for moves or carries `drag_handle`. Past the
+   slop **inwards** it becomes a back gesture; past the slop **along** the
+   edge it is an ordinary scroll and the strip is forgotten; a lift inside
+   the slop is the tap it was aimed at. A back gesture gives the press back
+   exactly as a scroll does — `pointer_up`, no `click` — and the client then
+   moves the topmost subtree that said how it leaves (03 §5.1) with the
+   contact. On release past half the window's width, or still moving inwards
+   when it left the glass, `back` is reported and the subtree goes; otherwise
+   it returns and **nothing is reported at all**.
+
+   This is the one gesture that outranks the tree, and it is worth saying
+   what that costs: a slider or a split bar within the strip loses its
+   stroke. The strip is a bezel's width and not a thumb's for that reason —
+   wide enough to find without looking, narrow enough that what it takes is
+   an edge nobody puts a control against — and an application that wants the
+   whole edge back can have it by not taking `back` at all.
+
 5. **Scroll.** The press is given back before the view moves: the node that
    took it receives `pointer_up` and **no `click` follows**, because none
    was meant. The view then moves against the contact, by the whole

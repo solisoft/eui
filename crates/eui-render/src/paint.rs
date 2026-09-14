@@ -43,6 +43,27 @@ pub const SCROLLER_MASK: u32 = 15 << SCROLLER_SHIFT;
 /// How many scrollers a list can carry: fifteen slots, two per glide
 /// (the content and its thumb).
 pub const MAX_SCROLLERS: usize = 15;
+/// Bits 12-15 of the flags: which of the list's `xforms` carries the quad
+/// — the page it is on, or the shared element it belongs to (03 §5) — or
+/// zero for none.
+///
+/// A second slot rather than a wider first one. Widening would have bought
+/// more scrollers, and scrollers were never the shortage: `carry` refuses a
+/// quad that already has a slot, and the inner node is stamped first, so a
+/// page containing a list mid-glide could not itself have moved however many
+/// slots there were. Two fields compose — the scroller within the page, the
+/// page within the frame — and a third level is refused, which is a limit
+/// that can be stated rather than a bug that turns up in one application.
+pub const XFORM_SHIFT: u32 = 12;
+/// The mask those bits make.
+pub const XFORM_MASK: u32 = 15 << XFORM_SHIFT;
+/// How many transforms a list can carry: fifteen slots. Two go to a page
+/// change — the one arriving and the one leaving — and the rest to the
+/// shared elements flying between them.
+pub const MAX_XFORMS: usize = 15;
+/// [`Xform::curve`] for a transform the hand is driving rather than the
+/// clock: the fraction is [`Xform::k`], written straight in.
+pub const CURVE_HELD: u32 = 4;
 
 /// The caret and selection of the focused editable node, as byte offsets
 /// into the text the node shows, plus how far the text is scrolled left to
@@ -153,6 +174,120 @@ pub struct Scroller {
     pub curve: u32,
     /// Padding.
     pub pad: u32,
+}
+
+/// One subtree on the move, as the list carries it: a page arriving or
+/// leaving (03 §5), or a shared element flying between its two boxes.
+///
+/// The same bargain a [`Scroller`] strikes, one level out. The layout ran
+/// once, where the subtree lands; the quads carry a slot; the vertex stage
+/// reads both ends and a clock out of here and puts them where they have got
+/// to. So a frame owed to a page transition alone is the previous draw list
+/// drawn again — nothing laid out, nothing painted, nothing uploaded, and
+/// across a worker's pipe nothing sent.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Xform {
+    /// Where it starts: `dx`, `dy` in device px, a uniform scale, and the
+    /// opacity everything under it is drawn at.
+    pub from: [f32; 4],
+    /// Where it ends, the same four.
+    pub to: [f32; 4],
+    /// When it began, seconds relative to the paint; how long it takes; the
+    /// curve; and the fraction to use outright when the curve is
+    /// [`CURVE_HELD`].
+    pub clock: [f32; 4],
+    /// What the scale is about, in device px: the subtree's own centre, so a
+    /// page shrinking for a fade-through goes towards its middle. Two spare.
+    pub pivot: [f32; 4],
+}
+
+impl Default for Xform {
+    fn default() -> Self {
+        bytemuck::Zeroable::zeroed()
+    }
+}
+
+impl Xform {
+    /// A transform that is standing still at `k`, for a gesture driving it
+    /// from the hand instead of from the clock (06 §5).
+    #[must_use]
+    pub fn held(from: [f32; 4], to: [f32; 4], pivot: (f32, f32), k: f32) -> Self {
+        Self { from, to, clock: [0.0, 0.0, CURVE_HELD as f32, k], pivot: [pivot.0, pivot.1, 0.0, 0.0] }
+    }
+
+    /// Where this transform stands at `age` seconds after the paint, as the
+    /// vertex stage will read it: what the cull has to allow for, and what a
+    /// released gesture carries on from.
+    #[must_use]
+    pub fn at(&self, age: f32) -> [f32; 4] {
+        let k = if self.clock[2] >= CURVE_HELD as f32 {
+            self.clock[3].clamp(0.0, 1.0)
+        } else {
+            let curve = match self.clock[2] as u32 {
+                1 => eui_theme::Curve::DECELERATE,
+                2 => eui_theme::Curve::SMOOTH,
+                3 => eui_theme::Curve::ACCELERATE,
+                _ => eui_theme::Curve::STANDARD,
+            };
+            curve.at((age - self.clock[0]) / self.clock[1].max(1e-3))
+        };
+        let mut out = [0.0; 4];
+        for ((o, a), b) in out.iter_mut().zip(self.from).zip(self.to) {
+            *o = a + (b - a) * k;
+        }
+        out
+    }
+}
+
+/// Where a subtree that asked to leave (03 §5) painted itself in this list.
+///
+/// A client keeps the quads rather than the tree, so it needs to know which
+/// ones they were. Recorded while the list is built, because afterwards the
+/// node is gone and nothing can be walked to find out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Departure {
+    /// The node's server id: what a release is reported by.
+    pub id: u32,
+    /// The first quad it pushed, and how many.
+    pub first: u32,
+    /// How many.
+    pub count: u32,
+    /// The clip its quads were drawn under.
+    pub clip: u32,
+    /// Whether that span is the whole of what it painted.
+    ///
+    /// An overlay met inside the subtree is not painted there — it is put by
+    /// for the top layer and drawn after everything (03 §1), outside this
+    /// span. A page with a menu open is therefore not all here, and a client
+    /// that kept only this would slide the page out and leave the menu
+    /// hanging in the air. Better to let such a page go at once, which is the
+    /// same licence §5 gives for reduced motion.
+    pub whole: bool,
+}
+
+/// A subtree on the move, as the painter is told of it (03 §5): a page
+/// arriving or leaving, or a shared element flying between its two boxes.
+///
+/// The counterpart to [`Glide`], one level out. Offsets are logical px, as
+/// everything the painter is handed is; the pivot is the node's own box, and
+/// the painter turns both into the device pixels the vertex stage wants.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mover {
+    /// Where it starts: `dx`, `dy` in logical px, a uniform scale, and the
+    /// opacity everything painted for it is drawn at.
+    pub from: [f32; 4],
+    /// Where it ends, the same four.
+    pub to: [f32; 4],
+    /// When it began, seconds relative to this paint: at or below zero.
+    pub t0: f32,
+    /// How long it takes, seconds.
+    pub dur: f32,
+    /// `0` standard, `1` decelerate (arriving), `3` accelerate (leaving).
+    pub curve: u32,
+    /// The fraction the hand is holding it at, when a gesture is driving it
+    /// rather than the clock (06 §5). The clock is then not read at all.
+    pub held: Option<f32>,
 }
 
 /// A scroll in flight, as the painter is told of it: which way the content
@@ -295,6 +430,15 @@ pub struct DrawList {
     pub cpu_bound: bool,
     /// The scrolls in flight this list carries (04 §7), by slot less one:
     /// a quad's flags name the slot that moves it.
+    /// Where each subtree that asked to leave painted itself, so a client
+    /// can keep those quads when the tree lets it go (03 §5).
+    pub departures: Vec<Departure>,
+    /// The subtrees this list has on the move (03 §5), in slot order from
+    /// slot one: the pages of a transition, and the shared elements flying
+    /// between them.
+    pub xforms: Vec<Xform>,
+    /// The scrolls this list has in flight (04 §7), in slot order from slot
+    /// one.
     pub scrollers: Vec<Scroller>,
     /// Set when some node wears a `blur`: the extra passes the frame needs
     /// before its own. `None` is the ordinary single-pass frame.
@@ -320,6 +464,9 @@ pub struct Scene<'a> {
     /// Nodes mid-transition (03 §5): where each is going, where it came
     /// from, and when, for the vertex stage to interpolate.
     pub anims: &'a [(NodeIx, GpuAnim)],
+    /// Subtrees on the move (03 §5): the page arriving, the page leaving,
+    /// and any shared element flying between them.
+    pub movers: &'a [(NodeIx, Mover)],
     /// Scrollers mid-glide (04 §7): how far their content stands from
     /// where the layout put it, and when, likewise.
     pub glides: &'a [(NodeIx, Glide)],
@@ -546,6 +693,46 @@ impl Painter<'_, '_> {
         u32::try_from(self.list.scrollers.len() - 1).ok()
     }
 
+    /// Give a subtree on the move its slot, in device pixels about its own
+    /// centre. `None` when the list has no room left, and it is painted
+    /// where the layout put it — the same answer [`Self::note_glide`] gives,
+    /// and for the same reason: a transition is a rendering of a change the
+    /// client already made, so declining to render it changes nothing but
+    /// how it looked.
+    fn note_xform(&mut self, m: Mover, rect: Rect) -> Option<u32> {
+        if self.list.xforms.len() >= MAX_XFORMS {
+            return None;
+        }
+        let s = self.scene.scale;
+        let dev = self.device(rect);
+        let px = [dev[0] + dev[2] / 2.0, dev[1] + dev[3] / 2.0, 0.0, 0.0];
+        let dev_of = |v: [f32; 4]| [v[0] * s, v[1] * s, v[2], v[3]];
+        let clock = match m.held {
+            Some(k) => [0.0, 0.0, CURVE_HELD as f32, k],
+            None => [m.t0, m.dur, m.curve as f32, 0.0],
+        };
+        self.list.xforms.push(Xform { from: dev_of(m.from), to: dev_of(m.to), clock, pivot: px });
+        u32::try_from(self.list.xforms.len()).ok()
+    }
+
+    /// Mark every quad pushed since `first` as carried by the transform in
+    /// `slot`.
+    ///
+    /// The outer field, so this composes with [`Self::carry`] rather than
+    /// fighting it: a list mid-glide on a page mid-slide keeps both, the
+    /// scroller within the page and the page within the frame. A quad
+    /// already carried by an outer transform keeps the one it has, which is
+    /// what makes a shared element fly out of the page it is on instead of
+    /// with it.
+    fn carry_outer(&mut self, first: usize, slot: u32) {
+        for q in self.list.quads.iter_mut().skip(first) {
+            let flags = flags_of(q);
+            if flags & XFORM_MASK == 0 {
+                q.params[2] = (flags | (slot << XFORM_SHIFT)) as f32;
+            }
+        }
+    }
+
     /// Mark every quad pushed since `first` as carried by `slot`.
     fn carry(&mut self, first: usize, slot: u32) {
         for q in self.list.quads.iter_mut().skip(first) {
@@ -624,9 +811,35 @@ impl Painter<'_, '_> {
             return;
         }
         let record = self.scene.session.style_of(ix);
-        let spinning = record.animation == 1;
+        let spinning = record.animation & eui_proto::ANIMATION_SPIN != 0;
         let first = self.list.quads.len();
+        let mover = self.scene.movers.iter().find(|(n, _)| *n == ix).map(|(_, m)| *m);
+        // A page arriving from off the trailing edge is outside every clip
+        // there is, and would be culled before it could slide in. The cull is
+        // loosened by however far this subtree still has to travel, exactly
+        // as a glide loosens it (04 §7) — and restored afterwards, because
+        // the slack belongs to the subtree and not to the frame.
+        let held_slack = self.slack;
+        if let Some(m) = mover {
+            let s = self.scene.scale;
+            let far = |a: f32, b: f32| a.abs().max(b.abs()) * s;
+            self.slack = (self.slack.0.max(far(m.from[0], m.to[0])), self.slack.1.max(far(m.from[1], m.to[1])));
+        }
+        let deferred_before = self.deferred.len();
         self.node_inner(ix, rect, &record);
+        self.slack = held_slack;
+        if record.animation & eui_proto::ANIMATION_EXIT != 0 {
+            if let Some(node) = self.scene.session.node(ix) {
+                let first = u32::try_from(first).unwrap_or(u32::MAX);
+                let count = u32::try_from(self.list.quads.len()).unwrap_or(u32::MAX).saturating_sub(first);
+                self.list.departures.push(Departure { id: node.id, first, count, clip: self.clip, whole: self.deferred.len() == deferred_before });
+            }
+        }
+        if let Some(m) = mover {
+            if let Some(slot) = self.note_xform(m, rect) {
+                self.carry_outer(first, slot);
+            }
+        }
         if spinning {
             // Spec 03 §5 `spin`: everything painted for the node turns about
             // its centre, one revolution per 1.2 s. The angle is not applied
@@ -845,7 +1058,7 @@ impl Painter<'_, '_> {
             // is dimmed itself. `anim` is set only while one runs, so this
             // is `None` for every node of every ordinary frame.
             let saved_fade = self.fade;
-            if record.animation == eui_proto::ANIMATION_ENTER {
+            if record.animation & eui_proto::ANIMATION_ENTER != 0 {
                 if let Some(a) = anim {
                     let (from, to, at) = if a.baked { (a.at.opacity, a.at.opacity, a.at.opacity) } else { (a.from.opacity, a.to.opacity, a.at.opacity) };
                     self.fade = Some(match self.fade {

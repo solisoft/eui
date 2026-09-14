@@ -61,6 +61,7 @@ fn draw_bars(fx: &mut Fx, w: u32, h: u32, scale: f32, bars: &[(eui_tree::NodeIx,
         size: (w, h),
         focus: None,
         anims: &[],
+        movers: &[],
         glides: &[],
         cache: &mut PaintCache::new(),
         editing: None,
@@ -733,6 +734,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             size: (200, 100),
             focus: None,
             anims,
+            movers: &[],
             glides: &[],
             cache: &mut PaintCache::new(),
             editing: None,
@@ -853,6 +855,170 @@ fn a_glide_moves_a_quad_by_its_eased_offset() {
     assert!(mid.abs_diff(want) <= 1, "halfway along the curve: at {mid}, wanted {want}");
 }
 
+/// 03 §5: the quads of one page carry a slot, and the vertex stage puts that
+/// page where it has got to — so the page slides and the header above it does
+/// not. A layer moves a whole list and cannot do that; this is what an
+/// in-tree navigator needs, and what a shared element flies on.
+#[test]
+fn an_outer_slot_moves_one_subtree_and_leaves_its_neighbour() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let slot = (1u32 << XFORM_SHIFT) as f32;
+    // A header that stays, and a page that goes.
+    list.quads = vec![
+        Quad { rect: [10.0, 10.0, 40.0, 10.0], params: [0.0, 0.0, 0.0, 1.0], fill: white, ..Quad::default() },
+        Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: white, ..Quad::default() },
+    ];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 2 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    // In from 60 px below, over a second, along the theme's standard curve.
+    list.xforms = vec![Xform { from: [0.0, 30.0, 1.0, 1.0], to: [0.0, 0.0, 1.0, 1.0], clock: [0.0, 1.0, 0.0, 0.0], pivot: [30.0, 45.0, 0.0, 0.0] }];
+    let target = r.offscreen(100, 100);
+    let mut rows = |r: &mut Renderer, st: &mut SessionTextures, age: f32| -> Vec<usize> {
+        r.render_offscreen_at(st, &target, 0.0, age, &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        (0..100).filter(|y| px[(y * 100 + 30) * 4] > 128).collect()
+    };
+    let start = rows(&mut r, &mut st, 0.0);
+    assert!(start.contains(&15), "the header is where it was laid out");
+    assert!(!start.contains(&45) && start.contains(&75usize), "the page is 30 px down");
+    let end = rows(&mut r, &mut st, 2.0);
+    assert!(end.contains(&15) && end.contains(&45), "and at the end both are where the layout put them");
+}
+
+/// A gesture drives a transform from the hand rather than from the clock:
+/// the fraction is written straight in, and the same list is right for every
+/// frame of the drag because only four floats change.
+#[test]
+fn a_held_transform_takes_its_fraction_from_the_hand() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let slot = (1u32 << XFORM_SHIFT) as f32;
+    list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    let target = r.offscreen(100, 100);
+    let mut top = |r: &mut Renderer, st: &mut SessionTextures, list: &eui_render::DrawList| -> Option<usize> {
+        r.render_offscreen_at(st, &target, 0.0, 9.0, list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        (0..100).find(|y| px[(y * 100 + 30) * 4] > 128)
+    };
+    // Nine seconds after the paint: a clock-driven transform would be long
+    // over. This one is wherever the hand left it.
+    for (k, want) in [(0.0, 80), (0.5, 60), (1.0, 40)] {
+        list.xforms = vec![Xform::held([0.0, 40.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], (30.0, 45.0), k)];
+        let at = top(&mut r, &mut st, &list).expect("ink");
+        assert!(at.abs_diff(want) <= 1, "held at {k}: {at}, wanted {want}");
+    }
+}
+
+/// 03 §5: a page slides as a layer, not as a list of moved quads. The window
+/// draws the list it already had, one `render` later, with four floats
+/// different — so a transition frame walks no tree, paints no quad and sends
+/// nothing anywhere.
+#[test]
+fn a_layer_moves_the_whole_list_it_draws() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let white = [1.0, 1.0, 1.0, 1.0];
+    list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, 0.0, 1.0], fill: white, ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    let target = r.offscreen(100, 100);
+    let mut top = |r: &mut Renderer, st: &mut SessionTextures, layer: ((f32, f32), f32, f32)| -> Option<usize> {
+        r.render_offscreen_layered(st, &target, 0.0, layer, &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        (0..100).find(|y| px[(y * 100 + 30) * 4] > 128)
+    };
+    assert_eq!(top(&mut r, &mut st, ((0.0, 0.0), 1.0, 1.0)), Some(40), "identity leaves it where it was laid out");
+    assert_eq!(top(&mut r, &mut st, ((0.0, 25.0), 1.0, 1.0)), Some(65), "the layer carries it down");
+    // Off the leading edge entirely: nothing is drawn, and no viewport was
+    // asked to leave its attachment to do it.
+    assert_eq!(top(&mut r, &mut st, ((-400.0, 0.0), 1.0, 1.0)), None, "slid off the leading edge");
+    // A scale is about the target's own centre, so a bar at y = 40 in a
+    // 100 px target moves towards y = 50 rather than towards the corner.
+    let half = top(&mut r, &mut st, ((0.0, 0.0), 0.5, 1.0)).expect("ink at half scale");
+    assert!(half.abs_diff(45) <= 1, "scaled about the centre: at {half}, wanted 45");
+}
+
+/// The distance field works in the quad's own units, and the vertex stage
+/// scales those units on their way to the screen — so every distance the
+/// fragment measures comes out `scale` device pixels wide, the antialiasing
+/// ramp included. Left uncorrected a page growing towards a shared element
+/// gets a soft fringe the size of the growth (eight pixels of gradient at
+/// eight times the size), and one shrinking gets a hard stepped one. The ramp
+/// is supposed to be one device pixel at every size.
+#[test]
+fn the_antialias_ramp_stays_a_device_pixel_under_a_layer_scale() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    // A narrow bar across the centre, its left edge a quarter of a pixel in,
+    // so there is an edge for the ramp to land on at any scale.
+    // Its left edge is a thirty-second of a pixel off centre, chosen so the
+    // edge lands a *quarter* of a pixel inside a pixel at eight times the
+    // size too — on a half it would sit exactly on a pixel's centre, where a
+    // ramp of any width at all reads the same and the test proves nothing.
+    list.quads = vec![Quad { rect: [49.53125, 30.0, 2.0, 40.0], params: [0.0, 0.0, 0.0, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    let target = r.offscreen(100, 100);
+    // How many pixels across the bar's row are neither ink nor ground: the
+    // width of the ramp in device pixels, counted rather than measured.
+    let mut soft = |r: &mut Renderer, st: &mut SessionTextures, scale: f32| -> usize {
+        r.render_offscreen_layered(st, &target, 0.0, ((0.0, 0.0), scale, 1.0), &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        (0..100).filter(|x| (20..250).contains(&px[(50 * 100 + x) * 4])).count()
+    };
+    let plain = soft(&mut r, &mut st, 1.0);
+    assert!((1..=2).contains(&plain), "unscaled the edge is one pixel of ramp: {plain}");
+    let big = soft(&mut r, &mut st, 8.0);
+    assert!((1..=2).contains(&big), "and eight times the size it is still one, not eight: {big}");
+    // Only growth is tested, and only because only growth is visible: a page
+    // shrinking to 92 % for a fade-through gets a ramp 0.92 device px wide
+    // uncorrected, which no eye has ever caught. A hero flying to eight times
+    // its thumbnail gets eight, which every eye does.
+}
+
+/// The layer's opacity multiplies what each quad arrived at, so a page can
+/// fade out while the things inside it are still running transitions of
+/// their own — the one thing the entrance's own fade cannot do without the
+/// two having to share a timeline.
+#[test]
+fn a_layer_fades_everything_it_draws() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    list.quads = vec![Quad { rect: [10.0, 10.0, 80.0, 80.0], params: [0.0, 0.0, 0.0, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    let target = r.offscreen(100, 100);
+    let mut ink = |r: &mut Renderer, st: &mut SessionTextures, a: f32| -> u8 {
+        r.render_offscreen_layered(st, &target, 0.0, ((0.0, 0.0), 1.0, a), &list, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()[(50 * 100 + 50) * 4]
+    };
+    let full = ink(&mut r, &mut st, 1.0);
+    let half = ink(&mut r, &mut st, 0.5);
+    let none = ink(&mut r, &mut st, 0.0);
+    assert!(full > 250, "opaque at 1.0: {full}");
+    assert!(half < full && half > 0, "part way at 0.5: {half}");
+    assert_eq!(none, 0, "gone at 0.0");
+}
+
 /// Asked to, the renderer times its main pass on the GPU and reports the
 /// frame before's figure -- read without waiting, so a frame never stalls
 /// on it.
@@ -909,6 +1075,7 @@ fn retained_glyph_quads_are_replayed_until_the_node_changes() {
             size: (200, 100),
             focus: None,
             anims: &[],
+            movers: &[],
             glides: &[],
             cache,
             editing: None,
@@ -1034,6 +1201,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         size: (200, 100),
         focus: None,
         anims: &[],
+        movers: &[],
         glides: &[],
         cache: &mut PaintCache::new(),
         editing,
@@ -1131,6 +1299,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             size: (200, 100),
             focus: None,
             anims: &[],
+            movers: &[],
             glides: &[],
             cache: &mut PaintCache::new(),
             editing,
@@ -1247,6 +1416,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             size: (100, 100),
             focus: None,
             anims: &[],
+            movers: &[],
             glides: &[],
             cache: &mut PaintCache::new(),
             editing: None,

@@ -316,10 +316,79 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
             std::thread::sleep(Duration::from_millis(200));
             driver.tick(Instant::now());
         }
+        // SNAPSHOT_CLICK="x,y" — a click before the last paint, for a state a
+        // page only reaches by being used: the section a link opens, the panel
+        // a button raises. Several, separated by `;`, for a state that takes
+        // more than one — a card behind a section behind a button.
+        //
+        // Each waits for the answer before the next is aimed, because the
+        // second one is usually at a place the first one's answer created.
+        // A step is `x,y` to click there, or `s<dy>` to wheel the view down
+        // first — what is worth photographing is often below the fold, and a
+        // click is aimed at where a thing is *on screen*.
+        let steps: Vec<(f32, f32, bool)> = std::env::var("SNAPSHOT_CLICK")
+            .ok()
+            .map(|at| {
+                at.split(';')
+                    .filter_map(|one| {
+                        let one = one.trim();
+                        if let Some(dy) = one.strip_prefix('s') {
+                            return Some((0.0, dy.trim().parse::<f32>().ok()?, true));
+                        }
+                        let (x, y) = one.split_once(',')?;
+                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?, false))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (x, y, scroll) in steps {
+            let _ = driver.paint(dw, dh);
+            if scroll {
+                driver.input(Input::PointerMove(w / 2.0, h / 2.0));
+                driver.input(Input::Wheel(0.0, y));
+                let mut clock = Instant::now();
+                for _ in 0..40 {
+                    clock += Duration::from_millis(16);
+                    driver.tick(clock);
+                    let _ = driver.paint(dw, dh);
+                }
+                continue;
+            }
+            for i in [Input::PointerMove(x, y), Input::PointerDown(0), Input::PointerUp(0)] {
+                for f in driver.input(i) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+            }
+            // Drain for a fixed spell rather than stopping at the first frame
+            // back. The first frame is usually an `Ack` for the press, not the
+            // batch answering the click — stopping there photographs the page
+            // as it was, which is a lie that looks exactly like a handler that
+            // does nothing.
+            let until = Instant::now() + Duration::from_millis(800);
+            while Instant::now() < until {
+                let _ = wake_rx.recv_timeout(Duration::from_millis(8));
+                while let Ok(msg) = conn.rx.try_recv() {
+                    if let Incoming::Message(b) = msg {
+                        if let Ok(f) = Frame::decode(&b) {
+                            for out in driver.handle_frame(f) {
+                                conn.tx.send(out.encode()).unwrap();
+                            }
+                        }
+                    }
+                }
+                let _ = driver.paint(dw, dh);
+            }
+            driver.tick(Instant::now());
+        }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
+        // SNAPSHOT_AGE=<ms> — draw the list as it will look this long after
+        // the paint that produced it. Everything the vertex stage animates
+        // from the clock (03 §5) is then visible off-screen: a transition
+        // part way, a page mid-slide, a spinner at an angle.
+        let age = std::env::var("SNAPSHOT_AGE").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(0.0, |ms| ms / 1000.0);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
+        renderer.render_offscreen_at(&mut textures, &target, 0.0, age, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {

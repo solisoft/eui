@@ -154,7 +154,108 @@ rebuilt the tree, which is the flash the sentence above exists to
 prevent. A client MAY skip an entrance for the same reason it may skip a
 transition, and the server hears nothing either way.
 
-A record's `animation` byte (02 §3, offset 61) is `0` or `1`, **spin**: a
+### 5.1 Leaving
+
+A record's `animation` bit `4` is **exit**, the mirror of `enter`: a node
+released while wearing it — by `RemoveChild`, `Replace`, `Mount`, or a
+parent's release carrying it down — **keeps its painting** for its
+`transition` duration, or `motion.base` when it names none, along the
+**accelerate** curve of 05 §2 rather than the theme's standard one. Then it
+is let go.
+
+`animation` is a bit set and not an enumeration for exactly this reason. A
+node has to say how it will leave while it is still there to say it: the op
+that removes a node is the only op there is, and a `SetStyle` aimed at one on
+its way out would be a style change on something already gone. So a page
+names its arrival and its departure in the one record it is grafted with, and
+`enter | exit` is the ordinary spelling of a page.
+
+What is kept is the **painting and not the tree**. The node is gone: it
+cannot be named by an op, cannot be reached by an event, cannot hold focus,
+cannot be a `wake`r or a locator, is not laid out again, is not hit-tested —
+a click during a page's departure lands on whatever is arriving underneath,
+which is what a person expects — and is not in the accessibility tree. None
+of that is a rule a client has to enforce at each door; it is what is left
+when only the quads are kept.
+
+Three bounds hold it down. A client MUST keep at most **one** released
+painting per session, and a second supersedes the first, which is let go at
+once — the same shape as one contact at a time (06 §5) and one drag at a
+time (06 §6), and what makes the memory a constant rather than a function of
+how fast a person can tap. A client MUST let a painting go rather than draw
+it wrong when what it was made against has moved: the glyph atlas it sampled,
+the size of the frame, the viewer's palette. And a subtree that painted an
+overlay (§1) painted part of itself in the top layer, outside the span it
+otherwise occupies; a client MAY refuse to keep such a page at all, and then
+it simply goes, which is the same licence the paragraph below gives.
+
+The server is never told — not that a departure began, and not that it
+ended. There is no op, no event and no acknowledgement, exactly as for the
+transition above, and a client MAY skip the whole thing (reduced motion)
+with no difference on the wire.
+
+### 5.2 Which way
+
+A record's `motion_kind` byte (02 §3, offset 63) says which way its entrance
+arrives and its exit leaves:
+
+| value | Name | The geometry |
+|---:|---|---|
+| 0 | `fade` | no movement: the entrance as §5 has always described it |
+| 1 | `leading` | from, or to, beyond the leading edge of the parent's content box |
+| 2 | `trailing` | likewise the trailing edge |
+| 3 | `top` | |
+| 4 | `bottom` | |
+| 5 | `scale` | from, or to, 92 % about the node's own centre |
+| 6 | `paired` | it flies between its own box and that of the node carrying the same `key` on the other side of the change (§5.3) |
+
+A direction and never a duration. The duration is `transition`, and keeping
+the two apart is what stops a page from carrying a timing of its own — 05 §2
+having already said that motion specified per node is motion nobody gets
+right twice.
+
+**A node that is leaving is not told where to go.** Its direction is the
+*mirror* of the direction the node arriving beside it came from, under
+`leading ↔ trailing`, `top ↔ bottom`, and `fade`, `scale` and `paired` each
+their own. Two nodes are a pair when one is released and one is grafted under
+the same parent with no paint between them; a release with no partner uses
+its own record's direction. So a push and a pop are the same sentence read in
+the two directions, a server interns two records for a page rather than four,
+and the question "which way is back" is never asked on the wire at all.
+
+The one leaving travels **a third** of the distance the one arriving does.
+That is prose here and not a field, because the page underneath is not being
+replaced, it is being uncovered, and something sliding out as fast as the
+thing covering it reads as two slides rather than as a stack with a depth to
+it. A client that moved both the same distance would be conforming and wrong.
+
+As with an entrance, the movement descends to **everything painted for the
+node**. That is the second place anything descends, and the justification
+already given for opacity carries over without change: a page whose header
+slid while its rows did not would read as a tear rather than as a page.
+
+### 5.3 Pairing
+
+`motion_kind` `6` `paired`, on a node carrying a `key`, on **both** sides of a
+change: the node leaving and the node arriving fly between their two boxes
+rather than each going the way its page goes.
+
+Nothing is laid out per frame to do it. The arriving node was laid out for
+this frame, and the leaving node's box is frozen by §5.1 — both rectangles are
+known before the first frame of the movement, so the pair is one
+interpolation resolved once, which is the same bargain §5 strikes for a
+colour and 04 §7 strikes for a scroll.
+
+A `paired` node whose partner is missing is **not an error and MUST NOT
+refuse the batch**: it falls back to the motion of the page it is on. A
+panel is built and torn down as it opens, so a name that does not resolve is
+the ordinary case and not a broken one.
+
+A client MUST bound the number of pairs it resolves in one change, and a
+client that cannot resolve a pair paints the node where the layout put it —
+the same answer it gives when it runs out of room for a scroll in flight.
+
+A record's `animation` bit `1` is **spin**: a
 node wearing it turns about its own centre, one revolution every 1.2 s,
 for as long as it is on screen, and everything painted for it — its box,
 its text, its canvas paths — turns with it. It is what a spinner is made

@@ -382,8 +382,8 @@ fn a_transition_past_the_motion_scale_is_rejected() {
 }
 
 #[test]
-fn an_unknown_animation_is_rejected() {
-    assert_eq!(style_with(61, &[3]), E::IllegalValue("animation is 0, 1 (spin) or 2 (enter)"));
+fn an_animation_bit_this_revision_does_not_define_is_rejected() {
+    assert_eq!(style_with(61, &[8]), E::IllegalValue("animation is a bit set of 1 (spin), 2 (enter) and 4 (exit)"));
 }
 
 #[test]
@@ -393,12 +393,32 @@ fn enter_is_a_known_animation() {
     assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).map(|s| s.animation), Ok(2));
 }
 
+/// A page says how it arrives and how it leaves in one record, because there
+/// is no later op to say the second half in.
 #[test]
-fn a_non_zero_reserved_byte_is_rejected() {
-    // Offset 62 is `blur` now and takes any value; 63 is the last byte left.
+fn an_entrance_and_an_exit_are_one_record() {
     let mut raw = style_bytes();
+    raw[61] = 2 | 4;
+    raw[63] = 2;
+    let out = StyleRecord::decode(&mut Reader::new(&raw)).unwrap();
+    assert_eq!((out.animation, out.motion), (6, Motion::Trailing));
+    assert_eq!(out.motion.mirrored(), Motion::Leading, "the way out is the way in, reversed");
+}
+
+#[test]
+fn an_unknown_motion_is_rejected() {
+    assert_eq!(style_with(63, &[7]), E::UnknownTag("motion"));
+}
+
+/// Offset 63 was the record's last reserved byte and is now `motion`. It is
+/// still refused when it is nothing but garbage: a direction is only a
+/// direction if something is going that way.
+#[test]
+fn a_motion_with_neither_an_entrance_nor_an_exit_is_rejected() {
+    let mut raw = style_bytes();
+    raw[61] = 1; // spin: an animation, but not one that arrives or leaves
     raw[63] = 1;
-    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(), E::IllegalValue("the reserved byte must be zero"));
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).unwrap_err(), E::IllegalValue("motion needs an entrance or an exit to belong to"));
 }
 
 #[test]

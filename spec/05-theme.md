@@ -98,7 +98,7 @@ be specified per node is motion nobody gets right twice:
 |---|---|---|
 | standard | `0.2, 0, 0, 1` | a style change (03 §5) |
 | decelerate | `0, 0, 0.2, 1` | something arriving (03 §5 `enter`) |
-| accelerate | `0.4, 0, 1, 1` | something leaving |
+| accelerate | `0.4, 0, 1, 1` | something leaving (03 §5.1 `exit`) |
 | smooth | `0.45, 0, 0.55, 1` | rest to rest — a keyboard scroll |
 | linear | `0, 0, 1, 1` | a value that is not a movement |
 
