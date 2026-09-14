@@ -748,7 +748,21 @@ impl Tab {
         let (origin, path) = split_origin(&self.url);
         let component = crate::chrome::component_of(&self.url);
         let title = if component.is_empty() { self.title.as_str() } else { component };
-        crate::chrome::TabView { title, origin, path, trust: Some(self.trust), link: self.link_word(), can_back: self.at > 0, can_forward: self.at + 1 < self.history.len() }
+        // Back is live when the *application* would do something with it —
+        // its own pages are its own, and 06 §1.3's `back` is how it is asked
+        // to pop one — or, failing that, when the tab has been at another
+        // address. Forward is the trail alone: the protocol has no event for
+        // it, because a server that keeps a stack was never asked to keep
+        // what it popped.
+        crate::chrome::TabView {
+            title,
+            origin,
+            path,
+            trust: Some(self.trust),
+            link: self.link_word(),
+            can_back: self.backend.takes_back() || self.at > 0,
+            can_forward: self.at + 1 < self.history.len(),
+        }
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {
@@ -1376,7 +1390,19 @@ impl Shell {
                     self.go_to(url, renderer, Trail::Stay);
                 }
             }
-            A::Back => self.step(true, renderer),
+            A::Back => {
+                // The page first, the address second. Clicking a menu item
+                // never changed the address, so nothing about it is in the
+                // tab's trail — an application's pages are the application's,
+                // and a server that draws them keeps the stack (06 §1.3).
+                // The arrow asks it to pop one, the same event Android's
+                // back button, `Alt+Left`, the mouse's fourth button and a
+                // swipe from the leading edge already arrive as. Only a page
+                // with nowhere left to go leaves the arrow meaning the trail.
+                if !self.back() {
+                    self.step(true, renderer);
+                }
+            }
             A::Forward => self.step(false, renderer),
             A::Open(url) => {
                 if let Some((c, _)) = &mut self.chrome {
