@@ -571,6 +571,29 @@ fn split_origin(url: &str) -> (&str, &str) {
     }
 }
 
+/// The whole session URL an address with no path meant, or `None` for one
+/// that already names a path.
+///
+/// Spec 01 §2.1 puts `entry` in the manifest — "session path, defaults to
+/// `/_eui/session`" — and the client had never read it, so every address had
+/// to be typed down to the protocol's own prefix, which is exactly the part
+/// nobody should have to know. `wss://host` is an origin, and the
+/// application's own manifest is what says where its session is.
+///
+/// Following it adds nothing a server could not already do. `entry` rides
+/// inside the manifest body the publisher's key signs, 01 §2.1 refuses one
+/// that is not an absolute path, and the path it names is on the origin the
+/// key was pinned to — the same origin the client was about to connect to
+/// anyway.
+fn completed(url: &str, entry: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if !path.is_empty() || host.is_empty() || !entry.starts_with('/') {
+        return None;
+    }
+    Some(format!("{scheme}://{host}{entry}"))
+}
+
 /// What to call a tab before its manifest arrives: the last path segment,
 /// which for `…/_eui/session/gallery` is the component's own name.
 fn name_from_url(url: &str) -> String {
@@ -631,6 +654,14 @@ impl Tab {
                 let refused = m.capabilities & !tab.allowed;
                 eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
                 tab.backend.grant(granted);
+                // 01 §2.1: the manifest says where the session lives, so an
+                // address with no path is not half an address — it is the
+                // origin, and the application completes it.
+                if let Some(whole) = completed(&tab.url, &m.entry) {
+                    eprintln!("eui: {} → {whole} (the manifest's entry)", tab.url);
+                    tab.url = whole;
+                    tab.title = name_from_url(&tab.url);
+                }
                 if !m.name.is_empty() {
                     tab.title = m.name;
                 }
@@ -3402,5 +3433,25 @@ mod tests {
         // An ordinary character always types.
         assert!(types_text(&Key::Character("a".into())));
         assert!(types_text(&Key::Character("é".into())));
+    }
+
+    /// 01 §2.1: an address with no path is an origin, and the manifest's
+    /// `entry` is what completes it. One that names a path is already whole.
+    #[test]
+    fn a_pathless_address_is_completed_by_the_manifests_entry() {
+        assert_eq!(completed("wss://host.example", "/_eui/session/gallery").as_deref(), Some("wss://host.example/_eui/session/gallery"));
+        // A bare origin with the slash typed is the same address.
+        assert_eq!(completed("wss://host.example/", "/_eui/session/gallery").as_deref(), Some("wss://host.example/_eui/session/gallery"));
+        assert_eq!(completed("ws://127.0.0.1:5092", "/_eui/session/counter").as_deref(), Some("ws://127.0.0.1:5092/_eui/session/counter"));
+
+        // Already whole: what was typed wins, so a person who names a
+        // component gets that component and not the default.
+        assert_eq!(completed("wss://host.example/_eui/session/music", "/_eui/session/gallery"), None);
+        assert_eq!(completed("wss://host.example/anything", "/x"), None);
+
+        // Nothing to complete from, or nothing to complete.
+        assert_eq!(completed("wss://host.example", "_eui/session"), None, "01 §2.1: entry is an absolute path");
+        assert_eq!(completed("wss://", "/x"), None, "no host");
+        assert_eq!(completed("host.example", "/x"), None, "no scheme");
     }
 }

@@ -47,7 +47,13 @@ record (see [`02-wire-format.md`](02-wire-format.md) §7) carrying:
 - `signature` — Ed25519 over the manifest body excluding the signature field
 - `capabilities` — the set requested; the client grants none of them implicitly
 - `theme` — blake3 of the default theme asset
-- `entry` — session path, defaults to `/_eui/session`
+- `entry` — session path, defaults to `/_eui/session`. A client given an
+  address with no path MUST take the origin's manifest and connect to
+  `entry` on it, so that `wss://host` is an address and not half of one:
+  the protocol's own prefix is the part nobody should have to type. An
+  address that names a path is already whole and `entry` does not touch it.
+  `entry` is inside the signed body and MUST be an absolute path, so it
+  names nothing the origin could not have served anyway.
 - `pin` — OPTIONAL SPKI pin set for the origin
 
 The record's keys, in the order they MUST appear (02 §7 leaves the table to
