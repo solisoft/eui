@@ -1091,6 +1091,7 @@ dependencies = [
  "eui-text",
  "eui-theme",
  "eui-tree",
+ "eui-uikit",
  "eui-video",
  "eui-vm",
  "futures-util",
@@ -1099,8 +1100,6 @@ dependencies = [
  "landlock",
  "libc",
  "notify",
- "objc2 0.5.2",
- "objc2-ui-kit",
  "png",
  "pollster",
  "rfd",
@@ -1183,6 +1182,14 @@ name = "eui-tree"
 version = "0.1.0"
 dependencies = [
  "eui-proto",
+]
+
+[[package]]
+name = "eui-uikit"
+version = "0.1.0"
+dependencies = [
+ "objc2 0.5.2",
+ "objc2-ui-kit",
 ]
 
 [[package]]

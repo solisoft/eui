@@ -11,6 +11,7 @@ members = [
     "crates/eui-shader",
     "crates/eui-render",
     "crates/eui-vm",
+    "crates/eui-uikit",
     "crates/eui-client",
     "crates/eui-android",
     "crates/eui-ios",

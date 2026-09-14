@@ -74,20 +74,12 @@ arboard = { version = "3", optional = true, default-features = false, features =
 rfd = { version = "0.17.2", optional = true }
 
 # iOS. UIKit is asked exactly one question — how much of the window its soft
-# keyboard is standing on — and `UIKeyboardLayoutGuide` is the public way to
-# ask it, so `crates/eui-client/src/ios.rs` stays the file with no
-# Objective-C of its own that it has always been. Only the classes that one
-# question needs are compiled in; `objc2-ui-kit` is a feature per class and
-# the default is all of UIKit.
+# keyboard is standing on — and it is asked from `eui-uikit` rather than
+# here, because asking costs an `unsafe` block and this crate is
+# `#![forbid(unsafe_code)]`. `ios.rs` does the safe half: it pulls the
+# `UIView` out of the window handle and hands the pointer over.
 [target.'cfg(target_os = "ios")'.dependencies]
-objc2 = "0.5"
-objc2-ui-kit = { version = "0.2", default-features = false, features = [
-  "UIResponder",
-  "UIView",
-  "UILayoutGuide",
-  "UITrackingLayoutGuide",
-  "UIKeyboardLayoutGuide",
-] }
+eui-uikit = { path = "../eui-uikit", version = "0.1.0" }
 
 # Android. `android-native-activity` is what makes winit's event loop take
 # an `AndroidApp` instead of starting from `main`; the crate itself is here

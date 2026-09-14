@@ -1,0 +1,28 @@
+[package]
+name = "eui-uikit"
+description = "The one question the client puts to UIKit: how much of the window its soft keyboard is standing on."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Only iOS has a UIKit. On every other target this crate compiles to
+# nothing, which is what lets `cargo build --workspace` on a desktop go on
+# building it.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.5"
+# A feature per class, and the default is the whole of UIKit. These are what
+# one getter needs — plus `std`, which is in the default set this turns off
+# and which `objc2-foundation` does not build without.
+objc2-ui-kit = { version = "0.2", default-features = false, features = [
+  "std",
+  "UIResponder",
+  "UIView",
+  "UILayoutGuide",
+  "UITrackingLayoutGuide",
+  "UIKeyboardLayoutGuide",
+] }
+
+[lints]
+workspace = true
