@@ -10,6 +10,10 @@ Everything else here is rendered from it by `scripts/make-icons.py` (needs
 librsvg`). Edit the SVG, run the script, commit what changed:
 
     png/eui-<n>.png   16 … 512, full bleed
+    crates/eui-android/res/mipmap-<density>/ic_launcher.png
+                      48, 72, 96, 144, 192 — Android is the one platform
+                      that takes its icon from resources compiled into the
+                      package, so it needs a tree of its own
     eui.icns          macOS: the artwork inset in 824 of 1024 with a shadow,
                       which is the canvas every other Mac app icon uses
     eui.ico           Windows, for installers and shortcuts
@@ -31,6 +35,7 @@ that fails differently on each of them.
 | Windows `eui.exe`, Explorer, taskbar | `eui.res`, linked in by `crates/eui-client/build.rs` |
 | The window itself, on X11 and Windows | `png/eui-64.png`, embedded in the binary and handed to winit |
 | Linux launchers, docks, alt-tab | `../eui.desktop` and the hicolor tree, installed by `scripts/install-linux-icon.sh` |
+| Android launcher, recents, settings | `crates/eui-android/res/mipmap-*/ic_launcher.png`, named by `android:icon` in that crate's manifest metadata |
 
 Wayland is the one place a window cannot hand its own icon over: the
 compositor matches the window's app id (`eui`) against a `.desktop` file and

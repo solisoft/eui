@@ -32,6 +32,14 @@ workspace = true
 # that opens the shell and lets an address be typed.
 [package.metadata.android]
 package = "org.eui.client"
+# The launcher icon. Android is the one platform that takes it from resources
+# compiled into the package rather than from a file beside the binary, so it
+# needs this tree and nothing else does; `scripts/make-icons.py` renders it
+# from `assets/icon/eui.svg` with every other raster.
+#
+# Without it the application installs with the green robot, which is the
+# platform saying it was given nothing.
+resources = "res"
 # 64-bit ARM alone: every phone made this decade, and each extra ABI is
 # another whole compile of the client. `EUI_ANDROID_ABIS` in
 # `scripts/make-android-apk.sh` overrides this where that is not enough.
@@ -51,6 +59,9 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "EUI"
+# Named on the application element, where Android looks for it — the
+# `resources` tree above only carries the file.
+icon = "@mipmap/ic_launcher"
 # The client draws its own everything; the platform theme must not put a
 # title bar or an action bar above it.
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
