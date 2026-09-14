@@ -1,17 +1,21 @@
-# Three EUI components. Needs a `soli` built with `--features eui`.
+# Eleven EUI components. Needs a `soli` built with `--features eui`.
 #
 # router_eui(component, handler, view, options?):
 #   handler — a LiveView handler: {event, params, state} -> state
 #   view    — a function of state returning the node tree
-#   options — {"session": "required"}, and {"default": true} for the one a
-#             bare origin opens. The EUI manifest carries a single `entry`
-#             (01 §2.1) and this server carries eleven components, so one of
-#             them has to be what `wss://host` means. Without it the first
-#             route here would be it; the gallery is the one worth showing.
+#   options — {"session": "required"}
+#
+# **The first one is the default.** The EUI manifest carries a single `entry`
+# (01 §2.1) and this server carries eleven components, so one of them has to
+# be what `wss://host` means, and it is this one — which is why the gallery
+# leads rather than the counter. A newer soli also takes `{"default": true}`
+# to say so explicitly, and this file does not use it: the deploy installs a
+# *released* soli, and a routes file that only loads under an unreleased one
+# is a routes file that does not load.
+router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("counter", "live#counter", "live#counter_view")
 router_eui("todo", "live#todo", "live#todo_view")
 router_eui("table", "live#table", "live#table_view")
-router_eui("gallery", "live#gallery", "live#gallery_view", {"default": true})
 router_eui("feed", "live#feed", "live#feed_view")
 router_eui("music", "music#music", "music#music_view")
 # A tracker: the pattern, the instruments and the mixer are Soli; the
