@@ -1412,8 +1412,19 @@ end
 
 # ---- Dashboard -------------------------------------------------------------
 
+# `grow` and `basis` are main-axis, and which axis that is changes with the
+# layout. Side by side the two panels share the row's width and a basis of
+# 340 is a width; stacked, the very same style asks for a *height* of 340 —
+# less than the activity list needs, so its last rows were drawn below the
+# card's own bottom edge, over the card after it. Narrow, the panels take
+# the height their content asks for and nothing else.
+def erp_panel_style(lay)
+  return {"gap": 3, "width": "100%", "grow": 1, "basis": 340} if lay["wide"]
+  {"gap": 3, "width": "100%"}
+end
+
 def erp_dashboard(state, lay)
-  panels = [erp_activity_card(state), erp_pipeline_card(state)]
+  panels = [erp_activity_card(state, lay), erp_pipeline_card(state, lay)]
   column(
     {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
     [
@@ -1930,7 +1941,7 @@ def erp_target(state, lay)
   )
 end
 
-def erp_activity_card(state)
+def erp_activity_card(state, lay)
   rows = erp_activity().map(fn(entry) {
     row(
       {"gap": 3, "align": "center", "width": "100%"},
@@ -1940,12 +1951,15 @@ def erp_activity_card(state)
           {"gap": 0, "grow": 1},
           [text(entry["who"], {"weight": "semibold", "size": 1}), muted(entry["what"])]
         ),
-        muted(entry["when"])
+        # Not `muted`: a clock face is the one thing in the row that must
+        # keep its width. Left shrinkable it was squeezed by the line beside
+        # it and broken mid-number — "07:4" over "8".
+        text(entry["when"], {"fg": "text.muted", "size": 1, "shrink": 0})
       ]
     )
   })
   card(
-    {"gap": 3, "width": "100%", "grow": 1, "basis": 340},
+    erp_panel_style(lay),
     [row({"gap": 3, "align": "center"}, [
       text("Today", {"weight": "bold", "grow": 1}),
       badge("live", "success")
@@ -1953,7 +1967,7 @@ def erp_activity_card(state)
   )
 end
 
-def erp_pipeline_card(state)
+def erp_pipeline_card(state, lay)
   widths = [150, 60, 110]
   stages = [
     ["Quotes", "18", "84 200 €"],
@@ -1963,7 +1977,7 @@ def erp_pipeline_card(state)
   ]
   body = stages.map(fn(stage) { table_row("pl-" + stage[0], stage, widths) })
   card(
-    {"gap": 3, "width": "100%", "grow": 1, "basis": 340},
+    erp_panel_style(lay),
     [
       text("Pipeline", {"weight": "bold"}),
       table_header(["Stage", "Orders", "Value"], widths)
