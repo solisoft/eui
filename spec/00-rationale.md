@@ -65,7 +65,14 @@ These are not gaps to be filled later. They are the reason the client is small.
   catalogue can grow without shipping a new client.
 - **No cascade, no selectors, no specificity, no `!important`.**
 - **No arbitrary code from the network.** No native code, no JIT, no `eval`.
-  Only bytecode that passes the verifier in [`07-bytecode.md`](07-bytecode.md).
+  Exactly two kinds of executable content reach the client, and each has a
+  verifier of its own: bytecode, by [`07-bytecode.md`](07-bytecode.md), and —
+  only where the `scene` capability was granted — a WGSL module, by
+  [`11-shaders.md`](11-shaders.md). Both are **total by construction**: the
+  bytecode's steps are bounded at run time by fuel, the shader's by its shape
+  before it is ever compiled, because a fragment stage cannot be stopped once
+  it is running. Neither can call the platform, allocate, keep state between
+  runs, or reach the other.
 - **No ambient authority.** A capability not granted in the manifest has no code
   path in the runtime, not merely a failing check.
 - **No error recovery.** A malformed frame ends the session. Tolerance is how
@@ -74,7 +81,10 @@ These are not gaps to be filled later. They are the reason the client is small.
   `calc()`. Layout is one specified algorithm so that every implementation
   agrees on the pixel.
 - **No fingerprinting surface.** No user-agent string, no font enumeration, no
-  canvas readback, no device identifier.
+  canvas readback, no device identifier — and a `scene` keeps every one of
+  those, by construction rather than by rule ([`08-security.md`](08-security.md)
+  §8). What a scene does not close is the coarse timing channel a `wake` and a
+  sound already give a server; 08 §8 says so rather than implying otherwise.
 
 ## What "light and fast" means, concretely
 
@@ -82,7 +92,10 @@ Normative budgets live in [`10-budgets.md`](10-budgets.md) and are enforced in
 CI. The headline ones:
 
 - 0 % CPU and **zero wakeups** at idle — an architectural consequence of an
-  event-driven redraw with no continuous render loop, not a tuning parameter;
+  event-driven redraw with no continuous render loop, not a tuning parameter.
+  Something that moves is not idle: a spinner, a playing picture and an
+  animating scene each redraw at the cadence they asked for, and each does it
+  without waking the part of the client that reads the server's bytes;
 - < 25 MB RSS for a 200-node application;
 - 4.6 KB on the wire for a 50-row table against 14.4 KB of HTML — 3.1× overall,
   5.3× on structure alone, measured rather than hoped;

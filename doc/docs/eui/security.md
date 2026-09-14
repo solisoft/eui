@@ -22,7 +22,12 @@ nor a proxy can substitute content. The name *is* the content.
 
 Deny by default. A manifest declares what it wants — `camera`, `microphone`,
 `clipboard.read`, `clipboard.write`, `notifications`, `location`, `fs.pick`,
-`fs.save` — and the user grants per application, revocably.
+`fs.save`, `nfc`, `scene` — and the user grants per application, revocably.
+
+`scene` is the odd one and worth its own sentence: it is not a device, it is
+permission to run a graphics program the application wrote. What the person
+is told is both halves of that — it spends their graphics card and can slow
+the machine down, and it still cannot read what is on their screen.
 
 An application asks for them in its routes, and asking grants nothing:
 
@@ -38,13 +43,30 @@ frame are rejected outright.
 
 ## No code from the network
 
-No native code. No JIT. No `eval`. Only bytecode that passes a verifier — to be
-specified in `spec/07-bytecode.md` — with an opcode allowlist, stack-effect
-validation, constant-pool bounds, jump-target checks, and a maximum chunk size,
-all before the first instruction runs.
+No native code. No JIT. No `eval`. Exactly two kinds of executable content
+reach the client, and each has a verifier of its own before the first
+instruction runs.
+
+**Bytecode** (`spec/07-bytecode.md`): an opcode allowlist, stack-effect
+validation, constant-pool bounds, jump-target checks, a maximum chunk size,
+and fuel that bounds a run while it is running.
+
+**A shader** (`spec/11-shaders.md`), and only where the `scene` capability was
+granted. A fragment stage cannot be stopped once it is running — it is already
+on the GPU when it misbehaves — so its bound has to be proved from its shape
+*before* it is compiled: every loop's trip count read off constants, a total
+step budget, and no storage, no atomics, no images, nothing bound to it but
+the uniform block the client hands it.
 
 This structurally removes the entire browser-JIT exploit class. There is no
 speculative compiler to confuse, because there is no compiler.
+
+What it does *not* remove, and the specification says so rather than implying
+otherwise: a shader still has to be compiled, and a shader compiler belongs to
+the graphics driver, which lives in the window process because that is where
+the GPU is. Verification makes the input to that compiler small and dull. It
+does not make the compiler safe, and no arrangement of processes can, short of
+not granting `scene` at all — which is exactly why it is a capability.
 
 ## Memory safety — **built**
 

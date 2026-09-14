@@ -45,6 +45,7 @@ pub const BUILD: &str = env!("EUI_BUILD");
 pub mod desktop_theme;
 pub mod driver;
 pub mod manifest;
+pub mod mesh;
 pub mod nfc;
 pub mod place;
 pub mod sandbox;

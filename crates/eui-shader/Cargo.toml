@@ -1,0 +1,18 @@
+[package]
+name = "eui-shader"
+description = "EUI shader verifier: what a WGSL module from the network must be before the window compiles it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The same front end wgpu uses, taken directly so that the hostile parse
+# happens in the worker (08 §10) rather than only in the window. It is
+# already linked -- 10 §1 counts naga at 876 KB of `.text` -- so this costs
+# no binary that was not already being paid for.
+naga = { version = "23", features = ["wgsl-in"] }
+
+[lints]
+workspace = true

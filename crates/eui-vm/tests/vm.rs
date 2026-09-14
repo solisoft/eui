@@ -17,6 +17,7 @@ struct Mem {
     refuse_nodes: bool,
     mode: Option<String>,
     went_back: bool,
+    uniforms: HashMap<(u32, u32), f64>,
 }
 
 impl Host for Mem {
@@ -57,6 +58,15 @@ impl Host for Mem {
     }
     fn go_back(&mut self) {
         self.went_back = true;
+    }
+    fn set_scene_uniform(&mut self, node: u32, index: u32, value: f64) -> bool {
+        // The two refusals a real host makes: the block is eight floats
+        // wide, and a node that is not a scene has none.
+        if self.refuse_nodes || index >= 8 {
+            return false;
+        }
+        self.uniforms.insert((node, index), value);
+        true
     }
 }
 
@@ -240,4 +250,103 @@ fn set_mode_takes_a_string_and_the_host_decides() {
     assert!(run(&chunk, &mut host).is_err());
     // It pops: nothing on the stack is a verification error.
     assert!(Chunk::verify(&Asm::new(1).set_mode().ret()).is_err());
+}
+
+// ---------------------------------------------------------------- floats
+
+/// 07 §3: a chunk can do arithmetic on floats, and every result it keeps is
+/// a finite number.
+///
+/// The reason the VM grew them: a scene's uniform block is eight floats, and
+/// a chunk that turns a cube with the pointer has to integrate an angle
+/// between frames. Integers could not carry that, and a round trip to the
+/// server for each frame is what the whole design is avoiding.
+#[test]
+fn a_chunk_can_do_float_arithmetic() {
+    // (0.5 + 0.25) * 2.0 -> 1.5
+    let chunk = Chunk::verify(&Asm::new(2).push_float(0.5).push_float(0.25).op(0x1C).push_float(2.0).op(0x1E).store(1).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.state[&1], Value::Float(1.5));
+}
+
+#[test]
+fn a_float_and_an_integer_are_not_the_same_number() {
+    // Deliberate: a chunk that meant 1.0 and wrote 1 is told so at the
+    // instruction, rather than having the two types quietly merge.
+    let chunk = Chunk::verify(&Asm::new(2).push_float(1.0).push_int(1).op(0x1C).store(1).ret()).unwrap();
+    assert_eq!(run(&chunk, &mut Mem::default()), Err(VmError::Type("float arithmetic on a non-float")));
+    // `to_float` is the one instruction that bridges them.
+    let chunk = Chunk::verify(&Asm::new(2).push_float(1.0).push_int(1).op(0x28).op(0x1C).store(1).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.state[&1], Value::Float(2.0));
+}
+
+/// The invariant this buys: a `Value::Float` is finite, everywhere.
+///
+/// The wire format already refuses a non-finite float at decode; the VM is
+/// the one place inside the client that could have made one. It aborts
+/// instead — a chunk's effects are advisory and the server re-derives them,
+/// so stopping costs a frame of optimism, while a NaN in a uniform costs a
+/// picture that is nowhere for as long as the node lives.
+#[test]
+fn arithmetic_that_leaves_the_numbers_aborts_the_chunk() {
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("divide by zero", Asm::new(2).push_float(1.0).push_float(0.0).op(0x1F).store(1).ret()),
+        ("the root of a negative", Asm::new(2).push_float(-1.0).op(0x27).store(1).ret()),
+        ("an overflow", Asm::new(2).push_float(f64::MAX).push_float(f64::MAX).op(0x1C).store(1).ret()),
+    ];
+    for (what, bytes) in cases {
+        let chunk = Chunk::verify(&bytes).unwrap();
+        let mut m = Mem::default();
+        assert_eq!(run(&chunk, &mut m), Err(VmError::NotFinite), "{what}");
+        assert!(m.state.is_empty(), "{what}: and nothing was left half-done");
+    }
+    // A chunk cannot smuggle one in as a literal either.
+    let chunk = Chunk::verify(&Asm::new(1).push_float(f64::NAN).store(1).ret()).unwrap();
+    assert_eq!(run(&chunk, &mut Mem::default()), Err(VmError::NotFinite));
+}
+
+#[test]
+fn a_float_reads_back_out_of_local_state_as_the_float_it_was() {
+    // What makes an integrator possible: load, add, store, frame after frame.
+    let chunk = Chunk::verify(&Asm::new(2).load(1).push_float(0.25).op(0x1C).op(0x06).store(1).set_uniform(9, 0).ret()).unwrap();
+    let mut m = Mem::default();
+    m.state.insert(1, Value::Float(1.0));
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.state[&1], Value::Float(1.25));
+    assert_eq!(m.uniforms[&(9, 0)], 1.25);
+}
+
+/// A uniform is written through a door of its own, and the door refuses.
+#[test]
+fn a_uniform_index_outside_the_block_is_refused() {
+    let chunk = Chunk::verify(&Asm::new(1).push_float(1.0).set_uniform(9, 8).ret()).unwrap();
+    assert_eq!(run(&chunk, &mut Mem::default()), Err(VmError::Host("set_scene_uniform")));
+    // And it takes a float, not an integer.
+    let chunk = Chunk::verify(&Asm::new(1).push_int(1).set_uniform(9, 0).ret()).unwrap();
+    assert_eq!(run(&chunk, &mut Mem::default()), Err(VmError::Type("a uniform takes a float")));
+}
+
+#[test]
+fn the_trigonometry_a_turning_cube_needs() {
+    // cos(0) -> 1, and sin/cos/sqrt all cost one unit of fuel like anything
+    // else: a chunk gets 4 096 steps whatever it spends them on.
+    let chunk = Chunk::verify(&Asm::new(1).push_float(0.0).op(0x26).store(1).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.state[&1], Value::Float(1.0));
+    let chunk = Chunk::verify(&Asm::new(1).push_float(9.0).op(0x27).store(1).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.state[&1], Value::Float(3.0));
+}
+
+#[test]
+fn a_float_becomes_a_string_the_way_a_person_would_write_it() {
+    let chunk = Chunk::verify(&Asm::new(1).push_float(0.5).op(0x1A).set_text(3).ret()).unwrap();
+    let mut m = Mem::default();
+    run(&chunk, &mut m).unwrap();
+    assert_eq!(m.texts[&3], "0.5");
 }

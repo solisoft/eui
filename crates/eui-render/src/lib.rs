@@ -12,6 +12,13 @@
 //!   target, and can read an off-screen target back — so the renderer is
 //!   tested by looking at pixels, on a machine with no display.
 //!
+//! The second exception is a [`scene`] (03 §1.2): a 3D node renders into a
+//! target of its own, with a depth buffer of its own, and the list then
+//! carries one [`SCENE`] quad that samples it. So the pass above keeps
+//! `depth_stencil: None` whatever an application draws, and the scene
+//! inherits the scissor, the corner radius, the opacity and the page
+//! transition of the quad without its shader knowing any of them exist.
+//!
 //! The one exception to the single pass is a `blur` (03 §2), which has to
 //! see what is under it: such a frame snapshots its backdrop, reduces and
 //! convolves it, and only then draws itself. A frame with no blurred node
@@ -31,11 +38,15 @@ pub mod gpu;
 pub mod icons;
 pub mod paint;
 pub mod retained;
+pub mod scene;
 
 pub use atlas::{Atlas, ImageAtlas, Region};
 pub use gpu::{Offscreen, RenderError, RenderStats, Renderer, SessionTextures, Target, FORMAT};
+pub use paint::SceneDraw;
 pub use paint::{
     colors_of, linear, pack4, paint, resolve_color, scrollbar_thumb, unpack4, Backdrop, Colors, Departure, DrawList, Editing, Glide, GpuAnim, Mover, Quad, Run, Scene, Scroller, Xform, ANIMATED,
-    BLURRED, CURVE_HELD, DECELERATE, MAX_SCROLLERS, MAX_XFORMS, SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA, XFORM_MASK, XFORM_SHIFT,
+    BLURRED, CURVE_HELD, DECELERATE, MAX_SCROLLERS, MAX_XFORMS, SCENE, SCENE_ANIMATED, SCENE_DEPTH, SCENE_MSAA, SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA,
+    XFORM_MASK, XFORM_SHIFT,
 };
 pub use retained::{PaintCache, PaintStats};
+pub use scene::SceneUniforms;

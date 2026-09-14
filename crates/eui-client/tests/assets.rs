@@ -229,3 +229,138 @@ fn what_is_transparent_lends_no_colour_to_what_is_not() {
     // them. Around half is the claim.
     assert!((100..=160).contains(&mid[3]), "and about half the coverage survives as alpha, got {}", mid[3]);
 }
+
+/// A scene's module and mesh are assets, and travel the same verified path a
+/// picture does.
+#[test]
+fn a_scene_asks_for_its_shader_and_its_mesh() {
+    let (shader, mesh) = ([5u8; 32], [6u8; 32]);
+    let mut d = Driver::new(300.0, 200.0, 1.0, caps::SCENE);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Asset(shader)));
+    tree.props.push((2, Value::Asset(mesh)));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "shader".into() },
+            Op::DefAtom { id: 2, value: "mesh".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(60), height: Dim::Px(40), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let asked = d.pending_assets();
+    assert!(asked.contains(&shader) && asked.contains(&mesh), "both, and by hash: {asked:?}");
+}
+
+/// 08 §3: a session that was never granted `scene` does not so much as ask
+/// for the module.
+///
+/// This is the difference between deny-by-default and a check. Refusing to
+/// *compile* a shader would still have fetched it, and a server would have
+/// learned that the request went out. Here there is no request, so there is
+/// nothing to learn — and it is decidable on a machine with no GPU, which is
+/// what makes it a conformance vector rather than a hope.
+#[test]
+fn a_scene_asks_for_nothing_without_the_grant() {
+    let (shader, mesh) = ([5u8; 32], [6u8; 32]);
+    let mut d = Driver::new(300.0, 200.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Asset(shader)));
+    tree.props.push((2, Value::Asset(mesh)));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "shader".into() },
+            Op::DefAtom { id: 2, value: "mesh".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(60), height: Dim::Px(40), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    assert!(d.pending_assets().is_empty(), "nothing is asked for");
+    // And the frame still arrives, with the node drawn as an ordinary box.
+    let list = d.paint(300, 200);
+    assert!(list.scenes.is_empty());
+}
+
+/// The whole chain, in one test: a module the server named, fetched by hash,
+/// verified in the driver, handed to a real GPU, and looked at.
+///
+/// Every link has a vector of its own — the verifier's, the asset store's,
+/// the pipe's, the renderer's. None of them proves they are joined, and this
+/// is the join: what arrives as an opaque `Value::Asset` in a tree comes out
+/// the far end as the colour the server's own shader chose, on hardware.
+///
+/// Skipped with a notice where there is no adapter, like the renderer's own
+/// pixel tests.
+#[test]
+fn a_shader_the_server_named_travels_from_a_hash_to_the_screen() {
+    let Ok(mut renderer) = eui_render::Renderer::new_headless() else {
+        eprintln!("no GPU adapter; skipping the end-to-end scene");
+        return;
+    };
+    // The server's module: flat green, ignoring the tint it is handed, so
+    // that the pixel read back can only have come from *this* shader and not
+    // from the client's own.
+    let wgsl = "
+struct Scene { mvp: mat4x4<f32>, time: vec4<f32>, size: vec4<f32>, params: vec4<f32>, tint: vec4<f32> }
+@group(0) @binding(0) var<uniform> u: Scene;
+struct VIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> }
+struct VOut { @builtin(position) pos: vec4<f32> }
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.pos = u.mvp * vec4<f32>(in.pos, 1.0);
+    return o;
+}
+@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }
+";
+    let asset = eui_shader::wrap(wgsl);
+    let hash = hash_of(&asset);
+
+    let mut d = Driver::new(64.0, 64.0, 1.0, caps::SCENE);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Asset(hash)));
+    // Red, which the module above pointedly does not use.
+    tree.props.push((2, Value::List(vec![Value::Float(0.0); 4].into_iter().chain([Value::Float(1.0), Value::Float(0.0), Value::Float(0.0), Value::Float(1.0)]).collect())));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "shader".into() },
+            Op::DefAtom { id: 2, value: "uniforms".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(64), height: Dim::Px(64), ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+
+    // The tree asks for the module by hash, and by nothing else.
+    assert_eq!(d.pending_assets(), vec![hash], "the module is wanted, by hash");
+    d.asset_ready(hash, asset);
+
+    // Verified on the way in; what comes out is what the GPU may have.
+    let taken = d.take_scene_assets();
+    assert_eq!(taken.len(), 1, "one module, checked");
+    let (got, eui_client::driver::SceneAsset::Shader(src)) = &taken[0] else { panic!("a shader, not a mesh") };
+    assert_eq!(*got, hash);
+    renderer.load_shader(hash, src).expect("the module compiles");
+
+    let mut textures = renderer.session();
+    let list = d.paint(64, 64);
+    assert_eq!(list.scenes.len(), 1);
+    assert_eq!(list.scenes[0].shader, hash, "the draw names the module the server did");
+
+    let target = renderer.offscreen(64, 64);
+    let (atlas, images) = d.atlases_mut();
+    renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
+    let px = renderer.read_back(&target).expect("read back");
+    let i = (32 * 64 + 32) * 4;
+    let middle = [px[i], px[i + 1], px[i + 2]];
+    assert!(middle[1] > 200 && middle[0] < 60, "the server's own shader is what drew: {middle:?}");
+}

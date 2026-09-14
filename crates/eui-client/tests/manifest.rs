@@ -3,7 +3,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
 use eui_client::manifest::{verify, ManifestError};
-use eui_proto::{caps, Manifest, Rotation};
+use eui_proto::{caps, Manifest, Rotation, PROTOCOL_VERSION};
+
+/// A manifest for a server this client can actually talk to.
+///
+/// Written against `PROTOCOL_VERSION` rather than a literal, so that the
+/// next kind added to the protocol moves these tests with it instead of
+/// breaking them: what they are about is signatures and pins, not versions.
+/// `Manifest::default()` stays at `1..=1` on purpose — an absent field on
+/// the wire means a server that claims only the oldest version, and
+/// claiming more on a server's behalf is the one mistake a default here
+/// must not make.
+fn speakable() -> Manifest {
+    Manifest { protocol_min: 1, protocol_max: PROTOCOL_VERSION, ..Manifest::default() }
+}
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
@@ -35,7 +48,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 fn a_signed_manifest_verifies_and_pins_its_key_on_first_use() {
     let pins = tmp("first");
     let k = keypair();
-    let m = Manifest { app_id: "demo".into(), name: "Demo".into(), publisher_key: public(&k), capabilities: caps::CLIPBOARD_READ, ..Manifest::default() };
+    let m = Manifest { app_id: "demo".into(), name: "Demo".into(), publisher_key: public(&k), capabilities: caps::CLIPBOARD_READ, ..speakable() };
     let got = verify(&signed(&m, &k), &pins).unwrap();
     assert_eq!(got, m);
     let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
@@ -56,7 +69,7 @@ fn a_changed_key_is_refused_unless_the_old_key_signed_the_rotation() {
     let pins = tmp("rotate");
     let old = keypair();
     let new = keypair();
-    let first = Manifest { app_id: "demo".into(), publisher_key: public(&old), ..Manifest::default() };
+    let first = Manifest { app_id: "demo".into(), publisher_key: public(&old), ..speakable() };
     verify(&signed(&first, &old), &pins).unwrap();
     let moved = Manifest { publisher_key: public(&new), ..first.clone() };
     assert_eq!(verify(&signed(&moved, &new), &pins).unwrap_err(), ManifestError::KeyChanged);
@@ -78,8 +91,10 @@ fn a_changed_key_is_refused_unless_the_old_key_signed_the_rotation() {
 fn a_server_outside_this_clients_protocol_is_refused() {
     let pins = tmp("proto");
     let k = keypair();
-    let m = Manifest { app_id: "demo".into(), publisher_key: public(&k), protocol_min: 2, protocol_max: 3, ..Manifest::default() };
-    assert_eq!(verify(&signed(&m, &k), &pins).unwrap_err(), ManifestError::Protocol { min: 2, max: 3 });
+    // A range that starts past what this client speaks, whatever it speaks.
+    let (min, max) = (PROTOCOL_VERSION + 1, PROTOCOL_VERSION + 2);
+    let m = Manifest { app_id: "demo".into(), publisher_key: public(&k), protocol_min: min, protocol_max: max, ..Manifest::default() };
+    assert_eq!(verify(&signed(&m, &k), &pins).unwrap_err(), ManifestError::Protocol { min, max });
     assert!(!pins.exists(), "nothing pinned for a server we cannot talk to");
 }
 

@@ -671,6 +671,14 @@ pub enum Payload {
         glyphs: Vec<(u32, u32, u32, Vec<u8>)>,
         /// RGBA rows.
         images: Option<(u32, u32, Vec<u8>)>,
+        /// Scene meshes and modules the worker checked since the last
+        /// paint, for the window to upload and compile.
+        ///
+        /// On the frame their hash first appears and on no other -- the
+        /// discipline the dirty atlas rows above already follow. A scene
+        /// that turns therefore costs this field nothing per frame, which
+        /// is what lets `gpu_only` repeat one without the pipe.
+        scenes: Vec<(Hash, crate::driver::SceneAsset)>,
     },
     /// `Tick`: a transition frame is due.
     Tick(bool),
@@ -778,7 +786,7 @@ impl Reply {
                     w.hash(h);
                 }
             }
-            Payload::Paint { list, glyphs, images } => {
+            Payload::Paint { list, glyphs, images, scenes } => {
                 w.u8(4);
                 put_list(&mut w, list);
                 w.u32(u32::try_from(glyphs.len()).unwrap_or(u32::MAX));
@@ -796,6 +804,22 @@ impl Reply {
                         w.bytes(px);
                     }
                     None => w.bool(false),
+                }
+                w.u32(u32::try_from(scenes.len()).unwrap_or(u32::MAX));
+                for (h, asset) in scenes {
+                    w.hash(h);
+                    match asset {
+                        crate::driver::SceneAsset::Mesh(m) => {
+                            w.u8(0);
+                            w.u32(u32::try_from(m.vertices.len()).unwrap_or(u32::MAX));
+                            w.bytes(bytemuck::cast_slice(&m.vertices));
+                            w.bytes(bytemuck::cast_slice(&m.indices));
+                        }
+                        crate::driver::SceneAsset::Shader(src) => {
+                            w.u8(1);
+                            w.str(src);
+                        }
+                    }
                 }
             }
             Payload::Tick(due) => {
@@ -886,7 +910,50 @@ impl Reply {
                     glyphs.push((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec()));
                 }
                 let images = if r.bool()? { Some((r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
-                Payload::Paint { list: Arc::new(list), glyphs, images }
+                let n = r.u32()? as usize;
+                let mut scenes = Vec::with_capacity(n.min(16));
+                for _ in 0..n {
+                    let hash = r.hash()?;
+                    scenes.push(match r.u8()? {
+                        0 => {
+                            let count = r.u32()? as usize;
+                            let vertex_bytes: &[u8] = r.bytes()?;
+                            let index_bytes: &[u8] = r.bytes()?;
+                            // Read element by element rather than cast in
+                            // place: a slice out of the pipe's buffer is not
+                            // aligned to four bytes, and `cast_slice` is
+                            // entitled to refuse it. Copying is what this
+                            // path was going to do anyway.
+                            let stride = eui_render::scene::VERTEX_BYTES as usize;
+                            if vertex_bytes.len() % stride != 0 || index_bytes.len() % 4 != 0 {
+                                return Err("mesh");
+                            }
+                            let vertices: Vec<eui_render::scene::Vertex> = vertex_bytes
+                                .chunks_exact(stride)
+                                .map(|c| {
+                                    let mut v = [0f32; 8];
+                                    for (slot, b) in v.iter_mut().zip(c.chunks_exact(4)) {
+                                        *slot = b.try_into().map(f32::from_le_bytes).unwrap_or(0.0);
+                                    }
+                                    eui_render::scene::Vertex { pos: [v[0], v[1], v[2]], normal: [v[3], v[4], v[5]], uv: [v[6], v[7]] }
+                                })
+                                .collect();
+                            let indices: Vec<u32> = index_bytes.chunks_exact(4).map(|c| c.try_into().map(u32::from_le_bytes).unwrap_or(u32::MAX)).collect();
+                            // The worker is the untrusted side of this pipe.
+                            // Re-check what the window is about to hand a
+                            // GPU: the index bound is the one wgpu does not
+                            // make, and on a GLES backend does not make at
+                            // all.
+                            if vertices.len() != count || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
+                                return Err("mesh");
+                            }
+                            (hash, crate::driver::SceneAsset::Mesh(crate::mesh::Mesh { vertices, indices }))
+                        }
+                        1 => (hash, crate::driver::SceneAsset::Shader(r.str()?)),
+                        _ => return Err("scene asset"),
+                    });
+                }
+                Payload::Paint { list: Arc::new(list), glyphs, images, scenes }
             }
             5 => Payload::Tick(r.bool()?),
             6 => Payload::Access(get_access(&mut r)?),
@@ -979,6 +1046,7 @@ fn put_list(w: &mut W, list: &DrawList) {
         w.u32(r.chain);
         w.u32(r.first);
         w.u32(r.count);
+        w.u32(r.scene);
     }
     w.u32(u32::try_from(list.clips.len()).unwrap_or(u32::MAX));
     for c in &list.clips {
@@ -1025,6 +1093,21 @@ fn put_list(w: &mut W, list: &DrawList) {
             }
         }
     }
+    // The scenes: two hashes and a handful of floats each, and nothing that
+    // grows with the geometry. A cube that turns costs the pipe these bytes
+    // once, because a `gpu_only` frame does not send the list again at all.
+    w.u32(u32::try_from(list.scenes.len()).unwrap_or(u32::MAX));
+    for s in &list.scenes {
+        w.u64(s.id);
+        w.f4(s.rect);
+        w.hash(&s.shader);
+        w.hash(&s.mesh);
+        w.f4([s.uniforms[0], s.uniforms[1], s.uniforms[2], s.uniforms[3]]);
+        w.f4([s.uniforms[4], s.uniforms[5], s.uniforms[6], s.uniforms[7]]);
+        w.f4(s.clear);
+        w.u32(s.flags);
+        w.u32(s.fps);
+    }
 }
 
 fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
@@ -1036,7 +1119,7 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     let n = r.u32()? as usize;
     let mut runs = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
-        runs.push(Run { clip: r.u32()?, chain: r.u32()?, first: r.u32()?, count: r.u32()? });
+        runs.push(Run { clip: r.u32()?, chain: r.u32()?, first: r.u32()?, count: r.u32()?, scene: r.u32()? });
     }
     let n = r.u32()? as usize;
     let mut clips = Vec::with_capacity(n.min(1 << 16));
@@ -1075,7 +1158,31 @@ fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
     // painted itself, and the only reader is the driver that recorded it —
     // on this side of the pipe. The window draws the quads; it never has to
     // know which of them were a page.
-    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, departures: Vec::new(), xforms, scrollers, backdrop })
+    // The worker is the untrusted side of this pipe by construction, so
+    // what it says about a scene is read the way every other field here is:
+    // masked to what is known, clamped to what is drawable, and checked
+    // again at the point of use in `render`.
+    let n = r.u32()?;
+    let mut scenes = Vec::with_capacity((n as usize).min(64));
+    for _ in 0..n {
+        let id = r.u64()?;
+        let rect = r.f4()?;
+        let shader = r.hash()?;
+        let mesh = r.hash()?;
+        let (a, b) = (r.f4()?, r.f4()?);
+        let clear = r.f4()?;
+        let flags = r.u32()? & (eui_render::SCENE_DEPTH | eui_render::SCENE_ANIMATED);
+        // Clamped rather than trusted: the pacing this drives is the window's
+        // own loop, and a worker that asked for a million frames a second
+        // would be asking the window to spin.
+        let fps = r.u32()?.min(60);
+        if !rect.iter().chain(a.iter()).chain(b.iter()).chain(clear.iter()).all(|v| v.is_finite()) {
+            return Err("scene");
+        }
+        let uniforms = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]];
+        scenes.push(eui_render::SceneDraw { id, rect, shader, mesh, uniforms, clear, flags, fps });
+    }
+    Ok(DrawList { quads, runs, clips, clear, wants_frame, gpu_only, repeat_until_ms, serial, cpu_bound: false, departures: Vec::new(), xforms, scrollers, backdrop, scenes })
 }
 
 fn put_access(w: &mut W, s: &AccessSnapshot) {
@@ -1319,7 +1426,7 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                             images.mark_clean();
                             (y0, y1, images.rows(y0, y1).to_vec())
                         });
-                        Payload::Paint { list, glyphs, images }
+                        Payload::Paint { list, glyphs, images, scenes: d.take_scene_assets() }
                     }
                     Request::Tick => Payload::Tick(d.tick(Instant::now())),
                     Request::AccessTree => Payload::Access(d.access_snapshot()),
@@ -1553,7 +1660,12 @@ impl Repeat {
             // now follows it, and a default here would put the strip into
             // the light for as long as a spinner kept repeating this list.
             status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, mode: reply.status.mode, ..Status::default() },
-            payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: None },
+            // No atlas rows and no scene assets: both were delivered on the
+            // frame that produced them and marked clean there. Replaying a
+            // mesh would re-upload it sixty times a second for as long as
+            // the scene turns, which is exactly the cost this whole path
+            // exists to avoid.
+            payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: None, scenes: Vec::new() },
         };
         Some(Self { reply, until })
     }
@@ -1743,6 +1855,10 @@ pub enum Backend {
         atlas: Arc<Mutex<Atlas>>,
         /// The image atlas.
         images: Arc<Mutex<ImageAtlas>>,
+        /// Scene meshes and modules that arrived with a paint and have not
+        /// been handed to the renderer yet. Unlike the atlases, these are
+        /// not state the window keeps: they are taken once and uploaded.
+        pending_scenes: Arc<Mutex<Vec<(Hash, crate::driver::SceneAsset)>>>,
     },
 }
 
@@ -1841,7 +1957,12 @@ impl Backend {
                     Ok(s) => format!("driver in worker {pid}: {s}"),
                     Err(e) => format!("driver in worker {pid}, unconfined: {e}"),
                 };
-                let backend = Backend::Remote { worker: Arc::new(Mutex::new(worker)), atlas: Arc::new(Mutex::new(Atlas::new())), images: Arc::new(Mutex::new(ImageAtlas::new())) };
+                let backend = Backend::Remote {
+                    worker: Arc::new(Mutex::new(worker)),
+                    atlas: Arc::new(Mutex::new(Atlas::new())),
+                    images: Arc::new(Mutex::new(ImageAtlas::new())),
+                    pending_scenes: Arc::new(Mutex::new(Vec::new())),
+                };
                 (backend, how)
             }
             Err(e) => (Backend::local(Driver::new(w, h, scale, granted)), format!("driver in this process: {e}")),
@@ -1983,7 +2104,7 @@ impl Backend {
         }) {
             return out;
         }
-        let Backend::Remote { worker, atlas, images } = self else {
+        let Backend::Remote { worker, atlas, images, pending_scenes } = self else {
             return (Arc::new(DrawList::default()), Vec::new());
         };
         let request = Request::Paint(w, h);
@@ -1992,7 +2113,7 @@ impl Backend {
             Err(_) => None,
         };
         match reply {
-            Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rows } }) => {
+            Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rows, scenes: scene_assets } }) => {
                 // Only the rows that changed cross the pipe.
                 if let Ok(mut a) = atlas.lock() {
                     for (size, y0, y1, px) in glyphs {
@@ -2006,9 +2127,29 @@ impl Backend {
                         eprintln!("eui: the worker sent image atlas rows of the wrong size");
                     }
                 }
+                if !scene_assets.is_empty() {
+                    if let Ok(mut q) = pending_scenes.lock() {
+                        q.extend(scene_assets);
+                    }
+                }
                 (list, status.outbound)
             }
             _ => (Arc::new(DrawList::default()), Vec::new()),
+        }
+    }
+
+    /// Scene meshes and modules waiting for the GPU, taken once.
+    ///
+    /// The window asks for these before it draws: they are the only part of
+    /// a scene that has to cross into this process at all, and they cross
+    /// once per content hash rather than once per frame.
+    pub fn take_scene_assets(&mut self) -> Vec<(Hash, crate::driver::SceneAsset)> {
+        if let Some(out) = self.with_local(crate::driver::Driver::take_scene_assets) {
+            return out;
+        }
+        match self {
+            Backend::Remote { pending_scenes, .. } => pending_scenes.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default(),
+            Backend::Local(_) => Vec::new(),
         }
     }
 
@@ -2362,7 +2503,7 @@ mod tests {
     fn a_repeated_frame_carries_the_list_and_nothing_that_happens_once() {
         let list = |gpu_only: bool| DrawList {
             quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0], from: [0; 8] }],
-            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
+            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
             wants_frame: true,
@@ -2374,16 +2515,29 @@ mod tests {
             xforms: Vec::new(),
             scrollers: Vec::new(),
             backdrop: None,
+            scenes: Vec::new(),
         };
         let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
-        let paint = |l: DrawList, st: Status| Reply { status: st, payload: Payload::Paint { list: Arc::new(l), glyphs: vec![(2, 1, 2, vec![0, 1])], images: Some((0, 1, vec![7; 8])) } };
+        let paint = |l: DrawList, st: Status| Reply {
+            status: st,
+            payload: Payload::Paint {
+                list: Arc::new(l),
+                glyphs: vec![(2, 1, 2, vec![0, 1])],
+                images: Some((0, 1, vec![7; 8])),
+                scenes: vec![([9; 32], crate::driver::SceneAsset::Shader("@fragment fn fs_main() {}".into()))],
+            },
+        };
         let t0 = Instant::now();
 
         let repeat = Repeat::of(&paint(list(true), status.clone()), t0).expect("a list the driver said may be drawn again");
         let again = repeat.answer(t0 + Duration::from_millis(5)).expect("and it is, for as long as nothing reaches the driver");
-        let Payload::Paint { list: kept, glyphs, images } = &again.payload else { panic!("still a paint") };
+        let Payload::Paint { list: kept, glyphs, images, scenes } = &again.payload else { panic!("still a paint") };
         assert_eq!(**kept, list(true), "the list itself is what gets drawn again");
         assert!(glyphs.is_empty() && images.is_none(), "the atlas rows already landed");
+        // The easiest line in this file to leave out, and the most
+        // expensive: replaying a scene's mesh would re-upload it on every
+        // frame for as long as the scene turns.
+        assert!(scenes.is_empty(), "and so did the scene's mesh and module");
         assert!(again.status.outbound.is_empty(), "the server must not be told twice");
         assert!(again.status.clipboard.is_none(), "nor the clipboard written twice");
         assert!(again.status.ime.is_none());
@@ -2468,7 +2622,7 @@ mod tests {
         };
         let list = DrawList {
             quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8] }],
-            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1 }],
+            runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
             wants_frame: true,
@@ -2480,6 +2634,16 @@ mod tests {
             xforms: vec![Xform { from: [320.0, 0.0, 1.0, 1.0], to: [0.0, 0.0, 1.0, 1.0], clock: [-0.02, 0.18, 1.0, 0.0], pivot: [160.0, 240.0, 0.0, 0.0] }],
             scrollers: vec![Scroller { from: [0.0, -40.0], to: [0.0, 0.0], t0: -0.05, dur: 0.1, curve: 2, pad: 0 }],
             backdrop: None,
+            scenes: vec![eui_render::SceneDraw {
+                id: 0x9876_5432,
+                rect: [10.0, 20.0, 80.0, 60.0],
+                shader: [3; 32],
+                mesh: [4; 32],
+                uniforms: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                clear: [0.0, 0.0, 0.0, 0.0],
+                flags: eui_render::SCENE_DEPTH,
+                fps: 30,
+            }],
         };
         let snap = AccessSnapshot {
             nodes: vec![
@@ -2525,7 +2689,18 @@ mod tests {
             Payload::Sandbox(Err("no".into())),
             Payload::Hello(vec![1, 2]),
             Payload::Assets(vec![[1; 32], [2; 32]]),
-            Payload::Paint { list: Arc::new(list), glyphs: vec![(2, 1, 2, vec![0, 1]), (2, 0, 1, vec![3, 4])], images: Some((0, 1, vec![7; 8192])) },
+            Payload::Paint {
+                list: Arc::new(list),
+                glyphs: vec![(2, 1, 2, vec![0, 1]), (2, 0, 1, vec![3, 4])],
+                images: Some((0, 1, vec![7; 8192])),
+                scenes: vec![(
+                    [4; 32],
+                    crate::driver::SceneAsset::Mesh(crate::mesh::Mesh {
+                        vertices: vec![eui_render::scene::Vertex { pos: [0.0, 0.0, 0.0], normal: [0.0, 0.0, 1.0], uv: [0.0, 0.0] }; 3],
+                        indices: vec![0, 1, 2],
+                    }),
+                )],
+            },
             Payload::Tick(true),
             Payload::Access(snap),
             Payload::Pcm(vec![0.0, 0.25, -0.5, 1.0]),

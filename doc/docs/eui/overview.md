@@ -110,7 +110,7 @@ are on [Budgets](/docs/budgets).
 
 Each refusal is why the client stays small enough to audit.
 
-- **An open element vocabulary.** Sixteen node kinds, and the set is closed.
+- **An open element vocabulary.** Seventeen node kinds, and the set is closed.
   Everything a person would call a widget is composed on the server.
 - **The cascade.** No selectors, no specificity, no `!important`.
 - **Code from the network.** No native code, no JIT, no `eval`.

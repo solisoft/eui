@@ -34,6 +34,7 @@ the entire vocabulary the protocol can express.
 | `sizer` | An invisible box that only imposes constraints |
 | `audio` | A sound. Draws nothing, plays |
 | `video` | A moving picture, decoded in the sandboxed worker |
+| `scene` | A 3D picture, drawn by a program the server names. Leaf, and behind a capability |
 
 Adding a kind is a protocol version bump. That is a deliberately high price,
 and it is why the list has to be argued down to what genuinely cannot be
@@ -88,10 +89,40 @@ cursor and nothing else. Keyboard navigation beyond `Tab` needs client work that
 has not been done: there is no roving focus and no type-ahead. See
 [what is not there yet](/docs/status).
 
+## The 3D scene, and what it cost
+
+`scene` is the seventeenth kind, and the only one whose picture the client
+does not work out from the tree. The server names a WGSL module and a mesh;
+the client renders them into a target of its own and draws that target as a
+single quad in the node's box.
+
+Compositing rather than drawing into the frame is what makes it cheap to own.
+The corner radius, the opacity, the scissor of a scroller, the slide of a page
+transition — the quad carries all of them, and the module knows about none.
+The 2D pipeline keeps no depth buffer, so an application with no scene pays
+nothing for the ones that do.
+
+It is the most expensive thing on this page, and not in frames. A shader is
+code from the network, which the [rationale](/docs/overview) refuses; it is
+admitted only through a verifier of its own, which proves before compiling
+that the module terminates in a bounded number of steps and can reach nothing
+but the uniform block the client hands it. What that verifier cannot do is
+make the *driver's* shader compiler safe — it runs in the window process, on
+input the server chose, and no amount of checking moves it somewhere else.
+That trade is written down rather than glossed over, in `spec/11-shaders.md`
+§6, and it is why `scene` is a capability a person grants rather than
+something every application has.
+
+Three things a scene deliberately cannot do: its target is not readable, so
+nothing on screen goes back to the server; a press on it reports a position
+and never an object, because picking is readback under another name; and a
+scene that is not playing draws once and wakes nothing.
+
 ## Sound and moving pictures
 
 `audio` and `video` were the fifteenth and sixteenth kinds, and they cost a
-protocol version, exactly as this page said they would.
+protocol version, exactly as this page said they would. `scene` was the
+seventeenth and cost the second.
 
 They are in because the decode stays small and stays confined. `eui-audio`
 decodes with `symphonia` and mixes up to eight sources; `eui-video` decodes

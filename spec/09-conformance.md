@@ -14,7 +14,8 @@ changed, and changing a vector is a protocol change.
 Two profiles:
 
 - A **client** MUST pass §2 (wire), §3 (tree), §4 (layout), §5 (theme),
-  §6 (bytecode) and §7 (events); §8 (painting) applies when it draws.
+  §6 (bytecode) and §7 (events); §8 (painting) applies when it draws, and
+  §11 (scenes) when it draws those.
 - A **server** MUST pass §2 and §6 for what it emits, and §9 (diff) if it
   patches rather than re-mounts.
 
@@ -70,6 +71,15 @@ the easing curve is monotone and pinned at both ends.
 The verifier refuses bad jumps, stack underflow and overflow past 64,
 unknown opcodes and oversized strings; fuel exhaustion aborts without effect;
 every opcode's stack effect is exercised.
+
+For the floats (07 §3), one vector each for the property that makes them
+safe to let near a uniform: that a float and an integer are different types
+and `to_float` is the only bridge, that a division by zero, the root of a
+negative and an overflow each abort the run with nothing left half-done,
+that a non-finite literal cannot be smuggled in, and that a float read back
+out of local state is the float that was put there — which is what an
+integrator between frames rests on. `set_uniform` refuses an index of 8 and
+a value that is not a float.
 
 ## 7. Events — `crates/eui-client/tests/driver.rs`
 
@@ -211,6 +221,40 @@ target for the clear colour, a filled box, a clipped scroll, a canvas line,
 and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.
+
+## 11. Scenes — `crates/eui-shader/tests`, `crates/eui-client/tests/mesh.rs`, `crates/eui-render/tests/render.rs`
+
+**A scene's pixels are not a conformance surface**, and this section is short
+because of it. Two conforming clients may draw the same scene differently:
+`sin`, the filtering, the rasteriser's fill rule and the point of sRGB
+conversion all belong to the adapter. A server that depends on a scene's exact
+pixels depends on something this protocol does not promise. Saying that
+plainly is better than widening §8 and hoping.
+
+What is pinned instead:
+
+1. **The shader verifier's verdicts**, one vector per rule of 11 §2 — an
+   unbounded loop, a bound read from a uniform, a step of zero, a counter the
+   body also moves, nested loops over the step budget, a compute stage, a
+   storage buffer, a texture, a barrier, a binding outside group 0, a uniform
+   block of the server's own shape, an entry point by another name, a fragment
+   result that is not `@location(0) vec4<f32>`, a module over 64 KiB. These
+   decide on a machine with no GPU, which is what makes them vectors and not
+   hopes; a fuzz target sits beside them (08 §5).
+2. **The mesh decoder's**, likewise: a container that is not one, an undefined
+   flag, a count over the cap, indices that are not whole triangles, a body
+   that is not the length the header claims, a coordinate that is not finite,
+   and **an index past the end of the vertices** — the bound no driver checks.
+3. **The structure of the frame.** A `scene` node produces exactly one
+   textured quad, at its box, in a run that names its target; a scene that is
+   not `playing` adds no pass to the frame after the one that drew it; a frame
+   whose only change is the clock uploads no instances; the target carries no
+   `COPY_SRC`; and a session that was not granted `scene` fetches no module
+   and builds no scene at all.
+4. **Three tolerant pixel vectors, and three only**: a flat triangle from the
+   client's own shader, checked to ±2/255; depth order, which is a boolean and
+   so insensitive to precision; and the fallback a refused module draws. A
+   fourth would be a promise this protocol does not make.
 
 ## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
 

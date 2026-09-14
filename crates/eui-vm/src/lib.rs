@@ -43,6 +43,14 @@ pub enum Value {
     Bool(bool),
     /// Integer.
     Int(i64),
+    /// A finite float.
+    ///
+    /// Never a NaN and never an infinity: every operation that could make
+    /// one aborts the run instead ([`VmError::NotFinite`]). That keeps the
+    /// invariant the wire format already has -- a `Value::Float` crossing
+    /// the protocol is finite -- true of the one place that could break it
+    /// from inside the client.
+    Float(f64),
     /// String.
     Str(String),
 }
@@ -65,6 +73,13 @@ pub enum VmError {
     Fuel,
     /// Run: a string grew past [`MAX_STR`].
     StringTooLong,
+    /// Run: arithmetic produced a NaN or an infinity.
+    ///
+    /// An abort and not a clamp. A chunk's effects are advisory and the
+    /// server re-derives everything anyway (07 §1), so stopping costs a
+    /// frame of optimism; letting a NaN reach a uniform costs a picture
+    /// that is nowhere, for as long as the node lives.
+    NotFinite,
     /// Run: the host refused an effect (unknown node, no tree).
     Host(&'static str),
 }
@@ -79,6 +94,7 @@ impl fmt::Display for VmError {
             Self::Type(w) => write!(f, "type error: {w}"),
             Self::Fuel => f.write_str("out of fuel"),
             Self::StringTooLong => f.write_str("string too long"),
+            Self::NotFinite => f.write_str("arithmetic produced a value that is not a finite number"),
             Self::Host(w) => write!(f, "host refused: {w}"),
         }
     }
@@ -91,6 +107,9 @@ impl std::error::Error for VmError {}
 #[allow(missing_docs)]
 pub enum Instr {
     PushInt(i64),
+    /// A float, as its bits: an instruction stays `Copy` and `Eq`, and two
+    /// chunks of the same bytes stay the same chunk.
+    PushFloat(u64),
     PushStr(u32),
     PushBool(bool),
     Load(u32),
@@ -102,6 +121,22 @@ pub enum Instr {
     Mul,
     Neg,
     Not,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    FNeg,
+    FMin,
+    FMax,
+    Sin,
+    Cos,
+    Sqrt,
+    /// Integer to float.
+    ToFloat,
+    /// Float to integer, towards zero.
+    ToInt,
+    /// Write one float of a scene's uniform block: `(node key, index)`.
+    SetUniform(u32, u32),
     Eq,
     Lt,
     Gt,
@@ -135,12 +170,14 @@ impl Instr {
     /// `(pops, pushes)`.
     const fn effect(self) -> (u8, u8) {
         match self {
-            Self::PushInt(_) | Self::PushStr(_) | Self::PushBool(_) | Self::Load(_) => (0, 1),
-            Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) | Self::SetMode => (1, 0),
+            Self::PushInt(_) | Self::PushFloat(_) | Self::PushStr(_) | Self::PushBool(_) | Self::Load(_) => (0, 1),
+            Self::Store(_) | Self::Pop | Self::JumpIfFalse(_) | Self::SetText(_) | Self::SetProp(..) | Self::SetMode | Self::SetUniform(..) => (1, 0),
             Self::SetStyle(..) | Self::GoBack => (0, 0),
             Self::Dup => (1, 2),
             Self::Add | Self::Sub | Self::Mul | Self::Eq | Self::Lt | Self::Gt | Self::And | Self::Or | Self::Concat => (2, 1),
+            Self::FAdd | Self::FSub | Self::FMul | Self::FDiv | Self::FMin | Self::FMax => (2, 1),
             Self::Neg | Self::Not | Self::ToStr => (1, 1),
+            Self::FNeg | Self::Sin | Self::Cos | Self::Sqrt | Self::ToFloat | Self::ToInt => (1, 1),
             Self::Jump(_) | Self::Emit(_) | Self::Return => (0, 0),
         }
     }
@@ -192,6 +229,7 @@ impl Chunk {
                 0x05 => Instr::Store(r.varint32().map_err(trunc)?),
                 0x06 => Instr::Dup,
                 0x07 => Instr::Pop,
+                0x08 => Instr::PushFloat(u64::from_le_bytes(r.array::<8>().map_err(trunc)?)),
                 0x10 => Instr::Add,
                 0x11 => Instr::Sub,
                 0x12 => Instr::Mul,
@@ -204,6 +242,18 @@ impl Chunk {
                 0x19 => Instr::Or,
                 0x1A => Instr::ToStr,
                 0x1B => Instr::Concat,
+                0x1C => Instr::FAdd,
+                0x1D => Instr::FSub,
+                0x1E => Instr::FMul,
+                0x1F => Instr::FDiv,
+                0x22 => Instr::FNeg,
+                0x23 => Instr::FMin,
+                0x24 => Instr::FMax,
+                0x25 => Instr::Sin,
+                0x26 => Instr::Cos,
+                0x27 => Instr::Sqrt,
+                0x28 => Instr::ToFloat,
+                0x29 => Instr::ToInt,
                 0x20 | 0x21 => {
                     let rel = i64::from(i16::from_le_bytes(r.array::<2>().map_err(trunc)?));
                     let next = r.position().saturating_sub(code_start) as i64;
@@ -227,6 +277,11 @@ impl Chunk {
                     let key = r.varint32().map_err(trunc)?;
                     let style = r.varint32().map_err(trunc)?;
                     Instr::SetStyle(key, style)
+                }
+                0x36 => {
+                    let node = r.varint32().map_err(trunc)?;
+                    let index = r.varint32().map_err(trunc)?;
+                    Instr::SetUniform(node, index)
                 }
                 0x40 => Instr::Return,
                 other => return Err(VmError::UnknownOp(other)),
@@ -321,6 +376,33 @@ pub trait Host {
     /// Ask to go back (06 §1.3). At most one per run: a chunk that asks
     /// twice asks once.
     fn go_back(&mut self);
+    /// Write one float of a `scene` node's uniform block (03 §1.2).
+    ///
+    /// The tenth method, and the narrowest. It exists rather than a
+    /// `set_prop` of a list because the block is eight floats and `set_prop`
+    /// carries one value -- and because a typed door can refuse things a
+    /// general one cannot: an index outside the block, a value that is not
+    /// finite, and a node that is not a scene.
+    ///
+    /// It must mark the node dirty for its *scene* and not for itself. A
+    /// chunk driving a cube with the pointer writes this sixty times a
+    /// second, and a node marked dirty that often would relayout and
+    /// repaint that often -- which would defeat the whole reason the
+    /// animation lives on the GPU. `set_scroll` already draws exactly this
+    /// distinction, for exactly this reason (10 §1).
+    fn set_scene_uniform(&mut self, node: u32, index: u32, value: f64) -> bool;
+}
+
+/// A float, or an abort.
+///
+/// Every float that reaches the stack goes through here, which is what makes
+/// "a `Value::Float` is finite" a property of the VM rather than a hope.
+fn finite(v: f64) -> Result<f64, VmError> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(VmError::NotFinite)
+    }
 }
 
 /// Run a verified chunk against a host with the default fuel.
@@ -346,6 +428,18 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
     fn boolean(v: Value, what: &'static str) -> Result<bool, VmError> {
         match v {
             Value::Bool(b) => Ok(b),
+            _ => Err(VmError::Type(what)),
+        }
+    }
+    /// A float from the stack.
+    ///
+    /// An integer is **not** accepted here, and that is deliberate: a chunk
+    /// that meant `1.0` and wrote `1` should be told so at the instruction
+    /// rather than have the two number types quietly merge. `to_float` is
+    /// one instruction and one unit of fuel.
+    fn float(v: Value, what: &'static str) -> Result<f64, VmError> {
+        match v {
+            Value::Float(f) => Ok(f),
             _ => Err(VmError::Type(what)),
         }
     }
@@ -414,6 +508,10 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
                     Value::Null => String::new(),
                     Value::Bool(b) => b.to_string(),
                     Value::Int(n) => n.to_string(),
+                    // Shortest round-tripping form, which is what Rust's
+                    // own `Display` gives for `f64` and what a person
+                    // reading a label expects: `0.5`, not `0.5000000`.
+                    Value::Float(f) => f.to_string(),
                     Value::Str(s) => s,
                 }));
             }
@@ -457,6 +555,53 @@ pub fn run_with_fuel(chunk: &Chunk, host: &mut dyn Host, mut fuel: u32) -> Resul
                 }
             }
             Instr::GoBack => host.go_back(),
+            Instr::PushFloat(bits) => stack.push(Value::Float(finite(f64::from_bits(bits))?)),
+            Instr::FAdd | Instr::FSub | Instr::FMul | Instr::FDiv | Instr::FMin | Instr::FMax => {
+                let b = float(pop(&mut stack)?, "float arithmetic on a non-float")?;
+                let a = float(pop(&mut stack)?, "float arithmetic on a non-float")?;
+                stack.push(Value::Float(finite(match instr {
+                    Instr::FAdd => a + b,
+                    Instr::FSub => a - b,
+                    Instr::FMul => a * b,
+                    // A division by zero is an infinity, which `finite`
+                    // then refuses: the chunk stops rather than carrying a
+                    // number that is not one into a uniform.
+                    Instr::FDiv => a / b,
+                    Instr::FMin => a.min(b),
+                    _ => a.max(b),
+                })?));
+            }
+            Instr::FNeg | Instr::Sin | Instr::Cos | Instr::Sqrt => {
+                let a = float(pop(&mut stack)?, "a float operation on a non-float")?;
+                stack.push(Value::Float(finite(match instr {
+                    Instr::FNeg => -a,
+                    Instr::Sin => a.sin(),
+                    Instr::Cos => a.cos(),
+                    // The root of a negative is a NaN, and `finite` refuses
+                    // it rather than this arm pretending it is zero.
+                    _ => a.sqrt(),
+                })?));
+            }
+            Instr::ToFloat => {
+                #[expect(clippy::cast_precision_loss, reason = "a float of a large integer is the nearest one, which is what this asks for")]
+                let a = int(pop(&mut stack)?, "to_float on a non-integer")? as f64;
+                stack.push(Value::Float(finite(a)?));
+            }
+            Instr::ToInt => {
+                let a = float(pop(&mut stack)?, "to_int on a non-float")?;
+                // Saturating, not wrapping: a float past the integers has no
+                // nearest one, and the two-billionth of a turn a wrap would
+                // produce is a worse answer than the edge.
+                #[expect(clippy::cast_possible_truncation, reason = "saturating by the clamp above it")]
+                let n = a.clamp(i64::MIN as f64, i64::MAX as f64) as i64;
+                stack.push(Value::Int(n));
+            }
+            Instr::SetUniform(node, index) => {
+                let v = float(pop(&mut stack)?, "a uniform takes a float")?;
+                if !host.set_scene_uniform(node, index, v) {
+                    return Err(VmError::Host("set_scene_uniform"));
+                }
+            }
             Instr::Return => return Ok(()),
         }
     }
@@ -486,6 +631,19 @@ impl Asm {
         let mut w = eui_proto::Writer::new();
         w.svarint(n);
         self.code.extend_from_slice(w.as_slice());
+        self
+    }
+    /// `push_float`.
+    pub fn push_float(mut self, v: f64) -> Self {
+        self.code.push(0x08);
+        self.code.extend_from_slice(&v.to_bits().to_le_bytes());
+        self
+    }
+    /// `set_uniform`: write one float of a scene's block.
+    pub fn set_uniform(mut self, key: u32, index: u32) -> Self {
+        self.code.push(0x36);
+        self.varint(key);
+        self.varint(index);
         self
     }
     /// `push_str`.

@@ -12,14 +12,16 @@ selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
 ## Layout
 
 ```
-spec/        00–10, all normative; 09 says what conforming means, 10 has the numbers
+spec/        00–11, all normative; 09 says what conforming means, 10 has the numbers
 crates/
   eui-proto  encode and decode. No dependencies, no unsafe            [built]
   eui-tree   session tables, node arena, patch application           [built]
   eui-theme  roles and scales to pixels; contrast by construction     [built]
   eui-layout flow, stack, grid, scroll, virtualised list             [built]
   eui-text   shaping and glyph rasterisation, embedded fonts only    [built]
-  eui-render one instanced rounded-rect pipeline over wgpu, atlas    [built]
+  eui-shader what a scene's WGSL must be before the window compiles  [built]
+  eui-render one instanced rounded-rect pipeline over wgpu, atlas,
+             and a 3D scene rendered off-screen beside it             [built]
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
   eui-client driver, WSS transport, manifest check, assets, winit,
              keyboard focus, editing, IME, AccessKit, transitions,

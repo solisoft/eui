@@ -304,6 +304,56 @@ impl Session {
         self.arena.mark_dirty(ix).is_ok()
     }
 
+    /// Write one float of a `scene` node's uniform block (03 §1.2).
+    ///
+    /// Marked **painted** and not dirty. A uniform changes what the node
+    /// draws and nothing it measures, so no layout is owed — which is the
+    /// same distinction a scroll already draws, and it matters for the same
+    /// reason: a chunk following the pointer writes this sixty times a
+    /// second, and sixty relayouts a second is the cost this whole design
+    /// exists to avoid.
+    ///
+    /// Three refusals, and they are the reason this is a method of its own
+    /// rather than a `set_prop` of a list: a node that is not a scene, an
+    /// index outside the eight the block holds, and a value that is not a
+    /// finite number.
+    pub fn set_scene_uniform_local(&mut self, ix: NodeIx, index: u32, value: f64) -> bool {
+        let Some(atom) = self.known.uniforms else { return false };
+        if index >= 8 || !value.is_finite() {
+            return false;
+        }
+        let Some(n) = self.arena.get_mut(ix) else { return false };
+        if n.kind != NodeKind::Scene {
+            return false;
+        }
+        let slot = match n.props.iter_mut().find(|(a, _)| *a == atom) {
+            Some(slot) => slot,
+            None => {
+                if n.props.len() >= proto::MAX_PROPS as usize {
+                    return false;
+                }
+                n.props.push((atom, Value::List(vec![Value::Float(0.0); 8])));
+                let Some(slot) = n.props.last_mut() else { return false };
+                slot
+            }
+        };
+        // A server may have sent fewer than eight; the block is eight wide,
+        // so it is filled out rather than written past.
+        let Value::List(vs) = &mut slot.1 else {
+            slot.1 = Value::List(vec![Value::Float(0.0); 8]);
+            let Value::List(vs) = &mut slot.1 else { return false };
+            if let Some(v) = vs.get_mut(index as usize) {
+                *v = Value::Float(value);
+            }
+            return self.arena.mark_painted(ix).is_ok();
+        };
+        vs.resize(8, Value::Float(0.0));
+        if let Some(v) = vs.get_mut(index as usize) {
+            *v = Value::Float(value);
+        }
+        self.arena.mark_painted(ix).is_ok()
+    }
+
     /// The focused node.
     pub fn focused(&self) -> Option<NodeIx> {
         if self.focused.is_some() {
@@ -956,6 +1006,18 @@ pub struct WellKnown {
     pub volume: Option<u32>,
     /// An `input` that hides what was typed (03 §3).
     pub secret: Option<u32>,
+    /// A scene's WGSL module, by content hash (03 §1.2).
+    pub shader: Option<u32>,
+    /// A scene's geometry, by content hash.
+    pub mesh: Option<u32>,
+    /// A scene's eight floats: the author's half of the uniform block. The
+    /// client fills the other half -- the matrix, the clock, the size -- so
+    /// a server never sends a camera and cannot send a broken one.
+    pub uniforms: Option<u32>,
+    /// Frames a second an animating scene asks for, capped by the client.
+    pub fps: Option<u32>,
+    /// Samples a scene asks to be drawn with: 1 or 4.
+    pub msaa: Option<u32>,
 }
 
 impl WellKnown {
@@ -988,6 +1050,11 @@ impl WellKnown {
             "position" => &mut self.position,
             "volume" => &mut self.volume,
             "secret" => &mut self.secret,
+            "shader" => &mut self.shader,
+            "mesh" => &mut self.mesh,
+            "uniforms" => &mut self.uniforms,
+            "fps" => &mut self.fps,
+            "msaa" => &mut self.msaa,
             _ => return,
         };
         slot.get_or_insert(id);

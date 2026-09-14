@@ -11,9 +11,32 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
+use eui_client::driver::SceneAsset;
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, ThemeMode, Welcome};
-use eui_render::Renderer;
+use eui_render::{Renderer, SessionTextures};
+
+/// Hand the renderer whatever a scene is waiting for.
+///
+/// A real session does this in the window process, because that is where the
+/// GPU is and the driver is somewhere else (`app.rs`). This tool has no
+/// window and no worker: the driver is right here. Both paths call the same
+/// two renderer methods, which is why they are methods and not something the
+/// worker boundary does privately -- a scene that could only be uploaded
+/// through a pipe could not be looked at without a screen, and this is the
+/// only pixel harness in the repository.
+fn load_scene_assets(driver: &mut Driver, renderer: &mut Renderer, textures: &mut SessionTextures) {
+    for (hash, asset) in driver.take_scene_assets() {
+        match asset {
+            SceneAsset::Mesh(m) => renderer.load_mesh(textures, hash, &m.vertices, &m.indices),
+            SceneAsset::Shader(src) => {
+                if let Err(e) = renderer.load_shader(hash, &src) {
+                    eprintln!("snapshot: {e}");
+                }
+            }
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -58,6 +81,7 @@ fn main() {
         }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
+        load_scene_assets(&mut driver, &mut renderer, &mut textures);
         let (atlas, images) = driver.atlases_mut();
         renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
         let px = renderer.read_back(&target).expect("read back");
@@ -339,6 +363,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 let t = Instant::now();
                 let list = driver.paint(dw, dh);
                 let painted = t.elapsed();
+                load_scene_assets(&mut driver, &mut renderer, &mut textures);
                 let (atlas, images) = driver.atlases_mut();
                 renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
                 let drawn = t.elapsed() - painted;
@@ -503,6 +528,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         // from the clock (03 §5) is then visible off-screen: a transition
         // part way, a page mid-slide, a spinner at an angle.
         let age = std::env::var("SNAPSHOT_AGE").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(0.0, |ms| ms / 1000.0);
+        load_scene_assets(&mut driver, &mut renderer, &mut textures);
         let (atlas, images) = driver.atlases_mut();
         renderer.render_offscreen_at(&mut textures, &target, 0.0, age, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
@@ -518,6 +544,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     let _ = driver.input(Input::Wheel(0.0, 20.0));
                     let list = driver.paint(dw, dh);
                     let painted = t.elapsed();
+                    load_scene_assets(&mut driver, &mut renderer, &mut textures);
                     let (atlas, images) = driver.atlases_mut();
                     renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
                     let _ = renderer.read_back(&target);

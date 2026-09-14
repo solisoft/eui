@@ -3,7 +3,7 @@
 Status: **normative** for §1–§3 (what the client implements); §4 is the
 catalogue contract for servers.
 
-## 1. The fourteen primitives
+## 1. The seventeen primitives
 
 The protocol can express exactly these node kinds. Every widget a person
 would name — button, dialog, table, date picker — is composed from them on
@@ -28,6 +28,7 @@ shipping a new client, and that price is deliberate.
 | `sizer` | An invisible box that only imposes constraints | yes | — | — |
 | `audio` | A sound, referenced by BLAKE3 hash in the `src` prop. Draws nothing | — | — | — |
 | `video` | A moving picture, referenced by BLAKE3 hash in the `src` prop | — | — | — |
+| `scene` | A 3D picture, drawn by a program the server names (§1.2) | — | — | yes |
 
 An inert kind MUST carry no text, props or handlers; a leaf kind MUST have
 no children. Both are decoder errors ([`02-wire-format.md`](02-wire-format.md)
@@ -311,6 +312,51 @@ series still shows its grid. The reference client draws every kind with its
 rounded-rectangle pipeline — a segment is a rotated capsule, an area a strip
 per device column, an arc a fan of chords at most 6° apart — so a canvas adds
 no shader, no tessellator and no allocation beyond its quads.
+
+### 1.2 `scene`
+
+A `scene` is the one node whose picture the client does not compute from the
+tree. The server names a WGSL module and a mesh, both as assets; the client
+renders them **into a target of its own**, with a depth buffer of its own, and
+draws that target as a single textured quad in the node's box.
+
+Everything a node ordinarily gets, a scene gets from that quad: the corner
+radius of its style, its opacity, the scissor of any `scroll` it sits in, and
+the transform of any page transition it is on (§5). Its module knows about
+none of them, and is not trusted to apply any of them.
+
+| Prop | Value | Meaning |
+|---|---|---|
+| `shader` | asset | The WGSL module, in its `"EUIS"` container (11 §1). Absent is the client's own |
+| `mesh` | asset | The geometry, in its `"EUIM"` container. Absent is the client's own |
+| `uniforms` | list of ≤ 8 numbers | The author's half of the uniform block (11 §3), zero-padded |
+| `playing` | bool | The clock runs. Absent is `false` — the same word `audio` and `video` use, and the same meaning |
+| `fps` | int | Frames a second while it animates, 1 to 60. A server may slow a scene down, never speed the client up |
+| `msaa` | int | `4` asks for four samples, `1` for one. Absent is `4`: a scene is a picture of edges, and the author who has to ask for them is the author who ships without them |
+
+A `scene` has **no intrinsic size**: the server sizes it, as it does a
+`spacer`. It names two assets, and neither of them is a width.
+
+A client that cannot multisample this format MUST draw the scene once rather
+than refuse it. A slightly harder silhouette is better than no picture, and
+the alternative is a validation error on a machine the author never had.
+
+A scene MUST NOT be drawn at all unless the `scene` capability was granted
+(08 §3). Without it the client does not fetch the module, and a `scene` node
+paints its own background like any node with no content.
+
+**No readback, and no picking.** A scene's target is not readable: 08 §8's
+"no canvas readback" is kept by construction here, not by rule. It follows
+that a press on a scene reports a position in the node's box and **never** an
+object, a triangle or a depth — picking is readback under another name, and a
+server that sent the geometry can do it for itself.
+
+A scene that is not `playing` is a still picture: it is drawn once and wakes
+nothing, and the zero-wakeup line of 10 §1 holds with one on screen. A scene
+that is `playing` is a window that asked to be woken, exactly as a `wake`
+prop is, and costs what it asked for. What a client MUST NOT do is wake the
+part of itself that reads the server's bytes: an animating scene is the same
+draw list redrawn with a later clock.
 
 ## 3. Focus and keyboard
 

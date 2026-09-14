@@ -46,12 +46,28 @@ it.
 
 ## 4. Code from the network
 
-- No native code, no JIT, no `eval`. The only executable content is a chunk
-  that passed the verifier in [`07-bytecode.md`](07-bytecode.md) §4.
-  *Enforced: `eui-vm::Chunk::verify`.*
-- A chunk's reachable surface is the nine methods of the host trait: local
+- No native code, no JIT, no `eval`. Exactly two kinds of executable content
+  reach the client: a chunk that passed the verifier in
+  [`07-bytecode.md`](07-bytecode.md) §4, and — only where the `scene`
+  capability was granted — a WGSL module that passed the verifier in
+  [`11-shaders.md`](11-shaders.md) §2.
+  *Enforced: `eui-vm::Chunk::verify`, `eui-shader::verify`.*
+- Both are **total by construction**, and differently. A chunk's steps are
+  bounded at run time by fuel; a shader's are bounded *before it is compiled*,
+  because a fragment stage is already on the GPU when it misbehaves and there
+  is nothing left to stop it with. That is why 11 §2.4 refuses every loop
+  whose trip count cannot be read off constants, including one bounded by a
+  uniform — a uniform is a number the server sends after verification.
+- A module reaches nothing: no storage, no atomics, no barriers, no images,
+  no subgroup or ray-query operations. The only thing bound to it is the
+  client's own uniform block, at the one group and binding the client offers.
+- A chunk's reachable surface is the ten methods of the host trait: local
   state, node text, props and style by key, the viewer's palette, an event
-  queue, and a request to go back. *Enforced by the type: `eui-vm::Host`.*
+  queue, a request to go back, and one float of a scene's uniform block.
+  The tenth is the narrowest of them: it refuses a node that is not a scene,
+  an index outside the eight the block holds, and a value that is not a
+  finite number — a typed door can refuse what a general one cannot, which
+  is why it is not a `set_prop` of a list. *Enforced by the type: `eui-vm::Host`.*
   `go_back` carries no data in either direction and reaches no state: it asks,
   and the tree that results is the server's (06 §1.3).
 - A run is fuel-metered and string-bounded; an abort has no further effect
@@ -166,6 +182,26 @@ only — *enforced: `eui-text::TextEngine::new`*), no canvas readback, no
 device identifier, no third-party connection. The fingerprinting surface is
 the viewport frame, and that is a testable claim.
 
+A `scene` (03 §1.2) does not widen it, and is built so that it cannot:
+
+- its target carries no `COPY_SRC`, so reading it back is a validation error
+  rather than a rule somebody has to remember;
+- a press on it reports a position and never an object, a triangle or a
+  depth — picking is readback under another name;
+- the adapter's name, vendor, device and driver reach neither the tree nor an
+  event payload, and a shader that fails to compile yields one word from a
+  closed vocabulary, never the compiler's own diagnostic, which would name
+  the driver and through it the machine;
+- no timestamp query is enabled on a device that will run one.
+
+**One channel is not closed, and saying so is the point of this paragraph.**
+A server can already time a client: a `wake` arrives on the driver's clock
+while a sound's `time_update` arrives on the audio thread's, and the
+difference between them is a coarse measure — about a tenth of a second — of
+how hard the window is working. That existed before scenes. What a shader adds
+is the ability to *modulate* what is being timed. The client does not close
+this; what it does is refuse to add a finer one.
+
 ## 9. Server side
 
 Every client event is validated against the tree the server last sent: the
@@ -219,6 +255,20 @@ process of the user can attach a debugger to it. What initialises itself
 lazily (the text engine's font loader starts a thread pool and asks for the
 core count) is warmed before the door closes, and the confinement is
 applied to every thread.
+
+**The `scene` capability moves one thing across this line, and it is the
+largest thing on either side of it.** A shader is verified in the worker —
+that is where the parse meeting bytes a server chose belongs — but it must
+then be compiled, and a shader compiler belongs to the graphics driver, which
+is in the window because the GPU is. So a program the server wrote is
+translated by the client's shader front end and then compiled by the vendor's,
+inside the process that holds TLS and the pin store. No division of labour
+removes this. What verification buys is that the input to that compiler is
+small, dull, and already rejected if it is anything else; what it does not buy
+is the compiler's own safety. A client that grants `scene` MUST wrap that
+compilation in a validation scope, because the alternative — the host API's
+default — is a panic in the window process, which is the one outcome this
+section exists to prevent.
 
 `EUI_SANDBOX=0` runs the driver in the window process, for debugging; the
 window prints which of the two it did and what the sandbox enforced. macOS

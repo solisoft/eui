@@ -102,6 +102,13 @@ scissor region.
 - Quads are snapped to device pixels at paint time; `scroll` and `list`
   become scissor rects; anything outside its clip is culled before it reaches
   the GPU; virtualised rows paint their box and shape no text.
+- A `scene` renders into a target of its own, with a depth buffer of its own,
+  and the list carries one textured quad that samples it. So the pipeline
+  above keeps `depth_stencil: None` whatever an application draws, and the
+  scene inherits the corner radius, the opacity, the scissor and the page
+  transition from a quad its shader knows nothing about. An inlined 3D pass
+  would have had to reimplement every one of those inside each shader a
+  server wrote.
 - Off-screen targets can be read back, so the renderer is **tested by its
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
@@ -182,6 +189,25 @@ memsets a per-node style cache.
 with its reason in `deny.toml`. Four `cargo fuzz` targets exist — frame
 decoding, session apply, theme documents, layout — and want a nightly
 toolchain to run; the in-tree hostile-input tests run on every `cargo test`.
+
+**`eui-shader` — what a scene's module must be.** The second verifier, and
+the second exception to "no code from the network".
+
+- It proves three things before the window compiles anything, and claims no
+  more: the module terminates in at most 4 096 steps per invocation — the
+  same number as the VM's fuel, deliberately — it reaches nothing but the
+  uniform block the client hands it, and it has the shape the client
+  compiles.
+- Every loop's trip count is read off its own constants. A bound taken from
+  a uniform is refused, because a uniform is a number the server sends
+  *after* verification.
+- Around forty vectors and a fuzz target, all of which decide without a GPU.
+  That is the point: a scene's pixels are not a conformance surface, and its
+  verdicts are.
+- What it does not prove is written down in `spec/11-shaders.md` §6 rather
+  than left implied — chiefly that the driver's own shader compiler runs in
+  the window process on input the server chose, and no arrangement of
+  processes moves it.
 
 **`eui-vm` — local handlers.** The only code a client runs that it did not
 ship with, per `spec/07-bytecode.md`, now normative.
@@ -901,12 +927,14 @@ implements it and the vectors that pin it:
 ## The phones: started, not finished
 
 The portable half of the client is portable in fact and not only in
-principle: `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`, `eui-text`
-and `eui-vm` cross-compile clean for **`aarch64-linux-android` and
-`aarch64-apple-ios`** today, with no `cfg` between them and the desktop.
+principle: `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`, `eui-text`,
+`eui-vm` and `eui-shader` cross-compile clean for **`aarch64-linux-android`
+and `aarch64-apple-ios`** today, with no `cfg` between them and the desktop.
 That is the protocol, the session, the theme, the layout engine, the text
-shaper and the bytecode VM — and it needs neither an NDK nor Xcode to
-check, because none of it touches C. `conform` builds both and skips with a
+shaper, the bytecode VM and the shader verifier — and it needs neither an NDK
+nor Xcode to check, because none of it touches C. The verifier belongs there
+for the same reason the rest do: a phone that draws a scene has to decide
+whether to compile its module, and that decision carries no platform. `conform` builds both and skips with a
 note where a target's standard library is missing.
 
 **Done, and tested where it can be tested here:**

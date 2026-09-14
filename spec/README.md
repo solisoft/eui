@@ -24,6 +24,7 @@ who did not write it.
 | [`08-security.md`](08-security.md) | **normative** | Threat model and requirements, each with where it is enforced |
 | [`09-conformance.md`](09-conformance.md) | **normative** | What a conforming implementation passes, and the harness that runs it |
 | [`10-budgets.md`](10-budgets.md) | **normative** | Performance budgets, measured by `xtask bench` |
+| [`11-shaders.md`](11-shaders.md) | **normative** | What a `scene`'s module must be, where it is checked, and what is given up |
 
 ## Conventions
 

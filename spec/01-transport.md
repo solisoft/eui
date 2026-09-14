@@ -77,7 +77,16 @@ Strings are at most 256 bytes. The signature is Ed25519 over the record
 encoded with fields 0–9 only (`field_count` 10), which a decoder can rebuild
 exactly because the order is fixed. Capability names and bits: `camera` 1,
 `microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
-16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256.
+16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256, `scene` 512.
+
+`scene` is named for what the person agrees to and not for the hardware it
+uses: that this application may put on screen a surface whose pixels it
+computed itself. Both halves of that are worth telling them — it spends their
+graphics card and can slow the machine down, and it still cannot read what is
+on their screen (03 §1.2, 08 §8). An application that asks for it MUST
+advertise `protocol_min` of at least 2, because a client that cannot decode
+`0x11` cannot be shown it at all; the refusal then happens at the handshake,
+with a reason, rather than mid-session on a batch.
 
 The set grows from the top and a bit outside it is a decode error
 ([`08-security.md`](08-security.md) §3). That is the point rather than a

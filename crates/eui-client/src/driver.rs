@@ -1016,6 +1016,20 @@ fn mix(a: Option<[f32; 4]>, b: Option<[f32; 4]>, k: f32) -> Option<[f32; 4]> {
     }
 }
 
+/// A scene's asset, checked in the worker and ready for the window.
+///
+/// The window uploads a mesh without reading it and compiles a module
+/// without trusting it. Both halves of that are load-bearing: the bytes here
+/// have passed the checks no driver performs, and the window still re-parses
+/// what it is given rather than believing this enum.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SceneAsset {
+    /// Geometry whose every index is already known to be in range.
+    Mesh(crate::mesh::Mesh),
+    /// WGSL that has passed `eui-shader`'s verifier.
+    Shader(String),
+}
+
 /// The driver.
 pub struct Driver {
     session: Session,
@@ -1027,6 +1041,8 @@ pub struct Driver {
     atlas: Atlas,
     images: ImageAtlas,
     assets: AssetStore,
+    /// Scene assets checked and waiting for the window, which owns the GPU.
+    scene_assets: Vec<(Hash, SceneAsset)>,
     size: Size,
     scale: f32,
     pointer: Pointer,
@@ -1265,6 +1281,7 @@ impl Driver {
             atlas: Atlas::new(),
             images: ImageAtlas::new(),
             assets: AssetStore::default(),
+            scene_assets: Vec::new(),
             size: Size::new(w, h),
             scale,
             pointer: Pointer::default(),
@@ -1757,7 +1774,7 @@ impl Driver {
         }));
         let clip = u32::try_from(list.clips.len()).unwrap_or(0);
         list.clips.push(d.clip);
-        let run = eui_render::Run { clip, chain: 0, first, count };
+        let run = eui_render::Run { clip, chain: 0, first, count, scene: 0 };
         // A pop uncovers what was beneath, so the page leaving is drawn last
         // and is on top; a push covers it, so it goes first and the arriving
         // page is drawn over it. Runs are drawn in order, and putting one at
@@ -1777,7 +1794,7 @@ impl Driver {
                 b.first = b.first.saturating_add(count);
             }
             list.quads.rotate_right(count as usize);
-            list.runs.insert(0, eui_render::Run { clip, chain: 0, first: 0, count });
+            list.runs.insert(0, eui_render::Run { clip, chain: 0, first: 0, count, scene: 0 });
         }
     }
 
@@ -2265,12 +2282,27 @@ impl Driver {
     /// `src` props and chunks defined by hash. The caller fetches them from
     /// the session's origin and calls [`Self::asset_ready`].
     pub fn pending_assets(&mut self) -> Vec<Hash> {
+        let scenes = self.granted & caps::SCENE != 0;
         if let Some(root) = self.session.root() {
             let wanted: Vec<Hash> = self
                 .session
                 .preorder(root)
                 .filter_map(|ix| self.session.node(ix))
-                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video))
+                // A scene is here too, and its `shader` and `mesh` are both
+                // assets -- the same `Value::Asset` sweep below finds them
+                // without knowing which is which.
+                //
+                // Only where the capability was granted, and that is 08 §3
+                // taken literally: without the grant the client does not ask
+                // for the module at all, so a server learns nothing from
+                // having offered one. Refusing to *compile* it later would
+                // have been a check; refusing to fetch it is an absent code
+                // path, which is what the rule asks for.
+                .filter(|n| match n.kind {
+                    NodeKind::Image | NodeKind::Audio | NodeKind::Video => true,
+                    NodeKind::Scene => scenes,
+                    _ => false,
+                })
                 .flat_map(|n| n.props.iter().filter_map(|(_, v)| if let Value::Asset(h) = v { Some(*h) } else { None }))
                 .collect();
             for h in wanted {
@@ -2284,6 +2316,29 @@ impl Driver {
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.touched = true;
+        // A scene's two assets are checked here, in the worker, and only
+        // what passes is handed on. This is the division 08 §10 asks for:
+        // the parse that meets bytes a server chose happens under seccomp,
+        // and the window receives a mesh whose indices are already known to
+        // be in range and a module that has already passed the verifier.
+        //
+        // The window will parse the WGSL again -- wgpu's front end is naga
+        // too -- and that duplication is deliberate: it means a worker that
+        // has been taken over cannot mark a module verified that is not.
+        if crate::mesh::looks_like_mesh(&bytes) {
+            match crate::mesh::decode(&bytes) {
+                Ok(m) => self.scene_assets.push((hash, SceneAsset::Mesh(m))),
+                Err(e) => self.assets.fail(hash, e.to_string()),
+            }
+        } else if eui_shader::looks_like_shader(&bytes) {
+            match eui_shader::verify_asset(&bytes) {
+                Ok((_, source)) => self.scene_assets.push((hash, SceneAsset::Shader(source.to_owned()))),
+                // The reason is kept for the blank page and the log. It is
+                // never sent back: a compiler's diagnostic names the
+                // compiler, and through it the machine (08 §8).
+                Err(e) => self.assets.fail(hash, e.to_string()),
+            }
+        }
         self.assets.deliver(hash, bytes);
         // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
@@ -2303,6 +2358,12 @@ impl Driver {
         self.layout.invalidate_all();
         self.paint_cache.clear();
         self.invalidate();
+    }
+
+    /// The scene assets checked since the last call, for the window to
+    /// upload. Taken rather than borrowed, so each is handed over once.
+    pub fn take_scene_assets(&mut self) -> Vec<(Hash, SceneAsset)> {
+        std::mem::take(&mut self.scene_assets)
     }
 
     /// Record that a hash could not be fetched.
@@ -5888,6 +5949,10 @@ impl Driver {
             cache: &mut self.paint_cache,
             editing,
             now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
+            // 08 §3: without the grant the painter never builds a scene, so
+            // there is no target, no fetch and nothing compiled -- not a
+            // check that fails, a path that is not taken.
+            scenes_allowed: self.granted & caps::SCENE != 0,
             scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
             scrollbars: &bars,
         });
@@ -5934,7 +5999,14 @@ impl Driver {
             // is 1.2 s (03 §5), which is 12° a frame at thirty — smooth —
             // and thirty frames is half the work of sixty, on a display
             // that would otherwise be asked for a hundred and twenty.
-            Some(now + SPIN_FRAME)
+            //
+            // A scene is the exception, and it earns it: 33 ms of a cube
+            // turning is visibly stepped in a way a spinner at the same
+            // cadence is not. The interval comes off the list itself, so
+            // the window can keep it while repeating a `gpu_only` frame
+            // without asking the driver anything.
+            let scene_frame = list.scenes.iter().filter(|s| s.flags & eui_render::SCENE_ANIMATED != 0 && s.fps > 0).map(|s| Duration::from_millis(1000 / u64::from(s.fps.clamp(1, 60)))).min();
+            Some(now + scene_frame.map_or(SPIN_FRAME, |d| d.min(SPIN_FRAME)))
         } else {
             Some(now + Duration::from_millis(16))
         };
@@ -6644,6 +6716,9 @@ fn to_wire(v: eui_vm::Value) -> Value {
         eui_vm::Value::Null => Value::Null,
         eui_vm::Value::Bool(b) => Value::Bool(b),
         eui_vm::Value::Int(n) => Value::Int(n),
+        // The VM refuses a non-finite float at every instruction that could
+        // make one, so this cannot carry one onto the wire.
+        eui_vm::Value::Float(f) => Value::Float(f),
         eui_vm::Value::Str(s) => Value::Str(s),
     }
 }
@@ -6653,7 +6728,10 @@ fn from_wire(v: &Value) -> eui_vm::Value {
         Value::Bool(b) => eui_vm::Value::Bool(*b),
         Value::Int(n) => eui_vm::Value::Int(*n),
         Value::Str(s) => eui_vm::Value::Str(s.clone()),
-        Value::Float(f) => eui_vm::Value::Int(*f as i64),
+        // A float was truncated to an integer here while the VM had no
+        // floats. It has them now, so a value read back out of local state
+        // is the value that was put there.
+        Value::Float(f) => eui_vm::Value::Float(*f),
         _ => eui_vm::Value::Null,
     }
 }
@@ -6703,6 +6781,22 @@ impl eui_vm::Host for SessionHost<'_> {
             undo.push(Undo::Prop(ix, atom, old));
         }
         self.session.set_prop_local(ix, atom, to_wire(value))
+    }
+    fn set_scene_uniform(&mut self, key: u32, index: u32, value: f64) -> bool {
+        let Some(ix) = self.named(key) else {
+            return false;
+        };
+        // Painted, not dirty: 03 §1.2's uniforms change what the node draws
+        // and nothing it measures. `set_scene_uniform_local` makes that
+        // distinction, and refuses a node that is not a scene, an index past
+        // the block, and a value that is not a number.
+        //
+        // No undo entry. A local handler's effects are provisional and the
+        // server's next batch overwrites them (07 §1); a uniform is eight
+        // floats of appearance, and rolling one back would cost more than
+        // the frame it saves.
+        self.touched = true;
+        self.session.set_scene_uniform_local(ix, index, value)
     }
     fn set_style(&mut self, key: u32, style: u32) -> bool {
         let Some(ix) = self.named(key) else {

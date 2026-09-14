@@ -61,6 +61,57 @@ statics rather than `.bss`), the four embedded faces (1.33 MB of
 `.rodata`), and the shader translator wgpu needs at runtime (naga, 876 KB
 of `.text`).
 
+### Scenes — measured where it can be, named where it cannot
+
+A `scene` (03 §1.2) is the one node that can ask the client for an unbounded
+amount of work, so what it may ask for is written down rather than left to
+the application's good manners.
+
+| Measure | Budget |
+|---|---:|
+| Shader source | 64 KiB (= `MAX_CHUNK_BYTES`) |
+| Static steps per fragment invocation | 4 096 (= the VM's fuel) |
+| Mesh vertices / indices | 65 536 / 196 608 |
+| Render targets alive per session | 8 |
+| Target edge, before the device's own limit trims it | 2 048 device px |
+| Author's uniforms | 8 floats |
+| Verifying a module | < 2 ms — **measured 81.5 µs** |
+| Decoding and checking a 60 000-vertex mesh (2.5 MB) | < 20 ms — **measured 739 µs** |
+| Scene frame, CPU | **0** beyond the list that was already painted — **measured 0 ns**, 29 ns against 39 ns for the same tree without the scene |
+| Scene frame, driver process | **zero wakeups** while the clock is the only thing moving |
+| A scene that is not `playing` | 0 CPU, no pass encoded, nothing scheduled |
+
+The target quota is the one with a concrete attacker behind it: a virtualised
+`list` of ten thousand rows with a scene in each is cheap to send and would
+otherwise ask for ten thousand render targets. Past the quota a scene draws
+its own background, which is what one whose module has not compiled yet
+already does — so the application has no new failure to handle.
+
+The two zero lines are the ones that keep the paragraph below honest, and
+they are *structural*, not tuned: an animating scene is the same draw list
+redrawn with a later clock, so the frame costs the window a uniform write and
+costs the process that reads the server's bytes nothing at all. If a scene
+frame ever costs that process work, the design is wrong rather than the
+budget.
+
+The three measured lines are the ones the argument rests on. The first two say
+a module and a mesh can be checked in the worker on the frame they arrive
+rather than over several: at 81 µs and 739 µs, both fit inside one frame with
+room to spare, so there is no need for either to be done in pieces. The third
+says what it looks like: a frame with a turning scene in it costs the paint
+nothing, because everything moving in it moves on the GPU from a clock, and the
+list is the same list.
+
+Measured 2026-09-14, release, on the machine of §"Where the machine is".
+**Debug numbers are not these numbers** — the mesh decode reads 40 ms there,
+fifty-five times the release figure — which is why `bench` refuses to be quiet
+about the profile it was built in.
+
+Still not measured by `xtask bench`, and named here rather than left implied:
+the per-frame **GPU** cost of a scene, the memory its targets hold, and what
+the feature adds to the binary. The first two want an adapter, which the bench
+does not assume.
+
 The zero-wakeup line is an architectural consequence, not a tuning parameter:
 `winit` runs in `ControlFlow::Wait` and the client redraws only when a frame, an
 input event, or a window event asked it to. There is no render loop in the code

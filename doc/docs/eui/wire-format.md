@@ -82,10 +82,10 @@ Node := kind:u8  flags:u8  id:varint  style:varint
         child_count × Node
 ```
 
-There are fourteen kinds and the set is closed: `box`, `text`, `image`, `icon`,
+There are seventeen kinds and the set is closed: `box`, `text`, `image`, `icon`,
 `input`, `textarea`, `scroll`, `list`, `canvas`, `spacer`, `divider`, `overlay`,
-`slot`, `sizer`. Adding one is a protocol version bump, because it means
-shipping a new client. See [the widget catalogue](/docs/widgets) for how a
+`slot`, `sizer`, `audio`, `video`, `scene`. Adding one is a protocol version
+bump, because it means shipping a new client. See [the widget catalogue](/docs/widgets) for how a
 button gets built out of these.
 
 A subtree decodes into **pre-order arrays**, not a tree of boxes. That is not a

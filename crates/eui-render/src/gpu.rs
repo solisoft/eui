@@ -3,9 +3,11 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use crate::atlas::{Atlas, ImageAtlas};
 use crate::paint::{Backdrop, DrawList, Quad, MAX_SCROLLERS, MAX_XFORMS};
+use crate::scene;
 
 /// Why the renderer could not start or draw.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +19,14 @@ pub enum RenderError {
     Device(String),
     /// A read-back failed.
     ReadBack(String),
+    /// The device went away under us — a driver reset, a TDR, an eviction.
+    /// Nothing built on it is valid any more.
+    DeviceLost(String),
+    /// An error no scope caught. wgpu's default for this is a panic, which
+    /// in the window process would take the session's whole display with
+    /// it; the renderer records it instead and lets the caller end the
+    /// session with a reason, the way a dead worker already does (08 §10).
+    Uncaptured(String),
 }
 
 impl fmt::Display for RenderError {
@@ -25,11 +35,46 @@ impl fmt::Display for RenderError {
             Self::NoAdapter => f.write_str("no GPU adapter available"),
             Self::Device(e) => write!(f, "device request failed: {e}"),
             Self::ReadBack(e) => write!(f, "read-back failed: {e}"),
+            Self::DeviceLost(e) => write!(f, "GPU device lost: {e}"),
+            Self::Uncaptured(e) => write!(f, "GPU error: {e}"),
         }
     }
 }
 
 impl std::error::Error for RenderError {}
+
+/// What went wrong on the device out of band — a lost device, or an error
+/// no scope was open for.
+///
+/// wgpu delivers both through callbacks that run on whatever thread the
+/// driver answers on, so this is the one piece of renderer state that is
+/// shared and locked. The window reads it between frames: the first
+/// trouble is kept and later ones are dropped, because the first is the
+/// one that explains the rest.
+#[derive(Debug, Clone, Default)]
+pub struct Trouble(Arc<Mutex<Option<RenderError>>>);
+
+impl Trouble {
+    /// Record `e`, unless something is already recorded.
+    fn set(&self, e: RenderError) {
+        if let Ok(mut slot) = self.0.lock() {
+            if slot.is_none() {
+                *slot = Some(e);
+            }
+        }
+    }
+
+    /// What went wrong, if anything has.
+    #[must_use]
+    pub fn get(&self) -> Option<RenderError> {
+        match self.0.lock() {
+            Ok(slot) => slot.clone(),
+            // A panic while holding this lock is itself a failure worth
+            // reporting, and reporting it beats hiding it behind `None`.
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
 
 /// The off-screen format, and what `read_back` hands back: sRGB, RGBA byte
 /// order, which is what a PNG wants.
@@ -71,7 +116,34 @@ pub struct Renderer {
     /// pipeline's layout has to be satisfied whether a fragment reads it
     /// or not.
     blur_none: wgpu::BindGroup,
+    /// The client's own scene shader, so a cube can be drawn before any
+    /// server has sent a module.
+    scene_shader: wgpu::ShaderModule,
+    /// Group 0 of a scene: the uniform block, at a dynamic offset so one
+    /// buffer serves every scene in the frame. The only thing bound to a
+    /// scene shader, which is what `eui-shader` enforces on the module.
+    scene_uniform_layout: wgpu::BindGroupLayout,
+    scene_pipeline_layout: wgpu::PipelineLayout,
+    /// One per distinct module, shared by every session on this device: a
+    /// pipeline is compiled code, holding no texture and no buffer, so two
+    /// sessions behind one cannot read each other. `None` is a module that
+    /// was refused, remembered so it is not compiled again every frame.
+    scene_pipelines: HashMap<scene::Key, Option<wgpu::RenderPipeline>>,
+    /// Modules a server sent, by content hash, compiled once each and
+    /// shared by every session that names one. A module is code, not data:
+    /// it holds no texture and no buffer, so two sessions behind one cannot
+    /// reach each other through it.
+    scene_modules: HashMap<[u8; 32], wgpu::ShaderModule>,
     adapter_name: String,
+    /// Whether this adapter can multisample a scene's target four ways. A
+    /// count it cannot meet is a validation error, so it is asked once here
+    /// rather than hoped for per frame.
+    scene_msaa: bool,
+    /// Whether this adapter is one a scene's shader may be trusted on at
+    /// all. See [`Renderer::grants_scenes`].
+    scene_ok: bool,
+    /// Where wgpu's two out-of-band callbacks leave what they were told.
+    trouble: Trouble,
     /// `EUI_GPU_TRACE=1` on an adapter that can: the main pass is
     /// bracketed by timestamps, resolved into a buffer that is read back
     /// the frame after, never waited on.
@@ -130,6 +202,9 @@ pub struct SessionTextures {
     /// The working textures, kept for as long as the next frame wants the
     /// same ones and dropped when a frame stops asking.
     blur: Option<Blur>,
+    /// The session's scene targets, meshes and uniform slots. Per session,
+    /// like the atlases above and for the same reason.
+    scenes: scene::Scenes,
 }
 
 impl fmt::Debug for SessionTextures {
@@ -420,9 +495,52 @@ impl Renderer {
             Err(first) => ask(adapter.limits()).map_err(|_| RenderError::Device(first.to_string()))?,
         };
 
+        // Both of wgpu's out-of-band reports, recorded rather than fatal.
+        //
+        // Without these two lines a lost device is a silent freeze and an
+        // uncaptured error is a panic -- in the window process, which holds
+        // the display, TLS and the pin store for every session. 08 §10
+        // promises that a failure ends the session with a reason and leaves
+        // the window standing; that promise is only kept if the window is
+        // told. Neither callback may allocate a session's worth of work or
+        // block: they run on the driver's thread.
+        let trouble = Trouble::default();
+        let lost = trouble.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            lost.set(RenderError::DeviceLost(format!("{reason:?}: {message}")));
+        });
+        let uncaught = trouble.clone();
+        device.on_uncaptured_error(Box::new(move |e| {
+            uncaught.set(RenderError::Uncaptured(e.to_string()));
+        }));
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("eui quad"), source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()) });
 
         let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("eui blur"), source: wgpu::ShaderSource::Wgsl(include_str!("blur.wgsl").into()) });
+
+        let scene_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("eui scene"), source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()) });
+
+        let scene_uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene uniforms"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                // One buffer, one slot per scene in the frame: the shape
+                // `blur_params` already uses, for the same reason.
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<scene::SceneUniforms>() as u64),
+                },
+                count: None,
+            }],
+        });
+        let scene_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene"),
+            // One group, and that is the whole reach of a scene shader.
+            bind_group_layouts: &[&scene_uniform_layout],
+            push_constant_ranges: &[],
+        });
 
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uniforms"),
@@ -570,7 +688,16 @@ impl Renderer {
             blur_params_bind,
             blur_sampler,
             blur_none,
+            scene_shader,
+            scene_uniform_layout,
+            scene_pipeline_layout,
+            scene_pipelines: HashMap::new(),
+            scene_modules: HashMap::new(),
             adapter_name: adapter.get_info().name,
+            scene_msaa: adapter.get_texture_format_features(FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4)
+                && adapter.get_texture_format_features(scene::DEPTH_FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4),
+            scene_ok: adapter.get_info().backend != wgpu::Backend::Gl,
+            trouble,
             timing,
         })
     }
@@ -652,7 +779,7 @@ impl Renderer {
         let (atlas_tex, img_tex, atlas_bind) = Self::make_atlas(&self.device, &self.atlas_layout, atlas_size, 1);
         let instance_cap = 4096;
         let instances = Self::make_instances(&self.device, instance_cap);
-        SessionTextures { instances, instance_cap, uploaded: 0, atlas_tex, img_tex, img_size: 1, atlas_bind, atlas_size, blur: None }
+        SessionTextures { instances, instance_cap, uploaded: 0, atlas_tex, img_tex, img_size: 1, atlas_bind, atlas_size, blur: None, scenes: scene::Scenes::default() }
     }
 
     fn make_instances(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
@@ -665,8 +792,74 @@ impl Renderer {
     }
 
     /// The adapter's name, for diagnostics.
+    ///
+    /// It names the machine's graphics hardware, so it is a fingerprint:
+    /// 08 §8. It may reach a log and a person, and it must reach neither
+    /// the tree nor an event payload.
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
+    }
+
+    /// Whether a scene's shader may be run on this adapter at all (11 §2.5).
+    ///
+    /// False on a GL backend, and this is the one refusal in the renderer
+    /// that is about somebody else's bug. wgpu generates **unchecked**
+    /// indexing there -- `index`, `buffer` and `binding_array` all
+    /// `Unchecked`, with the safety left to GLSL, whose answer to an
+    /// out-of-range index is undefined behaviour. Vulkan, Metal and DX12
+    /// restrict; GLES does not, and GLES is what an Android device without
+    /// Vulkan has.
+    ///
+    /// The verifier already refuses every index that is not a constant, so
+    /// this is the belt behind that brace. Both, because the GLES translator
+    /// is the least exercised path in the stack and the shader is the
+    /// attacker's.
+    #[must_use]
+    pub fn grants_scenes(&self) -> bool {
+        self.scene_ok
+    }
+
+    /// Whether this adapter can draw a scene four times over and resolve.
+    ///
+    /// A client that cannot does not refuse the scene: it draws it once, and
+    /// the cube's silhouette is a little harder than it would be elsewhere.
+    /// Exposed so a test can say which of those it is looking at rather than
+    /// pass vacuously on a machine that was never going to multisample.
+    #[must_use]
+    pub fn can_multisample_scenes(&self) -> bool {
+        self.scene_msaa
+    }
+
+    /// What the device reported out of band, if anything: a lost device, or
+    /// an error no scope was open for. The window asks between frames and
+    /// ends the session with the reason rather than drawing on.
+    ///
+    /// Once this answers, it goes on answering: nothing built on a lost
+    /// device is valid, so there is nothing to retry and nothing to clear.
+    #[must_use]
+    pub fn trouble(&self) -> Option<RenderError> {
+        self.trouble.get()
+    }
+
+    /// Run `f` with a validation scope open, so that what it builds fails as
+    /// a `Result` instead of reaching the uncaptured handler.
+    ///
+    /// This is what makes it safe to compile something the network chose:
+    /// wgpu's default for an uncaptured validation error is a panic, and a
+    /// panic here is the window process. `what` names the thing being built,
+    /// for the message.
+    ///
+    /// The scope catches validation only. A device lost under `f` lands in
+    /// [`Self::trouble`] instead, which is where the caller looks next.
+    pub fn scoped<T>(&self, what: &str, f: impl FnOnce(&wgpu::Device) -> T) -> Result<T, RenderError> {
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let made = f(&self.device);
+        match pollster::block_on(self.device.pop_error_scope()) {
+            None => Ok(made),
+            // The message is for a log, never for the server: a driver's
+            // diagnostic names the driver (08 §8).
+            Some(e) => Err(RenderError::Uncaptured(format!("{what}: {e}"))),
+        }
     }
 
     /// The device, for a client that manages its own surface.
@@ -793,6 +986,359 @@ impl Renderer {
         tex.blur = Some(Blur { key, snap, chains });
     }
 
+    /// The pipeline for one module, built the first time it is drawn.
+    ///
+    /// Never from inside `render`: compiling a fresh module costs tens of
+    /// milliseconds, and doing it on the frame that first wants it would put
+    /// that straight into "launch to first pixel" (10 §1). A module that is
+    /// not ready yet draws nothing this frame and is ready for the next.
+    ///
+    /// The error scope is the load-bearing part. wgpu's default for an
+    /// uncaptured validation error is a panic, and this is the one place in
+    /// the client where the thing being compiled was chosen by a server: a
+    /// panic here would be the window process, which holds the display, TLS
+    /// and the pin store for every session.
+    fn scene_pipeline_for(&mut self, key: scene::Key) {
+        if self.scene_pipelines.contains_key(&key) {
+            return;
+        }
+        let shader = if key.shader == [0u8; 32] {
+            &self.scene_shader
+        } else {
+            // Not cached as a refusal: the module may simply not have
+            // arrived yet, and a hash that is still being fetched must be
+            // able to compile on the frame it lands.
+            let Some(m) = self.scene_modules.get(&key.shader) else { return };
+            m
+        };
+        let layout = &self.scene_pipeline_layout;
+        let samples = key.samples.max(1);
+        let depth = key.depth.then_some(wgpu::DepthStencilState {
+            format: scene::DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+        let built = self.scoped("scene pipeline", |device| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("eui scene"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: scene::VERTEX_BYTES,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    // Always `FORMAT`, never the window's: a target is the
+                    // renderer's own texture, so one module is compiled once
+                    // per process instead of once per surface format.
+                    targets: &[Some(wgpu::ColorTargetState { format: FORMAT, blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+                depth_stencil: depth,
+                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                multiview: None,
+                cache: None,
+            })
+        });
+        match built {
+            Ok(p) => {
+                self.scene_pipelines.insert(key, Some(p));
+            }
+            Err(e) => {
+                // Remembered as a refusal so it is not attempted again every
+                // frame. The message is for a log and never for the server:
+                // a driver's diagnostic names the driver (08 §8).
+                eprintln!("eui: {e}");
+                self.scene_pipelines.insert(key, None);
+            }
+        }
+    }
+
+    /// What a scene's pipeline is built for.
+    ///
+    /// The sample count is the client's answer, not the server's request: a
+    /// count this adapter cannot meet is a validation error, so an author
+    /// who asked for four on a machine that has none gets one, silently and
+    /// correctly.
+    fn scene_key(&self, s: &crate::SceneDraw) -> scene::Key {
+        let samples = if s.flags & crate::SCENE_MSAA != 0 && self.scene_msaa { 4 } else { 1 };
+        scene::Key { shader: s.shader, depth: s.flags & crate::SCENE_DEPTH != 0, samples }
+    }
+
+    /// Render every scene the list carries into a target of its own, before
+    /// the frame that samples them is drawn.
+    ///
+    /// One pass and one submit per scene. They write into their own uniform
+    /// slots at dynamic offsets, so — unlike the backdrop, which has to
+    /// share `self.uniforms` with the main pass and therefore submits
+    /// separately to order the writes — there is no ordering puzzle here at
+    /// all. That is a reason to like the design, not an accident of it.
+    fn render_scenes(&mut self, tex: &mut SessionTextures, list: &DrawList, now: f64, age: f32) -> usize {
+        if list.scenes.is_empty() {
+            // A session that stops having scenes stops paying for them.
+            tex.scenes.targets.clear();
+            return 0;
+        }
+        tex.scenes.frame = tex.scenes.frame.wrapping_add(1);
+        let max = self.device.limits().max_texture_dimension_2d;
+
+        // Pipelines first: `render_scenes` may not compile inside its own
+        // encoder, and the borrow checker agrees with the budget here.
+        for s in &list.scenes {
+            self.scene_pipeline_for(self.scene_key(s));
+        }
+
+        // The client's own cube, uploaded once per session.
+        tex.scenes.meshes.entry([0u8; 32]).or_insert_with(|| {
+            let (vertices, indices) = scene::cube();
+            self.upload_mesh(&vertices, &indices)
+        });
+
+        // One uniform buffer for the frame, grown in powers of two.
+        let want = list.scenes.len();
+        if tex.scenes.uniforms.is_none() || tex.scenes.slots < want {
+            let slots = want.next_power_of_two().max(1);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("scene uniforms"),
+                size: (slots as u64).saturating_mul(scene::SLOT),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("scene uniforms"),
+                layout: &self.scene_uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<scene::SceneUniforms>() as u64) }),
+                }],
+            });
+            tex.scenes.uniforms = Some((buffer, bind));
+            tex.scenes.slots = slots;
+        }
+
+        // Targets, and the uniforms that go with them.
+        let mut redraw: Vec<bool> = Vec::with_capacity(list.scenes.len());
+        for (slot, s) in list.scenes.iter().enumerate() {
+            let size = scene::target_size(s.rect, max);
+            let key = self.scene_key(s);
+            let depth = key.depth;
+            let held = tex.scenes.targets.get(&s.id);
+            let fresh = held.map_or(true, |t| t.size != size || t.depth_view.is_some() != depth || t.samples != key.samples);
+            // The quota (08 §6). A scene that cannot have a target draws its
+            // own background, exactly as one whose module is still compiling
+            // does: the application already has to cope with that, so this
+            // adds no new failure for it to handle.
+            if fresh && (held.is_some() || tex.scenes.targets.len() < scene::MAX_TARGETS) {
+                let t = self.make_scene_target(size, depth, key.samples);
+                tex.scenes.targets.insert(s.id, t);
+            }
+            let u = scene::uniforms_for(s, size, now, age);
+            let Some(target) = tex.scenes.targets.get_mut(&s.id) else {
+                redraw.push(false);
+                continue;
+            };
+            target.used = tex.scenes.frame;
+            // Nothing moved: the target already holds the right pixels, so
+            // the pass below is not encoded at all. This is what makes the
+            // "a still scene costs nothing" line of 10 §1 true rather than
+            // merely nearly true.
+            let same = target.last == Some(u) && !fresh;
+            target.last = Some(u);
+            redraw.push(!same);
+            if let Some((buffer, _)) = &tex.scenes.uniforms {
+                self.queue.write_buffer(buffer, (slot as u64).saturating_mul(scene::SLOT), bytemuck::bytes_of(&u));
+            }
+        }
+
+        // A target nothing asked for this frame or last is dropped. One
+        // frame of hysteresis, unlike `Blur`, which evicts at once: a scene
+        // in a virtualised list crosses the edge of the viewport over and
+        // over, and evicting on the first frame out would reallocate on the
+        // next one in.
+        let (frame, keep) = (tex.scenes.frame, tex.scenes.frame.wrapping_sub(1));
+        tex.scenes.targets.retain(|_, t| t.used == frame || t.used == keep);
+
+        let mut passes = 0usize;
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("eui scenes") });
+        for (slot, s) in list.scenes.iter().enumerate() {
+            if redraw.get(slot) != Some(&true) {
+                continue;
+            }
+            let key = self.scene_key(s);
+            let (Some(Some(pipeline)), Some(target), Some(mesh), Some((_, bind))) =
+                (self.scene_pipelines.get(&key), tex.scenes.targets.get(&s.id), tex.scenes.meshes.get(&s.mesh), tex.scenes.uniforms.as_ref())
+            else {
+                // A module still compiling, refused, or a mesh not yet
+                // delivered: the quad samples a target that was cleared, and
+                // the node shows its own background. Never an error, and
+                // never a frame that fails to arrive.
+                continue;
+            };
+            let c = s.clear;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    // Multisampled where there is one, resolving into the
+                    // texture the composite quad samples; otherwise straight
+                    // into it. A resolve target attached wrongly does not
+                    // give a jagged picture, it gives a blank one -- which is
+                    // what the vector for this checks first.
+                    view: target.msaa_view.as_ref().unwrap_or(&target.view),
+                    resolve_target: target.msaa_view.as_ref().map(|_| &target.view),
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: f64::from(c[0]), g: f64::from(c[1]), b: f64::from(c[2]), a: f64::from(c[3]) }), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: target.depth_view.as_ref().map(|v| wgpu::RenderPassDepthStencilAttachment {
+                    view: v,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            #[expect(clippy::cast_possible_truncation, reason = "a frame's scenes are capped far below u32")]
+            pass.set_bind_group(0, bind, &[(slot as u64 * scene::SLOT) as u32]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.count, 0, 0..1);
+            passes = passes.saturating_add(1);
+        }
+        // Nothing encoded, nothing submitted. A frame in which every scene
+        // is still is a frame that costs the queue nothing at all.
+        if passes > 0 {
+            self.queue.submit([encoder.finish()]);
+        }
+        passes
+    }
+
+    /// Compile a module a server sent, once per content hash.
+    ///
+    /// The source reaching here has already passed `eui-shader`'s verifier
+    /// in the worker. It is compiled anyway inside an error scope, for two
+    /// reasons: a worker that has been taken over could send anything, and
+    /// wgpu's default for an uncaptured validation error is a panic — in
+    /// this process, which holds the display, TLS and the pin store for
+    /// every session.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::Uncaptured`] when the driver's front end refuses it.
+    /// The message is for a log: forwarding it to a server would name the
+    /// driver, and through it the machine (08 §8).
+    pub fn load_shader(&mut self, hash: [u8; 32], source: &str) -> Result<(), RenderError> {
+        if self.scene_modules.contains_key(&hash) {
+            return Ok(());
+        }
+        let owned = source.to_owned();
+        let module = self.scoped("scene shader", move |device| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("scene"), source: wgpu::ShaderSource::Wgsl(owned.into()) }))?;
+        self.scene_modules.insert(hash, module);
+        Ok(())
+    }
+
+    /// Upload a mesh a server sent, once per session per content hash.
+    ///
+    /// Per session because a mesh is *data*: the image atlas is content
+    /// addressed and still not shared between sessions (see the note on
+    /// [`SessionTextures`]), and one rule in the repository beats two.
+    pub fn load_mesh(&self, tex: &mut SessionTextures, hash: [u8; 32], vertices: &[scene::Vertex], indices: &[u32]) {
+        if tex.scenes.meshes.contains_key(&hash) {
+            return;
+        }
+        let mesh = self.upload_mesh(vertices, indices);
+        tex.scenes.meshes.insert(hash, mesh);
+    }
+
+    /// A mesh's two buffers. The bytes are copied and never read: what makes
+    /// that safe is that the worker already checked every index against the
+    /// vertex count, which is the one bounds check no driver performs.
+    fn upload_mesh(&self, vertices: &[scene::Vertex], indices: &[u32]) -> scene::Mesh {
+        use wgpu::util::DeviceExt as _;
+        let vertices = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("scene mesh"), contents: bytemuck::cast_slice(vertices), usage: wgpu::BufferUsages::VERTEX });
+        let index_bytes = bytemuck::cast_slice(indices);
+        let index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("scene index"), contents: index_bytes, usage: wgpu::BufferUsages::INDEX });
+        scene::Mesh { vertices, indices: index_buffer, count: u32::try_from(indices.len()).unwrap_or(0) }
+    }
+
+    /// A scene's colour target, its depth buffer, and the bind group the
+    /// composite quad reads it through.
+    ///
+    /// **No `COPY_SRC`.** That is how 08 §8's "no canvas readback" is kept
+    /// here: not by a rule somebody has to remember, but by a usage flag
+    /// that makes `copy_texture_to_buffer` a validation error. The target is
+    /// deliberately not an [`Offscreen`], which is the type `read_back`
+    /// takes.
+    fn make_scene_target(&self, size: (u32, u32), depth: bool, samples: u32) -> scene::Target {
+        let color = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = color.create_view(&Default::default());
+        // The multisampled attachment, drawn into and resolved down to
+        // `color` in the same pass. Nothing ever samples it, so it wants no
+        // `TEXTURE_BINDING` -- and the depth buffer below MUST carry the
+        // same count, or the pass is invalid.
+        let (msaa, msaa_view) = if samples > 1 {
+            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("scene msaa"),
+                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let v = t.create_view(&Default::default());
+            (Some(t), Some(v))
+        } else {
+            (None, None)
+        };
+        let (depth_tex, depth_view) = if depth {
+            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("scene depth"),
+                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                // Must match the colour target's, or the pass is invalid.
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: scene::DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let v = t.create_view(&Default::default());
+            (Some(t), Some(v))
+        } else {
+            (None, None)
+        };
+        // The same layout a finished blur binds, which is why a scene needs
+        // no new bind group layout and no change to the quad pipeline.
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scene out"),
+            layout: &self.blur_out_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.blur_sampler) },
+            ],
+        });
+        scene::Target { _msaa: msaa, msaa_view, _color: color, view, _depth: depth_tex, depth_view, bind, size, samples, last: None, used: 0 }
+    }
+
     /// Draw a list into a target. Returns what the frame cost the GPU's
     /// queue, for the trace and the budgets (10 §1).
     pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
@@ -825,6 +1371,15 @@ impl Renderer {
         self.pipeline_for(format);
         if !self.pipelines.contains_key(&format) {
             return stats;
+        }
+
+        // Scenes first: the quads below sample what these passes leave, and
+        // the backdrop below that has to be able to see them -- a frosted
+        // pane over a cube shows the cube, not a hole where one was.
+        let scene_passes = self.render_scenes(tex, list, now, age);
+        if scene_passes > 0 {
+            stats.passes += scene_passes;
+            stats.submits += 1;
         }
 
         // 03 §2: a frame with a `blur` in it snapshots what is behind the
@@ -888,7 +1443,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
             pass.set_vertex_buffer(0, tex.instances.slice(..));
-            let mut bound = u32::MAX;
+            let mut bound = (u32::MAX, u32::MAX);
             for run in &list.runs {
                 let Some(r) = list.clips.get(run.clip as usize) else {
                     continue;
@@ -903,9 +1458,22 @@ impl Renderer {
                 if w == 0 || h == 0 {
                     continue;
                 }
-                if bound != run.chain {
-                    pass.set_bind_group(2, outs.get(run.chain as usize).unwrap_or(&self.blur_none), &[]);
-                    bound = run.chain;
+                if bound != (run.chain, run.scene) {
+                    // Group 2 is one slot with two tenants: the blur a run
+                    // samples, or the scene it draws. A run never wants both
+                    // -- a scene quad has no backdrop of its own -- so they
+                    // share the binding rather than needing a fourth group.
+                    let group = match run.scene.checked_sub(1).and_then(|i| list.scenes.get(i as usize)).and_then(|s| tex.scenes.targets.get(&s.id)) {
+                        Some(t) => &t.bind,
+                        // Checked at the point of use, the way `clips` is
+                        // just above: a run naming a target that is not
+                        // there draws nothing rather than sampling whatever
+                        // group 2 happens to hold.
+                        None if run.scene != 0 => continue,
+                        None => outs.get(run.chain as usize).unwrap_or(&self.blur_none),
+                    };
+                    pass.set_bind_group(2, group, &[]);
+                    bound = (run.chain, run.scene);
                 }
                 // Scissors are in the view's own pixels, not the
                 // viewport's, so this is the one place the origin has to be
@@ -1049,7 +1617,6 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
-            pass.set_bind_group(2, &self.blur_none, &[]);
             pass.set_vertex_buffer(0, tex.instances.slice(..));
             for run in &list.runs {
                 // Only what was painted before the first blurred quad is the
@@ -1070,6 +1637,19 @@ impl Renderer {
                 if x1 <= x0 || y1 <= y0 {
                     continue;
                 }
+                // A scene is part of its own backdrop. This pass replays the
+                // frame's early runs into the snapshot, and binding the
+                // empty texture to every one of them -- which is what this
+                // did before scenes existed -- would leave a hole exactly
+                // where a frosted pane sits over a cube. Bound inside the
+                // loop rather than once outside it, because which run wants
+                // which texture is now a property of the run.
+                let group = match run.scene.checked_sub(1).and_then(|i| list.scenes.get(i as usize)).and_then(|s| tex.scenes.targets.get(&s.id)) {
+                    Some(t) => &t.bind,
+                    None if run.scene != 0 => continue,
+                    None => &self.blur_none,
+                };
+                pass.set_bind_group(2, group, &[]);
                 pass.set_scissor_rect(x0 - rx, y0 - ry, x1 - x0, y1 - y0);
                 pass.draw(0..6, run.first..run.first.saturating_add(count));
             }

@@ -91,4 +91,12 @@ pub use style::{
 pub use writer::Writer;
 
 /// The protocol version this crate implements.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// Two since the `scene` kind (03 §1.2). Adding a node kind is a version,
+/// deliberately and by the rule in `00-rationale.md`: an older client meets
+/// `0x11` as a decode error and ends the session rather than showing half a
+/// tree, so the price of a new primitive is a new client. Version one is
+/// still spoken -- a manifest says the range it serves, a `Welcome` names
+/// the lower of the two ends, and an application that asked for nothing new
+/// goes on working with the clients it already had.
+pub const PROTOCOL_VERSION: u32 = 2;

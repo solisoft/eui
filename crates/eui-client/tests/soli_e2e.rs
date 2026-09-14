@@ -850,8 +850,17 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     let _ = std::fs::remove_dir_all(&pins);
     let m = eui_client::manifest::check(&origin, &pins, None).expect("a signed manifest");
     assert_eq!(m.app_id, "demo-app", "the application folder's name");
-    assert_eq!((m.protocol_min, m.protocol_max), (1, 1));
-    assert_eq!(m.entry, "/_eui/session");
+    // The range a server that asked for nothing new serves: from the oldest
+    // version to whatever this build knows. The floor rises to 2 only for an
+    // application that asked for `scene`, whose kind an older client cannot
+    // decode at all (11 §2, 01 §2.1).
+    assert_eq!((m.protocol_min, m.protocol_max), (1, eui_proto::PROTOCOL_VERSION));
+    // The manifest names the component a bare origin opens, not the bare
+    // endpoint: `gallery` is the first `router_eui` in the demo's routes and
+    // claims the default for want of anything else claiming it. (Soli's
+    // `serve::eui::set_default`; this assertion predates that and was
+    // checking the older shape.)
+    assert_eq!(m.entry, "/_eui/session/gallery");
     // `fs.pick` joined it when the messenger learned to take an attachment,
     // and the other three when it learned to use a phone. The manifest is
     // the whole list an application ever asks for and the client pins it,

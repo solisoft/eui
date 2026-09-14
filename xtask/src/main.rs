@@ -181,6 +181,7 @@ fn bench() -> Vec<Row> {
                 now: 0.0,
                 scrollbar_hot: None,
                 scrollbars: &[],
+                scenes_allowed: true,
             });
             s.elapsed()
         })
@@ -242,7 +243,109 @@ fn bench() -> Vec<Row> {
     rows.push(Row { what: "process RSS at the end", value: format!("{:.1} MB", rss_kb() as f64 / 1024.0), budget: "info", ok: true });
 
     rows.extend(through_a_worker(scroll));
+    rows.extend(scene_rows());
 
+    rows
+}
+
+/// What a scene costs the half of the client that is not the GPU.
+///
+/// The GPU's own share is not measured here and 10 §1 says so: it wants an
+/// adapter, and this runs where there may be none. What *can* be measured is
+/// the part the budget actually leans on — that verifying a module and
+/// decoding a mesh are cheap enough to do in the worker on the frame they
+/// arrive, and that a scene adds nothing per frame to the paint, because
+/// everything that moves in it moves on the GPU from a clock.
+fn scene_rows() -> Vec<Row> {
+    let mut rows = Vec::new();
+
+    // A module at the shape a real one has: the client's own contract, with
+    // a bounded loop in it so the trip-count analysis is doing its work.
+    let module = "
+struct Scene { mvp: mat4x4<f32>, time: vec4<f32>, size: vec4<f32>, params: vec4<f32>, tint: vec4<f32> }
+@group(0) @binding(0) var<uniform> u: Scene;
+struct VIn { @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32> }
+struct VOut { @builtin(position) pos: vec4<f32>, @location(0) normal: vec3<f32> }
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.pos = u.mvp * vec4<f32>(in.pos, 1.0);
+    o.normal = in.normal;
+    return o;
+}
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    var acc: f32 = 0.0;
+    for (var i: i32 = 0; i < 8; i = i + 1) { acc = acc + 0.1; }
+    let light = normalize(vec3<f32>(0.35, 0.75, 0.55));
+    let shade = 0.25 + 0.75 * max(dot(normalize(in.normal), light), 0.0);
+    return vec4<f32>(u.tint.rgb * shade * acc, u.tint.a);
+}
+";
+    let t: Vec<Duration> = (0..20)
+        .map(|_| {
+            let s = Instant::now();
+            let _ = eui_shader::verify(module);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "verify a scene shader (median)", value: format!("{d:?}"), budget: "< 2 ms", ok: d < Duration::from_millis(2) });
+
+    // A mesh at the cap, checked index by index — which is the check no
+    // driver makes, so its cost is the price of the promise.
+    let verts = vec![eui_render::scene::Vertex { pos: [0.5, -0.5, 0.25], normal: [0.0, 0.0, 1.0], uv: [0.5, 0.5] }; 60_000];
+    let idx: Vec<u32> = (0..180_000u32).map(|i| i % 60_000).collect();
+    let bytes = eui_client::mesh::encode(&verts, &idx);
+    let t: Vec<Duration> = (0..5)
+        .map(|_| {
+            let s = Instant::now();
+            let _ = eui_client::mesh::decode(&bytes);
+            s.elapsed()
+        })
+        .collect();
+    let d = median(t);
+    rows.push(Row { what: "decode and check a 60k-vertex mesh (median)", value: format!("{d:?}, {:.1} KB", bytes.len() as f64 / 1024.0), budget: "< 20 ms", ok: d < Duration::from_millis(20) });
+
+    // The line the whole design rests on: a scene on screen costs the paint
+    // nothing per frame. The comparison is against the same tree with the
+    // scene node taken out, so what is measured is the scene and not the
+    // page around it.
+    let paint_of = |with_scene: bool| -> Duration {
+        let mut driver = Driver::new(800.0, 600.0, 1.0, eui_proto::caps::SCENE);
+        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: u32::from(with_scene) });
+        if with_scene {
+            tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 2, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 0 });
+            tree.props.push((1, Value::Bool(true)));
+        }
+        driver.handle_frame(Frame::Batch(Batch {
+            seq: 1,
+            ops: vec![
+                Op::DefAtom { id: 1, value: "playing".into() },
+                Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(800), height: Dim::Px(600), ..Default::default() } },
+                Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(400), height: Dim::Px(300), ..Default::default() } },
+                Op::Mount(tree),
+            ],
+        }));
+        let _ = driver.paint(800, 600);
+        let t: Vec<Duration> = (0..20)
+            .map(|_| {
+                let s = Instant::now();
+                let _ = driver.paint(800, 600);
+                s.elapsed()
+            })
+            .collect();
+        median(t)
+    };
+    let bare = paint_of(false);
+    let scened = paint_of(true);
+    let delta = scened.saturating_sub(bare);
+    rows.push(Row {
+        what: "paint a frame with a playing scene, over one without",
+        value: format!("{delta:?} ({scened:?} against {bare:?})"),
+        budget: "< 100 µs",
+        ok: delta < Duration::from_micros(100),
+    });
     rows
 }
 
@@ -538,7 +641,10 @@ fn conform() {
     // rather than failed where the standard library is not installed — this
     // is a check that the code is portable, not a demand that everyone
     // carry two phone toolchains.
-    const CORE: [&str; 12] = ["-p", "eui-proto", "-p", "eui-tree", "-p", "eui-theme", "-p", "eui-layout", "-p", "eui-text", "-p", "eui-vm"];
+    // `eui-shader` belongs here for the same reason the rest do: a phone
+    // that draws a scene has to verify its module, and the verifier carries
+    // no platform of its own.
+    const CORE: [&str; 14] = ["-p", "eui-proto", "-p", "eui-tree", "-p", "eui-theme", "-p", "eui-layout", "-p", "eui-text", "-p", "eui-vm", "-p", "eui-shader"];
     for target in ["aarch64-linux-android", "aarch64-apple-ios"] {
         if std_installed(target) {
             let mut args = vec!["check", "--target", target];

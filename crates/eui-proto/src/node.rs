@@ -51,6 +51,10 @@ pub enum NodeKind {
     Audio = 0x0F,
     /// A moving picture, referenced by content hash. Leaf.
     Video = 0x10,
+    /// A 3D scene, drawn by a shader the server names (`spec/11-shaders.md`).
+    /// Leaf, and the only kind whose picture the client does not compute
+    /// from the tree alone.
+    Scene = 0x11,
 }
 
 impl NodeKind {
@@ -73,6 +77,7 @@ impl NodeKind {
             0x0E => Ok(Self::Sizer),
             0x0F => Ok(Self::Audio),
             0x10 => Ok(Self::Video),
+            0x11 => Ok(Self::Scene),
             _ => Err(DecodeError::UnknownTag("node kind")),
         }
     }
@@ -84,7 +89,7 @@ impl NodeKind {
 
     /// True for kinds that MUST NOT have children.
     pub const fn is_leaf(self) -> bool {
-        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider | Self::Audio | Self::Video)
+        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider | Self::Audio | Self::Video | Self::Scene)
     }
 
     /// True for kinds that carry no text, props, or handlers.

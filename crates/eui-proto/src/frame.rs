@@ -86,9 +86,19 @@ pub mod caps {
     pub const FS_SAVE: u32 = 1 << 7;
     /// Read a tag held against the machine.
     pub const NFC: u32 = 1 << 8;
+    /// Draw with a graphics program of the application's own: a `scene`
+    /// node, and the shader it names (`spec/11-shaders.md`).
+    ///
+    /// Named for what the person consents to, not for the hardware it uses.
+    /// What they are agreeing to is that this application may put on screen
+    /// a surface whose pixels it computed itself -- which costs their
+    /// graphics card and can slow the machine down, and which still cannot
+    /// read what is on their screen, because a scene's target carries no
+    /// `COPY_SRC` and there is no path for a pixel to travel back.
+    pub const SCENE: u32 = 1 << 9;
 
     /// The names of 01 §2.1, in bit order.
-    pub const NAMES: [(&str, u32); 9] = [
+    pub const NAMES: [(&str, u32); 10] = [
         ("camera", CAMERA),
         ("microphone", MICROPHONE),
         ("clipboard.read", CLIPBOARD_READ),
@@ -98,6 +108,7 @@ pub mod caps {
         ("fs.pick", FS_PICK),
         ("fs.save", FS_SAVE),
         ("nfc", NFC),
+        ("scene", SCENE),
     ];
 
     /// A capability by its name, `clipboard.read`.
@@ -114,7 +125,7 @@ pub mod caps {
     /// It grows from the top as capabilities are added, and a bit outside
     /// it is a decode error (08 §3) — which is the point: a client that
     /// does not know what bit 256 means must not quietly agree to it.
-    pub const ALL: u32 = 0x1FF;
+    pub const ALL: u32 = 0x3FF;
 }
 
 /// The viewer's presentation state.

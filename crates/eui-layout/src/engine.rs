@@ -577,7 +577,13 @@ impl Layout {
                 let (w, h) = hash.and_then(|h| f.text.asset_size(&h)).unwrap_or((0.0, 0.0));
                 (Size::new(w, h), None)
             }
-            NodeKind::Spacer => (Size::default(), None),
+            // A scene has **no** intrinsic size, and that is a decision
+            // rather than an omission. The `Image` arm above takes the first
+            // `Value::Asset` prop it finds, which is unambiguous for a
+            // picture and meaningless for a scene: `shader` and `mesh` are
+            // both assets, and neither is a width. So the server says how
+            // big a scene is, the way it does for a `spacer`.
+            NodeKind::Scene | NodeKind::Spacer => (Size::default(), None),
             NodeKind::Divider => (Size::new(1.0, 1.0), None),
             NodeKind::Scroll | NodeKind::List => {
                 let p = self.place_scroll(f, ix, st, inner_w, inner_h, true);

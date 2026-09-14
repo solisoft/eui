@@ -221,7 +221,10 @@ fn oversized_batch_is_rejected() {
 #[test]
 fn unknown_node_kinds_are_rejected() {
     assert_eq!(subtree_err(&leaf(0x00)), E::UnknownTag("node kind"));
-    assert_eq!(subtree_err(&leaf(0x11)), E::UnknownTag("node kind"));
+    // 0x11 is `scene`, and decodes. The next one along does not: the set is
+    // closed, and adding to it is a protocol version, which is the price
+    // this test exists to keep charging.
+    assert_eq!(subtree_err(&leaf(0x12)), E::UnknownTag("node kind"));
     assert_eq!(subtree_err(&leaf(0xFF)), E::UnknownTag("node kind"));
 }
 

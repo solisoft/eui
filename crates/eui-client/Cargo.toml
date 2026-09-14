@@ -18,11 +18,17 @@ eui-theme = { path = "../eui-theme", version = "0.1.0" }
 eui-layout = { path = "../eui-layout", version = "0.1.0" }
 eui-text = { path = "../eui-text", version = "0.1.0" }
 eui-render = { path = "../eui-render", version = "0.1.0" }
+# The shader verifier. Linked here so the parse that meets a module a server
+# chose happens in the confined worker (08 §10), beside the image decoders,
+# and not in the window beside TLS.
+eui-shader = { path = "../eui-shader", version = "0.1.0" }
 eui-vm = { path = "../eui-vm", version = "0.1.0" }
 eui-audio = { path = "../eui-audio", version = "0.1.0" }
 eui-video = { path = "../eui-video", version = "0.1.0" }
 winit = "0.30"
 wgpu = "23"
+# Reinterpreting a validated mesh as bytes across the worker pipe, and back.
+bytemuck = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

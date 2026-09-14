@@ -53,6 +53,7 @@ const BLURRED: u32 = 4u;        // fill over the blurred backdrop
 const SPINNING: u32 = 8u;       // turns about its node's centre, 03 §5
 const ANIMATED: u32 = 16u;      // fill, stroke, opacity mix from `*_from`
 const DECELERATE: u32 = 32u;    // along the entrance curve, not the standard
+const SCENE: u32 = 64u;         // a scene's own target, premultiplied
 const HELD: u32 = 4u;           // a transform the hand is driving, not the clock
 const TAU: f32 = 6.2831855;
 
@@ -235,6 +236,18 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     }
 
     let flags = u32(in.params.z);
+
+    // A scene is a picture and nothing else: no fill, no border, no
+    // backdrop. Its target is bound where a blur would be, and it is
+    // premultiplied already, so the only thing left to apply is this quad's
+    // own coverage -- which is where the rounded corner, the scissor and
+    // the page's opacity have all arrived by, without the scene's shader
+    // knowing that any of them exist.
+    if ((flags & SCENE) != 0u) {
+        let t = textureSample(blur_tex, blur_smp, in.uv);
+        let a = coverage * in.params.w;
+        return vec4<f32>(t.rgb * a, t.a * a);
+    }
 
     var color = in.fill;
     // 03 §2: a blurred node fills over its backdrop rather than over what

@@ -34,6 +34,23 @@ pub const ANIMATED: u32 = 16;
 /// The transition decelerates (an entrance) rather than easing along the
 /// theme's standard curve.
 pub const DECELERATE: u32 = 32;
+/// The quad is a scene's picture: sample the target the scene was rendered
+/// into, which the run binds to group 2 where a blur would otherwise sit.
+///
+/// A scene composites as one textured quad and nothing else, which is what
+/// buys it the whole of the 2D world for free -- the scissor of the scroller
+/// it sits in, the rounded corner of its own style, the opacity and the
+/// slide of the page it is on, all of them applied by the vertex stage to a
+/// quad that knows nothing about any of it. The alternative, a 3D pass
+/// inlined into the main one, would have had to reimplement every one of
+/// those inside each shader a server wrote.
+///
+/// Not `TEXTURED_RGBA`: that samples the image atlas, which the worker
+/// fills and a scene's target is not in. And unlike the atlas, a scene's
+/// target is **premultiplied**, because the pass that drew it blended that
+/// way -- treating it as straight alpha, the way the atlas path does, puts
+/// a black fringe around everything translucent.
+pub const SCENE: u32 = 64;
 /// Bits 8-11 of the flags: which of the list's `scrollers` carries the
 /// quad — a scroll in flight (04 §7) the vertex stage moves from the
 /// offset the layout baked to the one on screen — or zero for none.
@@ -376,7 +393,68 @@ pub struct Run {
     pub first: u32,
     /// How many instances.
     pub count: u32,
+    /// Which of the list's `scenes` this run samples, plus one, or `0` for
+    /// a run that samples none. Not folded into `chain`: a run can sit
+    /// inside a blurred subtree and draw a scene, and the two bindings are
+    /// the same slot on the pipeline but never the same texture.
+    pub scene: u32,
 }
+
+/// One 3D scene to render off-screen before the frame is drawn, and the
+/// quad in the list that then samples it.
+///
+/// This is all that crosses the worker/window pipe for a scene per frame:
+/// two hashes and a handful of floats. The geometry and the shader travel
+/// once, by the asset path, the way a picture already does -- which is what
+/// makes an animating scene cost the pipe nothing, and lets `gpu_only`
+/// repeat a frame of it without waking the worker at all.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneDraw {
+    /// The node's protocol id, which keys the target it is drawn into. An
+    /// id rather than a position in this list, so that a row scrolling
+    /// through a virtualised list keeps its texture instead of reallocating
+    /// one every frame.
+    pub id: u64,
+    /// Where it lands, in device pixels: `x, y, w, h`. The target is sized
+    /// from this, rounded up to a quantum so that a node being dragged
+    /// wider does not reallocate on every frame.
+    pub rect: [f32; 4],
+    /// BLAKE3 of the WGSL module, or all zero for the client's own.
+    pub shader: [u8; 32],
+    /// BLAKE3 of the mesh, or all zero for the client's own.
+    pub mesh: [u8; 32],
+    /// The author's half of the uniform block: `params` then `tint`. The
+    /// client fills the rest -- the matrix, the clock and the size -- so a
+    /// server never sends a matrix and can never send a degenerate one.
+    pub uniforms: [f32; 8],
+    /// What the target is cleared to, linear premultiplied RGBA.
+    pub clear: [f32; 4],
+    /// `SCENE_DEPTH`, `SCENE_ANIMATED`.
+    pub flags: u32,
+    /// Frames a second this scene asks for while it animates, 1 to 60; `0`
+    /// for one that does not animate.
+    ///
+    /// Here rather than in the driver because the pacing has to be readable
+    /// from the list alone: a `gpu_only` frame is the *same list* redrawn
+    /// with a later clock, and the window decides when to redraw it without
+    /// asking the worker anything.
+    pub fps: u32,
+}
+
+/// The scene tests depth, so what is behind stays behind.
+pub const SCENE_DEPTH: u32 = 1;
+/// The scene moves by its own clock, so the window may redraw it without
+/// waking the worker -- the same bargain a `spin` already strikes.
+pub const SCENE_ANIMATED: u32 = 2;
+/// Draw the scene four times over and resolve.
+///
+/// The one thing the 2D pipeline's signed distance cannot smooth: a quad's
+/// own edge is antialiased by construction, and a triangle's inside the
+/// target is not. A client that cannot multisample this format ignores the
+/// flag rather than refusing the scene -- a slightly jagged cube is better
+/// than none, and the alternative is a validation error on a machine the
+/// author never had.
+pub const SCENE_MSAA: u32 = 4;
 
 /// What the frame's blurred quads see behind them (03 §2).
 ///
@@ -431,6 +509,10 @@ pub struct DrawList {
     /// only. Not sent over the pipe: the driver reads it before handing
     /// the list on.
     pub cpu_bound: bool,
+    /// The scenes this list wants rendered before it is drawn. Empty for
+    /// every frame of every application that has none, which is nearly all
+    /// of them: an empty vector allocates nothing.
+    pub scenes: Vec<SceneDraw>,
     /// The scrolls in flight this list carries (04 §7), by slot less one:
     /// a quad's flags name the slot that moves it.
     /// Where each subtree that asked to leave painted itself, so a client
@@ -480,6 +562,14 @@ pub struct Scene<'a> {
     pub editing: Option<Editing>,
     /// Seconds on the client's clock, for `spin` (03 §5).
     pub now: f32,
+    /// Whether this session was granted `scene` (08 §3).
+    ///
+    /// Not a check at the draw site so much as the absence of one: with the
+    /// grant withheld the painter never builds a `SceneDraw`, so no target
+    /// is made, no module is fetched and nothing is compiled. A `scene`
+    /// node then paints its own background, which is what any node with no
+    /// content already does.
+    pub scenes_allowed: bool,
     /// The scroller whose scrollbar the pointer is on or dragging: its
     /// thumb paints wider and darker.
     pub scrollbar_hot: Option<NodeIx>,
@@ -506,7 +596,8 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
         return list;
     };
     scene.cache.begin();
-    let mut p = Painter { scene, list, clip: 0, chain: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, slack: (0.0, 0.0), blur: None };
+    let mut p =
+        Painter { scene, list, clip: 0, chain: 0, scene_slot: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, slack: (0.0, 0.0), blur: None };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -530,6 +621,10 @@ struct Painter<'s, 'a> {
     clip: u32,
     /// Which blur the quads being pushed now sample; `0` is none.
     chain: u32,
+    /// Which scene the quads being pushed now sample, plus one; `0` is
+    /// none. A run binds one texture to group 2, so this ends a run exactly
+    /// as a change of scissor or of blur does.
+    scene_slot: u32,
     run_start: u32,
     inherited_fg: Vec<[f32; 4]>,
     /// Overlays met during the walk, kept for the top layer.
@@ -593,7 +688,7 @@ impl Painter<'_, '_> {
     fn close_run(&mut self) {
         let end = self.list.quads.len() as u32;
         if end > self.run_start {
-            self.list.runs.push(Run { clip: self.clip, chain: self.chain, first: self.run_start, count: end - self.run_start });
+            self.list.runs.push(Run { clip: self.clip, chain: self.chain, first: self.run_start, count: end - self.run_start, scene: self.scene_slot });
             self.run_start = end;
         }
     }
@@ -611,6 +706,14 @@ impl Painter<'_, '_> {
         if chain != self.chain {
             self.close_run();
             self.chain = chain;
+        }
+    }
+
+    /// Draws that follow sample scene `slot`, or none for zero.
+    fn set_scene_slot(&mut self, slot: u32) {
+        if slot != self.scene_slot {
+            self.close_run();
+            self.scene_slot = slot;
         }
     }
 
@@ -1010,6 +1113,71 @@ impl Painter<'_, '_> {
 
         let virtual_ = self.scene.layout.is_virtual(ix);
         match node.kind {
+            // 03 §1.2: a scene is rendered into a target of its own before
+            // the frame, and composited here as one textured quad. The quad
+            // is what gives it the corner radius, the opacity, the scissor
+            // of any scroller it sits in and the transform of any page it is
+            // on -- none of which its shader knows about, and none of which
+            // it could be trusted to apply for itself.
+            NodeKind::Scene => {
+                let well = self.scene.session.atoms();
+                let prop = |id: Option<u32>| id.and_then(|id| node.props.iter().find(|(k, _)| *k == id).map(|(_, v)| v));
+                let hash = |v: Option<&Value>| match v {
+                    Some(Value::Asset(h)) => *h,
+                    // All zero is the client's own: a scene with no module
+                    // named draws the built-in cube, which is what makes the
+                    // renderer testable without a server.
+                    _ => [0u8; 32],
+                };
+                let mut uniforms = [0.0f32; 8];
+                if let Some(Value::List(vs)) = prop(well.uniforms) {
+                    for (slot, v) in uniforms.iter_mut().zip(vs) {
+                        *slot = match v {
+                            Value::Float(f) => *f as f32,
+                            Value::Int(i) => *i as f32,
+                            _ => 0.0,
+                        };
+                    }
+                }
+                let playing = matches!(prop(well.playing), Some(Value::Bool(true)));
+                // Only emitted when it is on screen, and only where the
+                // capability was granted. A scene culled by its scroller
+                // must not cost a render target -- a virtualised list of
+                // them would otherwise ask for one per row.
+                if self.scene.scenes_allowed && self.visible(dev) {
+                    let msaa = match prop(well.msaa) {
+                        Some(Value::Int(n)) => *n >= 4,
+                        // Absent is on: a scene is a picture of edges, and
+                        // the author who has to ask for them is the author
+                        // who ships without them.
+                        _ => true,
+                    };
+                    let flags = SCENE_DEPTH | if playing { SCENE_ANIMATED } else { 0 } | if msaa { SCENE_MSAA } else { 0 };
+                    // A spinner is content at thirty (03 §5); a scene is
+                    // not, and 33 ms of a cube turning is visibly stepped.
+                    // Sixty unless the server asks for less -- it may slow
+                    // a scene down, never speed the client up.
+                    let fps = if playing {
+                        match prop(well.fps) {
+                            Some(Value::Int(n)) => (*n).clamp(1, 60) as u32,
+                            _ => 60,
+                        }
+                    } else {
+                        0
+                    };
+                    let slot = self.list.scenes.len() as u32;
+                    self.list.scenes.push(SceneDraw { id: u64::from(node.id), rect: dev, shader: hash(prop(well.shader)), mesh: hash(prop(well.mesh)), uniforms, clear: [0.0; 4], flags, fps });
+                    self.set_scene_slot(slot + 1);
+                    self.push(Quad { rect: dev, params: [radius, 0.0, SCENE as f32, opacity], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() });
+                    self.set_scene_slot(0);
+                    // A scene that moves by its own clock is a frame the
+                    // window can repeat without waking the worker -- the
+                    // same bargain a `spin` strikes (10 §1).
+                    if playing {
+                        self.list.wants_frame = true;
+                    }
+                }
+            }
             // A video's current frame lives in the image atlas under the
             // picture's own hash, rewritten as it plays: to the painter it
             // is a picture.

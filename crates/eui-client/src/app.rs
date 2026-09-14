@@ -322,6 +322,9 @@ struct Shell {
     /// `None` for a window opened on a URL: `eui <url>` is one application
     /// in one chromeless window, which is what an embedding host gets.
     chrome: Option<(crate::chrome::Chrome, eui_render::SessionTextures)>,
+    /// The device went away and every session has been told. Kept so the
+    /// reason is reported once rather than on every frame that follows it.
+    gpu_gone: bool,
     /// The applications, in strip order.
     tabs: Vec<Tab>,
     /// Which of them is shown and takes the input.
@@ -623,7 +626,19 @@ impl Tab {
             trouble: None,
             title: name_from_url(&launch.url),
             url: launch.url,
-            allowed: launch.allowed,
+            // 11 §2.5: a scene's shader is not run on a GL backend, whatever
+            // the person allowed -- the host generates unchecked indexing
+            // there, and the shader is the server's. Masked here rather than
+            // checked at the draw, so the capability is never granted and
+            // the module is never even fetched (08 §3).
+            allowed: if renderer.grants_scenes() {
+                launch.allowed
+            } else {
+                if launch.allowed & eui_proto::caps::SCENE != 0 {
+                    eprintln!("eui: this adapter is GL; `scene` is not offered on it (11 §2.5)");
+                }
+                launch.allowed & !eui_proto::caps::SCENE
+            },
             backend,
             conn: None,
             cookie: launch.cookie,
@@ -733,6 +748,17 @@ impl Tab {
                 self.lost();
             }
         }
+    }
+
+    /// The GPU went away under every session on this device. Ends this one
+    /// the way a refused tree or a dead socket does -- the reason kept on
+    /// the blank page rather than only on stderr -- and does not retry:
+    /// another socket would draw on the same lost device.
+    fn gpu_gone(&mut self, reason: &str) {
+        self.trouble = Some(reason.to_owned());
+        self.backend.close(reason.to_owned());
+        self.conn = None;
+        self.link = Link::Ended;
     }
 
     /// The socket is gone: count the attempt and say when the next is due.
@@ -1104,6 +1130,7 @@ impl Shell {
             window,
             surface: Some(surface),
             config,
+            gpu_gone: false,
             tabs: Vec::new(),
             active: 0,
             modifiers: 0,
@@ -2064,6 +2091,23 @@ impl Shell {
 
     /// Draw the window: the chrome, then the active application over it.
     fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
+        // A lost device is not this frame's problem: every pipeline, buffer
+        // and texture built on it is invalid, so there is nothing to draw
+        // and nothing to retry. One device stands behind every tab, so
+        // every session ends, each with the same reason -- which is what
+        // 08 §10 promises a failure does, and the window itself stays up.
+        if let Some(e) = renderer.trouble() {
+            if !self.gpu_gone {
+                self.gpu_gone = true;
+                eprintln!("eui: {e}");
+                let reason = e.to_string();
+                for tab in &mut self.tabs {
+                    tab.gpu_gone(&reason);
+                }
+                self.rebuild_chrome();
+            }
+            return;
+        }
         self.frames = self.frames.saturating_add(1);
         self.settle_chrome_mode(renderer);
         self.apply_resize(renderer);
@@ -2130,6 +2174,45 @@ impl Shell {
                 alpha: 1.0,
             };
             landed = l;
+            // A scene's mesh and module cross into this process once, on
+            // the frame their hash first appears, and are uploaded before
+            // the frame that samples them is drawn. Everything else about a
+            // scene -- the clock, the uniforms, the turning -- stays on this
+            // side and costs the worker nothing.
+            for (hash, asset) in tab.backend.take_scene_assets() {
+                match asset {
+                    crate::driver::SceneAsset::Mesh(m) => renderer.load_mesh(&mut tab.textures, hash, &m.vertices, &m.indices),
+                    crate::driver::SceneAsset::Shader(src) => {
+                        // Verified again, here, on a module the worker
+                        // already approved (11 §4). That is not belt and
+                        // braces for its own sake: the worker is the process
+                        // that reads what a server sent, so a worker that has
+                        // been taken over must not be able to *call* a module
+                        // verified. wgpu re-parses the WGSL either way, which
+                        // buys memory safety; it knows nothing of bounded
+                        // loops, of there being no compute stage, or of the
+                        // one binding a scene has. Measured at 81 µs for a
+                        // real module, which is a price worth paying once per
+                        // hash for a promise that would otherwise rest on the
+                        // sandbox holding.
+                        //
+                        // Then compiled inside a validation scope, because
+                        // wgpu's default for an uncaptured error is a panic
+                        // -- in this process, which holds the display for
+                        // every session. A module refused at either step
+                        // leaves its node drawing its own background, and the
+                        // session carries on.
+                        match eui_shader::verify(&src) {
+                            Ok(_) => {
+                                if let Err(e) = renderer.load_shader(hash, &src) {
+                                    eprintln!("eui: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("eui: a shader the worker passed was refused here: {e}"),
+                        }
+                    }
+                }
+            }
             let tex = &mut tab.textures;
             if let Some(st) = tab.backend.with_atlases(|atlas, images| renderer.render(tex, target, &list, atlas, images)) {
                 stats.quads += st.quads;

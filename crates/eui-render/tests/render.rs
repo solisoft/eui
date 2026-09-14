@@ -47,6 +47,30 @@ fn draw(fx: &mut Fx, w: u32, h: u32, scale: f32) -> DrawList {
     draw_bars(fx, w, h, scale, &[])
 }
 
+/// The same frame, painted by a session that was never granted `scene`.
+fn draw_ungranted(fx: &mut Fx, w: u32, h: u32) -> DrawList {
+    paint(&mut Scene {
+        session: &fx.session,
+        layout: &fx.layout,
+        theme: &fx.theme,
+        text: &mut fx.text,
+        atlas: &mut fx.atlas,
+        images: &fx.images,
+        scale: 1.0,
+        size: (w, h),
+        focus: None,
+        anims: &[],
+        movers: &[],
+        glides: &[],
+        cache: &mut PaintCache::new(),
+        editing: None,
+        now: 0.0,
+        scenes_allowed: false,
+        scrollbar_hot: None,
+        scrollbars: &[],
+    })
+}
+
 /// The same, with the scrollers whose bars are up — the client's decision,
 /// which a test has to make for itself.
 fn draw_bars(fx: &mut Fx, w: u32, h: u32, scale: f32, bars: &[(eui_tree::NodeIx, f32)]) -> DrawList {
@@ -66,6 +90,7 @@ fn draw_bars(fx: &mut Fx, w: u32, h: u32, scale: f32, bars: &[(eui_tree::NodeIx,
         cache: &mut PaintCache::new(),
         editing: None,
         now: 0.0,
+        scenes_allowed: true,
         scrollbar_hot: None,
         scrollbars: bars,
     })
@@ -120,7 +145,7 @@ fn paint_emits_one_quad_per_filled_box_and_one_per_glyph() {
     assert_eq!(list.quads[0].params[2] as u32, 0);
     assert_eq!(list.quads[1].params[2] as u32, TEXTURED);
     assert_eq!(list.quads[2].params[2] as u32, TEXTURED);
-    assert_eq!(list.runs, vec![Run { clip: 0, chain: 0, first: 0, count: 3 }]);
+    assert_eq!(list.runs, vec![Run { clip: 0, chain: 0, first: 0, count: 3, scene: 0 }]);
     assert_eq!(list.clips, vec![[0, 0, 200, 100]]);
     assert_eq!(list.clear, linear(fx.theme.color(Role::SurfaceBase)));
     assert_eq!(fx.atlas.len(), 2);
@@ -739,6 +764,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             cache: &mut PaintCache::new(),
             editing: None,
             now: 0.0,
+            scenes_allowed: true,
             scrollbar_hot: None,
             scrollbars: &[],
         })
@@ -796,7 +822,7 @@ fn a_transition_renders_its_midway_colour_at_half_time() {
     let flags = ANIMATED as f32;
     let from = [eui_render::pack4(red), [0; 4]].concat().try_into().unwrap();
     list.quads = vec![Quad { rect: [10.0, 10.0, 40.0, 40.0], params: [0.0, 0.0, flags, 1.0], fill: blue, extra: [0.0, 0.0, 0.0, 1.0], spin: [0.0, 0.0, 0.0, 1.0], from, ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
     list.serial = 9;
@@ -835,7 +861,7 @@ fn a_glide_moves_a_quad_by_its_eased_offset() {
     let slot = (1u32 << SCROLLER_SHIFT) as f32;
     // A 10 px bar put at y = 40, gliding there from 40 px lower over a second.
     list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: white, ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -871,7 +897,7 @@ fn an_outer_slot_moves_one_subtree_and_leaves_its_neighbour() {
         Quad { rect: [10.0, 10.0, 40.0, 10.0], params: [0.0, 0.0, 0.0, 1.0], fill: white, ..Quad::default() },
         Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: white, ..Quad::default() },
     ];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 2 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 2, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -900,7 +926,7 @@ fn a_held_transform_takes_its_fraction_from_the_hand() {
     let (mut fx, mut list) = spinning_bar();
     let slot = (1u32 << XFORM_SHIFT) as f32;
     list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, slot, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -930,7 +956,7 @@ fn a_layer_moves_the_whole_list_it_draws() {
     let (mut fx, mut list) = spinning_bar();
     let white = [1.0, 1.0, 1.0, 1.0];
     list.quads = vec![Quad { rect: [10.0, 40.0, 40.0, 10.0], params: [0.0, 0.0, 0.0, 1.0], fill: white, ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -970,7 +996,7 @@ fn the_antialias_ramp_stays_a_device_pixel_under_a_layer_scale() {
     // size too — on a half it would sit exactly on a pixel's centre, where a
     // ramp of any width at all reads the same and the test proves nothing.
     list.quads = vec![Quad { rect: [49.53125, 30.0, 2.0, 40.0], params: [0.0, 0.0, 0.0, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -1002,7 +1028,7 @@ fn a_layer_fades_everything_it_draws() {
     let mut st = r.session();
     let (mut fx, mut list) = spinning_bar();
     list.quads = vec![Quad { rect: [10.0, 10.0, 80.0, 80.0], params: [0.0, 0.0, 0.0, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clips = vec![[0, 0, 100, 100]];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
@@ -1080,6 +1106,7 @@ fn retained_glyph_quads_are_replayed_until_the_node_changes() {
             cache,
             editing: None,
             now: 0.0,
+            scenes_allowed: true,
             scrollbar_hot: None,
             scrollbars: &[],
         })
@@ -1163,7 +1190,7 @@ fn an_entering_quad_fades_its_opacity_from_nothing() {
     let flags = (ANIMATED | DECELERATE) as f32;
     list.quads =
         vec![Quad { rect: [10.0, 10.0, 40.0, 40.0], params: [0.0, 0.0, flags, 1.0], fill: white, extra: [0.0, 0.0, 0.0, 0.0], spin: [0.0, 0.0, 0.0, 1.0], from: [65535; 8], ..Quad::default() }];
-    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1 }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
     list.clear = [0.0, 0.0, 0.0, 1.0];
     list.wants_frame = false;
     let target = r.offscreen(100, 100);
@@ -1206,6 +1233,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         cache: &mut PaintCache::new(),
         editing,
         now: 0.0,
+        scenes_allowed: true,
         scrollbar_hot: None,
         scrollbars: &[],
     });
@@ -1284,6 +1312,7 @@ fn a_centred_fields_caret_sits_in_the_middle_not_on_the_left() {
         cache: &mut PaintCache::new(),
         editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0, caret_on: true }),
         now: 0.0,
+        scenes_allowed: true,
         scrollbar_hot: None,
         scrollbars: &[],
     });
@@ -1353,6 +1382,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             cache: &mut PaintCache::new(),
             editing,
             now: 0.0,
+            scenes_allowed: true,
             scrollbar_hot: None,
             scrollbars: &[],
         });
@@ -1470,6 +1500,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             cache: &mut PaintCache::new(),
             editing: None,
             now,
+            scenes_allowed: true,
             scrollbar_hot: None,
             scrollbars: &[],
         })
@@ -1602,4 +1633,453 @@ fn a_box_that_asks_to_be_clipped_is_clipped() {
     let run = list.runs.iter().find(|r| child as u32 >= r.first && (child as u32) < r.first + r.count).expect("a run carrying it");
     let clip = list.clips.get(run.clip as usize).copied().expect("its clip");
     assert!(clip[3] <= 40, "the child must be trimmed to its parent's 40 px, not left at {} px", clip[3]);
+}
+
+/// 03 §1.2: a scene renders into a target of its own and the list samples
+/// it through one quad.
+///
+/// The picture itself is not a conformance surface — two conforming clients
+/// may shade a cube differently, because `sin`, the filtering and the fill
+/// rule are the adapter's. What is pinned here is the mechanism: that ink
+/// arrives in the middle of the node, that the clear colour survives outside
+/// it, and that the quad's own rounded corner is still cut out of it. A
+/// fourth assertion about the shading would be a promise this protocol does
+/// not make.
+#[test]
+fn a_scene_draws_into_its_own_target_and_composites_as_one_quad() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let node = 7u64;
+    list.scenes = vec![eui_render::SceneDraw {
+        id: node,
+        rect: [10.0, 10.0, 80.0, 80.0],
+        shader: [0; 32],
+        mesh: [0; 32],
+        // No `params`; an opaque orange `tint`.
+        uniforms: [0.0, 0.0, 0.0, 0.0, 0.9, 0.5, 0.15, 1.0],
+        clear: [0.0, 0.0, 0.0, 0.0],
+        flags: eui_render::SCENE_DEPTH | eui_render::SCENE_ANIMATED,
+        fps: 60,
+    }];
+    let flags = eui_render::SCENE as f32;
+    list.quads = vec![Quad {
+        rect: [10.0, 10.0, 80.0, 80.0],
+        // A big radius, so the corner test below is testing something.
+        params: [20.0, 0.0, flags, 1.0],
+        uv: [0.0, 0.0, 1.0, 1.0],
+        ..Quad::default()
+    }];
+    // Slot one: the run names the scene by index plus one.
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 1 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 1.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 11;
+
+    let target = r.offscreen(100, 100);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let at = |x: usize, y: usize| {
+        let i = (y * 100 + x) * 4;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+
+    // The middle of the node: the cube is there, so it is neither the page's
+    // blue nor the scene's transparent clear.
+    let middle = at(50, 50);
+    assert!(middle[0] > 30, "the cube should have landed in the middle of the node: {middle:?}");
+    assert!(middle[0] > middle[2], "and it should be the orange it was tinted, not the page behind it: {middle:?}");
+
+    // Outside the node, the page's own clear colour, untouched.
+    let outside = at(2, 2);
+    assert_eq!(outside, [0, 0, 255], "outside the node the frame's clear colour stands");
+
+    // The quad's rounded corner is cut out of the scene, which is the whole
+    // point of compositing rather than drawing the scene into the frame: the
+    // shader knows nothing about the radius.
+    let corner = at(12, 12);
+    assert_eq!(corner, [0, 0, 255], "the corner radius clips the scene: {corner:?}");
+}
+
+/// A run naming a scene that has no target draws nothing, rather than
+/// sampling whatever was bound to group 2 before it.
+///
+/// The frame still arrives. That is the rule every other check on this path
+/// follows — a clip out of range is skipped, a bad canvas path is skipped —
+/// and it is what lets a scene whose shader is still compiling show its own
+/// background instead of a hole or a crash.
+#[test]
+fn a_run_naming_a_scene_that_is_not_there_draws_nothing() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    list.quads = vec![Quad { rect: [10.0, 10.0, 80.0, 80.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], ..Quad::default() }];
+    // Slot three, with no scenes in the list at all.
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 3 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 1.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 12;
+    let target = r.offscreen(100, 100);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let i = (50 * 100 + 50) * 4;
+    assert_eq!([px[i], px[i + 1], px[i + 2]], [0, 0, 255], "nothing was drawn, and the frame still came");
+}
+
+/// A scene is part of its own backdrop.
+///
+/// The snapshot pass replays the frame's early runs to build what a frosted
+/// pane sees behind it. Before scenes existed it bound the empty texture to
+/// every one of those runs, because none of them could want anything else —
+/// and a scene under a `blur` would have shown a hole exactly where the
+/// frost is. This is the vector that keeps the two features from quietly
+/// cancelling each other.
+#[test]
+fn a_frosted_pane_over_a_scene_frosts_the_scene() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let node = 11u64;
+    list.scenes = vec![eui_render::SceneDraw {
+        id: node,
+        rect: [0.0, 0.0, 100.0, 100.0],
+        shader: [0; 32],
+        mesh: [0; 32],
+        // Opaque green, so what shows through the frost is unmistakably the
+        // scene and not the frame's blue clear.
+        uniforms: [0.0, 0.0, 0.0, 0.0, 0.1, 0.9, 0.2, 1.0],
+        clear: [0.0, 0.0, 0.0, 0.0],
+        flags: eui_render::SCENE_DEPTH,
+        fps: 0,
+    }];
+    list.quads = vec![
+        // The scene, filling the frame.
+        Quad { rect: [0.0, 0.0, 100.0, 100.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() },
+        // A clear pane over its middle: no fill of its own, so everything it
+        // shows is what the backdrop gave it.
+        Quad { rect: [25.0, 25.0, 50.0, 50.0], params: [0.0, 0.0, BLURRED as f32, 1.0], fill: [0.0, 0.0, 0.0, 0.0], extra: [0.0, 0.0, 4.0, 0.0], ..Quad::default() },
+    ];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 1 }, eui_render::Run { clip: 0, chain: 0, first: 1, count: 1, scene: 0 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    // Blue, so a hole in the backdrop would be obvious.
+    list.clear = [0.0, 0.0, 1.0, 1.0];
+    list.backdrop = Some(eui_render::Backdrop { rect: [0, 0, 100, 100], first: 1, sigmas: vec![4.0] });
+    list.wants_frame = false;
+    list.serial = 13;
+
+    let target = r.offscreen(100, 100);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let i = (50 * 100 + 50) * 4;
+    let under = [px[i], px[i + 1], px[i + 2]];
+    assert!(under[1] > under[2], "the frost should show the scene's green, not a hole onto the frame: {under:?}");
+}
+
+/// 03 §1.2: a `scene` node in a tree becomes one entry in the list's scenes
+/// and one quad, in a run that names it.
+///
+/// The counting is the point. One scene and one quad, not one per frame of
+/// something: a scene that turns is the *same* list redrawn with a later
+/// clock, which is what lets `gpu_only` repeat it without waking the worker.
+#[test]
+fn a_scene_node_becomes_one_scene_and_one_quad_that_names_it() {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(100), ..Default::default() };
+    let box_ = StyleRecord { width: Dim::Px(60), height: Dim::Px(40), ..Default::default() };
+    let mut fx = fixture(
+        vec![root, box_],
+        vec![node(NodeKind::Box, 1, 1, 1), FlatNode { props: (0, 3), ..node(NodeKind::Scene, 2, 2, 0) }],
+        vec![(1, Value::Asset([5; 32])), (2, Value::List(vec![Value::Float(0.25), Value::Int(2), Value::Float(1.0)])), (3, Value::Bool(true))],
+        &["shader", "uniforms", "playing"],
+        100.0,
+        100.0,
+    );
+    let list = draw(&mut fx, 100, 100, 1.0);
+
+    assert_eq!(list.scenes.len(), 1, "one node, one scene");
+    let s = &list.scenes[0];
+    assert_eq!(s.shader, [5; 32], "the module the node named");
+    assert_eq!(s.mesh, [0; 32], "no mesh named, so the client's own");
+    assert_eq!(s.rect, [0.0, 0.0, 60.0, 40.0], "the box the layout gave it");
+    // Ints and floats both land in the block; the rest stays zero.
+    assert_eq!(s.uniforms, [0.25, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert!(s.flags & eui_render::SCENE_ANIMATED != 0, "`playing` is what asks for a clock");
+    assert!(list.wants_frame, "and a scene with a clock asks for the next frame");
+
+    let quads: Vec<_> = list.quads.iter().filter(|q| q.params[2] as u32 & eui_render::SCENE != 0).collect();
+    assert_eq!(quads.len(), 1, "composited as exactly one quad");
+    assert_eq!(quads[0].rect, [0.0, 0.0, 60.0, 40.0]);
+    let naming: Vec<_> = list.runs.iter().filter(|r| r.scene == 1).collect();
+    assert_eq!(naming.len(), 1, "one run names the scene, and it is the quad's");
+    assert_eq!(naming[0].count, 1);
+}
+
+/// A scene with no `playing` draws once and asks for nothing.
+///
+/// This is the half of the bargain that keeps `10 §1`'s zero-wakeup line
+/// true: an application with a still scene on screen is an application at
+/// rest, and the client must not be the thing that wakes it.
+#[test]
+fn a_scene_that_is_not_playing_asks_for_no_frame() {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(100), ..Default::default() };
+    let box_ = StyleRecord { width: Dim::Px(60), height: Dim::Px(40), ..Default::default() };
+    let mut fx =
+        fixture(vec![root, box_], vec![node(NodeKind::Box, 1, 1, 1), FlatNode { props: (0, 1), ..node(NodeKind::Scene, 2, 2, 0) }], vec![(1, Value::Asset([5; 32]))], &["shader"], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    assert_eq!(list.scenes.len(), 1);
+    assert!(list.scenes[0].flags & eui_render::SCENE_ANIMATED == 0);
+    assert!(!list.wants_frame, "a still scene wakes nothing");
+}
+
+/// 08 §3: a session that was not granted `scene` has no scene.
+///
+/// Not "the scene fails to draw" — there is nothing to fail. No `SceneDraw`
+/// is built, so no target is made, no module is fetched and nothing is
+/// compiled; the node paints its own background, which is what any node with
+/// no content does. This is the vector that makes deny-by-default a property
+/// of the code path rather than of a check somewhere in it.
+#[test]
+fn a_session_without_the_grant_has_no_scene_at_all() {
+    let root = StyleRecord { display: Display::Stack, width: Dim::Px(100), height: Dim::Px(100), ..Default::default() };
+    let box_ = StyleRecord { bg: ColorRef::role(Role::SurfaceBase.id()), width: Dim::Px(60), height: Dim::Px(40), ..Default::default() };
+    let mut fx = fixture(
+        vec![root, box_],
+        vec![node(NodeKind::Box, 1, 1, 1), FlatNode { props: (0, 2), ..node(NodeKind::Scene, 2, 2, 0) }],
+        vec![(1, Value::Asset([5; 32])), (2, Value::Bool(true))],
+        &["shader", "playing"],
+        100.0,
+        100.0,
+    );
+    let list = draw_ungranted(&mut fx, 100, 100);
+    assert!(list.scenes.is_empty(), "no scene is built");
+    assert!(list.quads.iter().all(|q| q.params[2] as u32 & eui_render::SCENE == 0), "and no quad samples one");
+    assert!(list.runs.iter().all(|r| r.scene == 0), "and no run names one");
+    assert!(!list.wants_frame, "and a `playing` it never read wakes nothing");
+    // The node is still there, and still wearing its own background.
+    assert!(list.quads.iter().any(|q| q.rect == [0.0, 0.0, 60.0, 40.0]), "the node paints as an ordinary box");
+}
+
+/// 10 §1: a scene that is not moving costs the next frame nothing.
+///
+/// Its target already holds the right pixels, so no pass is encoded and
+/// nothing is submitted — the same bargain `uploaded == serial` strikes for
+/// the instance buffer, one level up. This is the half of the scene story
+/// that keeps the zero-wakeup line honest: a still scene on screen is not a
+/// reason to do work, and the client must not make it one.
+#[test]
+fn a_still_scene_is_not_drawn_twice() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    list.scenes = vec![eui_render::SceneDraw {
+        id: 21,
+        rect: [0.0, 0.0, 64.0, 64.0],
+        shader: [0; 32],
+        mesh: [0; 32],
+        uniforms: [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.9, 1.0],
+        clear: [0.0; 4],
+        // Not playing: no clock, so nothing about it changes between frames.
+        flags: eui_render::SCENE_DEPTH,
+        fps: 0,
+    }];
+    list.quads = vec![Quad { rect: [0.0, 0.0, 64.0, 64.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 1 }];
+    list.clips = vec![[0, 0, 64, 64]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 21;
+
+    let target = r.offscreen(64, 64);
+    let first = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let again = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    assert!(first.passes > again.passes, "the first frame drew the scene: {} then {}", first.passes, again.passes);
+    assert_eq!(again.passes, 1, "the second frame is the one pass every frame has");
+
+    // And the picture is still there, which is the point: the target was
+    // kept, not skipped.
+    let px = r.read_back(&target).unwrap();
+    let i = (32 * 64 + 32) * 4;
+    assert!(px[i + 2] > 30, "the scene is still on screen after the frame that did not redraw it");
+}
+
+/// 08 §6: a session cannot ask for more render targets than its quota.
+///
+/// The case is a virtualised `list` of ten thousand rows with a scene in
+/// each. Past the cap a scene draws its own background, which is what one
+/// whose module has not compiled yet already does — so nothing new is asked
+/// of the application, and the client cannot be made to allocate without
+/// bound by a tree that is cheap to send.
+#[test]
+fn a_session_cannot_ask_for_more_targets_than_its_quota() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let many = eui_render::scene::MAX_TARGETS * 3;
+    list.scenes = (0..many)
+        .map(|i| eui_render::SceneDraw {
+            id: i as u64 + 1,
+            rect: [0.0, 0.0, 64.0, 64.0],
+            shader: [0; 32],
+            mesh: [0; 32],
+            uniforms: [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.9, 1.0],
+            clear: [0.0; 4],
+            flags: eui_render::SCENE_DEPTH,
+            fps: 0,
+        })
+        .collect();
+    list.quads = (0..many).map(|_| Quad { rect: [0.0, 0.0, 64.0, 64.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() }).collect();
+    list.runs = (0..many).map(|i| eui_render::Run { clip: 0, chain: 0, first: i as u32, count: 1, scene: i as u32 + 1 }).collect();
+    list.clips = vec![[0, 0, 64, 64]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 31;
+
+    let target = r.offscreen(64, 64);
+    let stats = r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    // One pass per scene that got a target, plus the frame's own.
+    assert_eq!(stats.passes, eui_render::scene::MAX_TARGETS + 1, "the quota holds: {} passes", stats.passes);
+}
+
+/// A module the server sent is what draws.
+///
+/// Up to here every scene test has drawn the client's own cube, which
+/// proves the plumbing and not the point. This one hands the renderer a
+/// module of its own — flat green, ignoring the tint entirely — and looks
+/// at the pixels: the built-in shader would have drawn the red it was
+/// tinted, so green is proof that the server's program ran.
+#[test]
+fn a_module_the_server_sent_is_what_draws() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    // The contract `eui-shader` enforces: these names, these signatures,
+    // and one binding. A module shaped otherwise never reaches this point.
+    let src = "
+struct Scene {
+    mvp: mat4x4<f32>,
+    time: vec4<f32>,
+    size: vec4<f32>,
+    params: vec4<f32>,
+    tint: vec4<f32>,
+}
+@group(0) @binding(0) var<uniform> u: Scene;
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+}
+struct VOut { @builtin(position) pos: vec4<f32> }
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.pos = u.mvp * vec4<f32>(in.pos, 1.0);
+    return o;
+}
+@fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }
+";
+    let hash = [77u8; 32];
+    r.load_shader(hash, src).expect("the module compiles");
+    list.scenes = vec![eui_render::SceneDraw {
+        id: 41,
+        rect: [0.0, 0.0, 64.0, 64.0],
+        shader: hash,
+        mesh: [0; 32],
+        // Red, which the module above pointedly does not use.
+        uniforms: [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+        clear: [0.0; 4],
+        flags: eui_render::SCENE_DEPTH,
+        fps: 0,
+    }];
+    list.quads = vec![Quad { rect: [0.0, 0.0, 64.0, 64.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 1 }];
+    list.clips = vec![[0, 0, 64, 64]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    list.serial = 41;
+
+    let target = r.offscreen(64, 64);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let i = (32 * 64 + 32) * 4;
+    let middle = [px[i], px[i + 1], px[i + 2]];
+    assert!(middle[1] > 200 && middle[0] < 60, "the server's shader drew, not the client's: {middle:?}");
+}
+
+/// A module the driver's own front end refuses leaves the session standing.
+///
+/// This is the test the error scopes exist for. wgpu's default for an
+/// uncaptured validation error is a panic — in the window process, which
+/// holds the display, TLS and the pin store for every session — and 08 §10
+/// promises that a failure ends a session with a reason and leaves the
+/// window up. Here the module never even names the entry points the client
+/// compiles, so the pipeline cannot be built; the renderer must say so and
+/// carry on.
+#[test]
+fn a_module_the_driver_refuses_does_not_take_the_window_with_it() {
+    let Some(mut r) = gpu() else { return };
+    let refused = r.load_shader([78; 32], "@fragment fn nope() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }");
+    // It may compile as a module and fail later at pipeline creation, or
+    // fail here; either way it is a `Result`, and the process is alive to
+    // read it.
+    let _ = refused;
+    let hash = [79u8; 32];
+    assert!(r.load_shader(hash, "this is not WGSL at all").is_err(), "nonsense is refused as a value, not as a panic");
+    // And the renderer still works afterwards.
+    let mut st = r.session();
+    let (mut fx, list) = spinning_bar();
+    let target = r.offscreen(32, 32);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    assert!(r.read_back(&target).is_ok(), "the renderer is still drawing");
+}
+
+/// A scene may be drawn four times over and resolved.
+///
+/// The one thing the 2D pipeline cannot smooth for it: a quad's own edge is
+/// antialiased by the signed distance, and a triangle's inside the target is
+/// not. What is checked here is the wiring, because that is what breaks — a
+/// resolve target attached wrongly gives a blank texture, not a jagged one,
+/// and the scene would silently disappear.
+#[test]
+fn a_scene_may_be_multisampled_and_still_arrives() {
+    let Some(mut r) = gpu() else { return };
+    let multisamples = r.can_multisample_scenes();
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    let draw_with = |r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx, flags: u32, id: u64| {
+        let mut list2 = list.clone();
+        list2.scenes =
+            vec![eui_render::SceneDraw { id, rect: [0.0, 0.0, 64.0, 64.0], shader: [0; 32], mesh: [0; 32], uniforms: [0.0, 0.0, 0.0, 0.0, 0.95, 0.95, 0.95, 1.0], clear: [0.0; 4], flags, fps: 0 }];
+        list2.quads = vec![Quad { rect: [0.0, 0.0, 64.0, 64.0], params: [0.0, 0.0, eui_render::SCENE as f32, 1.0], uv: [0.0, 0.0, 1.0, 1.0], ..Quad::default() }];
+        list2.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 1 }];
+        list2.clips = vec![[0, 0, 64, 64]];
+        list2.clear = [0.0, 0.0, 0.0, 1.0];
+        list2.wants_frame = false;
+        list2.serial = id;
+        let target = r.offscreen(64, 64);
+        r.render_offscreen(st, &target, 0.0, &list2, &mut fx.atlas, &mut fx.images);
+        r.read_back(&target).unwrap()
+    };
+
+    let hard = draw_with(&mut r, &mut st, &mut fx, eui_render::SCENE_DEPTH, 51);
+    let soft = draw_with(&mut r, &mut st, &mut fx, eui_render::SCENE_DEPTH | eui_render::SCENE_MSAA, 52);
+
+    // First and most important: the picture is still there. A resolve
+    // attached wrongly loses the scene entirely, and quietly.
+    let mid = (32 * 64 + 32) * 4;
+    assert!(soft[mid] > 100, "the multisampled scene arrived: {}", soft[mid]);
+    assert!(hard[mid] > 100, "and so did the single-sampled one");
+
+    // Then, where the adapter can actually do it, the silhouette carries
+    // values between the cube and the ground that the hard edge does not.
+    if multisamples {
+        let shades = |px: &[u8]| {
+            let mut seen = std::collections::BTreeSet::new();
+            for x in 0..64 {
+                seen.insert(px[(20 * 64 + x) * 4]);
+            }
+            seen.len()
+        };
+        assert!(shades(&soft) > shades(&hard), "four samples give more shades across the edge: {} against {}", shades(&soft), shades(&hard));
+    }
 }
