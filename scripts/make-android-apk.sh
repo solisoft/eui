@@ -21,7 +21,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Made absolute, and made to exist, before anything else uses it. The `zip`
+# below runs inside a `cd` to the staging directory, so a relative path given
+# on the command line — `make-android-apk.sh dist`, which is what CI passes —
+# resolved against the staging directory instead and the run died on
+# "Could not create output file (dist/eui.apk)" with the APK already built
+# and signed.
 OUT_DIR="${1:-$ROOT/dist}"
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK (usually ~/Android/Sdk)}"
 : "${ANDROID_NDK_ROOT:?set ANDROID_NDK_ROOT to the NDK (usually \$ANDROID_HOME/ndk/<version>)}"
@@ -100,7 +108,6 @@ export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-lc++_shared"
 
 cargo apk build --release -p eui-android $BUILD_TARGETS
 
-mkdir -p "$OUT_DIR"
 # Where cargo-apk drops the file has moved between its versions, so it is
 # looked for rather than assumed: the newest .apk under target/ is the one
 # just built.
