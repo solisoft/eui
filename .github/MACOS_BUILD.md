@@ -4,15 +4,21 @@ This document describes how to build EUI Demo applications for macOS, both local
 
 ## Overview
 
-Two different apps come out of this repo, built two different ways:
+What CI builds and releases is one thing:
 
 - **EUI Demo** — the `eui-client` binary. A native window that connects to an
   EUI server over a WebSocket. Built by `cargo`, needs nothing outside this
   repo, and needs a server to point at.
+
+There is a second thing this repo can produce by hand, and no longer does in
+CI:
+
 - **Vitrine** — the widget gallery (`examples/demo-app`, component
   `gallery`) as a self-contained desktop artifact: its own Soli server on a
   thread, no database, the EUI window with the decoder in a confined worker.
-  Double-click and it runs; there is nothing to point it at.
+  Double-click and it runs; there is nothing to point it at. Packaged by a
+  tool in another repository and shipped encrypted under a key CI had to
+  hold, so it is [built by hand](#vitrine) now.
 
 Supporting pieces: **demo-app** (the Soli app itself) and
 **counter-server** (a minimal hand-written Rust server, for testing the
@@ -132,10 +138,6 @@ gh workflow run build-macos-demo.yml -r main
 - `EUI-Demo-aarch64-macos.dmg` — installer
 - `EUI-Demo-aarch64-macos.zip` — app bundle
 
-`vitrine-macos-aarch64` (only when `SOLI_BUNDLE_KEY` is set):
-- `Vitrine-aarch64-macos.dmg` — installer
-- `Vitrine-aarch64-macos.zip` — app bundle
-
 Neither is signed or notarized, so the first launch of a downloaded build
 needs right-click → Open, or `xattr -dr com.apple.quarantine <app>`.
 
@@ -177,9 +179,15 @@ The `Info.plist` specifies:
 
 ## Vitrine
 
+**Not built by CI, and not in any release.** It had a job of its own across
+three platforms; it was removed, because a demo gallery is not something the
+release exists to ship and it cost a full build of the Soli toolchain on
+every push to produce a file nobody was asked to download. What follows is
+how to make one by hand.
+
 Vitrine is packaged by `soli desktop build`, which lives in
-[`solisoft/soli_lang`](https://github.com/solisoft/soli_lang), not here. The
-CI job therefore checks out **two** repositories: this one for the app source
+[`solisoft/soli_lang`](https://github.com/solisoft/soli_lang), not here — so
+you need **both** repositories: this one for the app source
 (`examples/demo-app`), and the language repo for the tool that packages it.
 
 ```bash
@@ -199,15 +207,9 @@ a URL scheme) with a DMG beside it.
 
 A desktop artifact ships your application **encrypted** — there is no
 unencrypted desktop build — so it cannot be produced without a key, and there
-is no offline fallback. CI reads `SOLI_BUNDLE_KEY` from repository secrets:
-
-```bash
-gh secret set SOLI_BUNDLE_KEY -R solisoft/eui
-```
-
-The job checks for it in its first seconds and fails with that command in the
-message, rather than discovering the problem after a ten-minute build of the
-Soli toolchain.
+is no offline fallback. Set `SOLI_BUNDLE_KEY` in the environment you build
+in. Nothing in CI reads it any more; the repository secret can go whenever
+you are sure nothing else wants it.
 
 **Do not bake a key into a published artifact.** If the download carries its
 own key, the encryption and the ability to revoke an installation both stop
@@ -224,9 +226,10 @@ grep -o 'SOLI_BUNDLE_KEY=[0-9a-f]*' ~/.local/bin/vitrine | cut -d= -f2
 
 ### Build cost
 
-The Soli toolchain is built with `--no-default-features --features
-eui-desktop`. That is deliberate: the default features roughly double the
-build, and none of them are needed to package a desktop artifact.
+Build the Soli toolchain with `--no-default-features --features eui-desktop`.
+The default features roughly double the build, and none of them are needed to
+package a desktop artifact. This cost — ten minutes of toolchain on three
+runners — is the reason the job is gone.
 
 ## Signing & Notarization (Future)
 

@@ -252,220 +252,6 @@ jobs:
           path: dist/*.zip
           retention-days: 30
 
-  build-vitrine:
-    name: Build Vitrine (${{ matrix.platform }})
-    runs-on: ${{ matrix.os }}
-    # The two new platforms have never been packaged before, so they report
-    # without gating: a Windows packaging break should not hold back a
-    # release of the client, for the same reason the phone jobs do not. The
-    # Mac has been building this for a while and goes on gating.
-    continue-on-error: ${{ matrix.platform != 'macos' }}
-    # Same three the client is built for, and the same reasoning as
-    # `build-matrix`: one platform failing should not hide what the others
-    # would have said.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            arch: x86_64
-            platform: linux
-            sfx: ''
-          # Apple Silicon only. Intel macOS is not a supported target.
-          - os: macos-14
-            target: aarch64-apple-darwin
-            arch: aarch64
-            platform: macos
-            sfx: ''
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            arch: x86_64
-            platform: windows
-            sfx: '.exe'
-    steps:
-      # Both repos are checked out as siblings, neither inside the other.
-      # This one is a cargo workspace, so a second workspace nested under it
-      # makes cargo insist the inner crate be a member of the outer.
-      - uses: actions/checkout@v4
-        with:
-          path: eui
-
-      # `soli desktop build` is the thing that packages Vitrine, and it lives
-      # in the language repo, not this one.
-      - name: Check out soli_lang
-        uses: actions/checkout@v4
-        with:
-          repository: solisoft/soli_lang
-          path: lang
-
-      # What the client links against on Linux and nowhere else — the same
-      # list `build-matrix` installs, because this build contains a client.
-      - name: Install Linux build dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
-
-      # There is no unencrypted desktop build, so this artifact is encrypted
-      # whether or not it has anything to hide — and it then needs that same
-      # key at every launch or it will not start. Vitrine is a demo, so the
-      # key is minted here, used to seal the artifact, and shipped inside it.
-      #
-      # It is deliberately NOT the repository secret. That one also unlocks a
-      # real installation, and baking it into a downloadable app would
-      # publish it.
-      - name: Mint a throwaway key for this build
-        shell: bash
-        run: |
-          # `openssl` is assumed on the Unix runners and merely likely on the
-          # Windows one, where this has never run; `/dev/urandom` is there in
-          # Git Bash either way. An empty key would not fail here, it would
-          # fail at launch on somebody's machine.
-          key=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-          [ ${#key} -eq 64 ] || { echo "could not mint a 32-byte key"; exit 1; }
-          echo "BUNDLE_KEY=$key" >> "$GITHUB_ENV"
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            lang/target
-          key: ${{ runner.os }}-vitrine-${{ hashFiles('lang/Cargo.lock') }}
-
-      # The binary itself, keyed by everything it is built from: the exact
-      # soli_lang commit, its lock file, and the two crates of this repo
-      # that are patched into it. The cargo cache above only makes a rebuild
-      # incremental; `solilang` is one crate of ten minutes, and it is
-      # rebuilt whenever eui-proto or eui-client changed — nearly every
-      # push. When nothing in that key moved, there is nothing to build,
-      # and this step says so.
-      - name: Which soli_lang this is
-        id: lang
-        shell: bash
-        run: echo "sha=$(git -C lang rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Cache the built soli
-        id: soli
-        uses: actions/cache@v4
-        with:
-          path: lang/target/release/soli${{ matrix.sfx }}
-          key: ${{ runner.os }}-soli-eui-desktop-${{ steps.lang.outputs.sha }}-${{ hashFiles('lang/Cargo.lock', 'eui/crates/eui-proto/**', 'eui/crates/eui-client/**', 'eui/crates/eui-tree/**', 'eui/crates/eui-theme/**', 'eui/crates/eui-layout/**', 'eui/crates/eui-text/**', 'eui/crates/eui-render/**', 'eui/crates/eui-vm/**', 'eui/crates/eui-audio/**', 'eui/crates/eui-video/**') }}
-
-      # Only the eui-desktop feature is needed, and leaving the defaults off
-      # is what keeps this build around ten minutes instead of twenty-five.
-      # soli_lang pins eui by git revision, so without this the artifact is
-      # built against whatever that pin says and no change in this repo can
-      # ever reach it — including a fix for a crash the artifact is showing.
-      # The patch points those two crates at the checkout beside us.
-      - name: Build soli with eui-desktop, against this checkout
-        if: steps.soli.outputs.cache-hit != 'true'
-        working-directory: lang
-        shell: bash
-        run: |
-          # `github.workspace` is a backslash path on Windows, and a
-          # backslash inside a TOML basic string is an escape: `\a` is not a
-          # valid one, so the patch would fail to parse rather than point at
-          # the wrong place. Cargo takes forward slashes on every platform.
-          ws='${{ github.workspace }}'
-          ws="${ws//\\//}"
-          cargo build --release --no-default-features --features eui-desktop \
-            --config "patch.\"https://github.com/solisoft/eui\".eui-proto.path=\"$ws/eui/crates/eui-proto\"" \
-            --config "patch.\"https://github.com/solisoft/eui\".eui-client.path=\"$ws/eui/crates/eui-client\""
-
-      - name: Package Vitrine
-        shell: bash
-        env:
-          SOLI_BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
-        run: |
-          mkdir -p dist
-          ./lang/target/release/soli${{ matrix.sfx }} desktop build eui/examples/demo-app \
-            --app-id com.soli.vitrine \
-            --name Vitrine \
-            --eui gallery \
-            --no-db \
-            --output dist/vitrine-desktop
-          ls -lh dist/
-
-      # The same key goes beside the executable, or the app cannot unlock
-      # itself at launch and exits before drawing anything.
-      - name: Wrap in a .app bundle, with a DMG beside it
-        id: wrap
-        if: matrix.platform == 'macos'
-        continue-on-error: true
-        env:
-          BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
-        run: ./eui/scripts/wrap-macos-app.sh dist/vitrine-desktop Vitrine com.soli.vitrine dist
-
-      # Everywhere else the same rule applies and there is no bundle to hide
-      # the key in, so the archive holds a folder rather than a bare
-      # executable: `.env` is read from `current_exe()`'s parent, so the two
-      # files have to arrive together. A lone binary would launch, find no
-      # key, and exit before drawing anything — which is the failure the
-      # macOS step above exists to prevent, and it is not macOS-specific.
-      - name: Lay the executable out with its key beside it
-        if: matrix.platform != 'macos'
-        shell: bash
-        env:
-          BUNDLE_KEY: ${{ env.BUNDLE_KEY }}
-        run: |
-          name="Vitrine-${{ matrix.arch }}-${{ matrix.platform }}"
-          mkdir -p "dist/$name"
-          mv "dist/vitrine-desktop${{ matrix.sfx }}" "dist/$name/Vitrine${{ matrix.sfx }}"
-          printf 'SOLI_BUNDLE_KEY=%s\n' "$BUNDLE_KEY" > "dist/$name/.env"
-          # `soli desktop build` also writes the deep-link helpers beside the
-          # executable — a .desktop entry and a protocol registration script.
-          # They are how `vitrine://` ever resolves, and moving the binary out
-          # on its own would leave them behind in a directory nobody keeps.
-          case "${{ matrix.platform }}" in
-            linux)   helpers="vitrine.desktop register-protocol.sh DEEP_LINKS.txt" ;;
-            windows) helpers="register-protocol.ps1 DEEP_LINKS.txt" ;;
-            *)       helpers="" ;;
-          esac
-          for f in $helpers; do
-            if [ -f "dist/$f" ]; then mv "dist/$f" "dist/$name/"; fi
-          done
-          ls -la "dist/$name"
-
-      # One archive per platform, named for what is in it. Windows gets a
-      # zip because that is what a Windows machine can open without being
-      # told how.
-      - name: Archive the folder
-        if: matrix.platform != 'macos'
-        shell: bash
-        run: |
-          name="Vitrine-${{ matrix.arch }}-${{ matrix.platform }}"
-          cd dist
-          case "${{ matrix.platform }}" in
-            linux)   tar -czf "$name.tar.gz" "$name" ;;
-            windows) 7z a "$name.zip" "$name" ;;
-          esac
-          ls -lh
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitrine-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            dist/Vitrine*.dmg
-            dist/Vitrine*.zip
-            dist/Vitrine*.tar.gz
-          retention-days: 30
-
-      # As in the client job: reported, but only once the downloads are safe.
-      - name: The macOS wrapping worked
-        if: matrix.platform == 'macos' && steps.wrap.outcome == 'failure'
-        run: |
-          echo "wrap-macos-app failed; whatever it built is in the artifacts above" >&2
-          exit 1
-
   # Between tags there was nowhere to send anybody: the files existed, on the
   # run, behind a GitHub login and four clicks. So every push to `main`
   # replaces one rolling prerelease, and the download links in the README
@@ -481,7 +267,7 @@ jobs:
   # first made from, which is worse than no release at all.
   publish-rolling:
     name: Publish the rolling build
-    needs: [build-matrix, build-vitrine, build-android, build-ios]
+    needs: [build-matrix, build-android, build-ios]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     permissions:
@@ -522,9 +308,6 @@ jobs:
             eui-*/*.dmg
             eui-android-apk/*.apk
             eui-ios-app/*.zip
-            vitrine-*/*.dmg
-            vitrine-*/*.zip
-            vitrine-*/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -532,7 +315,7 @@ jobs:
     name: Create Release (on tag push)
     # The phone jobs are `continue-on-error`, so a packaging break cannot
     # keep a release from happening; it just means that file is not in it.
-    needs: [build-matrix, build-vitrine, build-android, build-ios]
+    needs: [build-matrix, build-android, build-ios]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -550,9 +333,6 @@ jobs:
             eui-*/*.dmg
             eui-android-apk/*.apk
             eui-ios-app/*.zip
-            vitrine-*/*.dmg
-            vitrine-*/*.zip
-            vitrine-*/*.tar.gz
           draft: false
           prerelease: false
         env:
