@@ -43,12 +43,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # 2.2.1 is the first release whose `eui-proto` knows the `nfc` capability
-  # bit and the `location` and `nfc_tag` event kinds (it pins eui c5f19f3).
-  # An older server refuses this application at boot — `eui_capabilities:
-  # unknown capability 'nfc'` — which is why the version is checked before
-  # the switch rather than hoped for.
-  SOLI_VERSION: "2.2.1"
+  # 2.3.3 is the first release whose `eui-proto` knows the `scene` capability
+  # bit and the `scene` node kind (EUI protocol 2; it pins eui 5a9f9d9). An
+  # older server refuses this application at boot — `eui_capabilities:
+  # unknown capability 'scene'` — and would refuse the gallery's Scene section
+  # at render even if the capability were dropped, because `kind_of` does not
+  # know the kind either. Which is why the version is checked before the
+  # switch rather than hoped for.
+  #
+  # 2.2.1 held this line before, for `nfc` and the `location` and `nfc_tag`
+  # event kinds, for the same reason and in the same way.
+  SOLI_VERSION: "2.3.3"
   APP_DIR: examples/demo-app
 
 jobs:
