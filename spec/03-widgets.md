@@ -350,7 +350,9 @@ no shader, no tessellator and no allocation beyond its quads.
   scrollbar. While a drag is live the shape is `grabbing`, over everything.
 - An `input` taller than its line — stretched by a row, or given a
   control height — centres its line vertically, caret and selection with
-  it; a `textarea` starts at the top.
+  it; a `textarea` starts at the top. `text_align` (`start`, `center`,
+  `end`) shifts the run inside the content box; a run that overflows
+  still starts at the left and scrolls. `justify` is painted as `start`.
 - In an editable node the client owns the caret and the selection. A click
   places the caret at the nearest glyph edge and a drag selects;
   `ArrowLeft`/`ArrowRight` move by character, by word with `Ctrl` (`⌘` on

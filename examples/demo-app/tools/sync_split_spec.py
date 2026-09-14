@@ -48,6 +48,13 @@ SPECS = {
         "command_match",
         "tag_highlight",
     ],
+    ROOT / "tests" / "otp_spec.sl": [
+        "otp_clean",
+        "otp_take",
+        "otp_pop",
+        "otp_jump",
+        "otp_apply",
+    ],
     ROOT / "tests" / "catalogue_spec.sl": [
         "filter_at",
         "filter_edit",

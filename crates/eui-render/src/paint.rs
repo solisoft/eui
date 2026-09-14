@@ -1259,7 +1259,7 @@ impl Painter<'_, '_> {
             self.list.clips.push(intersect(parent, loosen(self.device(rect), self.slack)));
             self.set_clip(self.list.clips.len() as u32 - 1);
         }
-        let origin_x = rect.x + style.border.l + style.padding.l - editing.map_or(0.0, |e| e.scroll_x);
+        let origin_x = rect.x + style.border.l + style.padding.l - editing.map_or(0.0, |e| e.scroll_x) + style.text_pad_x(max_w, shaped.metrics.width);
         // A single-line field taller than its line — a control at the
         // theme's control height, say — centres its text; every other
         // node's text starts at the top of its content box.

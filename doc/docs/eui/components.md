@@ -483,6 +483,7 @@ is what says the person has had their turn.
 |---|---|
 | `text_field(label, value, on_change, o = {})` | A line of anything. It judges nothing on its own |
 | `password_field(label, value, on_change, o = {})` | The same, with `secret: true` so the client paints marks. `o["shown"]` reveals the text; `o["on_reveal"]` is Show/Hide. The value on the wire is still what was typed |
+| `otp_field(label, value, o = {})` | Six boxes, one code. The value is a prefix; the live cell is the next empty one. `o["digits"]` (default 6), `o["numeric"]` (default true), `o["secret"]` for a PIN. `o["on_input"]` hears `text_input`, `change`, `Backspace` and a click that jumps. `otp_take` / `otp_pop` / `otp_apply` are the algebra |
 | `email_field(label, value, on_change, o = {})` | One local part, one `@`, a domain with a dot in it, no spaces. Everything a field can honestly check — the only test of an address is a message sent to it |
 | `number_field(label, value, on_change, o = {})` | `o["min"]`, `o["max"]` and `o["step"]` are the bounds and the stride; `o["on_step"]` adds − and + buttons that send the direction in `params["props"]["delta"]`. The handler does the arithmetic — `number_stepped` is it — because the value is the server's |
 | `textarea_field(label, value, on_change, o = {})` | The multi-line one; `o["rows"]` is the floor the empty box keeps |

@@ -1243,6 +1243,55 @@ fn a_secret_field_paints_one_mark_per_character() {
     assert!((width(&hello) - width(&wide)).abs() < 1.0, "marks are the same width whatever was typed");
 }
 
+#[test]
+fn centered_text_sits_in_the_middle_of_its_box() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let start = StyleRecord { width: Dim::Px(120), padding: [2; 4], ..Default::default() };
+    let center = StyleRecord { width: Dim::Px(120), padding: [2; 4], text_align: TextAlign::Center, ..Default::default() };
+    let glyph_x = |align: StyleRecord| {
+        let mut n = node(NodeKind::Input, 2, 2, 0);
+        n.text = Some(TextRef::Inline("8".into()));
+        let mut fx = fixture(vec![col, align], vec![node(NodeKind::Box, 1, 1, 1), n], vec![], &[], 200.0, 100.0);
+        let list = draw(&mut fx, 200, 100, 1.0);
+        list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).map(|q| q.rect[0]).expect("a glyph")
+    };
+    let left = glyph_x(start);
+    let mid = glyph_x(center);
+    assert!(mid > left + 20.0, "center sits inward of start: {mid} vs {left}");
+}
+
+#[test]
+fn a_centred_fields_caret_sits_in_the_middle_not_on_the_left() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let field = StyleRecord { width: Dim::Px(120), padding: [2; 4], text_align: TextAlign::Center, ..Default::default() };
+    let mut n = node(NodeKind::Input, 2, 2, 0);
+    n.text = Some(TextRef::Inline("".into()));
+    let mut fx = fixture(vec![col, field], vec![node(NodeKind::Box, 1, 1, 1), n], vec![], &[], 200.0, 100.0);
+    let ix = fx.session.lookup(2).unwrap();
+    let list = paint(&mut Scene {
+        session: &fx.session,
+        layout: &fx.layout,
+        theme: &fx.theme,
+        text: &mut fx.text,
+        atlas: &mut fx.atlas,
+        images: &fx.images,
+        scale: 1.0,
+        size: (200, 100),
+        focus: Some(ix),
+        anims: &[],
+        movers: &[],
+        glides: &[],
+        cache: &mut PaintCache::new(),
+        editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0 }),
+        now: 0.0,
+        scrollbar_hot: None,
+        scrollbars: &[],
+    });
+    let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).expect("caret");
+    let r = fx.layout.rect(ix).unwrap();
+    assert!(caret.rect[0] > r.x + r.w * 0.35, "caret is centred, not on the left: {} in {:?}", caret.rect[0], r);
+}
+
 /// Spec 04 §7.1: a windowed list's rows in view without a child are drawn
 /// as placeholders in `surface.sunken`; rows with a child, and rows out
 /// of view, are not.

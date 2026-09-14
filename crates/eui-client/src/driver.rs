@@ -954,6 +954,10 @@ pub struct Driver {
     preedit: String,
     /// Text the person copied or cut, for the window to hand the clipboard.
     clipboard: Option<String>,
+    /// The focused field's caret, as a 1 px box, for the IME cursor area.
+    /// The platform draws its own caret at this origin; passing the whole
+    /// field put it on the left of a centred run.
+    ime_spot: Option<eui_layout::Rect>,
     /// Verified chunks by id; verification happens once per chunk.
     chunks: HashMap<u32, Option<eui_vm::Chunk>>,
     /// Effects of local-then-server handlers awaiting the server's answer.
@@ -1157,6 +1161,7 @@ impl Driver {
             edits: HashMap::new(),
             preedit: String::new(),
             clipboard: None,
+            ime_spot: None,
             chunks: HashMap::new(),
             provisional: Vec::new(),
             drag_provisional: None,
@@ -4196,8 +4201,9 @@ impl Driver {
         let secret = self.session.is_secret(e);
         let display = if secret { eui_tree::secret_display(&text) } else { text.clone() };
         let scroll_x = self.edits.get(&self.session.node(e)?.id).map_or(0.0, |ed| ed.scroll_x);
-        let shaped = self.text.shape(&display, style.font, Some((rect.w - style.inset_h()).max(0.0)), style.line_clamp);
-        let lx = x - (rect.x + style.border.l + style.padding.l) + scroll_x;
+        let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let shaped = self.text.shape(&display, style.font, Some(inner_w), style.line_clamp);
+        let lx = x - (rect.x + style.border.l + style.padding.l) - style.text_pad_x(inner_w, shaped.metrics.width) + scroll_x;
         let ly = y - (rect.y + style.border.t + style.padding.t);
         let at = shaped.byte_at(lx, ly).min(display.len());
         Some(if secret { eui_tree::secret_unoffset(&text, at) } else { at.min(text.len()) })
@@ -4619,7 +4625,18 @@ impl Driver {
     /// selection, with the scroll that keeps the caret in view — updated
     /// here, once per paint.
     fn editing(&mut self) -> Option<Editing> {
-        let f = self.focused.filter(|f| self.is_editable(*f))?;
+        let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else {
+            self.ime_spot = None;
+            return None;
+        };
+        let out = self.editing_of(f);
+        if out.is_none() {
+            self.ime_spot = None;
+        }
+        out
+    }
+
+    fn editing_of(&mut self, f: NodeIx) -> Option<Editing> {
         let rect = self.layout.rect(f)?;
         let style = eui_layout::Style::resolve(&self.session.style_of(f), &self.resolved);
         let text = self.session.text_of(f).unwrap_or("").to_owned();
@@ -4646,6 +4663,7 @@ impl Driver {
             }
         };
         let inner_w = (rect.w - style.inset_h()).max(0.0);
+        let inner_h = (rect.h - style.inset_v()).max(0.0);
         let cx = shaped.caret(caret).0;
         if cx - edit.scroll_x > inner_w {
             edit.scroll_x = cx - inner_w;
@@ -4655,6 +4673,13 @@ impl Driver {
         if shaped.metrics.width <= inner_w {
             edit.scroll_x = 0.0;
         }
+        let pad = style.text_pad_x(inner_w, shaped.metrics.width);
+        let (cx, cy) = shaped.caret(caret);
+        let origin_x = rect.x + style.border.l + style.padding.l - edit.scroll_x + pad;
+        let origin_y = rect.y + style.border.t + style.padding.t + if inner_h > shaped.metrics.height { (inner_h - shaped.metrics.height) * 0.5 } else { 0.0 };
+        let above = style.font.size * 0.9;
+        let below = style.font.size * 0.25;
+        self.ime_spot = Some(eui_layout::Rect::new(origin_x + cx, origin_y + cy - above, 1.0, above + below));
         let r = edit.selection();
         Some(Editing { node: f, start: shown(r.start), end: shown(r.end), caret, scroll_x: edit.scroll_x })
     }
@@ -4701,6 +4726,9 @@ impl Driver {
     /// already handles, and the client still owns no caret here.
     pub fn ime_area(&self) -> Option<eui_layout::Rect> {
         let f = self.focused.filter(|f| self.is_editable(*f) || self.takes_typing(*f))?;
+        if self.is_editable(f) {
+            return self.ime_spot.or_else(|| self.layout.rect(f));
+        }
         self.layout.rect(f)
     }
 

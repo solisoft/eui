@@ -1204,6 +1204,15 @@ ERP_DEMO_BULK = [
   {"label": "Archive", "event": "demo_bulk", "tone": "danger"}
 ]
 
+def erp_demo_otp(state, params, props)
+  was = (state["demo_otp"] ?? "").to_s
+  next_otp = otp_apply(was, (params["kind"] ?? "").to_s, params["payload"], props, {})
+  state = set_key(set_key(set_key(state, "demo_otp", next_otp), "demo_otp_focus", true), "demo_otp_gen", (state["demo_otp_gen"] ?? 0) + 1)
+  return erp_say(state, "Code accepted") if next_otp.length() == 6 && was.length() < 6
+
+  state
+end
+
 def erp_demo_mark(state, props)
   mark = (props["option"] ?? "").to_s
   marks = state["demo_marks"] ?? []
@@ -1610,6 +1619,13 @@ def erp_inputs_card(state, lay)
       restyle(password_field("Token", (state["demo_pass"] ?? "").to_s, "demo_pass", {
         "key": "cat_pass", "on_reveal": "demo_pass_reveal", "shown": state["demo_pass_shown"] == true
       }), narrow),
+      restyle(otp_field("Sign-in code", (state["demo_otp"] ?? "").to_s, {
+        "key": "cat_otp",
+        "on_input": "demo_otp",
+        "take_focus": state["demo_otp_focus"] == true,
+        "gen": state["demo_otp_gen"] ?? 0,
+        "hint": "Paste a code, or type. Backspace walks back."
+      }), {"width": "100%"}),
       restyle(textarea_field("Note", (state["cat_note"] ?? "").to_s, "cat_note", {"key": "cat_note", "rows": 3}), narrow)
     ]),
     row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
@@ -3709,6 +3725,9 @@ def erp_chrome_defaults
     "palette_at": -1,
     "demo_pass": "hunter2",
     "demo_pass_shown": false,
+    "demo_otp": "",
+    "demo_otp_focus": false,
+    "demo_otp_gen": 0,
     "demo_wh": "Lyon dock",
     "demo_wh_open": false,
     "demo_wh_query": "",
@@ -4065,6 +4084,7 @@ def gallery(event_data)
     "palette_close" => set_key(set_key(state, "palette", false), "palette_query", ""),
     "demo_pass" => erp_field(state, "demo_pass", params),
     "demo_pass_reveal" => set_key(state, "demo_pass_shown", !(state["demo_pass_shown"] ?? false)),
+    "demo_otp" => erp_demo_otp(state, params, props),
     "demo_wh_toggle" => set_key(set_key(set_key(state, "demo_wh_open", !(state["demo_wh_open"] ?? false)), "demo_wh_query", ""), "demo_wh_at", -1),
     "demo_wh_change" => set_key(set_key(state, "demo_wh_query", params["payload"].to_s), "demo_wh_at", -1),
     "demo_wh_pick" => set_key(set_key(set_key(state, "demo_wh", props["value"]), "demo_wh_open", false), "demo_wh_query", ""),

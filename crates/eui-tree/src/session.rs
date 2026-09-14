@@ -1007,6 +1007,7 @@ pub fn same_layout(a: &StyleRecord, b: &StyleRecord) -> bool {
         cursor: a.cursor,
         transition: a.transition,
         animation: a.animation,
+        text_align: a.text_align,
         ..*b
     };
     painted_like_a == *a
