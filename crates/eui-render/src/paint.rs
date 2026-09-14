@@ -80,6 +80,9 @@ pub struct Editing {
     pub caret: usize,
     /// Logical px the text is shifted left.
     pub scroll_x: f32,
+    /// Whether the caret is in the "on" half of its blink. The selection
+    /// never blinks — only the bar does, and only when there is one.
+    pub caret_on: bool,
 }
 
 /// A node's resolved paint colours, linear RGBA; `None` draws nothing.
@@ -1288,15 +1291,20 @@ impl Painter<'_, '_> {
                     self.push(Quad { rect: r, params: [0.0, 0.0, 0.0, opacity], fill: accent, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
                 }
             }
-            let (cx, cy) = shaped.caret(e.caret);
-            let x = ((origin_x + cx) * scale).round();
-            let y0 = ((origin_y + cy - above) * scale).round();
-            let y1 = ((origin_y + cy + below) * scale).round();
-            let mut caret = Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
-            if let Some(from) = self.own.and_then(|o| o.fg_from) {
-                self.animate(&mut caret, Some(from), None);
+            // The bar itself, in the half of the blink it is up (03 §3).
+            // The selection behind it does not blink: what is selected is a
+            // fact about the text, not a hint about where typing lands.
+            if e.caret_on {
+                let (cx, cy) = shaped.caret(e.caret);
+                let x = ((origin_x + cx) * scale).round();
+                let y0 = ((origin_y + cy - above) * scale).round();
+                let y1 = ((origin_y + cy + below) * scale).round();
+                let mut caret = Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
+                if let Some(from) = self.own.and_then(|o| o.fg_from) {
+                    self.animate(&mut caret, Some(from), None);
+                }
+                self.push(caret);
             }
-            self.push(caret);
         }
         // Per-glyph colour, for syntax highlighting: the `spans` prop, a flat
         // list of `[start byte, length, colour]` triples.

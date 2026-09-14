@@ -1189,7 +1189,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
     nodes[1].text = Some(TextRef::Inline("hello".into()));
     let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
     let ix = fx.session.lookup(2).unwrap();
-    let editing = Some(Editing { node: ix, start: 1, end: 3, caret: 3, scroll_x: 4.0 });
+    let editing = Some(Editing { node: ix, start: 1, end: 3, caret: 3, scroll_x: 4.0, caret_on: true });
     let list = paint(&mut Scene {
         session: &fx.session,
         layout: &fx.layout,
@@ -1282,7 +1282,7 @@ fn a_centred_fields_caret_sits_in_the_middle_not_on_the_left() {
         movers: &[],
         glides: &[],
         cache: &mut PaintCache::new(),
-        editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0 }),
+        editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0, caret_on: true }),
         now: 0.0,
         scrollbar_hot: None,
         scrollbars: &[],
@@ -1336,7 +1336,7 @@ fn a_tall_field_centres_its_text_and_caret() {
         nodes[1].text = Some(TextRef::Inline("hello".into()));
         let mut fx = fixture(vec![col, field], nodes, vec![], &[], 200.0, 100.0);
         let ix = fx.session.lookup(2).unwrap();
-        let editing = Some(Editing { node: ix, start: 0, end: 0, caret: 5, scroll_x: 0.0 });
+        let editing = Some(Editing { node: ix, start: 0, end: 0, caret: 5, scroll_x: 0.0, caret_on: true });
         let list = paint(&mut Scene {
             session: &fx.session,
             layout: &fx.layout,

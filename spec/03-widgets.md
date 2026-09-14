@@ -364,7 +364,12 @@ no shader, no tessellator and no allocation beyond its quads.
   the selection, and each reaches the application as one `text_input`. The
   caret is drawn in the text colour one device pixel wide, the selection in
   `accent.base` at 30 % opacity, and a field scrolls its text to keep the
-  caret in view. A paste is the person's act on their own clipboard;
+  caret in view. The caret blinks at 530 ms, up first: anything that moves
+  it — a keystroke, a click, an arrow — starts the period again, so it is
+  never absent under a hand that is typing. After ten seconds with nothing
+  moving it the blink stops and the caret stays up, which is what keeps
+  10 §1's idle budget true of a window left open on a form. The selection
+  does not blink. A paste is the person's act on their own clipboard;
   `clipboard.read` (08 §7) governs reads the application would initiate.
 
 - An `input` carrying **`secret: true`** is a password field. The client

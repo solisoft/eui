@@ -2755,7 +2755,47 @@ fn a_field_that_goes_quiet_commits_itself() {
     let _ = d.paint(400, 300);
     let said = changes(&d.take_pending());
     assert_eq!(said.len(), 1, "and now: {said:?}");
-    assert_eq!(d.next_frame_at(), None, "and nothing is owed after it — this is the budget half");
+    // The caret is blinking, and that is the only thing left owed. It
+    // settles on its own, and then nothing is — this is the budget half.
+    assert!(d.next_frame_at().is_some(), "the blink, and nothing else");
+    d.tick(t + Duration::from_millis(11_000));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.next_frame_at(), None, "and nothing is owed once the caret settles");
+}
+
+/// Spec 03 §3: the caret blinks. It is up for the first half-period after
+/// anything moves it — so typing is never punctuated by a caret that is not
+/// there — and off for the half after that.
+#[test]
+fn the_caret_blinks_and_is_up_while_the_keys_are_coming() {
+    fn carets(d: &mut Driver) -> usize {
+        // The caret is the only quad one device pixel wide and untextured.
+        d.paint(400, 300).quads.iter().filter(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).count()
+    }
+    let mut d = welcomed_form();
+    let t = Instant::now();
+    type_at(&mut d, t, "b");
+    assert_eq!(carets(&mut d), 1, "up the moment it moved");
+
+    d.tick(t + Duration::from_millis(300));
+    assert_eq!(carets(&mut d), 1, "and for the rest of the half-period");
+
+    d.tick(t + Duration::from_millis(700));
+    assert_eq!(carets(&mut d), 0, "down for the half after that");
+
+    d.tick(t + Duration::from_millis(1_200));
+    assert_eq!(carets(&mut d), 1, "and up again");
+
+    // A keystroke starts the clock again, so the caret is up under the hand.
+    d.input_at(Input::Text("c".into()), t + Duration::from_millis(1_800));
+    assert_eq!(carets(&mut d), 1);
+    d.tick(t + Duration::from_millis(2_100));
+    assert_eq!(carets(&mut d), 1, "still up: 300 ms into the new period");
+
+    // And it settles rather than blinking at an empty room forever (10 §1).
+    d.tick(t + Duration::from_millis(30_000));
+    assert_eq!(carets(&mut d), 1, "settled up");
+    assert_eq!(d.next_frame_at(), None, "and asking for no more frames");
 }
 
 /// Armed by disagreement, not by a keypress: a character typed and taken back
@@ -2769,8 +2809,10 @@ fn a_value_typed_back_to_what_the_server_has_owes_nothing() {
     key(&mut d, "Backspace", 0);
     let _ = d.paint(400, 300);
     let _ = d.take_pending();
+    d.tick(t + Duration::from_millis(11_000));
+    let _ = d.paint(400, 300);
     assert_eq!(d.next_frame_at(), None, "the deadline disarmed itself");
-    d.tick(t + Duration::from_millis(400));
+    d.tick(t + Duration::from_millis(11_400));
     let _ = d.paint(400, 300);
     assert!(changes(&d.take_pending()).is_empty());
 }
@@ -2825,6 +2867,10 @@ fn a_field_nobody_asked_about_arms_no_deadline() {
     d.input_at(Input::Text("z".into()), t);
     let _ = d.paint(400, 300);
     let _ = d.take_pending();
+    // Once the caret has stopped blinking; the blink is the one thing a
+    // focused field owes a frame for, and it does not owe it for long.
+    d.tick(t + Duration::from_millis(11_000));
+    let _ = d.paint(400, 300);
     assert_eq!(d.next_frame_at(), None, "nothing to tell, nothing to wake for");
 }
 

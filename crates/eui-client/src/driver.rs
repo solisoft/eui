@@ -788,6 +788,21 @@ pub fn trace(line: impl FnOnce() -> String) {
 /// runs at 60, but a spinner is a mark at rest, and the machine it is on
 /// should be too (10 §1).
 const SPIN_FRAME: Duration = Duration::from_millis(33);
+/// Half the caret's blink, in seconds: up for this long, down for this
+/// long. The number every desktop uses, and the one the caret is up for
+/// after each keystroke.
+const CARET_BLINK: f32 = 0.53;
+/// How long the caret goes on blinking with nothing happening, before it
+/// settles and stays up.
+///
+/// A blink is a wake-up twice a second, and 10 §1's idle budget is zero of
+/// them; a caret that blinked for as long as a field was focused would turn
+/// every window left open on a form into a process that never sleeps. So it
+/// blinks while somebody is plainly there and stops when they are not,
+/// which is GTK's `gtk-cursor-blink-time` and its default to the second.
+/// A caret left up is the honest resting state: it still says where typing
+/// would land.
+const CARET_BLINK_FOR: f32 = 10.0;
 /// How long a scrollbar stays up once the scrolling stops, and how long it
 /// then takes to go. A bar reports a movement, so there is nothing for one
 /// to say about a page that is sitting still — and a strip of furniture
@@ -954,6 +969,13 @@ pub struct Driver {
     preedit: String,
     /// Text the person copied or cut, for the window to hand the clipboard.
     clipboard: Option<String>,
+    /// What the caret's blink is timed from: the moment it last moved.
+    caret_since: Instant,
+    /// Where it was then — node, selection and offset — so that a caret that
+    /// has not moved keeps the clock it already had.
+    caret_was: Option<(NodeIx, usize, usize, usize)>,
+    /// When the blink next turns over, `None` with no field focused.
+    caret_due: Option<Instant>,
     /// The focused field's caret, as a 1 px box, for the IME cursor area.
     /// The platform draws its own caret at this origin; passing the whole
     /// field put it on the left of a centred run.
@@ -1161,6 +1183,9 @@ impl Driver {
             edits: HashMap::new(),
             preedit: String::new(),
             clipboard: None,
+            caret_since: Instant::now(),
+            caret_was: None,
+            caret_due: None,
             ime_spot: None,
             chunks: HashMap::new(),
             provisional: Vec::new(),
@@ -1780,11 +1805,23 @@ impl Driver {
 
     /// Advance the clock. True when a transition frame is due, so the window
     /// should redraw; false at rest, which is almost always.
+    ///
+    /// The deadline that fired is **taken**. A redraw asked for is not a
+    /// redraw delivered — the compositor brings it at the next refresh — and
+    /// until then the window's loop passes through here again, and again,
+    /// and a deadline left behind fires on every one of them. Measured on a
+    /// 60 Hz screen with a page sliding: six hundred passes a second, every
+    /// one asking for the same frame, and thirty-four frames delivered out
+    /// of sixty. The next deadline is `paint`'s to set, which is where every
+    /// other line in this file already expects it to come from.
     pub fn tick(&mut self, now: Instant) -> bool {
         self.now = now;
         match [self.next_due, self.viewport_due].into_iter().flatten().min() {
             Some(due) if now >= due => {
                 self.redraw = true;
+                if self.next_due.is_some_and(|d| now >= d) {
+                    self.next_due = None;
+                }
                 true
             }
             _ => false,
@@ -4627,13 +4664,38 @@ impl Driver {
     fn editing(&mut self) -> Option<Editing> {
         let Some(f) = self.focused.filter(|f| self.is_editable(*f)) else {
             self.ime_spot = None;
+            self.caret_due = None;
             return None;
         };
         let out = self.editing_of(f);
         if out.is_none() {
             self.ime_spot = None;
+            self.caret_due = None;
         }
         out
+    }
+
+    /// Spec 03 §3: the caret blinks. Half a period on, half off — and the
+    /// clock starts again every time the caret moves, so it is up for the
+    /// whole of that first half and typing is never interrupted by a bar
+    /// that happens not to be there.
+    ///
+    /// The `until` this puts on the frame is what makes the window come
+    /// back: a focused field costs two paints a second, which is what a
+    /// blinking caret costs anywhere.
+    fn caret_blink(&mut self, at: (NodeIx, usize, usize, usize)) -> bool {
+        if self.caret_was != Some(at) {
+            self.caret_was = Some(at);
+            self.caret_since = self.now;
+        }
+        let elapsed = self.now.saturating_duration_since(self.caret_since).as_secs_f32();
+        if elapsed >= CARET_BLINK_FOR {
+            self.caret_due = None;
+            return true;
+        }
+        let into = elapsed.rem_euclid(CARET_BLINK);
+        self.caret_due = Some(self.now + Duration::from_secs_f32((CARET_BLINK - into).max(0.001)));
+        elapsed.rem_euclid(CARET_BLINK * 2.0) < CARET_BLINK
     }
 
     fn editing_of(&mut self, f: NodeIx) -> Option<Editing> {
@@ -4681,7 +4743,9 @@ impl Driver {
         let below = style.font.size * 0.25;
         self.ime_spot = Some(eui_layout::Rect::new(origin_x + cx, origin_y + cy - above, 1.0, above + below));
         let r = edit.selection();
-        Some(Editing { node: f, start: shown(r.start), end: shown(r.end), caret, scroll_x: edit.scroll_x })
+        let (start, end) = (shown(r.start), shown(r.end));
+        let caret_on = self.caret_blink((f, start, end, caret));
+        Some(Editing { node: f, start, end, caret, scroll_x: self.edits.get(&id).map_or(0.0, |e| e.scroll_x), caret_on })
     }
 
     /// Spec 06 §3: a composition is local. The field shows its buffer plus
@@ -5335,7 +5399,7 @@ impl Driver {
         // `next_due`, or the cached list is handed back and the `change` is
         // never looked for. `others` feeds both, which is the whole of it.
         let change_due = self.edits.values().filter_map(|e| e.typed_at).min().map(|t| t + CHANGE_IDLE);
-        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due];
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due, self.caret_due];
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }

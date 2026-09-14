@@ -1311,6 +1311,14 @@ impl Shell {
                 }
                 self.open_url(url, renderer);
             }
+            A::Forget(url) => {
+                let list = crate::recent::forget(&url);
+                if let Some((c, _)) = &mut self.chrome {
+                    c.set_recents(list);
+                }
+                self.rebuild_chrome();
+            }
+            A::Rebuild => self.rebuild_chrome(),
         }
         true
     }
@@ -2005,6 +2013,26 @@ impl Shell {
             }
         }
         frame.present();
+        // Still moving? Ask for the next frame here, not on a timer.
+        //
+        // A deadline of `now + 16 ms` is armed at the *start* of a paint,
+        // and the present at the end of it waits for the display. By the
+        // time this returns, the deadline is already in the past, so the
+        // loop asked for the frame again, and again, and the one it got
+        // landed on the refresh after the one it wanted: 34 frames of 60
+        // with a page sliding, and six hundred passes a second to get them
+        // (measured on a 60 Hz screen, 2026-09-14). Asking now hands the
+        // pacing to the compositor's own frame callback, which is the
+        // clock an animation should be keeping anyway.
+        //
+        // Only for a frame that is due within a refresh: a caret's blink is
+        // half a second away and a spin asks for thirty a second, and
+        // neither wants to be woken sixty times for it.
+        let by_now = std::time::Instant::now();
+        let soon = self.tabs.get(self.active).and_then(|t| t.backend.next_frame_at()).is_some_and(|at| at.saturating_duration_since(by_now) <= std::time::Duration::from_millis(20));
+        if soon {
+            self.window.request_redraw();
+        }
         crate::driver::trace(|| {
             format!(
                 "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}{}",

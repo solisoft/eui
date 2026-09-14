@@ -73,25 +73,35 @@ pub struct Glyph {
 
 impl Shaped {
     /// Where a caret placed before byte `at` sits: `(x, baseline)` from the
-    /// run's origin. Past the last glyph, the end of the last line.
+    /// run's origin.
+    ///
+    /// The line comes first, and it comes from [`Shaped::lines`] rather than
+    /// from the glyphs: a line that carries no glyph — the one a newline
+    /// just opened, or a blank line in the middle of a paragraph — has a
+    /// place a caret can stand, and looking only at glyphs left the caret at
+    /// the end of the line above until something was typed.
     pub fn caret(&self, at: usize) -> (f32, f32) {
-        if let Some(g) = self.glyphs.iter().find(|g| g.start >= at) {
-            return (g.x, g.y);
+        let Some(line) = self.lines.iter().rev().find(|l| l.start <= at).or_else(|| self.lines.first()) else {
+            return (0.0, self.metrics.baseline);
+        };
+        let mut end = 0.0;
+        for g in self.glyphs.iter().filter(|g| g.y == line.y) {
+            if g.start >= at {
+                return (g.x, line.y);
+            }
+            end = g.x + g.w;
         }
-        match self.glyphs.last() {
-            Some(g) => (g.x + g.w, g.y),
-            None => (0.0, self.metrics.baseline),
-        }
+        (end, line.y)
     }
 
     /// The byte offset nearest a point from the run's origin: the line whose
     /// baseline is closest, then the glyph edge closest along it.
     pub fn byte_at(&self, x: f32, y: f32) -> usize {
-        let Some(line) = self.glyphs.iter().map(|g| g.y).min_by(|a, b| (a - y).abs().partial_cmp(&(b - y).abs()).unwrap_or(std::cmp::Ordering::Equal)) else {
+        let Some(line) = self.lines.iter().min_by(|a, b| (a.y - y).abs().partial_cmp(&(b.y - y).abs()).unwrap_or(std::cmp::Ordering::Equal)) else {
             return 0;
         };
-        let mut end = 0;
-        for g in self.glyphs.iter().filter(|g| g.y == line) {
+        let mut end = line.start;
+        for g in self.glyphs.iter().filter(|g| g.y == line.y) {
             if x < g.x + g.w / 2.0 {
                 return g.start;
             }
@@ -153,6 +163,22 @@ pub struct Shaped {
     pub metrics: TextMetrics,
     /// Glyphs in visual order.
     pub glyphs: Vec<Glyph>,
+    /// One entry per laid-out line, in order, including the lines that
+    /// carry no glyph. A caret and a click need a line before they need a
+    /// glyph, and an empty line has the first without the second.
+    pub lines: Vec<Line>,
+}
+
+/// One laid-out line: where its baseline sits and which bytes it holds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Line {
+    /// Baseline, from the run's top — the same `y` this line's glyphs carry.
+    pub y: f32,
+    /// First byte of the source text laid out on this line.
+    pub start: usize,
+    /// One past the last byte drawn on this line. The newline that ended the
+    /// line is not counted: a caret there belongs to the line below.
+    pub end: usize,
 }
 
 /// Cache statistics, for the budget harness.
@@ -363,6 +389,7 @@ impl TextEngine {
         }
 
         let mut glyphs = Vec::new();
+        let mut rows: Vec<Line> = Vec::new();
         let mut width = 0.0f32;
         let mut lines = 0u32;
         let mut baseline = None;
@@ -376,7 +403,14 @@ impl TextEngine {
                 baseline = Some(run.line_y - run.line_top);
             }
             let base = line_base.get(run.line_i).copied().unwrap_or(0);
+            // A run with no glyph is an empty line, and its bytes are the
+            // empty range where the line begins. One with glyphs takes its
+            // range from them rather than from the buffer line, because a
+            // wrapped line is several runs and each holds a slice of it.
+            let mut row = Line { y: run.line_y, start: base.saturating_add(run.glyphs.first().map_or(0, |g| g.start)), end: base };
             for g in run.glyphs.iter() {
+                row.start = row.start.min(base.saturating_add(g.start));
+                row.end = row.end.max(base.saturating_add(g.end));
                 glyphs.push(Glyph {
                     x: g.x,
                     y: run.line_y,
@@ -387,6 +421,17 @@ impl TextEngine {
                     end: base.saturating_add(g.end),
                 });
             }
+            rows.push(row);
+        }
+        // cosmic-text cuts a text into buffer lines the way `str::lines`
+        // does, so the empty line a trailing newline opens is never laid
+        // out: Return pressed at the end of a field added no height and
+        // moved no caret, and nothing happened on screen until the next
+        // character arrived. That line is a line. Its baseline is filled in
+        // below, with every other line that carries no glyph.
+        if text.ends_with('\n') && (line_clamp == 0 || lines < u32::from(line_clamp)) {
+            lines = lines.saturating_add(1);
+            rows.push(Line { y: f32::NAN, start: text.len(), end: text.len() });
         }
         // An empty text lays out an empty line whose baseline is the
         // fallback font's, not the face's the first glyph will use; a caret
@@ -406,8 +451,24 @@ impl TextEngine {
                 }
             };
         }
+        // The same correction for a line that is empty inside a text that is
+        // not — the one a trailing newline opens. It carries no glyph to be
+        // measured from, so cosmic-text lays it out in the default face, and
+        // a caret standing on it would sit a hair off the line above it.
+        // Every line here advances by the same `line_height`, so an empty one
+        // takes its baseline from the first line that has a glyph.
+        let anchor = glyphs.first().and_then(|g| rows.iter().position(|r| r.y == g.y).map(|i| (i, g.y)));
+        for (i, row) in rows.iter_mut().enumerate() {
+            if glyphs.iter().any(|g| g.y == row.y) {
+                continue;
+            }
+            row.y = match anchor {
+                Some((at, y)) => y + (i as f32 - at as f32) * line_height,
+                None => baseline.unwrap_or(size * 0.8) + i as f32 * line_height,
+            };
+        }
         let lines = lines.max(1);
-        Shaped { metrics: TextMetrics { width, height: lines as f32 * line_height, baseline: baseline.unwrap_or(size * 0.8), lines }, glyphs }
+        Shaped { metrics: TextMetrics { width, height: lines as f32 * line_height, baseline: baseline.unwrap_or(size * 0.8), lines }, glyphs, lines: rows }
     }
 
     /// Rasterise a glyph at a device scale (`2.0` for a 2× display).

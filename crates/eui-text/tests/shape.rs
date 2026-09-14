@@ -246,3 +246,59 @@ fn the_cache_survives_sub_pixel_widths_and_keeps_one_entry_per_key() {
     assert_eq!(first.metrics.baseline, again.metrics.baseline);
     assert!(first.metrics.baseline > 0.0);
 }
+
+/// A newline that has just been typed opens a line with nothing on it. The
+/// caret has to stand there — at the left of the new line, a line lower —
+/// or pressing Return looks like it did nothing until a character arrives.
+#[test]
+fn a_caret_after_a_trailing_newline_stands_on_the_new_line() {
+    let mut e = TextEngine::new();
+    let one = e.shape("abc", base(), None, 0);
+    let two = e.shape("abc\n", base(), None, 0);
+    assert_eq!(two.metrics.lines, 2, "the empty line is a line");
+    assert_eq!(two.metrics.height, 44.0, "and the box grows by one");
+    let (x0, y0) = one.caret(3);
+    let (x1, y1) = two.caret(4);
+    assert!(x0 > 1.0, "the caret after 'abc' is past the glyphs: {x0}");
+    assert_eq!(x1, 0.0, "the caret on the new line is at its left: {x1}");
+    assert!((y1 - y0 - 22.0).abs() < 0.5, "one line lower: {y1} against {y0}");
+    // The line above is unchanged, and a caret before the newline stays on it.
+    assert_eq!(two.caret(3), (x0, y0));
+}
+
+/// A blank line inside a text is a place a caret can stand and a place a
+/// click can land, neither of which a list of glyphs can say anything about.
+#[test]
+fn a_blank_line_in_the_middle_holds_a_caret_and_takes_a_click() {
+    let mut e = TextEngine::new();
+    let s = e.shape("abc\n\ndef", base(), None, 0);
+    assert_eq!(s.metrics.lines, 3);
+    let (x, y) = s.caret(4);
+    assert_eq!(x, 0.0);
+    let (_, y0) = s.caret(0);
+    assert!((y - y0 - 22.0).abs() < 0.5, "the middle line: {y} against {y0}");
+    assert_eq!(s.byte_at(30.0, y), 4, "a click out on the blank line lands in it");
+}
+
+/// Two returns in a row open two lines, and the second one is the one the
+/// caret is on.
+#[test]
+fn two_trailing_newlines_are_two_lines() {
+    let mut e = TextEngine::new();
+    let s = e.shape("abc\n\n", base(), None, 0);
+    assert_eq!(s.metrics.lines, 3);
+    assert_eq!(s.metrics.height, 66.0);
+    let (_, y0) = s.caret(0);
+    let (x, y) = s.caret(5);
+    assert_eq!(x, 0.0);
+    assert!((y - y0 - 44.0).abs() < 0.5, "two lines lower: {y} against {y0}");
+}
+
+/// A clamp counts the empty line like any other: two lines asked for is two
+/// lines, whether the second one has anything on it or not.
+#[test]
+fn a_clamp_of_one_does_not_grow_for_a_trailing_newline() {
+    let mut e = TextEngine::new();
+    assert_eq!(e.shape("abc\n", base(), None, 1).metrics.lines, 1);
+    assert_eq!(e.shape("abc\n", base(), None, 2).metrics.lines, 2);
+}

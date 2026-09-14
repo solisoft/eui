@@ -51,6 +51,12 @@ pub enum Action {
     /// `Change` only when the text actually moved, so without this a person
     /// who clicked into the bar and changed their mind had no way out.
     LeaveAddress,
+    /// Take this address off the recent list and draw the page again.
+    Forget(String),
+    /// The chrome's own state moved — the keyboard walked the recent list —
+    /// and the tree has to be built again to show it. The chrome cannot do
+    /// that itself: a rebuild needs the tabs, which the shell owns.
+    Rebuild,
 }
 
 /// How much the origin in the address bar is trusted (08 §1).
@@ -96,6 +102,13 @@ pub struct Chrome {
     blank: bool,
     /// Applications worth offering on a blank page, newest first.
     recents: Vec<crate::recent::Recent>,
+    /// Which of them the keyboard is on, if it has left the address field.
+    /// `None` means the field has it, which is where a blank page starts.
+    picked: Option<usize>,
+    /// The next rebuild is the chrome's own doing — the keyboard walked the
+    /// list — and must not take half a typed address with it. A rebuild
+    /// replaces the tree, and the blank page's field is built empty.
+    keep_address: bool,
     /// Why the last application in the active tab stopped, if it did.
     ///
     /// Kept here rather than on `TabView` so that setting it is one call and
@@ -145,16 +158,27 @@ const BLANK_WHY: u32 = 17;
 /// at four, the first row's host *was* the second row's box.
 const RECENT_BASE: u32 = 200;
 const RECENT_STRIDE: u32 = 8;
-/// How many of a row's ids answer a click: all of them, so the sigil and
-/// either label open the same application as the row.
-const RECENT_PARTS: u32 = 5;
+/// How many of a row's ids answer a click: all of them, so the sigil, either
+/// label and the Delete hint open the same application as the row.
+const RECENT_PARTS: u32 = 6;
 const TAB_BASE: u32 = 100;
 const TAB_STRIDE: u32 = 8;
 
 impl Chrome {
     /// A chrome for a window of `w × h` at `scale`.
     pub fn new(w: f32, h: f32, scale: f32) -> Self {
-        Self { driver: Driver::new(w, h, scale, 0), actions: HashMap::new(), editing: false, blank: true, recents: Vec::new(), trouble: None, seq: 0, defined: false }
+        Self {
+            driver: Driver::new(w, h, scale, 0),
+            actions: HashMap::new(),
+            editing: false,
+            blank: true,
+            recents: Vec::new(),
+            picked: None,
+            keep_address: false,
+            trouble: None,
+            seq: 0,
+            defined: false,
+        }
     }
 
     /// Where the application's viewport starts, in device-independent px.
@@ -226,8 +250,23 @@ impl Chrome {
     /// The driver answers an event with the frames it would have sent a
     /// server. Nothing sends them; their node ids are the whole point.
     pub fn input(&mut self, i: Input) -> Vec<Action> {
+        if let Some(out) = self.walk_recents(&i) {
+            return out;
+        }
+        // Spelling an address is no longer choosing from a list. The key
+        // still goes to the field — it is a character, and the field is what
+        // it is for — so the highlight is dropped here and the page is drawn
+        // again after it, with what was typed kept (`keep_address`).
+        let typing = matches!(i, Input::Text(_) | Input::Paste(_)) && self.picked.is_some();
+        if typing {
+            self.picked = None;
+            self.keep_address = true;
+        }
         let frames = self.driver.input(i);
         let mut out = Vec::new();
+        if typing {
+            out.push(Action::Rebuild);
+        }
         for f in frames {
             let Frame::Event(e) = f else { continue };
             match e.event {
@@ -254,10 +293,73 @@ impl Chrome {
         out
     }
 
+    /// What the blank page's address field holds right now, read back out
+    /// of the tree the driver is showing.
+    fn address_text(&self) -> String {
+        self.driver.session().lookup(BLANK_FIELD).and_then(|ix| self.driver.session().text_of(ix)).unwrap_or_default().to_owned()
+    }
+
+    /// The keyboard on the blank page's list of applications, before the
+    /// address field is given a look at the same keys.
+    ///
+    /// `Some` for a key this took, which is then not passed on: Down and Up
+    /// walk the list, Enter opens what they are standing on, Delete takes it
+    /// off the list, and Escape hands the keyboard back to the field. Every
+    /// one of them means something else in a text field, so a key that
+    /// reaches the list must not also reach the field.
+    ///
+    /// Anything typed puts the keyboard back in the field: a person who
+    /// starts spelling an address is no longer choosing from a list.
+    fn walk_recents(&mut self, i: &Input) -> Option<Vec<Action>> {
+        let shown = self.recents.len().min(crate::recent::KEEP);
+        if !self.blank || shown == 0 {
+            self.picked = None;
+            return None;
+        }
+        let Input::Key { key, modifiers, down } = i else { return None };
+        if !down || modifiers & 0b1110 != 0 {
+            return None;
+        }
+        self.keep_address = true;
+        match key.as_str() {
+            "ArrowDown" => {
+                self.picked = Some(self.picked.map_or(0, |i| i.saturating_add(1).min(shown - 1)));
+                Some(vec![Action::Rebuild])
+            }
+            "ArrowUp" => {
+                // Up off the first row is back to the address field, which
+                // is where the keyboard was before Down was ever pressed.
+                self.picked = self.picked.and_then(|i| i.checked_sub(1));
+                Some(vec![Action::Rebuild])
+            }
+            "Escape" if self.picked.is_some() => {
+                self.picked = None;
+                Some(vec![Action::Rebuild])
+            }
+            "Enter" => {
+                let url = self.recents.get(self.picked?)?.url.clone();
+                self.picked = None;
+                Some(vec![Action::Open(url)])
+            }
+            "Delete" => {
+                let at = self.picked?;
+                let url = self.recents.get(at)?.url.clone();
+                // Stand on the row that moves up into this one, or on the
+                // last one when this was the last: the hand is on Delete and
+                // the next press should take the next entry, not nothing.
+                self.picked = (shown > 1).then(|| at.min(shown - 2));
+                Some(vec![Action::Forget(url)])
+            }
+            _ => None,
+        }
+    }
+
     /// The applications the blank page offers. Kept here rather than read
     /// from disk on each rebuild, which happens on every tab switch.
     pub fn set_recents(&mut self, recents: Vec<crate::recent::Recent>) {
         self.recents = recents;
+        let shown = self.recents.len().min(crate::recent::KEEP);
+        self.picked = self.picked.filter(|_| shown > 0).map(|i| i.min(shown.saturating_sub(1)));
     }
 
     /// Why the active tab has no application. `None` for a tab that simply
@@ -292,6 +394,7 @@ impl Chrome {
     pub fn rebuild(&mut self, tabs: &[TabView<'_>], active: usize) {
         let mut b = Builder::new();
         self.actions.clear();
+        let keep = std::mem::take(&mut self.keep_address);
         self.blank = tabs.get(active).map_or(true, |t| t.trust.is_none());
         let editing = self.editing && !self.blank;
 
@@ -609,7 +712,36 @@ impl Chrome {
             overflow: Overflow::Clip,
             ..Default::default()
         });
+        // The row the keyboard is standing on. Same box, so nothing moves
+        // when the pick does: the border carries it, as a focus ring would.
+        let s_recent_on = b.style(StyleRecord {
+            display: Display::Row,
+            align_items: AlignItems::Center,
+            gap: 3,
+            height: Dim::Px(40),
+            padding: [0, 3, 0, 3],
+            radius: 2,
+            bg: role(Role::SurfaceBase.id()),
+            border_width: [1; 4],
+            border_color: role(Role::AccentBase.id()),
+            cursor: eui_proto::Cursor::Pointer,
+            overflow: Overflow::Clip,
+            ..Default::default()
+        });
         let s_recent_name = b.style(StyleRecord { font_size: 1, fg: text, line_clamp: 1, ..Default::default() });
+        // What Delete does, said on the row it would do it to and nowhere
+        // else: a key nobody can see is a key nobody presses.
+        let s_recent_del = b.style(StyleRecord {
+            font_size: 0,
+            font_family: eui_proto::FontFamily::Mono,
+            fg: muted,
+            padding: [0, 2, 0, 2],
+            radius: 1,
+            bg: sunken,
+            border_width: [1; 4],
+            border_color: role(Role::BorderSubtle.id()),
+            ..Default::default()
+        });
         let s_recent_where = b.style(StyleRecord {
             font_size: 0,
             font_family: eui_proto::FontFamily::Mono,
@@ -635,9 +767,14 @@ impl Chrome {
             b.text(BLANK_MARK_TEXT, s_mark_text, "EUI");
             b.close();
             b.text(BLANK_HEAD, s_head, "Open an application");
-            b.text(BLANK_SUB, s_sub, "Type an address and press Enter.");
+            let sub = if shown > 0 { "Type an address and press Enter, or ↓ to pick one below." } else { "Type an address and press Enter." };
+            b.text(BLANK_SUB, s_sub, sub);
             b.change();
-            b.text_node(NodeKind::Input, BLANK_FIELD, s_big, Some(""));
+            // Empty, unless this rebuild is one the chrome asked for itself:
+            // walking the recent list must not take a half-typed address
+            // with it.
+            let typed = if keep { self.address_text() } else { String::new() };
+            b.text_node(NodeKind::Input, BLANK_FIELD, s_big, Some(&typed));
             if !why.is_empty() {
                 // A field, so the reason can be selected and copied, and a
                 // `TextArea` so it wraps: a refusal that names a host and a
@@ -660,14 +797,18 @@ impl Chrome {
                     let component = component_of(&r.url);
                     let lead = if component.is_empty() { r.name.as_str() } else { component };
                     let under = if component.is_empty() || r.name.is_empty() { host.to_owned() } else { format!("{} · {host}", r.name) };
+                    let on = self.picked == Some(i);
                     b.click();
-                    b.open(NodeKind::Box, id, s_recent, 3);
+                    b.open(NodeKind::Box, id, if on { s_recent_on } else { s_recent }, 3 + u32::from(on));
                     let letter = lead.chars().next().unwrap_or('*').to_uppercase().to_string();
                     b.open(NodeKind::Box, id + 1, s_sigils.get(tint_index([&r.url, ""])).copied().unwrap_or(s_sigil_off), 1);
                     b.text(id + 2, s_sigil_text, &letter);
                     b.close();
                     b.text(id + 3, s_recent_name, lead);
                     b.text(id + 4, s_recent_where, &under);
+                    if on {
+                        b.text(id + 5, s_recent_del, "Del");
+                    }
                     b.close();
                 }
                 b.close();
