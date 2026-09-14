@@ -52,7 +52,18 @@ fn main() {
                 chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
             }
         } else {
-            let views: Vec<TabView<'_>> = tabs.iter().map(|(t, o, p, tr)| TabView { title: t, origin: o, path: p, trust: Some(*tr), link: None, can_back: true, can_forward: false }).collect();
+            let views: Vec<TabView<'_>> = tabs
+                .iter()
+                .map(|(t, o, p, tr)| TabView {
+                    title: t,
+                    origin: o,
+                    path: p,
+                    trust: Some(*tr),
+                    link: None,
+                    can_back: std::env::var("CHROME_BACK").is_ok(),
+                    can_forward: std::env::var("CHROME_FWD").is_ok(),
+                })
+                .collect();
             if std::env::var("CHROME_EDIT").is_ok() {
                 chrome.edit_address();
             }

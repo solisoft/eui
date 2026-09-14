@@ -176,6 +176,10 @@ const RECENT_STRIDE: u32 = 8;
 /// How many of a row's ids answer a click: all of them, so the sigil, either
 /// label and the Delete hint open the same application as the row.
 const RECENT_PARTS: u32 = 6;
+/// The atom for an icon's `name` prop. The chrome defines two atoms and
+/// this is the second; ids are the chrome's own and nothing on the wire
+/// ever sees them.
+const ATOM_NAME: u32 = 2;
 const TAB_BASE: u32 = 100;
 const TAB_STRIDE: u32 = 8;
 
@@ -723,9 +727,17 @@ impl Chrome {
             justify: Justify::Center,
             align_items: AlignItems::Center,
             radius: 2,
-            fg: ColorRef::role(Role::BorderSubtle.id()),
+            // `text.disabled`, not `border.subtle`. A hairline colour on a
+            // glyph is not a dim control, it is an invisible one — and a tab
+            // opens with nothing behind it and nothing ahead, so *both*
+            // arrows are in this state the first time anybody looks at them.
+            // Which is how a feature that was there read as a feature that
+            // was missing.
+            fg: ColorRef::role(Role::TextDisabled.id()),
             ..Default::default()
         });
+        // 16 px, the size the client's own icons are drawn beside a label.
+        let s_step_icon = b.style(StyleRecord { width: Dim::Px(16), height: Dim::Px(16), ..Default::default() });
         let s_recents = b.style(StyleRecord { display: Display::Column, gap: 1, width: Dim::Px(520), max_width: Dim::Percent(10000), ..Default::default() });
         let s_recent = b.style(StyleRecord {
             display: Display::Row,
@@ -855,7 +867,7 @@ impl Chrome {
                     b.click();
                 }
                 b.open(NodeKind::Box, id, if on { s_reload } else { s_step_off }, 1);
-                b.text(text_id, s_reload_text, if id == BACK { "\u{2039}" } else { "\u{203a}" });
+                b.icon(text_id, s_step_icon, if id == BACK { "chevron_left" } else { "chevron_right" });
                 b.close();
             }
             let chip = t.trust.map(|tr| match tr {
@@ -1071,6 +1083,19 @@ impl Builder {
         self.push(kind, id, style, s, 0);
     }
 
+    /// A named vector icon. The name is a prop, not text (03 §1), so it is
+    /// stroked from the client's own table rather than shaped — which is
+    /// how it comes out the same weight as every other icon in the client,
+    /// at whatever size the style asks for.
+    fn icon(&mut self, id: u32, style: u32, name: &str) {
+        let at = self.push(NodeKind::Icon, id, style, None, 0);
+        let first = self.tree.props.len() as u32;
+        self.tree.props.push((ATOM_NAME, Value::Str(name.to_owned())));
+        if let Some(node) = self.tree.nodes.get_mut(at) {
+            node.props = (first, 1);
+        }
+    }
+
     /// The batch for this tree.
     ///
     /// `defined` says the session already has the atom and the style
@@ -1085,6 +1110,7 @@ impl Builder {
         }
         let mut ops: Vec<Op> = self.styles.into_iter().enumerate().map(|(i, record)| Op::DefStyle { id: i as u32 + 1, record }).collect();
         ops.insert(0, Op::DefAtom { id: 1, value: "chrome".into() });
+        ops.insert(1, Op::DefAtom { id: ATOM_NAME, value: "name".into() });
         ops.push(Op::Mount(self.tree));
         ops
     }
