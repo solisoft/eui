@@ -1373,12 +1373,35 @@ impl Shell {
         } else if let Some(srgb) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb) {
             srgb
         } else {
-            // No sRGB anywhere: draw rather than refuse, and say why the
-            // colours look washed out.
+            // No sRGB *surface* format. This is the normal case for a WebGPU
+            // canvas, which is `bgra8unorm` and nothing else — so it is what
+            // a browser on a Mac gets, while the same page on a machine with
+            // no WebGPU falls back to WebGL2, is handed an sRGB surface, and
+            // looks right. That is the whole of "too black, but only in the
+            // browser, and only on the Mac".
+            //
+            // Writing linear values into a target that does not encode them
+            // darkens everything and crushes the bottom of the scale: 0.0137
+            // is meant to leave as #1f1f1f and leaves as #040404 instead, so
+            // `surface.base` and the card on top of it become the same
+            // black. (The note that used to be here said the colours would
+            // look *light*. It had the direction backwards, which is its own
+            // small lesson about untested diagnostics.)
+            //
+            // A view format fixes it without touching the shader: the
+            // surface stays `bgra8unorm`, the *view* is its sRGB sibling,
+            // and the hardware encodes on write exactly as it would for an
+            // sRGB surface. Both WebGPU and Metal allow that pairing.
             let first = caps.formats.first().copied().unwrap_or(eui_render::FORMAT);
-            eprintln!("eui: no sRGB surface format, falling back to {first:?} — colours will be light");
+            let srgb = first.add_srgb_suffix();
+            if srgb == first {
+                eprintln!("eui: no sRGB surface format and none to view {first:?} as — the dark end will crush");
+            }
             first
         };
+        // Empty when `format` is already sRGB: asking to view an sRGB format
+        // as itself is a validation error, not a no-op.
+        let view_formats = if format.is_srgb() { Vec::new() } else { vec![format.add_srgb_suffix()] };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -1386,7 +1409,7 @@ impl Shell {
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto),
-            view_formats: vec![],
+            view_formats,
             desired_maximum_frame_latency: 2,
         };
         surface.configure(gpu_shared.renderer.device(), &config);
@@ -2690,8 +2713,11 @@ impl Shell {
                 return;
             }
         };
-        let view = frame.texture.create_view(&Default::default());
-        let format = self.config.format;
+        // The sRGB sibling where the surface itself is not sRGB, so the
+        // hardware encodes what the shader wrote; the surface's own format
+        // when it already is. `view_formats` above declared this.
+        let format = if self.config.format.is_srgb() { self.config.format } else { self.config.format.add_srgb_suffix() };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(format), ..Default::default() });
         let now = self.epoch.elapsed().as_secs_f64();
         let at = crate::time::Instant::now();
 
