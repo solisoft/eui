@@ -131,7 +131,7 @@
                 </div>
                 <div class="dim">
                     <dt>12 MB</dt>
-                    <dd>the stripped client, two variable fonts included<small>target — 15.38 MB today, and the miss is published</small></dd>
+                    <dd>the stripped client, two variable fonts included<small>target — 16.28 MB today, and the miss is published</small></dd>
                 </div>
             </dl>
         </div>
@@ -153,7 +153,7 @@
                 </div>
                 <div class="stage">
                     <b>Worker</b>
-                    <p>Everything that reads bytes a server chose: frames, layout, text, pictures, sound, bytecode. Confined by Landlock and seccomp — 36 system calls, and any other one kills it.</p>
+                    <p>Everything that reads bytes a server chose: frames, layout, text, pictures, sound, bytecode, and a scene&rsquo;s shader and mesh. Confined by Landlock and seccomp — 37 system calls, and any other one kills it.</p>
                 </div>
             </div>
 
@@ -244,11 +244,12 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
 
             <p class="note">
                 <code>column</code>, <code>text</code>, <code>button</code> and the
-                ninety-four others are plain Soli functions returning hashes, and you
-                are meant to copy the file and change it. The
-                <a href="/components">component reference</a> has every signature,
-                the eight keys of a node, the thirty-seven style keys and the
-                twenty-eight colour roles.
+                three hundred and forty others are plain Soli functions returning
+                hashes, spread over four files because the call graph said where to
+                cut, and you are meant to copy them and change them. The
+                <a href="/components">component reference</a> documents two hundred and
+                twenty-six of them, with the eight keys of a node, the thirty-nine
+                style keys and the thirty-three colour roles.
             </p>
         </div>
     </section>
@@ -263,7 +264,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
             </p>
 
             <ul class="refusals">
-                <li><span>Run downloaded native code, or JIT anything. Local handlers are verified bytecode on a whitelisted opcode set, metered by fuel.<br><cite>spec 07 — bytecode</cite></span></li>
+                <li><span>Run downloaded native code, or JIT anything. Exactly two kinds of executable content reach the client and each has a verifier of its own: local handlers, as bytecode on a whitelisted opcode set metered by fuel; and — only where the <code>scene</code> capability was granted — a WGSL module whose loops must be countable, because a fragment stage cannot be stopped once it is running.<br><cite>spec 07 — bytecode · spec 11 — shaders</cite></span></li>
                 <li><span>Resolve a cascade. Styles arrive already computed, as fixed 64-byte records; the client does one array lookup.<br><cite>spec 02 — wire format</cite></span></li>
                 <li><span>Read the clipboard, the camera or the filesystem without a capability the person granted.<br><cite>spec 01 — transport</cite></span></li>
                 <li><span>Report a keystroke outside a focused field, enumerate fonts, or read back a canvas. The fingerprint surface is close to nothing.<br><cite>spec 08 — security</cite></span></li>
@@ -277,8 +278,10 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
         <div>
             <h2>Where it actually is</h2>
             <p>
-                The protocol, the client and the Soli integration exist and are tested.
-                Mobile does not. The full account, crate by crate, is on the status page.
+                The protocol, the client and the Soli integration exist and are
+                tested. The phones build and ship on every push, and nobody has sat
+                down with them. The full account, crate by crate, is on the status
+                page.
             </p>
 
             <table class="ledger">
@@ -286,17 +289,21 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
                     <tr><th>Piece</th><th>State</th><th>Evidence</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>64 tests</td></tr>
-                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>golden pixels</td></tr>
-                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>39 tests</td></tr>
-                    <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>26 tests</td></tr>
+                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>80 tests, 4 fuzz targets</td></tr>
+                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>121 tests, golden pixels</td></tr>
+                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>297 tests</td></tr>
+                    <tr><td>Local handlers: the bytecode VM</td><td class="yes">Built</td><td>16 tests</td></tr>
+                    <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>10 mixer tests, 8 in the client</td></tr>
+                    <tr><td>3D scenes and the shader verifier</td><td class="yes">Built</td><td>41 tests, 1 fuzz target</td></tr>
                     <tr><td>Sandbox: Landlock, seccomp, no core dump</td><td class="yes">Built</td><td>Linux only</td></tr>
                     <tr><td>Sandbox on macOS and Windows</td><td class="no">Not started</td><td>—</td></tr>
-                    <tr><td>Android, iOS</td><td class="no">Not started</td><td>—</td></tr>
+                    <tr><td>Android, iOS</td><td class="part">Built, untested</td><td>rolling APK and iOS builds</td></tr>
                 </tbody>
             </table>
 
             <p class="note">
+                619 tests in all, counted on 2026-09-15, and every figure above
+                is a number <code>cargo test --workspace</code> will give you back.
                 A desktop artifact is 52.6 MB today against a 15 MB promise — it was
                 76 MB until the runtime it embeds learned to drop what an application
                 never calls. The reason for what is left is that runtime, not the

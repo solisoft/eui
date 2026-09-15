@@ -22,8 +22,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 78 tests: 9 round-trip, 6 byte-level vectors, 3 size budgets, 3 manifest,
-  **55 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
+- 80 tests: 9 round-trip, 6 byte-level vectors, 3 size budgets, 3 manifest,
+  **57 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
@@ -39,7 +39,7 @@ with a free list, and `apply` for every op in the wire format.
   allocated. Subtree removal is an iterative walk, never a recursive drop.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 27 tests, including a random op stream that must keep the arena's live
+- 31 tests, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -55,7 +55,7 @@ values, per `spec/05-theme.md`, which is now normative.
   about.
 - `check_style` rejects a style record whose indices run off a scale, so a
   bad index is a rejected batch rather than a surprise at paint time.
-- 17 tests.
+- 23 tests.
 
 **`eui-layout` — the layout engine.** One algorithm, `spec/04-layout.md`,
 now normative.
@@ -88,7 +88,7 @@ text that must not be reinvented.
 - Glyph rasterisation at a device scale behind an opaque key, for the
   renderer's atlas.
 - Line clamping truncates; it does not yet append an ellipsis.
-- 8 tests, one of which lays out real glyphs through `eui-layout`.
+- 17 tests, one of which lays out real glyphs through `eui-layout`.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per
 scissor region.
@@ -113,7 +113,10 @@ scissor region.
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
   scroll clipping at the pixel, stack z order.
-- 10 tests. Not yet: shadows, images, canvas paths.
+- 68 tests. Shadows, images and canvas paths each have one now; what is
+  still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
+  §11 pins the verifier's verdicts and the frame's structure, and says in as
+  many words that a scene's pixels are not a conformance surface.
 
 **`eui-client` — the client.** Three parts kept apart so two can be tested
 without the third.

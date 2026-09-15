@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Reference<span>&sect;03</span></div>
         <div>
-            <h1>A hundred and eighty-two functions, and the vocabulary they speak.</h1>
+            <h1>Two hundred and twenty-six functions, and the vocabulary they speak.</h1>
             <p class="lede">
                 An EUI component is a Soli function that returns a hash. There is no
                 widget runtime, no component registry and no client release behind any
@@ -13,10 +13,10 @@
             </p>
 
             <nav class="toc">
-                <a href="#node"><b>The node</b><span>eight keys, sixteen kinds</span></a>
-                <a href="#style"><b>Style</b><span>thirty-seven keys, twenty-eight roles</span></a>
+                <a href="#node"><b>The node</b><span>eight keys, seventeen kinds</span></a>
+                <a href="#style"><b>Style</b><span>thirty-nine keys, thirty-three roles</span></a>
                 <a href="#events"><b>Events</b><span>twenty-four names, two handler forms</span></a>
-                <a href="#catalogue"><b>The catalogue</b><span>all 182, by family</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 226, by family</span></a>
                 <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
             </nav>
         </div>
@@ -62,7 +62,7 @@
                 </div>
             </div>
 
-            <h3>The sixteen kinds</h3>
+            <h3>The seventeen kinds</h3>
             <p class="soft">
                 Implemented in the client. Adding one is a protocol version bump, which
                 is a deliberately high price: it is what keeps the catalogue a library
@@ -85,6 +85,7 @@
                 <div><b>sizer</b><span>An invisible box that only constrains</span></div>
                 <div><b>audio</b><span>A sound. Draws nothing, plays</span></div>
                 <div><b>video</b><span>A moving picture, decoded in the worker</span></div>
+                <div><b>scene</b><span>A 3D pass into a target of its own, drawn by a shader the server sent. Leaf</span></div>
             </div>
         </div>
     </section>
@@ -92,7 +93,7 @@
     <section id="style">
         <div class="mark">Style<span>&sect;05</span></div>
         <div>
-            <h2>Thirty-seven keys, and no cascade</h2>
+            <h2>Thirty-nine keys, and no cascade</h2>
             <p>
                 A style is a flat hash. There is nothing to select against, no
                 inheritance to compute, and no specificity to lose an afternoon to. If
@@ -126,6 +127,8 @@
                     <tr><td>animation</td><td>none · spin</td></tr>
                     <tr><td>position</td><td>flow · absolute</td></tr>
                     <tr><td>cursor</td><td>default · pointer · text · grab · grabbing · resize_h · resize_v · wait · not_allowed</td></tr>
+                    <tr><td>blur</td><td>a backdrop radius, 0–255 — what is behind the node, not the node</td></tr>
+                    <tr><td>motion</td><td>fade · leading · trailing · top · bottom · scale · paired</td></tr>
                 </tbody>
             </table>
 
@@ -149,7 +152,7 @@
                 </div>
             </div>
 
-            <h3>The twenty-eight roles</h3>
+            <h3>The thirty-three roles</h3>
             <p class="soft">
                 The server never sends a colour. It sends a role, and the client resolves
                 it against the viewer's mode &mdash; which is why the same view is
@@ -166,6 +169,7 @@
                 <div><b>info</b><span>base · subtle · on</span></div>
                 <div><b>border</b><span>subtle · default · strong</span></div>
                 <div><b>focus</b><span>ring</span></div>
+                <div><b>series</b><span>1 · 2 · 3 · 4 · 5 — the chart palette, so a plot stays legible in either mode</span></div>
             </div>
         </div>
     </section>
@@ -242,11 +246,12 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <section id="catalogue">
         <div class="mark">Catalogue<span>&sect;03</span></div>
         <div>
-            <h2>All 182</h2>
+            <h2>All 226</h2>
             <p>
                 They live in four files under
                 <code>examples/demo-app/app/controllers/</code>, starting with
-                <code>eui_builders.sl</code> &mdash;
+                <code>eui_builders.sl</code>, which is where the call graph said to
+                cut &mdash;
                 and you are meant to copy them and change them. A widget is not a protocol
                 feature, and none of these had to ask permission to exist. Each one
                 below carries a call you can paste into a view.
@@ -328,7 +333,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Controls and states <span>9</span></h3>
+                <h3>Controls and states <span>10</span></h3>
                 <p class="soft">The base every interactive widget is built on. Its story is on <a href="/controls">Controls</a>.</p>
                 <dl class="api">
                     <dt><b>control(o)</b><i>control({"key": "cb:1", "tone": "accent", "size": "md", "on": {"click": "save"}, "a11y": {"role": "button"}, "c": [text("Save", {})]})</i></dt>
@@ -349,11 +354,13 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">The square an icon button occupies</span></dd>
                     <dt><b>checkbox_box_px(size)</b><i>checkbox_box_px("md")</i></dt>
                     <dd><span class="d">The mark of a checkbox, and the knob of a switch derived from it</span></dd>
+                                    <dt><b>size_spec(size)</b><i>size_spec("sm")</i></dt>
+                    <dd><span class="d">The whole row of the size table at once &mdash; padding, text scale, control height &mdash; so a widget that takes a <code>size</code> reads it in one call instead of three lookups that can drift apart</span><div class="p val">&rarr; <em>{"pad": 2, "size": 2, "h": 28}</em></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Buttons <span>8</span></h3>
+                <h3>Buttons <span>11</span></h3>
                 <p class="soft">One engine, and the variants are arguments to it.</p>
                 <dl class="api">
                     <dt><b>button_variant(label, on_click, bg, fg)</b><i>button_variant("Publish", "publish", "accent.base", "accent.on")</i></dt>
@@ -372,11 +379,17 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">A button whose click runs a bytecode chunk first, then a server event</span><div class="p"><span class="g-r"><span class="w-btn primary">+</span><span class="g-m">no round trip</span></span></div></dd>
                     <dt><b>theme_toggle()</b><i>theme_toggle()</i></dt>
                     <dd><span class="d">Light and dark, decided on the client; the server is never told</span><div class="p"><span class="w-btn secondary">&#9728;/&#9790;</span></div></dd>
+                                    <dt><b>split_button(label, on_click, o)</b><i>split_button("Save", "save", {"items": [{"id": "save_as", "label": "Save as&hellip;"}]})</i></dt>
+                    <dd><span class="d">The default and the rest: a primary that clicks, a caret that opens <code>o["items"]</code> through <code>context_menu</code>. One decision, one tab stop</span><div class="p"><span class="g-r"><span class="w-btn primary">Save</span><span class="w-btn primary icon">&#9662;</span></span></div></dd>
+                    <dt><b>popconfirm(anchor, open, o)</b><i>popconfirm(button("Delete", "ask"), state["asking"], {"props": {"id": row["id"]}})</i></dt>
+                    <dd><span class="d">The question asked beside the control that raised it. <code>o["props"]</code> ride on the confirming button, because the question is always about a particular thing &mdash; a dialog that has forgotten which row it was about is how the wrong row gets deleted</span><div class="p"><span class="g-c"><span class="w-btn">Delete</span><span class="g-tip">Delete this? <b>Yes</b> <u>No</u></span></span></div></dd>
+                    <dt><b>toggle_group(options, chosen, on_toggle, o)</b><i>toggle_group(["Bold", "Italic"], state["marks"], "toggle_mark")</i></dt>
+                    <dd><span class="d"><code>segmented</code> asks which one; this asks which ones. <code>chosen</code> is a list and the server owns it</span><div class="p"><span class="g-seg"><span class="on">B</span><span>I</span><span class="on">U</span></span></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Input and forms <span>13</span></h3>
+                <h3>Input and forms <span>27</span></h3>
                 <p class="soft">None of them holds state. The handler does.</p>
                 <dl class="api">
                     <dt><b>checkbox(label, checked, on_toggle, props)</b><i>checkbox(it["title"], it["done"], "toggle", {"id": it["id"]})</i></dt>
@@ -403,13 +416,35 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">One row of that dropdown</span><div class="p"><span class="g-p"><span class="g-t b">EUR</span></span></div></dd>
                     <dt><b>dropdown(anchor, content, open)</b><i>dropdown(anchor, options, state["open"])</i></dt>
                     <dd><span class="d">A panel under its anchor; the anchor alone when closed</span><div class="p"><span class="g-c"><span class="g-in">EUR&nbsp;&nbsp;&#9662;</span><span class="g-p col"><span class="g-m">GBP</span><span class="g-m">USD</span></span></span></div></dd>
-                    <dt><b>slider(value, min, max, on_set)</b><i>slider(state["volume"], 0, 100, "set_volume")</i></dt>
-                    <dd><span class="d">A 240 px track. Click sets from the pointer x, arrows nudge</span><div class="p"><span class="g-slider"><i></i><b></b><u></u></span></div></dd>
+                    <dt><b>slider(value, min, max, on_set, o)</b><i>slider(state["volume"], 0, 100, "set_volume")</i></dt>
+                    <dd><span class="d">A 240 px track. Click sets from the pointer x, arrows nudge. The node declares <code>track: "x"</code> and the client owns the press, the hold and the thumb every frame &mdash; one <code>change</code> per quantised step comes back, and nothing else</span><div class="p"><span class="g-slider"><i></i><b></b><u></u></span></div></dd>
+                    <dt><b>range_slider(low, high, min, max, on_set, o)</b><i>range_slider(lo, hi, 0, 1000, "set_price", {"low_label": "From", "high_label": "To"})</i></dt>
+                    <dd><span class="d">Two handles on one track: <code>track_value</code> carries the pair and the fill runs between them, which is the whole difference between &ldquo;up to here&rdquo; and &ldquo;between here and here&rdquo;. Each handle is its own <code>Tab</code> stop and its own <code>slider</code> to a reader, bounded by the one beside it, so the two meet without ever swapping and without a line of code saying so. One <code>change</code> carries both ends</span><div class="p"><span class="g-slider"><u></u><b></b><i></i><b></b><u></u></span></div></dd>
+                                    <dt><b>combobox(options, value, o)</b><i>combobox(cities, state["city"], {"query": q, "open": up, "on_pick": "pick_city"})</i></dt>
+                    <dd><span class="d">A select you type into. Closed, the value and a chevron; open, a field at the top of the panel filters the options. <code>o</code> carries <code>query</code>, <code>open</code>, <code>at</code>, <code>on_toggle</code>, <code>on_change</code>, <code>on_pick</code>, <code>on_key</code> and <code>on_submit</code></span><div class="p"><span class="g-c"><span class="g-in sm">Ly|</span><span class="g-tree"><span class="lit">Lyon</span><span>Lyons-la-For&ecirc;t</span></span></span></div></dd>
+                    <dt><b>combo_filter(options, query)</b><i>combo_filter(["Lyon", "Lille"], "li")</i></dt>
+                    <dd><span class="d">What of a fixed list still belongs under the draft</span><div class="p val">&rarr; <em>["Lille"]</em></div></dd>
+                    <dt><b>multi_select(options, sel, open, on_toggle, on_pick, o)</b><i>multi_select(tags, state["sel"], up, "open_tags", "pick_tag")</i></dt>
+                    <dd><span class="d">Several of something. The anchor carries a chip per chosen option &mdash; each chip&rsquo;s &times; sends the same <code>on_pick</code>, because removing one <em>is</em> toggling it off &mdash; and the panel&rsquo;s rows are the listbox&rsquo;s. Picking does <strong>not</strong> shut it: that is the caller&rsquo;s handler, not the widget</span><div class="p"><span class="g-r"><span class="w-chip">Urgent<b>&times;</b></span><span class="w-chip">Late<b>&times;</b></span><span class="g-m">&#9662;</span></span></div></dd>
+                    <dt><b>tag_field(label, tags, draft, o)</b><i>tag_field("Labels", state["tags"], state["draft"], {"key": "labels", "suggest": hints})</i></dt>
+                    <dd><span class="d">A line of chips you type into, and a panel of what is still worth choosing. Unlike <code>multi_select</code> the words are not a fixed set: whatever is typed becomes a tag. <code>o["key"]</code> is required; <code>o["suggest"]</code> is the narrowed list, <code>o["at"]</code> where the arrows are, <code>o["open"]</code> whether the panel is up, <code>o["take_focus"]</code> asks for the caret back for one batch. The entry claims <code>Backspace</code>, the arrows and <code>Escape</code> &mdash; not <code>Enter</code>, which arrives as a <code>submit</code> (03 &sect;3.1)</span><div class="p"><span class="g-r"><span class="w-chip">rust<b>&times;</b></span><span class="w-chip">gpu<b>&times;</b></span><span class="g-in sm">wg|</span></span></div></dd>
+                    <dt><b>tag_option(word, lit, pos, total, o)</b><i>tag_option("wgpu", true, 0, 3, o)</i></dt>
+                    <dd><span class="d">One row of that panel. <code>lit</code> is where the arrows have walked to, which is not a selection &mdash; nothing is chosen until Enter or a click</span><div class="p"><span class="g-tree"><span class="lit">wgpu</span><span>wgsl</span></span></div></dd>
+                    <dt><b>tag_add(tags, text, o) / tag_remove(tags, at)</b><i>tag_add(["rust"], " GPU ")</i></dt>
+                    <dd><span class="d">Trim, reject empty, reject a word already there in any case, and stop at <code>o["max"]</code>; <code>tag_remove</code> drops the one at <code>at</code> and an index out of range removes nothing. Both copy before they grow, so the list handed in is left alone</span><div class="p val">&rarr; <em>["rust", "GPU"]</em></div></dd>
+                    <dt><b>tag_suggest(all, tags, draft, limit) / tag_highlight(count, at, step)</b><i>tag_suggest(words, chosen, "gp", 6)</i></dt>
+                    <dd><span class="d">The words that match the draft anywhere minus the ones already chosen, capped; and where an arrow key lands, wrapping at both ends &mdash; <code>-1</code> in is &ldquo;nowhere yet&rdquo;, and a highlight left past a panel that shrank comes back inside</span><div class="p val">&rarr; <em>["gpu", "wgpu"]</em></div></dd>
+                    <dt><b>rating(value, on_set, o)</b><i>rating(state["stars"], "set_stars")</i></dt>
+                    <dd><span class="d">Stars, one control each &mdash; a <code>radio_group</code>, not one node with five meanings, so each is its own tab stop and says its own value to a reader</span><div class="p"><span class="g-r">&#9733;&#9733;&#9733;&#9734;&#9734;</span></div></dd>
+                    <dt><b>currency_field(label, value, on_change, o)</b><i>currency_field("Total", "1500", "set_total", {"unit": "&euro;", "hint": "1 500,00 &euro;"})</i></dt>
+                    <dd><span class="d">The unit inside the border, so it reads as part of the value and not as a label that might belong to something else. What is typed is what is sent: grouping a number under a live caret moves the caret, and a field that moves your caret is a field you cannot type in &mdash; the grouped form goes beside it, in <code>o["hint"]</code></span><div class="p"><span class="g-c"><span class="g-in sm">&euro; 1500</span><span class="g-dim">1&nbsp;500,00&nbsp;&euro;</span></span></div></dd>
+                    <dt><b>kbd(key) / shortcut_sheet(groups, on_close, o)</b><i>shortcut_sheet([{"name": "Editing", "keys": [["Ctrl+S", "Save"]]}], "close")</i></dt>
+                    <dd><span class="d">What the application claims of the keyboard (03 &sect;3.1), on one screen. A shortcut nobody can find is a shortcut nobody uses</span><div class="p"><span class="g-r"><span class="g-tip">Ctrl+S</span><span class="g-dim">Save</span></span></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Typed fields <span>13</span></h3>
+                <h3>Typed fields <span>23</span></h3>
                 <p class="soft">The client has no types &mdash; an <code>input</code> is an <code>input</code>, and 03 &sect;3 is not growing an <code>email</code> kind so a phone can pick a keyboard. The type lives on the server, which is where the value was going anyway, so &ldquo;valid&rdquo; means whatever this application means by it. A value is judged when it arrives, and <code>change</code> arrives on blur or Enter, so a field is never red while it is still being typed into.</p>
                 <dl class="api">
                     <dt><b>text_field(label, value, on_change, o)</b><i>text_field("Legal name", state["name"], "name_changed", {"required": true})</i></dt>
@@ -434,6 +469,29 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">What &minus; and + mean, clamped, in the handler that owns the value</span><div class="p"><span class="g-t">25</span></div></dd>
                     <dt><b>field_shell(label, control, o)</b><i>field_shell("Reference", input(v, "ref"), {"hint": "Yours, or the sequence"})</i></dt>
                     <dd><span class="d">The label, the control, and the line under it &mdash; for a field of your own</span><div class="p"><span class="g-c"><span class="g-m">Reference</span><span class="g-in">SO-24007</span><span class="g-m">Yours, or the sequence</span></span></div></dd>
+                                    <dt><b>password_field(label, value, on_change, o)</b><i>password_field("Password", state["pw"], "set_pw", {"shown": false, "on_reveal": "toggle_pw"})</i></dt>
+                    <dd><span class="d">The same as a text field, with <code>secret: true</code> so the client paints marks. <code>o["shown"]</code> reveals the text; <code>o["on_reveal"]</code> is Show/Hide. The value on the wire is still what was typed &mdash; the marks are a drawing, not an encoding</span><div class="p"><span class="g-r"><span class="g-in sm">&bull;&bull;&bull;&bull;&bull;&bull;</span><span class="g-dim">Show</span></span></div></dd>
+                    <dt><b>otp_field(label, value, o)</b><i>otp_field("Code", state["code"], {"digits": 6, "on_input": "type_code"})</i></dt>
+                    <dd><span class="d">Six boxes, one code &mdash; the code from an authenticator app, or the one that arrived by SMS. The value is a prefix and the live cell is the next empty one, so there is no caret to lose between boxes. <code>o["digits"]</code> (default 6), <code>o["numeric"]</code> (default true), <code>o["secret"]</code> for a PIN. <code>o["on_input"]</code> hears <code>text_input</code>, <code>change</code>, <code>Backspace</code> and a click that jumps</span><div class="p"><span class="g-r"><span class="g-sq lit">4</span><span class="g-sq lit">8</span><span class="g-sq lit">2</span><span class="g-sq on"></span><span class="g-sq"></span><span class="g-sq"></span></span></div></dd>
+                    <dt><b>otp_take(value, text, o) / otp_pop(value) / otp_jump(value, i) / otp_clean(text, o) / otp_apply(value, kind, payload, props, o)</b><i>otp_take("48", "2915", {"digits": 6})</i></dt>
+                    <dd><span class="d">The algebra behind it, each a plain function of the value and one event: take what was typed or pasted, drop the last digit, move the live cell, strip what is not a digit, and the one that dispatches over all four. Pure, so a paste of the whole code and six keystrokes end in the same string</span><div class="p val">&rarr; <em>"482915"</em></div></dd>
+                    <dt><b>field_error(value, judge, complaint, o) / field_style(bad, o) / field_props(label, error, bad, o)</b><i>field_error(v, fn(x) { email_valid?(x) }, "That is not an address", o)</i></dt>
+                    <dd><span class="d">The rest of the parts, beside <code>field_shell</code>: the judgement, the tone a bad value takes, and what the node says to a reader. Every typed field above is these three, a shell and a <code>judge</code></span><div class="p val">&rarr; <em>"That is not an address"</em></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Files <span>4</span></h3>
+                <p class="soft">A picker is three things at once &mdash; a capability, a dialog and a set of bytes &mdash; and a node with two of them opens nothing.</p>
+                <dl class="api">
+                    <dt><b>file_field(label, accept, on_pick, o)</b><i>file_field("Attach", "png,jpg", "took_file", {"max": 2000000})</i></dt>
+                    <dd><span class="d">A <code>control</code> that opens the platform&rsquo;s open dialog. <code>accept</code> is extensions without dots, empty for any file. <code>o["flags"]</code> takes <code>PICK_CAMERA</code> or <code>PICK_MICROPHONE</code>; <code>o["multiple"]</code> takes more than one file, which the capture flags ignore; <code>o["max"]</code> is the largest one file may be, in bytes, defaulting to the client&rsquo;s 16 MiB</span><div class="p"><span class="w-btn">Attach&hellip;</span></div></dd>
+                    <dt><b>file_drop(label, accept, on_pick, o)</b><i>file_drop("Drop a picture here", "png,jpg", "took_file", {"over": dragging})</i></dt>
+                    <dd><span class="d">A surface a file can be let go over. <code>drop</code> is the same prop as <code>pick</code>, so a drop <em>is</em> a <code>file_pick</code> and one handler covers both ways in. <code>o["on_drag"]</code> is <code>file_drag</code>; <code>o["over"]</code> lights the box; <code>o["pick"]</code> (default true) also opens the dialog on a click</span><div class="p"><span class="g-drop">Drop a picture here</span></div></dd>
+                    <dt><b>attachment_card(name, note, o)</b><i>attachment_card("invoice.pdf", "212 KB", {"badge": text("PDF", {})})</i></dt>
+                    <dd><span class="d">What was attached. <code>o["src"]</code> draws a small square of it &mdash; an asset from <code>eui_asset(bytes)</code>, or a path; <code>o["badge"]</code> draws a node there instead, usually the extension; neither draws just the name and the note, which is what a file whose bytes have gone gets. Resolve the bytes <em>before</em> choosing: a <code>src</code> naming nothing is a view that cannot be encoded, and that ends the session (01 &sect;4)</span><div class="p"><span class="g-r"><span class="g-sq">PDF</span><span class="g-c"><span class="g-t">invoice.pdf</span><span class="g-dim">212 KB</span></span></span></div></dd>
+                    <dt><b>pick_prop(accept, o)</b><i>pick_prop("png,jpg", {"max": 2000000})</i></dt>
+                    <dd><span class="d">The <code>pick</code> value itself, for a node built by hand &mdash; a string when nothing else is asked for, <code>[accept, flags, max]</code> otherwise</span><div class="p val">&rarr; <em>["png,jpg", 0, 2000000]</em></div></dd>
                 </dl>
             </div>
 
@@ -471,7 +529,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Structure and overlays <span>12</span></h3>
+                <h3>Structure and overlays <span>16</span></h3>
                 <dl class="api">
                     <dt><b>card(style, children)</b><i>card({"gap": 2}, [h2("Tree"), body])</i></dt>
                     <dd><span class="d">Raised surface, subtle border, radius 3 — your style wins where it sets a key</span><div class="p"><span class="g-p col"><span class="g-t b">Tree</span><i class="g-l w3"></i><i class="g-l w2"></i></span></div></dd>
@@ -497,11 +555,17 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">Inverted text on the default ink</span><div class="p"><span class="g-tip">Ctrl+K</span></div></dd>
                     <dt><b>segmented(options, selected, on_select)</b><i>segmented(["Day", "Week", "Month"], seg, "seg")</i></dt>
                     <dd><span class="d">One sunken row, the selected option raised</span><div class="p"><span class="g-seg"><span class="on">Day</span><span>Week</span><span>Month</span></span></div></dd>
+                                    <dt><b>context_menu(anchor, items, open, on_open, on_pick, o)</b><i>context_menu(row, items, up, "open_menu", "pick_item", {"on_close": "shut"})</i></dt>
+                    <dd><span class="d">Right-click opens a <code>menu</code> over the anchor. The client already emits <code>context_menu</code> on button 1, so <code>on_open</code> is that event and not a gesture you assembled; <code>o["on_close"]</code> is Escape</span><div class="p"><span class="g-stack"><i></i><i></i></span></div></dd>
+                    <dt><b>command_palette(query, items, at, o)</b><i>command_palette(state["q"], commands, state["at"], {"on_pick": "run"})</i></dt>
+                    <dd><span class="d">Overlay, a field, a list. <code>items</code> are <code>{id, label, hint, group}</code> or plain strings. Include it in the tree only while it is up &mdash; an overlay that is always mounted is an overlay that is always laid out</span><div class="p"><span class="g-c"><span class="g-in sm">&gt; op|</span><span class="g-tree"><span class="lit">Open file</span><span>Open recent</span></span></span></div></dd>
+                    <dt><b>command_match(items, query) / command_row(it)</b><i>command_match(commands, "op")</i></dt>
+                    <dd><span class="d">What of the palette still belongs under the draft, and the shape of one command</span><div class="p val">&rarr; <em>[{"id": "open", "label": "Open file"}]</em></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Split panes <span>7</span></h3>
+                <h3>Split panes <span>8</span></h3>
                 <p class="soft">Draggable dividers on both axes, and panels whose content answers the panel rather than the window.</p>
                 <dl class="api">
                     <dt><b>split_pane(o)</b><i>split_pane({"key": "ws", "dir": "row", "size": w, "fraction": state["split"], "on_drag": "split", "a": fn(px) { left(px) }, "b": fn(px) { right(px) }})</i></dt>
@@ -518,6 +582,8 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">Breakpoints at the scale a <em>panel</em> lives at &mdash; 200, 320, 480, 720. <code>bp</code> is a window&rsquo;s, and calls both a 309 px and a 505 px panel <code>xs</code></span><div class="p val">&rarr; <em>"lg"</em></div></dd>
                     <dt><b>pane_min(px, name)</b><i>pane_min(px, "lg") ? row({}, cells) : column({}, cells)</i></dt>
                     <dd><span class="d">The branch a panel makes on its own width</span></dd>
+                                    <dt><b>pane_px(name)</b><i>pane_px("md")</i></dt>
+                    <dd><span class="d">The other way round from <code>pane_bp</code>: the width a named breakpoint starts at. These are the scale a <em>panel</em> lives at, not the window &mdash; a pane 420 px wide is narrow whatever the screen around it is doing, which is the whole reason a split view needs a scale of its own</span><div class="p val">&rarr; <em>420</em></div></dd>
                 </dl>
             </div>
 
@@ -538,7 +604,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Data <span>15</span></h3>
+                <h3>Data <span>28</span></h3>
                 <dl class="api">
                     <dt><b>table_header(labels, widths)</b><i>table_header(["Reference", "Client", "Amount"], widths)</i></dt>
                     <dd><span class="d">A header row of fixed column widths</span><div class="p"><span class="g-c full"><span class="g-r"><span class="g-m">Reference</span><span class="g-m">Client</span><span class="g-m">Amount</span></span><i class="g-rule"></i></span></div></dd>
@@ -570,6 +636,39 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">A sunken placeholder</span><div class="p col"><span class="w-skeleton"></span></div></dd>
                     <dt><b>code_block(code)</b><i>code_block(state["snippet"])</i></dt>
                     <dd><span class="d">Monospace on a sunken ground</span><div class="p"><span class="g-code">router_eui("counter", …)</span></div></dd>
+                                    <dt><b>multi_select_list(items, sel, on_toggle, o)</b><i>multi_select_list(rows, state["sel"], "tick", {"key": "inbox"})</i></dt>
+                    <dd><span class="d">A list whose rows are tickable, with a tri-state select-all and a count. <code>items</code> are <code>{"id", "label"}</code>; <code>o["key"]</code> is required and prefixes every key inside; <code>o["row"]</code> is <code>fn(item, chosen)</code> for a row that is more than a label</span><div class="p"><span class="g-dgrid"><span class="g-r"><span class="w-check mixed"><i></i></span><span class="g-dim">2 of 5</span></span><span class="g-r"><span class="w-check on"><i></i></span><span class="g-l w3"></span></span><span class="g-r"><span class="w-check off"><i></i></span><span class="g-l w2"></span></span></span></div></dd>
+                    <dt><b>multi_select_window(make, count, window, sel, on_toggle, o)</b><i>multi_select_window(fn(i) { row(i) }, 10000, win, sel, "tick", {"key": "big"})</i></dt>
+                    <dd><span class="d">The same over a windowed list (04 &sect;7.1). <code>make</code> is <code>fn(i)</code> for absolute row <code>i</code>, so only the rows in <code>window</code> are built while <code>set_size</code> is the whole <code>count</code>; <code>o["row_shape"]</code> pins the height <code>heights</code> promised. Ten thousand rows, a dozen built</span><div class="p"><span class="g-clip"><span class="g-r"><span class="w-check on"><i></i></span><span class="g-l w4"></span></span><span class="g-r"><span class="w-check off"><i></i></span><span class="g-l w3"></span></span><span class="g-r ghost"><span class="w-check off"><i></i></span><span class="g-l w4"></span></span></span></div></dd>
+                    <dt><b>selection_toggle(sel, id) / selection_count(sel, total) / selection_mark(sel, total) / selection_all(sel) / selection_scoped(sel, scope)</b><i>selection_mark(sel, 5)</i></dt>
+                    <dd><span class="d">The model those two share, and it is a hash rather than a list because &ldquo;everything except these three&rdquo; has to survive a page that has not been fetched yet. <code>selection_mark</code> is what the header box draws: on, off, or the third state that is neither</span><div class="p val">&rarr; <em>"mixed"</em></div></dd>
+                    <dt><b>expandable_row(key, values, widths, open, on_toggle, detail, o)</b><i>expandable_row("r1", cells, widths, open, "toggle", detail_tree)</i></dt>
+                    <dd><span class="d">A row that opens onto what is inside it, in the flow, under the row &mdash; not in a dialog that covers the rows you wanted to compare it against</span><div class="p"><span class="g-dgrid"><span class="g-r"><span class="g-m">&#9662;</span><span class="g-l w3"></span></span><span class="g-r in"><span class="g-l w4"></span></span><span class="g-r"><span class="g-m">&#9656;</span><span class="g-l w2"></span></span></span></div></dd>
+                    <dt><b>tree_table(labels, widths, rows, open_ids, on_toggle, depth, o)</b><i>tree_table(["Account", "Debit"], [220, 90], rows, open, "toggle")</i></dt>
+                    <dd><span class="d"><code>tree_view</code> is a rail and <code>data_grid</code> is flat; this is the hierarchy that also has columns. The indentation lives in the first cell, so the numbers stay in theirs however deep it goes</span><div class="p"><span class="g-dgrid"><span class="g-r"><span class="g-m">&#9662;</span><span class="g-l w2"></span><span class="g-end g-dim">1 200</span></span><span class="g-r"><span class="g-l w1 in"></span><span class="g-end g-dim">400</span></span></span></div></dd>
+                    <dt><b>timeline(entries, o)</b><i>timeline([{"at": "09:12", "label": "Raised", "note": "by Marie"}])</i></dt>
+                    <dd><span class="d">What happened, in order. The rail is continuous and the dots sit on it, so it reads as one thread; the last entry draws no line below it, because a thread that continues says more is coming</span><div class="p"><span class="g-rail"><span><b></b>Raised</span><span><b></b>Assigned</span><span class="last"><b></b>Closed</span></span></div></dd>
+                    <dt><b>diff_view(lines, o) / diff_tally(lines)</b><i>diff_view([["-", "old"], ["+", "new"], [" ", "same"]])</i></dt>
+                    <dd><span class="d">A patch as one column. Unified and not side by side: the removed line belongs directly above the line that replaced it. The sign carries the meaning and the tint only repeats it, so it still reads where colour does not</span><div class="p"><span class="g-diff"><span class="del">- old</span><span class="add">+ new</span><span>&nbsp; same</span></span></div></dd>
+                    <dt><b>filter_builder(tree, o)</b><i>filter_builder(state["filter"], {"fields": cols})</i></dt>
+                    <dd><span class="d">A question the author never wrote down. The condition is a tree the server owns; every control sends the dotted <code>path</code> of the item it belongs to, and <code>filter_at</code>, <code>filter_edit</code> and <code>filter_drop</code> walk it &mdash; so an arbitrarily nested and/or has no recursive event vocabulary, just a string</span><div class="p"><span class="g-tree"><span>all of</span><span class="in">status is Open</span><span class="in">any of</span><span class="in in2">due &lt; today</span></span></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Picking things up <span>6</span></h3>
+                <p class="soft">Drag is a client gesture, not a stream of positions. The server hears where something was let go, and nothing in between.</p>
+                <dl class="api">
+                    <dt><b>draggable(key, group, style, children, opts)</b><i>draggable("card-7", "cards", {"pad": 3}, [title], {})</i></dt>
+                    <dd><span class="d">A thing that can be picked up. The key is <strong>not</strong> optional: the client carries the key across the gesture, and a thing with no name cannot be put back where it came from</span><div class="p"><span class="g-r"><span class="g-grip">&#8942;&#8942;</span><span class="g-l w3"></span></span></div></dd>
+                    <dt><b>drag_grip(label)</b><i>drag_grip("Reorder")</i></dt>
+                    <dd><span class="d">The grip: a press here grabs at once, with no slop and no hold. Everywhere else on the card, a press is still a press &mdash; which is how a draggable row can also be a clickable one</span><div class="p"><span class="g-grip">&#8942;&#8942;</span></div></dd>
+                    <dt><b>drop_zone(group, style, on_over, on_drop, children, props)</b><i>drop_zone("cards", {"min_height": 80}, "over", "dropped", rows, {})</i></dt>
+                    <dd><span class="d">A thing that takes what others carry. Matching <code>group</code> is what makes a zone willing; a card from another board simply is not offered</span><div class="p"><span class="g-drop">Drop here</span></div></dd>
+                    <dt><b>drag_slot(params)</b><i>drag_slot(event["params"])</i></dt>
+                    <dd><span class="d">The slot an event carries; <code>-1</code> means the gesture was cancelled, which is a real answer and not an error</span><div class="p val">&rarr; <em>2</em></div></dd>
+                    <dt><b>board_move(board, id, col, slot) / board_at(board, id)</b><i>board_move(board, "card-7", "doing", 0)</i></dt>
+                    <dd><span class="d">Move an id to a column and a place, taking it out of wherever it was; and <code>[column, slot]</code> for where it is now, so a cancelled drag goes back <em>exactly</em> where it was rather than to the end of its old column</span><div class="p val">&rarr; <em>["todo", 3]</em></div></dd>
                 </dl>
             </div>
 
@@ -590,8 +689,8 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Charts <span>8</span></h3>
-                <p class="soft">A chart is a canvas and a list of numbers. No chart library, no SVG, no client change.</p>
+                <h3>Charts <span>34</span></h3>
+                <p class="soft">A chart is a canvas and a list of numbers. No chart library, no SVG, no client change &mdash; the drawings below are SVG only because this page is a document. Every one takes <code>w</code> and <code>h</code> as the size of the whole chart, axes included.</p>
                 <dl class="api">
                     <dt><b>chart_line(values, w, h)</b><i>chart_line([3, 7, 4, 9, 6], 320, 120)</i></dt>
                     <dd><span class="d">Grid, polyline, a dot per point</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><polyline class="ln" points="4,36 40,10 76,28 112,6 146,20"/><circle class="dt" cx="4" cy="36" r="2.5"/><circle class="dt" cx="40" cy="10" r="2.5"/><circle class="dt" cx="76" cy="28" r="2.5"/><circle class="dt" cx="112" cy="6" r="2.5"/><circle class="dt" cx="146" cy="20" r="2.5"/></svg></div></dd>
@@ -609,11 +708,59 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">The top of the scale, never 0</span><div class="p val">&rarr; <em>7</em></div></dd>
                     <dt><b>flatten_points(points)</b><i>flatten_points([[0, 10], [8, 4]])</i></dt>
                     <dd><span class="d">[[x, y], …] into [x, y, …]</span><div class="p val">&rarr; <em>[0, 10, 8, 4]</em></div></dd>
+                                    <dt><b>chart_multi_line(id, sets, names, w, h, x_labels)</b><i>chart_multi_line("rev", [paris, lyon], ["Paris", "Lyon"], 320, 140)</i></dt>
+                    <dd><span class="d">A line a series on one shared scale, markers ringed in the surface colour so crossings stay legible, legend under</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><polyline class="ln" points="4,36 40,12 76,26 112,8 146,18"/><polyline class="ln" points="4,22 40,30 76,14 112,26 146,34" stroke="var(--green)"/><circle class="dt" cx="76" cy="26" r="2.5" stroke="var(--paper)" stroke-width="1.5"/><circle cx="76" cy="14" r="2.5" fill="var(--green)" stroke="var(--paper)" stroke-width="1.5"/></svg></div></dd>
+                    <dt><b>chart_grouped_bar(id, sets, names, labels, w, h)</b><i>chart_grouped_bar("q", [plan, actual], ["Plan", "Actual"], quarters, 320, 140)</i></dt>
+                    <dd><span class="d">A bar a series within each category, 2 px of surface between neighbours so a pair reads as a pair</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><rect class="br" x="8" y="24" width="14" height="20"/><rect x="24" y="16" width="14" height="28" fill="var(--green)"/><rect class="br" x="54" y="10" width="14" height="34"/><rect x="70" y="22" width="14" height="22" fill="var(--green)"/><rect class="br" x="100" y="28" width="14" height="16"/><rect x="116" y="14" width="14" height="30" fill="var(--green)"/></svg></div></dd>
+                    <dt><b>chart_stacked_bar(id, sets, names, labels, w, h)</b><i>chart_stacked_bar("mix", [a, b, c], names, months, 320, 140)</i></dt>
+                    <dd><span class="d">Part-to-whole a category; the scale is the largest <em>total</em>, not the largest part</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><rect class="br" x="10" y="30" width="22" height="14"/><rect x="10" y="20" width="22" height="10" fill="var(--green)"/><rect x="10" y="14" width="22" height="6" fill="var(--amber)"/><rect class="br" x="48" y="26" width="22" height="18"/><rect x="48" y="12" width="22" height="14" fill="var(--green)"/><rect x="48" y="6" width="22" height="6" fill="var(--amber)"/><rect class="br" x="86" y="34" width="22" height="10"/><rect x="86" y="22" width="22" height="12" fill="var(--green)"/><rect x="86" y="16" width="22" height="6" fill="var(--amber)"/></svg></div></dd>
+                    <dt><b>chart_ranked_bar(id, items, w, h)</b><i>chart_ranked_bar("top", [{"label": "Lyon", "value": 42}], 320, 160)</i></dt>
+                    <dd><span class="d"><code>{"label", "value"}</code> sorted high to low, names in a gutter, one hue &mdash; the job here is size, not identity, and five colours would only invite you to read a meaning into them</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><text class="lbl" x="2" y="10">Lyon</text><rect class="br" x="38" y="4" width="106" height="8"/><text class="lbl" x="2" y="24">Lille</text><rect class="br" x="38" y="18" width="74" height="8"/><text class="lbl" x="2" y="38">Nice</text><rect class="br" x="38" y="32" width="45" height="8"/></svg></div></dd>
+                    <dt><b>chart_diverging_bar(id, items, w, h)</b><i>chart_diverging_bar("delta", [{"label": "Jan", "value": -12}], 320, 160)</i></dt>
+                    <dd><span class="d"><code>{"label", "value"}</code> signed about a zero rule, blue over and red under, the signed number beside every row</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M75 2 V46"/><rect class="br" x="75" y="6" width="46" height="8"/><rect x="42" y="20" width="33" height="8" fill="var(--rose)"/><rect class="br" x="75" y="34" width="20" height="8"/></svg></div></dd>
+                    <dt><b>chart_candle(id, bars, w, h, labels)</b><i>chart_candle("px", [[14, 19, 12, 17]], 320, 160)</i></dt>
+                    <dd><span class="d">A candlestick a session, <code>[open, high, low, close]</code>: a wick from high to low and a body from open to close, <code>success</code> up and <code>danger</code> down</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><g stroke="var(--green)" fill="var(--green)"><path d="M20 6 V42"/><rect x="14" y="14" width="12" height="20"/></g><g stroke="var(--rose)" fill="var(--rose)"><path d="M56 10 V44"/><rect x="50" y="16" width="12" height="22"/></g><g stroke="var(--green)" fill="var(--green)"><path d="M92 4 V34"/><rect x="86" y="10" width="12" height="18"/></g><g stroke="var(--rose)" fill="var(--rose)"><path d="M128 12 V46"/><rect x="122" y="20" width="12" height="18"/></g></svg></div></dd>
+                    <dt><b>chart_extent(bars)</b><i>chart_extent([[14, 19, 12, 17]])</i></dt>
+                    <dd><span class="d"><code>[low, high]</code> over a candlestick series &mdash; a price scale is an extent, not a top, because a share that never went near zero should not be drawn as if it might</span><div class="p val">&rarr; <em>[12, 19]</em></div></dd>
+                    <dt><b>chart_heatmap(id, grid, col_labels, row_labels, w, h)</b><i>chart_heatmap("busy", rows, days, hours, 320, 160)</i></dt>
+                    <dd><span class="d">Boxes rather than a canvas: one role at varying opacity, so a cell hit-tests itself and can answer a pointer without anybody working out which square was under it</span><div class="p"><span class="g-heat"><i style="opacity:.15"></i><i style="opacity:.45"></i><i style="opacity:.9"></i><i style="opacity:.3"></i><i style="opacity:.7"></i><i style="opacity:.2"></i><i style="opacity:.55"></i><i style="opacity:1"></i><i style="opacity:.35"></i><i style="opacity:.1"></i><i style="opacity:.6"></i><i style="opacity:.25"></i></span></div></dd>
+                    <dt><b>chart_dumbbell(id, items, w, h)</b><i>chart_dumbbell("gap", [{"label": "Lyon", "from": 12, "to": 31}], 320, 160)</i></dt>
+                    <dd><span class="d"><code>{"label", "from", "to"}</code> &mdash; two dots and the distance between them. Before and after, as one mark rather than two bars you have to subtract by eye</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path d="M30 10 H96" stroke="var(--rule)" stroke-width="2"/><circle cx="30" cy="10" r="4" fill="var(--rule)"/><circle class="dt" cx="96" cy="10" r="4"/><path d="M46 26 H128" stroke="var(--rule)" stroke-width="2"/><circle cx="46" cy="26" r="4" fill="var(--rule)"/><circle class="dt" cx="128" cy="26" r="4"/><path d="M22 42 H70" stroke="var(--rule)" stroke-width="2"/><circle cx="22" cy="42" r="4" fill="var(--rule)"/><circle class="dt" cx="70" cy="42" r="4"/></svg></div></dd>
+                    <dt><b>chart_gantt(id, tasks, w, h)</b><i>chart_gantt("plan", [{"label": "Spec", "start": 0, "span": 3}], 420, 160)</i></dt>
+                    <dd><span class="d">A bar a task, <code>{"label", "start", "span"}</code>: the names in a gutter, the plot beside them, one band a row</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><text class="lbl" x="2" y="10">Spec</text><rect class="br" x="36" y="4" width="40" height="8" rx="2"/><text class="lbl" x="2" y="24">Build</text><rect class="br" x="60" y="18" width="58" height="8" rx="2"/><text class="lbl" x="2" y="38">Ship</text><rect class="br" x="110" y="32" width="34" height="8" rx="2"/></svg></div></dd>
+                    <dt><b>chart_funnel(id, stages, w, h)</b><i>chart_funnel("signup", [{"label": "Visited", "value": 900}], 320, 180)</i></dt>
+                    <dd><span class="d">A ranked bar chart that gave up its baseline, so the eye reads the narrowing rather than the lengths. The drop is put beside the lower stage, where it is wanted</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><rect class="br" x="10" y="3" width="130" height="10"/><rect class="br" x="26" y="16" width="98" height="10"/><rect class="br" x="45" y="29" width="60" height="10"/><rect class="br" x="60" y="42" width="30" height="6"/></svg></div></dd>
+                    <dt><b>chart_waterfall(id, steps, w, h)</b><i>chart_waterfall("pnl", [{"label": "Open", "value": 100, "total": true}], 320, 160)</i></dt>
+                    <dd><span class="d">Every bar starts where the last one ended, so the gap between opening and closing is visible rather than asserted. A step marked <code>{"total": true}</code> stands on the floor</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M2 4 H148 M2 18 H148 M2 32 H148 M2 44 H148"/><rect class="br" x="8" y="20" width="18" height="24"/><rect x="34" y="12" width="18" height="8" fill="var(--green)"/><rect x="60" y="6" width="18" height="6" fill="var(--green)"/><rect x="86" y="6" width="18" height="12" fill="var(--rose)"/><rect class="br" x="112" y="18" width="18" height="26"/></svg></div></dd>
+                    <dt><b>chart_box(id, groups, w, h)</b><i>chart_box("lat", [[4, 9, 12, 18, 30]], 320, 160)</i></dt>
+                    <dd><span class="d">Five numbers: the middle half as a box, the median as a line in it &mdash; not the mean, which one bad day drags &mdash; and the ends as whiskers</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><g stroke="var(--blue)" fill="none" stroke-width="1.5"><path d="M30 6 V42 M22 6 H38 M22 42 H38"/><rect x="18" y="14" width="24" height="20" fill="var(--rule-faint)"/><path d="M18 26 H42" stroke-width="2"/></g><g stroke="var(--blue)" fill="none" stroke-width="1.5"><path d="M90 10 V46 M82 10 H98 M82 46 H98"/><rect x="78" y="18" width="24" height="22" fill="var(--rule-faint)"/><path d="M78 28 H102" stroke-width="2"/></g></svg></div></dd>
+                    <dt><b>chart_sparkline(vals, w, h)</b><i>chart_sparkline([3, 7, 4, 9, 6], 80, 20)</i></dt>
+                    <dd><span class="d">A bare line: no grid, no axis, no labels. It belongs beside a number, where the number is the reading and the line is only the shape of it</span><div class="p"><svg class="g-chart sm" viewBox="0 0 80 20"><polyline class="ln" points="2,15 20,5 38,11 56,3 78,8"/></svg></div></dd>
+                    <dt><b>stat_spark(label, value, hint, vals, w)</b><i>stat_spark("Revenue", "42 k&euro;", "+8%", last_12, 160)</i></dt>
+                    <dd><span class="d"><code>stat</code> with the shape of the last few periods under the number</span><div class="p"><span class="w-stat"><small>Revenue</small><b>42 k&euro;</b><svg class="g-chart sm" viewBox="0 0 80 16"><polyline class="ln" points="2,12 20,6 38,9 56,3 78,5"/></svg></span></div></dd>
+                    <dt><b>chart_legend(names)</b><i>chart_legend(["Paris", "Lyon"])</i></dt>
+                    <dd><span class="d">A swatch and a name a series, in the order the marks were drawn, centred under the plot</span><div class="p"><span class="g-r"><span class="g-swatch"></span><span class="g-dim">Paris</span><span class="g-swatch g2"></span><span class="g-dim">Lyon</span></span></div></dd>
+                    <dt><b>chart_role(i)</b><i>chart_role(2)</i></dt>
+                    <dd><span class="d">The <code>i</code>-th series colour, in fixed order, never cycled. Five roles, and a sixth series is a chart that wanted to be two</span><div class="p val">&rarr; <em>"series.3"</em></div></dd>
+                    <dt><b>chart_scale_ticks(low, high) / chart_y_axis(ticks, h, gutter)</b><i>chart_scale_ticks(0, 90)</i></dt>
+                    <dd><span class="d">The four readings the four hairlines stand for, and those readings down the left of the plot</span><div class="p val">&rarr; <em>[90, 60, 30, 0]</em></div></dd>
+                    <dt><b>chart_x_axis_bands(labels, spans) / chart_x_axis_points(labels, w)</b><i>chart_x_axis_bands(["Q1", "Q2"], spans)</i></dt>
+                    <dd><span class="d">Categories centred under the bands they name, and categories spread between the ends for marks that sit on the edges. Which one is right is decided by where the marks are, not by taste</span><div class="p val">&rarr; <em>[["Q1", 0, 80], ["Q2", 80, 80]]</em></div></dd>
+                    <dt><b>chart_value_axis(low, high, w, divisions)</b><i>chart_value_axis(0, 90, 320, 4)</i></dt>
+                    <dd><span class="d">Readings along the bottom, for a chart whose rows are the categories</span><div class="p val">&rarr; <em>[[0, 0], [30, 106], [60, 213], [90, 320]]</em></div></dd>
+                    <dt><b>chart_grid_v(w, h, divisions)</b><i>chart_grid_v(320, 120, 6)</i></dt>
+                    <dd><span class="d">Hairlines down rather than across, for an axis that is a time</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M25 2 V46 M50 2 V46 M75 2 V46 M100 2 V46 M125 2 V46"/></svg></div></dd>
+                    <dt><b>chart_spans(centres, w)</b><i>chart_spans([20, 60, 100], 320)</i></dt>
+                    <dd><span class="d">The width of each hover band, from where the marks are &mdash; so the whole plot answers the pointer, not just the two pixels a dot occupies</span><div class="p val">&rarr; <em>[[0, 40], [40, 40], [40, 240]]</em></div></dd>
+                    <dt><b>chart_framed(ticks, x_axis, w, h, gutter, layers)</b><i>chart_framed(ticks, bands, 320, 140, 34, [plot])</i></dt>
+                    <dd><span class="d">The plot with both axes around it. Every chart above that has axes is this function and a layer</span><div class="p"><svg class="g-chart" viewBox="0 0 150 48"><path class="ax" d="M22 2 V40 M22 40 H148"/><text class="lbl" x="2" y="8">90</text><text class="lbl" x="2" y="38">0</text><polyline class="ln" points="26,34 60,14 96,24 144,8"/></svg></div></dd>
+                                    <dt><b>chart_plot_h(h)</b><i>chart_plot_h(160)</i></dt>
+                    <dd><span class="d">The marks&rsquo; share of a chart that is <code>h</code> tall. Every builder here takes <code>w</code> and <code>h</code> as the size of the <strong>whole</strong> chart, axes included, and works its own gutter out from how wide its readings print &mdash; so a caller sizes a cell and never a plot</span><div class="p val">&rarr; <em>140</em></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Media <span>3</span></h3>
+                <h3>Media <span>4</span></h3>
                 <p class="soft">The client seeks when position changes, which is how a scrubber works without a seek opcode.</p>
                 <dl class="api">
                     <dt><b>media_button(on, event, props)</b><i>media_button(playing, "play", {"id": post["id"]})</i></dt>
@@ -622,11 +769,13 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">A fixed-width bar, so the click's x maps straight onto the position</span><div class="p"><span class="g-slider"><i></i><u></u></span></div></dd>
                     <dt><b>media_clock(ms)</b><i>media_clock(67000)</i></dt>
                     <dd><span class="d">Milliseconds as minutes and seconds</span><div class="p val">&rarr; <em>"1:07"</em></div></dd>
+                    <dt><b>scene(props, style)</b><i>scene({"playing": true, "fps": 60, "uniforms": [0.3, 0.8]}, {"width": 320, "height": 240})</i></dt>
+                    <dd><span class="d">A 3D pass. Name a <code>shader</code> and a <code>mesh</code> by content hash and the client verifies both before anything is compiled; name neither and it draws its own lit cube. Needs the <code>scene</code> capability, and only then does a verifier exist to call</span><div class="p"><span class="g-m">&#9673;</span></div></dd>
                 </dl>
             </div>
 
             <div class="family">
-                <h3>Feed <span>4</span></h3>
+                <h3>Feed <span>5</span></h3>
                 <p class="soft">The pieces that make a hundred thousand cards work — virtualisation is a composition question, not a client feature.</p>
                 <dl class="api">
                     <dt><b>post_card(post, liked, play, height)</b><i>post_card(post, liked.includes?(i), play, 128)</i></dt>
@@ -637,6 +786,8 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">One action under a post, carrying the post id</span><div class="p"><span class="g-m">&#9829;&nbsp; 12</span></div></dd>
                     <dt><b>initial_avatar(letter, tone, size)</b><i>initial_avatar("A", "accent.base", 40)</i></dt>
                     <dd><span class="d">A letter in a coloured disc</span><div class="p"><i class="g-init">A</i></div></dd>
+                                    <dt><b>avatar_group(people, o)</b><i>avatar_group(["Marie", "Ada", "Jean", "Lin"], {"max": 3})</i></dt>
+                    <dd><span class="d">Roughly who, in the space of one and a half faces. <code>margin</code> is <code>[u8; 4]</code> in the protocol, so there is no negative margin to overlap with &mdash; instead every face but the last gets a slot narrower than it is, and spills over the next</span><div class="p"><span class="g-faces"><i>M</i><i>A</i><i>J</i><i>+1</i></span></div></dd>
                 </dl>
             </div>
         </div>

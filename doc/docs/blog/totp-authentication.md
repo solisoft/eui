@@ -130,24 +130,42 @@ end
 
 To help users set up 2FA, generate their secret and QR code:
 
+The secret has to be **Base32** — the alphabet `A`-`Z` and `2`-`7`, which is
+what `otpauth://` carries and what every authenticator scans. Neither
+`Crypto.random_hex` (which contains `0`, `1`, `8` and `9`) nor
+`Crypto.random_token` (URL-safe Base64) produces one, and a character outside
+the alphabet is a runtime error the first time a code is generated. There is no
+Base32 encoder in the language, so draw the characters directly:
+
 ```soli
 # app/controllers/settings_controller.sl
 
+B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+def totp_secret(n = 32)
+  bytes = Crypto.random_bytes(n)
+  out = ""
+  i = 0
+  while i < n
+    out = out + B32[bytes[i] % 32]
+    i = i + 1
+  end
+  out
+end
+
 def enable_2fa
   user = User.find(session["user_id"])
-  
-  # Generate a new random secret
-  keypair = Crypto.x25519_keypair
-  secret = base64_encode(keypair["private"][0..20])  # 20 bytes = 32 Base32 chars
-  
-  # Save to user (in production, encrypt this!)
+
+  secret = totp_secret()          # 32 Base32 characters, 160 bits
+
+  # Encrypt this column. A TOTP secret is a password-equivalent: anyone
+  # holding it can mint valid codes forever.
   user["totp_secret"] = secret
   user.save
-  
-  # Generate QR code URI
+
   uri = Crypto.totp_uri(secret, user["email"], "MyApp", 30)
   qr_code = QRCode.encode(uri)
-  
+
   render("settings/2fa_setup", {"qr_code": qr_code, "secret": secret})
 end
 ```

@@ -105,10 +105,11 @@ Eight keys, all optional but `k`:
 | `key` | string | Identity for the diff. Keyed children are matched by key and **moved**, not rebuilt |
 | `intern` | bool | Put this text in the atom table instead of inline. Only for short strings that repeat — see *Interning* |
 
-### The sixteen kinds
+### The seventeen kinds
 
-Fourteen primitives, plus the two the media work added. The set is closed:
-adding one is a protocol version bump.
+Fourteen primitives, the two the media work added, and `scene`. The set is
+closed: adding one is a protocol version bump, which is the deliberately high
+price that keeps the catalogue below a library rather than a client release.
 
 | `k` | What it is |
 |---|---|
@@ -128,6 +129,7 @@ adding one is a protocol version bump.
 | `sizer` | An invisible box that only imposes constraints |
 | `audio` | A sound. Draws nothing, plays |
 | `video` | A moving picture. GIF and animated WebP, decoded in the sandboxed worker |
+| `scene` | A 3D pass into a target of its own, drawn by a WGSL module the server names. Leaf, and only where the `scene` capability was granted (03 §1.2, 11) |
 
 ## Style
 
@@ -162,6 +164,8 @@ unknown colour role.
 | `animation` | `none` · `spin` |
 | `position` | `flow` · `absolute` |
 | `cursor` | `default` · `pointer` · `text` · `grab` · `grabbing` · `resize_h` · `resize_v` · `wait` · `not_allowed` |
+| `blur` | A backdrop radius, 0–255 — what is *behind* the node, not the node |
+| `motion` | `fade` · `leading` · `trailing` · `top` · `bottom` · `scale` · `paired` |
 
 **Lengths.** `120` is pixels (0–65535), `"auto"`, `"50%"`, `"1fr"`, or
 `"sp:4"` for a space-scale index.
@@ -171,7 +175,7 @@ numbers are **space indices**, not pixels: the viewer's density setting scales
 them.
 
 **Colours.** A role name, a literal `"#RRGGBB"` / `"#RRGGBBAA"`, or `"none"`.
-Twenty-eight roles exist, and the client resolves them against the viewer's
+Thirty-three roles exist, and the client resolves them against the viewer's
 mode — which is why the same view is right in dark mode without the server
 learning the viewer went there.
 
@@ -184,7 +188,12 @@ warning.base   warning.subtle  warning.on
 danger.base    danger.subtle   danger.on
 info.base      info.subtle     info.on
 border.subtle  border.default  border.strong   focus.ring
+series.1       series.2        series.3        series.4        series.5
 ```
+
+`series.1`–`series.5` are the chart palette, in fixed order and never cycled —
+which is why `chart_role(i)` numbers them rather than hashing a name: a sixth
+series is a chart that wanted to be two.
 
 A literal is right for a brand mark or a chart series, and wrong for a
 surface.

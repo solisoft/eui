@@ -222,6 +222,20 @@ and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.
 
+## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
+
+Keyed rows move rather than rebuild; mixed keyed and unkeyed children match
+by position and key; a changed cell is one `SetText`.
+
+## 10. End to end — `crates/eui-client/tests/soli_e2e.rs`
+
+With `EUI_SOLI_BIN` set, the client drives a real Soli server: the counter's
+local-first `+`, the todo's keyed rows and fetched avatar, ten thousand rows
+sorted by moves, and the gallery's select, slider, pickers, data grid and
+charts. The tag field is there too, because it is where §3.1's three tiers
+meet: `Enter` arrives as a `submit` and the field empties itself, and the
+same `Backspace` deletes a character on one press and a whole tag on the next.
+
 ## 11. Scenes — `crates/eui-shader/tests`, `crates/eui-client/tests/mesh.rs`, `crates/eui-render/tests/render.rs`
 
 **A scene's pixels are not a conformance surface**, and this section is short
@@ -256,17 +270,3 @@ What is pinned instead:
    client's own shader, checked to ±2/255; depth order, which is a boolean and
    so insensitive to precision; and the fallback a refused module draws. A
    fourth would be a promise this protocol does not make.
-
-## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
-
-Keyed rows move rather than rebuild; mixed keyed and unkeyed children match
-by position and key; a changed cell is one `SetText`.
-
-## 10. End to end — `crates/eui-client/tests/soli_e2e.rs`
-
-With `EUI_SOLI_BIN` set, the client drives a real Soli server: the counter's
-local-first `+`, the todo's keyed rows and fetched avatar, ten thousand rows
-sorted by moves, and the gallery's select, slider, pickers, data grid and
-charts. The tag field is there too, because it is where §3.1's three tiers
-meet: `Enter` arrives as a `submit` and the field empties itself, and the
-same `Backspace` deletes a character on one press and a whole tag on the next.

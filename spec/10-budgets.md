@@ -38,16 +38,27 @@ per boundary crossed, which the one-answer-at-a-time rule of
 client goes on following the hand, because nothing about the hand waits on the
 server, and the rows arrive behind it. That degrades; it does not break.
 
-Measured on 2026-09-08, `cargo build --release -p eui-client`, x86-64 Linux,
-LTO, stripped: **15.64 MB** (15 644 096 bytes) with the default features and
-**12.66 MB** with `--no-default-features`. Of the difference, 0.25 MB is the
-two pictures beside PNG (03 §1) — JPEG 157 KB (`zune-jpeg`) and WebP 64 KB
+Measured on 2026-09-15, `cargo build --release -p eui-client`, x86-64 Linux,
+LTO, stripped: **16.28 MB** (16 284 888 bytes) with the default features. The
+same build was 15.64 MB on 2026-09-08 and 12.13 MB on 2026-09-06; with
+`--no-default-features` it was 12.66 MB on 2026-09-08, and that one has not
+been re-measured since. Of that 2026-09-08 difference, 0.25 MB is the two
+pictures beside PNG (03 §1) — JPEG 157 KB (`zune-jpeg`) and WebP 64 KB
 (`image-webp`), each behind its own feature, both on by default. The rest is
 the accessibility stack — AccessKit and, on Linux, the AT-SPI bus client it
 needs (`zbus`), which brings its own async runtime beside tokio.
 
-On 2026-09-06 the same build was 12.13 MB, one per cent over. It is a
-quarter over now, and the budget stays: what grew is what the client
+The 0.64 MB added since 2026-09-08 is `scene`: `eui-shader`, the scene
+pipeline and its targets. It is smaller than a whole language front end
+would suggest, because naga was already paid for — wgpu links it to
+translate the client's own shaders — and the verifier reuses that parser
+rather than bringing one of its own. A second verifier for a second kind of executable
+content is two and a half times what the two extra picture formats cost and
+under a quarter of what the accessibility adapter costs — which is the
+comparison that matters, because those two are levers and this one is not.
+
+It was one per cent over in September's first week. It is a third over now,
+and the budget stays: what grew is what the client
 learned to do — sound and moving pictures decoded in the worker (03 §7,
 §8: symphonia's WAV, FLAC, MP3 and Vorbis, GIF and animated WebP), still
 pictures in the two other formats the web uses (03 §1), a

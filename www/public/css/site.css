@@ -708,6 +708,11 @@ code {
     color: var(--rose);
 }
 
+/* Built and shipping, but nobody has used it: neither green nor red is true. */
+.ledger .part {
+    color: var(--amber);
+}
+
 /* -------------------------------------------------------------- authoring */
 
 .pair {
@@ -1289,6 +1294,28 @@ footer a:hover {
     transform: rotate(45deg);
 }
 
+/* A tickable row's box has three states, not two: the third is what a
+   select-all says when some of a list is chosen and the rest is not -- and
+   `selection_mark` returns exactly that word. `.w-check i` already draws the
+   tick, so only the other two need saying. */
+.w-check.off i {
+    background: transparent;
+    border: 1px solid var(--rule);
+}
+
+.w-check.off i::after {
+    display: none;
+}
+
+.w-check.mixed i::after {
+    left: 4px;
+    top: 7px;
+    width: 8px;
+    height: 0;
+    border-width: 0 0 2px 0;
+    transform: none;
+}
+
 .w-progress {
     display: block;
     height: 6px;
@@ -1472,6 +1499,34 @@ footer a:hover {
     border-radius: 3px;
     background: var(--rule);
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.62rem;
+    color: var(--ink-soft);
+}
+
+/* One box of a code. `lit` is a digit already taken, `on` is the live cell --
+   the next empty one, which is where a keystroke lands. There is no caret to
+   lose between boxes because there is only ever one box in play. */
+.g-sq.lit {
+    background: var(--rule-faint);
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    font-family: var(--mono);
+}
+
+.g-sq.on {
+    background: transparent;
+    border: 1px solid var(--blue);
+}
+
+/* A row nested under the one above it: the detail an expandable row opens
+   onto, or a child in a tree table. The indentation lives in the first cell,
+   so the columns beside it do not move. */
+.g-r.in,
+.g-l.in {
+    margin-left: 0.9rem;
 }
 
 .g-sq.a {
@@ -1654,6 +1709,168 @@ footer a:hover {
 .g-arc {
     fill: none;
     stroke-width: 9;
+}
+
+/* A reading printed inside a chart drawing. The charts on this page are SVG
+   because the page is a document; the real ones are a canvas and a list of
+   numbers, which is the point the Charts section makes. */
+.g-chart .lbl {
+    fill: var(--ink-soft);
+    font-size: 8px;
+    font-family: var(--sans);
+}
+
+/* ------------------------------------------------- previews the widgets need
+
+   Each of these draws one widget's shape and nothing of its mechanism. They
+   are deliberately small: a preview that needed its own layout system would
+   be a second renderer to keep correct. */
+
+/* A grid of cells at one hue and varying opacity -- which is what the widget
+   itself does, so that a cell can hit-test itself. */
+.g-heat {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2px;
+    width: 100%;
+    max-width: 120px;
+}
+
+.g-heat i {
+    height: 13px;
+    border-radius: 2px;
+    background: var(--blue);
+}
+
+/* One series' colour beside its name. */
+.g-swatch {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--blue);
+    flex: 0 0 auto;
+}
+
+.g-swatch.g2 {
+    background: var(--green);
+}
+
+/* A continuous rail with the dots on it: one thread, not a column of rows.
+   The last entry draws no line, because a thread that continues says more is
+   coming. */
+.g-rail {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.73rem;
+    color: var(--ink-soft);
+}
+
+.g-rail span {
+    position: relative;
+    padding: 0 0 0.45rem 0.85rem;
+    line-height: 1.1;
+}
+
+.g-rail span::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 0.5em;
+    bottom: 0;
+    width: 1px;
+    background: var(--rule);
+}
+
+.g-rail span.last::before {
+    display: none;
+}
+
+.g-rail b {
+    position: absolute;
+    left: 0;
+    top: 0.25em;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--blue);
+}
+
+/* A patch as one column: the sign carries the meaning, the tint repeats it. */
+.g-diff {
+    display: flex;
+    flex-direction: column;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.5;
+    width: 100%;
+    max-width: 130px;
+}
+
+.g-diff .del {
+    background: color-mix(in srgb, var(--rose) 14%, transparent);
+    color: var(--rose);
+}
+
+.g-diff .add {
+    background: color-mix(in srgb, var(--green) 16%, transparent);
+    color: var(--green);
+}
+
+/* A surface a file can be let go over. */
+.g-drop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 130px;
+    height: 34px;
+    border: 1px dashed var(--rule);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    text-align: center;
+}
+
+/* The grip: a press here grabs at once. */
+.g-grip {
+    color: var(--ink-soft);
+    font-size: 0.7rem;
+    letter-spacing: -0.15em;
+    cursor: grab;
+    flex: 0 0 auto;
+}
+
+/* Roughly who, in the space of one and a half faces. There is no negative
+   margin in the protocol, so a face gets a slot narrower than it is and
+   spills over the next -- which is what the widget does too. */
+.g-faces {
+    display: flex;
+    align-items: center;
+}
+
+.g-faces i {
+    width: 20px;
+    height: 20px;
+    margin-right: -6px;
+    border-radius: 999px;
+    background: var(--rule);
+    border: 2px solid var(--paper);
+    font-style: normal;
+    font-size: 0.6rem;
+    color: var(--ink-soft);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.g-faces i:last-child {
+    margin-right: 0;
+    background: var(--rule-faint);
+}
+
+/* A second step of indentation, for a condition tree that nests. */
+.g-tree .in2 {
+    padding-left: 1.8rem;
 }
 
 .g-spin {
@@ -1916,6 +2133,15 @@ footer a:hover {
 
 .g-tree .in {
     padding-left: 0.9rem;
+}
+
+/* Where the arrow keys have walked to in a panel. It is not a selection --
+   nothing is chosen until Enter or a click -- so it is a ground, not a fill. */
+.g-tree .lit {
+    background: var(--rule-faint);
+    color: var(--ink);
+    border-radius: 3px;
+    padding: 0 0.25rem;
 }
 
 .g-c.mid {

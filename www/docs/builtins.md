@@ -1739,6 +1739,90 @@ state = Crypto.random_token()
 session_set("oauth_state", state)
 ```
 
+### Two-Factor Codes (TOTP)
+
+Time-based one-time passwords, RFC 6238: the six digits an authenticator app
+shows and rotates every thirty seconds. HMAC-SHA1 over a counter, which is what
+every authenticator implements — Google Authenticator, Authy, 1Password and the
+rest — so there is nothing to agree on with them beyond the secret.
+
+**The secret is Base32**, the alphabet `A`–`Z` and `2`–`7`, because that is what
+`otpauth://` URIs carry and what every app scans. A character outside it is a
+runtime error, not a silent wrong code, so a secret built with the wrong encoder
+fails loudly the first time it is used. Note what this rules out:
+`Crypto.random_hex` contains `0`, `1`, `8` and `9`, and `Crypto.random_token`
+is URL-safe Base64 — **neither is a valid TOTP secret.** There is no Base32
+encoder in the language, so draw the characters directly:
+
+```soli
+B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+def totp_secret(n = 32)
+  bytes = Crypto.random_bytes(n)
+  out = ""
+  i = 0
+  while i < n
+    out = out + B32[bytes[i] % 32]
+    i = i + 1
+  end
+  out
+end
+```
+
+#### Crypto.totp_generate(secret, time = now, period = 30)
+
+**Parameters:**
+- `secret` (String) - the shared secret, Base32
+- `time` (Int, optional) - Unix seconds; defaults to now
+- `period` (Int, optional) - step length in seconds, must be positive
+
+**Returns:** String - exactly six digits, zero-padded.
+
+```soli
+code = Crypto.totp_generate(secret)   # "497749"
+```
+
+Passing `time` is what makes this testable: a fixed second gives a fixed code,
+so a test does not have to wait out a window or mock a clock.
+
+#### Crypto.totp_verify(secret, code, time = now, period = 30)
+
+**Returns:** Bool - whether `code` is right for that secret and time.
+
+Three windows are accepted — the previous, the current and the next — so a
+phone whose clock is up to thirty seconds out still gets in, and a code entered
+just as the window turned is not refused. The comparison is constant-time
+(`Crypto.secure_compare`), so a wrong code leaks nothing about how wrong it was.
+
+A `code` that is not exactly six digits is an **error**, not `false`: it means
+the field handed you something a person could not have read off a phone, and
+that is a bug in the form rather than a failed attempt.
+
+```soli
+if Crypto.totp_verify(user["totp_secret"], params["code"])
+  session_set("user_id", user["id"])
+else
+  flash_error("That code is not right")
+end
+```
+
+#### Crypto.totp_uri(secret, account_name = nil, issuer = nil, period = 30)
+
+**Returns:** String - an `otpauth://totp/...` URI to put in a QR code at
+enrollment. Both names are URL-encoded.
+
+```soli
+Crypto.totp_uri(secret, "user@example.com", "MyApp", 30)
+# otpauth://totp/MyApp:user%40example.com?secret=...&algorithm=SHA1&digits=6&period=30&issuer=MyApp
+```
+
+The digits and the algorithm are fixed at 6 and SHA1 and appear in the URI
+because apps expect them there, not because they are yours to change.
+
+> **Encrypt the secret at rest.** A TOTP secret is a password-equivalent:
+> anyone holding it can mint valid codes forever. It belongs in an encrypted
+> column, never in a log line, and never back on the wire after enrollment.
+
 ### Tamper-Evidence (Hash Chains & Merkle Trees)
 
 Two building blocks for verifiable, append-only data — audit logs, provenance
