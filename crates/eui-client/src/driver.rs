@@ -5897,8 +5897,16 @@ impl Driver {
                 self.done_asking();
             }
             CONSENT_DENY => {
+                // Close leaves things as they were, which is what the word
+                // says. Answering `0` would have been right while the button
+                // read "Don't allow" and the sheet was only ever seen once;
+                // it is a silent revocation now that the padlock reopens it
+                // on an application that has already been granted something.
+                // On a first question nothing is granted yet, so this is the
+                // same `0` it always was.
+                let keep = self.granted & c.asked;
                 self.consent = None;
-                self.consent_said = Some(0);
+                self.consent_said = Some(keep);
                 self.done_asking();
             }
             id if id >= CONSENT_ROW => {
@@ -6092,8 +6100,13 @@ impl Driver {
         }
         // The two answers.
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 5, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
-        button_node(&mut tree, CONSENT_ALLOW, 9, "Allow");
-        button_node(&mut tree, CONSENT_DENY, 10, "Don't allow");
+        // "Save" and "Close" rather than "Allow" and "Don't allow". The rows
+        // are the decision — each one turns off on its own — so the buttons
+        // are what happens to it, not a second, coarser answer beside it.
+        // "Don't allow" also read as a verdict on the application when what
+        // it did was discard the choices above it.
+        button_node(&mut tree, CONSENT_ALLOW, 9, "Save");
+        button_node(&mut tree, CONSENT_DENY, 10, "Close");
 
         ops.push(Op::Mount(tree));
         // A fresh session, as `show_stopped` does: the ids below are this

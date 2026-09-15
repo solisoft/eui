@@ -891,7 +891,12 @@ impl Tab {
         let Some(asking) = self.asking.take() else { return };
         #[cfg(not(has_pins))]
         let _ = &asking;
-        self.allowed |= said;
+        // Replaced for what was asked about, not OR-ed into what was there.
+        // Now that the buttons say Save, the rows are the answer: one turned
+        // off has to come back off, and `|=` made every row one-way — the
+        // sheet would appear to work and change nothing. Capabilities the
+        // question did not cover are untouched.
+        self.allowed = (self.allowed & !asking.asked) | (said & asking.asked);
         // What was put to them and what they said to it — see
         // [`crate::manifest::Answered`] for why both. Nowhere to remember
         // it in a page, which is the other half of `has_pins`.
@@ -1784,11 +1789,10 @@ impl Shell {
             A::Permissions => {
                 if let Some(t) = self.tabs.get_mut(self.active) {
                     if let Some(p) = t.perms.clone() {
-                        // Cleared, not kept: the answer replaces what was
-                        // said last time. `consent_answered` ORs what comes
-                        // back, so leaving these set would make every row
-                        // one-way and turning one off do nothing.
-                        t.allowed &= !p.asked;
+                        // Nothing is cleared here any more: `consent_answered`
+                        // replaces the asked-about bits with the answer, so
+                        // the sheet is free to come up showing what is
+                        // actually granted — and Close can leave it alone.
                         t.conn = None;
                         t.link = Link::Asking;
                         let name = t.title.clone();

@@ -26,6 +26,16 @@ fn main() {
         if a == "--allow" {
             let Some(list) = it.next() else { usage() };
             for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                // `all` is the ten names without typing the ten names. It
+                // grants nothing the list would not: the point of it is that
+                // a person who has decided to trust an application should
+                // not have to spell out the decision to be allowed to make
+                // it, and a launcher that pre-grants is a great deal easier
+                // to read as `--allow all` than as a line that wraps.
+                if name == "all" {
+                    allowed |= eui_proto::caps::ALL;
+                    continue;
+                }
                 match eui_proto::caps::from_name(name) {
                     Some(bit) => allowed |= bit,
                     None => {
@@ -60,6 +70,6 @@ fn usage() -> ! {
     // `scene` -- and a usage message that omits the flag somebody needs is
     // worse than none, because it reads as a list of everything there is.
     let all = eui_proto::caps::NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(",");
-    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow {all}]");
+    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}]");
     std::process::exit(2);
 }

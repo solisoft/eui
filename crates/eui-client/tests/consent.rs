@@ -132,6 +132,22 @@ fn refusing_grants_nothing() {
 /// The whole reason the rows are rows: an application that wants a camera
 /// and a file picker must not be able to make somebody grant the camera in
 /// order to drop a CSV on it.
+/// Close leaves a grant alone; it does not revoke it.
+///
+/// While the button read "Don't allow" and the sheet was seen once, before
+/// anything was granted, answering nothing was the same as answering zero.
+/// The padlock reopens the question on an application that already has a
+/// grant, and there "Close" has to mean what it says — otherwise dismissing
+/// a dialog you opened to look at silently takes the camera away.
+#[test]
+fn closing_keeps_what_was_already_granted() {
+    let mut d = Driver::new(500.0, 400.0, 1.0, caps::CAMERA);
+    let asked = caps::CAMERA | caps::FS_PICK;
+    d.ask_consent(asked, "Meridian");
+    click(&mut d, DENY);
+    assert_eq!(d.take_consent(), Some(caps::CAMERA), "Close revoked what was already granted");
+}
+
 #[test]
 fn one_row_can_be_turned_off_without_the_others() {
     let mut d = driver();
