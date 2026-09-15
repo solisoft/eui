@@ -72,6 +72,14 @@ html {
 
 body {
     margin: 0;
+    /* So the demo below can break out of the column to exactly the window's
+       edges: `100cqw` is this element's content box, which excludes the
+       scrollbar — where `100vw` includes it and leaves the stage wider than
+       the page by the scrollbar's width, clipped unevenly or scrolling
+       sideways depending on which `overflow-x` hack you reach for. Nothing
+       here is positioned `fixed`, so the containing block this establishes
+       costs nothing. */
+    container-type: inline-size;
     background: var(--paper);
     color: var(--ink);
     font-family: var(--sans);
@@ -2562,16 +2570,52 @@ footer a:hover {
    than a black rectangle. That is why the two are stacked rather than
    swapped. */
 
+/* Full-bleed: out of the 68rem column to the window's edges. A client that
+   is handed a GPU surface and nothing else has little to show for itself in
+   a 4:3 box inside a text measure — the gallery is a dashboard, and a
+   dashboard needs the room.
+
+   `grid-column: 1 / -1` is load-bearing, not tidiness. A `section` here is a
+   two-column grid — an 8.5rem rail for the §-mark, then the prose — so an
+   element inside the prose column sits 11rem right of centre. A symmetric
+   negative margin centres a box on *its parent*, so from there it cannot
+   reach both edges: it falls 11rem short on the left and hangs the same
+   distance off the right. Spanning both columns puts the figure in a grid
+   area that is centred on the page, which is what makes the arithmetic
+   below true. The rail collapses under 60rem, so this is invisible on a
+   narrow window and wrong on every wide one. */
 .demo {
+    grid-column: 1 / -1;
     margin: 0 0 2rem;
+    margin-inline: calc(50% - 50cqw);
+}
+
+/* Nothing follows the session on /demo, so nothing should look like it does:
+   the sheet's 6rem tail and the figure's own margin would leave a band of
+   paper under a canvas that runs to both edges, which reads as the page
+   having failed to finish rather than as breathing room. */
+.sheet:has(.demo) {
+    padding-bottom: 0;
+}
+
+.demo:last-child {
+    margin-bottom: 0;
 }
 
 .demo__stage {
     position: relative;
     width: 100%;
-    aspect-ratio: 4 / 3;
+    /* The window, less nothing: the header scrolls away rather than sticking,
+       so once the stage is in place the remaining height *is* the viewport.
+       `svh` and not `vh` because a phone's `vh` is the tall measure taken
+       with the browser's own bars retracted — the canvas would be sized for
+       room it does not have, and the bottom of the application would sit
+       under the address bar. */
+    height: 100vh;
+    height: 100svh;
     overflow: hidden;
-    border: 1px solid var(--rule);
+    /* Edge to edge, so there are no sides to rule off. */
+    border-block: 1px solid var(--rule);
     background: var(--paper-sunk);
 }
 
@@ -2583,6 +2627,11 @@ footer a:hover {
     height: 100%;
 }
 
+/* `contain`, still: the stage now follows the window rather than the still's
+   own 4:3, and `cover` was tried — on a tall viewport it crops an 1800x1350
+   render to an unreadable slice, which is worse than a letterbox by some way.
+   The bars are `--paper-sunk` and sit under a dark render without announcing
+   themselves. */
 .demo__poster {
     object-fit: contain;
 }

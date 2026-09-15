@@ -22,58 +22,23 @@
                 nothing is fetched until you ask for it.
             </p>
 
-            <figure class="demo" data-eui data-component="gallery" style="margin:0">
-                <div class="demo__stage">
-                    <img class="demo__poster"
-                         src="/images/demo/gallery-light.png"
-                         data-light="/images/demo/gallery-light.png"
-                         data-dark="/images/demo/gallery-dark.png"
-                         width="1800" height="1350"
-                         alt="Meridian: a dashboard with revenue, orders, open invoices, a quarter target and a work list."
-                         loading="lazy" decoding="async">
-                    <canvas class="demo__canvas" id="eui-gallery" tabindex="0"
-                            aria-label="A live EUI session: the gallery" hidden></canvas>
-                    <button class="demo__run" type="button">Run it <small>&asymp;2 MB</small></button>
-                    <p class="demo__note" role="status" hidden></p>
-                </div>
-            </figure>
-
-            <p>
-                The session is opened on <em>this</em> host and not on the demo server's,
-                because Soli refuses a WebSocket upgrade whose <code>Origin</code> is not
-                its own &mdash; a page and the session it opens have to share an origin.
-                The proxy makes that true by routing <code>/_eui/</code> here to the
-                application that answers it.
-            </p>
-
-            <p>
-                One thing you will notice: the gallery's <strong>Scene</strong> pane is
-                empty here, and that is the design rather than a fault. A node whose
-                capability was not granted draws its own background and nothing else
-                (<a href="/docs/security">08 &sect;3</a>) &mdash; and this page grants
-                nothing at all, so no reader is ever asked for anything. Even if it did,
-                <code>scene</code> is not offered in a browser: WebGPU reports a shader's
-                validation errors asynchronously, so the client cannot say whether a
-                module the <em>server</em> wrote compiled until after it has been used,
-                and a capability that cannot be checked is not one to grant. Open the
-                same application in the native client to see that pane draw.
-            </p>
-
-            <p>
-                Everything else it gives up is written down rather than glossed:
-                the publisher key and TLS are the browser's here rather than the client's,
-                the decoder does not get a process of its own, and <code>scene</code> is
-                not offered at all &mdash; WebGPU reports a shader's validation errors
-                asynchronously, so a browser cannot say whether a module the server wrote
-                compiled until after it has been used.
-            </p>
-
-            <p>
-                <a href="/samples">Eight applications rendered by the native client</a>,
-                or <a href="https://eui-data.solisoft.net/live/counter">five of them running
-                on the demo server</a>.
-            </p>
         </div>
+
+        <figure class="demo" data-eui data-component="gallery">
+            <div class="demo__stage">
+                <img class="demo__poster"
+                     src="/images/demo/gallery-light.png"
+                     data-light="/images/demo/gallery-light.png"
+                     data-dark="/images/demo/gallery-dark.png"
+                     width="1800" height="1350"
+                     alt="Meridian: a dashboard with revenue, orders, open invoices, a quarter target and a work list."
+                     loading="lazy" decoding="async">
+                <canvas class="demo__canvas" id="eui-gallery" tabindex="0"
+                        aria-label="A live EUI session: the gallery" hidden></canvas>
+                <button class="demo__run" type="button">Run it <small>&asymp;2 MB</small></button>
+                <p class="demo__note" role="status" hidden></p>
+            </div>
+        </figure>
     </section>
 </main>
 
