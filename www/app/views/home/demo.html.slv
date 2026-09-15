@@ -24,7 +24,7 @@
 
         </div>
 
-        <figure class="demo" data-eui data-component="gallery">
+        <figure class="demo" data-eui data-fill data-component="gallery">
             <div class="demo__stage">
                 <img class="demo__poster"
                      src="/images/demo/gallery-light.png"

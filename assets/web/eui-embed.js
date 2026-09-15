@@ -186,7 +186,34 @@ async function run(fig) {
   }
 }
 
+/** The height left under a box, once what stands above it is taken off.
+ *
+ * `data-fill` asks for the remaining height rather than the whole window:
+ * `100svh` is the window, which on a page with a heading and two paragraphs
+ * over it means the bottom of the session sits below the fold and the reader
+ * has to scroll to see a demo they just pressed a button for.
+ *
+ * Measured from the document, not the viewport, so the answer does not change
+ * with the scroll position: it is "how tall can this be where it sits", asked
+ * once and again whenever the window changes. The floor is there because a
+ * short window, or a figure far enough down the page, would otherwise compute
+ * a height of nothing at all.
+ */
+function fill(fig) {
+  const stage = fig.querySelector(".demo__stage");
+  if (!stage) return;
+  const top = stage.getBoundingClientRect().top + window.scrollY;
+  const room = Math.max(360, Math.round(window.innerHeight - top));
+  fig.style.setProperty("--demo-fill", `${room}px`);
+}
+
 for (const fig of document.querySelectorAll("[data-eui]")) {
+  if (fig.dataset.fill !== undefined) {
+    fill(fig);
+    // The session is sized from this box, so a resize that changed it and
+    // said nothing would leave the client drawing at the old size.
+    window.addEventListener("resize", () => fill(fig));
+  }
   const img = fig.querySelector(".demo__poster");
   if (img) {
     dressPoster(img);

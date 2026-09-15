@@ -2605,14 +2605,19 @@ footer a:hover {
 .demo__stage {
     position: relative;
     width: 100%;
-    /* The window, less nothing: the header scrolls away rather than sticking,
-       so once the stage is in place the remaining height *is* the viewport.
+    /* The height the page can actually give it: the window less whatever
+       stands above this box, which only the page knows — so `eui-embed.js`
+       measures it and sets `--demo-fill` on a `data-fill` figure. These two
+       are the fallback for the turn before that lands, and for a reader with
+       no JavaScript, who gets the poster and nothing else anyway.
+
        `svh` and not `vh` because a phone's `vh` is the tall measure taken
-       with the browser's own bars retracted — the canvas would be sized for
-       room it does not have, and the bottom of the application would sit
-       under the address bar. */
+       with the browser's own bars retracted — the box would be sized for room
+       it does not have, and the bottom of the application would sit under the
+       address bar. */
     height: 100vh;
     height: 100svh;
+    height: var(--demo-fill, 100svh);
     overflow: hidden;
     /* Edge to edge, so there are no sides to rule off. */
     border-block: 1px solid var(--rule);
@@ -2637,8 +2642,19 @@ footer a:hover {
 }
 
 /* Laid out from the first frame so the client can measure it, and revealed
-   only once it has something on it. */
+   only once it has something on it.
+
+   The sizes are `!important` because the client writes its own inline
+   `width`/`height` in px, derived from the backing store it was handed, and
+   an inline style beats a stylesheet. That hands back a box a fraction
+   smaller than the one it is meant to fill — 852.727px inside 853px at dpr
+   1.65 — and the stage shows along the right edge and the bottom. The
+   division of labour this restores is the honest one: the page owns the box,
+   the client owns the number of device pixels it draws into. A fraction of a
+   percent of scaling between the two is invisible; a visible seam is not. */
 .demo__canvas {
+    width: 100% !important;
+    height: 100% !important;
     transition: opacity 0.18s ease;
 }
 
