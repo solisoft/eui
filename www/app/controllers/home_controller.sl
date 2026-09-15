@@ -34,10 +34,10 @@ class HomeController < Controller
   # an origin. The proxy makes that true by routing `/_eui/*` here to the
   # demo application; see `deploy/README.md`.
   def demo
-    render("home/demo", {
-      "title": "EUI demo — the gallery, running in this page",
-      "eui_build": this._eui_build()
-    })
+    render(
+      "home/demo",
+      {"title": "EUI demo — the gallery, running in this page", "eui_build": this._eui_build()}
+    )
   end
 
   # Which build of the browser client is on disk, for the page to stamp on
@@ -47,6 +47,7 @@ class HomeController < Controller
   def _eui_build
     raw = slurp("public/eui/manifest.json") rescue null
     return "none" if raw.nil?
+
     parsed = JSON.parse(raw) rescue null
     parsed.nil? ? "none" : (parsed["version"] ?? "none")
   end

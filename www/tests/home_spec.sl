@@ -38,12 +38,17 @@ describe("Components", fn() {
 
   test("carries the whole vocabulary", fn() {
     let body = res_body(get("/components"))
-    # examples/demo-app/app/controllers/eui_builders.sl
-    assert_contains(body, "All 107")
-    # lang/src/serve/eui/tree.rs — the kinds, the roles, the events
-    assert_contains(body, "The sixteen kinds")
-    assert_contains(body, "Thirty-seven keys")
-    assert_contains(body, "The twenty-eight roles")
+    # examples/demo-app/app/controllers/eui_builders*.sl
+    assert_contains(body, "All 226")
+    # The counted claims, checked against what they count rather than against
+    # what they used to say: seventeen node kinds is `spec/03-widgets.md` §1
+    # and `NodeKind` beside it, thirty-three colour roles is
+    # `spec/05-theme.md`, and the style record's keys are `spec/02` §3. The
+    # page had been swept and this file had not, so it asserted a vocabulary
+    # three sweeps old and the site could not deploy.
+    assert_contains(body, "The seventeen kinds")
+    assert_contains(body, "Thirty-nine keys")
+    assert_contains(body, "The thirty-three roles")
     assert_contains(body, "time_update")
     assert_contains(body, "list_window(style, item_height, count, heights, children, on_window)")
     assert_contains(body, "data_grid(columns, rows, selected, editing, sort, on_select, on_sort, on_change, on_key)")
