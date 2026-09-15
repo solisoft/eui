@@ -1,0 +1,36 @@
+[package]
+name = "eui-web"
+description = "The EUI client as a page: one canvas, one session, and the browser's own socket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# `cdylib` is what `wasm-bindgen` reads; `rlib` so that `cargo check
+# --workspace` on a desktop has something to check, where this crate is
+# empty.
+[lib]
+name = "eui_web"
+crate-type = ["cdylib", "rlib"]
+
+# Nothing outside a browser, so nothing is declared outside one. The client
+# is taken without default features: a page has no accessibility adapter, no
+# system clipboard and no file dialog behind it (see `eui-client/build.rs`),
+# and asking for them would only pull crates that cannot build for this
+# target. The two picture formats beside PNG are kept — they are bytes in
+# the module and 10 §1 counts them, but a gallery without JPEG is not a
+# gallery.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eui-client = { path = "../eui-client", version = "0.1.0", default-features = false, features = ["jpeg", "webp"] }
+eui-proto = { path = "../eui-proto", version = "0.1.0" }
+# For the bisecting probes only; see `probe_text`.
+eui-text = { path = "../eui-text", version = "0.1.0" }
+eui-layout = { path = "../eui-layout", version = "0.1.0" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1"
+
+[lints]
+workspace = true

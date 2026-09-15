@@ -12,7 +12,24 @@ eui-proto = { path = "../eui-proto", version = "0.1.0" }
 eui-layout = { path = "../eui-layout", version = "0.1.0" }
 # The one third-party dependency on the CPU side of the client. Shaping is
 # the part of text that must not be reinvented; everything around it is ours.
+
+# Shaping, per target, and the difference is one word with teeth in it.
+#
+# cosmic-text's `std` feature turns on `rayon`, and `cache_fonts` reaches
+# for `par_iter()`. On `wasm32-unknown-unknown` there are no threads:
+# rayon's global pool cannot be built, and the page hangs on a latch that
+# will never be released — a frozen tab, no panic, no message. `no_std`
+# swaps that one `par_iter` for an `iter` and drops the dependency.
+#
+# Nothing else in `std` is wanted here anyway. It brings `fontdb/memmap`
+# and `sys-locale`, and this crate embeds its faces with `include_bytes!`
+# and hands `FontSystem` a fixed `"en-US"` — the system's fonts and the
+# system's locale are both deliberately not consulted (05 §5, 08 §8).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cosmic-text = { version = "0.12", default-features = false, features = ["std", "swash"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cosmic-text = { version = "0.12", default-features = false, features = ["no_std", "swash"] }
 
 [dev-dependencies]
 eui-theme = { path = "../eui-theme", version = "0.1.0" }

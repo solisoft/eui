@@ -2,9 +2,9 @@
 //! socket. Frames in, frames out; input in, events out; a draw list when
 //! asked. Pure enough to be tested without a display or a network.
 
+use crate::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use eui_audio::Control;
 use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
@@ -782,7 +782,7 @@ struct Departing {
 struct Move {
     from: [f32; 4],
     to: [f32; 4],
-    start: std::time::Instant,
+    start: crate::time::Instant,
     duration: Duration,
     /// `0` standard, `1` decelerate (arriving), `3` accelerate (leaving).
     curve: u32,
@@ -792,11 +792,11 @@ struct Move {
 }
 
 impl Move {
-    fn done(&self, now: std::time::Instant) -> bool {
+    fn done(&self, now: crate::time::Instant) -> bool {
         self.held.is_none() && now.saturating_duration_since(self.start) >= self.duration
     }
 
-    fn to_paint(self, now: std::time::Instant) -> eui_render::Mover {
+    fn to_paint(self, now: crate::time::Instant) -> eui_render::Mover {
         eui_render::Mover { from: self.from, to: self.to, t0: -now.saturating_duration_since(self.start).as_secs_f32(), dur: self.duration.as_secs_f32(), curve: self.curve, held: self.held }
     }
 }
@@ -883,7 +883,7 @@ fn next_serial() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SERIAL: std::sync::OnceLock<AtomicU64> = std::sync::OnceLock::new();
     let counter = SERIAL.get_or_init(|| {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let nanos = crate::time::SystemTime::now().duration_since(crate::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         AtomicU64::new(u64::try_from(nanos & 0xFFFF_FFFF).unwrap_or(0) << 32)
     });
     counter.fetch_add(1, Ordering::Relaxed).saturating_add(1)

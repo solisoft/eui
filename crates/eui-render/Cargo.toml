@@ -17,7 +17,17 @@ eui-text = { path = "../eui-text", version = "0.1.0" }
 # crate itself stays forbid(unsafe_code).
 wgpu = "23"
 bytemuck = { version = "1", features = ["derive"] }
+
+# The blocking front door on `with_adapter_async`. A page has no thread to
+# block, and none of the three callers that want one.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4"
+
+# `Backends::GL` here is WebGL2, and it is not in wgpu's default set.
+# Without it a browser with no WebGPU gets no adapter at all, which is a
+# blank canvas rather than an error.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "23", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
 
 [lints]
 workspace = true

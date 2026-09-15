@@ -15,6 +15,7 @@ members = [
     "crates/eui-uikit",
     "crates/eui-wayland",
     "crates/eui-client",
+    "crates/eui-web",
     "crates/eui-android",
     "crates/eui-ios",
     "examples/counter-server",

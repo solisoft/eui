@@ -43,16 +43,38 @@ fn main() {
 /// platforms at each site is what keeps the third one honest.
 fn platform_parts() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let phone = os == "android" || os == "ios";
+    // The third platform with none of these behind it, and the one that is
+    // not a machine at all: a page. No adapter for an assistive technology,
+    // no system clipboard a canvas may take, no file dialog, and no second
+    // process — the same four answers as a phone, for different reasons.
+    // Asked here rather than at each site, which is the whole point of the
+    // three cfgs above.
+    let page = arch == "wasm32";
     for (feature, cfg) in [("A11Y", "has_a11y"), ("CLIPBOARD", "has_clipboard"), ("FILES", "has_files")] {
         println!("cargo:rustc-check-cfg=cfg({cfg})");
-        if !phone && std::env::var_os(format!("CARGO_FEATURE_{feature}")).is_some() {
+        if !phone && !page && std::env::var_os(format!("CARGO_FEATURE_{feature}")).is_some() {
             println!("cargo:rustc-cfg={cfg}");
         }
     }
     println!("cargo:rustc-check-cfg=cfg(no_subprocess)");
-    if phone {
+    if phone || page {
         println!("cargo:rustc-cfg=no_subprocess");
+    }
+    // The socket and the two devices this process opens for itself. A page
+    // is handed a WebSocket that has already done its TLS, and an audio
+    // graph it may not write samples into; neither is a thing to ask the
+    // platform for, so the code that asks is not compiled.
+    // The pinned publisher key of 01 §2.1: a signature to check and a
+    // place to remember it. A page has neither — no `ring`, and no store
+    // but the one the tab can clear — so the check is not compiled and the
+    // session says `Unverified` rather than implying a pin it never made.
+    for cfg in ["has_native_net", "has_audio", "has_desktop_theme", "has_pins"] {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+        if !page {
+            println!("cargo:rustc-cfg={cfg}");
+        }
     }
 }
 

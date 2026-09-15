@@ -19,11 +19,11 @@
 //! started) or across the boundary. The wire between the two is private
 //! to this crate and unversioned: both ends are always the same binary.
 
+use crate::time::{Duration, Instant};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use eui_proto::{Frame, ThemeMode};
 use eui_render::{Atlas, Backdrop, DrawList, ImageAtlas, Quad, Run, Scroller, Xform};
@@ -1968,12 +1968,16 @@ impl Backend {
         // worker that failed to start.
         #[cfg(no_subprocess)]
         {
-            let why = if cfg!(target_os = "ios") {
+            let why = if cfg!(target_arch = "wasm32") {
+                "driver in this process: a page has one thread and one module; the engine confines the module, nothing confines the decoder from the renderer beside it (08 §10)"
+            } else if cfg!(target_os = "ios") {
                 "driver in this process: iOS has no second process to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)"
             } else {
                 "driver in this process: Android has no second binary to run it in; the app sandbox confines the process, nothing confines the decoder (08 §10)"
             };
-            return (Backend::local(Driver::new(w, h, scale, granted)), why.into());
+            // The tail, not a `return`: everything below this block is
+            // `cfg(not(no_subprocess))` and is not compiled here.
+            (Backend::local(Driver::new(w, h, scale, granted)), why.into())
         }
         #[cfg(not(no_subprocess))]
         let program = match std::env::current_exe() {

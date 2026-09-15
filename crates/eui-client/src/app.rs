@@ -46,6 +46,29 @@ pub enum Wake {
     /// AccessKit has something for the window.
     #[cfg(has_a11y)]
     Access(accesskit_winit::Event),
+    /// The adapter and the device are ready, and the window that was made
+    /// to ask for them is inside.
+    ///
+    /// Only a page. Everywhere else both are asked for and answered inside
+    /// `resumed`, because the thread may block while they are; a page has
+    /// one thread and it is the one drawing.
+    #[cfg(target_arch = "wasm32")]
+    Gpu(Box<Gpu>),
+}
+
+/// What the probe came back with: a whole [`Shared`], plus the window and
+/// surface it was chosen for.
+///
+/// A newtype because [`Wake`] derives `Debug` and a renderer does not, and
+/// because `Shared` is private and a `pub enum` may not name it.
+#[cfg(target_arch = "wasm32")]
+pub struct Gpu(Shared);
+
+#[cfg(target_arch = "wasm32")]
+impl std::fmt::Debug for Gpu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad("Gpu { .. }")
+    }
 }
 
 #[cfg(has_a11y)]
@@ -67,6 +90,16 @@ struct Shared {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     renderer: eui_render::Renderer,
+    /// The window and surface the probe had to make before it could ask
+    /// about them, waiting for the first [`Shell::open`] to take them.
+    ///
+    /// Only a page has this, and only once. wgpu's WebGL2 backend
+    /// enumerates adapters *out of* a canvas's GL context, so `None` here
+    /// is not a choice — an adapter cannot be asked for until there is a
+    /// surface to ask about, which means the window exists before the
+    /// renderer does, which is the opposite of every other target.
+    #[cfg(target_arch = "wasm32")]
+    made: Option<(Arc<Window>, wgpu::Surface<'static>)>,
 }
 
 /// How to open an application: what the `eui` binary parses from its
@@ -101,6 +134,12 @@ impl Launch {
 /// a gap to be closed — so the client closes it, rather than leaving a
 /// window that looks alive and answers nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Where there is no manifest there is no consent sheet, so a handful of
+// the things that serve one are constructed nowhere. They are still
+// compiled — `Link` is matched exhaustively, and a variant behind a `cfg`
+// would move that cost to every match arm in the file — so the dead-code
+// lint is told the reason rather than worked around.
+#[cfg_attr(not(has_pins), allow(dead_code))]
 enum Link {
     /// Talking.
     Up,
@@ -109,12 +148,12 @@ enum Link {
     /// is not one that is coming back on its own.
     Trying {
         /// When to give up on this attempt and try again.
-        until: std::time::Instant,
+        until: crate::time::Instant,
     },
     /// Nothing is open. `at` is when the next attempt is due.
     Lost {
         /// When to try again.
-        at: std::time::Instant,
+        at: crate::time::Instant,
     },
     /// Ended for a reason another socket cannot fix: the manifest was
     /// refused, the server sent an `Error`, the tree was unusable.
@@ -126,6 +165,7 @@ enum Link {
 }
 
 /// A consent sheet that is up, and what it will have to remember.
+#[cfg_attr(not(has_pins), allow(dead_code))]
 struct Asking {
     /// Whose answer this is.
     app_id: String,
@@ -267,8 +307,10 @@ struct Tab {
     /// one application sample the other's rendered text.
     textures: eui_render::SessionTextures,
     /// The audio device, open only while something is loaded (03 §7).
+    #[cfg(has_audio)]
     audio: Option<crate::audio::Output>,
     /// Frames the audio thread produced, for the loop to send.
+    #[cfg(has_audio)]
     audio_rx: Option<mpsc::Receiver<Vec<u8>>>,
     /// Why this tab's session ended, if it did. The blank page a dead tab
     /// falls back to shows it, in a field, so it can be selected and pasted
@@ -414,6 +456,7 @@ struct Shell {
     /// `ime_area`: there is one keyboard, and it is the window's.
     covered: f32,
     /// The desktop theme watcher, alive as long as the window.
+    #[cfg_attr(not(has_desktop_theme), allow(dead_code))]
     theme_watch: Option<Box<dyn std::any::Any + Send>>,
     /// The palette the chrome was last put in, or `None` while it has not
     /// been told one.
@@ -422,12 +465,13 @@ struct Shell {
     /// open below it, so what it was last told is a property of the window.
     chrome_mode: Option<eui_proto::ThemeMode>,
     /// The desktop palette last applied.
+    #[cfg(has_desktop_theme)]
     desktop_theme: Option<crate::desktop_theme::DesktopTheme>,
     /// A theme wake is queued and not yet handled.
     theme_pending: Arc<std::sync::atomic::AtomicBool>,
     /// When this window started, so the renderer can be handed a monotonic
     /// clock in seconds.
-    epoch: std::time::Instant,
+    epoch: crate::time::Instant,
     /// Something happened that could have left a dialog to open or bytes to
     /// move, so the next pass of the loop asks the driver about files.
     ///
@@ -463,7 +507,7 @@ struct Shell {
 #[derive(Debug)]
 struct LoopStats {
     /// When the second being counted began.
-    since: std::time::Instant,
+    since: crate::time::Instant,
     /// Passes of `about_to_wait` since then.
     passes: u64,
     /// Frames drawn by every window at that moment, so the difference is
@@ -515,7 +559,7 @@ impl LoopStats {
     /// A counter, if the environment asked for one.
     fn asked_for() -> Option<Self> {
         std::env::var("EUI_LOOP_STATS").is_ok_and(|v| v == "1").then(|| Self {
-            since: std::time::Instant::now(),
+            since: crate::time::Instant::now(),
             passes: 0,
             frames_at: 0,
             wakes: [0; 7],
@@ -540,6 +584,11 @@ impl LoopStats {
 fn append_write(slot: &mut Writing, flag: eui_proto::Chunked, bytes: &[u8]) -> Result<bool, String> {
     use std::io::Write as _;
     let fail = |slot: &mut Writing, why: String| {
+        // Closed before it is removed, which is the whole point of taking
+        // it. `wasm32` has no files, so there its `File` is a type with
+        // nothing to drop and clippy says so; the order still matters
+        // everywhere a file exists.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
         drop(slot.file.take());
         let _ = std::fs::remove_file(&slot.path);
         Err(why)
@@ -647,6 +696,7 @@ fn split_origin(url: &str) -> (&str, &str) {
 /// that is not an absolute path, and the path it names is on the origin the
 /// key was pinned to — the same origin the client was about to connect to
 /// anyway.
+#[cfg_attr(not(has_pins), allow(dead_code))]
 fn completed(url: &str, entry: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
@@ -703,7 +753,9 @@ impl Tab {
             cookie: launch.cookie,
             host_loopback: launch.host_loopback,
             textures: renderer.session(),
+            #[cfg(has_audio)]
             audio: None,
+            #[cfg(has_audio)]
             audio_rx: None,
             answered: false,
             asking: None,
@@ -720,6 +772,21 @@ impl Tab {
         // Spec 01 §2.1: the manifest first. Its signature is verified and
         // its key pinned before a byte of the session is trusted; only the
         // debug loopback of 08 §1 may go on without one.
+        //
+        // A page does neither, and says so rather than appearing to. There
+        // is no store to pin a key in, and the fetch that would go and get
+        // the manifest is a blocking one on the thread that draws. What a
+        // browser build has instead is the chain the browser checked, which
+        // is not nothing and is not this: `Trust::Unverified` is the honest
+        // name for it, and the grant is whatever the embedding page asked
+        // for — which, for a demo, is none. See `has_pins` in `build.rs`
+        // and the note in `doc/docs/eui/security.md`.
+        #[cfg(not(has_pins))]
+        {
+            tab.backend.grant(tab.allowed);
+            tab.trust = crate::chrome::Trust::Unverified;
+        }
+        #[cfg(has_pins)]
         match crate::assets::origin_for(&tab.url).map_err(|e| e.to_string()).and_then(|origin| {
             let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
             crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map_err(|e| e.to_string())
@@ -800,10 +867,16 @@ impl Tab {
     /// The person answered the consent sheet: keep what they said, tell
     /// the driver, and only now open the socket.
     fn consent_answered(&mut self, said: u32, proxy: &Proxy) {
+        // Taken either way: the sheet is answered and must not be asked
+        // again, whether or not there is a store to remember it in.
         let Some(asking) = self.asking.take() else { return };
+        #[cfg(not(has_pins))]
+        let _ = &asking;
         self.allowed |= said;
         // What was put to them and what they said to it — see
-        // [`crate::manifest::Answered`] for why both.
+        // [`crate::manifest::Answered`] for why both. Nowhere to remember
+        // it in a page, which is the other half of `has_pins`.
+        #[cfg(has_pins)]
         crate::manifest::remember_grant(&asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
         eprintln!("eui: the person allowed [{}]", eui_proto::caps::names(self.allowed).join(", "));
         // The driver's mask, before `dial` asks it for a `Hello` carrying
@@ -825,7 +898,7 @@ impl Tab {
                 self.conn = Some(c);
                 // Open is not talking. Until a frame arrives this is still
                 // an attempt, and one that stalls is one to make again.
-                self.link = Link::Trying { until: std::time::Instant::now() + std::time::Duration::from_secs(20) };
+                self.link = Link::Trying { until: crate::time::Instant::now() + std::time::Duration::from_secs(20) };
             }
             // A URL the client refuses is not a network fault: trying it
             // again would refuse it again, in the same words, forever.
@@ -866,7 +939,7 @@ impl Tab {
         self.conn = None;
         self.tries = self.tries.saturating_add(1);
         let wait = backoff(self.tries.saturating_sub(1));
-        self.link = Link::Lost { at: std::time::Instant::now() + wait };
+        self.link = Link::Lost { at: crate::time::Instant::now() + wait };
         eprintln!("eui: trying again in {:.1}s", wait.as_secs_f32());
     }
 
@@ -993,6 +1066,7 @@ impl Tab {
     /// Spec 03 §7: the device is open exactly while the tab has a sound
     /// loaded — nothing playing, nothing running, no wakeups. A tab keeps
     /// its sound when it goes to the back, as a browser tab does.
+    #[cfg(has_audio)]
     fn sync_audio(&mut self, proxy: &Proxy) {
         let wanted = self.backend.audio_playing();
         match (wanted, self.audio.is_some()) {
@@ -1018,7 +1092,14 @@ impl Tab {
         }
     }
 
+    /// No device to open, so nothing to keep in step with one. The driver
+    /// goes on mixing — that is 03 §7's arithmetic and it is portable — and
+    /// a page simply never asks for the samples.
+    #[cfg(not(has_audio))]
+    fn sync_audio(&mut self, _proxy: &Proxy) {}
+
     /// What the audio thread produced since the last look: a sound's end.
+    #[cfg(has_audio)]
     fn drain_audio(&mut self) {
         let mut frames = Vec::new();
         if let Some(rx) = &self.audio_rx {
@@ -1030,6 +1111,10 @@ impl Tab {
             self.send(frames);
         }
     }
+
+    /// No thread, so nothing it produced.
+    #[cfg(not(has_audio))]
+    fn drain_audio(&mut self) {}
 
     /// Let this tab go, worker and all.
     ///
@@ -1052,6 +1137,7 @@ impl Tab {
 /// they cannot be expected to guess. The platform trust store carries it on
 /// a desktop; on a phone there is no such store to read, so the name of the
 /// flag has to be in the message.
+#[cfg_attr(not(has_pins), allow(dead_code))]
 fn refusal(why: &str) -> String {
     let cert = why.contains("certificate") || why.contains("UnknownIssuer") || why.contains("CaUsedAsEndEntity");
     if cert {
@@ -1108,6 +1194,28 @@ impl Shell {
             use winit::platform::x11::WindowAttributesExtX11;
             WindowAttributesExtWayland::with_name(attrs, "eui", "eui").pipe(|a| WindowAttributesExtX11::with_name(a, "eui", "eui"))
         };
+        // None of what was just built means anything to a canvas: it has
+        // no title bar to put a build number in, no icon, no app id for a
+        // taskbar, and a size the page's stylesheet decides. It is built
+        // anyway rather than threaded behind another `cfg`, because the
+        // chain above is four platforms deep already and a fifth arm in
+        // each is a worse trade than one discard with a reason.
+        #[cfg(target_arch = "wasm32")]
+        let _ = (&event_loop, attrs);
+
+        // A page's window was made before the renderer was, because the
+        // adapter had to be asked about its surface (see `Shared::made`).
+        // So it is taken, not made — and there is exactly one of it: a
+        // second window in a tab is a window the page never gave us.
+        #[cfg(target_arch = "wasm32")]
+        let (window, premade) = match shared.as_mut().and_then(|g| g.made.take()) {
+            Some(pair) => pair,
+            None => {
+                eprintln!("eui: a page has one canvas, and it is already in use");
+                return None;
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -1150,6 +1258,13 @@ impl Shell {
                 None
             }
         };
+        #[cfg(target_arch = "wasm32")]
+        let surface = {
+            // Made by the probe, from the same instance now in `shared`.
+            let _ = &make_surface;
+            premade
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let surface = match shared.as_ref() {
             Some(g) => make_surface(&g.instance)?,
             None => {
@@ -1257,9 +1372,10 @@ impl Shell {
             chrome_mode: None,
             locating: false,
             theme_watch: None,
+            #[cfg(has_desktop_theme)]
             desktop_theme: None,
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            epoch: std::time::Instant::now(),
+            epoch: crate::time::Instant::now(),
             frames: 0,
             files_dirty: true,
             chrome: chrome.take(),
@@ -1294,6 +1410,7 @@ impl Shell {
         // it last read, so running it against an empty window read the
         // theme, told nobody, and made every later call a no-op. The
         // window then came up in the default palette and stayed there.
+        #[cfg(has_desktop_theme)]
         if !crate::desktop_theme::disabled() {
             shell.follow_desktop_theme();
             // One wake per burst of changes: a switch touches several files
@@ -1656,6 +1773,7 @@ impl Shell {
     ///
     /// [`Self::follow_desktop_theme`] only acts when the desktop *changed*,
     /// so a tab opened afterwards would never hear the colours at all.
+    #[cfg(has_desktop_theme)]
     fn theme_one(&mut self, at: usize) {
         let Some(t) = self.desktop_theme.as_ref() else { return };
         let (mode, colors) = (Some(t.mode), t.colors.clone());
@@ -1664,8 +1782,15 @@ impl Shell {
         tab.send(out);
     }
 
+    /// No desktop and no palette on disk, so nothing to hand on. The
+    /// light/dark *mode* still arrives — winit reports `ThemeChanged` in a
+    /// page too — and that goes through `Input::Mode` as it always did.
+    #[cfg(not(has_desktop_theme))]
+    fn theme_one(&mut self, _at: usize) {}
+
     /// Follow the desktop's palette (05 §5): read it, hand it to every tab
     /// and to the chrome if it changed, and say so once.
+    #[cfg(has_desktop_theme)]
     fn follow_desktop_theme(&mut self) {
         let now = crate::desktop_theme::current();
         if now == self.desktop_theme {
@@ -1763,9 +1888,9 @@ impl Shell {
     /// Returns the earliest moment this window wants to be woken for one of
     /// them, so a window waiting on a server that is coming back up sleeps
     /// until it is worth another attempt and not a millisecond less.
-    fn serve_links(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+    fn serve_links(&mut self, now: crate::time::Instant) -> Option<crate::time::Instant> {
         let proxy = Arc::clone(&self.proxy);
-        let mut due: Option<std::time::Instant> = None;
+        let mut due: Option<crate::time::Instant> = None;
         let mut changed = false;
         for t in &mut self.tabs {
             match t.link {
@@ -1781,10 +1906,10 @@ impl Shell {
                 _ => {}
             }
             if let Link::Lost { at } = t.link {
-                due = Some(due.map_or(at, |d: std::time::Instant| d.min(at)));
+                due = Some(due.map_or(at, |d: crate::time::Instant| d.min(at)));
             }
             if let Link::Trying { until } = t.link {
-                due = Some(due.map_or(until, |d: std::time::Instant| d.min(until)));
+                due = Some(due.map_or(until, |d: crate::time::Instant| d.min(until)));
             }
             changed |= t.link_changed();
         }
@@ -2410,7 +2535,7 @@ impl Shell {
         if w == 0 || h == 0 {
             return;
         }
-        let t0 = std::time::Instant::now();
+        let t0 = crate::time::Instant::now();
         let top = self.content_origin();
         let (app_w, app_h) = (w, h.saturating_sub(top));
 
@@ -2438,7 +2563,7 @@ impl Shell {
         let view = frame.texture.create_view(&Default::default());
         let format = self.config.format;
         let now = self.epoch.elapsed().as_secs_f64();
-        let at = std::time::Instant::now();
+        let at = crate::time::Instant::now();
 
         // The chrome first, clearing the whole window; then the application
         // over the part of it below the chrome, which is why the second
@@ -2536,7 +2661,7 @@ impl Shell {
         // Only for a frame that is due within a refresh: a caret's blink is
         // half a second away and a spin asks for thirty a second, and
         // neither wants to be woken sixty times for it.
-        let by_now = std::time::Instant::now();
+        let by_now = crate::time::Instant::now();
         let soon = self.tabs.get(self.active).and_then(|t| t.backend.next_frame_at()).is_some_and(|at| at.saturating_duration_since(by_now) <= std::time::Duration::from_millis(20));
         if soon {
             self.window.request_redraw();
@@ -2618,6 +2743,7 @@ impl Shell {
     fn theme_wake(&mut self) {
         crate::driver::trace(|| "desktop theme wake".into());
         self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(has_desktop_theme)]
         self.follow_desktop_theme();
     }
 
@@ -3099,9 +3225,9 @@ impl Shell {
     /// the server sends of its own accord still lands: the transport wakes
     /// the loop and the batch is applied wherever it belongs. What a
     /// background tab does not get is a clock, which is the expensive half.
-    fn park(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+    fn park(&mut self, now: crate::time::Instant) -> Option<crate::time::Instant> {
         let t = self.tabs.get_mut(self.active)?;
-        crate::driver::trace(|| format!("about_to_wait: due={:?}", t.backend.next_frame_at().map(|d| d.saturating_duration_since(std::time::Instant::now()))));
+        crate::driver::trace(|| format!("about_to_wait: due={:?}", t.backend.next_frame_at().map(|d| d.saturating_duration_since(crate::time::Instant::now()))));
         // A running transition is the only thing that ever wakes the loop by
         // itself; at rest `ControlFlow::Wait` sleeps until the OS or the
         // transport speaks.
@@ -3200,23 +3326,38 @@ const HOVER_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 struct Timer {
     /// Rearm, or `None` to sleep until told otherwise. The thread ends when
     /// this is dropped.
-    tx: mpsc::Sender<Option<std::time::Instant>>,
+    tx: mpsc::Sender<Option<crate::time::Instant>>,
     /// What it was last told, so an unchanged deadline is not re-sent on
     /// every pass of the loop.
-    armed: Option<std::time::Instant>,
+    armed: Option<crate::time::Instant>,
 }
 
 impl Timer {
+    /// No thread to keep a deadline on, and none wanted.
+    ///
+    /// `ControlFlow::WaitUntil` on this backend *is* a `setTimeout`, which
+    /// is precisely what the thread below emulates where a platform's own
+    /// wait cannot be trusted to fire. So the fallback is not a fallback
+    /// here — it is the native mechanism — and `None` asks for it.
+    ///
+    /// (The note on `idle_flow` about Linux and Apple never sleeping is
+    /// about those two platforms and does not apply to a page.)
+    #[cfg(target_arch = "wasm32")]
+    fn start(_proxy: Proxy) -> Option<Self> {
+        None
+    }
+
     /// Start the thread. `None` if one could not be spawned, in which case
     /// the loop falls back to `WaitUntil` and its old behaviour.
+    #[cfg(not(target_arch = "wasm32"))]
     fn start(proxy: Proxy) -> Option<Self> {
-        let (tx, rx) = mpsc::channel::<Option<std::time::Instant>>();
+        let (tx, rx) = mpsc::channel::<Option<crate::time::Instant>>();
         let spawned = std::thread::Builder::new().name("eui-frame-timer".into()).spawn(move || {
-            let mut deadline: Option<std::time::Instant> = None;
+            let mut deadline: Option<crate::time::Instant> = None;
             loop {
                 let told = match deadline {
                     Some(at) => {
-                        let now = std::time::Instant::now();
+                        let now = crate::time::Instant::now();
                         if now >= at {
                             deadline = None;
                             // The loop does the work; this only says when.
@@ -3249,7 +3390,7 @@ impl Timer {
 
     /// Ask to be woken at `at`, or not at all. Sent only when it changes: at
     /// rest this is one message and then silence.
-    fn arm(&mut self, at: Option<std::time::Instant>) {
+    fn arm(&mut self, at: Option<crate::time::Instant>) {
         if self.armed == at {
             return;
         }
@@ -3340,18 +3481,14 @@ impl App {
     }
 }
 
-impl ApplicationHandler<Wake> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        event_loop.set_control_flow(ControlFlow::Wait);
-        // Android calls this again every time the application comes back
-        // from the background, with a new native window behind each of the
-        // ones already open. Their surfaces were dropped on the way out and
-        // are made again here, before any window that was still pending.
-        if let Some(shared) = self.shared.as_ref() {
-            for s in self.shells.values_mut() {
-                s.resume(shared);
-            }
-        }
+/// The two halves of opening a window that `ApplicationHandler` calls
+/// into but does not define: draining what is pending, and — where the
+/// GPU answers late — asking for it.
+impl App {
+    /// Open every window that was waiting on a GPU. Called from `resumed`
+    /// on every target, and again from `Wake::Gpu` on the one where the
+    /// answer arrives a turn later.
+    fn open_pending(&mut self, event_loop: &ActiveEventLoop) {
         for Pending { launches, chrome, allowed } in std::mem::take(&mut self.pending) {
             match Shell::open(launches, chrome, allowed, event_loop, Arc::clone(&self.proxy), &mut self.shared) {
                 Some(s) => {
@@ -3368,6 +3505,157 @@ impl ApplicationHandler<Wake> for App {
         }
     }
 
+    /// Make the page's window, then ask the browser about it.
+    ///
+    /// Both halves have to be here and in this order. The window is made
+    /// synchronously because `create_window` is synchronous even on this
+    /// backend, and it is made *first* because wgpu's WebGL2 backend builds
+    /// its context out of the canvas — `request_adapter` with no surface
+    /// finds WebGPU or nothing, which is a blank rectangle on every browser
+    /// that has only WebGL2. The two awaits then go to the browser, and
+    /// what comes back is a whole [`Shared`] with the window and surface
+    /// inside it.
+    #[cfg(target_arch = "wasm32")]
+    fn probe_gpu(&mut self, event_loop: &ActiveEventLoop) {
+        use winit::platform::web::WindowAttributesExtWebSys;
+
+        let Some(canvas) = crate::web::canvas() else {
+            eprintln!("eui: no canvas was handed over; call start() first");
+            event_loop.exit();
+            return;
+        };
+        // How big, in device pixels, asked of the page rather than assumed.
+        //
+        // winit takes a canvas's *backing store* as the window's size, and
+        // a fresh canvas's backing store is 300x150 or, where the embed set
+        // it to nothing, zero — which the surface then clamps to 1x1 and
+        // the session paints one pixel nobody can see. The box the
+        // stylesheet gave it is the real answer, and `devicePixelRatio` is
+        // what turns that into pixels.
+        //
+        // Clamped at 2, deliberately. A 3x phone at this size would be
+        // asking for a texture twice the area for a paragraph's
+        // illustration, and WebGL2's downlevel limits cap an edge at 2048
+        // besides.
+        let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()).clamp(1.0, 2.0);
+        // The canvas's own box, then the box it sits in, then a desktop's
+        // worth of pixels. A canvas that is still `display: none` when this
+        // runs measures zero, and a window opened at zero is a surface
+        // clamped to one pixel and a session nobody can see — so each
+        // fallback is a *different* question rather than the same one
+        // retried, and the last cannot fail.
+        let (mut css_w, mut css_h) = (canvas.client_width(), canvas.client_height());
+        if css_w <= 0 || css_h <= 0 {
+            if let Some(parent) = canvas.parent_element() {
+                css_w = parent.client_width();
+                css_h = parent.client_height();
+            }
+        }
+        if css_w <= 0 || css_h <= 0 {
+            eprintln!("eui: the canvas measures nothing yet — opening at 960x640 and waiting for the page to say otherwise");
+            css_w = 960;
+            css_h = 640;
+        }
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let size = winit::dpi::PhysicalSize::new((f64::from(css_w) * dpr).round() as u32, (f64::from(css_h) * dpr).round() as u32);
+        eprintln!("eui: canvas {css_w}x{css_h} css at {dpr}x -> {}x{} device", size.width, size.height);
+        // `with_prevent_default` is what stops an arrow key or a space from
+        // scrolling the page out from under a session that has focus.
+        let attrs = Window::default_attributes().with_canvas(Some(canvas)).with_prevent_default(true).with_inner_size(size);
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("eui: cannot take the canvas: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        // WebGPU where there is one, WebGL2 where there is not. Both, and
+        // in that order, because a browser with neither should say so
+        // rather than draw nothing.
+        let proxy = Arc::clone(&self.proxy);
+        wasm_bindgen_futures::spawn_local(async move {
+            // Which backend, decided **before** the canvas is touched.
+            //
+            // `BROWSER_WEBGPU | GL` in one instance looks like the obvious
+            // thing and is a trap. A canvas has exactly one context for its
+            // lifetime: `create_surface` takes a `webgpu` one wherever
+            // WebGPU is compiled in, and from that moment
+            // `getContext("webgl2")` on the same canvas returns null for
+            // ever. So a browser that *exposes* `navigator.gpu` but hands
+            // out no adapter loses WebGL2 as well, and a machine that could
+            // have drawn draws nothing. Brave does this with its
+            // fingerprinting defences on, and so does a Chrome with the
+            // flag off — this was found on the first one.
+            //
+            // WebGPU can be asked without a surface, though, and asking
+            // touches no canvas. So it is asked first about nothing: if it
+            // answers, this instance keeps the canvas; if it does not, it
+            // never held one and a GL instance gets it instead.
+            let webgpu = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::BROWSER_WEBGPU, ..Default::default() });
+            let has_webgpu =
+                webgpu.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::LowPower, compatible_surface: None, force_fallback_adapter: false }).await.is_some();
+            let instance = if has_webgpu {
+                webgpu
+            } else {
+                drop(webgpu);
+                eprintln!("eui: no WebGPU adapter here; drawing through WebGL2");
+                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..Default::default() })
+            };
+            let surface = match instance.create_surface(Arc::clone(&window)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("eui: cannot create a surface: {e}");
+                    return;
+                }
+            };
+            // Asked again, and this time about the surface: wgpu's WebGL2
+            // backend builds its context out of the canvas, so an adapter
+            // for that backend does not exist until there is one to ask
+            // about.
+            let adapter =
+                instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface), force_fallback_adapter: false }).await;
+            let Some(adapter) = adapter else {
+                eprintln!("eui: this browser would not give the page a GPU — WebGPU and WebGL2 both said no");
+                return;
+            };
+            let renderer = match eui_render::Renderer::with_adapter_async(&adapter, false).await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("eui: {e}");
+                    return;
+                }
+            };
+            let shared = Shared { instance, adapter, renderer, made: Some((window, surface)) };
+            // If this fails the loop is already gone, and so is the page.
+            let _ = proxy.send_event(Wake::Gpu(Box::new(Gpu(shared))));
+        });
+    }
+}
+
+impl ApplicationHandler<Wake> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        event_loop.set_control_flow(ControlFlow::Wait);
+        // Android calls this again every time the application comes back
+        // from the background, with a new native window behind each of the
+        // ones already open. Their surfaces were dropped on the way out and
+        // are made again here, before any window that was still pending.
+        if let Some(shared) = self.shared.as_ref() {
+            for s in self.shells.values_mut() {
+                s.resume(shared);
+            }
+        }
+        // A page asks for its GPU before it can open anything, and the
+        // asking takes a turn of the browser's loop. `pending` is left
+        // exactly as it is; `Wake::Gpu` arrives and drains it.
+        #[cfg(target_arch = "wasm32")]
+        if self.shared.is_none() {
+            self.probe_gpu(event_loop);
+            return;
+        }
+        self.open_pending(event_loop);
+    }
+
     /// The platform is taking the native windows away. On a desktop this
     /// never fires; on Android it fires whenever the application leaves the
     /// foreground, and a surface still held at that point is a crash on the
@@ -3377,6 +3665,20 @@ impl ApplicationHandler<Wake> for App {
         for s in self.shells.values_mut() {
             s.suspend(&shared.renderer);
         }
+    }
+
+    /// The loop is ending, which on a page is the only moment there is.
+    ///
+    /// Native builds do this after `run_app` returns, on the thread that
+    /// holds the device (see `run_loop`). `spawn_app` never returns, so
+    /// this is where the same work goes — reached whenever something calls
+    /// `event_loop.exit()`, which the GPU probe does when a browser gives
+    /// the page no adapter. A page closed by the person navigating away
+    /// does not come through here at all, and nothing can be done about
+    /// that: the browser reclaims the device either way.
+    #[cfg(target_arch = "wasm32")]
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.shutdown();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wake) {
@@ -3391,6 +3693,8 @@ impl ApplicationHandler<Wake> for App {
                 Wake::Frame => 5,
                 #[cfg(target_os = "linux")]
                 Wake::Drop => 6,
+                #[cfg(target_arch = "wasm32")]
+                Wake::Gpu(_) => 7,
                 Wake::Exit => usize::MAX,
             };
             if let Some(slot) = stats.wakes.get_mut(which) {
@@ -3398,6 +3702,14 @@ impl ApplicationHandler<Wake> for App {
             }
         }
         match event {
+            // The browser answered. This is `resumed` picking up where it
+            // left off: the window and the surface it made to ask with are
+            // inside, and what was pending has been pending since.
+            #[cfg(target_arch = "wasm32")]
+            Wake::Gpu(g) => {
+                self.shared = Some(g.0);
+                self.open_pending(event_loop);
+            }
             // Which window the transport, the audio thread or the desktop
             // meant is not in the wake, and asking each is a `try_recv` on
             // an empty channel — cheaper than carrying an id would be.
@@ -3454,8 +3766,8 @@ impl ApplicationHandler<Wake> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let now = std::time::Instant::now();
-        let body = self.loop_stats.is_some().then(std::time::Instant::now);
+        let now = crate::time::Instant::now();
+        let body = self.loop_stats.is_some().then(crate::time::Instant::now);
         if let Some(stats) = &mut self.loop_stats {
             stats.passes = stats.passes.saturating_add(1);
             let elapsed = now.saturating_duration_since(stats.since);
@@ -3569,7 +3881,7 @@ impl ApplicationHandler<Wake> for App {
 
 /// The control flow for a window with no timer thread of its own: the
 /// deadline where there is one, and [`idle_flow`] where there is not.
-fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) -> ControlFlow {
+fn idle_or_deadline(due: Option<crate::time::Instant>, now: crate::time::Instant) -> ControlFlow {
     match due {
         Some(at) => ControlFlow::WaitUntil(at),
         None => idle_flow(now),
@@ -3612,7 +3924,7 @@ fn idle_or_deadline(due: Option<std::time::Instant>, now: std::time::Instant) ->
 /// What is left is a negative result worth having: after `7cfec14` the waker
 /// is exonerated on evidence, not on argument, and the next reading has to
 /// come from a profile of the spinning thread.
-fn idle_flow(_now: std::time::Instant) -> ControlFlow {
+fn idle_flow(_now: crate::time::Instant) -> ControlFlow {
     ControlFlow::Wait
 }
 
@@ -3761,6 +4073,31 @@ fn build_event_loop() -> Result<EventLoop<Wake>, String> {
 
 /// The event loop, whatever is going to run in it. Must be called on the
 /// main thread.
+#[cfg(target_arch = "wasm32")]
+fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), String> {
+    use winit::platform::web::EventLoopExtWebSys;
+    let event_loop = build_event_loop()?;
+    let app = build(event_loop.create_proxy());
+    WINDOW_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+    EXIT_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    // `spawn_app` hands `App` to the browser and returns at once, so there
+    // is no "after the loop" here and `Ok(())` means *started*, not
+    // finished. No `eui-exit-watch` either: a page has no threads and no
+    // signals to watch for, and `request_exit` is nobody's to call.
+    //
+    // And no `shutdown`. The device, the surfaces and the workers go when
+    // the page goes, which is the only moment a browser offers and is not
+    // one this is called back on. `run_app` exists on this backend too and
+    // reaches its `!` return by throwing a JavaScript exception up through
+    // the whole Rust stack; that is not a thing to do to a documentation
+    // page.
+    event_loop.spawn_app(app);
+    Ok(())
+}
+
+/// The event loop, whatever is going to run in it. Must be called on the
+/// main thread.
+#[cfg(not(target_arch = "wasm32"))]
 fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), String> {
     let event_loop = build_event_loop()?;
     // Two asked of the loop rather than one cloned: on macOS a clone is a

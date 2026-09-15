@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(has_native_net)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A BLAKE3 hash.
@@ -75,8 +76,19 @@ pub fn origin_for(session_url: &str) -> Result<String, AssetError> {
     Ok(format!("{http}://{host}"))
 }
 
+// ------------------------------------------------- the fetch, where we do it
+//
+// A page does not. The browser has already done the TLS, checked the chain
+// and parsed the reply by the time a byte reaches this crate, so on
+// `wasm32` the whole of this section is replaced by a `fetch()` in
+// `transport_web.rs` — and what it hands back lands in `AssetStore::deliver`
+// below, verified by the same `blake3` line and decoded by the same
+// decoders. The split is here rather than inside each function because
+// there is nothing in common between the two but the bytes.
+
 /// Fetch and verify one asset. Blocking; runs its own small runtime, so call
 /// it from a worker thread.
+#[cfg(has_native_net)]
 pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
     let bytes = get(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie)?;
     if *blake3::hash(&bytes).as_bytes() != *hash {
@@ -88,11 +100,13 @@ pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>,
 /// One strict HTTPS `GET` of `path` at `origin`: no cookie, no redirect, a
 /// `Content-Length` body no larger than an asset. Blocking. The manifest and
 /// every asset come through here and nothing else does.
+#[cfg(has_native_net)]
 pub fn get(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
     rt.block_on(get_async(origin, path, accept, cookie))
 }
 
+#[cfg(has_native_net)]
 async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
@@ -123,6 +137,7 @@ async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>)
     parse_response(&raw)
 }
 
+#[cfg(has_native_net)]
 async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> Result<(), AssetError> {
     let mut buf = [0u8; 16 * 1024];
     loop {
@@ -139,6 +154,7 @@ async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> R
 
 /// The smallest HTTP/1.1 response reader that is still strict: status 200,
 /// a `Content-Length`, exactly that many body bytes.
+#[cfg(has_native_net)]
 fn parse_response(raw: &[u8]) -> Result<Vec<u8>, AssetError> {
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| AssetError::Http("no header terminator".into()))?;
     let head = std::str::from_utf8(raw.get(..split).unwrap_or(&[])).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
@@ -168,6 +184,8 @@ fn parse_response(raw: &[u8]) -> Result<Vec<u8>, AssetError> {
     }
     Ok(body.to_vec())
 }
+
+// ------------------------------------------- everything below is portable
 
 /// A decoded image, RGBA8, row-major, straight (non-premultiplied) alpha.
 #[derive(Debug, Clone, PartialEq, Eq)]

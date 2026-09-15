@@ -446,12 +446,19 @@ pub struct Offscreen {
 impl Renderer {
     /// A renderer with no window: adapter chosen without a surface, so this
     /// works on a headless machine as long as any adapter exists.
+    ///
+    /// Native only, and not merely for want of a thread to block. wgpu's
+    /// WebGL2 backend enumerates adapters *out of* a canvas's GL context,
+    /// so a probe with no surface finds WebGPU or nothing — a page must
+    /// make its surface first and ask about that. See `app.rs`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_headless() -> Result<Self, RenderError> {
         Self::new_headless_timed(std::env::var("EUI_GPU_TRACE").as_deref() == Ok("1"))
     }
 
     /// [`Self::new_headless`], timing the GPU or not as asked rather than
     /// as the environment says.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_headless_timed(timed: bool) -> Result<Self, RenderError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::all(), ..Default::default() });
         let adapter =
@@ -462,21 +469,37 @@ impl Renderer {
 
     /// A renderer on an adapter the caller chose (for a window surface).
     /// `EUI_GPU_TRACE=1` asks for the GPU's own timing of each frame.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_adapter(adapter: &wgpu::Adapter) -> Result<Self, RenderError> {
         Self::with_adapter_timed(adapter, std::env::var("EUI_GPU_TRACE").as_deref() == Ok("1"))
     }
 
     /// [`Self::with_adapter`], timing the GPU or not as asked.
+    ///
+    /// The blocking half of [`Self::with_adapter_async`]: the device
+    /// request is the only part of this that is asynchronous, and a thread
+    /// that may wait for it is the ordinary case. A browser is the one that
+    /// may not — see the async twin.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_adapter_timed(adapter: &wgpu::Adapter, timed: bool) -> Result<Self, RenderError> {
+        pollster::block_on(Self::with_adapter_async(adapter, timed))
+    }
+
+    /// [`Self::with_adapter_timed`] without a thread to block.
+    ///
+    /// Asking a browser for a device is asking the page's one thread to
+    /// wait for the page, which is the one thing it may never do:
+    /// `request_device` is a promise, and blocking on it parks the thread
+    /// that has to run it. So the await is the whole difference, and
+    /// everything after it — the modules, the layouts, the pipelines — is
+    /// the same work in the same order, which is why it is one body with
+    /// two front doors rather than two bodies.
+    pub async fn with_adapter_async(adapter: &wgpu::Adapter, timed: bool) -> Result<Self, RenderError> {
         // Timestamps only when asked, and only where they exist: a feature
         // asked for and absent is no device at all.
         let timed = timed && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let features = if timed { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() };
-        let ask = |limits: wgpu::Limits| {
-            pollster::block_on(
-                adapter.request_device(&wgpu::DeviceDescriptor { label: Some("eui"), required_features: features, required_limits: limits, memory_hints: wgpu::MemoryHints::MemoryUsage }, None),
-            )
-        };
+        let descriptor = |limits: wgpu::Limits| wgpu::DeviceDescriptor { label: Some("eui"), required_features: features, required_limits: limits, memory_hints: wgpu::MemoryHints::MemoryUsage };
         // Downlevel limits cap textures at 2048 px, which a high-DPI window
         // exceeds on its first frame. Ask for the ordinary defaults, trimmed
         // to what the adapter has.
@@ -490,9 +513,22 @@ impl Renderer {
         // be opened at all. Second and not first, because the defaults are
         // the floor the renderer is written against and a device that meets
         // them should be held to them.
-        let (device, queue) = match ask(wgpu::Limits::default().using_resolution(adapter.limits())) {
+        //
+        // A third tier below those two, for the one adapter that can refuse
+        // both: WebGL2. `adapter.limits()` is satisfiable by construction
+        // everywhere a driver reports honestly, and on the web it is the
+        // browser reporting — so this is the floor to fall back to rather
+        // than a device that never opens and a canvas that never draws.
+        // Last, because it caps a texture at 2048 px and the renderer would
+        // rather have the room.
+        let (device, queue) = match adapter.request_device(&descriptor(wgpu::Limits::default().using_resolution(adapter.limits())), None).await {
             Ok(d) => d,
-            Err(first) => ask(adapter.limits()).map_err(|_| RenderError::Device(first.to_string()))?,
+            Err(first) => match adapter.request_device(&descriptor(adapter.limits()), None).await {
+                Ok(d) => d,
+                Err(_) => {
+                    adapter.request_device(&descriptor(wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())), None).await.map_err(|_| RenderError::Device(first.to_string()))?
+                }
+            },
         };
 
         // Both of wgpu's out-of-band reports, recorded rather than fatal.
@@ -696,7 +732,13 @@ impl Renderer {
             adapter_name: adapter.get_info().name,
             scene_msaa: adapter.get_texture_format_features(FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4)
                 && adapter.get_texture_format_features(scene::DEPTH_FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4),
-            scene_ok: adapter.get_info().backend != wgpu::Backend::Gl,
+            // GL generates unchecked indexing. A browser is the other
+            // case, and a different one: on WebGPU nothing can be caught
+            // at all, because `pop_error_scope` is a promise and the one
+            // thread a page has is the thread drawing. A module a server
+            // chose that cannot be checked before it is compiled is not
+            // offered — `Tab::open` masks the capability out and says why.
+            scene_ok: !matches!(adapter.get_info().backend, wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu),
             trouble,
             timing,
         })
@@ -851,6 +893,7 @@ impl Renderer {
     ///
     /// The scope catches validation only. A device lost under `f` lands in
     /// [`Self::trouble`] instead, which is where the caller looks next.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn scoped<T>(&self, what: &str, f: impl FnOnce(&wgpu::Device) -> T) -> Result<T, RenderError> {
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let made = f(&self.device);
@@ -860,6 +903,27 @@ impl Renderer {
             // diagnostic names the driver (08 §8).
             Some(e) => Err(RenderError::Uncaptured(format!("{what}: {e}"))),
         }
+    }
+
+    /// [`Self::scoped`] where a scope cannot answer in time — so it does
+    /// not open one and does not pretend to.
+    ///
+    /// WebGPU's validation errors are asynchronous by specification: the
+    /// verdict on a module arrives through a promise, after the thing built
+    /// from it has been used, and the one thread a page has is the thread
+    /// drawing. There is no synchronous escape and no amount of structure
+    /// makes one.
+    ///
+    /// Since what this guards is a program the *server* wrote (11 §2.5),
+    /// the answer is not to build it unchecked but to not offer the
+    /// capability: `scene_ok` is false on this backend, `Tab::open` masks
+    /// `scene` out of the grant, and nothing reaches here. This refuses
+    /// rather than succeeding quietly, so that if a path ever does reach
+    /// it the session ends with a reason instead of compiling something
+    /// nobody verified.
+    #[cfg(target_arch = "wasm32")]
+    pub fn scoped<T>(&self, what: &str, _f: impl FnOnce(&wgpu::Device) -> T) -> Result<T, RenderError> {
+        Err(RenderError::Uncaptured(format!("{what}: a browser cannot check a module before it is used, so one is never built here")))
     }
 
     /// The device, for a client that manages its own surface.

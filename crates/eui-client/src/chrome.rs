@@ -254,7 +254,7 @@ impl Chrome {
     }
 
     /// How old the list last handed out is, in seconds (03 §5).
-    pub fn list_age(&self, now: std::time::Instant) -> f32 {
+    pub fn list_age(&self, now: crate::time::Instant) -> f32 {
         self.driver.list_age(now)
     }
 

@@ -30,6 +30,22 @@ winit = "0.30"
 wgpu = "23"
 # Reinterpreting a validated mesh as bytes across the worker pipe, and back.
 bytemuck = "1"
+blake3 = "1"
+png = "0.17"
+# JPEG and WebP, both pure Rust and both optional: see the `jpeg` and
+# `webp` features.
+zune-jpeg = { version = "0.5.15", optional = true }
+image-webp = { version = "0.2.0", optional = true }
+
+# The socket, the clock's trust store and the two devices — every one of them
+# a thing the host does itself in a browser. A page is handed a WebSocket
+# that has already done TLS, a `fetch` that has already checked the chain,
+# and an audio graph it may not write samples into; so the crates that do
+# those jobs here are not merely unused on `wasm32`, they do not build for
+# it. `ring` compiles C, `cpal` and `notify` want a device and an inotify,
+# and `tokio`'s reactor wants a poll. See `transport_web.rs` for the half
+# that replaces them.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -37,12 +53,6 @@ pollster = "0.4"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "0.26"
-blake3 = "1"
-png = "0.17"
-# JPEG and WebP, both pure Rust and both optional: see the `jpeg` and
-# `webp` features.
-zune-jpeg = { version = "0.5.15", optional = true }
-image-webp = { version = "0.2.0", optional = true }
 # Ed25519 for the manifest signature; already in the tree under rustls.
 ring = "0.17"
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
@@ -57,7 +67,7 @@ cpal = "0.15"
 # adapter for TalkBack or VoiceOver — so they are declared for every target
 # but those two, and `build.rs` turns the matching `has_*` cfg off there.
 # See its `platform_parts`.
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))'.dependencies]
 # The platform's own trust store, so the client agrees with the machine it
 # runs on: a development CA installed by `mkcert -install` is there, and
 # every other client on that machine already honours it. A desktop only —
@@ -73,6 +83,39 @@ arboard = { version = "3", optional = true, default-features = false, features =
 # XDG portal rather than GTK, so a client in a sandbox asks the desktop for
 # a file the way everything else does.
 rfd = { version = "0.17.2", optional = true }
+
+# A page. Nothing here is new to the lock file: `winit` and `wgpu` already
+# resolve every one of these for this target, so naming them is the client
+# agreeing with the two libraries it is built on rather than converting at
+# every boundary.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The window's own channel to the socket. Only `sync`: the far end of
+# `Connection.tx` is a task on the page's one thread, and keeping the type
+# identical is what leaves `app.rs` untouched. No reactor, no runtime.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+# `Backends::GL` on this target is WebGL2, and it is not in wgpu's default
+# set. Without it a browser with no WebGPU gets no adapter and draws
+# nothing, which is a blank rectangle rather than an error.
+# `webgl`: `Backends::GL` here is WebGL2, and it is not in wgpu's default
+# set — without it a browser with no WebGPU gets no adapter and draws
+# nothing. `fragile-send-sync-non-atomic-wasm`: wgpu's handles are `!Send`
+# on this target, and `Wake` travels through winit's `Sender<T>`. The
+# feature is named for a hazard that does not exist here — a page has one
+# thread and wasm has no threads without `SharedArrayBuffer`, which this
+# build does not use and whose headers the sites deliberately do not set.
+wgpu = { version = "23", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
+# `std::time::Instant` panics here; this is `performance.now()` behind
+# `std`'s own names, and it is what winit's `ControlFlow::WaitUntil` takes.
+web-time = "1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "Element", "HtmlCanvasElement", "console", "Location",
+    "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "EventTarget",
+    "Request", "RequestInit", "RequestMode", "RequestRedirect", "RequestCredentials",
+    "Response", "Headers",
+] }
 
 # iOS. UIKit is asked exactly one question — how much of the window its soft
 # keyboard is standing on — and it is asked from `eui-uikit` rather than
