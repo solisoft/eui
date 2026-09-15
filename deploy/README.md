@@ -59,11 +59,25 @@ leaves the page rendering.
 hijacking), so a page here may not open a session on `eui-data`. The page
 asks for `/_eui/session/gallery` on its own host; the proxy has to answer it.
 
-One line, in the site's `proxy.conf` on the server:
+One line, in `proxy.conf` on the server — **and the host is not optional**:
 
 ```
-/_eui/* -> https://eui-data.solisoft.net/
+eui.solisoft.net/_eui/* -> https://eui-data.solisoft.net/
 ```
+
+**Without the host it applies to every site on the box**, and that is not a
+tidiness point: it took `/live` down along with `/demo`. A bare `/_eui/*`
+catches the demo application's *own* session paths and sends them out to
+Cloudflare and back into the proxy, where the same rule catches them again;
+they end as a 404 rather than a session. The symptom is a page that loads,
+a client that starts, a canvas that measures itself correctly — and
+`connect failed: the browser did not say why` in the console, for both
+sites at once.
+
+The proof, if it is ever in doubt again, is any host that has nothing to do
+with EUI: with the rule scoped, `www.solisoft.net/_eui/session/x` answers
+**421** like any other unrouted path. With it unscoped it answers **404**,
+because the proxy really did route it — to the wrong place.
 
 **Why the public name and not a port.** The demo application runs in
 blue-green slots whose ports the proxy assigns, so there is no fixed port to
