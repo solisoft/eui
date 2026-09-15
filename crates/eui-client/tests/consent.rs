@@ -55,6 +55,33 @@ fn allowing_grants_everything_that_was_asked_for() {
     assert!(!d.asking_consent(), "and the sheet is done with");
 }
 
+/// The same answer, on the window the machine actually has.
+///
+/// Every other test here runs at 500x400 and scale 1.0, where a pointer's
+/// coordinates and the layout's are the same numbers — so a unit mismatch
+/// anywhere between the two would be invisible in all of them. This one is a
+/// desktop window on a 1.5x display, with the seven capabilities the demo
+/// application asks for, because that is the configuration a person reported
+/// being unable to answer.
+#[test]
+fn the_sheet_can_be_answered_on_a_hidpi_window() {
+    let mut d = Driver::new(820.0, 927.0, 1.5, 0);
+    let asked = caps::CAMERA | caps::MICROPHONE | caps::CLIPBOARD_READ | caps::LOCATION | caps::FS_PICK | caps::NFC | caps::SCENE;
+    d.ask_consent(asked, "demo-app");
+    assert!(d.asking_consent());
+
+    let _ = d.paint(1230, 1390);
+    let ix = d.session().lookup(ALLOW).expect("the sheet has no Allow");
+    let r = d.layout().rect(ix).expect("Allow was not laid out");
+    let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let _ = d.input(Input::PointerMove(x, y));
+    let _ = d.input(Input::PointerDown(0));
+    let _ = d.input(Input::PointerUp(0));
+
+    assert_eq!(d.take_consent(), Some(asked), "Allow at {x},{y} did not answer the sheet");
+    assert!(!d.asking_consent());
+}
+
 #[test]
 fn refusing_grants_nothing() {
     let mut d = driver();

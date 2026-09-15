@@ -175,6 +175,15 @@ const CHART: Icon = &[&[(4.0, 20.0), (20.5, 20.0)], &[(7.5, 20.0), (7.5, 14.0)],
 /// equals sign.
 const SLIDERS: Icon = &[&[(4.0, 8.5), (20.0, 8.5)], &[(4.0, 15.5), (20.0, 15.5)], &[(9.0, 5.5), (9.0, 11.5)], &[(15.5, 12.5), (15.5, 18.5)]];
 
+/// A padlock: the shackle as a five-segment arc over a closed body.
+///
+/// Drawn rather than borrowed from a font because every icon here is, and
+/// because this one has to read at 16 px in a chrome strip — where a lock
+/// with any detail in it becomes a smudge. Two strokes, both closed by the
+/// renderer's join, and nothing inside the body: a keyhole at this size is
+/// one dark pixel that looks like a mistake.
+const LOCK: Icon = &[&[(5.5, 11.0), (18.5, 11.0), (18.5, 20.0), (5.5, 20.0), (5.5, 11.0)], &[(8.0, 11.0), (8.0, 8.0), (9.0, 6.0), (12.0, 5.0), (15.0, 6.0), (16.0, 8.0), (16.0, 11.0)]];
+
 /// A triangle with a bang in it, for a warning.
 const WARNING: Icon = &[&[(12.0, 4.0), (21.0, 19.5), (3.0, 19.5), (12.0, 4.0)], &[(12.0, 10.0), (12.0, 14.5)], &[(12.0, 17.0)]];
 
@@ -217,12 +226,15 @@ pub fn icon(name: &str) -> Option<Icon> {
         "filter" | "funnel" => FILTER,
         "chart" | "reports" => CHART,
         "sliders" | "settings" => SLIDERS,
+        "lock" | "permissions" => LOCK,
         _ => return None,
     })
 }
 
 /// Every name this client draws, for a catalogue that wants to check itself.
 pub const NAMES: &[&str] = &[
+    "lock",
+    "permissions",
     "chevron_down",
     "chevron_up",
     "chevron_left",

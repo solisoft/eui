@@ -15,10 +15,42 @@ const H: f32 = 560.0;
 
 fn tabs() -> Vec<TabView<'static>> {
     vec![
-        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false },
-        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false },
-        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local), link: None, can_back: false, can_forward: false },
+        TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false, grants: None },
+        TabView { title: "Needle", origin: "wss://needle.example", path: "/_eui/session/music", trust: Some(Trust::Pinned), link: None, can_back: false, can_forward: false, grants: None },
+        TabView { title: "Feedx", origin: "ws://127.0.0.1:5090", path: "/_eui/session/feed", trust: Some(Trust::Local), link: None, can_back: false, can_forward: false, grants: None },
     ]
+}
+
+/// The padlock is there when an application asked for something, and it is
+/// what reopens the question.
+///
+/// The sheet is shown once, before the first connection, and never again on
+/// its own — so without this a person who said yes quickly, or who wants the
+/// camera back, has nowhere to go. It must also stay absent for a tab whose
+/// application asked for nothing, because an icon that opens an empty sheet
+/// is worse than no icon.
+#[test]
+fn the_address_row_offers_the_permissions_back() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+
+    let mut asking = tabs();
+    if let Some(first) = asking.first_mut() {
+        first.grants = Some(eui_proto::caps::CAMERA | eui_proto::caps::FS_PICK);
+    }
+    chrome.rebuild(&asking, 0);
+    let found = (0..40).find_map(|i| {
+        let x = 100.0 + f64::from(i) as f32 * 4.0;
+        let got = click(&mut chrome, x, 54.0);
+        got.contains(&Action::Permissions).then_some(x)
+    });
+    assert!(found.is_some(), "no padlock anywhere along the address row");
+
+    // And nothing to press for an application that asked for nothing.
+    chrome.rebuild(&tabs(), 0);
+    for i in 0..40 {
+        let x = 100.0 + f64::from(i) as f32 * 4.0;
+        assert!(!click(&mut chrome, x, 54.0).contains(&Action::Permissions), "a padlock at {x} for a tab that was never asked anything");
+    }
 }
 
 /// Press and release at a point, and say what the chrome made of it.
@@ -61,7 +93,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
     // A tab with no application: the chrome owns the window below the
     // strip and gives its own field the focus, so the first keystroke is
     // already part of an address.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }], 0);
     assert!(chrome.is_blank());
     assert!(!chrome.content_top().is_finite(), "no application has room in an empty tab");
 
@@ -77,7 +109,7 @@ fn an_address_typed_into_an_empty_tab_comes_back_as_a_url_to_open() {
 #[test]
 fn an_empty_address_opens_nothing() {
     let mut chrome = Chrome::new(W, H, 1.0);
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }], 0);
     let _ = chrome.input(Input::Text("   ".to_owned()));
     let out = chrome.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
     assert!(out.is_empty(), "whitespace is not an address");
@@ -168,7 +200,7 @@ fn the_keyboard_changes_hands_with_the_address_bar() {
     assert!(!chrome.holds_keys(), "leaving gives it back");
 
     // An empty tab always holds it: its page is the chrome's own.
-    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }], 0);
+    chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }], 0);
     assert!(chrome.holds_keys(), "an empty tab has no application to give it to");
 }
 
@@ -200,7 +232,7 @@ fn the_chromes_ground_follows_the_palette_it_is_put_in() {
 }
 
 fn blank() -> Vec<TabView<'static>> {
-    vec![TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false }]
+    vec![TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }]
 }
 
 fn recents() -> Vec<eui_client::recent::Recent> {
@@ -280,7 +312,7 @@ fn typing_takes_the_keyboard_back_and_keeps_what_was_typed() {
 }
 
 fn one_tab(back: bool, forward: bool) -> Vec<TabView<'static>> {
-    vec![TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: back, can_forward: forward }]
+    vec![TabView { title: "Vitrine", origin: "wss://vitrine.example", path: "/_eui/session/gallery", trust: Some(Trust::Pinned), link: None, can_back: back, can_forward: forward, grants: None }]
 }
 
 /// Back and forward sit before the address, in that order, and keep their

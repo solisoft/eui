@@ -50,6 +50,9 @@ pub enum Action {
     Back,
     /// A step forward through it.
     Forward,
+    /// Put the consent sheet up again for the active tab, so what an
+    /// application was allowed can be seen and changed after the fact.
+    Permissions,
     /// Leave the address bar and show the address again. Enter on an
     /// unchanged address produces this and nothing else: the driver emits
     /// `Change` only when the text actually moved, so without this a person
@@ -99,6 +102,11 @@ pub struct TabView<'a> {
     /// Spec 01 §4: a window that stopped talking to its application must
     /// not look like one that is merely idle.
     pub link: Option<&'a str>,
+    /// What this application's manifest asked for, once it has arrived, so
+    /// the address row can offer the answer back. `None` before the manifest
+    /// and for a manifest that asks for nothing — there is no question to
+    /// reopen, and an icon that opens an empty sheet is worse than no icon.
+    pub grants: Option<u32>,
 }
 
 /// The chrome: a driver, a tree, and what its node ids mean.
@@ -147,6 +155,8 @@ const BACK_TEXT: u32 = 23;
 const FWD: u32 = 24;
 const FWD_TEXT: u32 = 25;
 const LINK: u32 = 20;
+const GRANTS: u32 = 26;
+const GRANTS_TEXT: u32 = 27;
 const LINK_TEXT: u32 = 21;
 const ADDR: u32 = 4;
 const FIELD: u32 = 5;
@@ -878,8 +888,24 @@ impl Chrome {
             self.actions.insert(FIELD, Action::EditAddress);
             self.actions.insert(ORIGIN, Action::EditAddress);
             self.actions.insert(PATH, Action::EditAddress);
+            // Before everything else in the field, where a browser puts its
+            // padlock: what this application was allowed, reachable without
+            // having to remember that it was ever asked. A person who said
+            // yes too quickly, or who wants the camera back, has nowhere
+            // else to go — the sheet is shown once, before the first
+            // connection, and never again on its own.
+            if t.grants.is_some() {
+                self.actions.insert(GRANTS, Action::Permissions);
+                self.actions.insert(GRANTS_TEXT, Action::Permissions);
+            }
             b.click();
-            b.open(NodeKind::Box, FIELD, s_field, u32::from(chip.is_some()) + u32::from(t.link.is_some()) + if editing { 1 } else { 2 });
+            b.open(NodeKind::Box, FIELD, s_field, u32::from(t.grants.is_some()) + u32::from(chip.is_some()) + u32::from(t.link.is_some()) + if editing { 1 } else { 2 });
+            if t.grants.is_some() {
+                b.click();
+                b.open(NodeKind::Box, GRANTS, s_reload, 1);
+                b.icon(GRANTS_TEXT, s_step_icon, "lock");
+                b.close();
+            }
             if let Some((label, s)) = chip {
                 b.open(NodeKind::Box, CHIP, s, 1);
                 b.text(CHIP_TEXT, s_chip_text, label);

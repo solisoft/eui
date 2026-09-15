@@ -166,6 +166,7 @@ enum Link {
 
 /// A consent sheet that is up, and what it will have to remember.
 #[cfg_attr(not(has_pins), allow(dead_code))]
+#[derive(Clone)]
 struct Asking {
     /// Whose answer this is.
     app_id: String,
@@ -327,6 +328,11 @@ struct Tab {
     /// that had nothing to ask — which is every `ws://` loopback one,
     /// because those carry no manifest to ask about.
     asking: Option<Asking>,
+    /// The same question, kept after it has been answered so the chrome's
+    /// padlock can put it again. `asking` is taken the moment there is an
+    /// answer — that is what stops it being asked twice — so it cannot also
+    /// be the record of what was asked.
+    perms: Option<Asking>,
     /// What the address bar says about the origin.
     trust: crate::chrome::Trust,
     /// What the socket is doing.
@@ -764,6 +770,7 @@ impl Tab {
             audio_rx: None,
             answered: false,
             asking: None,
+            perms: None,
             trust: crate::chrome::Trust::Unverified,
             link: Link::Ended,
             tries: 0,
@@ -811,6 +818,13 @@ impl Tab {
                 // and gets asked.
                 let settled = tab.allowed | before.map_or(0, |b| b.asked);
                 let unanswered = m.capabilities & !settled;
+                // Kept even when nothing is unanswered: the padlock exists
+                // for the person who already said yes and wants to look
+                // again, which is the common case and the only one the
+                // sheet alone cannot serve.
+                if m.capabilities & eui_proto::caps::ALL != 0 {
+                    tab.perms = Some(Asking { app_id: m.app_id.clone(), asked: m.capabilities & eui_proto::caps::ALL });
+                }
                 let granted = m.capabilities & tab.allowed;
                 let refused = m.capabilities & !tab.allowed;
                 eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
@@ -991,6 +1005,7 @@ impl Tab {
         // it, because a server that keeps a stack was never asked to keep
         // what it popped.
         crate::chrome::TabView {
+            grants: self.perms.as_ref().map(|p| p.asked),
             title,
             origin,
             path,
@@ -1630,7 +1645,7 @@ impl Shell {
         // An empty shell still shows one tab, so there is something to
         // click and something to type into.
         if views.is_empty() {
-            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false };
+            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None, grants: None, can_back: false, can_forward: false };
             chrome.set_trouble(None);
             chrome.rebuild(&[blank], 0);
         } else {
@@ -1758,6 +1773,31 @@ impl Shell {
                     c.edit_address();
                 }
                 self.rebuild_chrome();
+            }
+            // The sheet again, for an application that has already been
+            // answered. The grant rides in `Hello` (01 §2.1), so there is no
+            // way to change it on a live session: the socket is dropped here
+            // and `consent_answered` dials a new one with the new answer.
+            // That is honest rather than convenient — a capability taken
+            // away has to stop being true, and a session that kept running
+            // would still be holding it.
+            A::Permissions => {
+                if let Some(t) = self.tabs.get_mut(self.active) {
+                    if let Some(p) = t.perms.clone() {
+                        // Cleared, not kept: the answer replaces what was
+                        // said last time. `consent_answered` ORs what comes
+                        // back, so leaving these set would make every row
+                        // one-way and turning one off do nothing.
+                        t.allowed &= !p.asked;
+                        t.conn = None;
+                        t.link = Link::Asking;
+                        let name = t.title.clone();
+                        t.asking = Some(p.clone());
+                        t.backend.ask_consent(p.asked, &name);
+                    }
+                }
+                self.rebuild_chrome();
+                self.window.request_redraw();
             }
             A::LeaveAddress => {
                 if let Some((c, _)) = &mut self.chrome {
