@@ -96,8 +96,18 @@ async function run(fig) {
     const url = fig.dataset.url || `${scheme}://${location.host}/_eui/session/${fig.dataset.component}`;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.max(1, Math.round(stage.clientWidth * dpr));
-    canvas.height = Math.max(1, Math.round(stage.clientHeight * dpr));
+    // `ceil` and not `round`, and it is the stylesheet's `width: 100%` that
+    // makes the difference visible. The client sets the canvas's CSS size
+    // from the backing store it is given, `backing / dpr`, as an inline
+    // style — which beats the stylesheet. So rounding *down* hands back a
+    // canvas fractionally smaller than the box it is supposed to fill: at
+    // 853 px and dpr 1.65, `round(1407.45)` is 1407 and the canvas comes
+    // back 852.727 px, leaving a sliver of the stage showing along the
+    // right edge and the bottom. Rounding up can only overshoot, and the
+    // stage is `overflow: hidden`, so the excess is a fraction of a pixel
+    // nobody sees.
+    canvas.width = Math.max(1, Math.ceil(stage.clientWidth * dpr));
+    canvas.height = Math.max(1, Math.ceil(stage.clientHeight * dpr));
     canvas.hidden = false;
     // Laid out, so the client can measure it — but not yet *shown*. The
     // canvas sits over the poster, and until the session has drawn its first
