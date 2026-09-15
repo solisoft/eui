@@ -24,7 +24,8 @@
 
         </div>
 
-        <figure class="demo" data-eui data-component="gallery">
+        <figure class="demo" data-eui data-component="gallery"
+                    data-allow="camera,microphone,clipboard.read,clipboard.write,notifications,location,fs.pick,fs.save,nfc,scene">
             <div class="demo__stage">
                 <img class="demo__poster"
                      src="/images/demo/gallery-light.png"

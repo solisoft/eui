@@ -165,9 +165,25 @@ async function run(fig) {
       { once: true },
     );
 
-    // Nothing is granted. A documentation page may not ask a reader for a
-    // camera, and the server's manifest requests none either.
-    m.start(canvas.id, url, "");
+    // What the page grants, and it grants it rather than asking.
+    //
+    // The client's consent sheet is the right thing in a client: it goes up
+    // before anything is dialled, every row starts chosen, and each can be
+    // turned off on its own. On a page it is the wrong thing, because the
+    // reader did not come here to be asked — they pressed a button called
+    // "Run it" and expect the application, not a permissions wall in front
+    // of a demo they have not seen yet.
+    //
+    // So `data-allow` on the figure names what this page grants, and the
+    // question never arises. It is a page-author's decision and stays
+    // visible in the markup: drop the attribute and the sheet comes back,
+    // which is the right default for anything that is not a demo.
+    //
+    // Granting is not the same as reaching hardware. `camera`, `microphone`
+    // and `location` still go through the browser's own permission prompt
+    // the moment anything actually asks for them, and that prompt is the one
+    // that matters — it is the reader's browser asking, not a page.
+    m.start(canvas.id, url, fig.dataset.allow ?? "");
 
     live = {
       stop: () => {

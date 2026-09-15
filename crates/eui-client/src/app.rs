@@ -2594,8 +2594,24 @@ impl Shell {
         // never connects would still uncover an empty canvas — promptly.
         // A frame drawn while the link is up is a frame with an application
         // in it.
+        //
+        // `Asking` counts too, and leaving it out was a real fault rather
+        // than a nicety. The consent sheet goes up *before* anything is
+        // dialled — `Hello` carries the grant, so the question has to be
+        // answered first — and it is drawn on this canvas like everything
+        // else. Waiting for `Up` therefore kept the canvas at zero opacity
+        // underneath the poster for exactly as long as the person was being
+        // asked something, which is to say for ever: they are looking at a
+        // still image and a note that says "Connecting…", the question is
+        // invisible beneath it, and there is no way to answer a question you
+        // cannot see. Reported as "l'app demande les droits, mais impossible
+        // d'accepter ou pas", which is precisely what it looks like from the
+        // outside.
+        //
+        // Both states mean the same thing to the page: there is something on
+        // this canvas that the reader is meant to look at.
         #[cfg(target_arch = "wasm32")]
-        if !self.announced && self.tabs.get(self.active).is_some_and(|t| matches!(t.link, Link::Up)) {
+        if !self.announced && self.tabs.get(self.active).is_some_and(|t| matches!(t.link, Link::Up | Link::Asking)) {
             self.announced = true;
             self.announce_first_frame();
         }
