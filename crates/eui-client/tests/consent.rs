@@ -112,6 +112,13 @@ fn a_session_can_start_once_the_sheet_has_been_answered() {
 
     assert_eq!(out, vec![Frame::Ack { seq: 1 }], "the first batch after a grant was refused: {out:?}");
     assert!(d.closed().is_none(), "the session closed: {:?}", d.closed());
+
+    // Accepted is not the same as drawn. The sheet's teardown empties the
+    // session, so a tree that arrives and lands nowhere leaves a window that
+    // is blank rather than broken — which is harder to report and no better
+    // to look at.
+    let list = d.paint(500, 400);
+    assert!(!list.quads.is_empty() || !list.runs.is_empty(), "the first frame after a grant drew nothing");
 }
 
 #[test]
