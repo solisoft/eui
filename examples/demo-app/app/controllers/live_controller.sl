@@ -1383,7 +1383,14 @@ end
 # The rail, or — narrow — a navbar with the sections in a drawer behind it.
 # The drawer is a layer, so it is composed by the view, not by the shell.
 def erp_shell(state, lay, page)
-  content = column({"gap": 0, "grow": 1, "height": "100%"}, [erp_topbar(state, lay), page])
+  # `grow` alone, and the `height: "100%"` that used to sit beside it is the
+  # bug it looks like a belt for. This column holds the top bar and the page;
+  # 100% is 100% of the row it sits in, so it came out as tall as the whole
+  # window while starting below a 31 px bar — overflowing by exactly that,
+  # and putting the bottom of every section where no scroll offset reaches.
+  # The last card of a page was simply not gettable to. `grow` takes the room
+  # that is left, which is what both of them were trying to say.
+  content = column({"gap": 0, "grow": 1, "min_height": 0}, [erp_topbar(state, lay), page])
   return row(
     {"gap": 0, "width": "100%", "height": "100%"},
     [erp_rail(state), content]
@@ -4273,8 +4280,14 @@ def gallery_view(raw_state)
   body_page = nav_page(
     section,
     column(
-      {"grow": 1, "width": "100%", "height": "100%", "bg": "surface.base"},
-      [scroll({"grow": 1}, [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])])]
+      # `grow` and not `height: 100%`. The two look interchangeable and are
+      # not: this sits in a column that also holds the top bar, so 100% is
+      # the whole column — bar included — and the page ends up taller than
+      # the room left for it by exactly the bar's height. Its bottom falls
+      # below the window, where no scroll offset reaches, and the last card
+      # of every section becomes unreachable. `grow` takes what is left.
+      {"grow": 1, "width": "100%", "min_height": 0, "bg": "surface.base"},
+      [scroll({"grow": 1, "min_height": 0}, [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])])]
     ),
     {"motion": state["page_motion"] ?? "none"}
   )
