@@ -2380,7 +2380,10 @@ def erp_customers_section(state, lay)
     {"gap": 3, "width": "100%"},
     [nav_page(
       deep ? "cust:detail" : "cust:list",
-      deep ? erp_customer_detail(state, lay, 0) : erp_customer_list(state, 0),
+      # Opaque for the same reason the section pages are: the list and the
+      # detail cross over the same rectangle, and glass over glass is not a
+      # slide, it is two pages at once.
+      restyle(deep ? erp_customer_detail(state, lay, 0) : erp_customer_list(state, 0), {"bg": "surface.base"}),
       {"motion": motion}
     )]
   )
@@ -4255,9 +4258,24 @@ def gallery_view(raw_state)
   # renders as one leaving and one arriving (03 §5). `scale` is the
   # fade-through: the sections are siblings, neither is deeper than the other,
   # and a slide would claim a direction that does not exist between them.
+  # The `bg` on the wrapper is what makes a transition readable. A page with
+  # no background of its own is a sheet of glass: while one is leaving and the
+  # next arriving they occupy the same rectangle, so both sets of text are on
+  # screen at once, overlapping and half-lit. That reads as a rendering fault
+  # rather than as motion. `surface.base` is exactly what the client clears
+  # the surface to (`Role::SurfaceBase`, eui-render/src/paint.rs), so an
+  # opaque page is indistinguishable from its own background when nothing is
+  # moving, and hides the other page completely when something is.
+  #
+  # On a wrapper and not on the scroller's column: that column is as tall as
+  # its content, so a short section would paint only part of the rectangle
+  # and let the outgoing page show through under it.
   body_page = nav_page(
     section,
-    scroll({"grow": 1}, [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])]),
+    column(
+      {"grow": 1, "width": "100%", "height": "100%", "bg": "surface.base"},
+      [scroll({"grow": 1}, [column({"gap": lay["wide"] ? 5 : 3, "pad": lay["wide"] ? 6 : 4, "width": "100%"}, [body])])]
+    ),
     {"motion": state["page_motion"] ?? "none"}
   )
   layers = [erp_shell(state, lay, body_page)]

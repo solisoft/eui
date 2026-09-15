@@ -87,6 +87,25 @@ pub struct Connection {
     ws: web_sys::WebSocket,
 }
 
+/// Wake the window, but not from inside the socket callback that is asking.
+///
+/// `notify` is `EventLoopProxy::send_event`, and what it reaches is the whole
+/// window: a pump, a tree, a frame. Run from the tail of `onmessage` that work
+/// happens *inside* the JS callback, so anything it decides — a session that
+/// ends, a socket redialled, a tab closed — drops this `Connection` and frees
+/// the very `Closure` still on the stack. `wasm-bindgen` catches the return
+/// into freed Rust and throws "closure invoked recursively or after being
+/// dropped", which traps the module: the canvas keeps its last frame and the
+/// page keeps saying "Connecting…" for ever.
+///
+/// A microtask costs one turn of the loop and puts every wake after the
+/// callback has returned, where dropping a `Connection` is ordinary.
+#[cfg(target_arch = "wasm32")]
+fn wake_later(notify: &Rc<dyn Fn()>) {
+    let notify = Rc::clone(notify);
+    wasm_bindgen_futures::spawn_local(async move { notify() });
+}
+
 impl std::fmt::Debug for Connection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connection").field("origin", &self.origin).finish()
@@ -95,6 +114,26 @@ impl std::fmt::Debug for Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        // The handlers come off *before* the close, and that order is the
+        // whole of this method.
+        //
+        // `close()` is a request, not an end: the socket stays alive long
+        // enough to deliver a `close` event, and a `message` already queued
+        // is still delivered. The `Closure` fields below are freed the
+        // moment this returns, so a socket still holding them calls into
+        // freed Rust and `wasm-bindgen` throws
+        //
+        //     Uncaught Error: closure invoked recursively or after being
+        //     dropped                              ... at WebSocket.real
+        //
+        // which is a trap: the module stops, so the window stops drawing
+        // and the page is left with whatever was on the canvas and a note
+        // that still says "Connecting…". Clearing the handlers first means
+        // nothing the browser has left to deliver has anywhere to land.
+        self.ws.set_onopen(None);
+        self.ws.set_onmessage(None);
+        self.ws.set_onerror(None);
+        self.ws.set_onclose(None);
         // The page outlives the session; a socket left open would go on
         // waking a loop that no longer has a tab for it.
         let _ = self.ws.close();
@@ -263,7 +302,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
                 }
                 let _ = ws.close();
             }
-            notify();
+            wake_later(&notify);
         })
     };
     ws.set_onmessage(Some(message.as_ref().unchecked_ref()));
@@ -278,7 +317,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
             // reason that reads like one we looked up.
             if !ended.replace(true) {
                 let _ = tx.send(Incoming::Closed(TransportError::Connect("the browser did not say why".to_owned())));
-                notify();
+                wake_later(&notify);
             }
         })
     };
@@ -291,7 +330,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
         Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |_e: web_sys::CloseEvent| {
             if !ended.replace(true) {
                 let _ = tx.send(Incoming::Closed(TransportError::Closed));
-                notify();
+                wake_later(&notify);
             }
         })
     };
