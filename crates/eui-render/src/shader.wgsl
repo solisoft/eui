@@ -217,6 +217,23 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     return out;
 }
 
+// Every sample below takes an explicit LOD, and that is a validation
+// requirement rather than a preference. `textureSample` computes its own
+// derivatives, so WGSL may only call it from uniform control flow; every
+// sample here is inside a branch on `flags`, which comes from the quad's own
+// vertex data and is therefore not uniform. Tint rejects the module outright:
+//
+//     error: 'textureSample' must only be called from uniform control flow
+//     note: control flow depends on possibly non-uniform value
+//
+// and a rejected module is a device with no pipeline, so nothing draws at
+// all. It only bites where WebGPU is real — Brave and Chrome on macOS, over
+// Metal. A machine that falls back to WebGL2 never runs the validator and
+// the shader looks fine, which is how this shipped.
+//
+// The explicit LOD costs nothing: every texture bound here is created with
+// `mip_level_count: 1`, so level 0 is the only level there has ever been and
+// `textureSampleLevel(.., 0.0)` samples exactly what `textureSample` did.
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
     let half = in.rect.zw * 0.5;
@@ -244,7 +261,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // the page's opacity have all arrived by, without the scene's shader
     // knowing that any of them exist.
     if ((flags & SCENE) != 0u) {
-        let t = textureSample(blur_tex, blur_smp, in.uv);
+        let t = textureSampleLevel(blur_tex, blur_smp, in.uv, 0.0);
         let a = coverage * in.params.w;
         return vec4<f32>(t.rgb * a, t.a * a);
     }
@@ -257,7 +274,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // coverage below.
     if ((flags & BLURRED) != 0u) {
         let uv = (in.pos.xy + u.viewport.zw - u.backdrop.xy) / u.backdrop.zw;
-        let back = textureSample(blur_tex, blur_smp, uv);
+        let back = textureSampleLevel(blur_tex, blur_smp, uv, 0.0);
         color = vec4<f32>(mix(back.rgb, in.fill.rgb, in.fill.a), 1.0);
     }
     let border = in.params.y;
@@ -266,10 +283,10 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         color = mix(in.stroke, color, inner);
     }
     if ((flags & TEXTURED_RGBA) != 0u) {
-        let t = textureSample(img_tex, img_smp, in.uv);
+        let t = textureSampleLevel(img_tex, img_smp, in.uv, 0.0);
         color = vec4<f32>(t.rgb, t.a * in.fill.a);
     } else if ((flags & TEXTURED) != 0u) {
-        color.a = color.a * textureSample(atlas_tex, atlas_smp, in.uv).r;
+        color.a = color.a * textureSampleLevel(atlas_tex, atlas_smp, in.uv, 0.0).r;
     }
     let a = color.a * coverage * in.params.w;
     return vec4<f32>(color.rgb * a, a);
