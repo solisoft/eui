@@ -2605,19 +2605,15 @@ footer a:hover {
 .demo__stage {
     position: relative;
     width: 100%;
-    /* The height the page can actually give it: the window less whatever
-       stands above this box, which only the page knows — so `eui-embed.js`
-       measures it and sets `--demo-fill` on a `data-fill` figure. These two
-       are the fallback for the turn before that lands, and for a reader with
-       no JavaScript, who gets the poster and nothing else anyway.
+    /* The window, whole. Not the height left under the text above it: the
+       demo is what the page is for, and one that stops short of the fold to
+       stay tidy reads as a widget rather than as the application it is.
 
-       `svh` and not `vh` because a phone's `vh` is the tall measure taken
-       with the browser's own bars retracted — the box would be sized for room
-       it does not have, and the bottom of the application would sit under the
-       address bar. */
+       `vh` and not `svh`, asked for directly. The difference is a phone's:
+       `vh` is the measure taken with the browser's own bars retracted, so on
+       a small screen the bottom of the box sits under the address bar until
+       the reader scrolls. On a desktop window the three units agree. */
     height: 100vh;
-    height: 100svh;
-    height: var(--demo-fill, 100svh);
     overflow: hidden;
     /* Edge to edge, so there are no sides to rule off. */
     border-block: 1px solid var(--rule);
