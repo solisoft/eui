@@ -20,7 +20,7 @@
 // with nothing to say so.
 //
 // The version comes from the query the page put on *this* script's own URL,
-// which the server read out of the manifest `xtask web` writes beside the
+// which the server read out of the manifest `xtask-web` writes beside the
 // module. One string, stamped once, carried to all three files — and the
 // page that carries it is server-rendered and never cached, which is what
 // makes the rest of it safe to cache forever.

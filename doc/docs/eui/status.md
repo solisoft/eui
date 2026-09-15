@@ -940,7 +940,7 @@ principle.
 
 - The module is **7.02 MB** and **1.97 MB** over the wire with brotli, before
   `wasm-opt`, which is worth about another 30%. Built by
-  `cargo run -p xtask -- web`.
+  `cargo run -p xtask-web`.
 - **Eleven of the workspace's twelve crates cross-compile untouched**,
   `eui-render` and all of wgpu 23 among them. Only `eui-client`'s platform
   layer needed work, and the first check of it — the whole dependency graph,

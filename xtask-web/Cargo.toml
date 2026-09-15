@@ -1,0 +1,25 @@
+[package]
+name = "xtask-web"
+description = "Build the EUI client for a page, and lay it beside every site that serves one."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Deliberately empty, and that is the point of this crate existing.
+#
+# This was a subcommand of `xtask`, which depends on `eui-client` so that
+# `bench` can measure the real thing. So building the *task* was a native
+# Linux client build: it wanted `alsa`, `xkbcommon` and `wayland` before it
+# could shell out to cargo — system libraries that a WebAssembly module has
+# no use for, failing in a place that gives no hint of the cause. Every
+# deployment that serves the client paid for that.
+#
+# What is left here is `std` calling three programs. Nothing to install, and
+# a failure here can only be about the thing being built.
+[dependencies]
+
+[lints]
+workspace = true

@@ -47,7 +47,7 @@ class LivePageController < Controller
   #
   # The module is served `immutable` for a year, so without this a deploy
   # that replaced the client would never be fetched again — the reader would
-  # go on running a year-old one with nothing to say so. `xtask web` writes
+  # go on running a year-old one with nothing to say so. `xtask-web` writes
   # the manifest beside the module; a tree with no manifest has no client
   # built yet, and says so rather than guessing a version.
   def _build

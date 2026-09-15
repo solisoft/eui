@@ -211,7 +211,7 @@ jobs:
       # client change, so it is generated rather than tracked. Without this
       # step the page deploys and every reader presses a button that fetches
       # a 404 — which the embed reports honestly, and which is still a broken
-      # feature in production. `xtask web` writes it into
+      # feature in production. `xtask-web` writes it into
       # `examples/demo-app/public/eui/`, inside what the rsync below sends.
       - name: Install Rust for the browser client
         uses: dtolnay/rust-toolchain@stable
@@ -222,25 +222,23 @@ jobs:
 
       # Pinned to what `Cargo.lock` resolved: the generator and the macro
       # must agree, or the module loads and then fails on its first call.
-      # `binaryen` is for `wasm-opt`; the rest is because `xtask` links the
-      # native client for `bench`, so building the task that produces a wasm
-      # module still needs a Linux client's system libraries.
-      - name: Install wasm-bindgen and the system libraries xtask links
+      # `binaryen` is `wasm-opt`, which is worth about 30% of the module.
+      # Nothing else: `xtask-web` has no dependencies, so building the tool
+      # that produces a WebAssembly module needs no system libraries at all.
+      - name: Install wasm-bindgen and binaryen
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            binaryen pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends binaryen
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
 
       - name: Build the browser client
-        run: cargo run -p xtask -- web
+        run: cargo run -p xtask-web
 
       - name: The live page has a client to load
         run: |
           set -euo pipefail
           for f in eui_web.js eui_web_bg.wasm eui-embed.js manifest.json; do
             [ -s "examples/demo-app/public/eui/$f" ] \
-              || { echo "xtask web did not write $f" >&2; exit 1; }
+              || { echo "xtask-web did not write $f" >&2; exit 1; }
           done
           ls -l examples/demo-app/public/eui/
 

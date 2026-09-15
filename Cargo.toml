@@ -21,6 +21,7 @@ members = [
     "examples/counter-server",
     "examples/snapshot",
     "xtask",
+    "xtask-web",
 ]
 
 [workspace.package]

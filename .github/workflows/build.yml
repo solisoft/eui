@@ -46,22 +46,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The *target* is wasm, but the tool is not: `xtask` links the native
-      # client so that `bench` can measure it, so building the task needs
-      # everything a Linux client build needs. Same list as the matrix above.
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
-
       # Pinned to what `Cargo.lock` resolved. The generator and the macro
       # must be the same version: a mismatch loads and then fails on the
       # module's first call, which is a very long way from its cause.
       - name: Install wasm-bindgen
         run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
 
-      # `wasm-opt -Oz` is worth about 30% of the module. `xtask web` says so
+      # `wasm-opt -Oz` is worth about 30% of the module. `xtask-web` says so
       # and carries on where binaryen is missing; here it should not be.
       - name: Install binaryen
         run: sudo apt-get update && sudo apt-get install -y binaryen
@@ -70,8 +61,8 @@ jobs:
       # `bench`, and a release build of it costs minutes before this
       # command — which only shells out to cargo and wasm-bindgen — can
       # start. What it *builds* is release either way.
-      - name: cargo xtask web
-        run: cargo run -p xtask -- web
+      - name: cargo run -p xtask-web
+        run: cargo run -p xtask-web
 
       # The module is the one thing on a documentation page that could
       # undo the argument the page is making. Measured, printed, and
