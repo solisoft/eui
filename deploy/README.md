@@ -62,22 +62,46 @@ asks for `/_eui/session/gallery` on its own host; the proxy has to answer it.
 One line, in `proxy.conf` on the server — **and the host is not optional**:
 
 ```
-eui.solisoft.net/_eui/* -> https://eui-data.solisoft.net/
+eui.solisoft.net/_eui/* -> https://eui-data.solisoft.net/_eui/
 ```
 
-**Without the host it applies to every site on the box**, and that is not a
-tidiness point: it took `/live` down along with `/demo`. A bare `/_eui/*`
-catches the demo application's *own* session paths and sends them out to
-Cloudflare and back into the proxy, where the same rule catches them again;
-they end as a 404 rather than a session. The symptom is a page that loads,
-a client that starts, a canvas that measures itself correctly — and
-`connect failed: the browser did not say why` in the console, for both
-sites at once.
+Both halves of that line are load-bearing, and each was got wrong once.
 
-The proof, if it is ever in doubt again, is any host that has nothing to do
-with EUI: with the rule scoped, `www.solisoft.net/_eui/session/x` answers
-**421** like any other unrouted path. With it unscoped it answers **404**,
-because the proxy really did route it — to the wrong place.
+**The host is not optional.** Without it the rule applies to every site on
+the box, and that is not a tidiness point: it took `/live` down along with
+`/demo`. A bare `/_eui/*` catches the demo application's *own* session paths
+and sends them out to Cloudflare and back into the proxy, where the same rule
+catches them again; they end as a 404 rather than a session. The symptom is a
+page that loads, a client that starts, a canvas that measures itself
+correctly — and `connect failed: the browser did not say why` in the console,
+for both sites at once. The proof, if that is ever in doubt again, is any
+host that has nothing to do with EUI: with the rule scoped,
+`www.solisoft.net/_eui/session/x` answers **421** like any other unrouted
+path. With it unscoped it answers **404**, because the proxy really did route
+it — to the wrong place.
+
+**The target repeats the prefix.** A path rule is a `StripPrefix` rule
+(`src/server/mod.rs`): the proxy cuts the matched prefix off the path and
+appends what is left to the target, so a target of `…solisoft.net/` turns
+`/_eui/session/gallery` into `/session/gallery` — a path the demo application
+does not serve. Ending the target in `/_eui/` puts it back. The symptom is
+the same silent one, because a browser is told nothing about a failed
+upgrade: `close code=1006`, no `open`, no reason. Curl is told, if it is kept
+off HTTP/2 — Cloudflare drops the upgrade headers on an h2 request, so the
+answer to a plain `curl -i` is a page and not a handshake:
+
+```
+curl -i --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://eui.solisoft.net/_eui/session/gallery
+```
+
+`101 Switching Protocols` is the route working. `502` is this mistake: it is
+what the stripped path answers, and comparing the two against
+`eui-data.solisoft.net` directly says which half is wrong in one command.
+`scripts/check-demo-session.sh` is that comparison with the diagnosis
+attached, and the site's deploy runs it as a notice — it cannot fail the
+deploy over a line no workflow can set.
 
 **Why the public name and not a port.** The demo application runs in
 blue-green slots whose ports the proxy assigns, so there is no fixed port to

@@ -16,8 +16,18 @@ name: verify & deploy the site
 on:
   push:
     branches: [main]
+    # The client is part of what these deploys ship: both build the
+    # WebAssembly module and rsync it into the site. A change confined to
+    # `crates/` or to the loader would otherwise sit in `main` looking
+    # deployed while production served the previous module — which is how
+    # the canvas-size fix spent a morning not reaching the page it fixed.
     paths:
       - "www/**"
+      - "crates/**"
+      - "assets/web/**"
+      - "xtask-web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/deploy-site.yml"
   workflow_dispatch:
 
@@ -297,3 +307,14 @@ jobs:
           code="$(ssh "$USER@$HOST" "curl -sk -m 8 --resolve '$DOMAIN:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://$DOMAIN/images/samples/tracker.png'")"
           echo "/images/samples/tracker.png -> $code"
           [ "$code" = "200" ] || { echo "The samples page's pictures are not being served." >&2; exit 1; }
+
+      # /demo needs a route that lives in proxy.conf on the server, not in
+      # this repository, so a deploy cannot set it and must not fail for it:
+      # without the route the page still shows a real render of the
+      # application under a message, which is the designed fallback. It can
+      # still say so, because the alternative is finding out from a browser
+      # that reports a failed upgrade as `close code=1006` and nothing else.
+      - name: Check /demo can open a session
+        continue-on-error: true
+        run: scripts/check-demo-session.sh "$DOMAIN" gallery
+

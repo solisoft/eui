@@ -30,8 +30,18 @@ name: verify & deploy the demo application
 on:
   push:
     branches: [main]
+    # The client is part of what these deploys ship: both build the
+    # WebAssembly module and rsync it into the site. A change confined to
+    # `crates/` or to the loader would otherwise sit in `main` looking
+    # deployed while production served the previous module — which is how
+    # the canvas-size fix spent a morning not reaching the page it fixed.
     paths:
       - "examples/demo-app/**"
+      - "crates/**"
+      - "assets/web/**"
+      - "xtask-web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/deploy-data.yml"
   workflow_dispatch:
 
