@@ -204,6 +204,41 @@ jobs:
             exit 1
           fi
 
+      # The browser client, built here because it is not committed.
+      #
+      # `/live` serves a canvas and then asks for `/eui/eui_web.js`; the
+      # module is a seven-megabyte artefact that would be rebuilt on every
+      # client change, so it is generated rather than tracked. Without this
+      # step the page deploys and every reader presses a button that fetches
+      # a 404 — which the embed reports honestly, and which is still a broken
+      # feature in production. `xtask web` writes it into
+      # `examples/demo-app/public/eui/`, inside what the rsync below sends.
+      - name: Install Rust for the browser client
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Pinned to what `Cargo.lock` resolved: the generator and the macro
+      # must agree, or the module loads and then fails on its first call.
+      - name: Install wasm-bindgen and binaryen
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build the browser client
+        run: cargo run -p xtask -- web
+
+      - name: The live page has a client to load
+        run: |
+          set -euo pipefail
+          for f in eui_web.js eui_web_bg.wasm eui-embed.js manifest.json; do
+            [ -s "examples/demo-app/public/eui/$f" ] \
+              || { echo "xtask web did not write $f" >&2; exit 1; }
+          done
+          ls -l examples/demo-app/public/eui/
+
       # --delete-delay: what leaves the repository leaves the server. The
       # exclusions are the whole safety of that sentence here, because this
       # application writes into its own tree and none of it is committed:
