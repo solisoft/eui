@@ -33,3 +33,11 @@ __pycache__/
 
 # Where scripts/make-android-apk.sh leaves the package it built.
 dist/
+
+# The page's client, written by `cargo run -p xtask -- web`. Built in CI and
+# rsynced with the site it serves; a multi-megabyte binary rebuilt on every
+# client change does not belong in a history.
+# `cargo run -p xtask -- web` writes these; the source is assets/web/.
+www/public/eui/
+doc/public/eui/
+examples/demo-app/public/eui/

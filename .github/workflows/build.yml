@@ -33,6 +33,54 @@ jobs:
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
 
+  web:
+    name: Build the browser client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Pinned to what `Cargo.lock` resolved. The generator and the macro
+      # must be the same version: a mismatch loads and then fails on the
+      # module's first call, which is a very long way from its cause.
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+
+      # `wasm-opt -Oz` is worth about 30% of the module. `xtask web` says so
+      # and carries on where binaryen is missing; here it should not be.
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      # Debug, deliberately: `xtask` links the whole native client for
+      # `bench`, and a release build of it costs minutes before this
+      # command — which only shells out to cargo and wasm-bindgen — can
+      # start. What it *builds* is release either way.
+      - name: cargo xtask web
+        run: cargo run -p xtask -- web
+
+      # The module is the one thing on a documentation page that could
+      # undo the argument the page is making. Measured, printed, and
+      # failed on rather than left to drift.
+      - name: The module fits its budget
+        run: |
+          raw=$(stat -c%s www/public/eui/eui_web_bg.wasm)
+          br=$(brotli -c -q 11 www/public/eui/eui_web_bg.wasm | wc -c)
+          echo "raw $((raw / 1048576)) MB, brotli $((br / 1048576)) MB"
+          [ "$raw" -lt 16777216 ] || { echo "the browser client passed 16 MB raw" >&2; exit 1; }
+          [ "$br" -lt 4194304 ] || { echo "the browser client passed 4 MB brotli" >&2; exit 1; }
+
+      - name: Upload the browser client
+        uses: actions/upload-artifact@v4
+        with:
+          name: eui-web
+          path: www/public/eui
+
   build-matrix:
     name: Build EUI Client
     runs-on: ${{ matrix.os }}

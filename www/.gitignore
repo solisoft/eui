@@ -32,3 +32,9 @@ Thumbs.db
 # Coverage
 coverage/
 .coverage
+
+# The page's client, written by `cargo run -p xtask -- web` in the eui
+# repository above this one. Built in CI and rsynced with the site; a
+# multi-megabyte binary rebuilt on every client change does not belong in a
+# history.
+public/eui/
