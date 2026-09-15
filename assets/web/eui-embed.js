@@ -5,10 +5,12 @@
 //   1. Nothing is fetched until somebody asks. The module is some two
 //      megabytes compressed, and a page whose argument is a byte budget
 //      should not spend that on a reader who is scrolling past.
-//   2. The poster is never removed — the canvas is *revealed* over it. So
-//      every failure lands on a real picture with a sentence under it, and
-//      "never a blank canvas" is structural rather than a code path anyone
-//      has to remember.
+//   2. Nothing hides the poster except a frame the client says it drew.
+//      The canvas is revealed over it and the poster goes at the same
+//      instant, so every failure — including one nobody thought of — lands
+//      on a real picture with a sentence under it, and "never a blank
+//      canvas" is structural rather than a code path anyone has to
+//      remember. Stopping a session puts the poster back.
 //   3. One module and one session per page. Eight embeds share one
 //      instantiation, and starting a second stops the first: eight sockets
 //      and eight GPU surfaces is a thing the reader's fan would tell them
@@ -53,6 +55,8 @@ function unsupported() {
 
 function fail(fig, why) {
   fig.querySelector(".demo__canvas").hidden = true;
+  const poster = fig.querySelector(".demo__poster");
+  if (poster) poster.hidden = false;
   const note = fig.querySelector(".demo__note");
   note.hidden = false;
   note.textContent = why;
@@ -131,12 +135,22 @@ async function run(fig) {
     //
     // Armed before `start`, because on a warm cache the first frame can land
     // in the same turn.
+    // The poster goes here and only here. An EUI surface is composited
+    // with alpha — a node draws a background only where it has one (08 §3),
+    // so the canvas is see-through wherever the interface is not — and a
+    // still of the same component underneath it therefore shows *through*
+    // the live render rather than behind it. The page ghosts: every label
+    // twice, a pixel or two apart, because the still was taken at a
+    // different size. It reads as a rendering bug in EUI, which is the
+    // worst thing a page arguing for EUI could do.
+    const poster = fig.querySelector(".demo__poster");
     canvas.addEventListener(
       "eui:frame",
       () => {
         note.hidden = true;
         button.hidden = true;
         canvas.style.opacity = "";
+        if (poster) poster.hidden = true;
       },
       { once: true },
     );
@@ -149,6 +163,10 @@ async function run(fig) {
       stop: () => {
         canvas.hidden = true;
         canvas.style.opacity = "0";
+        // Back to the picture it was covering, or starting a second embed
+        // would leave the first one an empty box — the blank canvas again,
+        // by the one route that does not go through `fail`.
+        if (poster) poster.hidden = false;
         button.hidden = false;
         button.disabled = false;
       },
