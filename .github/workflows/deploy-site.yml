@@ -58,6 +58,24 @@ jobs:
           [ "$got" = "$SOLI_VERSION" ] || { echo "soli $got installed, $SOLI_VERSION expected" >&2; exit 1; }
           echo "soli $got"
 
+      # The suite asks `/demo` for the client it says it will load, and that
+      # is the point of asking: a page whose module 404s is broken in exactly
+      # the way a 200 on the page itself will not show. So verify builds it
+      # too, and tests what production will serve rather than what the
+      # repository happens to contain — the module is not committed.
+      - name: Install Rust for the browser client
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+
+      - name: Build the browser client
+        run: cargo run -p xtask-web
+
       - name: Format
         working-directory: ${{ env.APP_DIR }}
         run: soli fmt --check
@@ -137,10 +155,6 @@ jobs:
           ssh "$USER@$HOST" "test -f '$SITES_DIR/$DOMAIN/app.infos' && test -f '$SITES_DIR/$DOMAIN/.env'" \
             || { echo "$SITES_DIR/$DOMAIN must hold app.infos and .env — see deploy/README.md" >&2; exit 1; }
 
-      # --delete-delay: what leaves the repository leaves the server. The
-      # exclusions protect what lives on the server (.env, app.infos,
-      # restart.txt) and what has no business there (the nested checkout, the
-      # test environment, the agent instructions).
       # The browser client, for `/demo`. Not committed — seven megabytes
       # rebuilt on every client change — so without this the page deploys
       # and its button fetches a 404. `xtask-web` has no dependencies, so
@@ -168,6 +182,10 @@ jobs:
           done
           ls -l www/public/eui/
 
+      # --delete-delay: what leaves the repository leaves the server. The
+      # exclusions protect what lives on the server (.env, app.infos,
+      # restart.txt) and what has no business there (the nested checkout, the
+      # test environment, the agent instructions).
       - name: Sync the files
         run: |
           set -euo pipefail
