@@ -222,10 +222,15 @@ jobs:
 
       # Pinned to what `Cargo.lock` resolved: the generator and the macro
       # must agree, or the module loads and then fails on its first call.
-      - name: Install wasm-bindgen and binaryen
+      # `binaryen` is for `wasm-opt`; the rest is because `xtask` links the
+      # native client for `bench`, so building the task that produces a wasm
+      # module still needs a Linux client's system libraries.
+      - name: Install wasm-bindgen and the system libraries xtask links
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binaryen pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
-          sudo apt-get update && sudo apt-get install -y binaryen
 
       - name: Build the browser client
         run: cargo run -p xtask -- web

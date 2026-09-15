@@ -46,6 +46,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The *target* is wasm, but the tool is not: `xtask` links the native
+      # client so that `bench` can measure it, so building the task needs
+      # everything a Linux client build needs. Same list as the matrix above.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
+
       # Pinned to what `Cargo.lock` resolved. The generator and the macro
       # must be the same version: a mismatch loads and then fails on the
       # module's first call, which is a very long way from its cause.
