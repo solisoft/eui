@@ -103,6 +103,25 @@ what the stripped path answers, and comparing the two against
 attached, and the site's deploy runs it as a notice — it cannot fail the
 deploy over a line no workflow can set.
 
+**It disappears on its own, until soli-proxy carries the fix.** If the line
+is gone and nobody removed it, the proxy removed it. `sync_routes` in
+`src/app/mod.rs` prunes static rules for app-managed domains so they cannot
+shadow blue-green routing, and it matched path carve-outs as well as
+whole-domain rules. `eui.solisoft.net` is a site directory, so the scoped
+rule qualified and was deleted — and `proxy.conf` rewritten without it — from
+all three call sites: adding an alias, app auto-start (**every restart**) and
+the traffic switch (**every deploy**). Re-adding it works, and keeps working
+until the next deploy of either site, which is what makes it look like
+anything other than what it is.
+
+The scoping above is what exposed it: unscoped, the rule is a `Prefix` and is
+never pruned — it simply breaks `/live` instead. There is no form of the line
+that is both correct and safe from the pruner, and no way around it from the
+other end either: `websocket_origin_allowed` compares authorities for
+equality and has no allowlist, so the session cannot simply be opened on
+`eui-data`. Until a proxy with the fix is installed, the line has to be put
+back after each deploy.
+
 **Why the public name and not a port.** The demo application runs in
 blue-green slots whose ports the proxy assigns, so there is no fixed port to
 name. Pointing at the public name costs a hop through Cloudflare and works
