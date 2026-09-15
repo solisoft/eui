@@ -87,25 +87,6 @@ pub struct Connection {
     ws: web_sys::WebSocket,
 }
 
-/// Wake the window, but not from inside the socket callback that is asking.
-///
-/// `notify` is `EventLoopProxy::send_event`, and what it reaches is the whole
-/// window: a pump, a tree, a frame. Run from the tail of `onmessage` that work
-/// happens *inside* the JS callback, so anything it decides — a session that
-/// ends, a socket redialled, a tab closed — drops this `Connection` and frees
-/// the very `Closure` still on the stack. `wasm-bindgen` catches the return
-/// into freed Rust and throws "closure invoked recursively or after being
-/// dropped", which traps the module: the canvas keeps its last frame and the
-/// page keeps saying "Connecting…" for ever.
-///
-/// A microtask costs one turn of the loop and puts every wake after the
-/// callback has returned, where dropping a `Connection` is ordinary.
-#[cfg(target_arch = "wasm32")]
-fn wake_later(notify: &Rc<dyn Fn()>) {
-    let notify = Rc::clone(notify);
-    wasm_bindgen_futures::spawn_local(async move { notify() });
-}
-
 impl std::fmt::Debug for Connection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connection").field("origin", &self.origin).finish()
@@ -302,7 +283,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
                 }
                 let _ = ws.close();
             }
-            wake_later(&notify);
+            notify();
         })
     };
     ws.set_onmessage(Some(message.as_ref().unchecked_ref()));
@@ -317,7 +298,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
             // reason that reads like one we looked up.
             if !ended.replace(true) {
                 let _ = tx.send(Incoming::Closed(TransportError::Connect("the browser did not say why".to_owned())));
-                wake_later(&notify);
+                notify();
             }
         })
     };
@@ -330,7 +311,7 @@ pub fn connect(url: &str, first: Vec<u8>, _cookie: Option<String>, host_loopback
         Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |_e: web_sys::CloseEvent| {
             if !ended.replace(true) {
                 let _ = tx.send(Incoming::Closed(TransportError::Closed));
-                wake_later(&notify);
+                notify();
             }
         })
     };
