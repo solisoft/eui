@@ -14,6 +14,17 @@
             </p>
 
             <p>
+                If you would rather press the buttons than look at them, the same
+                client is also compiled to WebAssembly, and the demo server serves a
+                page that runs it on a <code>&lt;canvas&gt;</code>:
+                <a href="https://eui-data.solisoft.net/live/counter">eui-data.solisoft.net/live</a>.
+                It is a viewing vehicle and not the model &mdash; the browser supplies a
+                GPU surface, a socket and a pointer, and nothing else &mdash; and it is
+                served by the application it embeds because Soli refuses a WebSocket
+                upgrade whose origin is not its own.
+            </p>
+
+            <p>
                 They all live in one Soli application &mdash;
                 <code>examples/demo-app</code> &mdash; and each is a route of four
                 words: a handler that takes an event and returns state, and a view that

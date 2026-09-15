@@ -136,6 +136,13 @@ identifier, and no third-party connection — the manifest's host allowlist is
 enforced. The fingerprinting surface is close to nil, and that is a **testable**
 goal, not a slogan.
 
+That is a claim about the **client**, and in the standalone client the client
+is the whole surface, so it is also a claim about what a person running it
+gives away. In the WebAssembly build it is only the first half: the client
+still asks for none of those things, but the tab around it is a browser tab,
+and the `Origin` and `User-Agent` on the upgrade are the browser's to send.
+A page cannot suppress them and this one does not pretend to.
+
 ## Server side
 
 Every event is validated against the schema of the node it names. A client
@@ -156,3 +163,16 @@ with a reason and the window stands. macOS (`sandbox_init`) and Windows
 (AppContainer) are not done: the worker is its own process there, a crash
 is contained, a compromised worker is not confined, and the window says
 so. `EUI_SANDBOX=0` runs the driver in the window process for debugging.
+
+**In a browser there is no second process, and the trade is not all one
+way.** The WebAssembly build runs the driver in the window — the same path
+the phones take, for the same reason: there is no second binary to start.
+What the engine gives instead is real and is not nothing: a decoder that
+cannot corrupt the host's memory, cannot reach the GPU, the socket or the
+filesystem except through the imports the module declares, and runs inside
+the browser's own site-isolated renderer. What it does not give is the
+*availability* half. A panic in the decoder takes the whole module, canvas
+and all, where a native worker's death leaves the window standing with a
+reason on it. That is a regression against §10 and it is the price of the
+demo; the honest fix is a Web Worker speaking the same request/reply wire
+the two processes already use, which is written down and not yet built.

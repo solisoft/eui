@@ -29,6 +29,34 @@ ordinary proxies and CDNs.
 - No cross-origin redirect during discovery.
 - No user-agent string and no client identifier, ever.
 
+### In a browser, none of that is ours
+
+The WebAssembly build of the client ([Overview](/docs/overview)) meets almost
+none of the requirements above *itself*, and it is worth saying which and
+why rather than leaving it implied.
+
+TLS is the tab's. The chain was verified before a byte reached the module,
+by code we did not write and cannot inspect from inside; `EUI_CA_SYSTEM` and
+`EUI_CA_FILE` have no meaning there because there is no trust store to
+point at. The `Origin` and `User-Agent` headers on the upgrade are the
+browser's and cannot be suppressed from a page, so the last line above is
+one a page simply cannot keep. And the publisher key is not pinned at all —
+there is nowhere durable to pin it that the reader cannot clear, so that
+build reports its session as **unverified** rather than implying a pin it
+never made.
+
+What it does keep is the part that does not need a platform: `wss://` only,
+binary frames only, one origin for the page and the session — the server
+refuses an upgrade whose `Origin` is not its own, which is why an embed is
+served by the application it embeds.
+
+The loopback exception of [Security](/docs/security) §1 survives in a better
+form there than the environment variable it replaces. `EUI_ALLOW_INSECURE_LOOPBACK`
+cannot be set in a page, so `ws://` is permitted only when the *document
+itself* came from `localhost` — a question the browser answers, not the
+document. A page served from anywhere else cannot ask for it however it is
+written.
+
 ## Endpoints
 
 | | |

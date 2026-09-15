@@ -118,10 +118,14 @@ Each refusal is why the client stays small enough to audit.
   path in the client.
 - **Error recovery.** A malformed frame ends the session.
 - **Layout escape hatches.** No floats, no CSS positioning, no `calc()`.
-- **A fingerprinting surface.** No user-agent, no font enumeration, no canvas
-  readback, no device identifier.
+- **A fingerprinting surface.** The client sends no user-agent, enumerates no
+  fonts, reads back no canvas and carries no device identifier — and in the
+  standalone client that is the whole surface, so it is the whole story. The
+  WebAssembly build below inherits the page's: the *client* still asks for
+  none of it, but the tab around it is a browser tab, with everything that
+  implies. Read documentation in it; do not bank in it.
 
-## Three ways to open an application
+## Four ways to open an application, and one of them is a courier
 
 - `eui <wss://host/_eui/session/app> [--allow cap,cap]` — the standalone
   client, twelve megabytes, no browser.
@@ -130,6 +134,32 @@ Each refusal is why the client stays small enough to audit.
 - `soli desktop build --eui <component>` — one executable that carries the
   app, its database and the window; the server runs on a thread behind a
   loopback gate only the embedded client can pass.
+- **A page, on a `<canvas>`** — the same client compiled to WebAssembly, so
+  that a documentation page can put a running application beside its source
+  instead of a picture of one:
+  [eui-data.solisoft.net/live](https://eui-data.solisoft.net/live/counter).
+  It is served by the application it embeds, and it has to be: Soli refuses a
+  WebSocket upgrade whose origin is not its own, so the page that opens a
+  session must come from the server that answers it.
+
+That fourth entry is a **viewing vehicle, not the model**, and the difference
+is worth being plain about. The browser supplies three things — a GPU
+surface, a socket and a pointer — and nothing else: there is no DOM below
+that line, no HTML, no CSS, no cascade, and still no code from the network in
+the sense [Security](/docs/security) means, because the module *is* the
+client and the server sends only data. What it costs is a multi-megabyte
+download the native client does not, which is why nothing fetches it until
+you press a button.
+
+It also gives up three things the standalone client does not, and they are
+listed where they belong rather than here: the publisher key is the
+browser's business and not ours ([Transport](/docs/transport)), the decoder
+does not get a process of its own ([Security](/docs/security) §10), and the
+`scene` capability is not offered at all, because a browser cannot tell you
+whether a shader compiled until after it has run.
+
+If you want the real thing, the first line of this list is twelve megabytes
+and opens in a window.
 
 ## Reading order
 

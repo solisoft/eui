@@ -927,6 +927,69 @@ implements it and the vectors that pin it:
   implemented; the signed manifest and key pinning are specified, not yet
   checked by the client.
 
+## The browser: it paints, and what that cost
+
+A fourth target, added on 2026-09-15 and described in
+[Overview](/docs/overview): the same client compiled to
+`wasm32-unknown-unknown`, drawing on a `<canvas>` so a page can put a running
+application beside its source. It is a **viewing vehicle, not a platform**,
+and the entries below are what that means in practice rather than in
+principle.
+
+**Measured, on the day it first drew:**
+
+- The module is **7.02 MB** and **1.97 MB** over the wire with brotli, before
+  `wasm-opt`, which is worth about another 30%. Built by
+  `cargo run -p xtask -- web`.
+- **Eleven of the workspace's twelve crates cross-compile untouched**,
+  `eui-render` and all of wgpu 23 among them. Only `eui-client`'s platform
+  layer needed work, and the first check of it — the whole dependency graph,
+  every capability `cfg` — left `app.rs` with exactly **one** error in three
+  and a half thousand lines: a `pollster::block_on`. The window's logic was
+  already portable; only its *asking* for a GPU was not, because a page may
+  not block the one thread it has while a promise settles.
+- **Idle costs nothing.** Zero WebGL draw calls in a second and a half with a
+  session up, which is [Budgets](/docs/budgets) §1's zero-wakeup line holding
+  on a target where the obvious implementation is a `requestAnimationFrame`
+  loop. `ControlFlow::WaitUntil` on this backend *is* a `setTimeout`, so the
+  frame timer thread is simply not built.
+- The counter, the todo list, the gallery, the feed, the clock and the
+  **10 000-row virtualised table** all render and lay out correctly, the
+  table's 770 KB mount included.
+
+**One trap worth naming, because every example gets it wrong.** Asking wgpu
+for `BROWSER_WEBGPU | GL` in one instance looks right and fails silently on
+the machines it was meant to help: a canvas has exactly one context for its
+lifetime, so taking a `webgpu` one makes WebGL2 impossible afterwards — and a
+browser that *exposes* `navigator.gpu` while handing out no adapter (a
+privacy-minded one with its defences up; a Chrome with the flag off) then
+draws nothing at all. WebGPU can be asked for an adapter with no surface,
+which touches no canvas, so it is asked first and asked about nothing; the
+canvas goes to whichever backend answered. This build draws through WebGL2 on
+the machine it was developed on, and that is the path that would otherwise
+have been lost.
+
+**Cut, and cut deliberately:** the accessibility adapter (a canvas is opaque
+to a screen reader, and pretending otherwise would be worse), the clipboard,
+file pick and save, NFC, audio output, the tab strip, the signed manifest and
+its pin store, and `scene` — the last for a technical reason rather than a
+scope one: WebGPU reports a shader's validation errors asynchronously, so a
+browser cannot say whether a module the *server* wrote compiled until after
+it has been used, and a capability that cannot be checked is not offered.
+
+**Driven end to end**, against a Soli server, in a browser, on the day
+above: the counter's `+` — a local bytecode handler that then tells the
+server — took it from 6 to 7; its `−`, a full round trip, took it back to 6;
+a button lights under the pointer; and the 10 000-row table scrolls to
+FA-1028 with its scrollbar, laying out only the rows that have boxes. The
+canvas is 914×685 CSS and 1828×1370 device, which is the page's own box at
+its own pixel ratio.
+
+**Honest about the rest:** TLS and the publisher key are the browser's, not
+ours ([Transport](/docs/transport)), and the decoder does not get a process
+of its own ([Security](/docs/security)). Both are named where they matter
+rather than here.
+
 ## The phones: started, not finished
 
 The portable half of the client is portable in fact and not only in
