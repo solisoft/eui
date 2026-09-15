@@ -1843,6 +1843,34 @@ impl Worker {
         if status.clipboard.is_none() {
             status.clipboard = self.status.clipboard.take();
         }
+        // The answer to the consent sheet, carried the same way and for the
+        // same reason — and its absence here was a bug with a long shadow.
+        //
+        // A status is *replaced* by every reply, and a reply comes back from
+        // every call. The window reads the answer in `serve_links`, but
+        // between the click and that read it asks the worker several more
+        // things — the clipboard, the IME area, whether a redraw is wanted,
+        // the cursor — and each of those replies carried `consent: None` and
+        // took the answer with it. The window then saw nobody had answered,
+        // and wrote "asked 871, granted 0" into the grants store: the
+        // person pressed Allow and the session started with nothing, which
+        // is a blank window and a grant that looks like a refusal for ever.
+        //
+        // In-process there is no status to replace — `take_consent` asks the
+        // driver, which is still holding it — which is why `EUI_SANDBOX=0`
+        // looked like a cure and why every test of the sheet passed.
+        if status.consent.is_none() {
+            status.consent = self.status.consent.take();
+        }
+        // Scans asked for, accumulated like the file asks above. Same
+        // one-shot shape, same hazard; not reported, and not reproduced
+        // here either — fixed because leaving one half of a pattern right
+        // is how the other half gets found the hard way.
+        if !self.status.nfc.is_empty() {
+            let mut nfc = std::mem::take(&mut self.status.nfc);
+            nfc.append(&mut status.nfc);
+            status.nfc = nfc;
+        }
         self.status = status;
     }
 

@@ -68,6 +68,61 @@ fn quads(backend: &mut Backend) -> Vec<eui_render::Quad> {
     backend.paint(320, 240).0.quads.clone()
 }
 
+/// The consent sheet, answered, through a real worker.
+///
+/// Every other test of the sheet drives an in-process driver, and that is
+/// the half that worked: reported as a blank window after Allow, and gone
+/// the moment `EUI_SANDBOX=0` puts the driver back in this process. So the
+/// fault is in what crosses the pipe, and nothing here was crossing it.
+#[test]
+fn a_session_starts_through_a_worker_once_the_sheet_is_answered() {
+    use eui_proto::caps;
+
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let url = start_server();
+    let (mut backend, how) = Backend::open_with(eui_binary(), 320.0, 240.0, 1.0, 0);
+    assert!(matches!(backend, Backend::Remote { .. }), "a worker started: {how}");
+
+    // As the window does it: the manifest's already-settled grant first,
+    // then the question for the rest.
+    let asked = caps::CAMERA | caps::FS_PICK;
+    backend.grant(0);
+    backend.ask_consent(asked, "counter");
+    let _ = backend.paint(320, 240);
+
+    // Where Allow is. The sheet is the client's own tree, so an in-process
+    // driver given the same question lays it out in the same place.
+    let mut probe = Driver::new(320.0, 240.0, 1.0, 0);
+    probe.ask_consent(asked, "counter");
+    let _ = probe.paint(320, 240);
+    let ix = probe.session().lookup(10).expect("the sheet has no Allow");
+    let r = probe.layout().rect(ix).expect("Allow was not laid out");
+    let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+
+    let _ = backend.input(Input::PointerMove(x, y));
+    let _ = backend.input(Input::PointerDown(0));
+    let _ = backend.input(Input::PointerUp(0));
+
+    // What the window really does between the click and reading the answer:
+    // `send_to_tab` asks the clipboard, the IME area, whether a redraw is
+    // wanted, then the cursor, and the answer is only read a pass later in
+    // `serve_links`. Every one of those is another reply, and a reply used
+    // to replace the whole status — so the answer was gone before anyone
+    // looked, and the window recorded a refusal.
+    let _ = backend.take_clipboard();
+    let _ = backend.needs_redraw();
+    let _ = backend.paint(320, 240);
+
+    assert_eq!(backend.take_consent(), Some(asked), "the answer was lost between the click and the read");
+
+    // And what `consent_answered` does with it before dialling.
+    backend.grant(asked);
+
+    // What the window does next, and what a person sees if it does not work.
+    let (conn, wake) = open(&mut backend, &url);
+    pump(&mut backend, &conn, &wake, |b| quads(b).len() > 5);
+}
+
 #[test]
 fn the_counter_runs_through_a_worker_process() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
