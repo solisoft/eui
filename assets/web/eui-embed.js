@@ -105,8 +105,41 @@ async function run(fig) {
     // out. `hidden = false` only schedules that; reading a width in the same
     // turn can still answer zero, and a window opened at zero is a session
     // drawn into one pixel.
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    //
+    // Raced against a timer, because `requestAnimationFrame` does not fire in
+    // a hidden tab at all. Without the race a reader who opened this in a
+    // background tab — or who switched away while two megabytes arrived —
+    // waits for ever on a frame that is never painted, and the button says
+    // "Fetching the client…" until the page is closed. The fallback is cheap
+    // and the measurement is still sound: a hidden tab has laid the canvas
+    // out, it simply is not drawing it, and the client falls back to the
+    // parent's box and then to a default if it ever reads a zero.
+    await Promise.race([
+      new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+      new Promise((r) => setTimeout(r, 250)),
+    ]);
     note.textContent = "Connecting…";
+
+    // Revealed when the client says it has drawn, and not on a timer.
+    //
+    // A timer looked right and was wrong in the one case the poster exists
+    // for: a session that never connects would uncover an empty canvas after
+    // however long the timer was, which is exactly the blank rectangle the
+    // still is there to prevent. The client dispatches `eui:frame` on its
+    // canvas at its first paint; until that arrives the reader goes on
+    // looking at a real render of the application.
+    //
+    // Armed before `start`, because on a warm cache the first frame can land
+    // in the same turn.
+    canvas.addEventListener(
+      "eui:frame",
+      () => {
+        note.hidden = true;
+        button.hidden = true;
+        canvas.style.opacity = "";
+      },
+      { once: true },
+    );
 
     // Nothing is granted. A documentation page may not ask a reader for a
     // camera, and the server's manifest requests none either.
@@ -120,15 +153,6 @@ async function run(fig) {
         button.disabled = false;
       },
     };
-    // Long enough for a Welcome and a first Batch on a loopback or a fast
-    // link, and the poster is what shows until then. A slower one reveals a
-    // frame or two late, which reads as the page settling rather than as
-    // anything wrong.
-    window.setTimeout(() => {
-      note.hidden = true;
-      button.hidden = true;
-      canvas.style.opacity = "";
-    }, 600);
   } catch (e) {
     fail(fig, `${e && e.message ? e.message : e}`);
   }

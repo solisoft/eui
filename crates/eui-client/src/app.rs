@@ -484,6 +484,11 @@ struct Shell {
     /// Frames drawn since the window opened. Only ever read by
     /// [`LoopStats`], and only when it is asked for.
     frames: u64,
+    /// Whether the page has been told this window drew an application.
+    /// Once per window: an embed reveals its canvas on it and has nothing to
+    /// do with a second.
+    #[cfg(target_arch = "wasm32")]
+    announced: bool,
 }
 
 /// A second's worth of loop activity, for finding out why a window that
@@ -1377,6 +1382,8 @@ impl Shell {
             theme_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             epoch: crate::time::Instant::now(),
             frames: 0,
+            #[cfg(target_arch = "wasm32")]
+            announced: false,
             files_dirty: true,
             chrome: chrome.take(),
         };
@@ -2510,6 +2517,20 @@ impl Shell {
     }
 
     /// Draw the window: the chrome, then the active application over it.
+    /// Tell the page that this window has drawn, once.
+    ///
+    /// A `CustomEvent` on the canvas rather than a callback through
+    /// `wasm_bindgen`, so that `start`'s signature stays the three arguments
+    /// an embed already passes and a page that does not care listens for
+    /// nothing.
+    #[cfg(target_arch = "wasm32")]
+    fn announce_first_frame(&self) {
+        use winit::platform::web::WindowExtWebSys;
+        let Some(canvas) = self.window.canvas() else { return };
+        let Ok(event) = web_sys::CustomEvent::new("eui:frame") else { return };
+        let _ = canvas.dispatch_event(&event);
+    }
+
     fn redraw(&mut self, renderer: &mut eui_render::Renderer) {
         // A lost device is not this frame's problem: every pipeline, buffer
         // and texture built on it is invalid, so there is nothing to draw
@@ -2529,6 +2550,25 @@ impl Shell {
             return;
         }
         self.frames = self.frames.saturating_add(1);
+        // The page has been waiting to know this, and cannot find it out for
+        // itself: an embed shows a still of the application until the session
+        // draws, and a canvas revealed before that is the empty rectangle the
+        // still exists to prevent. There is no way to ask a `<canvas>` whether
+        // anything has been drawn into it — a WebGL context without
+        // `preserveDrawingBuffer` reads back blank, and WebGPU offers nothing
+        // at all — so the client says so once, and the embed listens.
+        //
+        // The *first* frame is the wrong one to say it on, and saying it there
+        // was worse than the timer it replaced: a window paints its own
+        // background before a socket has answered anything, so a session that
+        // never connects would still uncover an empty canvas — promptly.
+        // A frame drawn while the link is up is a frame with an application
+        // in it.
+        #[cfg(target_arch = "wasm32")]
+        if !self.announced && self.tabs.get(self.active).is_some_and(|t| matches!(t.link, Link::Up)) {
+            self.announced = true;
+            self.announce_first_frame();
+        }
         self.settle_chrome_mode(renderer);
         self.apply_resize(renderer);
         let (w, h) = (self.config.width, self.config.height);

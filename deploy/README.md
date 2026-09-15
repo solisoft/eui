@@ -51,6 +51,41 @@ leaves the page rendering.
 > soli-proxy deploy -c /home/rocky/sites/config.toml eui
 > ```
 
+### One route the repository cannot set: `/_eui/` on the site
+
+`/demo` runs the gallery in the page, and its session has to be opened on
+`eui.solisoft.net` — `websocket_origin_allowed` in Soli requires an upgrade's
+`Origin` to match the authority it arrived on (SEC-046, cross-site WebSocket
+hijacking), so a page here may not open a session on `eui-data`. The page
+asks for `/_eui/session/gallery` on its own host; the proxy has to answer it.
+
+One line, in the site's `proxy.conf` on the server:
+
+```
+/_eui/* -> https://eui-data.solisoft.net/
+```
+
+**Why the public name and not a port.** The demo application runs in
+blue-green slots whose ports the proxy assigns, so there is no fixed port to
+name. Pointing at the public name costs a hop through Cloudflare and works
+without knowing which slot is up.
+
+**Why this passes the origin check rather than tripping it.** For a TLS
+target the proxy rewrites `Host` to the backend's name — and, for exactly
+this case, rewrites a *same-origin* `Origin` to match it (`rewrite_same_origin`
+in `src/server/mod.rs`). The demo application therefore sees
+`Origin: https://eui-data.solisoft.net` against a request authority of
+`eui-data.solisoft.net`, and they agree. A cross-site `Origin` is passed
+through untouched and is still refused, which is the point.
+
+`is_websocket_request` keys off the `Upgrade` header and not the target
+scheme, so this one rule carries both the session's WebSocket and the
+`GET /_eui/asset/<hash>` fetches beside it.
+
+Without the route the page still works: it shows a real render of the
+application with a message under it, because the poster is never removed.
+That is a deliberate failure mode, not a reason to leave it unset.
+
 ## The demo application
 
 Same three steps, four differences — and each of them is a way this site

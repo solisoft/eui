@@ -141,6 +141,33 @@ jobs:
       # exclusions protect what lives on the server (.env, app.infos,
       # restart.txt) and what has no business there (the nested checkout, the
       # test environment, the agent instructions).
+      # The browser client, for `/demo`. Not committed — seven megabytes
+      # rebuilt on every client change — so without this the page deploys
+      # and its button fetches a 404. `xtask-web` has no dependencies, so
+      # this costs a wasm toolchain and nothing else.
+      - name: Install Rust for the browser client
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen and binaryen
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends binaryen
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+
+      - name: Build the browser client
+        run: cargo run -p xtask-web
+
+      - name: The demo page has a client to load
+        run: |
+          set -euo pipefail
+          for f in eui_web.js eui_web_bg.wasm eui-embed.js manifest.json; do
+            [ -s "www/public/eui/$f" ] || { echo "xtask-web did not write $f" >&2; exit 1; }
+          done
+          ls -l www/public/eui/
+
       - name: Sync the files
         run: |
           set -euo pipefail

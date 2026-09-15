@@ -112,6 +112,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window", "Document", "Element", "HtmlCanvasElement", "console", "Location",
+    "CustomEvent", "EventTarget",
     "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "ErrorEvent", "Event", "EventTarget",
     "Request", "RequestInit", "RequestMode", "RequestRedirect", "RequestCredentials",
     "Response", "Headers",

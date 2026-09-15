@@ -2553,3 +2553,88 @@ footer a:hover {
 .split li code {
     font-size: 0.8rem;
 }
+
+/* ---------------------------------------------------------------- the demo
+
+   One live session, on /demo. The poster is never removed: the canvas is
+   revealed over it once the client has drawn, so a browser that cannot draw
+   — and a reader who has not pressed anything — sees the application rather
+   than a black rectangle. That is why the two are stacked rather than
+   swapped. */
+
+.demo {
+    margin: 0 0 2rem;
+}
+
+.demo__stage {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border: 1px solid var(--rule);
+    background: var(--paper-sunk);
+}
+
+.demo__poster,
+.demo__canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.demo__poster {
+    object-fit: contain;
+}
+
+/* Laid out from the first frame so the client can measure it, and revealed
+   only once it has something on it. */
+.demo__canvas {
+    transition: opacity 0.18s ease;
+}
+
+.demo__run {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 0.7rem 1.2rem;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    color: inherit;
+    font: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+    box-shadow: 0 2px 18px rgb(0 0 0 / 28%);
+}
+
+.demo__run:hover {
+    background: var(--paper-sunk);
+}
+
+.demo__run[disabled] {
+    cursor: progress;
+    opacity: 0.65;
+}
+
+.demo__run small {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+    margin-left: 0.45rem;
+}
+
+.demo__note {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    background: rgb(0 0 0 / 78%);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+}

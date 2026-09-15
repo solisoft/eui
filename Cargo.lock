@@ -4858,6 +4858,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask-web"
+version = "0.1.0"
+
+[[package]]
 name = "yazi"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
