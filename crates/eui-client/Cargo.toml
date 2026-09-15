@@ -109,6 +109,10 @@ gif = "0.13"
 workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The drop half of 03 §3.2, which winit's Wayland backend does not report.
+# Its own crate because attaching to winit's `wl_display` needs `unsafe`,
+# and this one is `#![forbid(unsafe_code)]`.
+eui-wayland = { path = "../eui-wayland", version = "0.1.0" }
 landlock = "0.4.7"
 libc = "0.2.189"
 rustix = { version = "1", features = ["process"] }

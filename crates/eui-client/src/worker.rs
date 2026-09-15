@@ -201,6 +201,14 @@ pub enum Request {
     /// The viewer's desktop palette (05 §5): its mode if it has one, and
     /// colours by role id. Empty means none: the theme's own colours.
     DesktopTheme(Option<ThemeMode>, Vec<(u16, u32)>),
+    /// Spec 01 §2.1: raise the consent sheet before the session is
+    /// dialled. The answer comes back in [`Status::consent`].
+    AskConsent {
+        /// What the manifest asks for that the command line did not give.
+        asked: u32,
+        /// What the manifest calls the application.
+        name: String,
+    },
     /// A file is over a node carrying `drop`, or has left it. `None` when
     /// the drag ended or went away (spec 03 §3.2).
     FileDragged {
@@ -329,6 +337,11 @@ impl Request {
                 w.u8(*channels);
                 w.u32(*rate);
             }
+            Request::AskConsent { asked, name } => {
+                w.u8(25);
+                w.u32(*asked);
+                w.str(name);
+            }
             Request::FileDragged { at } => {
                 w.u8(23);
                 match at {
@@ -453,6 +466,7 @@ impl Request {
                 }
                 Request::Picked { token, files }
             }
+            25 => Request::AskConsent { asked: r.u32()?, name: r.str()? },
             23 => {
                 let at = if r.u8()? == 1 { Some((r.f32()?, r.f32()?)) } else { None };
                 Request::FileDragged { at }
@@ -645,6 +659,10 @@ pub struct Status {
     /// the window has the input — so the platform's positioning should be
     /// running, and should not be a moment longer than this stays true.
     pub wants_location: bool,
+    /// Spec 01 §2.1: the person answered the consent sheet, and this is
+    /// the mask they settled on. `None` while there is nothing to report —
+    /// which is every pass but the one.
+    pub consent: Option<u32>,
     /// The root holds a `back` handler, so this session would do something
     /// with a back (06 §1.3).
     ///
@@ -735,6 +753,13 @@ impl Reply {
         w.bool(s.video);
         w.bool(s.wants_location);
         w.bool(s.takes_back);
+        match s.consent {
+            Some(mask) => {
+                w.bool(true);
+                w.u32(mask);
+            }
+            None => w.bool(false),
+        }
         w.u32(u32::try_from(s.files.len()).unwrap_or(u32::MAX));
         for a in &s.files {
             w.u32(a.token);
@@ -871,6 +896,7 @@ impl Reply {
         let video = r.bool()?;
         let wants_location = r.bool()?;
         let takes_back = r.bool()?;
+        let consent = if r.bool()? { Some(r.u32()?) } else { None };
         let n = r.u32()? as usize;
         let mut files = Vec::with_capacity(n.min(64));
         for _ in 0..n {
@@ -894,7 +920,7 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, files, nfc, writes };
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -1465,6 +1491,10 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.pending_mut().extend(out);
                         Payload::Uploads(ids)
                     }
+                    Request::AskConsent { asked, name } => {
+                        d.ask_consent(asked, &name);
+                        Payload::None
+                    }
                     Request::Dismissed(token) => {
                         d.dialog_dismissed(token);
                         Payload::None
@@ -1516,6 +1546,7 @@ fn status_of(d: &mut Driver) -> Status {
         video: d.video_playing(),
         wants_location: d.wants_location(),
         takes_back: d.takes_back(),
+        consent: d.take_consent(),
         files: d.take_file_asks(),
         nfc: d.take_nfc_asks(),
         writes: d.take_writes(),
@@ -2249,6 +2280,25 @@ impl Backend {
         self.with_local(|d| d.take_clipboard()).or_else(|| self.with_worker(|w| w.status.clipboard.take())).flatten()
     }
 
+    /// Spec 01 §2.1: raise the consent sheet, before anything is dialled.
+    pub fn ask_consent(&mut self, asked: u32, name: &str) {
+        if self.with_local(|d| d.ask_consent(asked, name)).is_some() {
+            return;
+        }
+        self.with_worker(|w| {
+            w.call(&Request::AskConsent { asked, name: name.to_owned() });
+        });
+    }
+
+    /// What the person answered, once they have. Taken, so the window can
+    /// ask on every pass and act once.
+    pub fn take_consent(&mut self) -> Option<u32> {
+        if let Some(said) = self.with_local(Driver::take_consent) {
+            return said;
+        }
+        self.with_worker(|w| w.status.consent.take()).flatten()
+    }
+
     /// Dialogs the tree asked for since the last call (spec 03 §3.2).
     pub fn take_file_asks(&mut self) -> Vec<FileAsk> {
         if let Some(asks) = self.with_local(|d| d.take_file_asks()) {
@@ -2617,6 +2667,7 @@ mod tests {
             video: false,
             wants_location: true,
             takes_back: true,
+            consent: Some(eui_proto::caps::FS_PICK | eui_proto::caps::CLIPBOARD_READ),
             files: vec![
                 FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20, source: crate::driver::PickSource::Held } },
                 FileAsk { token: 4, node: 10, want: FileWant::Save { name: "export.csv".into() } },

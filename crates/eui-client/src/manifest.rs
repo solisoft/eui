@@ -117,6 +117,70 @@ pub fn verify(bytes: &[u8], pins: &Path) -> Result<Manifest, ManifestError> {
     Ok(manifest)
 }
 
+/// Where the answers to the consent sheet are kept: one file per
+/// `app_id`, beside the pins.
+///
+/// Asking again on every run would make the sheet a thing to click past
+/// rather than a thing to read, which is how a permission prompt stops
+/// working. Forgetting one is deleting its file; forgetting all of them is
+/// deleting this directory.
+pub fn grants_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("EUI_GRANTS_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    config_dir().map(|d| d.join("grants"))
+}
+
+/// What an application asked for last time, and what it was given.
+///
+/// Two numbers and not one, and the second is not the interesting half. A
+/// store of grants alone cannot tell a capability that was **refused**
+/// from one that was never **asked about** — both are simply absent — so
+/// it would either nag on every run about the thing the person already
+/// said no to, or never notice a new version asking for something new.
+/// What was asked is what says which of those happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Answered {
+    /// The capabilities the sheet showed.
+    pub asked: u32,
+    /// The ones ticked when it was answered.
+    pub granted: u32,
+}
+
+/// What this person last said about `app_id`, or `None` if they have not
+/// been asked yet.
+///
+/// A file that cannot be read, or that says something this build does not
+/// understand, is a person who has not answered: the sheet goes up again,
+/// which costs a question, where guessing would cost a grant nobody gave.
+#[must_use]
+pub fn remembered_grant(app_id: &str) -> Option<Answered> {
+    let path = grants_dir()?.join(pin_name(app_id));
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut parts = text.split_whitespace();
+    let asked = parts.next()?.parse::<u32>().ok()?;
+    let granted = parts.next()?.parse::<u32>().ok()?;
+    // A grant outside what was asked is a file somebody edited or a build
+    // that wrote a wider mask; either way the sheet is the safe answer.
+    let (asked, granted) = (asked & eui_proto::caps::ALL, granted & eui_proto::caps::ALL);
+    (granted & !asked == 0).then_some(Answered { asked, granted })
+}
+
+/// Keep what they answered, so they are not asked it again.
+///
+/// Best effort, and deliberately so: a client that could not write here
+/// would otherwise have to refuse a session over a file nobody knew about.
+/// The cost of failing is one more question next time.
+pub fn remember_grant(app_id: &str, answered: Answered) {
+    let Some(dir) = grants_dir() else { return };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let asked = answered.asked & eui_proto::caps::ALL;
+    let granted = answered.granted & asked;
+    let _ = std::fs::write(dir.join(pin_name(app_id)), format!("{asked} {granted}\n"));
+}
+
 /// A file name from an `app_id`: its bytes, hex, so no id can escape the dir.
 fn pin_name(app_id: &str) -> String {
     app_id.bytes().map(|b| format!("{b:02x}")).collect()

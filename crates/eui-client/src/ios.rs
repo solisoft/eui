@@ -82,7 +82,9 @@ pub fn url() -> Option<String> {
 pub fn run() -> Result<(), String> {
     match url() {
         Some(u) => crate::app::run(u, 0),
-        None => crate::app::shell(),
+        // No command line on a phone, so nothing is pre-allowed; what an
+        // application asks for is asked about (01 §2.1).
+        None => crate::app::shell(0),
     }
 }
 

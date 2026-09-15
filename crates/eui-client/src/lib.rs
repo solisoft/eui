@@ -50,6 +50,10 @@ pub mod nfc;
 pub mod place;
 pub mod sandbox;
 pub mod transport;
+/// The drop half of spec 03 §3.2 on Wayland, which winit does not report.
+/// The safe half of it; the `unsafe` is in `eui-wayland`, one crate over.
+#[cfg(target_os = "linux")]
+pub mod wayland;
 pub mod worker;
 
 pub use assets::{AssetError, AssetStore, Image};

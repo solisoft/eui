@@ -119,6 +119,8 @@ pub fn url() -> Option<&'static str> {
 pub fn run() -> Result<(), String> {
     match url() {
         Some(u) => crate::app::run(u.to_owned(), 0),
-        None => crate::app::shell(),
+        // No command line on a phone, so nothing is pre-allowed; what an
+        // application asks for is asked about (01 §2.1).
+        None => crate::app::shell(0),
     }
 }

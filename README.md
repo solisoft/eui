@@ -96,9 +96,12 @@ cd doc && soli serve . --dev                             # the docs, on :5011
 cargo run -p counter-server                              # ws://127.0.0.1:5090
 EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5090 --allow fs.pick,fs.save
 
-# A Soli app (../lang built with --features eui), with a capability granted:
+# A Soli app (../lang built with --features eui), with capabilities granted.
+# The gallery is Meridian, whose Files section picks and takes files, so it
+# wants `fs.pick` and `fs.save`; a capability left off here is a control
+# that does nothing, and says so on stderr rather than on the glass.
 ../lang/target/debug/soli serve examples/demo-app --port 5011
-EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read
+EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eui/session/gallery --allow clipboard.read,fs.pick,fs.save
 
 # Atrium, the messenger. Open it twice against the one server: the two
 # windows are two people, and each sees what the other types, sends, reacts

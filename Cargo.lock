@@ -1094,6 +1094,7 @@ dependencies = [
  "eui-uikit",
  "eui-video",
  "eui-vm",
+ "eui-wayland",
  "futures-util",
  "gif",
  "image-webp",
@@ -1205,6 +1206,15 @@ name = "eui-vm"
 version = "0.1.0"
 dependencies = [
  "eui-proto",
+]
+
+[[package]]
+name = "eui-wayland"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.4",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]

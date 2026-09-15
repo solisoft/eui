@@ -103,3 +103,104 @@ fn garbage_is_not_a_manifest() {
     let pins = tmp("garbage");
     assert!(matches!(verify(b"<!doctype html>", &pins).unwrap_err(), ManifestError::Decode(_)));
 }
+
+// -------------------------------------------------------------- grants
+
+/// Spec 01 §2.1: what the person said to the consent sheet, kept so they
+/// are not asked it again.
+mod grants {
+    use eui_client::manifest::{remember_grant, remembered_grant, Answered};
+    use eui_proto::caps;
+
+    /// One grant store for the module, and an `app_id` per test.
+    ///
+    /// `EUI_GRANTS_DIR` is process-wide and these run on threads of one
+    /// process, so a directory per test would have them setting the
+    /// variable out from under each other. One directory, set to the same
+    /// path by whoever gets there first, and nothing shared inside it.
+    fn store() -> std::path::PathBuf {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        let dir = std::env::temp_dir().join(format!("eui-grants-{}", std::process::id()));
+        ONCE.call_once(|| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::env::set_var("EUI_GRANTS_DIR", &dir);
+        });
+        dir
+    }
+
+    /// The file `app_id` is kept in.
+    fn file_of(app_id: &str) -> std::path::PathBuf {
+        store().join(app_id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+
+    #[test]
+    fn nobody_has_been_asked_yet() {
+        store();
+        assert_eq!(remembered_grant("com.example.unasked"), None);
+    }
+
+    #[test]
+    fn what_was_said_comes_back() {
+        store();
+        let said = Answered { asked: caps::FS_PICK | caps::CAMERA, granted: caps::FS_PICK };
+        remember_grant("com.example.roundtrip", said);
+        assert_eq!(remembered_grant("com.example.roundtrip"), Some(said));
+    }
+
+    /// The whole reason the store keeps two numbers. Refused and never
+    /// asked are both "not granted", and telling them apart is what
+    /// decides between nagging somebody about the thing they already said
+    /// no to and never noticing that a new version wants something new.
+    #[test]
+    fn a_refusal_is_an_answer_and_not_a_silence() {
+        store();
+        remember_grant("com.example.refused", Answered { asked: caps::CAMERA, granted: 0 });
+        let back = remembered_grant("com.example.refused").unwrap();
+        assert_eq!(back.granted, 0, "they said no");
+        assert_eq!(back.asked, caps::CAMERA, "and they were asked, which is not the same as not having been");
+        assert_eq!(caps::CAMERA & !(back.granted | back.asked), 0, "so it is not asked again");
+        assert_ne!(caps::FS_PICK & !(back.granted | back.asked), 0, "and something new still is");
+    }
+
+    #[test]
+    fn everything_refused_is_still_an_answer() {
+        store();
+        let said = Answered { asked: caps::ALL, granted: 0 };
+        remember_grant("com.example.allrefused", said);
+        assert_eq!(remembered_grant("com.example.allrefused"), Some(said));
+    }
+
+    /// A file somebody edited, or one a different build wrote. The sheet
+    /// going up again costs a question; trusting it costs a grant nobody
+    /// gave.
+    #[test]
+    fn a_file_that_makes_no_sense_is_not_an_answer() {
+        std::fs::create_dir_all(store()).unwrap();
+        let path = file_of("com.example.nonsense");
+        for bad in ["", "   ", "not a number", "7", "7 x", &format!("0 {}", caps::ALL)] {
+            std::fs::write(&path, bad).unwrap();
+            assert_eq!(remembered_grant("com.example.nonsense"), None, "{bad:?}");
+        }
+    }
+
+    /// Bits outside 01 §2.1 are not capabilities, however they got there.
+    #[test]
+    fn nothing_outside_the_capabilities_survives_the_store() {
+        store();
+        remember_grant("com.example.outside", Answered { asked: u32::MAX, granted: u32::MAX });
+        let back = remembered_grant("com.example.outside").unwrap();
+        assert_eq!(back.asked, caps::ALL);
+        assert_eq!(back.granted, caps::ALL);
+    }
+
+    /// An `app_id` is a string from a server. It names a file, so it must
+    /// not be able to name one anywhere else.
+    #[test]
+    fn an_app_id_cannot_walk_out_of_the_store() {
+        let dir = store();
+        remember_grant("../../../etc/passwd", Answered { asked: caps::FS_PICK, granted: caps::FS_PICK });
+        assert!(file_of("../../../etc/passwd").starts_with(&dir), "the file it wrote is inside the store");
+        let stray = std::fs::read_dir(&dir).unwrap().filter_map(Result::ok).any(|e| !e.file_name().to_string_lossy().bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!stray, "and every name in it is hex, so none of them is a path");
+    }
+}

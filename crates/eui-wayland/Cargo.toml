@@ -1,0 +1,28 @@
+[package]
+name = "eui-wayland"
+description = "The one thing a Wayland compositor will tell the client that winit will not: that a file is over the window, and which files were let go."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Only Linux has a Wayland. On every other target this crate is the stub at
+# the bottom of `lib.rs` and nothing else, which is what lets
+# `cargo build --workspace` on a Mac go on building it.
+#
+# The same libwayland the window is already talking on: `client_system` so
+# these are the objects winit's own live in — a second `wayland-backend` in
+# the tree would break the identity test that keeps other windows' drags
+# out — and `dlopen` so a build that lands on an X11-only machine does not
+# fail to start over a shared object it never needed. winit asks for both
+# already; naming them here is what keeps it true if winit stops.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+# The stop pipe, the transfer pipe, and the poll over both. Already under
+# wayland-client, so this crate adds nothing to the supply chain.
+rustix = { version = "1", features = ["event", "pipe", "std"] }
+
+[lints]
+workspace = true

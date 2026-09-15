@@ -37,6 +37,12 @@ pub enum Wake {
     Exit,
     /// A frame the window asked to be woken for is due. See [`Timer`].
     Frame,
+    /// A file is being dragged over a window, or was let go on one.
+    ///
+    /// Wayland only. Everywhere else winit reports a drop itself, as a
+    /// window event, and there is nothing to be woken for.
+    #[cfg(target_os = "linux")]
+    Drop,
     /// AccessKit has something for the window.
     #[cfg(has_a11y)]
     Access(accesskit_winit::Event),
@@ -113,6 +119,20 @@ enum Link {
     /// Ended for a reason another socket cannot fix: the manifest was
     /// refused, the server sent an `Error`, the tree was unusable.
     Ended,
+    /// Spec 01 §2.1: the consent sheet is up and nothing has been dialled.
+    /// `Hello` carries the grant, so the question has to be answered
+    /// before there is a socket to ask it on.
+    Asking,
+}
+
+/// A consent sheet that is up, and what it will have to remember.
+struct Asking {
+    /// Whose answer this is.
+    app_id: String,
+    /// Everything this manifest asked for that the person has now been
+    /// shown — the rows on the sheet, plus anything they had already
+    /// settled on a previous run. What gets written down as asked.
+    asked: u32,
 }
 
 /// How long to wait before the `tries`-th attempt: 300 ms doubling to
@@ -260,6 +280,11 @@ struct Tab {
     /// This session has sent a frame, so the address is one that answers.
     /// Only then is it worth offering again on a blank page.
     answered: bool,
+    /// Spec 01 §2.1: the consent sheet is up, and nothing has been
+    /// dialled. `None` once it has been answered, and on every session
+    /// that had nothing to ask — which is every `ws://` loopback one,
+    /// because those carry no manifest to ask about.
+    asking: Option<Asking>,
     /// What the address bar says about the origin.
     trust: crate::chrome::Trust,
     /// What the socket is doing.
@@ -307,6 +332,15 @@ enum Trail {
 /// several tabs share one of each: one surface, one accessibility adapter,
 /// one clipboard, one theme watcher, one pointer.
 struct Shell {
+    /// The Wayland data device, watched on its own thread, or `None`
+    /// everywhere winit reports a drop by itself — X11, Windows, macOS,
+    /// the phones — and on a compositor with no data device to watch.
+    ///
+    /// Declared before `window` so the drop glue stops the thread before
+    /// the surface it holds a pointer to can go. `close` does it by name
+    /// as well, because `close` does not use the drop glue.
+    #[cfg(target_os = "linux")]
+    dnd: Option<crate::wayland::Drops>,
     window: Arc<Window>,
     /// `None` between a suspend and the resume that follows it. Android
     /// destroys the native window when the application goes to the
@@ -325,6 +359,17 @@ struct Shell {
     /// The device went away and every session has been told. Kept so the
     /// reason is reported once rather than on every frame that follows it.
     gpu_gone: bool,
+    /// What the person allowed on the command line (`--allow`), for every
+    /// tab this window opens.
+    ///
+    /// The window's, not a tab's, and this is the whole point of it: every
+    /// navigation — a typed address, a link, a reload, a step back —
+    /// builds a *new* `Tab` through `go_to`, and that used to pass a grant
+    /// of zero. So `eui <url> --allow fs.pick` lost the grant on the first
+    /// reload, and the shell never had one at all. Spec 01 §2.1: what the
+    /// person allowed is intersected with what the manifest asks for, and
+    /// what the person allowed does not expire when a page does.
+    allowed: u32,
     /// The applications, in strip order.
     tabs: Vec<Tab>,
     /// Which of them is shown and takes the input.
@@ -418,7 +463,7 @@ struct LoopStats {
     /// loop that passes far more often than it draws is being woken, and
     /// this says by whom — which is the difference between a tree that
     /// asks for too many frames and a thread that will not stop talking.
-    wakes: [u64; 6],
+    wakes: [u64; 7],
     /// Passes that parked with no deadline at all, and passes that armed
     /// one. Both park the loop on `Wait`; the deadline is the timer's.
     waits: u64,
@@ -454,7 +499,7 @@ struct LoopStats {
 const WEVENT_NAMES: [&str; 6] = ["redraw", "cursor", "occluded", "resized", "focus", "other"];
 
 /// The names of [`LoopStats::wakes`], in its order.
-const WAKE_NAMES: [&str; 6] = ["transport", "audio", "files", "theme", "access", "frame"];
+const WAKE_NAMES: [&str; 7] = ["transport", "audio", "files", "theme", "access", "frame", "drop"];
 
 impl LoopStats {
     /// A counter, if the environment asked for one.
@@ -463,7 +508,7 @@ impl LoopStats {
             since: std::time::Instant::now(),
             passes: 0,
             frames_at: 0,
-            wakes: [0; 6],
+            wakes: [0; 7],
             waits: 0,
             untils: 0,
             shortest_us: u64::MAX,
@@ -651,6 +696,7 @@ impl Tab {
             audio: None,
             audio_rx: None,
             answered: false,
+            asking: None,
             trust: crate::chrome::Trust::Unverified,
             link: Link::Ended,
             tries: 0,
@@ -669,10 +715,32 @@ impl Tab {
             crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map_err(|e| e.to_string())
         }) {
             Ok(m) => {
+                // Spec 01 §2.1: what the person allowed, and nothing is
+                // granted by being asked for. `--allow` is one way they
+                // say so; the sheet below is the other, and it is the only
+                // one a person who did not start this from a terminal has.
+                let before = crate::manifest::remembered_grant(&m.app_id);
+                tab.allowed |= before.map_or(0, |b| b.granted);
+                // What neither the command line nor a previous answer has
+                // ever put in front of them. A capability they refused is
+                // *answered* and is not asked about again — that is the
+                // difference the store keeps two numbers for — but a new
+                // version asking for something new is a different question
+                // and gets asked.
+                let settled = tab.allowed | before.map_or(0, |b| b.asked);
+                let unanswered = m.capabilities & !settled;
                 let granted = m.capabilities & tab.allowed;
                 let refused = m.capabilities & !tab.allowed;
                 eprintln!("eui: {} {} — publisher key pinned; granted [{}], refused [{}]", m.name, m.version, eui_proto::caps::names(granted).join(", "), eui_proto::caps::names(refused).join(", "));
                 tab.backend.grant(granted);
+                if unanswered != 0 {
+                    // The sheet instead of the session: `Hello` carries
+                    // the grant, so there is nothing to dial until the
+                    // question has an answer.
+                    tab.asking = Some(Asking { app_id: m.app_id.clone(), asked: settled | unanswered });
+                    tab.backend.ask_consent(unanswered, &m.name);
+                    tab.link = Link::Asking;
+                }
                 // 01 §2.1: the manifest says where the session lives, so an
                 // address with no path is not half an address — it is the
                 // origin, and the application completes it.
@@ -712,8 +780,26 @@ impl Tab {
             }
         }
 
+        if matches!(tab.link, Link::Asking) {
+            return tab;
+        }
         tab.dial(&proxy);
         tab
+    }
+
+    /// The person answered the consent sheet: keep what they said, tell
+    /// the driver, and only now open the socket.
+    fn consent_answered(&mut self, said: u32, proxy: &Proxy) {
+        let Some(asking) = self.asking.take() else { return };
+        self.allowed |= said;
+        // What was put to them and what they said to it — see
+        // [`crate::manifest::Answered`] for why both.
+        crate::manifest::remember_grant(&asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
+        eprintln!("eui: the person allowed [{}]", eui_proto::caps::names(self.allowed).join(", "));
+        // The driver's mask, before `dial` asks it for a `Hello` carrying
+        // it.
+        self.backend.grant(self.allowed);
+        self.dial(proxy);
     }
 
     /// Open a socket for this tab's URL, with whatever the driver says the
@@ -795,6 +881,7 @@ impl Tab {
             // address that was refused would name the wrong fault.
             Link::Ended if self.answered => Some("offline"),
             Link::Ended => None,
+            Link::Asking => Some("permission"),
         }
     }
 
@@ -980,7 +1067,10 @@ impl Shell {
     /// With `chrome`, the window gets a tab strip and can be given more
     /// applications later; without it, it is the one chromeless window
     /// `eui <url>` and an embedding host have always had.
-    fn open(launches: Vec<Launch>, chrome: bool, event_loop: &ActiveEventLoop, proxy: Proxy, shared: &mut Option<Shared>) -> Option<Self> {
+    ///
+    /// `allowed` is what the person granted on the command line, kept for
+    /// every tab this window will open rather than only the first.
+    fn open(launches: Vec<Launch>, chrome: bool, allowed: u32, event_loop: &ActiveEventLoop, proxy: Proxy, shared: &mut Option<Shared>) -> Option<Self> {
         // The build is in the title because a window cannot otherwise be
         // told from one built an hour earlier, and a demo downloaded from
         // the wrong run looks exactly like the right one.
@@ -1131,10 +1221,13 @@ impl Shell {
         });
 
         let mut shell = Self {
+            #[cfg(target_os = "linux")]
+            dnd: None,
             window,
             surface: Some(surface),
             config,
             gpu_gone: false,
+            allowed,
             tabs: Vec::new(),
             active: 0,
             modifiers: 0,
@@ -1202,6 +1295,15 @@ impl Shell {
             });
         }
 
+        // The one thing winit will not report on this platform: a file
+        // over the window (03 §3.2). Started last, where the window
+        // certainly exists and nothing after it can fail, and stopped in
+        // `close`. On X11 this is `None` and winit's own path runs.
+        #[cfg(target_os = "linux")]
+        {
+            shell.dnd = crate::wayland::watch(&shell.window, &shell.proxy);
+        }
+
         // Everything the first frame needs is in place, and any assistive
         // technology has already registered: it is safe to be seen.
         //
@@ -1241,6 +1343,20 @@ impl Shell {
     /// axes. The inverse of what `paint.rs` does with the same factor.
     fn to_app(x: f32, y: f32, top: f32, zoom: f32) -> (f32, f32) {
         (x / zoom, (y - top) / zoom)
+    }
+
+    /// The same point for something arriving over the window from outside
+    /// it — a file being dragged — or `None` when it is over the chrome
+    /// strip and so not the page's at all. A file let go on the address bar
+    /// is not for the page.
+    ///
+    /// Shared by the two paths that can put a file over a window, which is
+    /// why it is a function and not an expression written twice: winit's
+    /// `HoveredFile`, which carries no position and has to use the last
+    /// pointer, and Wayland's `wl_data_device.enter`, which carries a real
+    /// one because winit does not report that event at all (`wayland.rs`).
+    fn page_point(x: f32, y: f32, top: f32, zoom: f32) -> Option<(f32, f32)> {
+        (y >= top).then(|| Self::to_app(x, y, top, zoom))
     }
 
     /// Draw the active page at `z`, and tell it so.
@@ -1370,7 +1486,14 @@ impl Shell {
             Trail::Stay => {}
             Trail::At(n) => at = n,
         }
-        let launch = Launch::new(url, 0);
+        // The window's grant, not nothing. This line used to read
+        // `Launch::new(url, 0)`, and since `go_to` is the one funnel every
+        // navigation goes through — a typed address, a link, a reload, a
+        // step back — that made `--allow` last exactly one page and made
+        // the shell, which reaches every application through here, unable
+        // to be granted anything at all. A dialog that never opens and a
+        // dropped file that never arrives were both this.
+        let launch = Launch::new(url, self.allowed);
         let mut tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
         tab.zoom = zoom;
         tab.history = history;
@@ -1650,6 +1773,13 @@ impl Shell {
         }
         self.files_dirty = false;
         let proxy = Arc::clone(&self.proxy);
+        // Spec 01 §2.1: a consent sheet that has been answered. Before the
+        // dialogs, because the answer is what decides whether `fs.pick`
+        // will let one open at all.
+        for t in &mut self.tabs {
+            let Some(said) = t.backend.take_consent() else { continue };
+            t.consent_answered(said, &proxy);
+        }
         for i in 0..self.tabs.len() {
             let asks = match self.tabs.get_mut(i) {
                 Some(t) => t.backend.take_file_asks(),
@@ -1899,6 +2029,46 @@ impl Shell {
         let out = t.backend.file_dragged(at);
         t.send(out);
         self.window.request_redraw();
+    }
+
+    /// What the Wayland thread saw since the last wake (spec 03 §3.2, the
+    /// drop half, on the one platform winit does not report it).
+    ///
+    /// Nothing here is Wayland-shaped by the time it lands: it goes into
+    /// the same two calls the winit arms use, through the same
+    /// [`Self::page_point`], so a drop that arrived this way and one that
+    /// arrived winit's way are indistinguishable from here down — which is
+    /// what spec 03 §3.2 asks of a pick and a drop, and is just as true of
+    /// two ways of hearing about the same drop.
+    #[cfg(target_os = "linux")]
+    fn drain_drops(&mut self) {
+        let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
+        let zoom = self.zoom();
+        // Collected, not iterated: the borrow on `self.dnd` has to end
+        // before the window is asked to act on any of it.
+        let Some(said) = self.dnd.as_mut().map(crate::wayland::Drops::take) else { return };
+        for drag in said {
+            match drag {
+                // Surface-local logical px are the window's own logical px.
+                // There is no scale to take out here, and that is not an
+                // omission: winit's Wayland pointer multiplies the very same
+                // numbers by the scale factor, and `CursorMoved` above
+                // divides it straight back out.
+                eui_wayland::Drag::Over(at) => {
+                    let at = at.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
+                    self.files_dragged(at);
+                }
+                eui_wayland::Drag::Dropped { at, paths } => {
+                    let Some(at) = Self::page_point(at.0, at.1, top, zoom) else { continue };
+                    // One call per path, as the winit arm gets one event
+                    // per file: each is a whole arrival — an id, an event
+                    // and its own bytes.
+                    for path in paths {
+                        self.file_dropped_at(at, path);
+                    }
+                }
+            }
+        }
     }
 
     /// A file was let go over the page at `at`: the same arrival a dialog
@@ -2411,7 +2581,7 @@ impl Shell {
             // pointer at all. The chrome strip takes none of it: a file
             // let go over the address bar is not for the page.
             WindowEvent::HoveredFile(_) => {
-                let at = self.pointer_at.filter(|(_, y)| *y >= top).map(|(x, y)| Self::to_app(x, y, top, zoom));
+                let at = self.pointer_at.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
                 self.files_dragged(at);
             }
             WindowEvent::HoveredFileCancelled => self.files_dragged(None),
@@ -2419,7 +2589,7 @@ impl Shell {
                 // One event per file, so one call per file: a hand that
                 // let go of six gives six of these, and each is a whole
                 // arrival — an id, an event and its own bytes.
-                let at = self.pointer_at.filter(|(_, y)| *y >= top).map(|(x, y)| Self::to_app(x, y, top, zoom));
+                let at = self.pointer_at.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
                 if let Some(at) = at {
                     self.file_dropped_at(at, path);
                 }
@@ -2788,10 +2958,20 @@ impl Shell {
     /// window first, and both of the steps below have to happen while it is
     /// still alive.
     fn close(self, renderer: &eui_render::Renderer) {
-        #[cfg(has_a11y)]
+        #[cfg(all(has_a11y, target_os = "linux"))]
+        let Shell { window, surface, tabs, access, dnd, .. } = self;
+        #[cfg(all(has_a11y, not(target_os = "linux")))]
         let Shell { window, surface, tabs, access, .. } = self;
-        #[cfg(not(has_a11y))]
+        #[cfg(all(not(has_a11y), target_os = "linux"))]
+        let Shell { window, surface, tabs, dnd, .. } = self;
+        #[cfg(all(not(has_a11y), not(target_os = "linux")))]
         let Shell { window, surface, tabs, .. } = self;
+        // The thread holds this window's `wl_surface` pointer and reads it
+        // on every event the compositor sends. Stopped and joined here,
+        // before the window it points into can go — and before the tabs,
+        // because a drop still in flight would be talking to one.
+        #[cfg(target_os = "linux")]
+        drop(dnd);
         for t in tabs {
             t.close("the window closed");
         }
@@ -2953,6 +3133,23 @@ impl Timer {
     }
 }
 
+/// A window asked for and not yet opened.
+struct Pending {
+    /// The applications to open in it, one tab each. Empty for the shell,
+    /// which opens with nothing in it and is typed into.
+    launches: Vec<Launch>,
+    /// Whether it gets a tab strip and an address bar.
+    chrome: bool,
+    /// What the person allowed on the command line.
+    ///
+    /// The window's, not a launch's. The shell has no launch to hang it on
+    /// and still opens tabs that need it, and a chromeless window that
+    /// follows a link or reloads builds a new tab from an address alone --
+    /// so a grant kept only on the `Launch` is a grant that lasts exactly
+    /// one page.
+    allowed: u32,
+}
+
 /// The process: the event loop, and every window running in it.
 pub struct App {
     proxy: Proxy,
@@ -2962,7 +3159,7 @@ pub struct App {
     /// Windows asked for and not yet opened. `resumed` drains it; on the
     /// platforms that suspend and resume, a window already open is not
     /// opened twice.
-    pending: Vec<(Vec<Launch>, bool)>,
+    pending: Vec<Pending>,
     shells: std::collections::HashMap<WindowId, Shell>,
     /// `EUI_LOOP_STATS=1`: one line a second saying what the loop did.
     loop_stats: Option<LoopStats>,
@@ -2976,14 +3173,22 @@ impl App {
     pub fn new(launches: Vec<Launch>, proxy: EventLoopProxy<Wake>) -> Self {
         let proxy = Arc::new(proxy);
         let timer = Timer::start(Arc::clone(&proxy));
-        Self { proxy, shared: None, pending: launches.into_iter().map(|l| (vec![l], false)).collect(), shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
+        let pending = launches.into_iter().map(|l| Pending { allowed: l.allowed, launches: vec![l], chrome: false }).collect();
+        Self { proxy, shared: None, pending, shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
     /// Build for one window with a tab strip in it, and nothing open.
-    pub fn shell(proxy: EventLoopProxy<Wake>) -> Self {
+    ///
+    /// `allowed` is `--allow` on the command line. It used to be thrown
+    /// away here -- the shell took no grant at all -- so every tab opened
+    /// by typing an address asked for capabilities that could never be
+    /// given, and `fs.pick` in particular was unreachable from the shell
+    /// since the day the shell landed.
+    pub fn shell(allowed: u32, proxy: EventLoopProxy<Wake>) -> Self {
         let proxy = Arc::new(proxy);
         let timer = Timer::start(Arc::clone(&proxy));
-        Self { proxy, shared: None, pending: vec![(Vec::new(), true)], shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
+        let pending = vec![Pending { launches: Vec::new(), chrome: true, allowed }];
+        Self { proxy, shared: None, pending, shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
     }
 
     /// One window closed. The last one takes the process with it: a client
@@ -3022,8 +3227,8 @@ impl ApplicationHandler<Wake> for App {
                 s.resume(shared);
             }
         }
-        for (launches, chrome) in std::mem::take(&mut self.pending) {
-            match Shell::open(launches, chrome, event_loop, Arc::clone(&self.proxy), &mut self.shared) {
+        for Pending { launches, chrome, allowed } in std::mem::take(&mut self.pending) {
+            match Shell::open(launches, chrome, allowed, event_loop, Arc::clone(&self.proxy), &mut self.shared) {
                 Some(s) => {
                     self.shells.insert(s.window.id(), s);
                 }
@@ -3059,6 +3264,8 @@ impl ApplicationHandler<Wake> for App {
                 #[cfg(has_a11y)]
                 Wake::Access(_) => 4,
                 Wake::Frame => 5,
+                #[cfg(target_os = "linux")]
+                Wake::Drop => 6,
                 Wake::Exit => usize::MAX,
             };
             if let Some(slot) = stats.wakes.get_mut(which) {
@@ -3083,6 +3290,10 @@ impl ApplicationHandler<Wake> for App {
             // waiting. The wake is the whole message.
             Wake::Frame => {}
             Wake::Theme => self.shells.values_mut().for_each(Shell::theme_wake),
+            // Which window the file was over is not in the wake either;
+            // the same `try_recv` on an empty channel answers it.
+            #[cfg(target_os = "linux")]
+            Wake::Drop => self.shells.values_mut().for_each(Shell::drain_drops),
             Wake::Exit => event_loop.exit(),
             #[cfg(has_a11y)]
             Wake::Access(e) => {
@@ -3147,7 +3358,7 @@ impl ApplicationHandler<Wake> for App {
                     since: now,
                     passes: 0,
                     frames_at: frames,
-                    wakes: [0; 6],
+                    wakes: [0; 7],
                     waits: 0,
                     untils: 0,
                     shortest_us: u64::MAX,
@@ -3350,8 +3561,13 @@ pub fn run(url: String, allowed: u32) -> Result<(), String> {
 /// This is what bare `eui` does. Applications are opened by typing an
 /// address, and each one that opens gets its own tab — its own confined
 /// worker, connection, cookie and textures — beside the others.
-pub fn shell() -> Result<(), String> {
-    run_loop(App::shell)
+///
+/// `allowed` is `--allow` on the command line, and it covers every tab the
+/// window opens. Bare `eui` with no `--allow` grants nothing, which is
+/// what it should do and what it has always said it does; what it used to
+/// do as well was ignore the flag when it was given.
+pub fn shell(allowed: u32) -> Result<(), String> {
+    run_loop(move |proxy| App::shell(allowed, proxy))
 }
 
 /// Open a window on the session `launch` describes and run until it closes.
@@ -3473,6 +3689,27 @@ mod tests {
         assert_eq!(backoff(4), std::time::Duration::from_millis(4800));
         assert_eq!(backoff(7), std::time::Duration::from_secs(30));
         assert_eq!(backoff(u32::MAX), std::time::Duration::from_secs(30), "and never grows past it");
+    }
+
+    /// 03 §3.2: a file let go over the address bar is not for the page.
+    ///
+    /// Both paths that can put a file over a window go through this — the
+    /// winit one, which has to guess the position from the last pointer,
+    /// and the Wayland one, which is given a real one — so this is the
+    /// test that keeps them answering alike.
+    #[test]
+    fn a_file_over_the_chrome_is_not_over_the_page() {
+        // The strip is 40 px and the page starts under it.
+        assert_eq!(Shell::page_point(10.0, 39.9, 40.0, 1.0), None, "over the strip");
+        assert_eq!(Shell::page_point(10.0, 40.0, 40.0, 1.0), Some((10.0, 0.0)), "the page's first row");
+        assert_eq!(Shell::page_point(10.0, 60.0, 40.0, 1.0), Some((10.0, 20.0)));
+        // The zoom comes out of both axes, and the strip is taken off in
+        // window px before it — the strip does not zoom with the page.
+        assert_eq!(Shell::page_point(20.0, 80.0, 40.0, 2.0), Some((10.0, 20.0)));
+        assert_eq!(Shell::page_point(10.0, 60.0, 40.0, 0.5), Some((20.0, 40.0)));
+        // A chromeless window — `eui <url>`, and every phone — has no
+        // strip, so nothing is excluded and nothing is subtracted.
+        assert_eq!(Shell::page_point(10.0, 0.0, 0.0, 1.0), Some((10.0, 0.0)));
     }
 
     /// The ladder is the point: a factor applied and undone the same

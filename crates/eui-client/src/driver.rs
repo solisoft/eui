@@ -1255,6 +1255,13 @@ pub struct Driver {
     /// Whether the notice of [`Self::show_stopped`] has replaced the tree,
     /// so it is mounted once and not on every frame after.
     stopped: bool,
+    /// Spec 01 §2.1: the person is being asked what this application may
+    /// do, and nothing has been dialled yet. `None` once they have
+    /// answered, and on every session that had nothing to ask.
+    consent: Option<Consent>,
+    /// The answer, waiting for the window to come and take it
+    /// ([`Self::take_consent`]).
+    consent_said: Option<u32>,
     /// When the players were last advanced.
     video_clock: Option<Instant>,
     /// When the next video frame is due. Applied at the end of the paint,
@@ -1386,6 +1393,8 @@ impl Driver {
             wake_dirty: false,
             locate_dirty: false,
             stopped: false,
+            consent: None,
+            consent_said: None,
             video_clock: None,
             video_due: None,
             viewport_due: None,
@@ -3941,8 +3950,14 @@ impl Driver {
                     let p = self.point_payload(ix, kind, x, y);
                     out.extend(self.emit(ix, kind, p));
                     if matches!(kind, EventKind::Click) {
-                        self.offer_files(ix);
-                        self.offer_scan(ix);
+                        // Before the two offers, and in place of them while
+                        // the sheet is up: nothing on it carries `pick` or
+                        // `nfc`, and there is no session for either to
+                        // belong to yet.
+                        if !self.consent_click(ix) {
+                            self.offer_files(ix);
+                            self.offer_scan(ix);
+                        }
                     }
                 }
             }
@@ -4344,6 +4359,10 @@ impl Driver {
         let r = self.layout.rect(f).unwrap_or_default();
         let p = Value::List(vec![Value::Float(f64::from(r.w / 2.0)), Value::Float(f64::from(r.h / 2.0))]);
         let out = self.emit(f, EventKind::Click, p);
+        // The consent sheet is answerable from the keyboard, like anything
+        // else with a click handler: it is the one page a person may reach
+        // before they have decided to trust the application at all.
+        self.consent_click(f);
         self.offer_files(f);
         self.offer_scan(f);
         out
@@ -5823,6 +5842,255 @@ impl Driver {
         self.emit(f, EventKind::Change, Value::Str(value))
     }
 
+    // -------------------------------------------------------- consent
+
+    /// Spec 01 §2.1: ask what this application may do, before it is dialled.
+    ///
+    /// `asked` is what the manifest wants and the command line did not
+    /// already grant; `name` is what the manifest calls itself. Every row
+    /// starts chosen, and each one can be turned off on its own: an
+    /// application that wants a camera and a file picker must not be able
+    /// to make somebody grant the camera to drop a CSV on it.
+    ///
+    /// The sheet is a tree this client mounts itself, the same way
+    /// [`Self::show_stopped`] mounts its notice, and for the same reason: a
+    /// window opened straight onto a URL has no chrome to put a question
+    /// in, and a phone has no chrome at all.
+    pub fn ask_consent(&mut self, asked: u32, name: &str) {
+        let asked = asked & caps::ALL;
+        if asked == 0 {
+            self.consent_said = Some(0);
+            return;
+        }
+        self.consent = Some(Consent { asked, chosen: asked, name: name.to_owned() });
+        self.show_consent();
+    }
+
+    /// The answer, once there is one. Taken, so the window asks on every
+    /// pass and acts once.
+    pub fn take_consent(&mut self) -> Option<u32> {
+        self.consent_said.take()
+    }
+
+    /// True while the sheet is up and the session has not been dialled.
+    pub fn asking_consent(&self) -> bool {
+        self.consent.is_some()
+    }
+
+    /// A click landed while the sheet is up. `true` if it was the sheet's.
+    ///
+    /// `ix` is whatever was under the pointer, which for a button is the
+    /// label inside it — so the handler is resolved the same way a click
+    /// resolves one, by walking out to the node that declared it.
+    fn consent_click(&mut self, ix: NodeIx) -> bool {
+        if self.consent.is_none() {
+            return false;
+        }
+        let Some((ix, _)) = self.target(ix, EventKind::Click) else { return false };
+        let Some(c) = self.consent.as_mut() else { return false };
+        let Some(id) = self.session.node(ix).map(|n| n.id) else { return false };
+        match id {
+            CONSENT_ALLOW => {
+                let said = c.chosen;
+                self.consent = None;
+                self.consent_said = Some(said);
+            }
+            CONSENT_DENY => {
+                self.consent = None;
+                self.consent_said = Some(0);
+            }
+            id if id >= CONSENT_ROW => {
+                // The rows are in bit order, so the row's distance from the
+                // first names the bit it stands for.
+                let Some(nth) = id.checked_sub(CONSENT_ROW) else { return false };
+                let Some(&(_, bit)) = caps::NAMES.iter().filter(|(_, b)| c.asked & b != 0).nth(nth as usize) else {
+                    return false;
+                };
+                c.chosen ^= bit;
+                self.show_consent();
+            }
+            _ => return false,
+        }
+        self.touched = true;
+        self.redraw = true;
+        true
+    }
+
+    /// Draw the sheet, from scratch, for what is currently chosen.
+    ///
+    /// Remounted on every toggle rather than patched. The tree is a dozen
+    /// nodes and this runs when a finger moves, not when a frame does; a
+    /// diff here would be more code to be wrong in than the whole sheet.
+    fn show_consent(&mut self) {
+        let Some(c) = self.consent.clone() else { return };
+        let role = |r: eui_theme::Role| ColorRef::role(r.id());
+        let page = StyleRecord {
+            display: Display::Column,
+            // Not `Justify::Center`, tempting as it is on a page this
+            // small. Ten capabilities on a short phone is a column taller
+            // than the window, and centred content that overflows puts its
+            // top above the origin where no scroll offset can reach it —
+            // which on *this* page means an answer nobody can give.
+            justify: Justify::Start,
+            align_items: AlignItems::Center,
+            // And the other half of that: past the bottom of the window the
+            // rows are still gettable to.
+            overflow: eui_proto::Overflow::Scroll,
+            gap: 4,
+            padding: [6, 6, 6, 6],
+            bg: role(eui_theme::Role::SurfaceBase),
+            ..Default::default()
+        };
+        let heading = StyleRecord { font_size: 3, font_weight: FontWeight::Bold, fg: role(eui_theme::Role::TextDefault), text_align: TextAlign::Center, ..Default::default() };
+        let hint = StyleRecord { font_size: 0, fg: role(eui_theme::Role::TextMuted), text_align: TextAlign::Center, max_width: Dim::Px(460), ..Default::default() };
+        let list = StyleRecord { display: Display::Column, gap: 2, max_width: Dim::Px(460), width: Dim::Percent(10_000), ..Default::default() };
+        let row = |on: bool| StyleRecord {
+            display: Display::Row,
+            align_items: AlignItems::Center,
+            gap: 3,
+            padding: [2, 3, 2, 3],
+            radius: 2,
+            border_width: [1, 1, 1, 1],
+            border_color: role(if on { eui_theme::Role::AccentBase } else { eui_theme::Role::BorderSubtle }),
+            bg: role(eui_theme::Role::SurfaceRaised),
+            fg: role(if on { eui_theme::Role::TextDefault } else { eui_theme::Role::TextMuted }),
+            cursor: Cursor::Pointer,
+            ..Default::default()
+        };
+        let mark = StyleRecord { font_family: eui_proto::FontFamily::Mono, font_size: 1, ..Default::default() };
+        let buttons = StyleRecord { display: Display::Row, gap: 3, justify: Justify::Center, ..Default::default() };
+        let button = |accent: bool| StyleRecord {
+            display: Display::Row,
+            align_items: AlignItems::Center,
+            justify: Justify::Center,
+            padding: [2, 4, 2, 4],
+            radius: 2,
+            bg: role(if accent { eui_theme::Role::AccentBase } else { eui_theme::Role::SurfaceRaised }),
+            fg: role(if accent { eui_theme::Role::AccentOn } else { eui_theme::Role::TextDefault }),
+            border_width: [1, 1, 1, 1],
+            border_color: role(if accent { eui_theme::Role::AccentBase } else { eui_theme::Role::BorderSubtle }),
+            cursor: Cursor::Pointer,
+            font_weight: FontWeight::Bold,
+            ..Default::default()
+        };
+
+        // Styles 1..=6 are fixed; a row takes 7 when it is on and 8 when it
+        // is off, so a toggle is a different style and not a new record.
+        let mut ops = vec![
+            Op::DefStyle { id: 1, record: page },
+            Op::DefStyle { id: 2, record: heading },
+            Op::DefStyle { id: 3, record: hint },
+            Op::DefStyle { id: 4, record: list },
+            Op::DefStyle { id: 5, record: buttons },
+            Op::DefStyle { id: 6, record: mark },
+            Op::DefStyle { id: 7, record: row(true) },
+            Op::DefStyle { id: 8, record: row(false) },
+            Op::DefStyle { id: 9, record: button(true) },
+            Op::DefStyle { id: 10, record: button(false) },
+            Op::DefAtom { id: ATOM_ROLE, value: "role".into() },
+            Op::DefAtom { id: ATOM_LABEL, value: "label".into() },
+            Op::DefAtom { id: ATOM_EVENT, value: "consent".into() },
+        ];
+
+        let wanted: Vec<(&str, u32)> = caps::NAMES.iter().copied().filter(|(_, b)| c.asked & b != 0).collect();
+        let mut tree = Subtree::default();
+        let button_node = |tree: &mut Subtree, id: u32, style: u32, text: &str| {
+            let h = u32::try_from(tree.handlers.len()).unwrap_or(0);
+            tree.handlers.push((EventKind::Click, Handler::Server(ATOM_EVENT)));
+            let pr = u32::try_from(tree.props.len()).unwrap_or(0);
+            tree.props.push((ATOM_ROLE, Value::Str("button".into())));
+            tree.props.push((ATOM_LABEL, Value::Str(text.to_owned())));
+            tree.nodes.push(FlatNode { kind: NodeKind::Box, id, style, key: 0, text: None, props: (pr, 2), handlers: (h, 1), child_count: 1 });
+            tree.nodes.push(FlatNode {
+                kind: NodeKind::Text,
+                id: id.saturating_add(CONSENT_TEXT),
+                style: 0,
+                key: 0,
+                text: Some(TextRef::Inline(text.to_owned())),
+                props: (0, 0),
+                handlers: (0, 0),
+                child_count: 0,
+            });
+        };
+
+        // The page: a heading, a line saying what a grant is, the rows, and
+        // the two answers.
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 4 });
+        let who = if c.name.is_empty() { "This application".to_owned() } else { c.name.clone() };
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline(format!("{who} is asking for:"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode {
+            kind: NodeKind::Text,
+            id: 3,
+            style: 3,
+            key: 0,
+            // Said plainly, because the alternative is a list of words from
+            // a specification: what is turned off here is refused for the
+            // whole session, and the application is told nothing about it.
+            text: Some(TextRef::Inline("Anything you turn off is simply not there for it.".into())),
+            props: (0, 0),
+            handlers: (0, 0),
+            child_count: 0,
+        });
+        // The rows.
+        let rows = u32::try_from(wanted.len()).unwrap_or(0);
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 4, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: rows });
+        for (nth, (name, bit)) in wanted.iter().enumerate() {
+            let on = c.chosen & bit != 0;
+            let id = CONSENT_ROW.saturating_add(u32::try_from(nth).unwrap_or(0));
+            let said = cap_in_words(name);
+            let h = u32::try_from(tree.handlers.len()).unwrap_or(0);
+            tree.handlers.push((EventKind::Click, Handler::Server(ATOM_EVENT)));
+            let pr = u32::try_from(tree.props.len()).unwrap_or(0);
+            tree.props.push((ATOM_ROLE, Value::Str("checkbox".into())));
+            tree.props.push((ATOM_LABEL, Value::Str(said.to_owned())));
+            tree.nodes.push(FlatNode { kind: NodeKind::Box, id, style: if on { 7 } else { 8 }, key: 0, text: None, props: (pr, 2), handlers: (h, 1), child_count: 2 });
+            // A mark and not a glyph from an icon font: this tree is mounted
+            // before any asset has been fetched, and a box that draws
+            // nothing is a row nobody can tell the state of.
+            tree.nodes.push(FlatNode {
+                kind: NodeKind::Text,
+                id: id.saturating_add(CONSENT_MARK),
+                style: 6,
+                key: 0,
+                text: Some(TextRef::Inline(if on { "[x]".into() } else { "[ ]".into() })),
+                props: (0, 0),
+                handlers: (0, 0),
+                child_count: 0,
+            });
+            tree.nodes.push(FlatNode {
+                kind: NodeKind::Text,
+                id: id.saturating_add(CONSENT_TEXT),
+                style: 0,
+                key: 0,
+                text: Some(TextRef::Inline(said.to_owned())),
+                props: (0, 0),
+                handlers: (0, 0),
+                child_count: 0,
+            });
+        }
+        // The two answers.
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 5, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+        button_node(&mut tree, CONSENT_ALLOW, 9, "Allow");
+        button_node(&mut tree, CONSENT_DENY, 10, "Don't allow");
+
+        ops.push(Op::Mount(tree));
+        // A fresh session, as `show_stopped` does: the ids below are this
+        // client's and must not collide with any a server has defined.
+        self.session = Session::new();
+        self.focused = None;
+        self.pointer = Pointer::default();
+        if self.session.apply(&Batch { seq: 1, ops }).is_err() {
+            // The sheet is this client's own tree, so this cannot happen
+            // from anything a server sent — but a question nobody can see
+            // is worse than none, and refusing is the safe answer.
+            self.consent = None;
+            self.consent_said = Some(0);
+            return;
+        }
+        self.invalidate();
+        self.redraw = true;
+    }
+
     /// Spec 01 §4: when a session ends, say so on the glass.
     ///
     /// A window that stopped talking to its application must not look like
@@ -6990,4 +7258,67 @@ impl TextMeasurer for Measurer<'_> {
 /// is told the name it picked, not where it lives.
 fn basename(name: &str) -> &str {
     name.rsplit(['/', '\\']).next().unwrap_or(name)
+}
+
+// ------------------------------------------------------------- consent
+
+/// What the person is being asked, and what they have said so far.
+///
+/// Spec 01 §2.1: a client grants the intersection of what a manifest asks
+/// for with what the person allowed, and reports it in `Hello.granted`. So
+/// the answer has to exist *before* the socket opens — this stands in
+/// front of a session rather than over one, and there is no protocol for
+/// changing its mind afterwards.
+#[derive(Debug, Clone)]
+struct Consent {
+    /// What the manifest wants that the command line did not already give.
+    asked: u32,
+    /// What is still ticked. Everything, until somebody unticks something.
+    chosen: u32,
+    /// What the manifest calls the application.
+    name: String,
+}
+
+/// The first row's node id. The rows run upward from here in bit order, so
+/// a row's distance from this names the capability it stands for.
+const CONSENT_ROW: u32 = 100;
+/// Added to a row's or a button's id for the label inside it.
+const CONSENT_TEXT: u32 = 1_000;
+/// Added to a row's id for the `[x]` beside its label.
+const CONSENT_MARK: u32 = 2_000;
+/// The two answers.
+const CONSENT_ALLOW: u32 = 10;
+const CONSENT_DENY: u32 = 11;
+
+/// Atoms the sheet defines for itself. Ids in a session of this client's
+/// own making, so they collide with nothing a server ever sent.
+const ATOM_ROLE: u32 = 1;
+const ATOM_LABEL: u32 = 2;
+const ATOM_EVENT: u32 = 3;
+
+/// What a capability lets an application do, said to the person who has to
+/// decide about it.
+///
+/// Not the name from 01 §2.1. `fs.pick` is a line in a specification;
+/// "open files you choose" is a thing somebody can agree to or not, and a
+/// permission sheet that shows the former is asking a question it knows
+/// the reader cannot answer.
+fn cap_in_words(name: &str) -> &'static str {
+    match name {
+        "camera" => "Take photographs with the camera",
+        "microphone" => "Make recordings with the microphone",
+        "clipboard.read" => "Read what you have copied",
+        "clipboard.write" => "Put things on your clipboard",
+        "notifications" => "Show you notifications",
+        "location" => "Read roughly where you are",
+        "fs.pick" => "Open files you choose or drop on it",
+        "fs.save" => "Save files where you say",
+        "nfc" => "Read a tag you hold against the machine",
+        "scene" => "Draw with a graphics program of its own",
+        // Every name in `caps::NAMES` is above, and the sheet only ever
+        // shows rows for those. A row rather than none all the same: a
+        // capability this build cannot name is still one nobody should be
+        // granted without being shown a line about it.
+        _ => "Something this build has no words for",
+    }
 }
