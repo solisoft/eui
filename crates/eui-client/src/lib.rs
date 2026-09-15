@@ -42,6 +42,9 @@ pub mod recent;
 /// no repository to ask. Shown in the window so a demo from the wrong run
 /// can be told from the right one at a glance.
 pub const BUILD: &str = env!("EUI_BUILD");
+/// Where the pointer is during a drag, which no winit backend says.
+/// The safe half; the `unsafe` is in `eui-cursor`, one crate over.
+pub mod cursor;
 pub mod desktop_theme;
 pub mod driver;
 pub mod manifest;

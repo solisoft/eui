@@ -12,6 +12,7 @@ name = "eui"
 path = "src/main.rs"
 
 [dependencies]
+eui-cursor = { path = "../eui-cursor", version = "0.1.0" }
 eui-proto = { path = "../eui-proto", version = "0.1.0" }
 eui-tree = { path = "../eui-tree", version = "0.1.0" }
 eui-theme = { path = "../eui-theme", version = "0.1.0" }

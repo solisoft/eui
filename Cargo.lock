@@ -1084,6 +1084,7 @@ dependencies = [
  "counter-server",
  "cpal",
  "eui-audio",
+ "eui-cursor",
  "eui-layout",
  "eui-proto",
  "eui-render",
@@ -1117,6 +1118,16 @@ dependencies = [
  "wgpu",
  "winit",
  "zune-jpeg",
+]
+
+[[package]]
+name = "eui-cursor"
+version = "0.1.0"
+dependencies = [
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

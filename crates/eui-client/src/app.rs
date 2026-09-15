@@ -380,6 +380,16 @@ struct Shell {
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
     /// Where the pointer last was, in the window's own logical pixels.
     pointer_at: Option<(f32, f32)>,
+    /// A file is over this window and has not been let go or taken away.
+    ///
+    /// Only ever set by winit's `HoveredFile`, so it stays false on
+    /// Wayland — where `eui-wayland` is told where the file is, and needs
+    /// no polling at all.
+    hovering: bool,
+    /// Where the poll last found the pointer while `hovering`, so a hand
+    /// holding still costs one cursor query a tick rather than a hit
+    /// test, a worker round trip and a frame.
+    hover_at: Option<(f32, f32)>,
     /// Whether that was over the application rather than the chrome. Kept
     /// rather than recomputed so a button pressed in one and released in
     /// the other does not arrive as half a click in each.
@@ -1233,6 +1243,8 @@ impl Shell {
             modifiers: 0,
             pending_resize: None,
             pointer_at: None,
+            hovering: false,
+            hover_at: None,
             pointer_in_app: false,
             proxy,
             #[cfg(has_a11y)]
@@ -1343,6 +1355,38 @@ impl Shell {
     /// axes. The inverse of what `paint.rs` does with the same factor.
     fn to_app(x: f32, y: f32, top: f32, zoom: f32) -> (f32, f32) {
         (x / zoom, (y - top) / zoom)
+    }
+
+    /// Where the pointer is **now**, in the window's logical pixels.
+    ///
+    /// Asked of the platform rather than remembered, because the one
+    /// moment this is wanted is the one moment the remembered answer is
+    /// wrong: no backend delivers `CursorMoved` while a drag is in flight,
+    /// so `pointer_at` is from before the gesture began — usually
+    /// somewhere else on the page, and `None` if the pointer had not been
+    /// over the window at all since it opened. That was a file let go on
+    /// the drop zone landing whereever the mouse had last rested, or being
+    /// discarded without a word.
+    ///
+    /// Falls back to `pointer_at` where there is nobody to ask: X11, whose
+    /// `XdndPosition` winit drops on the floor, and Wayland, which never
+    /// reaches here.
+    fn pointer_from_platform(&self) -> Option<(f32, f32)> {
+        self.platform_pointer().or(self.pointer_at)
+    }
+
+    /// The platform's own answer, with no fallback: `None` means there was
+    /// nobody to ask, not that the pointer is nowhere.
+    ///
+    /// The distinction is what decides whether the hover poll is worth
+    /// arming. On X11 the answer never comes, so polling for it would be
+    /// a wake-up every 20 ms to compare a stale value with itself.
+    fn platform_pointer(&self) -> Option<(f32, f32)> {
+        let scale = self.scale();
+        if !scale.is_finite() || scale <= 0.0 {
+            return None;
+        }
+        crate::cursor::position(&self.window).map(|(x, y)| (x / scale, y / scale))
     }
 
     /// The same point for something arriving over the window from outside
@@ -2027,6 +2071,14 @@ impl Shell {
     fn files_dragged(&mut self, at: Option<(f32, f32)>) {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let out = t.backend.file_dragged(at);
+        // 06 §1: `file_drag` is sent only when the node under the file
+        // changes, so nothing to send is nothing to draw either. Worth the
+        // branch because this is now called from a poll rather than once
+        // an event: without it, a file held over the window repainted the
+        // page fifty times a second to show the same highlight.
+        if out.is_empty() {
+            return;
+        }
         t.send(out);
         self.window.request_redraw();
     }
@@ -2069,6 +2121,34 @@ impl Shell {
                 }
             }
         }
+    }
+
+    /// Spec 03 §3.2: keep the zone lit under the file while it is held
+    /// over the window.
+    ///
+    /// winit says a file arrived and then says nothing more until it
+    /// lands, so there is no event to hang this on and it is a poll. It
+    /// runs only while a file is actually over this window, and only on
+    /// the platforms that have a pointer to ask about — never at rest,
+    /// and never on Wayland, where the compositor reports the motion and
+    /// `hovering` is never set.
+    ///
+    /// A hand holding still costs one cursor query and stops here: the
+    /// driver would collapse the repeat anyway, but not before a hit test
+    /// and, in the sandboxed configuration, a round trip to the worker.
+    fn serve_hover(&mut self) {
+        if !self.hovering {
+            return;
+        }
+        let live = self.platform_pointer();
+        if live == self.hover_at {
+            return;
+        }
+        self.hover_at = live;
+        let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
+        let zoom = self.zoom();
+        let at = live.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
+        self.files_dragged(at);
     }
 
     /// A file was let go over the page at `at`: the same arrival a dialog
@@ -2581,15 +2661,37 @@ impl Shell {
             // pointer at all. The chrome strip takes none of it: a file
             // let go over the address bar is not for the page.
             WindowEvent::HoveredFile(_) => {
-                let at = self.pointer_at.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
+                // One of these per file, and only on entering the window:
+                // no backend sends another as the hand moves. So this is
+                // where the poll starts, and `serve_hover` is what keeps
+                // the zone lit under the file rather than lit wherever it
+                // first crossed the edge.
+                let live = self.platform_pointer();
+                // Armed only where there is something to poll. X11 keeps
+                // the old behaviour — the zone lights where the pointer
+                // last was and stays there — because winit discards the
+                // `XdndPosition` that would fix it and there is no second
+                // way to ask.
+                self.hovering = live.is_some();
+                self.hover_at = live;
+                let at = live.or(self.pointer_at).and_then(|(x, y)| Self::page_point(x, y, top, zoom));
                 self.files_dragged(at);
             }
-            WindowEvent::HoveredFileCancelled => self.files_dragged(None),
+            WindowEvent::HoveredFileCancelled => {
+                self.hovering = false;
+                self.hover_at = None;
+                self.files_dragged(None);
+            }
             WindowEvent::DroppedFile(path) => {
                 // One event per file, so one call per file: a hand that
                 // let go of six gives six of these, and each is a whole
                 // arrival — an id, an event and its own bytes.
-                let at = self.pointer_at.and_then(|(x, y)| Self::page_point(x, y, top, zoom));
+                // Windows sends no `DragLeave` after a drop and macOS's
+                // exit is not promised either, so the poll is stopped
+                // here rather than waited on.
+                self.hovering = false;
+                self.hover_at = None;
+                let at = self.pointer_from_platform().and_then(|(x, y)| Self::page_point(x, y, top, zoom));
                 if let Some(at) = at {
                     self.file_dropped_at(at, path);
                 }
@@ -3046,15 +3148,38 @@ impl Shell {
         // has set one, for the same reason and at the same cost as the arm
         // below: a wake-up while a frame is pending, nothing at rest.
         let due = self.tabs.get(self.active).and_then(|t| t.backend.next_frame_at());
-        match due {
+        let next = match due {
             _ if requested && cfg!(target_os = "ios") => Some(now + std::time::Duration::from_millis(1)),
             _ if requested => None,
             Some(at) if at > now => Some(at),
             Some(_) => Some(now + std::time::Duration::from_millis(1)),
             None => None,
+        };
+        // A file held over the window is the one thing here that has to be
+        // looked at rather than waited for: winit announces the arrival
+        // and then says nothing until the drop, so a loop that parked on
+        // `Wait` would leave the zone lit where the file first crossed the
+        // edge. This is the only deadline in this function that is not
+        // about drawing, and it is armed exactly while a drag is in flight
+        // — `HoveredFile` to `DroppedFile`, on the backends that send
+        // them, which is never Wayland.
+        if self.hovering {
+            let poll = now + HOVER_POLL;
+            return Some(next.map_or(poll, |at| at.min(poll)));
         }
+        next
     }
 }
+
+/// How often to ask where a file being dragged has got to.
+///
+/// Fifty a second: fast enough that the zone lights as the file crosses
+/// into it rather than after it, slow enough to be a rounding error beside
+/// what the compositor is already doing to drag an icon around. It costs
+/// one cursor query per tick while a file is over the window and nothing
+/// whatsoever otherwise — `serve_hover` returns at its first line, and
+/// `park` arms no deadline.
+const HOVER_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// The deadline the loop wants to be woken at, kept by a thread of our own.
 ///
@@ -3373,6 +3498,9 @@ impl ApplicationHandler<Wake> for App {
         // Dialogs the last events asked for, and the bytes they moved.
         for s in self.shells.values_mut() {
             s.serve_files();
+            // Where a file being dragged has got to. Nothing at all
+            // unless one is over that window right now.
+            s.serve_hover();
             // Where the keyboard belongs may have changed for a reason the
             // transport never heard about — a tap into the address bar, a
             // local handler moving focus. On a phone that is the difference

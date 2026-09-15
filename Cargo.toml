@@ -11,6 +11,7 @@ members = [
     "crates/eui-shader",
     "crates/eui-render",
     "crates/eui-vm",
+    "crates/eui-cursor",
     "crates/eui-uikit",
     "crates/eui-wayland",
     "crates/eui-client",
