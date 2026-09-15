@@ -14,6 +14,11 @@ eui-client = { path = "../../crates/eui-client", version = "0.1.0" }
 eui-render = { path = "../../crates/eui-render", version = "0.1.0" }
 counter-server = { path = "../counter-server", version = "0.1.0" }
 eui-tree = { path = "../../crates/eui-tree", version = "0.1.0" }
+# `SNAPSHOT_PNG=1` writes a picture instead of raw bytes, for the poster a
+# documentation page shows before anybody asks for two megabytes of client.
+# The same encoder the client decodes with, so a poster and the session it
+# stands in for cannot disagree about a colour.
+png = "0.17"
 
 [lints]
 workspace = true

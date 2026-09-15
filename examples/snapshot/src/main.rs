@@ -99,9 +99,28 @@ fn main() {
         let (atlas, images) = driver.atlases_mut();
         renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
         let px = renderer.read_back(&target).expect("read back");
-        std::fs::write(format!("{out}/{name}.rgba"), &px).unwrap();
+        write_image(&out, name, &px, dw, dh);
         println!("{name} {dw} {dh} quads={} mount_bytes={wire}", list.quads.len());
     }
+}
+
+/// Write `px` — sRGB RGBA, row-major — as `<out>/<file>`.
+///
+/// Raw bytes by default, because that is what the pixel tests compare and a
+/// PNG would only be a slower way to say the same thing. `SNAPSHOT_PNG=1`
+/// asks for the other one: a poster for a documentation page, which wants a
+/// picture a browser can show and not a buffer only this repository can read.
+fn write_image(out: &str, file: &str, px: &[u8], w: u32, h: u32) {
+    if std::env::var_os("SNAPSHOT_PNG").is_none() {
+        std::fs::write(format!("{out}/{file}.rgba"), px).unwrap();
+        return;
+    }
+    let path = format!("{out}/{file}.png");
+    let writer = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    let mut encoder = png::Encoder::new(writer, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header().unwrap().write_image_data(px).unwrap();
 }
 
 /// Render a component served by a running Soli, in both modes.
@@ -579,7 +598,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         }
         let px = renderer.read_back(&target).expect("read back");
         let file = format!("{name}-{mode_name}");
-        std::fs::write(format!("{out}/{file}.rgba"), &px).unwrap();
+        write_image(out, &file, &px, dw, dh);
         println!("{file} {dw} {dh} quads={} nodes={}", list.quads.len(), driver.session().live_nodes());
         if std::env::var_os("SNAPSHOT_DUMP").is_some() {
             if let Some(root) = driver.session().root() {
