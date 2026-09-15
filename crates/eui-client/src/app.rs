@@ -1308,7 +1308,37 @@ impl Shell {
             eprintln!("eui: this window's surface is not supported by the adapter the first one chose; refusing to open it");
             return None;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         let size = window.inner_size();
+        // A page's window reports the canvas's *backing store*, and
+        // `with_inner_size` only asks for one — on a slow load the ask has
+        // not landed by the time this reads it, so the surface is configured
+        // at 1x1 and stays there. Nothing corrects it later either: winit
+        // resizes from a `ResizeObserver` on the CSS box, and the CSS box
+        // never changed. The session then connects, decodes and lays out
+        // perfectly into one pixel.
+        //
+        // So the page's own box is asked again here, and asserted rather
+        // than requested. Measured against production, where the race is
+        // lost reliably and is won every time locally.
+        #[cfg(target_arch = "wasm32")]
+        let size = {
+            use winit::platform::web::WindowExtWebSys;
+            let asked = window.inner_size();
+            let measured = window.canvas().map(|canvas| {
+                let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()).clamp(1.0, 2.0);
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                winit::dpi::PhysicalSize::new((f64::from(canvas.client_width().max(1)) * dpr).round() as u32, (f64::from(canvas.client_height().max(1)) * dpr).round() as u32)
+            });
+            match measured {
+                Some(m) if m.width > 1 && m.height > 1 && (asked.width <= 1 || asked.height <= 1) => {
+                    eprintln!("eui: the window opened at {}x{}; the canvas says {}x{} and the canvas is right", asked.width, asked.height, m.width, m.height);
+                    let _ = window.request_inner_size(m);
+                    m
+                }
+                _ => asked,
+            }
+        };
         let caps = surface.get_capabilities(&gpu_shared.adapter);
         // A surface only takes a format it advertises, and configuring it with
         // any other is a validation error inside wgpu — which aborts, because
