@@ -32,6 +32,13 @@ router_eui("broken", "live#broken", "live#broken_view")
 # because someone at another window did something. Open it twice.
 router_eui("chat", "chat#chat", "chat#chat_view")
 
+# The one HTML page here: an EUI session in a browser, beside the Soli that
+# produces it. It must be served by *this* application and not by the
+# marketing site, because Soli refuses a WebSocket upgrade whose `Origin` is
+# not its own — see `app/controllers/live_page_controller.sl`.
+get("/live", "live_page#index")
+get("/live/:component", "live_page#show")
+
 get("/health", "home#health")
 
 # Linking a Spotify account: the only two pages this app serves. The

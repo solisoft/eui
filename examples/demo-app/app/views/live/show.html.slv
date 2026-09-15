@@ -1,0 +1,45 @@
+<h1><%= title %></h1>
+<p class="lede"><%= lead %></p>
+
+<nav class="strip" aria-label="Components">
+  <% for other in components.keys() %>
+    <a href="/live/<%= other %>"<% if other == slug %> aria-current="page"<% end %>><%= components[other]["title"] %></a>
+  <% end %>
+</nav>
+
+<figure class="demo" data-eui data-component="<%= slug %>">
+  <div class="demo__stage">
+    <%# The still is a real render of this component, taken off the wire by
+        `examples/snapshot` and committed (a runner has no GPU). It is never
+        removed — the canvas is revealed over it — so a browser that cannot
+        draw, or a demo server that is down, leaves the reader looking at the
+        application rather than at a black rectangle. %>
+    <img class="demo__poster"
+         src="<%= "/images/live/" + slug + "-light.png" %>"
+         data-light="<%= "/images/live/" + slug + "-light.png" %>"
+         data-dark="<%= "/images/live/" + slug + "-dark.png" %>"
+         alt="<%= title %>, rendered by the native client"
+         width="1800" height="1350" loading="lazy" decoding="async">
+    <canvas class="demo__canvas" id="eui-<%= slug %>" tabindex="0"
+            aria-label="A live EUI session: <%= title %>" hidden></canvas>
+    <button class="demo__run" type="button">Run it <small>&asymp;2 MB</small></button>
+    <p class="demo__note" role="status" hidden></p>
+  </div>
+  <figcaption class="demo__code">
+    <strong><%= source %></strong><br><br>
+    <code>router_eui("<%= slug %>", &hellip;)</code><br><br>
+    This is the EUI client compiled to WebAssembly, drawing on a
+    <code>&lt;canvas&gt;</code> over a binary WebSocket to this same server.
+    No DOM, no HTML and no CSS below that line &mdash; the page supplies a GPU
+    surface, a socket and a pointer, and nothing else.
+  </figcaption>
+</figure>
+
+<footer>
+  <p>
+    The native client is the real one, and is twelve megabytes:
+    <code>eui wss://&hellip;/_eui/session/<%= slug %></code>.
+    This build exists so a page can show you the thing instead of a picture
+    of it.
+  </p>
+</footer>

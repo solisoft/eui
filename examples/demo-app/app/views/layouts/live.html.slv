@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> — EUI, live</title>
+  <meta name="description" content="<%= lead %>">
+  <style>
+    /* No framework and no build step, the same as every other page in this
+       repository's sites. Two columns above 64rem, one below. */
+    :root {
+      color-scheme: light dark;
+      --ground: #fbfbfa; --raise: #fff; --ink: #14161a; --muted: #5d636e;
+      --rule: #e3e5e9; --accent: #2f6df6;
+      font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --ground: #0f1115; --raise: #161920; --ink: #e8eaee; --muted: #9aa1ad; --rule: #262b34; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--ground); color: var(--ink); }
+    .sheet { max-width: 78rem; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    h1 { font-size: 1.9rem; margin: 0 0 .35rem; letter-spacing: -0.02em; }
+    .lede { color: var(--muted); margin: 0 0 2rem; max-width: 46rem; }
+    nav.strip { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 2rem; }
+    nav.strip a {
+      padding: .3rem .7rem; border: 1px solid var(--rule); border-radius: 999px;
+      text-decoration: none; color: var(--muted); font-size: .875rem; background: var(--raise);
+    }
+    nav.strip a[aria-current="page"] { color: var(--ink); border-color: var(--accent); }
+    .demo { display: grid; gap: 1.5rem; grid-template-columns: 1fr; margin: 0; }
+    @media (min-width: 64rem) { .demo { grid-template-columns: 1.25fr 1fr; align-items: start; } }
+    .demo__stage {
+      position: relative; width: 100%; aspect-ratio: 4 / 3;
+      border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--raise);
+    }
+    .demo__poster, .demo__canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    /* The canvas fades in over the poster once the session has drawn. */
+    .demo__canvas { transition: opacity .18s ease; }
+    .demo__poster { object-fit: contain; }
+    .demo__run {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      padding: .65rem 1.15rem; font: inherit; color: #fff; background: var(--accent);
+      border: 0; border-radius: 7px; cursor: pointer; box-shadow: 0 1px 10px #0003;
+    }
+    .demo__run small { opacity: .8; margin-left: .4rem; }
+    .demo__run[disabled] { opacity: .6; cursor: progress; }
+    .demo__note {
+      position: absolute; left: 0; right: 0; bottom: 0; margin: 0;
+      padding: .55rem .8rem; background: #000c; color: #fff; font-size: .82rem;
+    }
+    .demo__code {
+      margin: 0; padding: 1rem; background: var(--raise); border: 1px solid var(--rule);
+      border-radius: 10px; overflow-x: auto; font-size: .8125rem; line-height: 1.5;
+    }
+    footer { margin-top: 3rem; color: var(--muted); font-size: .875rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="sheet"><%= yield %></main>
+  <script type="module" src="/eui/eui-embed.js?v=<%= build %>"></script>
+  <noscript><p style="padding:1rem">This page runs the EUI client as WebAssembly, which needs JavaScript to load. The native client needs none: <code>eui wss://&hellip;</code></p></noscript>
+</body>
+</html>

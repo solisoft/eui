@@ -85,6 +85,13 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
         run: soli routes
 
+      # `/live` offers a component and then opens a session for it by name.
+      # A slug listed on the page with no `router_eui` beside it is a page
+      # that loads, connects to nothing, and says only that a socket failed
+      # — which is the least useful place to learn that a route was renamed.
+      - name: Every component the live page offers has a session to open
+        run: scripts/check-live-page.sh
+
       # Then the whole tree. `soli serve` warms every handler in every
       # controller and service before it answers anything, so a boot that
       # reaches a 200 on /up has parsed all of it. `/up` is Soli's own
