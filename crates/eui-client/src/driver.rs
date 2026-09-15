@@ -5894,10 +5894,12 @@ impl Driver {
                 let said = c.chosen;
                 self.consent = None;
                 self.consent_said = Some(said);
+                self.done_asking();
             }
             CONSENT_DENY => {
                 self.consent = None;
                 self.consent_said = Some(0);
+                self.done_asking();
             }
             id if id >= CONSENT_ROW => {
                 // The rows are in bit order, so the row's distance from the
@@ -5914,6 +5916,26 @@ impl Driver {
         self.touched = true;
         self.redraw = true;
         true
+    }
+
+    /// The sheet is answered: take its tree back out of the session.
+    ///
+    /// The sheet is mounted into `self.session` like any other tree, with
+    /// ids, styles and atoms of its own — and nothing was removing it. The
+    /// window then dialled, and the application's first batch arrived on a
+    /// session that still held the sheet: refused, resynced, refused again,
+    /// and the session closed with "resync refused". So answering the
+    /// question was what broke the session it was asked for, which is why
+    /// `--allow` appeared to work — with nothing to ask, nothing was ever
+    /// mounted.
+    ///
+    /// `start_over` and not a surgical removal: everything it clears — the
+    /// tree, focus, the edits, the verified chunks — belongs to a session
+    /// that does not exist yet. There is nothing here worth keeping, and a
+    /// partial teardown is how this happened in the first place.
+    fn done_asking(&mut self) {
+        self.start_over();
+        self.redraw = true;
     }
 
     /// Draw the sheet, from scratch, for what is currently chosen.

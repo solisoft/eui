@@ -82,6 +82,38 @@ fn the_sheet_can_be_answered_on_a_hidpi_window() {
     assert!(!d.asking_consent());
 }
 
+/// Answering the sheet must leave a session an application can start in.
+///
+/// The sheet is a tree like any other and it is mounted into the session. It
+/// used to stay there: the window dialled, the application's first batch
+/// arrived on top of it, and the client refused its own session —
+/// `the resynced tree was refused`, then `resync refused`, then closed. So
+/// saying yes was what broke the session the question was asked for, and the
+/// only way through was `--allow`, which works by never asking and so never
+/// mounting anything.
+#[test]
+fn a_session_can_start_once_the_sheet_has_been_answered() {
+    use eui_proto::{AlignItems, Batch, Display, FlatNode, Frame, NodeKind, Op, StyleRecord, Subtree, TextRef, Welcome};
+
+    let mut d = driver();
+    d.ask_consent(caps::CAMERA | caps::FS_PICK, "demo-app");
+    click(&mut d, ALLOW);
+    assert_eq!(d.take_consent(), Some(caps::CAMERA | caps::FS_PICK));
+
+    // What the window does next: dial, and the server says hello.
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: false })).is_empty());
+
+    // An application's first batch, using the same low ids the sheet did.
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("the application".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let batch = Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() } }, Op::Mount(tree)] };
+    let out = d.handle_frame(Frame::Batch(batch));
+
+    assert_eq!(out, vec![Frame::Ack { seq: 1 }], "the first batch after a grant was refused: {out:?}");
+    assert!(d.closed().is_none(), "the session closed: {:?}", d.closed());
+}
+
 #[test]
 fn refusing_grants_nothing() {
     let mut d = driver();
