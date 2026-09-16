@@ -28,6 +28,18 @@ const BUFFER_MS: u32 = 200;
 /// How often the filler tops the buffer up.
 const FILL_EVERY: Duration = Duration::from_millis(25);
 
+/// Device callbacks that found the ring short, and the frames they could
+/// not fill. An underrun *is* the crackle: the callback writes silence into
+/// the middle of a sound, and there is no way to hear that as anything else.
+///
+/// Counted always and printed only under `EUI_AUDIO_STATS=1`, because the
+/// alternative is guessing at a symptom that has already been mistaken for
+/// two different faults. Nothing here decides anything — it says whether
+/// the ring ran dry, which is the one question that separates "the supply
+/// is late" from "what is being supplied is wrong".
+pub(crate) static UNDERRUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static STARVED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// An open output device, and the thread that feeds it. Dropping it stops
 /// both.
 pub struct Output {
@@ -77,6 +89,8 @@ impl Output {
         let filler = std::thread::Builder::new()
             .name("eui-audio".into())
             .spawn(move || {
+                let stats = std::env::var("EUI_AUDIO_STATS").is_ok_and(|v| v != "0");
+                let mut last_underruns = 0u64;
                 while !filler_stop.load(Ordering::SeqCst) {
                     let have = filler_ring.lock().map(|r| r.len()).unwrap_or(0) / usize::from(channels);
                     if have < want {
@@ -116,6 +130,18 @@ impl Output {
                                 }
                             }
                             wake();
+                        }
+                    }
+                    if stats {
+                        let n = UNDERRUNS.load(Ordering::Relaxed);
+                        if n != last_underruns {
+                            last_underruns = n;
+                            eprintln!(
+                                "eui: audio underruns {n}, {} frames of silence written into a sound, ring {}/{} ms",
+                                STARVED_FRAMES.load(Ordering::Relaxed),
+                                have * 1000 / rate.max(1) as usize,
+                                BUFFER_MS
+                            );
                         }
                     }
                     std::thread::sleep(FILL_EVERY);
@@ -165,7 +191,13 @@ fn fill_device(data: &mut [f32], device_channels: u16, mix_channels: u16, ring: 
                     }
                 }
                 // Nothing buffered: silence, and the filler catches up.
-                None => return,
+                // Counted on the way out — this is the crackle itself.
+                None => {
+                    UNDERRUNS.fetch_add(1, Ordering::Relaxed);
+                    let done = (frame.as_ptr() as usize).saturating_sub(data.as_ptr() as usize) / (dev * size_of::<f32>());
+                    STARVED_FRAMES.fetch_add((data.len() / dev).saturating_sub(done) as u64, Ordering::Relaxed);
+                    return;
+                }
             }
         }
     }
