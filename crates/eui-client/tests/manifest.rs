@@ -98,6 +98,25 @@ fn a_server_outside_this_clients_protocol_is_refused() {
     assert!(!pins.exists(), "nothing pinned for a server we cannot talk to");
 }
 
+/// A server older than this client is talked down to, not refused.
+///
+/// The session always could: a server settles at `min(client, its own)` and
+/// the client accepts any `Welcome` at or below its version. Only the
+/// manifest check stood in the way, and requiring an exact match meant that
+/// the day a version was added, every client refused every server that had
+/// not been upgraded yet — which is every server, on that day. It happened:
+/// `manifest: the server speaks EUI 2-2, this client 3`, against production
+/// and against a local `soli` alike.
+#[test]
+fn a_server_older_than_this_client_is_still_talked_to() {
+    let pins = tmp("older");
+    let k = keypair();
+    // The oldest wire this client still speaks, offered on its own.
+    let (min, max) = (2, 2);
+    let m = Manifest { app_id: "demo".into(), publisher_key: public(&k), protocol_min: min, protocol_max: max, ..Manifest::default() };
+    assert!(verify(&signed(&m, &k), &pins).is_ok(), "a {min}-{max} server was refused by a client speaking {PROTOCOL_VERSION}");
+}
+
 #[test]
 fn garbage_is_not_a_manifest() {
     let pins = tmp("garbage");

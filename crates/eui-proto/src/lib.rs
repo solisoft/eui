@@ -99,8 +99,16 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 2;
-// Back to 2, and it goes to 3 with the server and not before.
+pub const PROTOCOL_VERSION: u32 = 3;
+// 3 carries `EventKind::Level` (03 §7), which `soli` gates on it.
+//
+// Safe to move now, and it was not this morning: the client's manifest
+// check required this to be *inside* the range a server advertises, so
+// claiming 3 refused every server still serving 2 — production included.
+// It now asks only that the ranges meet, which is what the session always
+// did (`hello.version.min(...)` on one side, any `Welcome` at or below this
+// on the other). A server that speaks 2 gets a conversation in 2 and no
+// level events; one that speaks 3 gets them.
 //
 // `manifest::check` requires this to be *inside* the range a server
 // advertises — there is no negotiating down — so a client that claims a

@@ -5,6 +5,14 @@
 use std::path::{Path, PathBuf};
 
 use eui_proto::{Manifest, PROTOCOL_VERSION};
+
+/// The oldest protocol this client still speaks.
+///
+/// Every version since has added to the wire rather than changed it — a new
+/// event kind, a new prop — so a newer client holds a perfectly good
+/// conversation with an older server by simply never using what that server
+/// has not heard of. What it must not do is refuse to have the conversation.
+const SPEAKS_FROM: u32 = 2;
 use ring::signature::{UnparsedPublicKey, ED25519};
 
 use crate::assets::{self, AssetError};
@@ -97,7 +105,25 @@ pub fn verify(bytes: &[u8], pins: &Path) -> Result<Manifest, ManifestError> {
     let (manifest, signature) = Manifest::decode(bytes).map_err(|e| ManifestError::Decode(e.to_string()))?;
     let key = UnparsedPublicKey::new(&ED25519, manifest.publisher_key);
     key.verify(&manifest.signed_bytes(), &signature).map_err(|_| ManifestError::BadSignature)?;
-    if !(manifest.protocol_min..=manifest.protocol_max).contains(&PROTOCOL_VERSION) {
+    // The two ranges have to *meet*, not match.
+    //
+    // This used to require the client's own version to be inside the
+    // server's range, which reads as caution and is the opposite: it means
+    // every client refuses every server older than itself, so the day a
+    // version is added nothing can connect until every server in the world
+    // has been upgraded first. One line of that shipped this morning and
+    // took out every deployed server at once — `manifest: the server speaks
+    // EUI 2-2, this client 3`.
+    //
+    // The session already knew better. A server settles at
+    // `hello.version.min(its own)`, and `handle_frame` accepts any `Welcome`
+    // at or below `PROTOCOL_VERSION`, so talking down was always supported
+    // — the door was locked in front of a room that was ready.
+    //
+    // `SPEAKS_FROM` is the floor: the oldest wire this client still
+    // understands, which is where the additions since have been additive.
+    // Below it there is nothing to negotiate and refusing is right.
+    if manifest.protocol_min > PROTOCOL_VERSION || manifest.protocol_max < SPEAKS_FROM {
         return Err(ManifestError::Protocol { min: manifest.protocol_min, max: manifest.protocol_max });
     }
     let pin = pins.join(pin_name(&manifest.app_id));
