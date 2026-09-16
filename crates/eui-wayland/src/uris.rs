@@ -29,10 +29,34 @@ pub fn paths(body: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Percent-decoded bytes as a path.
+///
+/// A Unix path is bytes, so on the platform this crate exists for they go
+/// across whole: a name that is not UTF-8 is still a name, and dropping it
+/// would mean refusing a file somebody can see on their desk.
+///
+/// Elsewhere there is no such conversion — and elsewhere is only reached
+/// because this module is parsing, and parsing is worth compiling and
+/// testing on every platform the workspace builds for. It was not gated,
+/// `std::os::unix` is not there on Windows, and `Run Tests
+/// (windows-latest)` had been failing on it. UTF-8 or nothing: a `file:`
+/// URI naming a Windows path is UTF-8 in practice, and no real drop ever
+/// arrives there — `Dnd::start` answers `None` off Linux and winit reports
+/// its own drops.
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
+/// See the Unix one above: UTF-8 or nothing.
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: Vec<u8>) -> Option<PathBuf> {
+    String::from_utf8(bytes).ok().map(PathBuf::from)
+}
+
 /// The path one URI names, if it names a local file at all.
 fn one(uri: &[u8]) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-
     // The scheme is case-insensitive (RFC 3986 §3.1) and `FILE:` does turn
     // up, from Java applications among others.
     let rest = strip_scheme(uri, b"file")?;
@@ -58,7 +82,7 @@ fn one(uri: &[u8]) -> Option<PathBuf> {
     if bytes.is_empty() || bytes.contains(&0) {
         return None;
     }
-    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    path_from_bytes(bytes)
 }
 
 /// What follows `scheme:`, or `None` when that is not the scheme.

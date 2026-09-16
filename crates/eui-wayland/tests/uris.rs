@@ -79,6 +79,11 @@ fn a_truncated_escape_keeps_its_percent() {
     assert_eq!(paths(b"file:///tmp/a%zz\r\n"), vec![p("/tmp/a%zz")]);
 }
 
+/// Unix only, because the claim is a Unix one: a path is bytes there, and a
+/// name that is not UTF-8 is still a name. Off Unix there is no such path to
+/// build and nothing to assert — `path_from_bytes` takes UTF-8 or nothing,
+/// and no real drop reaches this crate there anyway.
+#[cfg(unix)]
 #[test]
 fn a_path_that_is_not_utf8_arrives_intact() {
     use std::os::unix::ffi::OsStrExt;
