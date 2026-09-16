@@ -284,3 +284,69 @@ fn a_crashed_worker_leaves_its_neighbours_untouched() {
     assert!(bystander.worker_status().is_some(), "the survivor's worker is still answering");
     assert!(bystander.closed().is_none(), "and it still has a session");
 }
+
+/// What the audio filler actually waits for, in milliseconds.
+///
+/// A measurement rather than an assertion, and ignored by default: the
+/// number it prints is the machine's, and pinning it would be a test that
+/// fails on somebody else's laptop for no fault of theirs.
+///
+///     cargo test -p eui-client --test worker -- --ignored --nocapture
+///
+/// Measured here on 16 September 2026: 5 228 round trips in 3 s, and the
+/// worst audio fill waited **145 ms** against a ring that holds 200. That is
+/// 55 ms of margin under a moving mouse, which is the reported stutter
+/// waiting for a slower machine or a heavier tree.
+///
+/// It is not throughput — each call costs 0.57 ms. It is fairness:
+/// `std::sync::Mutex` makes no promise about who gets it next, and the
+/// window's loop re-takes it in a tight sequence while the filler waits its
+/// turn.
+#[ignore = "a measurement, not a threshold: run it by hand"]
+#[test]
+fn how_long_an_audio_fill_waits_behind_a_painting_window() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let url = start_server();
+    let (mut backend, _) = Backend::open_with(eui_binary(), 1200.0, 900.0, 2.0, 0);
+    let (conn, wake) = open(&mut backend, &url);
+    pump(&mut backend, &conn, &wake, |b| quads(b).len() > 5);
+
+    let Backend::Remote { worker, .. } = &backend else { panic!("not a worker") };
+    let tap = eui_client::worker::AudioTap::Remote(std::sync::Arc::clone(worker));
+
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let painting = {
+        let stop = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut worst = Duration::ZERO;
+            let mut chunk = vec![0.0f32; 44_100 * 2 / 5];
+            while !stop.load(Ordering::SeqCst) {
+                let t = Instant::now();
+                let _ = tap.fill(&mut chunk, 2, 44_100);
+                worst = worst.max(t.elapsed());
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            worst
+        })
+    };
+
+    // The window, painting as hard as it can.
+    // Pointer moves, not paints: a paint is answered from the repeat cache
+    // without touching the pipe, so painting alone measures nothing. An
+    // input always crosses it and clears that cache, which is what a window
+    // under a moving mouse really does.
+    let t0 = Instant::now();
+    let mut paints = 0u32;
+    let mut x = 0.0f32;
+    while t0.elapsed() < Duration::from_secs(3) {
+        x = (x + 1.0) % 1000.0;
+        let _ = backend.input(Input::PointerMove(x, 300.0));
+        let _ = backend.paint(1200, 900);
+        paints += 1;
+    }
+    stop.store(true, Ordering::SeqCst);
+    let worst = painting.join().unwrap();
+    eprintln!("MEASURED: {paints} paints in 3 s; worst audio fill waited {} ms (the ring holds 200)", worst.as_millis());
+}
