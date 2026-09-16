@@ -84,8 +84,30 @@ impl Output {
                         // wait on a driver that is busy painting.
                         let mut chunk = vec![0.0f32; (want - have) * usize::from(channels)];
                         let frames = tap.fill(&mut chunk, channels, rate);
-                        if let Ok(mut r) = filler_ring.lock() {
-                            r.extend(chunk);
+                        // Silence is never queued, and that is the whole of
+                        // the latency fix.
+                        //
+                        // `fill_device` zeroes its buffer and returns the
+                        // moment the ring runs out, so an empty ring already
+                        // *is* silence — queueing it buys nothing. What it
+                        // cost was a delay on every sound: the device is
+                        // opened as soon as a sound is loaded, not when it
+                        // plays, so a chime sitting paused kept 200 ms of
+                        // zeroes in front of the speaker. Pressing Play then
+                        // had to drain them first, and the sound arrived a
+                        // fifth of a second late — which is audible, and was
+                        // reported as lag.
+                        //
+                        // The tap is still called at the same cadence: it
+                        // moves the mixer's clock and it is where `ended`
+                        // comes from. Only the pushing is skipped, and only
+                        // when there is nothing in the chunk at all. A chunk
+                        // that starts silent and turns into a sound halfway
+                        // is queued whole.
+                        if chunk.iter().any(|s| *s != 0.0) {
+                            if let Ok(mut r) = filler_ring.lock() {
+                                r.extend(chunk);
+                            }
                         }
                         if !frames.is_empty() {
                             for f in frames {
