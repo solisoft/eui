@@ -1,0 +1,3 @@
+[package]
+name = "eui-site"
+main = "app.sl"
