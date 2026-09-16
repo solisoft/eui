@@ -123,6 +123,31 @@ fn a_session_starts_through_a_worker_once_the_sheet_is_answered() {
     pump(&mut backend, &conn, &wake, |b| quads(b).len() > 5);
 }
 
+/// A paint answered from the cache must not walk the session backwards.
+///
+/// The cached reply carries the status the driver had when the list was
+/// made, and reinstating it undoes whatever has happened since. `audio` and
+/// `video` are where that costs something physical: the window opens a
+/// device when they turn true and drops it when they turn false, so a stale
+/// `false` tore the output down and the next real reply built it again —
+/// four times a second, each rebuild starting on an empty ring.
+#[test]
+fn a_cached_paint_does_not_forget_that_a_sound_is_playing() {
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let url = start_server();
+    let (mut backend, _) = Backend::open_with(eui_binary(), 320.0, 240.0, 1.0, 0);
+    let (conn, wake) = open(&mut backend, &url);
+    pump(&mut backend, &conn, &wake, |b| quads(b).len() > 5);
+
+    // Whatever the session says about sound right now is the truth, and a
+    // repeat of the same paint has no standing to contradict it.
+    let before = backend.audio_playing();
+    for _ in 0..8 {
+        let _ = backend.paint(320, 240);
+        assert_eq!(backend.audio_playing(), before, "a repeated paint changed what the window thinks about the sound");
+    }
+}
+
 #[test]
 fn the_counter_runs_through_a_worker_process() {
     std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");

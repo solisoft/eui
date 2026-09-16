@@ -1770,7 +1770,24 @@ impl Worker {
         if matches!(request, Request::Paint(..)) {
             let now = Instant::now();
             if let Some(reply) = self.repeat.as_ref().and_then(|r| r.answer(now)) {
-                self.keep(reply.status.clone());
+                // A cached list describes the *list*. It says nothing about
+                // the session, and it must not be allowed to: the status it
+                // carries was taken when the list was made, and reinstating
+                // it walks the window's idea of the session backwards.
+                //
+                // `audio` and `video` are where that has a physical cost.
+                // The window opens a device when they turn true and drops it
+                // when they turn false, so a stale `false` tore the output
+                // down and the next real reply built it again — four times a
+                // second, in step with the level reports that were causing
+                // the paints. Every rebuild starts on an empty ring, which
+                // is why the meters working made the sound break up: 133
+                // underruns and six and a half seconds of silence written
+                // into a chime, with the ring reading `0/200 ms` every time.
+                let mut status = reply.status.clone();
+                status.audio = self.status.audio;
+                status.video = self.status.video;
+                self.keep(status);
                 self.due = Some(now);
                 crate::driver::trace(|| "paint: the last list again, the pipe untouched".to_owned());
                 return Some(reply);
