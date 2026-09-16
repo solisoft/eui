@@ -2459,6 +2459,54 @@ fn a_playing_sound_schedules_its_own_report() {
     assert!(d.tick(later), "the loop woke for the report and was told there was nothing to draw");
 }
 
+/// A sound that is playing tells the server how loud it is.
+///
+/// Reported as meters that never move while a sound plays. Everything
+/// around this has been checked by hand — the node asks for levels, the
+/// server routes them, both binaries carry the machinery — so the one link
+/// left is whether the client emits anything at all, and that needs no
+/// device and no server to find out.
+#[test]
+fn a_playing_sound_reports_how_loud_it_is() {
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_LEVEL: u32 = 35;
+    let hash: [u8; 32] = [11; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::Level, Handler::Server(A_LEVEL)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_LEVEL, value: "level".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+
+    // A second of a loud tone, so there is a peak to report.
+    d.asset_ready(hash, wav_bytes(&[16_000i16; 8_000], 8_000));
+    let _ = d.paint(400, 300);
+    let mut out = [0.0f32; 800];
+    d.fill_audio(&mut out, 1, 8_000);
+    assert!(out.iter().any(|s| *s != 0.0), "the tone is being mixed");
+
+    // The report rides a paint, a quarter second apart.
+    let _ = d.take_pending();
+    let _ = d.paint(400, 300);
+    d.tick(std::time::Instant::now() + std::time::Duration::from_millis(300));
+    d.fill_audio(&mut out, 1, 8_000);
+    let _ = d.paint(400, 300);
+
+    let sent = d.take_pending();
+    let levels: Vec<&Frame> = sent.iter().filter(|f| matches!(f, Frame::Event(e) if e.name == A_LEVEL)).collect();
+    assert!(!levels.is_empty(), "no level was reported while a sound played: {sent:?}");
+}
+
 /// Spec 03 §7: an `audio` node names a sound, says what it should be
 /// doing, and hears back when it ends.
 #[test]
