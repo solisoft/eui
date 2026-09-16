@@ -99,4 +99,18 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 2;
+// Back to 2, and it goes to 3 with the server and not before.
+//
+// `manifest::check` requires this to be *inside* the range a server
+// advertises — there is no negotiating down — so a client that claims a
+// version no deployed server serves refuses every one of them:
+//
+//     manifest: the server speaks EUI 2-2, this client 3
+//
+// which is what every `eui` built from main did, against production and
+// against a local `soli` alike. The bump belongs with a `soli` that
+// advertises 2-3; published on its own it is not a new protocol, it is an
+// outage. `EventKind::Level` stays defined: a tag nobody sends yet costs
+// nothing, and it is what the peaks will ride on when the server side
+// lands.
