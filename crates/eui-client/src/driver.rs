@@ -1289,7 +1289,11 @@ pub struct Driver {
     /// The tree changed, so the audio nodes must be looked at again.
     audio_dirty: bool,
     /// When `time_update` was last sent, for the rate limit of 03 §7.
+    /// `level` rides the same clock rather than bringing one of its own.
     audio_reported: Option<Instant>,
+    /// The last `level` sent for a node. A meter that has not moved costs
+    /// nothing, and a sound that stopped still gets its one last zero.
+    audio_level: HashMap<u32, (i64, i64)>,
     /// The viewer's desktop palette by role, on top of the theme (05 §5),
     /// and the mode it is for: in the other mode the theme's own colours
     /// show, so a light/dark switch still switches something.
@@ -1405,6 +1409,7 @@ impl Driver {
             video_at: HashMap::new(),
             audio_dirty: false,
             audio_reported: None,
+            audio_level: HashMap::new(),
         }
     }
 
@@ -2017,7 +2022,27 @@ impl Driver {
     /// When the next transition frame is due — `None` at rest. The window
     /// sleeps until then and not a moment less.
     pub fn next_frame_at(&self) -> Option<Instant> {
-        [self.next_due, self.viewport_due].into_iter().flatten().min()
+        // A sound or a picture that is playing owes its meters a report four
+        // times a second (03 §7, §8), and that report is made from a paint.
+        // Leaving it out of here was leaving it to chance: the paint only
+        // happened if something *else* asked for one, so a chime playing over
+        // a still interface reported once and then nothing — the meter froze
+        // with the sound still going, which is the one thing a meter must not
+        // do. The demo loops its chime precisely so the bars have time to
+        // move, and they did not.
+        //
+        // It costs four wake-ups a second, and only while something plays:
+        // `audio_due` is `None` the moment the mixer and the players are
+        // empty, which is every window that is not playing anything.
+        [self.next_due, self.viewport_due, self.audio_due()].into_iter().flatten().min()
+    }
+
+    /// When the next audio or video report is due, if anything is playing.
+    fn audio_due(&self) -> Option<Instant> {
+        if self.mixer.is_empty() && self.players.is_empty() {
+            return None;
+        }
+        Some(self.audio_reported.map_or_else(Instant::now, |t| t + Duration::from_millis(250)))
     }
 
     /// True while any transition runs.
@@ -6142,6 +6167,7 @@ impl Driver {
         self.stopped = true;
         let why = self.closed.as_ref().map(ToString::to_string).unwrap_or_default();
         self.mixer = eui_audio::Mixer::new(48_000);
+        self.audio_level.clear();
         self.players.clear();
         self.wakes.clear();
         self.locators.clear();
@@ -6720,6 +6746,7 @@ impl Driver {
         self.mixer.retain(&live);
         self.audio_at.retain(|id, _| live.contains(id));
         self.audio_src.retain(|id, _| live.contains(id));
+        self.audio_level.retain(|id, _| live.contains(id));
         for (id, hash, control, position) in work {
             // Load when the node is new to the mixer, and again when it is
             // pointed at a different asset: same node, another sound.
@@ -6832,7 +6859,19 @@ impl Driver {
                 })
                 .collect()
         };
-        if playing.is_empty() && moving.is_empty() {
+        // Not `playing`: a source that paused or ended owes its meter one
+        // last zero. `fill` skips a stopped source, so its peak drains to
+        // nothing and the bar falls once, which is what an instrument does.
+        let metered: Vec<u32> = self
+            .session
+            .media()
+            .iter()
+            .filter_map(|ix| self.session.node(*ix))
+            .filter(|n| n.kind == NodeKind::Audio && n.handler(EventKind::Level).is_some())
+            .map(|n| n.id)
+            .filter(|id| self.mixer.has(*id))
+            .collect();
+        if playing.is_empty() && moving.is_empty() && metered.is_empty() {
             return Vec::new();
         }
         self.audio_reported = Some(now);
@@ -6848,6 +6887,23 @@ impl Driver {
                 continue;
             };
             out.extend(self.emit(ix, EventKind::TimeUpdate, Value::List(vec![Value::Int(at as i64), Value::Int(len as i64)])));
+        }
+        // Drain every metered source even when nothing is sent for it:
+        // a peak left in place is a spike that surfaces later, under a
+        // sound that was never that loud.
+        for id in metered {
+            let Some(peak) = self.mixer.take_peak(id) else {
+                continue;
+            };
+            let pair = (level_pct(peak.0), level_pct(peak.1));
+            if self.audio_level.get(&id) == Some(&pair) {
+                continue;
+            }
+            self.audio_level.insert(id, pair);
+            let Some(ix) = self.session.lookup(id) else {
+                continue;
+            };
+            out.extend(self.emit(ix, EventKind::Level, Value::List(vec![Value::Int(pair.0), Value::Int(pair.1)])));
         }
         out
     }
@@ -7356,4 +7412,15 @@ fn cap_in_words(name: &str) -> &'static str {
         // granted without being shown a line about it.
         _ => "Something this build has no words for",
     }
+}
+
+/// A peak as the wire carries it, `0..=100`.
+///
+/// `round`, not truncation: truncating puts everything below exactly full
+/// scale at 99, so a sound that pegs the meter never looks like it did —
+/// which is the one reading a meter exists to show. Clamped first because
+/// a decoded sound is not normalised, and because a NaN saturates to 0,
+/// which is the right answer for a sample that went bad.
+fn level_pct(v: f32) -> i64 {
+    (v.clamp(0.0, 1.0) * 100.0).round() as i64
 }

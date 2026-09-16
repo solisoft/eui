@@ -2411,6 +2411,47 @@ fn wav_bytes(samples: &[i16], rate: u32) -> Vec<u8> {
     out
 }
 
+/// A sound that is playing asks the loop to come back for its meter.
+///
+/// The report is made from a paint (03 §7), and the paint used to have to be
+/// somebody else's idea: `next_frame_at` named the transitions and the
+/// viewport and not this, so a chime over a still interface reported once and
+/// then never again — the bars froze with the sound still going. The demo
+/// loops its chime precisely so the meters have time to move.
+#[test]
+fn a_playing_sound_schedules_its_own_report() {
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_LEVEL: u32 = 35;
+    let hash: [u8; 32] = [9; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::Level, Handler::Server(A_LEVEL)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_LEVEL, value: "level".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+
+    // Nothing is playing yet, and nothing is owed a frame on that account.
+    assert!(d.next_frame_at().is_none(), "an idle window asks for nothing");
+
+    d.asset_ready(hash, wav_bytes(&[8_000i16; 8_000], 8_000));
+    let _ = d.paint(400, 300);
+    assert!(d.audio_playing(), "the sound is loaded and playing");
+
+    let due = d.next_frame_at().expect("a playing sound asks the loop to come back");
+    let ahead = due.saturating_duration_since(std::time::Instant::now());
+    assert!(ahead <= std::time::Duration::from_millis(250), "the next report is more than a quarter second away: {ahead:?}");
+}
+
 /// Spec 03 §7: an `audio` node names a sound, says what it should be
 /// doing, and hears back when it ends.
 #[test]
@@ -3360,4 +3401,131 @@ fn a_keyboard_that_covers_nothing_scrolls_nothing() {
     let settled = d.session().node(scroll).unwrap().scroll.1;
     assert!(d.input(Input::Covered(10.0)).is_empty(), "the same covering, said again");
     assert_eq!(d.session().node(scroll).unwrap().scroll.1, settled);
+}
+
+/// Spec 03 §7: `level` goes only to a node that asks for it, on the clock
+/// `time_update` already runs, and it falls to zero when the sound stops.
+///
+/// The freeze is the interesting half. A meter gated on "is playing" stops
+/// being sent the moment the sound pauses, so the last bar it drew stays
+/// lit for ever — a meter that lies about silence is worse than none.
+#[test]
+fn level_only_for_nodes_that_ask_and_it_falls_when_the_sound_stops() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_LEVEL: u32 = 36;
+    let hash: [u8; 32] = [9; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    // The metered node, and a sibling that plays the same sound and asks
+    // for nothing: silence for it is the deny-by-default half of the test.
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 3, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::Level, Handler::Server(A_LEVEL)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_LEVEL, value: "level".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    // Half of full scale, two seconds of it.
+    d.asset_ready(hash, wav_bytes(&[16_384i16; 16_000], 8_000));
+    let t0 = Instant::now();
+
+    // Nothing has been mixed yet, so the first reading is honestly zero.
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let first = d.take_pending();
+    let levels: Vec<_> = first.iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Level)).collect();
+    assert_eq!(levels.len(), 1, "one node asked, one node hears: {first:?}");
+
+    // Now mix some audio the way the device's filler thread would.
+    let mut buf = vec![0.0f32; 2 * 1024];
+    d.fill_audio(&mut buf, 2, 48_000);
+    d.tick(t0 + Duration::from_millis(260));
+    let _ = d.paint(400, 300);
+    let next = d.take_pending();
+    let Some(Frame::Event(e)) = next.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Level)) else { panic!("{next:?}") };
+    assert_eq!(e.payload, Value::List(vec![Value::Int(50), Value::Int(50)]), "half of full scale, both channels");
+
+    // Again at once: nothing. `level` shares `time_update`'s clock and
+    // does not bring a finer one (08 §8).
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().is_empty(), "the same four a second");
+
+    // A tick where the level has not moved says nothing at all.
+    d.fill_audio(&mut buf, 2, 48_000);
+    d.tick(t0 + Duration::from_millis(520));
+    let _ = d.paint(400, 300);
+    let same = d.take_pending();
+    assert!(!same.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Level)), "a meter that has not moved costs nothing: {same:?}");
+
+    // Pause it. `sync_audio` runs inside `paint`, so the mixer only hears
+    // about it there; the filler thread's next pass is the first silent
+    // one, which is the order these happen in on a real device too.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetProp { node: 2, prop: A_PLAYING, value: Value::Bool(false) }] }));
+    let _ = d.paint(400, 300);
+    d.take_pending();
+    d.fill_audio(&mut buf, 2, 48_000);
+    d.tick(t0 + Duration::from_millis(780));
+    let _ = d.paint(400, 300);
+    let stopped = d.take_pending();
+    let Some(Frame::Event(e)) = stopped.iter().find(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Level)) else { panic!("a stopped sound owes its meter one last zero: {stopped:?}") };
+    assert_eq!(e.payload, Value::List(vec![Value::Int(0), Value::Int(0)]), "the bar falls");
+
+    // And stays down without saying so four times a second.
+    d.fill_audio(&mut buf, 2, 48_000);
+    d.tick(t0 + Duration::from_millis(1_040));
+    let _ = d.paint(400, 300);
+    let quiet = d.take_pending();
+    assert!(!quiet.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Level)), "silence is not news twice: {quiet:?}");
+}
+
+/// Spec 08 §8: `level` rides the clock `time_update` already runs on. A
+/// node asking for both hears both on one tick and neither on the next —
+/// the client adds no finer timing channel than the one it already has.
+#[test]
+fn level_and_time_update_share_one_clock() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    const A_SRC: u32 = 30;
+    const A_PLAYING: u32 = 31;
+    const A_TIME: u32 = 35;
+    const A_LEVEL: u32 = 36;
+    let hash: [u8; 32] = [9; 32];
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, 2), handlers: (0, 2), child_count: 0 });
+    tree.props.push((A_SRC, Value::Asset(hash)));
+    tree.props.push((A_PLAYING, Value::Bool(true)));
+    tree.handlers.push((EventKind::TimeUpdate, Handler::Server(A_TIME)));
+    tree.handlers.push((EventKind::Level, Handler::Server(A_LEVEL)));
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefAtom { id: A_TIME, value: "time".into() },
+        Op::DefAtom { id: A_LEVEL, value: "level".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    d.asset_ready(hash, wav_bytes(&[16_384i16; 16_000], 8_000));
+    let t0 = Instant::now();
+    let mut buf = vec![0.0f32; 2 * 1024];
+    d.fill_audio(&mut buf, 2, 48_000);
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let out = d.take_pending();
+    let count = |k: EventKind| out.iter().filter(|f| matches!(f, Frame::Event(e) if e.event == k)).count();
+    assert_eq!(count(EventKind::TimeUpdate), 1, "{out:?}");
+    assert_eq!(count(EventKind::Level), 1, "{out:?}");
+    // The next paint is the same tick: neither is sent again.
+    let _ = d.paint(400, 300);
+    assert!(d.take_pending().is_empty(), "one clock, not two");
 }
