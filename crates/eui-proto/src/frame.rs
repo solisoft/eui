@@ -97,8 +97,19 @@ pub mod caps {
     /// `COPY_SRC` and there is no path for a pixel to travel back.
     pub const SCENE: u32 = 1 << 9;
 
+    /// Hand an `https:` address to the platform, so the person's own
+    /// browser opens it (03 §3.5).
+    ///
+    /// The person's act, never the server's: there is no op for it and no
+    /// event back from it. What it costs is written down in 08 §8 — a
+    /// server may put a token in the address, and the browser then arrives
+    /// carrying the person's cookies and address, which links this session
+    /// to their web identity. No allowlist closes that; a server is always
+    /// allowed to link to itself.
+    pub const NET_OPEN: u32 = 1 << 10;
+
     /// The names of 01 §2.1, in bit order.
-    pub const NAMES: [(&str, u32); 10] = [
+    pub const NAMES: [(&str, u32); 11] = [
         ("camera", CAMERA),
         ("microphone", MICROPHONE),
         ("clipboard.read", CLIPBOARD_READ),
@@ -109,6 +120,7 @@ pub mod caps {
         ("fs.save", FS_SAVE),
         ("nfc", NFC),
         ("scene", SCENE),
+        ("net.open", NET_OPEN),
     ];
 
     /// A capability by its name, `clipboard.read`.
@@ -125,7 +137,7 @@ pub mod caps {
     /// It grows from the top as capabilities are added, and a bit outside
     /// it is a decode error (08 §3) — which is the point: a client that
     /// does not know what bit 256 means must not quietly agree to it.
-    pub const ALL: u32 = 0x3FF;
+    pub const ALL: u32 = 0x7FF;
 }
 
 /// The viewer's presentation state.

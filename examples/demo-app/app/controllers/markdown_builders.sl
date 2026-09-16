@@ -108,8 +108,11 @@ def md_runs(line)
 end
 
 # A run as a node. `code` gets the mono face on a sunken ground; a link is
-# accent-coloured but goes nowhere yet — opening a URL is a capability
-# (08 §7), not a builder's decision.
+# accent-coloured and goes nowhere here. It could: a node carrying `open`
+# hands its address to the person's browser when *they* click it (03 §3.5).
+# But that wants the `net.open` capability, which this application does not
+# ask for, and asking for one so that a paragraph of markdown can contain a
+# link is the wrong way round. A builder does not decide that.
 def md_run_node(run, size)
   kind = run["k"]
   return text(run["t"], {"font": "mono", "size": size - 1, "bg": "surface.sunken", "fg": "accent.base", "pad": [0, 1, 0, 1], "radius": 1}) if kind == "code"

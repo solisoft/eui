@@ -36,7 +36,7 @@ them unchanged.
 |---|---|
 | `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, a `DefFont`, every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
-| `reject.rs` | 63 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
+| `reject.rs` | 62 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
 
@@ -121,6 +121,15 @@ property that carries 08 §8 is pinned a layer down, in
 `crates/eui-audio/tests/audio.rs` — the reported peak does not change when
 the viewer's master gain does, including when it is zero.
 
+03 §3.5's address is pinned in the same file, and the three conditions are
+pinned apart: a tree that merely arrives opens nothing; an activation with
+the `net.open` grant yields the address exactly once, and a second read of it
+yields nothing; an activation without the grant yields nothing at all; and a
+scheme that is not literally `https://` — `file:`, `ms-msdt:`, plain `http:`,
+or an authority carrying credentials — never reaches the platform. The same
+cases are pinned a layer down on `https_host` itself, where whitespace,
+quotes and control characters are refused with them.
+
 ### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
 
 03 §5's two lifecycles, which are exactly the kind of thing two clients would
@@ -193,7 +202,7 @@ reporting one `scroll` rather than one a frame.
 
 ### 7.4 Files — `crates/eui-client/tests/files.rs`
 
-Spec 03 §3.2 and 01 §6, eleven vectors. A click on a node carrying `pick`
+Spec 03 §3.2 and 01 §6, twenty-one vectors. A click on a node carrying `pick`
 asking the window for a dialog with the accept list, multiplicity and
 ceiling the tree declared; **nothing opening** without the capability, and
 nothing opening for a tree that merely arrived; what was picked becoming one

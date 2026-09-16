@@ -840,6 +840,31 @@ one per part, against the `min`, `max` and `width` they replace, leave
 `MAX_PROPS` ([`02-wire-format.md`](02-wire-format.md) §6) further from its
 ceiling than before.
 
+### 3.5 What a node may claim of the browser
+
+One prop, for the one thing the client will start another program to do.
+
+| Prop | Value | Means |
+|---|---|---|
+| `open` | `Str` an `https:` address | activating this node hands it to the platform's opener |
+
+The three conditions of §3.2, and for the same reason: the node carries the
+prop, the `net.open` capability was granted, and **the person activated it**.
+There is no op that opens an address and no event that reports one, so a tree
+that merely arrives opens nothing, and an application learns nothing by
+trying. A node carrying `open` is a focus stop, so the keyboard and an
+assistive technology can follow a link the pointer can.
+
+**The scheme is the whole of the danger, and the check is a comparison.** A
+platform opener is a URI *dispatcher*, not a browser: handed `file:`, `smb:`
+or a scheme some other application registered for itself, it runs that
+instead, with a string the server chose. So exactly one scheme is accepted —
+`https://`, lower case, literally — and an address carrying credentials,
+control characters or whitespace is refused before it reaches the platform.
+A client MUST tell the person which host it is about to open, and MUST NOT
+report back whether it opened, when, or whether it failed: an answer is a
+probe for whether there is a browser here at all, with a clock beside it
+([`08-security.md`](08-security.md) §8).
 
 ## 4. The catalogue contract
 

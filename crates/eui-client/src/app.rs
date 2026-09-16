@@ -2424,11 +2424,22 @@ impl Shell {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let out = t.backend.input(i);
         t.send(out);
+        // 03 §3.5. The driver has already decided: the person activated a
+        // node carrying `open`, the capability was granted, and the address
+        // is `https:` with a plain host. All that is left is the platform
+        // call, which belongs here because the window owns the platform.
+        //
+        // Nothing is reported back. Whether the browser opened, how long it
+        // took and whether it exists at all stay on this side (08 §8).
+        let opening = t.backend.take_open();
         #[cfg(has_clipboard)]
         if let Some(text) = t.backend.take_clipboard() {
             if let Some(c) = self.clipboard() {
                 let _ = c.set_text(text);
             }
+        }
+        if let Some(url) = opening {
+            open_in_browser(&url);
         }
         self.settle_ime();
         self.settle_covered();
@@ -4283,6 +4294,35 @@ fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), Strin
     app.shutdown();
     drop(app);
     result
+}
+
+/// Hand an address to the platform's opener.
+///
+/// The one place this client starts another program, and it starts exactly
+/// one: the opener, with one argument that has already been checked to be
+/// an `https:` URL (`driver::https_host`). It is spawned and forgotten --
+/// the status is not waited on and not reported, because there is nobody
+/// to report it to.
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "linux")]
+    let opener = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = url;
+        return;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        use std::process::{Command, Stdio};
+        let spawned = Command::new(opener).arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        if spawned.is_err() {
+            eprintln!("eui: no {opener} on this machine; the address was not opened");
+        }
+    }
 }
 
 #[cfg(test)]

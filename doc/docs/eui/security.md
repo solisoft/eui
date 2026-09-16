@@ -22,7 +22,8 @@ nor a proxy can substitute content. The name *is* the content.
 
 Deny by default. A manifest declares what it wants — `camera`, `microphone`,
 `clipboard.read`, `clipboard.write`, `notifications`, `location`, `fs.pick`,
-`fs.save`, `nfc`, `scene` — and the user grants per application, revocably.
+`fs.save`, `nfc`, `scene`, `net.open` — and the user grants per application,
+revocably.
 
 `scene` is the odd one and worth its own sentence: it is not a device, it is
 permission to run a graphics program the application wrote. What the person
@@ -33,6 +34,19 @@ And it guards the program, not the feature. A `scene` that names no shader
 draws without the grant: it is the client's own program over the client's own
 shape, and asking someone to allow that would be a toll on nothing — which is
 how people learn to grant without reading.
+
+`net.open` is the odd one at the other end: the only capability that hands
+something to the world *outside* the client. Granted, a person clicking a node
+that carries an `https:` address has it opened in their own browser — their
+act, never the application's, because no op opens an address and no event
+reports one. What it costs cannot be sanitised away: the address may carry a
+token, and the browser arrives at that server with the person's cookies beside
+it, linking the session to the identity they browse the web with. No allowlist
+closes that, since a server is always allowed to link to itself. So the client
+keeps the act the person's, names the host before it calls the opener, and
+accepts exactly one scheme — a platform opener is a URI *dispatcher*, and
+handed `file:` or whatever some other application registered it would run that
+instead.
 
 An application asks for them in its routes, and asking grants nothing:
 

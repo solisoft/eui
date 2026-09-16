@@ -3596,3 +3596,66 @@ fn level_and_time_update_share_one_clock() {
     let _ = d.paint(400, 300);
     assert!(d.take_pending().is_empty(), "one clock, not two");
 }
+
+/// Spec 03 §3.5: an address opens because the person activated it, the
+/// node carried it, and the capability was granted — and never otherwise.
+#[test]
+fn an_address_opens_only_when_all_three_are_true() {
+    let mut d = Driver::new(1280.0, 800.0, 2.0, caps::NET_OPEN);
+    const A_OPEN: u32 = 40;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("github.com".into())), props: (0, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((A_OPEN, Value::Str("https://github.com/solisoft/eui".into())));
+    let ops = vec![Op::DefAtom { id: A_OPEN, value: "open".into() }, Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+
+    // Nothing has been activated: a tree that merely arrived opens nothing.
+    assert_eq!(d.take_open(), None, "a tree that arrives opens nothing");
+
+    let ix = d.session().lookup(2).expect("the node is in the tree");
+    let _ = d.activate_node(ix);
+    assert_eq!(d.take_open().as_deref(), Some("https://github.com/solisoft/eui"), "the person activated it and the capability was granted");
+    // Drained: one activation, one open.
+    assert_eq!(d.take_open(), None, "one press opens one page");
+}
+
+/// The capability is the whole of it: without the grant there is no call
+/// site, and the address is not even looked at.
+#[test]
+fn an_address_without_the_capability_opens_nothing() {
+    let mut d = Driver::new(1280.0, 800.0, 2.0, 0);
+    const A_OPEN: u32 = 40;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("github.com".into())), props: (0, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((A_OPEN, Value::Str("https://github.com/solisoft/eui".into())));
+    let ops = vec![Op::DefAtom { id: A_OPEN, value: "open".into() }, Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let _ = d.paint(400, 300);
+    let ix = d.session().lookup(2).expect("the node is in the tree");
+    let _ = d.activate_node(ix);
+    assert_eq!(d.take_open(), None, "no grant, no open");
+}
+
+/// A scheme that is not `https:` is refused at the client, whatever the
+/// capability says — a platform opener is a URI dispatcher, and this is
+/// the check that keeps it from being one.
+#[test]
+fn only_an_https_address_reaches_the_platform() {
+    for url in ["file:///etc/passwd", "ms-msdt:/id PCWDiagnostic", "http://example.test", "https://github.com@evil.test/"] {
+        let mut d = Driver::new(1280.0, 800.0, 2.0, caps::NET_OPEN);
+        const A_OPEN: u32 = 40;
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("x".into())), props: (0, 1), handlers: (0, 0), child_count: 0 });
+        tree.props.push((A_OPEN, Value::Str(url.into())));
+        let ops = vec![Op::DefAtom { id: A_OPEN, value: "open".into() }, Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)];
+        d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+        let _ = d.paint(400, 300);
+        let ix = d.session().lookup(2).expect("the node is in the tree");
+        let _ = d.activate_node(ix);
+        assert_eq!(d.take_open(), None, "{url} must not reach the platform");
+    }
+}

@@ -1293,9 +1293,11 @@ def needle_seek(state, params)
   state
 end
 
-# The consent screen is a web page and the client cannot open one — no
-# capability in 01 §2.1 opens a URL. The server can, though: it runs on
-# the same machine as the person clicking, which is the whole point of a
+# The consent screen is a web page. A client can be handed one now —
+# `net.open` and a node carrying `open` (03 §3.5) — but only when the
+# person clicks the address itself, and what has to happen here is the end
+# of a flow the *server* is running. So the server opens it: it runs on the
+# same machine as the person clicking, which is the whole point of a
 # desktop build.
 def needle_open_login(state)
   System.run(["xdg-open", needle_login_url()]) rescue nil

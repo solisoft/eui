@@ -246,6 +246,26 @@ That is the whole difference between a meter and a sensor, and it is one
 multiplication. *Enforced: `eui_audio::Mixer::take_peak`, pinned by
 `peak_is_before_the_viewers_own_gain`.*
 
+### 8.1 The address bar is a hole in §8, and this is what it costs
+
+`net.open` (03 §3.5) is the one capability that hands something to the world
+outside this client, and the thing it hands over cannot be sanitised: a
+server may put a token in the address it offers. The browser then arrives at
+that server carrying the person's cookies and their address, and the session
+they were reading is linked to the identity they browse the web with.
+
+No allowlist closes that — a server is always allowed to link to itself — and
+nor does the scheme check, which is there for a different attack. What the
+client does instead is make the link the *person's* act and keep it that way:
+no op opens an address, no event reports one, the host is shown before the
+opener is called, and the capability is refused by default. A person who
+never clicks is never correlated, and a person who clicks has done the same
+thing they do every day in a browser.
+
+It is written here rather than discovered later because §8's claim is that
+the fingerprinting surface is the viewport frame. With `net.open` granted,
+that claim has an asterisk, and this paragraph is the asterisk.
+
 ## 9. Server side
 
 Every client event is validated against the tree the server last sent: the

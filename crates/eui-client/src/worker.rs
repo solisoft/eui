@@ -635,6 +635,8 @@ pub struct Status {
     pub ime: Option<[f32; 4]>,
     /// Text the viewer copied, for the system clipboard.
     pub clipboard: Option<String>,
+    /// An address the viewer asked to open, for the platform's opener.
+    pub opening: Option<String>,
     /// Milliseconds until the next transition frame, if one is due.
     pub next_due_ms: Option<u32>,
     /// The pointer's shape over what it is on, as [`eui_proto::Cursor`]'s
@@ -740,6 +742,7 @@ impl Reply {
             None => w.bool(false),
         }
         w.opt_str(s.clipboard.as_deref());
+        w.opt_str(s.opening.as_deref());
         match s.next_due_ms {
             Some(ms) => {
                 w.bool(true);
@@ -889,6 +892,7 @@ impl Reply {
         let closed = r.opt_str()?;
         let ime = if r.bool()? { Some(r.f4()?) } else { None };
         let clipboard = r.opt_str()?;
+        let opening = r.opt_str()?;
         let next_due_ms = if r.bool()? { Some(r.u32()?) } else { None };
         let cursor = r.u8()?;
         let mode = r.u8()?;
@@ -920,7 +924,7 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes };
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, opening, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -1539,6 +1543,7 @@ fn status_of(d: &mut Driver) -> Status {
         closed: d.closed().map(|c| format!("{c:?}")),
         ime: d.ime_area().map(|r| [r.x, r.y, r.w, r.h]),
         clipboard: d.take_clipboard(),
+        opening: d.take_open(),
         next_due_ms: d.next_frame_at().map(|at| u32::try_from(at.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)),
         cursor: d.cursor().to_u8(),
         mode: d.mode() as u8,
@@ -1856,6 +1861,9 @@ impl Worker {
             let mut writes = std::mem::take(&mut self.status.writes);
             writes.append(&mut status.writes);
             status.writes = writes;
+        }
+        if status.opening.is_none() {
+            status.opening = self.status.opening.take();
         }
         if status.clipboard.is_none() {
             status.clipboard = self.status.clipboard.take();
@@ -2373,6 +2381,11 @@ impl Backend {
         self.with_local(|d| d.take_clipboard()).or_else(|| self.with_worker(|w| w.status.clipboard.take())).flatten()
     }
 
+    /// The address the viewer asked to open since the last call, checked.
+    pub fn take_open(&mut self) -> Option<String> {
+        self.with_local(|d| d.take_open()).or_else(|| self.with_worker(|w| w.status.opening.take())).flatten()
+    }
+
     /// Spec 01 §2.1: raise the consent sheet, before anything is dialled.
     pub fn ask_consent(&mut self, asked: u32, name: &str) {
         if self.with_local(|d| d.ask_consent(asked, name)).is_some() {
@@ -2753,6 +2766,7 @@ mod tests {
             closed: Some("x".into()),
             ime: Some([1.0, 2.0, 3.0, 4.0]),
             clipboard: Some("c".into()),
+            opening: Some("https://example.test/a".into()),
             next_due_ms: Some(16),
             cursor: 1,
             mode: 1,

@@ -1117,6 +1117,9 @@ pub struct Driver {
     preedit: String,
     /// Text the person copied or cut, for the window to hand the clipboard.
     clipboard: Option<String>,
+    /// An address the person asked to open, for the window to hand the
+    /// platform. At most one per input: a click opens one page.
+    opening: Option<String>,
     /// What the caret's blink is timed from: the moment it last moved.
     caret_since: Instant,
     /// Where it was then — node, selection and offset — so that a caret that
@@ -1346,6 +1349,7 @@ impl Driver {
             track: None,
             preedit: String::new(),
             clipboard: None,
+            opening: None,
             caret_since: Instant::now(),
             caret_was: None,
             caret_due: None,
@@ -4059,6 +4063,7 @@ impl Driver {
                         if !self.consent_click(ix) {
                             self.offer_files(ix);
                             self.offer_scan(ix);
+                            self.offer_open(ix);
                         }
                     }
                 }
@@ -4374,6 +4379,11 @@ impl Driver {
                 || node.handler(EventKind::KeyUp).is_some()
                 || node.handler(EventKind::FilePick).is_some()
                 || node.handler(EventKind::FileSave).is_some()
+                // 03 §3.5: an address is a stop. A link the pointer can
+                // follow and the keyboard cannot is not a link, and by
+                // 03 §6's ceiling rule it would put the assistive action
+                // out of reach too.
+                || self.session.atom_id("open").is_some_and(|a| node.prop(a).is_some_and(|v| matches!(v, Value::Str(_))))
                 // 03 §3: a thing that can be moved can be reached without a
                 // pointer. Without this a draggable row with no `click` is
                 // unreachable by keyboard — and by 03 §6's ceiling rule, that
@@ -4467,6 +4477,7 @@ impl Driver {
         self.consent_click(f);
         self.offer_files(f);
         self.offer_scan(f);
+        self.offer_open(f);
         out
     }
 
@@ -5187,6 +5198,53 @@ impl Driver {
         self.touched = true;
     }
 
+    /// Spec 03 §3.5: the person activated a node carrying `open`.
+    ///
+    /// The three conditions of §3.2, again and for the same reason: the
+    /// node carries the prop, the capability was granted, and *the person
+    /// activated it*. There is no op that opens an address and no event
+    /// that reports one, so a tree that merely arrives opens nothing.
+    ///
+    /// The scheme is the whole of the danger. A platform opener is a URI
+    /// dispatcher, not a browser: handed `file:`, `smb:` or whatever an
+    /// application registered for itself, it runs that instead, with a
+    /// string a server chose. So exactly one scheme is accepted here, and
+    /// the check is a comparison rather than a parse.
+    fn offer_open(&mut self, from: NodeIx) {
+        let Some(atom) = self.session.atom_id("open") else { return };
+        let Some(ix) = self.ancestor_where_prop(from, atom) else { return };
+        let Some(node) = self.session.node(ix) else { return };
+        let id = node.id;
+        let Some(Value::Str(url)) = node.prop(atom) else { return };
+        let url = url.clone();
+        if self.granted & caps::NET_OPEN == 0 {
+            eprintln!("eui: node {id} carries `open`, which needs a capability the person did not grant; nothing opens");
+            return;
+        }
+        let Some(host) = https_host(&url) else {
+            eprintln!("eui: node {id} carries an `open` that is not an https address; nothing opens");
+            return;
+        };
+        // The person is told where they are going, by the client and not by
+        // the application: the text on the node is the server's to write,
+        // and this line is not.
+        eprintln!("eui: opening {host} in your browser, because you activated node {id}");
+        self.opening = Some(url);
+    }
+
+    /// The nearest node at or above `from` carrying `atom`.
+    fn ancestor_where_prop(&self, from: NodeIx, atom: u32) -> Option<NodeIx> {
+        let mut cur = Some(from);
+        while let Some(ix) = cur {
+            let node = self.session.node(ix)?;
+            if node.prop(atom).is_some() {
+                return Some(ix);
+            }
+            cur = if node.parent.is_some() { Some(node.parent) } else { None };
+        }
+        None
+    }
+
     fn offer_files(&mut self, from: NodeIx) {
         for (kind, prop) in [(EventKind::FilePick, "pick"), (EventKind::FileSave, "save")] {
             let Some((ix, handler)) = self.target(from, kind) else { continue };
@@ -5502,6 +5560,17 @@ impl Driver {
     /// Text the person copied or cut since the last call, for the clipboard.
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard.take()
+    }
+
+    /// The address the person asked to open since the last call, already
+    /// checked: `https:`, a host, and nothing that is not a URL.
+    ///
+    /// The window hands this to the platform. Nothing goes back to the
+    /// server -- not that it opened, not that it failed, not when. An
+    /// answer would be a probe for whether there is a browser here at all,
+    /// and a clock beside it (08 §8).
+    pub fn take_open(&mut self) -> Option<String> {
+        self.opening.take()
     }
 
     /// What the painter needs to draw the focused field's caret and
@@ -6059,7 +6128,7 @@ impl Driver {
         let page = StyleRecord {
             display: Display::Column,
             // Not `Justify::Center`, tempting as it is on a page this
-            // small. Ten capabilities on a short phone is a column taller
+            // small. Eleven capabilities on a short phone is a column taller
             // than the window, and centred content that overflows puts its
             // top above the origin where no scroll offset can reach it —
             // which on *this* page means an answer nobody can give.
@@ -7485,6 +7554,7 @@ fn cap_in_words(name: &str) -> &'static str {
         "microphone" => "Make recordings with the microphone",
         "clipboard.read" => "Read what you have copied",
         "clipboard.write" => "Put things on your clipboard",
+        "net.open" => "Open web addresses in your browser, when you click one",
         "notifications" => "Show you notifications",
         "location" => "Read roughly where you are",
         "fs.pick" => "Open files you choose or drop on it",
@@ -7508,4 +7578,60 @@ fn cap_in_words(name: &str) -> &'static str {
 /// which is the right answer for a sample that went bad.
 fn level_pct(v: f32) -> i64 {
     (v.clamp(0.0, 1.0) * 100.0).round() as i64
+}
+
+/// The host of an `https:` URL, or `None` if it is not one.
+///
+/// Deliberately not a URL parser. A platform opener dispatches on scheme,
+/// so what matters is that the string starts with exactly `https://`, has
+/// a host, and contains nothing that could end the argument early or be
+/// read as anything but a URL. Everything else -- paths, queries,
+/// fragments, percent escapes -- is the browser's to interpret, and the
+/// browser is much better at it than this would be.
+fn https_host(url: &str) -> Option<&str> {
+    const SCHEME: &str = "https://";
+    let rest = url.strip_prefix(SCHEME)?;
+    // A control character, a space or a quote has no business in an
+    // address and is how an argument becomes two.
+    if url.len() > 2048 || url.chars().any(|c| c.is_control() || c.is_whitespace() || c == '"' || c == '\'' || c == '\\') {
+        return None;
+    }
+    // No credentials: `https://evil.test@bank.test/` reads as the bank to
+    // a person and resolves to the attacker.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    // A host is letters, digits, dots, hyphens, and a port.
+    let host = authority.split(':').next().unwrap_or_default();
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return None;
+    }
+    Some(authority)
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::https_host;
+
+    #[test]
+    fn only_https_addresses_with_a_plain_host_are_opened() {
+        assert_eq!(https_host("https://github.com/solisoft/eui"), Some("github.com"));
+        assert_eq!(https_host("https://docs.example.test:8443/a?b=1#c"), Some("docs.example.test:8443"));
+        // The schemes that make a platform opener dangerous.
+        assert_eq!(https_host("file:///etc/passwd"), None);
+        assert_eq!(https_host("smb://host/share"), None);
+        assert_eq!(https_host("ms-msdt:/id PCWDiagnostic"), None);
+        assert_eq!(https_host("mailto:someone@example.test"), None);
+        assert_eq!(https_host("http://example.test"), None, "plain http is not one of ours either");
+        assert_eq!(https_host("HTTPS://example.test"), None, "the check is a comparison, not a parse");
+        // Credentials read as one host and resolve to another.
+        assert_eq!(https_host("https://github.com@evil.test/"), None);
+        // Nothing that could end an argument early.
+        assert_eq!(https_host("https://example.test/a b"), None);
+        assert_eq!(https_host("https://example.test/\na"), None);
+        assert_eq!(https_host("https://exa\"mple.test/"), None);
+        assert_eq!(https_host("https://"), None);
+        assert_eq!(https_host("https:///path"), None);
+    }
 }
