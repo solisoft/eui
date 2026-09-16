@@ -65,5 +65,14 @@ eui_capabilities("clipboard.read", "fs.pick", "camera", "microphone", "location"
 # Declaring a font raises what the manifest asks of a client to EUI 4, since
 # `DefFont` and a font role are both decode errors below it — so this belongs
 # at boot, before a manifest is signed, and not inside a view.
-google_font("Playfair Display", [400, 700])
-google_font("Space Grotesk", [400, 700])
+#
+# `rescue nil` because `soli routes` evaluates this file with the builtins
+# and *without* `app/services`, where `google_font` is defined — so the
+# check that the routes parse would otherwise die on a font. At boot the
+# services are loaded and the declaration happens; under `soli routes` it is
+# skipped, which is right: that command asks whether the routes load, not
+# whether a font service answered. The service already answers `"sans"` for
+# every other way this can fail, and an application whose typography depends
+# on a network that is down should still draw.
+google_font("Playfair Display", [400, 700]) rescue nil
+google_font("Space Grotesk", [400, 700]) rescue nil

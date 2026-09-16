@@ -38,8 +38,10 @@ describe("Components", fn() {
 
   test("carries the whole vocabulary", fn() {
     let body = res_body(get("/components"))
-    # examples/demo-app/app/controllers/eui_builders*.sl
-    assert_contains(body, "All 226")
+    # examples/demo-app/app/controllers/eui_builders*.sl. The heading is the
+    # sum of the per-section counts beside it, so the two move together or
+    # the page contradicts itself; the meter builders took it to 229.
+    assert_contains(body, "All 229")
     # The counted claims, checked against what they count rather than against
     # what they used to say: seventeen node kinds is `spec/03-widgets.md` §1
     # and `NodeKind` beside it, thirty-three colour roles is
