@@ -1005,6 +1005,10 @@ when the card stops, so the client holds a few sources, not a feed of them.
 | `media_button(on, event, props)` | 28 px play/pause |
 | `media_scrubber(width, at, duration, on_seek, props)` | A fixed-width bar; the click's x maps straight onto the position |
 | `media_clock(ms)` | `"1:07"` |
+| `vu_meter(level, o = {})` | A level meter the way a cassette deck had one: segments lit up to the reading, green until it gets loud, amber close, red past the line. `level` is one number or `[left, right]` — which is what a `level` event carries and what the front of a deck showed. `o`: `axis` (`"h"` default, `"v"`), `segments` (12), `peak` for the hold marker, `scale: false` to drop the legend, `label` |
+| `vu_strip(level, o = {})` | One channel of it, if you are placing the strips yourself |
+| `vu_scale(o = {})` | The dB legend a deck printed: `-20 -10 -6 -3 0 +3`. `0` is the line you are not supposed to cross, not the top of the scale |
+| `vu_zone(i, n)` | Which of the three colours the `i`-th of `n` segments is. `success` / `warning` / `danger`, not `series.*`, which is categorical and must not be read as a ramp |
 
 ## Feed
 

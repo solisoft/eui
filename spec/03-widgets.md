@@ -890,7 +890,7 @@ to the window process, which owns the audio device as it owns the GPU. A
 sound that fails to decode is dropped with a message on the client's
 console; the node stays, silent.
 
-Two events go back, and only to a node that holds a handler for them:
+Three events go back, and only to a node that holds a handler for them:
 
 - `ended` when a sound reaches its end. Not sent for a looping source,
   which has no end.
@@ -899,6 +899,42 @@ Two events go back, and only to a node that holds a handler for them:
   is what the reference client sends. It is a progress bar's input, not a
   clock: a server that needs the exact position asks for it at the moment
   it matters.
+- `level`, `[peak_left, peak_right]`, each `0..=100`: how loud the sound
+  has been **since the last `level`**, so a transient between two of them
+  is smoothed rather than missed. It is a peak-reading instrument and a
+  meter is what it is for.
+
+  `level` rides the clock of `time_update` and MUST NOT bring a finer one:
+  a client that sends one sends both on the same tick, and the reference
+  client sends four a second. It is sent when the value changes, so a
+  silent sound costs nothing, and a sound that stops sends one last zero —
+  a meter that stays lit over silence is worse than no meter.
+
+  **The peak is measured before the viewer's own volume**, on the source's
+  own samples with only the application's `volume` applied. This is
+  normative and it is the whole reason the event can exist: a peak taken
+  after the master gain could be divided by the volume the application
+  asked for to recover the viewer's setting, and a zero would say they had
+  muted. What a server learns from a `level` is a property of the bytes it
+  sent, at the gain it chose, and nothing about the machine.
+
+  A client that settled on a protocol below 3 has never heard of this
+  event, and a handler naming it would be a decode error that ends the
+  session. A server MUST therefore leave the handler out of the tree it
+  sends such a client rather than send it and lose the session: the
+  application runs, and its meter does not move. This is the difference
+  between an event added later and a node kind added later — a kind is a
+  capability the manifest can declare before anything renders, an event is
+  a key in a view that has not run yet, so the floor is enforced at encode
+  time and not at the handshake.
+
+  A `level` describes sound that is **about to be heard**, not sound
+  already heard: a client keeps a buffer queued ahead of the device — a
+  fifth of a second in the reference client — so the meter leads the
+  loudspeaker by that much. Closing that gap would mean indexing peaks by
+  playback position, which is the finer clock
+  [`08-security.md`](08-security.md) §8 refuses, so it stays open and is
+  written down here instead.
 
 A client MUST bound what a session may play: the reference client holds at
 most eight sources at once and refuses a ninth, and counts decoded audio

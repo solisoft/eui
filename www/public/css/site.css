@@ -1881,6 +1881,53 @@ footer a:hover {
     padding-left: 1.8rem;
 }
 
+/* A level meter: segments lit up to the reading. An unlit segment is its
+   own colour turned down rather than a grey one -- the dark red waiting
+   at the top of the strip is half of why the thing reads as hardware. */
+.g-vu {
+    display: flex;
+    gap: 1px;
+    align-items: center;
+    width: 100%;
+    max-width: 120px;
+}
+
+.g-vu.v {
+    flex-direction: column;
+    width: auto;
+    max-width: none;
+}
+
+.g-vu i {
+    flex: 1 1 auto;
+    height: 9px;
+    min-width: 3px;
+    border-radius: 1px;
+    opacity: 0.15;
+}
+
+.g-vu.v i {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 3px;
+}
+
+.g-vu i.on {
+    opacity: 1;
+}
+
+.g-vu i.z1 {
+    background: var(--green);
+}
+
+.g-vu i.z2 {
+    background: var(--amber);
+}
+
+.g-vu i.z3 {
+    background: var(--rose);
+}
+
 .g-spin {
     width: 16px;
     height: 16px;

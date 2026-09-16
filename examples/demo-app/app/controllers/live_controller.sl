@@ -304,24 +304,78 @@ end
 # One page with every catalogue widget, driven by a handful of state keys, so
 # the whole catalogue is exercised by one mount and a few clicks.
 
-# The gallery's sound: one chime, played by a button. The node carries
-# what it should be doing; the client owns the clock and says when it
-# ended (EUI spec 03 §7).
+# The gallery's sound: one chime, played by a button, with a pair of
+# meters following it.
+#
+# The node carries what it should be doing; the client owns the clock and
+# says when it ended (EUI spec 03 §7). It also says how loud it is, four
+# times a second, which is what makes these move: `level` carries the
+# loudest the sound has been since the last one, so the attack of a chime
+# registers even though nothing here samples anything.
+#
+# It loops while it plays, because a meter that gets one and a half
+# seconds to move is a screenshot. The `ended` handler stays: a looping
+# source never sends one, and the day this stops looping it matters again.
 def gallery_sound(state)
   playing = state["sound"] ?? false
-  column({"gap": 2}, [
+  reading = state["vu"] ?? [0, 0]
+  hold = state["vu_peak"] ?? [-1, -1]
+  column({"gap": 3}, [
     audio("public/sounds/chime.wav", {
       "playing": playing,
-      "volume": 80
-    }, {"ended": "sound_ended"}),
+      "volume": 80,
+      "loop": playing
+    }, {"ended": "sound_ended", "level": "sound_level"}),
     row(
       {"gap": 3, "align": "center"},
       [
         button(playing ? "Stop" : "Play a chime", "sound"),
         muted(playing ? "playing…" : "1.6 s, decoded and mixed by the client")
       ]
-    )
+    ),
+    row({"gap": 5, "align": "end", "wrap": "wrap"}, [
+      restyle(vu_meter(reading, {"peak": hold, "label": "Chime"}), {"width": 240}),
+      vu_meter(reading, {"axis": "v", "peak": hold, "label": "Chime"})
+    ])
   ])
+end
+
+# Play or stop, and put the meters back at rest on the way out.
+#
+# The client sends one last zero when a sound stops (03 §7), so the bars
+# would fall on their own — but only on the next tick, and a meter still
+# lit a quarter of a second after the button said Stop looks like a bug
+# rather than like ballistics. The reading is the client's; the resting
+# state is the application's.
+def gallery_sound_toggle(state)
+  on = !(state["sound"] ?? false)
+  set_key(set_key(set_key(state, "sound", on), "vu", [0, 0]), "vu_peak", [-1, -1])
+end
+
+# How fast a peak-hold marker falls, in points of the scale per reading.
+# Four readings a second, so this is about a second and a half from the
+# top to the floor — slow enough to read the loudest moment after it has
+# gone, which is the entire job of the marker.
+VU_FALL = 4
+
+# What arrives four times a second: `[left, right]`, each the loudest that
+# channel has been since the last one.
+#
+# The bars are that number. The markers are the slower thing above them: a
+# marker that never fell would climb to the loudest moment of the session
+# and stay there, so each one holds the reading or falls by `VU_FALL`,
+# whichever is higher. That is the decay a deck did in a capacitor, and it
+# belongs here rather than in the client — the reading is a measurement,
+# the falling is a decision about how to show it.
+def gallery_sound_level(state, params)
+  said = params["payload"] ?? [0, 0]
+  now = [said[0] ?? 0, said[1] ?? 0]
+  was = state["vu_peak"] ?? [-1, -1]
+  held = range(0, 2).map(fn(i) {
+    fell = (was[i] ?? -1) - VU_FALL
+    now[i] > fell ? now[i] : fell
+  })
+  set_key(set_key(state, "vu", now), "vu_peak", held)
 end
 
 # The gallery's moving picture: a loop the client decodes and plays. The
@@ -1677,6 +1731,40 @@ def erp_feedback_card(state, lay)
       spec_of("spinner", spinner()),
       spec_of("progress", restyle(progress(0.62), {"width": 180}))
     ]),
+    # The meters are the one specimen on this page that is worth seeing
+    # move, so this is the sound itself rather than a still of it: the
+    # same node, the same `level` event, the same handler as the release
+    # card up on the dashboard.
+    spec_wide("vu_meter", gallery_sound(state)),
+    # The same meter, told five numbers instead of two.
+    #
+    # Nothing about `vu_meter` is stereo: it draws one strip per reading,
+    # and the pair a `level` event carries is simply the commonest case. A
+    # spectrum is the same drawing with more of them, and `labels` is what
+    # stops five strips from all announcing themselves as "Level" to
+    # somebody who cannot see the bars.
+    #
+    # These five are fixed, and deliberately so. The client reports what a
+    # sound *is*, not what it is made of — there is no band data on the
+    # wire, and inventing some here would make this page show a render of
+    # something that never happened, which is the one thing it promises
+    # not to do.
+    spec_wide(
+      "vu_meter — five bands, named",
+      row({"gap": 5, "align": "end", "wrap": "wrap"}, [
+        vu_meter([82, 64, 47, 31, 18], {
+          "axis": "v",
+          "peak": [88, 71, 55, 40, 26],
+          "labels": ["60 Hz", "250 Hz", "1 kHz", "4 kHz", "12 kHz"],
+          "marks": ["60", "250", "1k", "4k", "12k"]
+        }),
+        restyle(vu_meter([82, 64, 47, 31, 18], {
+          "peak": [88, 71, 55, 40, 26],
+          "labels": ["60 Hz", "250 Hz", "1 kHz", "4 kHz", "12 kHz"],
+          "scale": false
+        }), {"width": 240})
+      ])
+    ),
     row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
       restyle(spec_of("skeleton", column({"gap": 1}, [skeleton(180, 12), skeleton(140, 12), skeleton(160, 12)])), {"width": 200}),
       restyle(spec_of("stat", stat("Open invoices", "37", "128 940 € outstanding")), {"width": 220}),
@@ -3921,6 +4009,14 @@ def erp_chrome_defaults
     "doc_window": [0, 24],
     "devbar": true,
     "sound": false,
+    # The meters' own state, and it has to be declared here or it does not
+    # exist. `gallery_defaults` copies `state` onto this table and returns
+    # *this table*, so a key that is not in it is dropped on every pass —
+    # the `level` event arrived, the handler stored the reading, and the
+    # next render threw it away. From outside that is a debug bar full of
+    # `sound_level` events and a meter that never lights a cell.
+    "vu": [0, 0],
+    "vu_peak": [-1, -1],
     "video": false,
     "scene": false,
     "video_at": 0,
@@ -4102,7 +4198,8 @@ def gallery(event_data)
     "toast_done" => set_key(state, "toast", ""),
     # The dashboard.
     "forecast_toggle" => set_key(state, "shown", toggle_id(state["shown"] ?? [], "forecast")),
-    "sound" => set_key(state, "sound", !(state["sound"] ?? false)),
+    "sound" => gallery_sound_toggle(state),
+    "sound_level" => gallery_sound_level(state, params),
     "scene" => set_key(state, "scene", !(state["scene"] ?? false)),
     "video" => set_key(
       set_key(state, "video", !(state["video"] ?? false)),

@@ -518,6 +518,160 @@ def media_clock(ms)
   str(seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") + str(seconds % 60)
 end
 
+# ---------------------------------------------------------------- the meter
+#
+# A level meter, the way a cassette deck had one: a row of segments that
+# light up to the reading, green until it gets loud, amber where it is
+# getting close, red past the line. `level` arrives four times a second
+# (03 §7) carrying the loudest the sound has been since the last one, so
+# the meter is a peak-reading instrument and not a sampler -- a transient
+# between two readings still lights the red.
+#
+# Boxes rather than a canvas, for the same reason the heatmap uses boxes:
+# a segment can be hit-tested, the strip carries real `progress` semantics
+# to a reader, and nothing here needs a path. `transition: "fast"` turns
+# the four-a-second steps into a glide, so it reads as an instrument
+# settling rather than a bar chart being redrawn.
+
+# Which of the three the i-th of n segments belongs to. Not `series.*`:
+# those are categorical and must not be read as a ramp. These three say
+# what they mean in any theme, and mean it in dark mode too.
+def vu_zone(i, n)
+  at = n > 1 ? (i * 100) / (n - 1) : 0
+  return "danger.base" if at >= 88
+  return "warning.base" if at >= 70
+  "success.base"
+end
+
+# One segment. An unlit segment is its own colour turned down, not a grey
+# one: the dark red waiting at the top of the strip is half of why this
+# reads as hardware.
+def vu_segment(i, n, lit, axis)
+  thin = axis == "v" ? 4 : 3
+  long = axis == "v" ? 3 : 4
+  {
+    "k": "box",
+    "s": {
+      "width": axis == "v" ? 18 : long,
+      "height": axis == "v" ? long : 10,
+      "radius": 1,
+      "bg": vu_zone(i, n),
+      "opacity": lit == true ? 255 : 38,
+      "transition": "fast",
+      "shrink": 0,
+      # Both axes now: a segment shares the length the strip was given, the
+      # way the horizontal one always has. Vertically it used to be three
+      # pixels and no growth, so the bar came out the height of its contents
+      # — 58 px — while the legend beside it stretched to 96 and no mark
+      # stood against the segment it names.
+      "grow": 1,
+      "min_width": axis == "v" ? 0 : thin,
+      "min_height": axis == "v" ? long : 0
+    }
+  }
+end
+
+# One strip: the segments for a single channel.
+#
+# `peak` is the peak-hold marker -- the segment that stays lit above the
+# bar while the bar falls away under it. The decay belongs to whoever owns
+# the state, which is the server: it is a max and a countdown, not a thing
+# the client should be told how to do.
+def vu_strip(level, o = {})
+  axis = o["axis"] ?? "h"
+  n = o["segments"] ?? 12
+  now = (level ?? 0).clamp(0, 100)
+  hold = (o["peak"] ?? -1).clamp(-1, 100)
+  lit_to = (now * n) / 100
+  hold_at = hold >= 0 ? (hold * n) / 100 : -1
+  cells = range(0, n).map(fn(i) {
+    vu_segment(i, n, i < lit_to || i == hold_at, axis)
+  })
+  cells = cells.reverse() if axis == "v"
+  # The vertical strip needs a length to share out, exactly as the
+  # horizontal one takes the full width. `height` names it; the legend is
+  # given the same one, which is the whole of making the two line up.
+  tall = o["height"] ?? 96
+  strip = axis == "v"
+    ? column({"gap": 0, "align": "center", "shrink": 0, "height": tall}, cells)
+    : row({"gap": 0, "align": "center", "width": "100%"}, cells)
+  strip["s"]["gap"] = 1
+  strip["p"] = {
+    "role": "progress",
+    "label": o["label"] ?? "Level",
+    "value_now": now,
+    "value_min": 0,
+    "value_max": 100
+  }
+  strip
+end
+
+# The legend an old deck printed under the segments. dB, because that is
+# what the numbers on the front of the machine said, and because 0 is the
+# line you are not supposed to cross rather than the top of the scale --
+# the red is past it, not at the end of it.
+def vu_scale(o = {})
+  axis = o["axis"] ?? "h"
+  marks = (o["marks"] ?? ["-20", "-10", "-6", "-3", "0", "+3"]).map(fn(m) {
+    text(m, {"size": 0, "fg": "text.muted", "font": "mono"})
+  })
+  # The mirror of the horizontal case, and it was not one. Laid out at its
+  # natural height, six marks of text stand about twice as tall as twelve
+  # three-pixel segments, so the legend ran past the strip and no mark stood
+  # beside the segment it names. `between` is what the row already does
+  # across its width.
+  #
+  # And no `height`: the parent row is `align: "stretch"`, so this column is
+  # already the height of the strips beside it. Asking for `100%` on top of
+  # that resolved against an ancestor instead and laid the meter out 6 232
+  # pixels tall — measured, after writing it.
+  if axis == "v"
+    tall = o["height"] ?? 96
+    return column({"gap": 0, "justify": "between", "align": "end", "shrink": 0, "height": tall}, marks.reverse())
+  end
+
+
+  row({"gap": 0, "justify": "between", "width": "100%"}, marks)
+end
+
+# The meter itself. `level` is one reading, or `[left, right]` for the two
+# a `level` event carries -- which is what the front of a deck showed, one
+# strip a channel, and what this draws when handed a pair.
+def vu_meter(level, o = {})
+  axis = o["axis"] ?? "h"
+  pair = level.is_a?("array") == true ? level : [level]
+  vals = pair.filter(fn(v) { v != null })
+  # One strip per reading, whatever the readings are. Two is the pair a
+  # `level` event carries and the shape a deck showed, so two is named left
+  # and right; one is named nothing, because there is nothing to tell it
+  # apart from. Anything else — bands of a spectrum, a channel per voice —
+  # is the same drawing and only wants its own words, so `labels` supplies
+  # them. A reader who cannot see the bars is who this is for: without a
+  # name each strip announces itself as "Level" and the screen reader says
+  # the same thing five times.
+  sides = o["labels"].is_a?("array") == true
+    ? o["labels"].map(fn(l) { " " + l.to_s })
+    : (vals.length() == 2 ? [" left", " right"] : [""])
+  # The hold marker has the same shape as the reading it follows: one
+  # number for one strip, a pair for two. A single number shared by both
+  # would put the louder channel's marker over the quieter one, which is
+  # the one thing a peak-hold must not do.
+  holds = (o["peak"] ?? -1).is_a?("array") == true ? o["peak"] : [o["peak"] ?? -1, o["peak"] ?? -1]
+  strips = range(0, vals.length()).map(fn(i) {
+    vu_strip(vals[i], o.merge({
+      "peak": holds[i] ?? -1,
+      "label": (o["label"] ?? "Level") + (sides[i] ?? "")
+    }))
+  })
+  body = axis == "v"
+    ? row({"gap": 1, "align": "end", "shrink": 0}, strips)
+    : column({"gap": 1, "width": "100%"}, strips)
+  return body if o["scale"] == false
+  axis == "v"
+    ? row({"gap": 2, "align": "stretch", "shrink": 0}, [body, vu_scale(o)])
+    : column({"gap": 1, "width": "100%"}, [body, vu_scale(o)])
+end
+
 # A play/pause button of the size these cards use.
 def media_button(on, event, props)
   {

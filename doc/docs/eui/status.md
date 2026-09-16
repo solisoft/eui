@@ -516,7 +516,12 @@ The tree can carry a sound — 03 §7's `audio` node — and a record in
 `public/music` really plays: the file is an asset like a picture, the
 client decodes it in the worker, and `time_update` four times a second
 is the only clock this application has, so that bar advances because the
-sound does. Spotify's own catalogue never plays here, because the Web
+sound does. `level` (03 §7) rides that same tick and carries how loud the
+sound has been since the last one, which is what a `vu_meter` draws. It is
+measured on the source before the viewer's own volume is applied, and that
+is not an implementation detail: measured one line later it would be a
+readout of the viewer's volume knob, and a zero would report that they had
+muted. `peak_is_before_the_viewers_own_gain` is the test that says so. Spotify's own catalogue never plays here, because the Web
 API returns metadata and never audio to anyone. What it offers instead
 is a device to play *on*, so Needle lists them, marks the one it is
 asking, and can start one of its own on this machine — `librespot`, 41

@@ -46,6 +46,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x1D` | `nfc_tag` | `List[Str uid, List[List[Str kind, Str payload]]]`, one tag for a scan the person started (spec 03 §3.3) | |
 | `0x1E` | `file_drag` | `List[Bool over]`, a file is over a node carrying `drop`, or has left it (spec 03 §3.2) | **only when the node under the file changes** |
 | `0x1F` | `back` | `Null`, the person asked to go back (§1.3) | |
+| `0x20` | `level` | `List[Int peak_left, Int peak_right]`, `0..=100`, how loud a sound has been since the last one (spec 03 §7) | on `time_update`'s clock, and only when it changes |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,

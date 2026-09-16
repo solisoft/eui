@@ -113,6 +113,14 @@ handlers with and without a following server event, resync on a bad batch,
 transitions on a style change, a back reaching the mounted root and a back
 reaching nobody when the root holds no handler for one.
 
+Sound reports on one clock and says nothing about the machine: `level` and
+`time_update` are emitted on the same tick and neither twice in it; a
+`level` reaches only a node that holds a handler for one; a meter that has
+not moved sends nothing and a sound that stopped sends one last zero. The
+property that carries 08 §8 is pinned a layer down, in
+`crates/eui-audio/tests/audio.rs` — the reported peak does not change when
+the viewer's master gain does, including when it is zero.
+
 ### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
 
 03 §5's two lifecycles, which are exactly the kind of thing two clients would

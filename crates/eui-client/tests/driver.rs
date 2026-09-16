@@ -2505,6 +2505,18 @@ fn a_playing_sound_reports_how_loud_it_is() {
     let sent = d.take_pending();
     let levels: Vec<&Frame> = sent.iter().filter(|f| matches!(f, Frame::Event(e) if e.name == A_LEVEL)).collect();
     assert!(!levels.is_empty(), "no level was reported while a sound played: {sent:?}");
+
+    // And the reading has to be a reading. An event that faithfully reports
+    // zero is an event the debug bar shows and the meter cannot use, which
+    // looks from the outside exactly like a meter that is broken.
+    let loud = levels.iter().any(|f| match f {
+        Frame::Event(e) => match &e.payload {
+            Value::List(v) => v.iter().any(|n| matches!(n, Value::Int(i) if *i > 0)),
+            _ => false,
+        },
+        _ => false,
+    });
+    assert!(loud, "every level reported was zero for a full-scale tone: {levels:?}");
 }
 
 /// Spec 03 §7: an `audio` node names a sound, says what it should be

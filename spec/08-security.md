@@ -227,6 +227,25 @@ how hard the window is working. That existed before scenes. What a shader adds
 is the ability to *modulate* what is being timed. The client does not close
 this; what it does is refuse to add a finer one.
 
+`level` (03 §7) is the case that tests that refusal, and it is why the
+event is shaped the way it is. A meter wants to be fast, and a fast meter
+would be exactly the finer clock this paragraph refuses — so `level` is
+sent on `time_update`'s existing tick and carries the peak since the last
+one rather than a fresh sample. Nothing about the timing surface changes:
+the same four messages a second the client already sent, one of them now
+carrying a second number.
+
+What the number itself says is bounded by where it is measured. The peak
+is taken on the source's own samples with the application's own `volume`
+applied and **the viewer's master gain deliberately excluded**, so it is a
+property of bytes the server sent, at a gain the server set — a value the
+server could have computed for itself from the file it uploaded. Measured
+one line later, after the master gain, it would instead be a readout of
+the viewer's volume knob, and a zero would report that they had muted.
+That is the whole difference between a meter and a sensor, and it is one
+multiplication. *Enforced: `eui_audio::Mixer::take_peak`, pinned by
+`peak_is_before_the_viewers_own_gain`.*
+
 ## 9. Server side
 
 Every client event is validated against the tree the server last sent: the
@@ -240,7 +259,9 @@ Playing a sound needs no capability: it is output, like drawing, and a
 window that can draw can already annoy. What it does need is a bound, and
 the client imposes it — at most eight sources at once, decoded bytes
 counted against the session's asset quota, and the viewer's own volume
-above everything, unreadable by the application. Decoding runs in the
+above everything, unreadable by the application — including through the
+`level` event, which is measured before that gain is applied precisely so
+that it stays unreadable. Decoding runs in the
 worker with every other decoder; the audio device belongs to the window
 process. Recording is not output and is not this: the microphone is a
 declared capability (01 §2.1) and is not implemented.

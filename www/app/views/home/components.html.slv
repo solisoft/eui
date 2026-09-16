@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Reference<span>&sect;03</span></div>
         <div>
-            <h1>Two hundred and twenty-six functions, and the vocabulary they speak.</h1>
+            <h1>Two hundred and twenty-nine functions, and the vocabulary they speak.</h1>
             <p class="lede">
                 An EUI component is a Soli function that returns a hash. There is no
                 widget runtime, no component registry and no client release behind any
@@ -15,8 +15,8 @@
             <nav class="toc">
                 <a href="#node"><b>The node</b><span>eight keys, seventeen kinds</span></a>
                 <a href="#style"><b>Style</b><span>thirty-nine keys, thirty-three roles</span></a>
-                <a href="#events"><b>Events</b><span>twenty-four names, two handler forms</span></a>
-                <a href="#catalogue"><b>The catalogue</b><span>all 226, by family</span></a>
+                <a href="#events"><b>Events</b><span>thirty-two names, two handler forms</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 229, by family</span></a>
                 <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
             </nav>
         </div>
@@ -210,6 +210,14 @@
                 <span>window</span>
                 <span>ended</span>
                 <span>time_update</span>
+                <span>level</span>
+                <span>wake</span>
+                <span>file_pick</span>
+                <span>file_save</span>
+                <span>file_drag</span>
+                <span>location</span>
+                <span>nfc_tag</span>
+                <span>back</span>
             </div>
 
             <div class="pair">
@@ -246,7 +254,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <section id="catalogue">
         <div class="mark">Catalogue<span>&sect;03</span></div>
         <div>
-            <h2>All 226</h2>
+            <h2>All 229</h2>
             <p>
                 They live in four files under
                 <code>examples/demo-app/app/controllers/</code>, starting with
@@ -760,7 +768,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
             </div>
 
             <div class="family">
-                <h3>Media <span>4</span></h3>
+                <h3>Media <span>7</span></h3>
                 <p class="soft">The client seeks when position changes, which is how a scrubber works without a seek opcode.</p>
                 <dl class="api">
                     <dt><b>media_button(on, event, props)</b><i>media_button(playing, "play", {"id": post["id"]})</i></dt>
@@ -769,6 +777,12 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dd><span class="d">A fixed-width bar, so the click's x maps straight onto the position</span><div class="p"><span class="g-slider"><i></i><u></u></span></div></dd>
                     <dt><b>media_clock(ms)</b><i>media_clock(67000)</i></dt>
                     <dd><span class="d">Milliseconds as minutes and seconds</span><div class="p val">&rarr; <em>"1:07"</em></div></dd>
+                    <dt><b>vu_meter(level, o)</b><i>vu_meter([72, 58], {"peak": 91, "label": "Master"})</i></dt>
+                    <dd><span class="d">A level meter the way a cassette deck had one. <code>level</code> is one number or <code>[left, right]</code> &mdash; which is what a <code>level</code> event carries and what the front of a deck showed, one strip a channel. The reading is the loudest the sound has been since the last event four times a second, so it is a peak-reading instrument and a transient still lights the red. <code>o["axis"]</code> is <code>"h"</code> or <code>"v"</code>; <code>o["peak"]</code> is the hold marker that stays lit above the bar while the bar falls away under it</span><div class="p"><span class="g-c"><span class="g-vu"><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="z2"></i><i class="on z2"></i><i class="z3"></i><i class="z3"></i></span><span class="g-vu"><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="z1"></i><i class="z1"></i><i class="z2"></i><i class="z2"></i><i class="z3"></i><i class="z3"></i></span></span></div></dd>
+                    <dt><b>vu_strip(level, o)</b><i>vu_strip(72, {"axis": "v", "segments": 12})</i></dt>
+                    <dd><span class="d">One channel of it, if you are placing the strips yourself. Plain boxes rather than a canvas, so a segment hit-tests itself and the strip says <code>progress</code>, its reading and its scale to a reader &mdash; a meter drawn as one rectangle says none of that</span><div class="p"><span class="g-vu v"><i class="z3"></i><i class="z3"></i><i class="on z2"></i><i class="z2"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i><i class="on z1"></i></span></div></dd>
+                    <dt><b>vu_scale(o)</b> / <b>vu_zone(i, n)</b><i>vu_zone(11, 12)</i></dt>
+                    <dd><span class="d">The dB legend a deck printed, and which of the three colours a segment belongs to. <code>0</code> is the line you are not supposed to cross rather than the top of the scale, which is why the red is past it. <code>success</code>, <code>warning</code> and <code>danger</code> &mdash; never <code>series.*</code>, which is categorical and must not be read as a ramp</span><div class="p val">&rarr; <em>"danger.base"</em></div></dd>
                     <dt><b>scene(props, style)</b><i>scene({"playing": true, "fps": 60, "uniforms": [0.3, 0.8]}, {"width": 320, "height": 240})</i></dt>
                     <dd><span class="d">A 3D pass. Name a <code>shader</code> and a <code>mesh</code> by content hash and the client verifies both before anything is compiled; name neither and it draws its own lit cube. Needs the <code>scene</code> capability, and only then does a verifier exist to call</span><div class="p"><span class="g-m">&#9673;</span></div></dd>
                 </dl>

@@ -248,7 +248,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
                 hashes, spread over four files because the call graph said where to
                 cut, and you are meant to copy them and change them. The
                 <a href="/components">component reference</a> documents two hundred and
-                twenty-six of them, with the eight keys of a node, the thirty-nine
+                twenty-nine of them, with the eight keys of a node, the thirty-nine
                 style keys and the thirty-three colour roles.
             </p>
         </div>

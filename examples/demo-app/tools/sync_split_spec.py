@@ -50,6 +50,17 @@ SPECS = {
         "selection_in?",
         "selection_ids",
     ],
+    ROOT / "tests" / "vu_spec.sl": [
+        "node",
+        "column",
+        "row",
+        "text",
+        "vu_zone",
+        "vu_segment",
+        "vu_strip",
+        "vu_scale",
+        "vu_meter",
+    ],
     ROOT / "tests" / "tag_spec.sl": [
         "tag_add",
         "tag_remove",
