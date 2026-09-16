@@ -10,6 +10,30 @@ You are working in a Soli MVC app. Soli looks like Ruby/JS but has its own quirk
 automatically when you work in those directories. Shared model mixins
 (`module` / `include`) live in `app/models/concerns/`.
 
+### Tests run on the build server, not here
+
+Run this project's suite through `rbuild`. It executes on the dedicated build
+machine and hands back the console output and the exit code:
+
+```bash
+rbuild soli eui/www test                                 # whole suite
+rbuild soli eui/www test tests/<the-relevant-spec>.sl    # one spec, fast feedback
+rbuild soli eui/www test --coverage --coverage-min 90.0
+```
+
+`rbuild` rsyncs the working tree — uncommitted changes included — starts a
+throwaway SoliDB and rewrites `SOLIDB_HOST` in the mirror's `.env.test`, so
+nothing the suite does can reach the production database. Only `coverage/` comes
+back, and only when you asked for it.
+
+`soli fmt`, `soli lint` and `soli serve . --dev` stay local: they are short and
+interactive. `test` is the one that saturates the machine — a forgotten browser
+suite once ran there for four hours, starved the shared SoliDB, and turned five
+passing specs into false failures.
+
+The bare `soli test …` commands quoted elsewhere in this file are the local form.
+Prefer the `rbuild` ones above.
+
 ### Verification loop (mandatory before reporting done)
 
 1. `soli fmt <files-you-changed>` — canonical layout, before you read your own diff.
