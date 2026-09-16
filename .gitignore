@@ -46,3 +46,21 @@ dist/
 www/public/eui/
 doc/public/eui/
 examples/demo-app/public/eui/
+
+# A soli-proxy configuration that happens to sit at this root; it belongs to
+# the machine that serves the examples, not to this repository.
+/config.toml
+# Touching this is what asks the proxy for a blue/green deploy. It is a
+# gesture, not a file: its contents never matter and its mtime never means
+# anything twice.
+examples/demo-app/restart.txt
+# What somebody attached through the demo's file pickers, and whatever the
+# server wrote beside it. Same as public/chat/ above, and the same reason:
+# these are a person's files, sitting in a directory the application writes.
+examples/demo-app/public/files/
+# The site's two faces, excluded for the reason demo-app's are: a file the
+# application serves is not a file the repository wrote, and it keeps
+# somebody else's licence out of this tree. `examples/eui-site/README.md`
+# says which faces and where they go; without them the page draws in the
+# client's own Inter and says so.
+examples/eui-site/public/fonts/
