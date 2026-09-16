@@ -268,6 +268,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
                 <li><span>Resolve a cascade. Styles arrive already computed, as fixed 64-byte records; the client does one array lookup.<br><cite>spec 02 — wire format</cite></span></li>
                 <li><span>Read the clipboard, the camera or the filesystem without a capability the person granted.<br><cite>spec 01 — transport</cite></span></li>
                 <li><span>Report a keystroke outside a focused field, enumerate fonts, or read back a canvas. The fingerprint surface is close to nothing.<br><cite>spec 08 — security</cite></span></li>
+                <li><span>Open a web address of its own accord. A link opens because <em>you</em> clicked it: there is no op that opens an address and no event that reports one, so a page learns nothing by trying and a person who never clicks is never correlated. Granting <code>net.open</code> does mean a server may put a token in an address you do click, and that is the one asterisk on the line above — written down rather than discovered.<br><cite>spec 03 §3.5 · spec 08 §8.1</cite></span></li>
                 <li><span>Fall back to plain HTTP. TLS 1.3, or no session.<br><cite>spec 01 — transport</cite></span></li>
             </ul>
         </div>
@@ -289,11 +290,11 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
                     <tr><th>Piece</th><th>State</th><th>Evidence</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>80 tests, 4 fuzz targets</td></tr>
-                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>121 tests, golden pixels</td></tr>
-                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>297 tests</td></tr>
+                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>86 tests, 4 fuzz targets</td></tr>
+                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>128 tests, golden pixels</td></tr>
+                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>333 tests</td></tr>
                     <tr><td>Local handlers: the bytecode VM</td><td class="yes">Built</td><td>16 tests</td></tr>
-                    <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>10 mixer tests, 8 in the client</td></tr>
+                    <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>14 in the mixer, 9 in the video decoder</td></tr>
                     <tr><td>3D scenes and the shader verifier</td><td class="yes">Built</td><td>41 tests, 1 fuzz target</td></tr>
                     <tr><td>Sandbox: Landlock, seccomp, no core dump</td><td class="yes">Built</td><td>Linux only</td></tr>
                     <tr><td>Sandbox on macOS and Windows</td><td class="no">Not started</td><td>—</td></tr>
@@ -302,7 +303,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
             </table>
 
             <p class="note">
-                619 tests in all, counted on 2026-09-15, and every figure above
+                704 tests in all, counted on 2026-09-16, and every figure above
                 is a number <code>cargo test --workspace</code> will give you back.
                 A desktop artifact is 52.6 MB today against a 15 MB promise — it was
                 76 MB until the runtime it embeds learned to drop what an application

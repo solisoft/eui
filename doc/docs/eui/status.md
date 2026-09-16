@@ -22,8 +22,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 80 tests: 9 round-trip, 6 byte-level vectors, 3 size budgets, 3 manifest,
-  **57 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
+- 86 tests: 9 round-trip, 7 byte-level vectors, 3 size budgets, 3 manifest,
+  **62 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
@@ -39,7 +39,7 @@ with a free list, and `apply` for every op in the wire format.
   allocated. Subtree removal is an iterative walk, never a recursive drop.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 31 tests, including a random op stream that must keep the arena's live
+- 35 tests, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -71,7 +71,7 @@ now normative.
   per node. Hit-testing honours stacking order and scroll clipping.
 - Text shaping is behind a trait; tests use a fixed-pitch stand-in so the
   goldens pin exact pixels.
-- 18 golden tests.
+- 36 golden tests.
 
 **`eui-text` — shaping and rasterisation.** Over `cosmic-text`, the one
 third-party dependency on the CPU side of the client: shaping is the part of
@@ -138,7 +138,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 13 tests.
+  trip. 95 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused except on loopback in a debug build with an
   explicit opt-in.
@@ -243,7 +243,7 @@ ship with, per `spec/07-bytecode.md`, now normative.
   tells the server, which confirms or corrects on the next batch. Every
   catalogue button uses it for hover and pressed states, and the end-to-end
   test watches the style id change under the pointer with no frame sent.
-- 7 VM tests; the driver runs a local handler with no round trip and stays
+- 16 VM tests; the driver runs a local handler with no round trip and stays
   silent when a chunk fails verification; the Soli end-to-end counter uses
   one.
 
@@ -389,7 +389,18 @@ speak, pins the key on first use and refuses a changed key without a
 rotation the old key signed. Soli signs with a key it generates into
 `config/eui_publisher.pkcs8`; `eui_capabilities(...)` in `routes.sl` says
 what to ask for and `eui <url> --allow ...` what the person grants. A
-capability prompt in the window is still to come.
+capability prompt in the window asks in the person's words, once, with a
+padlock in the address bar that opens the answer again afterwards.
+
+The eleventh capability is `net.open`, and it is the only one that hands
+something *outside* the client: a node carrying an `https:` address opens it
+in the person's own browser when they click it (03 §3.5). Their act and
+never the application's — no op opens an address, no event reports one, the
+host is named before the opener is called, and exactly one scheme is
+accepted, because a platform opener is a URI dispatcher and `file:` is a
+scheme. What it costs is written down rather than discovered: a token in the
+address links this session to the identity the person browses the web with,
+and no allowlist closes that (08 §8.1).
 
 **Accessibility.** The client exposes its tree through AccessKit — AT-SPI
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
@@ -421,8 +432,10 @@ clippy with warnings denied, and the Soli end-to-end suite when
 **Shadows and transitions.** A record's `shadow` paints a grown, offset,
 black quad under the box, faded across the blur in the fragment stage;
 `transition` (the last reserved byte of the 64, now spent) names a `motion`
-index, and a node whose style changes to such a record eases its colours and
-opacity from the old ones. The driver keeps a clock, the window switches to
+index — five of them now, `fast 100` to `slowest 1000`, the top two for a
+thing arriving over a distance rather than a control changing state — and a
+node whose style changes to such a record eases its colours and opacity from
+the old ones. The driver keeps a clock, the window switches to
 `WaitUntil` for the next frame only while something animates, and the
 catalogue's buttons fade between their hover and pressed states.
 
@@ -502,9 +515,10 @@ client-credentials grant, which has no browser step and no callback at
 all. Playing on a device the person already has open is Spotify Connect,
 which is *their* account rather than the app's, so the top bar's
 **connect account** opens the consent screen — the server spawns the
-browser, since no capability in 01 §2.1 lets a client open a URL — and
-the two ordinary routes in `spotify_controller.sl` finish the
-authorization code exchange. The `state` parameter is derived from the
+browser, because this is the server's own flow to finish; a client can be
+handed an address now (`net.open`, 03 §3.5), but only one the person clicks
+themselves — and the two ordinary routes in `spotify_controller.sl` finish
+the authorization code exchange. The `state` parameter is derived from the
 client secret rather than kept between the two requests, and the refresh
 token is handed to the person to paste into their launcher rather than
 saved, because `Cache` is SoliKV and `File` is jailed to an application
@@ -751,7 +765,7 @@ no button left to infer. And a present zero is not an absence: `value_now: 0`
 is a slider at the bottom of its range, which is why the numbers travel
 behind presence bits rather than as sentinels.
 
-Thirteen vectors in `crates/eui-client/tests/a11y.rs`, named in `spec/09`
+Sixteen vectors in `crates/eui-client/tests/a11y.rs`, named in `spec/09`
 §7.1, including every role discriminant surviving the `to_u8`/`from_u8` round
 trip that crossing the worker's process boundary makes of it. The
 kind-mapping default is pinned separately in `driver.rs`, so a tree that
@@ -799,7 +813,7 @@ it drops focus, as always. `dialog`, `alert`, `confirm`, `sheet` and `drawer`
 declare all of it now, and `spec/06` §3's "no global key capture" gained the
 clause `keys` adds to it.
 
-Ten vectors in `crates/eui-client/tests/keyboard.rs`, named in `spec/09` §7.1.
+Seventeen vectors in `crates/eui-client/tests/keyboard.rs`, named in `spec/09` §7.1.
 And the off-screen renderer grew `SNAPSHOT_KEYS`, so a focus ring, a trapped
 `Tab` or a surface that closes on a key can be looked at without a keyboard:
 driven through a real server, the gallery's sheet opens at 940 nodes carrying
@@ -847,7 +861,7 @@ chosen, and an aborted transfer takes the partial file with it. No path
 reaches a server, a dismissed dialog reaches nobody, and the ceilings are
 the client's — a node's `max` may only be lower.
 
-Eleven vectors in `crates/eui-client/tests/files.rs`, named in `spec/09`
+Twenty-one vectors in `crates/eui-client/tests/files.rs`, named in `spec/09`
 §7.4, the last of them running both gestures against the reference server
 over a real socket: the bytes of a picked file reach it, and the bytes it
 owes a save come back. `examples/counter-server` grew an "Attach a file…"
@@ -924,7 +938,7 @@ wrong conclusions here.
 Every document in `spec/` is normative now, and each names the code that
 implements it and the vectors that pin it:
 
-- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 55 rejection
+- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 62 rejection
   cases. The last of the style record's reserved bytes became `transition`.
 - **Primitives, painting, focus, canvas paths, transitions** (`03`) —
   `eui-render` and `eui-client`.
@@ -1025,7 +1039,7 @@ note where a target's standard library is missing.
   drag when the node under the finger asked for moves, a scroll when it did
   not, and a fling when the finger was still moving as it left. The press a
   scroll began with is given back so no button fires under a thumb that was
-  only scrolling. Ten tests in `crates/eui-client/tests/touch.rs`; they run
+  only scrolling. Twenty-one tests in `crates/eui-client/tests/touch.rs`; they run
   on any machine, because this is the driver and not the window.
 - **Suspend and resume.** Android destroys the native window whenever the
   application goes to the background. The surface is dropped on the way out
