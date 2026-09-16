@@ -293,10 +293,11 @@ fn a_crashed_worker_leaves_its_neighbours_untouched() {
 ///
 ///     cargo test -p eui-client --test worker -- --ignored --nocapture
 ///
-/// Measured here on 16 September 2026: 5 228 round trips in 3 s, and the
-/// worst audio fill waited **145 ms** against a ring that holds 200. That is
-/// 55 ms of margin under a moving mouse, which is the reported stutter
-/// waiting for a slower machine or a heavier tree.
+/// Measured here on 16 September 2026, before the window learned to stand
+/// aside: 5 228 round trips in 3 s and a worst fill of **145 ms** against a
+/// ring that holds 200 — 55 ms of margin under a moving mouse, which is the
+/// reported stutter waiting for a slower machine or a heavier tree. After:
+/// 10, 27, 27 and 33 ms over four runs, for about 8 % fewer round trips.
 ///
 /// It is not throughput — each call costs 0.57 ms. It is fairness:
 /// `std::sync::Mutex` makes no promise about who gets it next, and the

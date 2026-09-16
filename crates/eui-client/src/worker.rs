@@ -1953,7 +1953,13 @@ impl AudioTap {
                 let channels = channels.clamp(1, 2);
                 let frames = u32::try_from(out.len() / usize::from(channels)).unwrap_or(0);
                 let request = Request::Audio { frames, channels: channels as u8, rate };
-                let reply = match w.lock() {
+                // Counted while waiting, dropped the instant the lock is
+                // held: the window stands aside for a fill that has not
+                // started, not for one that is running.
+                AUDIO_WAITING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let guard = w.lock();
+                AUDIO_WAITING.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                let reply = match guard {
                     Ok(mut w) => w.call(&request),
                     Err(_) => None,
                 };
@@ -1975,6 +1981,41 @@ impl AudioTap {
 fn silence(out: &mut [f32]) {
     for s in out.iter_mut() {
         *s = 0.0;
+    }
+}
+
+/// How many audio fills are waiting for the worker right now.
+///
+/// A hint, not a lock. The filler and the window share one pipe behind one
+/// `Mutex`, and `std::sync::Mutex` promises nothing about who gets it next:
+/// the window's loop re-takes it in a tight sequence — a pointer move and a
+/// paint, hundreds of times a second — and the filler waits its turn among
+/// them. Measured on 16 September 2026: 5 228 round trips in three seconds,
+/// and the worst fill waited **145 ms** against a ring holding 200. Fifty-
+/// five milliseconds of margin, and crossing it is an audible crackle.
+///
+/// So the window stands aside while a fill is waiting. It costs a yield on
+/// a path that was about to block anyway, and it cannot deadlock: the count
+/// is dropped the moment the fill *has* the lock, not when it finishes, and
+/// the wait below is bounded whatever happens to the filler.
+///
+/// Global rather than per-window on purpose. Two windows do not share a
+/// worker, so the only cost of the wrong one standing aside is that yield,
+/// and the alternative is threading a handle through every call site for a
+/// hint that is allowed to be wrong.
+static AUDIO_WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Stand aside if a sound is waiting for the pipe.
+///
+/// Bounded: a filler that died holding the count cannot stop the window, it
+/// can only cost it this many yields once.
+fn let_audio_through() {
+    use std::sync::atomic::Ordering;
+    for _ in 0..64 {
+        if AUDIO_WAITING.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -2053,7 +2094,10 @@ impl Backend {
     /// Run `f` against the worker when the driver is in one.
     fn with_worker<T>(&self, f: impl FnOnce(&mut Worker) -> T) -> Option<T> {
         match self {
-            Backend::Remote { worker, .. } => worker.lock().ok().map(|mut w| f(&mut w)),
+            Backend::Remote { worker, .. } => {
+                let_audio_through();
+                worker.lock().ok().map(|mut w| f(&mut w))
+            }
             Backend::Local(_) => None,
         }
     }
