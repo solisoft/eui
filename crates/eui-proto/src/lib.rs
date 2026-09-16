@@ -99,4 +99,4 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;

@@ -233,3 +233,110 @@ fn a_control_survives_the_sound_being_replaced() {
     assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-6), "still playing at half: {out:?}");
     assert_eq!(m.position_ms(1), Some(0), "the new sound starts at its beginning");
 }
+
+// ---------------------------------------------------------------- the meter
+//
+// What a `level` event carries. The property these pin is not "the number
+// is right" but "the number says nothing about the machine": everything a
+// meter reports has to be recoverable from the bytes the server sent and
+// the gain the server asked for, and nothing else.
+
+#[test]
+fn peak_is_before_the_viewers_own_gain() {
+    let mut m = Mixer::new(8_000);
+    m.load(1, tone(0.8, 8_000, 4_000));
+    m.control(1, Control { playing: true, volume: 1.0, looping: false });
+
+    let mut out = [0.0f32; 16];
+    m.fill(&mut out, 1);
+    let (l, r) = m.take_peak(1).expect("a loaded source has a peak");
+    assert!((l - 0.8).abs() < 1e-6 && (r - 0.8).abs() < 1e-6, "full gain: {l} {r}");
+
+    // The viewer turns it down. The output follows; the meter does not.
+    m.set_master(0.25);
+    m.fill(&mut out, 1);
+    assert!(out.iter().all(|s| (*s - 0.2).abs() < 1e-6), "master really applied: {out:?}");
+    let (l, _) = m.take_peak(1).unwrap();
+    assert!((l - 0.8).abs() < 1e-6, "spec 03 §7: the viewer's volume is not the application's to read, got {l}");
+
+    // And the case that matters most: muted must be indistinguishable
+    // from playing, or a server learns the viewer silenced it.
+    m.set_master(0.0);
+    m.fill(&mut out, 1);
+    assert!(out.iter().all(|s| *s == 0.0), "muted: {out:?}");
+    let (l, _) = m.take_peak(1).unwrap();
+    assert!((l - 0.8).abs() < 1e-6, "a muted viewer must not be inferable, got {l}");
+
+    // The application's own gain *is* the server's to know: it set it.
+    m.control(1, Control { playing: true, volume: 0.5, looping: false });
+    m.fill(&mut out, 1);
+    let (l, _) = m.take_peak(1).unwrap();
+    assert!((l - 0.4).abs() < 1e-6, "the application's own volume is in the reading, got {l}");
+}
+
+#[test]
+fn peak_is_the_maximum_since_the_last_read() {
+    let mut m = Mixer::new(8_000);
+    // Quiet, with one loud frame a third of the way in.
+    let mut samples = vec![0.1f32; 300];
+    samples[150] = 0.9;
+    m.load(1, Arc::new(Sound::new(samples, 8_000, 1)));
+    m.control(1, Control { playing: true, volume: 1.0, looping: false });
+
+    // Nothing has played yet.
+    assert_eq!(m.take_peak(1), Some((0.0, 0.0)));
+
+    // Three fills of 100 frames each: the transient is in the second, and
+    // only the drain after all three reads it. A meter that sampled
+    // instead of accumulating would miss it.
+    let mut out = [0.0f32; 100];
+    for _ in 0..3 {
+        m.fill(&mut out, 1);
+    }
+    let (l, _) = m.take_peak(1).unwrap();
+    assert!((l - 0.9).abs() < 1e-3, "the transient between two readings survives, got {l}");
+
+    // A read drains: the same peak is not reported twice.
+    assert_eq!(m.take_peak(1), Some((0.0, 0.0)), "a reading covers one interval, once");
+    assert_eq!(m.take_peak(999), None, "a node with no sound has no reading");
+}
+
+#[test]
+fn peak_is_stereo_even_on_a_mono_output() {
+    let lr: Vec<f32> = (0..200).flat_map(|_| [1.0, -0.25]).collect();
+    let mut m = Mixer::new(8_000);
+    m.load(1, Arc::new(Sound::new(lr, 8_000, 2)));
+    m.control(1, Control { playing: true, volume: 1.0, looping: false });
+
+    // One channel out. The right side is still measured, and the sign is
+    // not the meter's business.
+    let mut out = [0.0f32; 8];
+    m.fill(&mut out, 1);
+    let (l, r) = m.take_peak(1).unwrap();
+    assert!((l - 1.0).abs() < 1e-6, "left: {l}");
+    assert!((r - 0.25).abs() < 1e-6, "right survives a mono device, and is absolute: {r}");
+}
+
+#[test]
+fn a_stopped_source_peaks_at_zero() {
+    let mut m = Mixer::new(8_000);
+    m.load(1, tone(0.7, 8_000, 4_000));
+    m.control(1, Control { playing: true, volume: 1.0, looping: false });
+    let mut out = [0.0f32; 16];
+    m.fill(&mut out, 1);
+    assert!(m.take_peak(1).unwrap().0 > 0.5);
+
+    // Paused. The meter must fall, or the last bar stays lit for ever.
+    m.control(1, Control { playing: false, volume: 1.0, looping: false });
+    m.fill(&mut out, 1);
+    assert_eq!(m.take_peak(1), Some((0.0, 0.0)), "a paused sound reads zero");
+
+    // A replacement starts from a clean meter, which is the opposite of
+    // what `a_control_survives_the_sound_being_replaced` pins for the
+    // control: the gain is the application's intent and carries over, the
+    // reading is the sound's and does not.
+    m.control(1, Control { playing: true, volume: 1.0, looping: false });
+    m.fill(&mut out, 1);
+    m.load(1, tone(0.3, 8_000, 4_000));
+    assert_eq!(m.take_peak(1), Some((0.0, 0.0)), "a new sound starts from a clean meter");
+}

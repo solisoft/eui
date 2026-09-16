@@ -229,6 +229,11 @@ struct Source {
     at: f64,
     /// The source reached its end since the last [`Mixer::fill`].
     ended: bool,
+    /// Loudest this source has been since the last [`Mixer::take_peak`],
+    /// per channel, `0.0..=1.0`. The application's own `volume` is in it;
+    /// the viewer's master gain is **not** — see [`Mixer::take_peak`].
+    peak_l: f32,
+    peak_r: f32,
 }
 
 /// The sounds a session is playing, mixed to one output rate.
@@ -288,7 +293,10 @@ impl Mixer {
             return false;
         }
         let control = self.sources.get(&node).map_or_else(Control::default, |s| s.control);
-        self.sources.insert(node, Source { sound, control, at: 0.0, ended: false });
+        // The control survives a replacement; the peak does not. A new
+        // sound starts from a clean meter, or the last bar of the sound
+        // before it stays lit over the first silence of this one.
+        self.sources.insert(node, Source { sound, control, at: 0.0, ended: false, peak_l: 0.0, peak_r: 0.0 });
         true
     }
 
@@ -340,6 +348,26 @@ impl Mixer {
         self.sources.get(&node).is_some_and(|s| s.control.playing && s.at < s.sound.frames() as f64)
     }
 
+    /// The loudest a source has been since the last call, `(left, right)`
+    /// in `0.0..=1.0`, and reset to zero — so a reading covers the whole
+    /// interval since the previous one and a transient between two calls
+    /// is not missed. `None` for a node with no sound.
+    ///
+    /// The source's own `volume` is in it. **The viewer's master gain is
+    /// not**, and that is the point rather than an oversight: a level
+    /// measured after [`Self::set_master`] could be divided by the volume
+    /// the application asked for to recover the viewer's own setting, and
+    /// a zero would say they had muted. `spec/03-widgets.md` §7 puts the
+    /// viewer's volume above the application, and this is where that
+    /// holds or fails.
+    pub fn take_peak(&mut self, node: u32) -> Option<(f32, f32)> {
+        let s = self.sources.get_mut(&node)?;
+        let out = (s.peak_l, s.peak_r);
+        s.peak_l = 0.0;
+        s.peak_r = 0.0;
+        Some(out)
+    }
+
     /// Bytes the loaded sounds occupy.
     pub fn bytes(&self) -> usize {
         self.sources.values().map(|s| s.sound.bytes()).sum()
@@ -366,7 +394,11 @@ impl Mixer {
                 continue;
             }
             let step = f64::from(source.sound.rate()) / f64::from(self.rate);
-            let gain = source.control.volume * self.master;
+            let volume = source.control.volume;
+            let gain = volume * self.master;
+            // The meter's reading, accumulated before `self.master` is
+            // anywhere near it.
+            let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
             for frame in out.chunks_mut(channels) {
                 if source.at >= frames as f64 {
                     if !source.control.looping {
@@ -390,8 +422,14 @@ impl Mixer {
                 let t = (source.at - i as f64) as f32;
                 let (l0, r0) = source.sound.frame(i);
                 let (l1, r1) = if i + 1 < frames { source.sound.frame(i + 1) } else { (l0, r0) };
-                let l = (l0 + (l1 - l0) * t) * gain;
-                let r = (r0 + (r1 - r0) * t) * gain;
+                let raw_l = l0 + (l1 - l0) * t;
+                let raw_r = r0 + (r1 - r0) * t;
+                // `max` returns the other operand for a NaN, so one bad
+                // sample cannot poison the meter for the whole interval.
+                peak_l = peak_l.max(raw_l.abs());
+                peak_r = peak_r.max(raw_r.abs());
+                let l = raw_l * gain;
+                let r = raw_r * gain;
                 if let Some(s) = frame.first_mut() {
                     *s += l;
                 }
@@ -408,6 +446,11 @@ impl Mixer {
             if source.control.looping && source.at >= frames as f64 {
                 source.at %= frames as f64;
             }
+            // One multiply a source a fill rather than one a sample: the
+            // application's gain scales the whole interval's maximum just
+            // as well as it scales each sample of it.
+            source.peak_l = source.peak_l.max(peak_l * volume);
+            source.peak_r = source.peak_r.max(peak_r * volume);
         }
         // Two sounds at full volume must not wrap around; clamping is what
         // every mixer does and what a listener expects.

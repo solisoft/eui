@@ -190,6 +190,13 @@ pub enum EventKind {
     /// "nothing" means the platform keeps the gesture, which is how a person
     /// gets out of an application that has nowhere left to go back to.
     Back = 0x1F,
+    /// How loud a sound the application is playing actually is:
+    /// `List[Int peak_left, Int peak_right]`, each `0..=100`, the loudest
+    /// since the last one. It rides the clock of [`Self::TimeUpdate`] and
+    /// does not add one of its own (03 §7), and it is measured **before**
+    /// the viewer's own volume, so it carries nothing about the machine —
+    /// only the server's own bytes at the gain the server asked for.
+    Level = 0x20,
 }
 
 impl EventKind {
@@ -227,6 +234,7 @@ impl EventKind {
             0x1D => Ok(Self::NfcTag),
             0x1E => Ok(Self::FileDrag),
             0x1F => Ok(Self::Back),
+            0x20 => Ok(Self::Level),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }
