@@ -67,6 +67,8 @@ fn every_op() {
         Op::DefColor { id: 1, rgba: 0xFF5722FF },
         Op::DefChunk { id: 1, hash: [3; 32] },
         Op::DefChunkBytes { id: 2, bytes: b"EUIC\x01\x02\x40".to_vec() },
+        Op::DefFont { role: 0, faces: vec![[4; 32]] },
+        Op::DefFont { role: 2, faces: vec![[5; 32], [6; 32]] },
         Op::Mount(tree.clone()),
         Op::Replace { node: 1, subtree: tree.clone() },
         Op::SetStyle { node: 1, style: 4 },

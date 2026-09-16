@@ -153,7 +153,7 @@ unknown colour role.
 | `bg`, `fg`, `border_color` | A colour, below |
 | `radius`, `shadow`, `opacity`, `z` | 0–255 |
 | `blur` | 0–255 — the node shows what is behind it through a Gaussian this wide, in px, and `bg` tints the result |
-| `font` | `sans` · `mono` |
+| `font` | `sans` · `mono` · the name of a font the application declared with `eui_font` |
 | `size` | A text-scale index, 0–255 |
 | `weight` | `regular` · `medium` · `semibold` · `bold` |
 | `text_align` | `start` · `center` · `end` · `justify` |
@@ -296,6 +296,41 @@ A widget is not a protocol feature.
 | `h2(content)` | Size 4, semibold |
 | `muted(content)` | Size 1, `text.muted` |
 | `text_interned(content, style)` | A text marked `intern` — for short strings that repeat across many nodes |
+
+### Typefaces
+
+`{"font": "sans"}` and `{"font": "mono"}` are the two faces every client
+carries. A third is a face this application serves:
+
+```soli
+# config/routes.sl, at boot — before a manifest is signed.
+eui_font("Playfair Display", ["public/fonts/playfair-400.ttf",
+                              "public/fonts/playfair-700.ttf"])
+
+text("A heading", {"font": "Playfair Display", "weight": "bold"})
+```
+
+One face per weight; `"weight"` picks among them. The wire carries a role
+(one byte) and the faces travel as content-addressed assets, so the window
+fetches them from this application's own origin and checks the bytes against
+their own name. It never resolves a font by name, by URL, or from the
+machine it runs on.
+
+Which is why a Google font is one the **server** fetched:
+`app/services/google_fonts.sl` asks the CSS endpoint for the face URLs with
+an ancient `User-Agent` (a modern one gets woff2, which the client does not
+read), downloads each `.ttf` into `public/fonts/` behind a `File.exists`
+guard, and hands the paths to `eui_font`. Google sees the server once per
+deploy and the viewer never. The Settings section of the gallery shows the
+result — four faces, four weights each.
+
+`google_font` downloads, so it belongs at boot and nowhere else; a view
+calls `google_font_here`, which declares only the faces already on disk and
+answers `"sans"` for the rest. A render must not be able to block on a font
+service that has stopped answering.
+
+A face that has not arrived yet, and one the shaper could not read, both
+draw in `sans`. The page is never blank because a font is missing.
 
 ## Controls and states
 

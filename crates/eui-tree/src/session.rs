@@ -13,6 +13,10 @@ use crate::error::{ApplyError, Result, Table};
 use crate::limits::Limits;
 use crate::tables::DefineOnce;
 
+/// How many font roles a session holds: `0` sans, `1` mono, and the
+/// application's own up to [`eui_proto::limits::MAX_FONT_ROLE`].
+const FONT_ROLES: usize = proto::MAX_FONT_ROLE as usize + 1;
+
 /// A bytecode chunk as the session holds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Chunk {
@@ -32,6 +36,14 @@ pub struct Session {
     styles: DefineOnce<StyleRecord>,
     colors: DefineOnce<u32>,
     chunks: DefineOnce<Chunk>,
+    /// Font roles, by role byte, each holding the asset hashes of its faces
+    /// (02 §5). A fixed, tiny namespace rather than a `DefineOnce` table:
+    /// an id table hands out names, and these are not handed out — roles
+    /// `0` and `1` already mean sans and mono before a server says anything,
+    /// and the rest are slots an application fills. Rebinding one is
+    /// therefore a change of mind, not a redefinition, and is allowed: the
+    /// client drops what it shaped in the old face.
+    fonts: [Option<Vec<[u8; proto::HASH_BYTES]>>; FONT_ROLES],
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
@@ -106,6 +118,7 @@ impl Session {
             styles: DefineOnce::new(Table::Style, limits.max_styles),
             colors: DefineOnce::new(Table::Color, limits.max_colors),
             chunks: DefineOnce::new(Table::Chunk, limits.max_chunks),
+            fonts: [const { None }; FONT_ROLES],
             arena: Arena::default(),
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
@@ -242,6 +255,17 @@ impl Session {
     /// A chunk, by hash or inline.
     pub fn chunk(&self, id: u32) -> Option<&Chunk> {
         self.chunks.get(id)
+    }
+
+    /// The faces bound to a font role, or `None` for one nothing bound.
+    pub fn font(&self, role: u8) -> Option<&[[u8; proto::HASH_BYTES]]> {
+        self.fonts.get(usize::from(role))?.as_deref()
+    }
+
+    /// Every bound role, lowest first, with its faces. What the client turns
+    /// into asset requests.
+    pub fn fonts(&self) -> impl Iterator<Item = (u8, &[[u8; proto::HASH_BYTES]])> {
+        self.fonts.iter().enumerate().filter_map(|(role, faces)| Some((role as u8, faces.as_deref()?)))
     }
 
     /// The props of the root node: a component's local state
@@ -565,6 +589,14 @@ impl Session {
             Op::DefColor { id, rgba } => self.colors.define(*id, *rgba),
             Op::DefChunk { id, hash } => self.chunks.define(*id, Chunk::Hash(*hash)),
             Op::DefChunkBytes { id, bytes } => self.chunks.define(*id, Chunk::Bytes(bytes.clone())),
+            Op::DefFont { role, faces } => {
+                // The decoder already bounded the role and the face count;
+                // this is the slot's own check, so a session built by hand
+                // in a test cannot write past the array either.
+                let slot = self.fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
+                *slot = Some(faces.clone());
+                Ok(())
+            }
             Op::Mount(subtree) => self.mount(subtree),
             _ => {
                 if self.poisoned {
@@ -720,7 +752,7 @@ impl Session {
                 self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
-            Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::Mount(_) => Err(ApplyError::Internal),
+            Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::DefFont { .. } | Op::Mount(_) => Err(ApplyError::Internal),
         }
     }
 

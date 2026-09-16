@@ -369,3 +369,84 @@ struct VOut { @builtin(position) pos: vec4<f32> }
     let middle = [px[i], px[i + 1], px[i + 2]];
     assert!(middle[1] > 200 && middle[0] < 60, "the server's own shader is what drew: {middle:?}");
 }
+
+// -------------------------------------------------------------- font roles
+//
+// A face is an asset like any other: named by its hash, fetched from the
+// session's own origin, verified, and then — unlike a picture — handed to the
+// shaper. 02 §5, 08 §8.
+
+/// One of the client's own faces, read off disk so the test has real font
+/// bytes without embedding a fifth copy of one.
+const A_FACE: &[u8] = include_bytes!("../../eui-text/fonts/NotoSansSymbols-Regular.ttf");
+
+/// A row holding one text node drawn in `role`, with that role bound to
+/// `hash`. A row that starts its children rather than stretching them is
+/// what makes the text's own measured width visible in its rect.
+fn text_in_role(d: &mut Driver, role: u8, hash: Option<[u8; 32]>) {
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("Hamburgefonstiv".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let mut ops = vec![
+        Op::DefStyle { id: 1, record: StyleRecord { display: Display::Row, align_items: AlignItems::Start, ..Default::default() } },
+        Op::DefStyle { id: 2, record: StyleRecord { font_family: FontFamily::Role(role), ..Default::default() } },
+    ];
+    if let Some(hash) = hash {
+        ops.insert(0, Op::DefFont { role, faces: vec![hash] });
+    }
+    ops.push(Op::Mount(tree));
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops }));
+}
+
+#[test]
+fn a_font_role_is_fetched_then_bound_then_reshaped() {
+    let h = hash_of(A_FACE);
+    let mut d = Driver::new(300.0, 200.0, 1.0, 0);
+    text_in_role(&mut d, 2, Some(h));
+
+    // A role's faces are wanted because the *session* bound them, not
+    // because a node holds the hash in a prop: no node ever names a face.
+    assert_eq!(d.pending_assets(), vec![h]);
+    assert!(d.pending_assets().is_empty(), "asked once");
+
+    let node = d.session().lookup(2).unwrap();
+    d.paint(300, 200);
+    let fallback = d.layout().rect(node).unwrap().w;
+    assert!(fallback > 0.0, "an unbound role draws in sans rather than not at all");
+
+    d.asset_ready(h, A_FACE.to_vec());
+    assert!(d.needs_redraw());
+    d.paint(300, 200);
+    assert_ne!(d.layout().rect(node).unwrap().w, fallback, "the run was re-shaped in the face that arrived");
+}
+
+#[test]
+fn a_face_that_is_not_a_face_leaves_the_role_in_sans() {
+    let junk = b"GIF89a and not a font at all".to_vec();
+    let h = hash_of(&junk);
+    let mut d = Driver::new(300.0, 200.0, 1.0, 0);
+    text_in_role(&mut d, 3, Some(h));
+    assert_eq!(d.pending_assets(), vec![h]);
+
+    let node = d.session().lookup(2).unwrap();
+    d.paint(300, 200);
+    let fallback = d.layout().rect(node).unwrap().w;
+
+    d.asset_ready(h, junk);
+    d.paint(300, 200);
+    assert_eq!(d.layout().rect(node).unwrap().w, fallback, "the text is still drawn, in sans");
+    assert!(d.assets().failure(&h).is_some(), "and the reason was kept");
+}
+
+#[test]
+fn a_role_the_application_never_bound_draws_in_sans() {
+    // Role 7, and no `DefFont` anywhere: a legal style naming a binding that
+    // does not exist. The session stands and the text is drawn.
+    let mut d = Driver::new(300.0, 200.0, 1.0, 0);
+    text_in_role(&mut d, 7, None);
+    assert!(d.pending_assets().is_empty(), "nothing to fetch");
+    d.paint(300, 200);
+    let node = d.session().lookup(2).unwrap();
+    assert!(d.layout().rect(node).unwrap().w > 0.0, "drawn in sans");
+}

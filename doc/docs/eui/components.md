@@ -153,7 +153,7 @@ unknown colour role.
 | `bg`, `fg`, `border_color` | A colour, below |
 | `radius`, `shadow`, `opacity`, `z` | 0–255 |
 | `blur` | 0–255 — the node shows what is behind it through a Gaussian this wide, in px, and `bg` tints the result |
-| `font` | `sans` · `mono` |
+| `font` | `sans` · `mono` · the name of a font the application declared with `eui_font` |
 | `size` | A text-scale index, 0–255 |
 | `weight` | `regular` · `medium` · `semibold` · `bold` |
 | `text_align` | `start` · `center` · `end` · `justify` |

@@ -307,6 +307,17 @@ pub fn looks_like_image(bytes: &[u8]) -> bool {
     bytes.starts_with(b"\x89PNG") || bytes.starts_with(&[0xff, 0xd8, 0xff]) || (bytes.len() > 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
 }
 
+/// True for bytes that open like a font file the shaper can read.
+///
+/// `sfnt` in its two spellings — `0x00010000` for TrueType outlines,
+/// `OTTO` for CFF — plus the `ttcf` collection. WOFF and WOFF2 are
+/// deliberately absent: their tables are compressed, the client carries no
+/// inflate or brotli, and a server that wants a face on this client sends
+/// the face rather than an archive of it (05 §3).
+pub fn looks_like_font(bytes: &[u8]) -> bool {
+    matches!(bytes.get(..4), Some(b"\x00\x01\x00\x00" | b"OTTO" | b"true" | b"ttcf"))
+}
+
 /// Decode a JPEG. Baseline and progressive, greyscale or colour; the
 /// decoder hands back RGB and the alpha is filled in.
 #[cfg(feature = "jpeg")]

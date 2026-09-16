@@ -562,3 +562,43 @@ fn a_key_survives_a_move_between_parents_in_either_order() {
         assert_eq!(s.node(found).map(|n| n.parent), s.lookup(4), "under its new parent");
     }
 }
+
+// ------------------------------------------------------------- font roles
+//
+// 02 §5.1. A role is a slot, not an id: the protocol already names all ten,
+// so binding one twice is a change of mind rather than a redefinition — the
+// one table here that is not define-once.
+
+#[test]
+fn a_font_role_holds_the_faces_bound_to_it() {
+    let mut s = mounted();
+    assert_eq!(s.font(2), None, "nothing bound yet");
+    one(&mut s, 2, Op::DefFont { role: 2, faces: vec![[1; 32], [2; 32]] }).unwrap();
+    assert_eq!(s.font(2), Some(&[[1u8; 32], [2u8; 32]][..]));
+    assert_eq!(s.fonts().collect::<Vec<_>>().len(), 1, "one role bound");
+}
+
+#[test]
+fn a_font_role_may_be_bound_again() {
+    let mut s = mounted();
+    one(&mut s, 2, Op::DefFont { role: 0, faces: vec![[1; 32]] }).unwrap();
+    one(&mut s, 3, Op::DefFont { role: 0, faces: vec![[3; 32]] }).unwrap();
+    assert_eq!(s.font(0), Some(&[[3u8; 32]][..]), "the later binding stands");
+    assert_eq!(s.fonts().collect::<Vec<_>>().len(), 1, "and it is still one role");
+}
+
+#[test]
+fn a_font_role_past_the_last_is_refused() {
+    // The decoder bounds this too; the slot checks it again so a session
+    // built by hand cannot write past the array either.
+    let mut s = mounted();
+    assert_eq!(one(&mut s, 2, Op::DefFont { role: 250, faces: vec![[1; 32]] }), Err(E::UnknownFontRole(250)));
+}
+
+#[test]
+fn a_mount_does_not_unbind_a_font_role() {
+    let mut s = mounted();
+    one(&mut s, 2, Op::DefFont { role: 3, faces: vec![[5; 32]] }).unwrap();
+    one(&mut s, 3, Op::Mount(sample())).unwrap();
+    assert_eq!(s.font(3), Some(&[[5u8; 32]][..]), "tables outlive the tree");
+}

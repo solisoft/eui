@@ -122,15 +122,50 @@ u8_enum!(
     }
 );
 
-u8_enum!(
-    /// Which font role to shape with.
-    FontFamily, "font_family", {
-        /// Proportional UI face.
-        Sans = 0,
-        /// Fixed-pitch face.
-        Mono = 1,
+/// Which font role to shape with.
+///
+/// Zero and one are the client's own faces and are always available. Two and
+/// up are the application's, bound to their faces by `DefFont` (02 §5) and
+/// carried as assets like every other byte a server chooses. Written by hand
+/// rather than through `u8_enum!` because the open half is the point: the
+/// wire format reserved `2+` for granted font roles before there was
+/// anything to put there, and a decoder that refuses them refuses the
+/// extension it documents.
+///
+/// A role a session never bound is still a legal byte. It is not the
+/// decoder's business: the tree knows which roles were defined, and the text
+/// engine falls back to `Sans` for one that was not — a missing face draws
+/// the text in another face, never nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontFamily {
+    /// Proportional UI face.
+    Sans,
+    /// Fixed-pitch face.
+    Mono,
+    /// A face the application supplied, `2..=255`.
+    Role(u8),
+}
+
+impl FontFamily {
+    /// Decode from the wire. Every byte is a role, so this cannot fail; it
+    /// returns a `Result` so the field decodes like its neighbours.
+    pub const fn from_u8(v: u8) -> Result<Self> {
+        match v {
+            0 => Ok(Self::Sans),
+            1 => Ok(Self::Mono),
+            r => Ok(Self::Role(r)),
+        }
     }
-);
+
+    /// The wire discriminant.
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Sans => 0,
+            Self::Mono => 1,
+            Self::Role(r) => r,
+        }
+    }
+}
 
 u8_enum!(
     /// Weight, as a role rather than a numeric axis value.

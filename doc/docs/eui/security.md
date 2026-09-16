@@ -136,6 +136,15 @@ identifier, and no third-party connection — the manifest's host allowlist is
 enforced. The fingerprinting surface is close to nil, and that is a **testable**
 goal, not a slogan.
 
+An application may supply its own typeface without moving any of that. A face
+is an asset: named by the BLAKE3 of its bytes, fetched from the session's own
+origin, checked against its own name, and parsed inside the confined worker.
+The client never resolves a face by name or by URL and never asks the machine
+what it has installed, so a face from a font service is one the *server*
+downloaded, once, and re-served — the viewer's address never reaches the third
+party. Bytes that are not a face the client reads are discarded, and the role
+falls back to sans.
+
 That is a claim about the **client**, and in the standalone client the client
 is the whole surface, so it is also a claim about what a person running it
 gives away. In the WebAssembly build it is only the first half: the client

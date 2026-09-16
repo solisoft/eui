@@ -6,7 +6,7 @@
 //! fuzzed against raw bytes with no setup.
 
 use crate::error::{DecodeError, Result};
-use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_OPS_PER_BATCH};
+use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_FACES_PER_ROLE, MAX_FONT_ROLE, MAX_OPS_PER_BATCH};
 use crate::node::{EventKind, Handler, Subtree, TextRef, Value};
 use crate::reader::Reader;
 use crate::style::StyleRecord;
@@ -43,6 +43,19 @@ pub enum Op {
         /// BLAKE3 of the chunk asset.
         hash: [u8; HASH_BYTES],
     },
+    /// Bind a font role to the faces that draw it (`spec/02-wire-format.md` §5).
+    ///
+    /// The faces are assets, fetched and hash-checked like any other; until
+    /// they arrive the role draws in `sans`. Roles `0` and `1` are the
+    /// client's own sans and mono, and binding one replaces it for this
+    /// session only — which is what a theme's `font_sans` asset means (05 §3).
+    DefFont {
+        /// Font role, at most [`MAX_FONT_ROLE`].
+        role: u8,
+        /// BLAKE3 of each face, at least one and at most
+        /// [`MAX_FACES_PER_ROLE`]. `font_weight` chooses among them.
+        faces: Vec<[u8; HASH_BYTES]>,
+    },
     /// Deliver a bytecode chunk inline (`spec/07-bytecode.md` §2).
     DefChunkBytes {
         /// Chunk id, non-zero.
@@ -50,7 +63,10 @@ pub enum Op {
         /// The chunk, at most [`MAX_CHUNK_BYTES`].
         bytes: Vec<u8>,
     },
-    /// Replace the whole document and clear every session table.
+    /// Replace the whole document. The session's tables — atoms, styles,
+    /// colours, chunks, font roles — are not cleared: they outlive the tree
+    /// that referenced them, so a second page costs no second `DefAtom`
+    /// (02 §5).
     Mount(Subtree),
     /// Replace one node and its descendants.
     Replace {
@@ -156,6 +172,28 @@ impl Op {
                 Ok(Self::DefChunk { id, hash: r.array::<HASH_BYTES>()? })
             }
             0x14 => Ok(Self::DefChunkBytes { id: nonzero(r.varint32()?, "chunk id")?, bytes: r.bytes(MAX_CHUNK_BYTES, "chunk bytes")?.to_vec() }),
+            0x15 => {
+                let role = r.u8()?;
+                if role > MAX_FONT_ROLE {
+                    return Err(DecodeError::LimitExceeded("font role"));
+                }
+                let count = r.varint32()?;
+                // A role with no face is not an empty binding, it is a
+                // sentence that stops halfway: the style says "draw this in
+                // role 2" and nothing ever says what role 2 is. Rejected
+                // here so the session never holds one.
+                if count == 0 {
+                    return Err(DecodeError::IllegalValue("font faces"));
+                }
+                if count > MAX_FACES_PER_ROLE {
+                    return Err(DecodeError::LimitExceeded("font faces"));
+                }
+                let mut faces = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    faces.push(r.array::<HASH_BYTES>()?);
+                }
+                Ok(Self::DefFont { role, faces })
+            }
             0x20 => Ok(Self::Mount(Subtree::decode(r)?)),
             0x21 => Ok(Self::Replace { node: nonzero(r.varint32()?, "node id")?, subtree: Subtree::decode(r)? }),
             0x22 => Ok(Self::SetStyle { node: nonzero(r.varint32()?, "node id")?, style: r.varint32()? }),
@@ -190,6 +228,12 @@ impl Op {
             }
             Self::DefChunkBytes { id, bytes } => {
                 w.u8(0x14).varint32(*id).bytes(bytes);
+            }
+            Self::DefFont { role, faces } => {
+                w.u8(0x15).u8(*role).varint32(faces.len() as u32);
+                for face in faces {
+                    w.raw(face);
+                }
             }
             Self::Mount(subtree) => {
                 w.u8(0x20);

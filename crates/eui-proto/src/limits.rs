@@ -61,3 +61,13 @@ pub const MAX_ABORT_REASON: usize = 256;
 pub const STYLE_RECORD_BYTES: usize = 64;
 /// Size of a BLAKE3 asset hash, in bytes.
 pub const HASH_BYTES: usize = 32;
+
+/// Highest font role an application may bind (02 §5). Roles `0` and `1` are
+/// the client's own sans and mono, which a `DefFont` may replace; `2..=9` are
+/// the application's to name. Eight is a typographic system, not a font
+/// menu: past that the session is shipping a catalogue, and every face is
+/// bytes the viewer waits for.
+pub const MAX_FONT_ROLE: u8 = 9;
+/// Most faces one role may carry — a weight and a slant each, twice over.
+/// `font_weight` selects among them; nothing else does.
+pub const MAX_FACES_PER_ROLE: u32 = 8;

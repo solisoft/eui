@@ -78,17 +78,28 @@ third-party dependency on the CPU side of the client: shaping is the part of
 text that must not be reinvented.
 
 - Four faces embedded — Inter regular and bold, JetBrains Mono, Noto Sans Symbols for the hearts and arrows a text face lacks — all OFL. The font
-  database is built by hand from those three files and **never touches the
-  system's fonts** — a test asserts the count is exactly three. The first
+  database is built by hand from those four files and **never touches the
+  system's fonts** — a test asserts the count is exactly four. The first
   version of this code used the convenience constructor and loaded 779
   faces; the same text would have shaped differently on every machine, and
   the installed font list would have been visible to a server.
+- **Font roles.** An application may supply faces of its own: `DefFont`
+  binds a role — the `font_family` byte — to faces named by asset hash, and
+  the client fetches them from its own origin, checks the bytes against
+  their own name, reads the family out of the face's own tables and shapes
+  the role in it. Roles 0 and 1 are sans and mono and may be replaced for
+  the session; 2–9 are the application's. A role nothing bound, a face that
+  has not arrived, and a face that will not parse all draw in sans, so a
+  font is never what stops a page being drawn. Nothing about this widens
+  what the client connects to: a face from a font service is fetched by the
+  *server*, once, and re-served from the application's origin.
 - A bounded shaping cache keyed by `(text, font, width, clamp)`; layout
   measures a run under several constraints per frame and shapes it once.
+  The key holds the *role*, so rebinding one drops what was shaped under it.
 - Glyph rasterisation at a device scale behind an opaque key, for the
   renderer's atlas.
 - Line clamping truncates; it does not yet append an ellipsis.
-- 17 tests, one of which lays out real glyphs through `eui-layout`.
+- 24 tests, one of which lays out real glyphs through `eui-layout`.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per
 scissor region.

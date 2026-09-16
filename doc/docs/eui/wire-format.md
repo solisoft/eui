@@ -34,8 +34,19 @@ server starting at 1. Id 0 always means "none" and can never be defined.
 | Literal colours | `DefColor` | 4 095 |
 | Bytecode chunks | `DefChunk` | 4 095 |
 
-Redefining an id is an error. Referencing an undefined id is an error. Tables
-clear only on `Mount`.
+Redefining an id is an error. Referencing an undefined id is an error. The
+tables outlive the tree: a `Mount` replaces the document and clears none of
+them, so a second page costs no second `DefAtom`.
+
+**Font roles** are the exception, and the shape of the exception says why.
+`DefFont` binds a role — one byte, `0`–`9` — to the faces that draw it, each
+named by its BLAKE3 hash and fetched as an asset. A role is not an id the
+server hands out: `0` and `1` already mean sans and mono before anything is
+said, and the rest are slots an application fills. So a role may be *re*bound,
+and rebinding it is a change of mind rather than an error; the client drops
+what it shaped under the old face. A style may name a role nothing bound, and
+the client draws it in sans rather than failing the session — a missing face
+never costs a page.
 
 ## The style record
 
@@ -97,6 +108,7 @@ the call stack.
 
 ```
 DefAtom  DefStyle  DefColor  DefChunk       definitions
+DefFont(role, faces)                        a font the application supplies
 Mount(subtree)                              replace everything
 Replace(node, subtree)
 SetStyle(node, style)

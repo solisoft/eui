@@ -126,6 +126,15 @@ carrying **seeds**, not palettes. Every colour in §1 is derived from them by
 | 5 | `font_sans` | asset hash, or absent for the client's built-in face | absent |
 | 6 | `font_mono` | asset hash, or absent | absent |
 
+`font_sans` and `font_mono` are the static form of a `DefFont` on font roles
+`0` and `1` ([`02-wire-format.md`](02-wire-format.md) §5.1): the face is an
+asset, fetched from the application's own origin and verified against its
+hash, and it replaces the client's own face for that session. A theme that
+names neither leaves both on the embedded faces. An application that wants
+more than two faces names them per style with a font role instead, and a
+`DefFont` binds each; the two mechanisms bind the same table, so the last to
+arrive wins.
+
 `L` and `C` are clamped to `[0, 1]` and `[0, 0.4]`; `h` is taken modulo 360.
 Status hues are fixed by the protocol, not the theme: `success 145`,
 `warning 80`, `danger 25`, `info 250`. A theme cannot make danger green.

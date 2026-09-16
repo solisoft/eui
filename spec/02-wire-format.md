@@ -87,7 +87,7 @@ resolution against a parent.
 | 47 | 1 | `radius` | `radius` scale index |
 | 48 | 1 | `shadow` | `shadow` scale index |
 | 49 | 1 | `opacity` | 0–255, 255 = opaque |
-| 50 | 1 | `font_family` | 0 `sans`, 1 `mono`, 2+ granted font roles |
+| 50 | 1 | `font_family` | 0 `sans`, 1 `mono`, 2..9 an application font role (§5, `DefFont`) |
 | 51 | 1 | `font_size` | `text` scale index; the default record carries `2`, `base` |
 | 52 | 1 | `font_weight` | 0 `regular`, 1 `medium`, 2 `semibold`, 3 `bold` |
 | 53 | 1 | `text_align` | 0 `start`, 1 `center`, 2 `end`, 3 `justify` |
@@ -181,10 +181,21 @@ been removed.
 | `0x11` | `scene` |
 
 This set is closed. Adding a kind is a protocol version bump, because it means
-shipping a new client. `0x11` is why this protocol is at version 2: a client
+shipping a new client. `0x11` took this protocol to version 2: a client
 that knows only version 1 meets it as a decode error and ends the session,
 which is the deliberate price and the reason an application that asked for
-`scene` raises the floor its manifest advertises (01 §2.1). Everything users would call a widget — button, dialog,
+`scene` raises the floor its manifest advertises (01 §2.1). An event kind is
+the same bargain read from the other end — a client that does not know
+`0x20` `level` (03 §7, 06 §1) fails the same way on the handler that names
+it — and that took the protocol to **version 3**. An op is the same bargain
+again: `0x15` `DefFont` and the font roles it binds (§5.1) took it to
+**version 4**. The three are paid for differently, though: a kind is refused
+at the handshake through the manifest's floor, while an event is left out at
+encode time, because a capability is declared before anything renders and a
+handler is a key in a view that has not run yet. A font role is both — an
+application that declares one at boot raises its floor, and one that
+declares a face mid-session falls back to `sans` for the sessions already
+open rather than ending them. Everything users would call a widget — button, dialog,
 table, date picker — is composed from these on the server; see
 [`03-widgets.md`](03-widgets.md).
 
@@ -263,6 +274,7 @@ Op    := opcode:u8  payload
 | `0x12` | `DefColor` | `id:varint rgba:u32` |
 | `0x13` | `DefChunk` | `id:varint hash:32×u8` — fetched as an asset |
 | `0x14` | `DefChunkBytes` | `id:varint bytes:bytes` — inline, ≤ 64 KiB ([`07-bytecode.md`](07-bytecode.md)) |
+| `0x15` | `DefFont` | `role:u8 count:varint count × 32×u8` — bind a font role to its faces, fetched as assets |
 | `0x20` | `Mount` | `root:Node` — replaces the whole tree; tables persist |
 | `0x21` | `Replace` | `node:varint subtree:Node` |
 | `0x22` | `SetStyle` | `node:varint style:varint` |
@@ -288,6 +300,36 @@ thousand-row table is *n* moves, not a rebuild. A server SHOULD emit
 `MoveChild` whenever the keys of a child list are a permutation of the previous
 keys.
 
+### 5.1 Font roles
+
+`DefFont` binds a `font_family` role to the faces that draw it. `role` MUST be
+at most `9`; `count` MUST be at least 1 and at most 8. Each face is the BLAKE3
+hash of an asset, fetched and verified like any other
+([`01-transport.md`](01-transport.md) §2.2); `font_weight` selects among the
+faces of a role, and nothing else does.
+
+Roles `0` and `1` are `sans` and `mono`, and the client MUST have faces for
+them before any op arrives. A `DefFont` on `0` or `1` replaces the client's
+own face **for that session only** — which is what a theme's `font_sans`
+asset means ([`05-theme.md`](05-theme.md) §3). Roles `2..9` begin bound to
+nothing.
+
+Unlike the other definition tables a role MAY be bound again: a role is a
+slot the protocol already names, not an id a server hands out, so rebinding
+is a change of mind rather than a redefinition. A client MUST discard what it
+shaped under the old binding.
+
+A style MAY name a role no `DefFont` bound, and a client MUST NOT fail the
+session for it: it draws the run in `sans` and carries on. The same applies
+to a role whose faces have not arrived yet, or whose bytes the client could
+not read as a face. **Text is never not drawn because a font is missing** —
+the only thing a server can do by naming a face badly is choose the wrong
+typography for its own application.
+
+A client MUST NOT resolve a face by name, by URL, or from the machine it runs
+on. The faces a session shapes with are exactly the embedded ones and the
+assets its own origin served ([`08-security.md`](08-security.md) §8).
+
 ## 6. Limits
 
 A conforming client MUST enforce all of these and MUST fail the session, not
@@ -304,6 +346,8 @@ truncate, when one is exceeded.
 | `MAX_STYLES` | 65 535 |
 | `MAX_COLORS` | 4 095 |
 | `MAX_CHUNKS` | 4 095 |
+| `MAX_FONT_ROLE` | 9 (roles `0`–`9`) |
+| `MAX_FACES_PER_ROLE` | 8 |
 | `MAX_CHILDREN` | 65 535 per node |
 | `MAX_PROPS` | 64 per node |
 | `MAX_HANDLERS` | 16 per node |

@@ -72,6 +72,14 @@ statics rather than `.bss`), the four embedded faces (1.33 MB of
 `.rodata`), and the shader translator wgpu needs at runtime (naga, 876 KB
 of `.text`).
 
+A face an application supplies (02 §5.1) does not move this line at all: it
+is an asset, it travels once per session and lives in the asset budget of 01
+§2.2, and it is not in the binary. The lever it offers points the other way
+— a client that could rely on the application to send a face would need
+fewer of its own — but that is not a trade this version makes: the embedded
+faces are what makes an application that asks for nothing still draw, and
+what makes the same text shape the same way on every machine.
+
 ### Scenes — measured where it can be, named where it cannot
 
 A `scene` (03 §1.2) is the one node that can ask the client for an unbounded

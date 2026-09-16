@@ -16,6 +16,11 @@
 examples/demo-app/public/covers/
 # Pictures fetched from x.com for the feed, cached as PNG the same way.
 examples/demo-app/public/x/
+# Faces fetched from a font service at boot, named by weight and kept as a
+# cache: the same shape as the two above, and the reason is the same one
+# over again — a file the server downloaded is not a file the repository
+# wrote. It also keeps somebody else's licence out of this tree.
+examples/demo-app/public/fonts/
 # What the tracker's Play button mixes: generated, never committed.
 examples/demo-app/public/tracker/
 # What somebody attached in Atrium, and the thumbnails made from it. These

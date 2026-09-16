@@ -1477,8 +1477,14 @@ impl Driver {
     /// belongs to the window rather than to the session — the theme, the
     /// viewer, the atlases, and assets, which are named by their content
     /// and so are the same bytes in any session.
+    ///
+    /// A font role is the session's: the application said what `sans` means
+    /// here, and when the session goes the client's own face comes back.
+    /// The faces already loaded stay in the shaper, because they are assets
+    /// too and re-reading bytes the process still holds buys nothing.
     fn start_over(&mut self) {
         self.session = Session::new();
+        self.text.clear_roles();
         self.layout = Layout::new();
         self.focused = None;
         self.focus_visible = false;
@@ -2373,9 +2379,17 @@ impl Driver {
     // -------------------------------------------------------------- assets
 
     /// Hashes the tree needs and the client has not fetched: images'
-    /// `src` props and chunks defined by hash. The caller fetches them from
-    /// the session's origin and calls [`Self::asset_ready`].
+    /// `src` props, font roles' faces, and chunks defined by hash. The caller
+    /// fetches them from the session's origin and calls [`Self::asset_ready`].
     pub fn pending_assets(&mut self) -> Vec<Hash> {
+        // A font role's faces come from the session's tables rather than
+        // from the tree: a role is bound once and used by however many
+        // styles, and a face nothing happens to reference this frame is
+        // still the face the next frame draws in.
+        let faces: Vec<Hash> = self.session.fonts().flat_map(|(_, faces)| faces.iter().copied()).collect();
+        for h in faces {
+            self.assets.want(h);
+        }
         // What the grant actually guards is **a program the server wrote**,
         // not the node kind (08 §4). A scene that names no `shader` draws
         // with the client's own module, so nothing third-party is compiled
@@ -2436,6 +2450,7 @@ impl Driver {
             }
         }
         self.assets.deliver(hash, bytes);
+        self.load_font(hash);
         // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
         self.video_dirty = true;
@@ -2454,6 +2469,47 @@ impl Driver {
         self.layout.invalidate_all();
         self.paint_cache.clear();
         self.invalidate();
+    }
+
+    /// If this hash is a face some role is waiting on, read it and bind the
+    /// role to the family it calls itself.
+    ///
+    /// The face is parsed here, in the worker, under the same seccomp and
+    /// Landlock the tree is: a font file is a table of offsets a server
+    /// chose, and it meets the parser where a parser taken over reaches
+    /// nothing (08 §10). The bytes are shared with the asset store rather
+    /// than copied — a face is most of a megabyte and there is no reason to
+    /// hold it twice.
+    ///
+    /// A face the shaper cannot read fails the hash rather than the session:
+    /// the role stays unbound, the text draws in sans, and the reason is
+    /// kept for the log. That is the same answer a picture that will not
+    /// decode gets, and for the same reason — a server does not get to
+    /// blank a page by sending nonsense.
+    fn load_font(&mut self, hash: Hash) {
+        let roles: Vec<u8> = self.session.fonts().filter(|(_, faces)| faces.contains(&hash)).map(|(role, _)| role).collect();
+        if roles.is_empty() {
+            return;
+        }
+        let Some(bytes) = self.assets.raw(&hash) else { return };
+        if !crate::assets::looks_like_font(&bytes) {
+            self.assets.fail(hash, "not a font face this client reads".to_owned());
+            return;
+        }
+        match self.text.add_font(bytes as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>) {
+            // `bind_role` drops what the engine shaped under the old
+            // binding; `asset_ready` relays out and clears the paint cache
+            // for every asset, this one included, so the page is measured
+            // and painted again in the face that just arrived. The glyph
+            // atlas needs no flush: a `GlyphKey` carries the face's own id,
+            // and a face just loaded has one nothing else holds.
+            Some(family) => {
+                for role in roles {
+                    self.text.bind_role(role, &family);
+                }
+            }
+            None => self.assets.fail(hash, "font face could not be read".to_owned()),
+        }
     }
 
     /// The scene assets checked since the last call, for the window to
@@ -6157,7 +6213,11 @@ impl Driver {
         ops.push(Op::Mount(tree));
         // A fresh session, as `show_stopped` does: the ids below are this
         // client's and must not collide with any a server has defined.
+        // The faces go back to the client's own with it: a question about
+        // what an application may do is the client speaking, and it is not
+        // typeset by the application it is asking about.
         self.session = Session::new();
+        self.text.clear_roles();
         self.focused = None;
         self.pointer = Pointer::default();
         if self.session.apply(&Batch { seq: 1, ops }).is_err() {
@@ -6204,6 +6264,10 @@ impl Driver {
         self.scroll_anim = None;
         self.next_due = None;
         self.session = Session::new();
+        // Why the session stopped is the client's sentence, in the client's
+        // face — an application does not get to set the type of its own
+        // error message.
+        self.text.clear_roles();
         let role = |r: eui_theme::Role| ColorRef::role(r.id());
         let page = StyleRecord {
             display: Display::Column,

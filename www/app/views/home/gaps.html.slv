@@ -67,6 +67,7 @@
                     <tr><td>split panes</td><td>Draggable dividers on both axes, keyboard-movable, panels sized in px</td><td class="yes">built</td></tr>
                     <tr><td>virtualised lists</td><td>Windowed, with heights the tree does not hold</td><td class="yes">built</td></tr>
                     <tr><td>light / dark / palette</td><td>Resolved from roles, contrast by construction, follows the desktop</td><td class="yes">built</td></tr>
+                    <tr><td>application typefaces</td><td>A <code>DefFont</code> binds a font role to faces the application serves as content-addressed assets; sans and mono can be replaced. No WOFF2, no variable axes</td><td class="part">partial</td></tr>
                     <tr><td>input methods</td><td>Preedit anchored to the field, commit as one <code>text_input</code></td><td class="yes">built</td></tr>
                 </tbody>
             </table>

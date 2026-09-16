@@ -154,3 +154,24 @@ fn color_ref_encoding() {
     assert!(ColorRef::literal(3).is_literal());
     assert_eq!(ColorRef::literal(3).index(), 3);
 }
+
+/// `DefFont`, byte for byte: opcode, role, face count, then the hashes back
+/// to back. 02 §5.1 — the shape a conforming decoder has to agree with, and
+/// the reason a role is a plain `u8` rather than a varint id: there are ten
+/// of them and there will not be more.
+#[test]
+fn def_font_bytes() {
+    let mut w = Writer::new();
+    Op::DefFont { role: 2, faces: vec![[0xAA; 32], [0xBB; 32]] }.encode(&mut w);
+    let body = w.into_vec();
+    assert_eq!(body.len(), 1 + 1 + 1 + 64, "opcode, role, count, two hashes");
+    assert_eq!(&body[0..3], &[0x15, 0x02, 0x02]);
+    assert!(body[3..35].iter().all(|b| *b == 0xAA));
+    assert!(body[35..67].iter().all(|b| *b == 0xBB));
+
+    // Replacing `sans` is the same op on role 0 — a theme's `font_sans`
+    // asset (05 §3) and a font role are one mechanism, not two.
+    let mut w = Writer::new();
+    Op::DefFont { role: 0, faces: vec![[7; 32]] }.encode(&mut w);
+    assert_eq!(&w.as_slice()[0..3], &[0x15, 0x00, 0x01]);
+}

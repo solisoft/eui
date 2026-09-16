@@ -182,10 +182,30 @@ has forgotten a session cannot be made to act on a tree it no longer has.
 
 ## 8. Privacy
 
-No user-agent, no font enumeration (the client shapes with embedded faces
-only — *enforced: `eui-text::TextEngine::new`*), no canvas readback, no
-device identifier, no third-party connection. The fingerprinting surface is
-the viewport frame, and that is a testable claim.
+No user-agent, no font enumeration, no canvas readback, no device
+identifier, no third-party connection. The fingerprinting surface is the
+viewport frame, and that is a testable claim.
+
+An application MAY supply a face (02 §5.1, 05 §3), and none of the above
+softens to let it:
+
+- the face is an **asset**, named by its content and fetched from the
+  session's own origin like every other byte a server chose — *enforced:
+  `eui-client::assets::origin_for` derives the origin from the session URL
+  and nothing else can name a host*. A face hosted by a third party is
+  fetched **by the server**, once, and re-served from the application's
+  origin; the viewer's address never reaches it;
+- the client still never asks the machine what fonts it has — *enforced:
+  `eui-text::TextEngine::new` builds its database by hand rather than
+  through `FontSystem::new_with_fonts`*. A session's faces are exactly the
+  embedded ones plus the assets it was sent, so the same text shapes the
+  same way on every machine;
+- the face is parsed in the confined worker, under the same seccomp and
+  Landlock as the tree (§10). A font file is a table of offsets a server
+  chose, and it meets the parser where a parser taken over reaches nothing;
+- bytes that are not a face the client reads are discarded rather than
+  displayed, and the role falls back to `sans`. **No font a server sends or
+  fails to send can stop text being drawn.**
 
 A `scene` (03 §1.2) does not widen it, and is built so that it cannot:
 

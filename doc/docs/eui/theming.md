@@ -67,6 +67,36 @@ then nudges every specified pair — body text on each surface at 7:1, muted
 text at 4.5:1, accents and borders at 3:1 — apart until it passes. A theme
 cannot fail contrast, because the algorithm does not have a failing path.
 
+## Typefaces
+
+A client ships two faces, `sans` and `mono`, and shapes with those and
+nothing else: it never asks the machine what fonts it has, and it never
+fetches one from a font service. An application that wants its own typeface
+*serves* it, like any other asset:
+
+```soli
+eui_font("Playfair Display", ["public/fonts/playfair-400.ttf",
+                              "public/fonts/playfair-700.ttf"])
+
+text("A heading", font: "Playfair Display", weight: :bold)
+```
+
+One face per weight — `weight` picks among the faces of a family — and at
+most eight per family, nine families beside sans and mono. The names `sans`
+and `mono` replace the client's own faces rather than taking a role of their
+own.
+
+The wire carries a role, one byte, and the faces travel as content-addressed
+assets: the window fetches them from its own origin and checks the bytes
+against their own name before the shaper sees them. So a face from Google
+Fonts is one the **server** downloaded, once, and re-served — `HTTP.download`
+behind a `File.exists` guard is the whole of it. The viewer's address never
+reaches the third party, which is the difference between this and a
+`@font-face` rule.
+
+Until a face arrives the role draws in `sans`, and so does a role whose bytes
+would not parse. A missing font is never why a page is blank.
+
 ## Literals, and when they are right
 
 A literal colour is available:

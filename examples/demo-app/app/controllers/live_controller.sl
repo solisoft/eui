@@ -3117,6 +3117,7 @@ def erp_settings_section(state, lay)
     [
       erp_company_card(state, lay),
       erp_preferences_card(state, lay),
+      erp_typography_card(state, lay),
       gallery_editor(state),
       erp_diagnostics_card(state, lay)
     ]
@@ -3223,6 +3224,73 @@ def erp_diagnostics_card(state, lay)
     [
       muted("The same photograph, encoded three ways. The client tells them apart by their first bytes; the server only ever sends a hash."),
       gallery_pictures(lay["wide"])
+    ]
+  )
+end
+
+# The faces this application draws in, each shown in the one it names.
+#
+# Two of them the client carries and every EUI window has; the other two the
+# server fetched from Google once and now serves from its own origin, named
+# by the BLAKE3 of their bytes (`app/services/google_fonts.sl`,
+# `config/routes.sl`). On the wire a font is one byte — a role — and the
+# faces travel as assets like a picture does, so nothing here talks to a
+# font service and nothing leaves the window (spec 02 §5.1, 08 §8).
+#
+# The weights are the second axis: one face per weight, and `"weight"`
+# picks among the faces of a role. A family that came back with one weight
+# only draws every row the same, which is the honest way to show that the
+# download did not happen.
+GALLERY_PANGRAM = "Sphinx of black quartz, judge my vow"
+
+# The four names, resolved every render rather than remembered.
+#
+# `google_font_here` never touches the network — a `File.exists` and a
+# re-declare that keeps the role the family already had — and it answers
+# `"sans"` when the faces are not on disk, so a server that booted without
+# a network draws this card in the faces it has instead of naming a font
+# nothing declared. The download, and with it the manifest's protocol floor,
+# belongs at boot: `config/routes.sl` calls the fetching form once.
+def gallery_faces()
+  ["sans", "mono", gallery_serif(), gallery_display()]
+end
+
+def gallery_serif()
+  google_font_here("Playfair Display", [400, 700])
+end
+
+def gallery_display()
+  google_font_here("Space Grotesk", [400, 700])
+end
+
+def erp_typography_card(state, lay)
+  faces = gallery_faces()
+  fetched = faces[2] != "sans" || faces[3] != "sans"
+  erp_card(
+    "Typefaces",
+    [muted(fetched ? "two the client carries, two the server fetched" : "the two the client carries")],
+    [
+      muted("A style names a font by role. Sans and mono are the client's own; the others the server downloaded once and serves by hash, so the window opens no connection of its own."),
+      column({"gap": 4, "width": "100%"}, faces.map(fn(face) { erp_typography_row(face, lay) }))
+    ]
+  )
+end
+
+def erp_typography_row(face, lay)
+  column(
+    {"gap": 1, "width": "100%"},
+    [
+      row(
+        {"gap": 2, "align": "baseline"},
+        [text(face, {"weight": "semibold", "size": 1}), muted(face == "sans" || face == "mono" ? "embedded" : "asset")]
+      ),
+      text(GALLERY_PANGRAM, {"font": face, "size": 4}),
+      row(
+        {"gap": 4, "wrap": "wrap"},
+        ["regular", "medium", "semibold", "bold"].map(fn(w) {
+          text(GALLERY_PANGRAM.substring(0, 12), {"font": face, "weight": w})
+        })
+      )
     ]
   )
 end

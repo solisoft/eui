@@ -116,7 +116,7 @@
                     <tr><td>pad · margin · border</td><td>edges</td></tr>
                     <tr><td>bg · fg · border_color</td><td>a colour</td></tr>
                     <tr><td>radius · shadow · opacity · z</td><td>0–255</td></tr>
-                    <tr><td>font</td><td>sans · mono</td></tr>
+                    <tr><td>font</td><td>sans · mono · a font the application declared</td></tr>
                     <tr><td>size</td><td>a text-scale index</td></tr>
                     <tr><td>weight</td><td>regular · medium · semibold · bold</td></tr>
                     <tr><td>text_align</td><td>start · center · end · justify</td></tr>

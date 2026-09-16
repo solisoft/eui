@@ -196,6 +196,34 @@ fn oversized_chunk_is_rejected() {
 }
 
 #[test]
+fn a_font_role_without_a_face_is_rejected() {
+    // A role bound to nothing is a style that names a face no op ever
+    // supplies: the session would hold a binding it can never honour.
+    assert_eq!(op_err(&[0x15, 0x02, 0x00]), E::IllegalValue("font faces"));
+}
+
+#[test]
+fn a_font_role_past_the_last_is_rejected() {
+    let mut w = Writer::new();
+    w.u8(0x15).u8(MAX_FONT_ROLE + 1).varint32(1).raw(&[0u8; HASH_BYTES]);
+    assert_eq!(op_err(w.as_slice()), E::LimitExceeded("font role"));
+}
+
+#[test]
+fn too_many_faces_on_one_role_is_rejected() {
+    let mut w = Writer::new();
+    w.u8(0x15).u8(2).varint32(MAX_FACES_PER_ROLE + 1);
+    assert_eq!(op_err(w.as_slice()), E::LimitExceeded("font faces"));
+}
+
+#[test]
+fn a_truncated_face_hash_is_rejected() {
+    let mut w = Writer::new();
+    w.u8(0x15).u8(2).varint32(2).raw(&[7u8; HASH_BYTES]).raw(&[7u8; 8]);
+    assert_eq!(op_err(w.as_slice()), E::Truncated);
+}
+
+#[test]
 fn oversized_atom_value_is_rejected() {
     let mut w = Writer::new();
     w.u8(0x10).varint32(1).varint((MAX_ATOM_BYTES + 1) as u64);
@@ -366,12 +394,27 @@ fn unknown_style_enums_are_rejected() {
     assert_eq!(style_with(2, &[6]), E::UnknownTag("justify"));
     assert_eq!(style_with(3, &[5]), E::UnknownTag("align_items"));
     assert_eq!(style_with(4, &[6]), E::UnknownTag("align_self"));
-    assert_eq!(style_with(50, &[2]), E::UnknownTag("font_family"));
     assert_eq!(style_with(52, &[4]), E::UnknownTag("font_weight"));
     assert_eq!(style_with(53, &[4]), E::UnknownTag("text_align"));
     assert_eq!(style_with(56, &[3]), E::UnknownTag("overflow"));
     assert_eq!(style_with(57, &[3]), E::UnknownTag("position"));
     assert_eq!(style_with(59, &[9]), E::UnknownTag("cursor"));
+}
+
+/// `font_family` is the one style byte with an open half: `2..=255` are the
+/// application's font roles (02 §5), so a byte the client does not recognise
+/// is a role it has not been told about, not a malformed record. The tree
+/// checks the binding; the text engine falls back to sans for a role that
+/// has none.
+#[test]
+fn a_font_role_is_not_an_unknown_tag() {
+    let mut raw = style_bytes();
+    raw[50] = 2;
+    let record = StyleRecord::decode(&mut Reader::new(&raw)).expect("a font role is a legal byte");
+    assert_eq!(record.font_family, eui_proto::FontFamily::Role(2));
+    raw[50] = 255;
+    let record = StyleRecord::decode(&mut Reader::new(&raw)).expect("a font role is a legal byte");
+    assert_eq!(record.font_family, eui_proto::FontFamily::Role(255));
 }
 
 #[test]

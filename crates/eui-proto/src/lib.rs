@@ -99,7 +99,15 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
+// 4 carries `DefFont` (02 §5) and the open half of `font_family`: roles
+// `2..` are the application's faces. Both are a version for the same reason
+// the `scene` kind was — a client at 3 meets opcode `0x15` as an unknown
+// opcode and a style byte of `2` as an unknown tag, and ends the session
+// rather than drawing a page in the wrong face. A server advertises 1-4 and
+// asks for a *minimum* of 4 only from the applications that declare a font
+// role; every other application keeps the clients it had.
+//
 // 3 carries `EventKind::Level` (03 §7), which `soli` gates on it.
 //
 // Safe to move now, and it was not this morning: the client's manifest

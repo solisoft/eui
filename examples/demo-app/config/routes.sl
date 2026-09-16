@@ -55,3 +55,15 @@ get("/x/callback", "x#callback")
 # `fs.pick` is Atrium's: without it the attach button opens no dialog at all,
 # and there is no diagnostic the application can see (03 §3.2).
 eui_capabilities("clipboard.read", "fs.pick", "camera", "microphone", "location", "nfc", "scene")
+
+# Two faces from Google Fonts, fetched *here* — by the server, at boot, once
+# per deploy — and served from this application's own origin by content hash.
+# The window never talks to a font service: that is spec 08 §8's "no
+# third-party connection", and it stays true because the third party is the
+# server's business and not the viewer's (`app/services/google_fonts.sl`).
+#
+# Declaring a font raises what the manifest asks of a client to EUI 4, since
+# `DefFont` and a font role are both decode errors below it — so this belongs
+# at boot, before a manifest is signed, and not inside a view.
+google_font("Playfair Display", [400, 700])
+google_font("Space Grotesk", [400, 700])

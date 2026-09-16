@@ -302,3 +302,101 @@ fn a_clamp_of_one_does_not_grow_for_a_trailing_newline() {
     assert_eq!(e.shape("abc\n", base(), None, 1).metrics.lines, 1);
     assert_eq!(e.shape("abc\n", base(), None, 2).metrics.lines, 2);
 }
+
+// ------------------------------------------------------------- font roles
+//
+// 02 §5: a `DefFont` binds a role to faces the application supplies. The
+// engine's half of that is three things — read a face, name it, draw a role
+// in it — and the fourth is what happens when any of them fails.
+
+/// The face used here is one of the client's own, read back from disk. The
+/// point is not which face it is: it is that bytes handed to `add_font` are
+/// parsed, named, and bound, the same way an asset's would be.
+fn a_face() -> std::sync::Arc<dyn AsRef<[u8]> + Send + Sync> {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/fonts/NotoSansSymbols-Regular.ttf")).expect("the embedded face is on disk too");
+    std::sync::Arc::new(bytes)
+}
+
+#[test]
+fn a_loaded_face_says_what_family_it_is() {
+    let mut t = TextEngine::new();
+    assert_eq!(t.add_font(a_face()).as_deref(), Some("Noto Sans Symbols"));
+    assert_eq!(t.face_count(), 5, "the four embedded, and the one just read");
+}
+
+#[test]
+fn bytes_that_are_not_a_face_are_refused() {
+    let mut t = TextEngine::new();
+    assert_eq!(t.add_font(std::sync::Arc::new(b"not a font, not even close".to_vec())), None);
+    assert_eq!(t.face_count(), 4, "nothing was loaded");
+}
+
+#[test]
+fn an_unbound_role_falls_back_to_sans() {
+    let mut t = TextEngine::new();
+    let sans = t.shape("Hamburgefonstiv", base(), None, 0).metrics.width;
+    let role = FontSpec { family: FontFamily::Role(4), ..base() };
+    assert_eq!(t.role_family(4), None, "nothing bound role 4");
+    assert_eq!(t.shape("Hamburgefonstiv", role, None, 0).metrics.width, sans, "an unbound role draws in sans, not in nothing");
+}
+
+#[test]
+fn a_bound_role_draws_in_its_own_face() {
+    let mut t = TextEngine::new();
+    let role = FontSpec { family: FontFamily::Role(2), ..base() };
+    let before = t.shape("♥★✓", role, None, 0).metrics.width;
+    let family = t.add_font(a_face()).unwrap();
+    t.bind_role(2, &family);
+    assert_eq!(t.role_family(2), Some("Noto Sans Symbols"));
+    let after = t.shape("♥★✓", role, None, 0).metrics.width;
+    // Sans reaches the symbols face by fallback and the role reaches it
+    // first; what must differ is the *sans* run, which now has a face of
+    // its own for the Latin text a symbol face does not carry.
+    let latin_sans = t.shape("Hamburgefonstiv", base(), None, 0).metrics.width;
+    let latin_role = t.shape("Hamburgefonstiv", role, None, 0).metrics.width;
+    assert!(after > 0.0 && before > 0.0);
+    assert_ne!(latin_sans, latin_role, "the role is shaped in the face bound to it, not in sans");
+}
+
+/// A shape is keyed by the role, not by the face. Rebinding the role must
+/// therefore throw away what was shaped under the old meaning, or the cache
+/// answers with glyphs from a face nothing draws in any more.
+#[test]
+fn rebinding_a_role_drops_what_was_shaped_under_it() {
+    let mut t = TextEngine::new();
+    let role = FontSpec { family: FontFamily::Role(3), ..base() };
+    let fallback = t.shape("Hamburgefonstiv", role, None, 0).metrics.width;
+    let family = t.add_font(a_face()).unwrap();
+    t.bind_role(3, &family);
+    assert_ne!(t.shape("Hamburgefonstiv", role, None, 0).metrics.width, fallback);
+}
+
+/// Binding a role to the family it already holds changes nothing, so it must
+/// not cost the cache: a client that re-binds on every face of a family
+/// would otherwise re-shape the page once per weight.
+#[test]
+fn rebinding_a_role_to_what_it_already_holds_keeps_the_cache() {
+    let mut t = TextEngine::new();
+    t.shape("Hello", base(), None, 0);
+    let filled = t.stats();
+    t.bind_role(0, "Inter");
+    t.shape("Hello", base(), None, 0);
+    assert_eq!(t.stats().misses, filled.misses, "nothing was re-shaped");
+    assert!(t.stats().hits > filled.hits, "and the run came from the cache");
+}
+
+/// Sans and mono are roles like any other, so an application may replace
+/// them — and when the session ends the client's own faces come back.
+#[test]
+fn sans_can_be_replaced_and_restored() {
+    let mut t = TextEngine::new();
+    let sans = t.shape("Hamburgefonstiv", base(), None, 0).metrics.width;
+    let family = t.add_font(a_face()).unwrap();
+    t.bind_role(0, &family);
+    assert_eq!(t.role_family(0), Some("Noto Sans Symbols"));
+    assert_ne!(t.shape("Hamburgefonstiv", base(), None, 0).metrics.width, sans);
+    t.clear_roles();
+    assert_eq!(t.role_family(0), Some("Inter"));
+    assert_eq!(t.role_family(1), Some("JetBrains Mono"));
+    assert_eq!(t.shape("Hamburgefonstiv", base(), None, 0).metrics.width, sans);
+}

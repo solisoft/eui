@@ -6,9 +6,11 @@
 //! of text that must not be reinvented, and everything around it here is
 //! ours.
 //!
-//! - Two faces are embedded — Titillium Web (regular, bold) and JetBrains
-//!   Mono — so a session never requests a font. A theme MAY name others by
-//!   asset hash; loading them is the client's job, through [`TextEngine::add_font`].
+//! - Four faces are embedded — Inter (regular, bold), JetBrains Mono, and
+//!   Noto Sans Symbols behind them — so a session that asks for nothing
+//!   still draws. An application MAY name others: a `DefFont` op binds a
+//!   font role to faces named by asset hash, and the client loads them here
+//!   through [`TextEngine::add_font`] and [`TextEngine::bind_role`].
 //! - [`TextEngine`] implements [`eui_layout::TextMeasurer`], with a bounded
 //!   cache keyed by `(text, font, width, clamp)`: layout measures the same
 //!   run under several constraints per frame, and shaping it once is the
@@ -27,7 +29,7 @@ use std::sync::Arc;
 
 use cosmic_text::{fontdb, Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent, Weight};
 use eui_layout::{FontSpec, TextMeasurer, TextMetrics};
-use eui_proto::{FontFamily, FontWeight};
+use eui_proto::FontWeight;
 
 const INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
 const INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
@@ -38,6 +40,12 @@ const NOTO_SYMBOLS: &[u8] = include_bytes!("../fonts/NotoSansSymbols-Regular.ttf
 
 const SANS_FAMILY: &str = "Inter";
 const MONO_FAMILY: &str = "JetBrains Mono";
+
+/// The role a face is drawn in when the one a style names has no binding —
+/// an application's face that has not arrived yet, or one whose bytes were
+/// refused. Text drawn in the wrong face is a typographic complaint; text
+/// not drawn at all is a broken page, so the fallback is never nothing.
+const FALLBACK_FAMILY: &str = SANS_FAMILY;
 
 /// How many shaped runs to keep before evicting the oldest.
 /// How many shaped runs to keep. Sized to hold a page's working set rather
@@ -221,6 +229,10 @@ pub struct TextEngine {
     /// gets in that font, probed once rather than once per empty field
     /// per width.
     probes: HashMap<(u8, u8, u32, u32), Option<f32>>,
+    /// Font role to family name. Roles `0` and `1` start on the embedded
+    /// faces and an application may rebind them; `2..` are the
+    /// application's own and start bound to nothing.
+    roles: HashMap<u8, Arc<str>>,
     stats: Stats,
 }
 
@@ -251,15 +263,77 @@ impl TextEngine {
             db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
         }
         let fonts = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
-        Self { fonts, swash: SwashCache::new(), cache: HashMap::new(), order: VecDeque::new(), probes: HashMap::new(), stats: Stats::default() }
+        let roles = HashMap::from([(0u8, Arc::from(SANS_FAMILY)), (1u8, Arc::from(MONO_FAMILY))]);
+        Self { fonts, swash: SwashCache::new(), cache: HashMap::new(), order: VecDeque::new(), probes: HashMap::new(), roles, stats: Stats::default() }
     }
 
-    /// Load an additional face from bytes (a theme's `font_sans` asset, once
-    /// verified against its hash). Later faces take priority for their family.
-    pub fn add_font(&mut self, bytes: Vec<u8>) {
-        self.fonts.db_mut().load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
+    /// Load an additional face from bytes — an application's font asset, once
+    /// verified against its hash — and answer the family it calls itself.
+    ///
+    /// The name comes out of the face's own `name` table, because that is
+    /// what shaping will match on: `bind_role` takes it and a role, and the
+    /// two together are the whole of "this application draws headings in
+    /// Playfair Display". `None` when the bytes are not a face this build can
+    /// read, which is where a hostile or truncated asset stops — the caller
+    /// fails the hash rather than binding a role to nothing.
+    ///
+    /// Later faces take priority for their family, so a second face with a
+    /// family already loaded shadows the first for this session.
+    ///
+    /// The bytes arrive behind an `Arc` because that is how the asset store
+    /// already holds them: a face is most of a megabyte, and the shaper and
+    /// the store share the one allocation rather than each keeping a copy.
+    pub fn add_font(&mut self, bytes: Arc<dyn AsRef<[u8]> + Send + Sync>) -> Option<String> {
+        let db = self.fonts.db_mut();
+        // `load_font_source` answers the ids it added -- a collection file
+        // holds several faces -- and says nothing when the bytes parse as no
+        // face at all. The first is the one whose name is taken: a `.ttc` is
+        // one family in practice, and a caller that wants more than a name
+        // wants a second asset, not a second face hidden in the first.
+        let added = db.load_font_source(fontdb::Source::Binary(bytes));
+        let family = added.first().and_then(|id| db.face(*id)).and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+        self.forget();
+        family
+    }
+
+    /// Draw `role` in `family` from here on.
+    ///
+    /// Roles `0` and `1` are `sans` and `mono`; rebinding one replaces the
+    /// embedded face for this session, which is what a theme's `font_sans`
+    /// asset means (05 §3). Nothing verifies that a face by that name is
+    /// loaded: one that is not falls back like a role that was never bound,
+    /// and the text is drawn.
+    pub fn bind_role(&mut self, role: u8, family: &str) {
+        if self.roles.get(&role).is_some_and(|held| &**held == family) {
+            return;
+        }
+        self.roles.insert(role, Arc::from(family));
+        self.forget();
+    }
+
+    /// Unbind every application role and put `sans` and `mono` back on the
+    /// embedded faces. The faces themselves stay in the database — they are
+    /// content-addressed, so the session that loaded them may name them
+    /// again, and re-parsing bytes it already has buys nothing.
+    pub fn clear_roles(&mut self) {
+        self.roles.clear();
+        self.roles.insert(0, Arc::from(SANS_FAMILY));
+        self.roles.insert(1, Arc::from(MONO_FAMILY));
+        self.forget();
+    }
+
+    /// The family a role draws in, or `None` for one nothing has bound.
+    pub fn role_family(&self, role: u8) -> Option<&str> {
+        self.roles.get(&role).map(|f| &**f)
+    }
+
+    /// Drop everything shaped under the old face set. A shape is keyed by
+    /// the *role*, not the face, so a role that changed meaning would
+    /// otherwise be served the old glyphs out of the cache.
+    fn forget(&mut self) {
         self.cache.clear();
         self.order.clear();
+        self.probes.clear();
     }
 
     /// Cache statistics.
@@ -358,17 +432,17 @@ impl TextEngine {
         let size = if font.size.is_finite() && font.size > 0.0 { font.size } else { 1.0 };
         let line_height = if font.line_height.is_finite() && font.line_height > 0.0 { font.line_height } else { size };
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
-        let family = match font.family {
-            FontFamily::Sans => SANS_FAMILY,
-            FontFamily::Mono => MONO_FAMILY,
-        };
+        // Cloned out of the table before the font system is borrowed: an
+        // `Attrs` holds the name by reference for as long as the buffer is
+        // shaped, and the table lives behind the same `&mut self`.
+        let family: Arc<str> = self.roles.get(&font.family.to_u8()).cloned().unwrap_or_else(|| Arc::from(FALLBACK_FAMILY));
         let weight = match font.weight {
             FontWeight::Regular => Weight::NORMAL,
             FontWeight::Medium => Weight::MEDIUM,
             FontWeight::Semibold => Weight::SEMIBOLD,
             FontWeight::Bold => Weight::BOLD,
         };
-        let attrs = Attrs::new().family(Family::Name(family)).weight(weight);
+        let attrs = Attrs::new().family(Family::Name(&family)).weight(weight);
         // Layout re-measures a run at exactly the width it first reported; a
         // wrap at float equality would then split it. A hair of slack keeps
         // "measure, then lay out at that size" a fixed point.

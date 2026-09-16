@@ -34,9 +34,9 @@ them unchanged.
 
 | File | Pins |
 |---|---|
-| `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, every op |
+| `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, a `DefFont`, every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
-| `reject.rs` | 59 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth |
+| `reject.rs` | 63 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
 
@@ -49,9 +49,12 @@ before its resume flag.
 
 ## 3. Tree — `crates/eui-tree/tests`
 
-Tables never cleared; a batch that fails leaves the session poisoned until
-the next `Mount`; every reference (atom, style, chunk, node, key) validated
-before anything is placed; `MoveChild` indexes after removal.
+Tables never cleared — including by a `Mount`; a batch that fails leaves the
+session poisoned until the next `Mount`; every reference (atom, style, chunk,
+node, key) validated before anything is placed; `MoveChild` indexes after
+removal. Font roles are the one table that is not define-once: a role holds
+the faces bound to it, may be bound again, and one past the last is refused
+in the session as well as in the decoder.
 
 ## 4. Layout — `crates/eui-layout/tests/layout.rs`
 
@@ -59,6 +62,25 @@ Goldens against the fixed-pitch measurer (9 px per character, 22 px lines):
 flow, grow, shrink with the automatic minimum, wrap, justify, align, baseline,
 percent, stack (stretch on both axes, absolute layers), grid, scroll clamping,
 virtualised lists, display none, depth 255 within a 1 MiB stack.
+
+### 2.1 Font roles — `crates/eui-text/tests/shape.rs`, `crates/eui-client/tests/assets.rs`, `crates/eui-tree/tests/apply.rs`
+
+02 §5.1. `font_family` is the one style byte with an open half, so `2` is a
+*role* rather than an unknown tag and `reject.rs` pins that it decodes. The
+rest is the behaviour the section promises and the client owes:
+
+1. **A face is read and names itself** — `add_font` answers the family out of
+   the face's own tables, and refuses bytes that are not a face at all.
+2. **A role draws in the face bound to it**, and rebinding a role throws away
+   what was shaped under the old binding. Rebinding a role to the family it
+   already holds costs the cache nothing.
+3. **Sans and mono are roles**: an application may replace either, and when
+   the session ends the client's own faces come back.
+4. **A missing face never costs a page.** A role no `DefFont` bound, a role
+   whose asset has not arrived, and a role whose bytes would not parse all
+   draw in `sans`, and the session stands in all three.
+5. **The faces are asked for from the session**, not from the tree: a role's
+   hashes are wanted because a `DefFont` bound them, and asked for once.
 
 ## 5. Theme — `crates/eui-theme/tests`
 

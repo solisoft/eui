@@ -73,6 +73,8 @@ pub enum ApplyError {
     TooDeep,
     /// A `text`, `props`, or `handlers` change on a kind that refuses it.
     InertNode(u32),
+    /// `DefFont` named a role past the last the protocol defines (02 §5).
+    UnknownFontRole(u8),
     /// A node would carry more props than the protocol allows.
     TooManyProps(u32),
     /// A node would carry more handlers than the protocol allows.
@@ -108,6 +110,7 @@ impl fmt::Display for ApplyError {
             Self::TooManyNodes => f.write_str("node limit exceeded"),
             Self::TooDeep => f.write_str("tree depth limit exceeded"),
             Self::InertNode(id) => write!(f, "node {id} is inert and carries no content"),
+            Self::UnknownFontRole(role) => write!(f, "font role {role} is past the last the protocol defines"),
             Self::TooManyProps(id) => write!(f, "node {id} exceeds the props limit"),
             Self::TooManyHandlers(id) => write!(f, "node {id} exceeds the handlers limit"),
             Self::OutOfOrder { last, got } => write!(f, "batch {got} after batch {last}"),
