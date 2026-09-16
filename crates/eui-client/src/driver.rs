@@ -2007,7 +2007,13 @@ impl Driver {
     /// other line in this file already expects it to come from.
     pub fn tick(&mut self, now: Instant) -> bool {
         self.now = now;
-        match [self.next_due, self.viewport_due].into_iter().flatten().min() {
+        // The same set `next_frame_at` names, and it has to be: that one
+        // decides when the loop wakes, this one decides whether the wake
+        // becomes a frame. Adding the audio report to the first and not the
+        // second bought a wake-up that did nothing — the loop came back on
+        // time, asked for no redraw, and the meter stayed exactly as still
+        // as before. Two lists that must agree are one list.
+        match self.due_at(now) {
             Some(due) if now >= due => {
                 self.redraw = true;
                 if self.next_due.is_some_and(|d| now >= d) {
@@ -2034,15 +2040,30 @@ impl Driver {
         // It costs four wake-ups a second, and only while something plays:
         // `audio_due` is `None` the moment the mixer and the players are
         // empty, which is every window that is not playing anything.
-        [self.next_due, self.viewport_due, self.audio_due()].into_iter().flatten().min()
+        self.due_at(self.now)
     }
 
-    /// When the next audio or video report is due, if anything is playing.
-    fn audio_due(&self) -> Option<Instant> {
-        if self.mixer.is_empty() && self.players.is_empty() {
+    /// Everything that owes this window a frame, soonest first.
+    ///
+    /// `now` rather than the clock so `tick` and `next_frame_at` answer the
+    /// same question from the same instant.
+    fn due_at(&self, now: Instant) -> Option<Instant> {
+        [self.next_due, self.viewport_due, self.audio_due(now)].into_iter().flatten().min()
+    }
+
+    /// When the next sound report is due, if anything is loaded.
+    ///
+    /// The mixer only. A video schedules a frame of its own for every frame
+    /// it has, so its position report rides on a paint that was going to
+    /// happen anyway — and saying a report is due *now* on top of that
+    /// overwrote the frame's own delay with zero, which is the video's
+    /// cadence gone. Sound has no such clock: without this nothing asks for
+    /// the paint, which is what left the meters still.
+    fn audio_due(&self, now: Instant) -> Option<Instant> {
+        if self.mixer.is_empty() {
             return None;
         }
-        Some(self.audio_reported.map_or_else(Instant::now, |t| t + Duration::from_millis(250)))
+        Some(self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)))
     }
 
     /// True while any transition runs.

@@ -2450,6 +2450,13 @@ fn a_playing_sound_schedules_its_own_report() {
     let due = d.next_frame_at().expect("a playing sound asks the loop to come back");
     let ahead = due.saturating_duration_since(std::time::Instant::now());
     assert!(ahead <= std::time::Duration::from_millis(250), "the next report is more than a quarter second away: {ahead:?}");
+
+    // And the wake has to become a frame, which is the half that was
+    // missing: `tick` decides that, and it used to consult a different list
+    // from `next_frame_at`. The loop came back on time, asked for no redraw,
+    // and the meter stayed as still as it had been.
+    let later = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    assert!(d.tick(later), "the loop woke for the report and was told there was nothing to draw");
 }
 
 /// Spec 03 §7: an `audio` node names a sound, says what it should be
