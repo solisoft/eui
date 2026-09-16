@@ -25,14 +25,16 @@ sees; and the server learns nothing about the person using it.
 
 `space.0`–`space.12` · `radius.none/sm/md/lg/full` · `text.xs`–`text.4xl`,
 each pairing a size with a line height · `weight.regular/medium/semibold/bold` ·
-`shadow.sm/md/lg` · `motion.fast/base/slow` with their curves
+`shadow.sm/md/lg` · `motion.fast/base/slow/slower/slowest` with their curves
 
 A style's `shadow` index paints a soft black rectangle under the box — offset,
 blurred and weighted by the scale, drawn by the same quad pipeline as the box
 with a fade across the blur. A style's `transition` names a `motion` index:
 when a node's style changes to it, the client eases the background, foreground,
 border colour and opacity from the old values over that duration, along
-`cubic-bezier(0.2, 0, 0, 1)`. Layout never animates, the server never hears of
+`cubic-bezier(0.2, 0, 0, 1)`. The two slowest steps — 560 ms and a second —
+are for a thing *arriving* over a distance, where the duration reads against
+how far it travels; a control's hover still belongs at `fast`. Layout never animates, the server never hears of
 it, and the window wakes only while a transition runs — at rest it sleeps.
 
 ## The three viewer axes

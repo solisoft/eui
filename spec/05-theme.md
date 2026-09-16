@@ -84,8 +84,17 @@ The default `StyleRecord` carries `font_size = 2`, `base`.
 **`shadow`** (index 0–3), as `y offset, blur, opacity` of black:
 `none`, `sm 1 2 0.12`, `md 4 12 0.16`, `lg 12 32 0.24`
 
-**`motion`** (index 0–2), milliseconds: `fast 100`, `base 180`, `slow 320`,
-all with the easing curve `cubic-bezier(0.2, 0, 0, 1)`.
+**`motion`** (index 0–4), milliseconds: `fast 100`, `base 180`, `slow 320`,
+`slower 560`, `slowest 1000`, all with the easing curve
+`cubic-bezier(0.2, 0, 0, 1)`.
+
+The top of the scale is longer than any control should take, and that is
+deliberate: the two slowest steps are for something *arriving* over a
+distance, where the duration has to be read against how far the thing
+travels rather than against a person's patience. An entrance that moves a
+node its own height (03 §5.2) at `base` reads as a jump — the eye has no
+time to see a curve — and the same move at `slowest` reads as a glide. A
+control's hover still belongs at `fast`.
 
 A curve is evaluated as CSS evaluates one: it gives `y` for an `x`, `x` is
 the fraction of the duration elapsed, and solving `x` for the Bézier

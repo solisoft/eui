@@ -594,8 +594,8 @@ impl StyleRecord {
             blur: f.u8()?,
             motion: Motion::from_u8(f.u8()?)?,
         };
-        if out.transition > 3 {
-            return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 3"));
+        if out.transition > 5 {
+            return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 5"));
         }
         if out.animation & !ANIMATION_MASK != 0 {
             return Err(DecodeError::IllegalValue("animation is a bit set of 1 (spin), 2 (enter) and 4 (exit)"));

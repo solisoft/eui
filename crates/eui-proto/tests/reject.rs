@@ -424,7 +424,7 @@ fn unknown_text_decoration_bits_are_rejected() {
 
 #[test]
 fn a_transition_past_the_motion_scale_is_rejected() {
-    assert_eq!(style_with(60, &[4]), E::IllegalValue("transition is a motion index + 1, at most 3"));
+    assert_eq!(style_with(60, &[6]), E::IllegalValue("transition is a motion index + 1, at most 5"));
 }
 
 #[test]

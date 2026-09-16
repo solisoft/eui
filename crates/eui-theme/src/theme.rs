@@ -71,7 +71,7 @@ pub struct Resolved {
     /// Shadow scale, unchanged.
     pub shadow: [(f32, f32, f32); 4],
     /// Motion durations, ms.
-    pub motion: [u16; 3],
+    pub motion: [u16; 5],
     /// Control heights after density, whole px.
     pub control: [f32; 3],
     /// The mode these colours are for.

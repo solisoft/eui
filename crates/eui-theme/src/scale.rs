@@ -9,8 +9,9 @@ pub const TEXT: [(f32, f32); 8] = [(11.0, 16.0), (13.0, 18.0), (15.0, 22.0), (17
 /// `shadow` entries as `(y offset, blur, opacity)`, index 0–3.
 pub const SHADOW: [(f32, f32, f32); 4] = [(0.0, 0.0, 0.0), (1.0, 2.0, 0.12), (4.0, 12.0, 0.16), (12.0, 32.0, 0.24)];
 
-/// `motion` durations in ms, index 0–2.
-pub const MOTION: [u16; 3] = [100, 180, 320];
+/// `motion` durations in ms, index 0–4. The top two are for a thing
+/// arriving over a distance rather than a control changing state (05 §2).
+pub const MOTION: [u16; 5] = [100, 180, 320, 560, 1000];
 
 /// The easing curve shared by every motion entry, as cubic-bezier control
 /// points. The same numbers as [`Curve::STANDARD`], kept as an array
