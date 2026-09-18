@@ -114,8 +114,8 @@ class DocsController < Controller
         {
           "slug": "clients",
           "file": "clients.md",
-          "title": "Servers in four languages",
-          "lead": "Ruby, Python, PHP and Node: what they implement, and what they cost."
+          "title": "Servers in six languages",
+          "lead": "Ruby, Python, PHP, Node, Go and Rust: what they implement, and what they cost."
         }
       ]},
       {"title": "Guarantees", "items": [

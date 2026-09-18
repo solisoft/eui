@@ -1157,29 +1157,39 @@ note where a target's standard library is missing.
   Android, so the client falls back to the public roots and a development
   CA is not honoured — `EUI_CA_FILE` is the way in until it is.
 
-## Four more servers: Ruby, Python, PHP and Node
+## Six more servers: Ruby, Python, PHP, Node, Go and Rust
 
-`clients/` holds the protocol's server half in four languages besides Soli,
+`clients/` holds the protocol's server half in six languages besides Soli,
 each its own repository and each with no runtime dependencies to speak of:
 the wire format, the session, the view encoder and its diff, assets, and the
-signed manifest — three to four thousand lines apiece. The reference client
+signed manifest — three to five thousand lines apiece. The reference client
 cannot tell which server it is talking to, and the bytes bear that out: nine
 for a changed number, 2.8 KB to reverse five hundred keyed rows, byte for
-byte across all five.
+byte across all seven. The counter renders to identical pixels out of every
+one of them.
 
 BLAKE3 is written out in each of them, because an asset is named by the hash
-of its content and none of those standard libraries ships one. The publisher
-key is a PKCS#8 PEM all four read, so an application that changes language
-keeps its identity and nobody's pin breaks.
+of its content and none of those standard libraries ships one. Ed25519 is the
+runtime's where there is one and written out in Python and Rust where there
+is not; the Rust crate, which takes no dependencies at all, also writes out
+SHA-1 and base64 for the handshake. The publisher key is a PKCS#8 PEM all six
+read — the same file produces the same manifest bytes, signature included,
+out of every one of them, so an application that changes language keeps its
+identity and nobody's pin breaks.
 
 Their tests run in their own runners — 97 in Ruby, 103 in Python, 96 in PHP,
-99 in Node — and each carries the same two that matter: the spec's §8 example
-at 150 bytes, and a client of forty lines that applies the server's ops and
-compares the tree it ends up holding against the server's own, over every
-permutation of five keyed rows and four hundred and eighty random edits.
+98 in Node, 98 in Go, 102 in Rust — and each carries the same two that matter:
+the spec's §8 example at 150 bytes, and a client of forty lines that applies
+the server's ops and compares the tree it ends up holding against the
+server's own, over every permutation of five keyed rows and four hundred and
+eighty random edits.
+
+The one gap is TLS in Rust: the standard library has none, so that crate
+answers `ws://` and belongs behind a terminator. The other five terminate
+TLS 1.3 themselves.
 
 None of them has local handlers, file transfers or session resume yet.
-[Servers in four languages](/docs/clients) has the rest, including what each
+[Servers in six languages](/docs/clients) has the rest, including what each
 costs against Soli on the same application.
 
 ## Not started

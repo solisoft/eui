@@ -34,10 +34,11 @@ examples/
                   a team messenger — as a Soli app; the catalogue (buttons to
                   date pickers to charts) is app/controllers/eui_builders*.sl
   snapshot        render the counter, or any live Soli component, off-screen
-clients/     the protocol's server half in four more languages, each its own
+clients/     the protocol's server half in six more languages, each its own
              repository and each with no runtime dependencies: eui-ruby,
-             eui-python, eui-php, eui-node. `clients/eui-ruby/bench` holds the
-             same application written five times and the driver that times them
+             eui-python, eui-php, eui-node, eui-go, eui-rust.
+             `clients/eui-ruby/bench` holds the same application written seven
+             times and the one driver that times them all
 doc/         the documentation site, itself a Soli app
 www/         the public site, itself a Soli app
 xtask/       `bench` measures the budgets; `conform` runs every vector of spec/09
