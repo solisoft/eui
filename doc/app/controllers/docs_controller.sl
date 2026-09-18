@@ -112,10 +112,10 @@ class DocsController < Controller
           "lead": "Roles, scales, and why the client resolves them."
         },
         {
-          "slug": "ruby",
-          "file": "ruby.md",
-          "title": "Serving from Ruby",
-          "lead": "A second server: the gem, what it implements, what it costs."
+          "slug": "clients",
+          "file": "clients.md",
+          "title": "Servers in four languages",
+          "lead": "Ruby, Python, PHP and Node: what they implement, and what they cost."
         }
       ]},
       {"title": "Guarantees", "items": [

@@ -15,14 +15,14 @@ cargo run --release -p xtask -- bench                      # the budgets; exits 
 ## Built and tested
 
 **`eui-proto` — the wire format.** Encodes and decodes every construct in
-[the wire format specification](/docs/wire-format): frames, batches, all sixteen
+[the wire format specification](/docs/wire-format): frames, batches, all nineteen
 ops, the 64-byte style record, flat subtrees, values, handlers.
 
 - No dependencies. Everything this crate touches came off a network socket, so a
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 86 tests: 9 round-trip, 7 byte-level vectors, 3 size budgets, 3 manifest,
+- 87 tests: 10 round-trip, 7 byte-level vectors, 3 size budgets, 3 manifest,
   **62 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
@@ -401,6 +401,18 @@ accepted, because a platform opener is a URI dispatcher and `file:` is a
 scheme. What it costs is written down rather than discovered: a token in the
 address links this session to the identity the person browses the web with,
 and no allowlist closes that (08 §8.1).
+
+**Notifications.** `eui_notify("Nouveau message", "Ana : on déjeune ?",
+{ "tag": "thread-7" })` in a Soli handler raises a real notification on the
+machine the window is on — `notify-send` on Linux, `osascript` on macOS, and
+a line on the error output anywhere else. It is a new op (`0x2C`, 02 §5.2),
+the only one that names no node, and the `notifications` capability is the
+whole of the gate: nothing in the tree asks for a notification, so there is
+nothing else to refuse. Four to a batch, refused past that. Nothing comes
+back — not shown, not clicked, not dismissed — and clicking one brings the
+window forward and tells the server nothing. A notification goes to the
+session whose handler called it; `eui_wake` is how the other windows are
+given the chance to notify themselves.
 
 **Accessibility.** The client exposes its tree through AccessKit — AT-SPI
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
@@ -1145,24 +1157,30 @@ note where a target's standard library is missing.
   Android, so the client falls back to the public roots and a development
   CA is not honoured — `EUI_CA_FILE` is the way in until it is.
 
-## A second server, in Ruby
+## Four more servers: Ruby, Python, PHP and Node
 
-`clients/eui-ruby` is the protocol's server half as a Ruby gem — the wire
-format, the session, the view encoder and its diff, assets, and the signed
-manifest, in about 3 600 lines with no runtime dependencies. The reference
-client cannot tell which server it is talking to, and the bytes bear that
-out: nine for a changed number, 2.8 KB to reverse five hundred keyed rows,
-byte for byte against Soli.
+`clients/` holds the protocol's server half in four languages besides Soli,
+each its own repository and each with no runtime dependencies to speak of:
+the wire format, the session, the view encoder and its diff, assets, and the
+signed manifest — three to four thousand lines apiece. The reference client
+cannot tell which server it is talking to, and the bytes bear that out: nine
+for a changed number, 2.8 KB to reverse five hundred keyed rows, byte for
+byte across all five.
 
-97 tests, among them a client of forty lines that applies the server's ops
-and compares the tree it ends up holding against the server's own, over
-every permutation of five keyed rows and four hundred and eighty random
-edits — the check that catches a `MoveChild` off by one, which encodes,
-decodes and applies without complaint.
+BLAKE3 is written out in each of them, because an asset is named by the hash
+of its content and none of those standard libraries ships one. The publisher
+key is a PKCS#8 PEM all four read, so an application that changes language
+keeps its identity and nobody's pin breaks.
 
-What it does not do yet: local handlers, file transfers, session resume, and
-the windowed list's `window` event. [Serving EUI from Ruby](/docs/ruby) has
-the rest, including what it costs against Soli on the same application.
+Their tests run in their own runners — 97 in Ruby, 103 in Python, 96 in PHP,
+99 in Node — and each carries the same two that matter: the spec's §8 example
+at 150 bytes, and a client of forty lines that applies the server's ops and
+compares the tree it ends up holding against the server's own, over every
+permutation of five keyed rows and four hundred and eighty random edits.
+
+None of them has local handlers, file transfers or session resume yet.
+[Servers in four languages](/docs/clients) has the rest, including what each
+costs against Soli on the same application.
 
 ## Not started
 
