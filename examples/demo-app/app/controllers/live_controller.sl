@@ -971,7 +971,7 @@ end
 # holds the active section; the rail and the top bar are outside it, so the
 # page moves under a header that stays.
 
-ERP_SECTIONS = ["Dashboard", "Orders", "Customers", "Inventory", "Scene", "Files", "Reports", "Settings", "Catalogue"]
+ERP_SECTIONS = ["Dashboard", "Live", "Orders", "Customers", "Inventory", "Scene", "Files", "Reports", "Settings", "Catalogue"]
 # The page transitions to try, as `motion` names (03 §5.2). `none` is first
 # and is the default: every one of the others is the client's rendering of a
 # change it was going to make anyway, so turning them all off has to leave an
@@ -984,7 +984,7 @@ ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"
 ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
-ERP_SECTION_ICONS = {"Dashboard": "grid", "Orders": "doc", "Customers": "users", "Inventory": "box", "Scene": "scene", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Live": "circle", "Orders": "doc", "Customers": "users", "Inventory": "box", "Scene": "scene", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
 
 ERP_PER_PAGE = 7
 
@@ -1482,6 +1482,180 @@ end
 def erp_panel_style(lay)
   return {"gap": 3, "width": "100%", "grow": 1, "basis": 340} if lay["wide"]
   {"gap": 3, "width": "100%"}
+end
+
+# ---- The floor, live -------------------------------------------------------
+#
+# The one card on this dashboard that moves while nobody touches it, and the
+# only one whose cost is worth watching rather than reading about.
+#
+# The mechanism is the last four lines of `erp_live_card`: the card carries a
+# `wake` prop and a `wake` handler, so the client sends one event every
+# `live_ms` milliseconds for as long as it carries both (06 §1.1). Taking the
+# prop away stops the clock, and so does leaving the section — the node goes
+# with the page and the clock goes with the node. Nothing polls, nothing is
+# held open, and the server has no timer of its own; it never has.
+#
+# What a tick costs is on screen. The dev bar along the bottom prints the view
+# time, the encode time, the ops, the bytes, and — the figure this card exists
+# to make visible — `interned`: the session's atom, style, colour and chunk
+# tables. **Those four numbers must stay flat while this runs.** They are
+# define-once tables (02 §5) of 65 535, 65 535, 4 095 and 4 095 entries, and
+# none of them ever reuses an id, so a view that derives a style or a colour
+# from a live reading grows one of them on every tick and ends the session in
+# an afternoon. Watching them not move is the demonstration; the chart is what
+# makes it worth watching.
+#
+# 500 ms is the default because it is what a monitor wants: fast enough that
+# the window is alive, slow enough that a person can finish reading a number
+# before it changes. 200 ms sits beside it as the fastest cadence worth
+# offering — 06 §1.1 raises anything under 100 ms to 100 ms, so an option of
+# 50 would be demonstrating a number the client quietly replaces.
+
+ERP_LIVE_RATES = ["200 ms", "500 ms", "1 s"]
+
+def erp_live_defaults
+  {"live_t": 0, "live_on": true, "live_ms": 500}
+end
+
+def erp_live_rate(state, option)
+  lr_ms = 500
+  lr_ms = 200 if option == "200 ms"
+  lr_ms = 1000 if option == "1 s"
+  set_key(state, "live_ms", lr_ms)
+end
+
+def erp_live_label(ll_ms)
+  return "200 ms" if ll_ms == 200
+  return "1 s" if ll_ms == 1000
+
+  "500 ms"
+end
+
+# A tile a line, reading the same window the chart draws. The sparkline gets
+# the last twenty-four samples and not all sixty: a tile is a glance, and at
+# 150 px sixty readings is a smear with no shape in it.
+def erp_live_tiles(lt_sets, lt_count)
+  lt_from = lt_count > 24 ? lt_count - 24 : 0
+  range(0, 3).map(fn(lt_i) {
+    lt_vals = lt_sets[lt_i];
+    lt_now = lt_vals[lt_vals.length() - 1];
+    lt_delta = lt_now - lt_vals[0];
+    tile(200, stat_spark(
+      ERP_WAREHOUSES[lt_i],
+      str(lt_now) + " / min",
+      chart_signed(lt_delta) + " across the window",
+      lt_vals.slice(lt_from, lt_count),
+      150
+    ))
+  })
+end
+
+# How often this page is redrawing, in the words the sentence around it wants.
+def erp_live_per_second(lp_ms)
+  return "five times a second" if lp_ms == 200
+  return "once a second" if lp_ms == 1000
+
+  "twice a second"
+end
+
+# `lv_sets` is handed in rather than generated here, because both cards on this
+# page draw the same window and each was building its own. Measured with
+# `EUI_TRACE=1`: the tick is about 15 ms of view, of which the window and the
+# paths it feeds are 5 to 6 — a page cut to a fifteen-sample window renders in
+# 10 — and the remaining 10 is the shell, which every event on every section
+# of this application pays. So the saving is a third of a third; it is here
+# because generating the same sixty readings twice is not a thing to leave in
+# a card whose whole subject is what a tick costs.
+def erp_live_card(state, lay, lv_sets)
+  lv_t = state["live_t"] ?? 0
+  lv_on = (state["live_on"] ?? true) == true
+  lv_ms = state["live_ms"] ?? 500
+  lv_count = lv_sets[0].length()
+  lv_w = erp_inner_px(lay)
+  lv_head = [
+    badge(lv_on ? "live" : "paused", lv_on ? "success" : "warning"),
+    segmented(ERP_LIVE_RATES, erp_live_label(lv_ms), "live_rate"),
+    secondary_button(lv_on ? "Pause" : "Resume", "live_play")
+  ]
+  lv_body = [
+    muted("Three conveyor lines, one reading every " + erp_live_label(lv_ms) + ". The card carries a wake and a wake handler; nothing else here does. Watch `interned` in the bar along the bottom — those four tables never reuse an id, so on a page that redraws " + erp_live_per_second(lv_ms) + " they are the numbers that have to stay still."),
+    row({"gap": 3, "width": "100%", "wrap": "wrap"}, erp_live_tiles(lv_sets, lv_count)),
+    chart_stream(lv_sets, ERP_WAREHOUSES, lv_w, 210, erp_floor_labels(lv_ms, lv_count), ERP_FLOOR_TARGET, "Target"),
+    column({"gap": 1, "width": "100%"}, [
+      row({"gap": 2, "align": "center", "width": "100%"}, [
+        muted("All three together, against " + str(ERP_FLOOR_CEILING) + " a minute"),
+        spacer(),
+        text(str(erp_floor_total(lv_sets, lv_count - 1)), {"weight": "semibold"})
+      ]),
+      chart_strip(erp_floor_totals(lv_sets, lv_count), ERP_FLOOR_CEILING, lv_w, 26)
+    ]),
+    muted("Tick " + str(lv_t) + " · " + str(lv_count) + " samples · every point in a window that moves has moved, so the whole `paths` prop goes again on each tick. That is what the `B` figure in the bar is counting, and why the coordinates are whole pixels.")
+  ]
+  lv_card = erp_card("The floor, right now", lv_head, lv_body)
+  return lv_card unless lv_on
+
+  lv_card["p"] = {"wake": lv_ms}
+  lv_card["on"] = {"wake": "live_tick"}
+  lv_card
+end
+
+# What one line is allowed to be doing, for its own strip. The three run 37 to
+# 142, 25 to 131 and 14 to 119 (`erp_floor_at`), so 150 puts an ordinary
+# minute in the green and a peak over the line — the same reasoning as
+# `ERP_FLOOR_CEILING`, applied to a third of the floor.
+ERP_FLOOR_LINE_CEILING = 150
+
+# Each line's own history, under the total. The same window and the same
+# cells, one strip a line: the total strip says whether the floor is coping,
+# and these say which line is the reason it is not.
+def erp_live_lines(state, lay, ll_sets)
+  ll_w = erp_inner_px(lay)
+  ll_rows = range(0, 3).map(fn(ll_i) {
+    ll_vals = ll_sets[ll_i];
+    column({"gap": 1, "width": "100%"}, [
+      row({"gap": 2, "align": "center", "width": "100%"}, [
+        muted(ERP_WAREHOUSES[ll_i]),
+        spacer(),
+        text(str(ll_vals[ll_vals.length() - 1]) + " / min", {"size": 0, "weight": "semibold"})
+      ]),
+      chart_strip(ll_vals, ERP_FLOOR_LINE_CEILING, ll_w, 20)
+    ])
+  })
+  erp_card(
+    "Each line",
+    [muted("against " + str(ERP_FLOOR_LINE_CEILING) + " a minute")],
+    [column({"gap": 3, "width": "100%"}, ll_rows)]
+  )
+end
+
+# The live section: the card above, given the page.
+#
+# On its own section rather than on the dashboard, for a reason worth writing
+# down. A `wake` is the one thing in this application that costs something
+# while nobody is doing anything, and on the dashboard it would tick for every
+# visitor who opened Meridian and went to make coffee. It also broke the
+# tests, which is how it got here: every gallery case in `soli_e2e.rs` mounts
+# on the dashboard, sends an event and waits for the sequence number to move.
+# A clock that moves it twice a second on its own turns each of those waits
+# into a race, and the assertion after it reads whichever tree arrived first.
+#
+# Here the clock starts when somebody asks for this page and stops when they
+# leave it, because the node carrying the `wake` leaves with the page —
+# nothing has to remember to stop it (06 §1.1).
+# Sixty samples, which at 500 ms is the last half minute. It is a constant and
+# not a setting: the window is what the chart is wide enough to draw one mark
+# a pixel of, and a person reading a floor wants the last minute rather than
+# the last hour — for the hour there is a chart of the day, and it is not
+# live.
+ERP_LIVE_WINDOW = 60
+
+def erp_live_section(state, lay)
+  ls_sets = erp_floor_window(state["live_t"] ?? 0, ERP_LIVE_WINDOW)
+  column(
+    {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
+    [erp_live_card(state, lay, ls_sets), erp_live_lines(state, lay, ls_sets)]
+  )
 end
 
 def erp_dashboard(state, lay)
@@ -3007,17 +3181,21 @@ def erp_shapes_card(state, lay)
   sh_dw = sh_cols == 1 ? sh_w : sh_h
   sh_sw = sh_cols == 1 ? sh_w : 150
   sh_series = erp_revenue()
+  # Frozen at tick 0. The catalogue shows what a shape looks like; the one
+  # that moves is on the dashboard, because a `wake` belongs to the card that
+  # asked for it and not to a page of specimens.
+  sh_floor = erp_floor_window(0, 60)
   sh_rows = erp_regions()
   sh_names = erp_region_names()
   sh_weeks = erp_weeks()
-  # Seventeen canvases is the most expensive thing on this page, and a page
+  # Nineteen canvases is the most expensive thing on this page, and a page
   # rebuilds entirely on every event -- so with them always built, dragging
   # the range slider two cards up cost 39 ms a frame against 9 for the
   # dashboard. `lazy` is the answer the catalogue already had: built when
   # asked for, a button until then.
   erp_card("Charts", [badge("family", "info")], [
     muted("Every shape the catalogue draws. All of them are a `canvas` of paths (03 §1.1) -- no shader, no font, no asset fetch -- and every one takes its colours from roles, so they follow the viewer into dark mode."),
-    lazy("on", state["cat_charts"] ?? [], secondary_button("Draw the seventeen charts", "cat_charts"), fn() {
+    lazy("on", state["cat_charts"] ?? [], secondary_button("Draw the nineteen charts", "cat_charts"), fn() {
     row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
       sh_spec("chart_line", chart_line("cl", sh_series["line"], sh_w, sh_h, erp_days(sh_series["line"].length()))),
       sh_spec("chart_area", chart_area("ca", sh_series["area"], sh_w, sh_h, erp_days(sh_series["area"].length()))),
@@ -3035,7 +3213,9 @@ def erp_shapes_card(state, lay)
       sh_spec("chart_funnel", chart_funnel("cfn", ERP_DEMO_FUNNEL, sh_w, sh_h)),
       sh_spec("chart_waterfall", chart_waterfall("cwf", ERP_DEMO_BRIDGE, sh_w, sh_h)),
       sh_spec("chart_box", chart_box("cbx", ERP_DEMO_SPREAD, sh_w, sh_h)),
-      sh_spec("chart_sparkline", chart_sparkline(sh_series["line"], sh_sw, 40))
+      sh_spec("chart_sparkline", chart_sparkline(sh_series["line"], sh_sw, 40)),
+      sh_spec("chart_stream", chart_stream(sh_floor, ERP_WAREHOUSES, sh_w, sh_h, erp_floor_labels(500, 60), ERP_FLOOR_TARGET, "Target")),
+      sh_spec("chart_strip", chart_strip(erp_floor_totals(sh_floor, 60), ERP_FLOOR_CEILING, sh_w, 26))
     ]) })
   ])
 end
@@ -4158,6 +4338,7 @@ def gallery_defaults(state)
     .merge(erp_settings_defaults())
     .merge(erp_files_defaults())
     .merge(erp_board_state_defaults())
+    .merge(erp_live_defaults())
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
   end
@@ -4201,6 +4382,12 @@ def gallery(event_data)
     "sound" => gallery_sound_toggle(state),
     "sound_level" => gallery_sound_level(state, params),
     "scene" => set_key(state, "scene", !(state["scene"] ?? false)),
+    # The live card. A tick is the whole of it: the window the chart draws is
+    # a pure function of this number (`erp_floor_window`), so the handler
+    # neither keeps a history nor trims one.
+    "live_tick" => set_key(state, "live_t", (state["live_t"] ?? 0) + 1),
+    "live_play" => set_key(state, "live_on", !(state["live_on"] ?? true)),
+    "live_rate" => erp_live_rate(state, props["option"]),
     "video" => set_key(
       set_key(state, "video", !(state["video"] ?? false)),
       "video_at",
@@ -4417,6 +4604,7 @@ def gallery_view(raw_state)
   lay = erp_layout(state)
   section = state["section"] ?? "Dashboard"
   body = erp_dashboard(state, lay)
+  body = erp_live_section(state, lay) if section == "Live"
   body = erp_orders_section(state, lay) if section == "Orders"
   body = erp_customers_section(state, lay) if section == "Customers"
   body = erp_inventory_section(state, lay) if section == "Inventory"

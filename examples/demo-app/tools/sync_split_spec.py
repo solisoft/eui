@@ -93,6 +93,10 @@ SPECS = {
         "range_slider",
         "diff_tally",
     ],
+    ROOT / "tests" / "stream_spec.sl": [
+        "chart_stream_ceiling",
+        "chart_band_role",
+    ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",
         "split_sizes",

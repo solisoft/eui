@@ -787,6 +787,10 @@ More than one series, where `sets` is a list of series and `names` names them:
 | `chart_sparkline(values, w, h)` | A bare line: no grid, no axis, no labels |
 | `stat_spark(label, value, hint, values, w)` | `stat` with the shape of the last few periods under the number |
 | `chart_legend(names)` | A swatch and a name a series, in the order the marks were drawn, centred under the plot |
+| `chart_stream(sets, names, w, h, labels, mark, mark_name)` | The same shape as `chart_multi_line`, for a window that **moves**: no id and no hover bands, one marker a series rather than one a sample, whole-pixel coordinates, `mark` dashed across as a target, and the current reading in the legend |
+| `chart_stream_ceiling(max, mark)` | The top of a live scale, rounded up to a step so the plot does not rescale on every tick |
+| `chart_strip(values, ceiling, w, h)` | One measure as a row of cells, newest at the right: how often it was in the red, where a line chart answers what it was at 14:02 |
+| `chart_band_role(pct)` | The four-step load ramp — idle, working, busy, over — as roles, because a hue computed from a reading would mint a colour a tick |
 
 Every builder above takes `w` and `h` as the size of the **whole** chart —
 axes included. Each works out its own gutter from how wide its readings print
@@ -794,6 +798,18 @@ and takes `chart_plot_h(h)` for the marks, so a caller sizes a cell and never
 a plot. The ones whose x axis is a category (`chart_line`, `chart_area`,
 `chart_bar`, `chart_multi_line`, `chart_candle`) take an optional list of
 labels last; without it the marks are numbered.
+
+`chart_stream` and `chart_strip` are the two that expect to be redrawn. They
+are what Meridian's **Live** section is made of, and what makes them different
+is not the drawing but what a redraw costs: every point in a moving window has
+moved, so the whole `paths` prop goes again on each tick, and nothing in either
+of them may derive a style or a colour from a reading — the session's tables
+are define-once (02 §5), so a hue computed per value would mint a permanent
+entry twice a second. Measured on that page with the dev bar, at one tick
+every 500 ms: 7 511 B and 22 ops at tick 49, 10.2 ms of view and 0.7 ms of
+encode, and `interned` reading **290/333/0/195 at tick 11 and 290/333/0/195 at
+tick 49** — fifty redraws, not one new atom, style, colour or chunk. The
+colour column is zero because every mark in both builders takes a theme role.
 
 
 No chart library, no SVG, no client change: a chart is arithmetic in Soli and

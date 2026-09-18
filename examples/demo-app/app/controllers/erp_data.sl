@@ -608,3 +608,97 @@ def erp_lead_times
     {"label": "Gasket set", "from": 11, "to": 5}
   ]
 end
+
+# ---- The floor, right now --------------------------------------------------
+#
+# Three conveyor lines' pick rate, one reading every half second, for the one
+# card on the dashboard that moves while nobody touches it.
+#
+# Generated from the tick index exactly as everything above is generated from
+# a row index — a pure function of `t` — which buys a live chart two things it
+# wants badly. The session holds **one integer** rather than three lists of
+# sixty, so a window that grows costs the server nothing; and a session
+# resumed at tick 412 (01 §4.1) draws the window the one that produced it drew
+# rather than starting from a flat line.
+#
+# Two sines a long way from a common period, plus this file's usual ugly
+# modulus, so the three lines drift against each other instead of marching and
+# no two of them peak together.
+
+# The target every line is read against, in picks a minute. It is a constant
+# and not a reading: the dashed rule across the chart is what the floor agreed
+# to do, and a target that moved with the data would be a chart agreeing with
+# itself.
+ERP_FLOOR_TARGET = 96
+
+# What the three lines together are allowed to be doing, for the load strip.
+#
+# Chosen against the sequence rather than guessed at, which is the only way a
+# threshold means anything: the total runs 153 to 316 with a mean of 233, so
+# 340 puts a little over half of every window in the green band, most of the
+# rest in amber and about one reading in a hundred over the line. A ceiling of
+# 300 made it amber three quarters of the time — a strip that cries wolf — and
+# one of 400 made it green always, which is a strip carrying nothing.
+ERP_FLOOR_CEILING = 340
+
+# `fl_t + ERP_FLOOR_EPOCH` and not `fl_t`: the first window a session draws
+# ends at tick 0, so it reaches back to −59, and clamping those to zero drew
+# sixty copies of one reading — a flat line, a delta of +0 on every
+# tile, and a first impression of a chart that is not working. The phase
+# origin is a thousand readings in instead, so a session that has just
+# connected already has a shift of floor behind it.
+ERP_FLOOR_EPOCH = 1000
+
+def erp_floor_at(fl_line, fl_t)
+  fl_u = fl_t + ERP_FLOOR_EPOCH
+  fl_base = 90
+  fl_base = 78 if fl_line == 1
+  fl_base = 66 if fl_line == 2
+  fl_slow = Math.sin(fl_u * 0.041 + fl_line * 2.1)
+  fl_fast = Math.sin(fl_u * 0.17 + fl_line * 0.7)
+  # The one term the three lines share, and the reason the strip under the
+  # chart is worth drawing: with only the per-line terms above, the three
+  # peaked at different moments and cancelled, so their total sat between 192
+  # and 254 for ever and a band of colour over it was one colour. A floor does
+  # not work like that — the lorries arrive together — so a slow tide moves
+  # all three at once, and what it moves is the *total*, which is the thing
+  # the strip is a picture of.
+  fl_tide = Math.sin(fl_u * 0.0093)
+  fl_jit = (fl_u * 137 + fl_line * 911) % 15 - 7
+  fl_v = fl_base + int(22 * fl_slow) + int(9 * fl_fast) + int(18 * fl_tide) + fl_jit
+  fl_v < 0 ? 0 : fl_v
+end
+
+# The window the chart draws: three series of `fw_count` readings, ending at
+# `fw_t`. Nothing is stored between calls — this is the whole of the model.
+def erp_floor_window(fw_t, fw_count)
+  range(0, 3).map(fn(fw_line) {
+    range(0, fw_count).map(fn(fw_i) { erp_floor_at(fw_line, fw_t - fw_count + 1 + fw_i) })
+  })
+end
+
+def erp_floor_total(ft_sets, ft_i)
+  ft_sum = 0
+  for ft_r in ft_sets
+    ft_sum = ft_sum + (ft_r[ft_i] ?? 0)
+  end
+  ft_sum
+end
+
+def erp_floor_totals(fo_sets, fo_count)
+  range(0, fo_count).map(fn(fo_i) { erp_floor_total(fo_sets, fo_i) })
+end
+
+# Four landmarks along the bottom, from the cadence and the window: at 500 ms
+# and sixty samples they read −30 s, −20 s, −10 s, now. They change when the
+# cadence does, which is the point of writing them out of the interval rather
+# than freezing them.
+def erp_floor_labels(fb_ms, fb_count)
+  fb_span = fb_ms * fb_count / 1000
+  [
+    "−" + str(fb_span) + " s",
+    "−" + str(fb_span * 2 / 3) + " s",
+    "−" + str(fb_span / 3) + " s",
+    "now"
+  ]
+end
