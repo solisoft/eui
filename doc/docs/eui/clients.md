@@ -103,26 +103,26 @@ until the server has been silent for a second.
 
 | | Soli | Ruby | Python | PHP | Node | Go | Rust |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Mount | 44 ms | 72 ms | 79 ms | 92 ms | 81 ms | 42 ms | 68 ms |
-| Tick — one number | 13.8 ms | 22.9 ms | 22.5 ms | 26.4 ms | 8.3 ms | 4.4 ms | 2.4 ms |
-| Sort — 500 reversed | 17 ms | 36 ms | 27 ms | 30 ms | 9 ms | 9 ms | 5 ms |
-| Memory, idle → after | 109 → 101 MB | 24 → 33 MB | 22 → 26 MB | 30 → 49 MB | 73 → 124 MB | 8 → 16 MB | 2.5 → 5 MB |
-| CPU, 25 events | 0.35 s | 0.67 s | 0.65 s | 0.72 s | 0.45 s | 0.18 s | 0.06 s |
+| Mount | 50 ms | 82 ms | 61 ms | 78 ms | 59 ms | 49 ms | 37 ms |
+| Tick — one number | 13.1 ms | 22.9 ms | 23.3 ms | 27.0 ms | 8.8 ms | 4.4 ms | 2.3 ms |
+| Sort — 500 reversed | 16 ms | 25 ms | 27 ms | 35 ms | 9 ms | 8 ms | 5 ms |
+| Memory, idle → after | 99 → 98 MB | 24 → 34 MB | 22 → 26 MB | 30 → 49 MB | 84 → 143 MB | 9 → 16 MB | 2.5 → 5 MB |
+| CPU, 25 events | 0.38 s | 0.63 s | 0.65 s | 0.75 s | 0.45 s | 0.17 s | 0.06 s |
 
 **10 000 rows — 50 011 nodes**
 
 | | Soli | Ruby | Python | PHP | Node | Go | Rust |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Mount | 1 202 ms | 1 421 ms | 1 293 ms | 1 572 ms | 896 ms | 851 ms | 828 ms |
-| Tick | 223 ms | 536 ms | 550 ms | 552 ms | 116 ms | 88 ms | 57 ms |
-| Sort — 10 000 reversed | 243 ms | 587 ms | 666 ms | 723 ms | 179 ms | 168 ms | 114 ms |
-| Memory, after | 229 MB | 126 MB | 94 MB | 154 MB | 268 MB | 94 MB | 57 MB |
-| CPU, 25 events | 6.29 s | 14.38 s | 14.65 s | 15.36 s | 5.09 s | 3.72 s | 1.46 s |
+| Mount | 1 175 ms | 1 424 ms | 1 245 ms | 1 528 ms | 875 ms | 842 ms | 811 ms |
+| Tick | 227 ms | 503 ms | 572 ms | 545 ms | 110 ms | 88 ms | 45 ms |
+| Sort — 10 000 reversed | 358 ms | 581 ms | 663 ms | 651 ms | 169 ms | 149 ms | 101 ms |
+| Memory, after | 229 MB | 125 MB | 93 MB | 153 MB | 264 MB | 94 MB | 54 MB |
+| CPU, 25 events | 6.75 s | 13.58 s | 15.30 s | 14.84 s | 5.01 s | 3.73 s | 1.24 s |
 
 The JavaScript one runs unchanged on **Bun**, where the same 98 tests pass
 and the client cannot tell the difference. Bun is slower on this work by a
-tenth to a half — 173 ms against Node's 116 for a tick at ten thousand rows —
-and holds about half the memory, 33 MB idle against 84.
+half — 174 ms against Node's 110 for a tick at ten thousand rows — and holds
+about half the memory, 33 MB idle against 84.
 
 **On the wire, all seven are identical**: 9 bytes for the tick, 2.8 KB for the
 500-row sort, 58.5 KB and ten thousand `MoveChild` for the 10 000-row one.
@@ -136,7 +136,7 @@ share nothing but a specification produce the same frames to the byte. That
 is the claim this whole project rests on, and it is the one thing here that
 is not a matter of degree.
 
-**The spread is about 11× at the tick, and it ranks by runtime.** Rust and Go
+**The spread is about 12× at the tick, and it ranks by runtime.** Rust and Go
 compile to machine code and land where you would expect; V8 is within a
 factor of two of Go; Soli's interpreter is next; CRuby, CPython and PHP land
 within a sixth of one another. Every one of these servers is doing the same
@@ -157,6 +157,13 @@ between runs as that pool warms, which is why its 500-row idle above reads
 higher than its figure after the run. Node's is V8. Rust's 2.5 MB and Go's
 8 MB are what a process is when nothing else is in it. Compare what the
 processes do before comparing what they hold.
+
+**The mount column is a single sample.** A tick is a median of twenty and a
+sort of five; a mount happens once per session, with a connection and a
+handshake inside it, so it is one measurement. Across runs it moves by forty
+per cent — Rust's 500-row mount has read 68 ms and 37 ms on the same binary —
+while the tick beside it moves by a tenth of a millisecond. The 10 000-row
+mounts are large enough to drown that and can be read as they stand.
 
 **And these are single runs on a machine that is not idle.** An earlier pass
 put Ruby's 500-row tick at 36.9 ms against the 22.9 above and Soli's at 17.0
