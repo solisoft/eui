@@ -64,3 +64,9 @@ examples/demo-app/public/files/
 # says which faces and where they go; without them the page draws in the
 # client's own Inter and says so.
 examples/eui-site/public/fonts/
+
+# `clients/` holds the language bindings, each one its own repository —
+# eui-ruby is the first. A repository inside a repository is nobody's
+# submodule: it is cloned and pushed on its own, and this tree only ever
+# has a copy of it sitting here.
+/clients/

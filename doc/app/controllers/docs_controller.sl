@@ -110,6 +110,12 @@ class DocsController < Controller
           "file": "theming.md",
           "title": "Theming",
           "lead": "Roles, scales, and why the client resolves them."
+        },
+        {
+          "slug": "ruby",
+          "file": "ruby.md",
+          "title": "Serving from Ruby",
+          "lead": "A second server: the gem, what it implements, what it costs."
         }
       ]},
       {"title": "Guarantees", "items": [

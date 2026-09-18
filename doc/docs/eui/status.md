@@ -715,9 +715,10 @@ a poor icon three ways over: they cannot be sized against the control they sit
 in, cannot take a colour apart from their label, and reach a screen reader as
 themselves.
 
-There is an arm now, and a table of nineteen icons behind it, under
-twenty-two names — `dash`, `sort_asc` and `sort_desc` are the three that reach
-for a shape another name already draws. Every icon is
+There is an arm now, and a table of thirty-three icons behind it, under
+forty-seven names — fourteen of those names are aliases that reach for a shape
+another one already draws, so a view can say `sort_asc` or `inventory` and get
+`arrow_up` or `box`. Every icon is
 polylines on a 24-unit grid with a 2-unit stroke, and every segment is the
 same rounded capsule a chart's line is made of — so this cost no new pipeline,
 no font, no asset fetch and no protocol version. A run of one point is a dot,
@@ -749,7 +750,7 @@ reader user could not tell a switch from a link, or a ticked box from an
 unticked one.
 
 A node declares itself now, in props the client reads: a role from
-thirty-five names, a `label` that overrides the text gathered from inside,
+forty names, a `label` that overrides the text gathered from inside,
 and the states — `checked` with its third value, `expanded`, `selected`,
 `disabled`, `read_only`, `required`, `invalid`, `busy`, `modal` — plus
 `value_now` with its range, `pos_in_set`/`set_size`, `level`, `orientation`
@@ -1143,6 +1144,25 @@ note where a target's standard library is missing.
 - The platform trust store. `rustls-native-certs` finds nothing useful on
   Android, so the client falls back to the public roots and a development
   CA is not honoured — `EUI_CA_FILE` is the way in until it is.
+
+## A second server, in Ruby
+
+`clients/eui-ruby` is the protocol's server half as a Ruby gem — the wire
+format, the session, the view encoder and its diff, assets, and the signed
+manifest, in about 3 600 lines with no runtime dependencies. The reference
+client cannot tell which server it is talking to, and the bytes bear that
+out: nine for a changed number, 2.8 KB to reverse five hundred keyed rows,
+byte for byte against Soli.
+
+97 tests, among them a client of forty lines that applies the server's ops
+and compares the tree it ends up holding against the server's own, over
+every permutation of five keyed rows and four hundred and eighty random
+edits — the check that catches a `MoveChild` off by one, which encodes,
+decodes and applies without complaint.
+
+What it does not do yet: local handlers, file transfers, session resume, and
+the windowed list's `window` event. [Serving EUI from Ruby](/docs/ruby) has
+the rest, including what it costs against Soli on the same application.
 
 ## Not started
 
