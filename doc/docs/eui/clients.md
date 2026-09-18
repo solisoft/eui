@@ -92,9 +92,12 @@ The other five terminate TLS 1.3 themselves.
 ## What they cost
 
 The same application written seven times — the same node hash, the same keys,
-the same strings — an invoice table with a tick that changes one number and a
-sort that reverses every row. One session at a time, over loopback, each
-phase measured until the server stops talking.
+the same strings — an invoice table with a **tick** that changes one number
+and a **sort** that reverses every row. A tick is the floor: the handler
+adds 1, the view re-renders in full — fifty thousand nodes at ten thousand
+rows — the diff finds one changed text node, and nine bytes go out. One
+session at a time, over loopback; 20 ticks and 5 sorts, each phase measured
+until the server has been silent for a second.
 
 **500 rows — 2 511 nodes, which is what an application looks like**
 
@@ -104,7 +107,7 @@ phase measured until the server stops talking.
 | Tick — one number | 17.0 ms | 36.9 ms | 35.7 ms | 32.2 ms | 9.9 ms | 6.9 ms | 2.5 ms |
 | Sort — 500 reversed | 24 ms | 32 ms | 31 ms | 38 ms | 10 ms | 14 ms | 8 ms |
 | Memory, idle → after | 43 → 53 MB | 24 → 34 MB | 22 → 26 MB | 28 → 46 MB | 59 → 122 MB | 8 → 16 MB | 2.5 → 5 MB |
-| CPU, 40 events | 0.48 s | 0.97 s | 0.95 s | 0.89 s | 0.50 s | 0.24 s | 0.07 s |
+| CPU, 25 events | 0.48 s | 0.97 s | 0.95 s | 0.89 s | 0.50 s | 0.24 s | 0.07 s |
 
 **10 000 rows — 50 011 nodes**
 
@@ -114,7 +117,7 @@ phase measured until the server stops talking.
 | Tick | 356 ms | 661 ms | 649 ms | 671 ms | 132 ms | 97 ms | 55 ms |
 | Sort — 10 000 reversed | 421 ms | 812 ms | 751 ms | 927 ms | 197 ms | 180 ms | 164 ms |
 | Memory, after | 223 MB | 126 MB | 94 MB | 152 MB | 251 MB | 90 MB | 54 MB |
-| CPU, 20 events | 9.80 s | 18.48 s | 17.85 s | 19.09 s | 5.65 s | 4.13 s | 1.55 s |
+| CPU, 25 events | 9.80 s | 18.48 s | 17.85 s | 19.09 s | 5.65 s | 4.13 s | 1.55 s |
 
 The JavaScript one runs unchanged on **Bun**, where the same 98 tests pass
 and the client cannot tell the difference. Bun is slower on this work by a
