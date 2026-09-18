@@ -9,7 +9,7 @@ with no runtime dependencies to speak of:
 | Ruby | [solisoft/eui-ruby](https://github.com/solisoft/eui-ruby) | gem `eui-ruby` | nothing; Ruby ≥ 3.2 |
 | Python | [solisoft/eui-python](https://github.com/solisoft/eui-python) | `eui-python` | nothing; Python ≥ 3.11 |
 | PHP | [solisoft/eui-php](https://github.com/solisoft/eui-php) | `solisoft/eui-php` | `ext-openssl`; PHP ≥ 8.2 |
-| Node | [solisoft/eui-node](https://github.com/solisoft/eui-node) | `eui-node` | nothing; Node ≥ 20 |
+| Node | [solisoft/eui-node](https://github.com/solisoft/eui-node) | `eui-node` | nothing; Node ≥ 20 or Bun ≥ 1.1 |
 
 They exist for the obvious reason. An application whose data already lives in
 a Rails codebase, a Django one, a Laravel one or an Express one should not
@@ -105,6 +105,11 @@ phase measured until the server stops talking.
 | Sort — 10 000 reversed | 385 ms | 688 ms | 709 ms | 717 ms | 191 ms |
 | Memory, after | 177 MB | 125 MB | 91 MB | 151 MB | 248 MB |
 | CPU, 20 events | 7.16 s | 12.94 s | 13.95 s | 13.79 s | 4.41 s |
+
+The JavaScript one runs unchanged on **Bun**, where the same 98 tests pass
+and the client cannot tell the difference. Bun is slower on this work by a
+fifth to a third — 178 ms against Node's 152 for a tick at ten thousand rows
+— and holds about half the memory, 34 MB idle against 60.
 
 **On the wire, all five are identical**: 9 bytes for the tick, 2.8 KB for the
 500-row sort, 58.5 KB and ten thousand `MoveChild` for the 10 000-row one.
