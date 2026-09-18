@@ -198,12 +198,18 @@ jobs:
       # refuses this application at boot over a capability it does not know,
       # and finding that out *after* the tree has been replaced means the old
       # code is gone too.
-      - name: Check the server runs the pinned version
+      # A server *ahead* of the pin is not a reason to hold a deployment: it
+      # is a file that has not caught up, and it costs a warning. A server
+      # *behind* it still stops here, because the consequence is written
+      # above and is not a warning's worth: the tree would be replaced and
+      # the application would not boot on the other side.
+      - name: Check the server is not behind the pinned version
         run: |
           set -euo pipefail
           installed="$(ssh "$USER@$HOST" 'soli --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
           echo "server: $installed — pinned: $SOLI_VERSION"
-          if [ "$installed" != "$SOLI_VERSION" ]; then
+          oldest="$(printf '%s\n%s\n' "$installed" "$SOLI_VERSION" | sort -V | head -1)"
+          if [ "$installed" != "$SOLI_VERSION" ] && [ "$oldest" = "$installed" ]; then
             echo "" >&2
             echo "The server runs Soli $installed; this application needs $SOLI_VERSION." >&2
             echo "It asks for the 'scene' capability and draws a 'scene' node," >&2
@@ -212,6 +218,10 @@ jobs:
             echo "its kind_of does not know the kind either." >&2
             echo "Upgrade the server, or align SOLI_VERSION in this file." >&2
             exit 1
+          fi
+          if [ "$installed" != "$SOLI_VERSION" ]; then
+            echo "::warning::the server runs Soli $installed; this run tested $SOLI_VERSION — align SOLI_VERSION in this file, or the server"
+            echo "⚠️ The server runs Soli \`$installed\`; this run tested \`$SOLI_VERSION\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # The browser client, built here because it is not committed.

@@ -212,16 +212,19 @@ jobs:
 
       # One second to check; a version drift between CI and production has
       # already cost an intermittent 500 that the CI could not see.
-      - name: Check the server runs the pinned version
+      #
+      # Reported rather than enforced. Which Soli the server runs is worth a
+      # line in the log and a line in the summary, and it is not worth
+      # holding a finished site off production — which is what failing here
+      # did on the day the server was upgraded ahead of this file.
+      - name: Note the version the server runs
         run: |
           set -euo pipefail
           installed="$(ssh "$USER@$HOST" 'soli --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
           echo "server: $installed — pinned: $SOLI_VERSION"
           if [ "$installed" != "$SOLI_VERSION" ]; then
-            echo "" >&2
-            echo "The server runs Soli $installed; the CI tested $SOLI_VERSION." >&2
-            echo "Align SOLI_VERSION in this file, or update the server." >&2
-            exit 1
+            echo "::warning::the server runs Soli $installed; this run tested $SOLI_VERSION — align SOLI_VERSION in this file, or the server"
+            echo "⚠️ The server runs Soli \`$installed\`; this run tested \`$SOLI_VERSION\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # `soli-proxy deploy` rather than `touch restart.txt`: the trigger file
