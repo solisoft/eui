@@ -98,7 +98,10 @@ CI. The headline ones:
   without waking the part of the client that reads the server's bytes;
 - < 25 MB RSS for a 200-node application;
 - 4.6 KB on the wire for a 50-row table against 14.4 KB of HTML — 3.1× overall,
-  5.3× on structure alone, measured rather than hoped;
+  5.3× on structure alone, measured rather than hoped. **Compressed, the HTML
+  is smaller** (910 B to 1 491 B): its bulk is one tag repeated, which is what
+  gzip removes, and EUI removed it already. First-paint bytes are not the
+  claim;
 - 22 bytes for a single-cell update.
 
 If a change cannot hold these, the change is wrong, not the budget.

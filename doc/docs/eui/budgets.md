@@ -29,7 +29,38 @@ such a table really carries, unindented — the favourable case for HTML.
 **Total 3.1×. Structure 5.3×. 8.9 bytes of structure per node.**
 
 The text is the data — neither side can compress it away — so the honest
-headline is the structural ratio. The regression budget is set at 4×, below the
+headline is the structural ratio.
+
+### Under `Content-Encoding: gzip`, HTML wins
+
+| | Raw | gzip -9 |
+|---|---:|---:|
+| EUI | 4 619 | **1 491** |
+| HTML | 14 362 | **910** |
+
+That is not a typo and it is not close: **compressed, the HTML is smaller.**
+HTML's bulk is the same few tag names and class strings repeated fifty times,
+which is precisely what a compressor exists to remove; EUI has already
+removed that repetition itself, so what is left is dense and gzip finds
+little in it. A format that does its own deduplication competes badly against
+one that hands the job to zlib — and in the real world the HTML *is* gzipped.
+
+So the first-paint byte comparison belongs to HTML, and anything that claims
+otherwise is quoting the raw column and should be corrected. Two things are
+unaffected, and they are the ones worth making the argument on:
+
+- **Updates.** A single cell is 22 B and re-sorting fifty rows is 201 B.
+  Compression gives HTML no answer to that, because HTML has no update: the
+  page is sent again, and 910 B compressed is still forty times 22 B.
+- **Work.** Compression makes the receiving machine's job *larger* — it
+  inflates, and then still does the tolerant parse, the selector matching,
+  the cascade, the layout of a tree whose types it inferred, and the script.
+  That is what `00-rationale.md` and the README lead with, and it is the
+  claim that was always load-bearing.
+
+Measured by `what_the_ratio_is` in
+`crates/eui-proto/tests/size_budget.rs`, which fails if either half of this
+reverses. The regression budget is set at 4×, below the
 measured 5.3×, so a real regression trips it and ordinary drift does not.
 
 | Operation | Measured | Budget |

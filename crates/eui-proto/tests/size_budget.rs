@@ -149,6 +149,71 @@ fn a_fifty_row_table_costs_what_the_budget_says() {
     assert!(interned.len() < text_bytes.max(interned_text) + 2400);
 }
 
+/// The same table under `Content-Encoding: gzip`, which is how HTML actually
+/// crosses a wire — and where the raw comparison stops being true.
+///
+/// **Compressed, HTML is smaller.** Measured here: 910 B against EUI's
+/// 1 491 B. It is not close and it is not a fluke. HTML's bulk is the same
+/// few tag names and class strings repeated fifty times, which is exactly
+/// what a compressor is for; EUI has already removed that repetition, so its
+/// binary is dense and there is little left for gzip to find. A format that
+/// does its own deduplication competes badly with one that hands the job to
+/// zlib.
+///
+/// So the first-paint byte comparison belongs to HTML once compression is on,
+/// and anything claiming otherwise should be corrected rather than defended.
+/// What survives is elsewhere and is not affected by this:
+///
+/// - **Updates.** A single cell is 22 B and re-sorting fifty rows is 201 B
+///   ([`a_single_cell_update_is_tiny`], [`re_sorting_a_keyed_table_moves_rather_than_rebuilds`]).
+///   Compression does not give HTML an answer to that, because HTML has no
+///   update at all — the page is sent again, and 910 B compressed is still
+///   forty times 22 B.
+/// - **Work.** Compression makes the receiving machine's job *larger*: it
+///   inflates, and then still does the tolerant parse, the selector matching,
+///   the cascade, the layout of an inferred tree and the script. That is the
+///   argument `README.md` leads with, and it is the one that was always
+///   load-bearing.
+#[test]
+fn compressed_html_is_smaller_and_that_is_worth_knowing() {
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+
+    fn gz(bytes: &[u8]) -> usize {
+        let mut e = GzEncoder::new(Vec::new(), Compression::best());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap().len()
+    }
+
+    let (eui, _) = build_eui(false);
+    let html = build_html();
+    let (eui_gz, html_gz) = (gz(&eui), gz(html.as_bytes()));
+
+    println!("\n  fifty-row table, on the wire");
+    println!("  {:<10} {:>7} {:>9}", "", "raw", "gzip -9");
+    println!("  {:<10} {:>7} {:>9}", "EUI", eui.len(), eui_gz);
+    println!("  {:<10} {:>7} {:>9}", "HTML", html.len(), html_gz);
+    println!(
+        "  {:<10} {:>6.1}x {:>8.1}x  (>1 means EUI is smaller)",
+        "ratio",
+        html.len() as f64 / eui.len() as f64,
+        html_gz as f64 / eui_gz as f64
+    );
+
+    // Nothing here is a budget. These numbers move with the compressor and
+    // with how repetitive the fixture's text happens to be, and a threshold
+    // would be testing zlib. What this pins is the *shape* of the answer, so
+    // that a change which quietly reversed either half would be noticed:
+    // raw, EUI is smaller; compressed, it is not.
+    assert!(eui.len() < html.len(), "raw: EUI {} B vs HTML {} B", eui.len(), html.len());
+    assert!(
+        eui_gz > html_gz,
+        "compressed EUI {eui_gz} B is now smaller than compressed HTML {html_gz} B. \
+         That would be good news and it makes the note above wrong — rewrite it, and \
+         the claims in README.md and doc/docs/eui/budgets.md with it."
+    );
+}
+
 fn eui_overhead_ratio(html: usize, eui: usize) -> f64 {
     html as f64 / eui as f64
 }

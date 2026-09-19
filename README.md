@@ -5,9 +5,17 @@ or JavaScript. The server sends an interface tree that is **already resolved**,
 in a compact binary encoding; a native Rust client applies it, lays it out, and
 draws it on the GPU.
 
-The point is not the bytes — though a 50-row table is 4 619 B against 14 362 B
-of HTML. The point is what the client no longer does: no tolerant parse, no
-selector matching, no cascade resolution, no reflow of an untyped tree, no JIT.
+The point is not the bytes, and it is worth saying why rather than leaving it
+as modesty. A 50-row table is 4 619 B against 14 362 B of HTML — but gzip the
+pair and the HTML is *smaller*, 910 B to 1 491 B, because its bulk is the same
+tag repeated fifty times and that is exactly what a compressor removes. EUI
+removed it already, so there is little left to squeeze.
+
+The point is what the client no longer does: no tolerant parse, no selector
+matching, no cascade resolution, no reflow of an untyped tree, no JIT.
+Compression makes that worse, not better — the machine inflates the page and
+then does all of it anyway. And after the first paint the comparison stops
+being close: a changed cell is 22 B, where HTML has no update to send at all.
 
 ## Layout
 

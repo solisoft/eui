@@ -286,8 +286,14 @@ here it is 49 moves and 201 bytes.
 
 ### What this does not claim
 
-Bytes on the wire were never the main prize. A 3.1× reduction matters on a slow
-link, but the reason EUI exists is what the *client* does not do with those
+Bytes on the wire were never the main prize, and under compression they are
+not even a win: gzip the same table both ways and the HTML is **smaller**,
+910 B to 1 491 B, because its bulk is one tag repeated fifty times and that is
+what a compressor is for. A 3.1× raw reduction matters on a link with no
+compression and nowhere else.
+
+What does not change is the update — 22 B against a page HTML must send again
+— and the reason EUI exists, which is what the *client* does not do with those
 bytes: no tolerant parse, no selector matching, no cascade resolution, no reflow
 of an untyped tree, no JIT. Those are the numbers in §1, and they are the ones
 worth judging the project on once the client can be measured.

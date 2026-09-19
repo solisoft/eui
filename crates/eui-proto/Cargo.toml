@@ -11,5 +11,13 @@ rust-version.workspace = true
 # dependency here would be attack surface we did not write and cannot fuzz.
 [dependencies]
 
+# Tests only, and so not a dependency in the sense the note above refuses:
+# nothing here is compiled into the shipped crate or shown a byte from the
+# network. `flate2` is here so the size claim can be made about *compressed*
+# payloads too — HTML compresses very well, and a ratio measured only on raw
+# bytes would be the flattering half of the truth.
+[dev-dependencies]
+flate2 = "1"
+
 [lints]
 workspace = true
