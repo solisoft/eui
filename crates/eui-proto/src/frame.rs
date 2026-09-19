@@ -333,6 +333,36 @@ pub enum Frame {
 }
 
 impl Frame {
+    /// How many bytes the frame at the start of `bytes` occupies, header
+    /// included, without looking at its payload.
+    ///
+    /// For walking a run of frames that did not arrive as separate messages:
+    /// the body of `GET /_eui/view/<component>` is a `Welcome` and its
+    /// batches concatenated, because the framing is self-delimiting and a
+    /// socket's message boundaries were never what carried it (01 §3).
+    ///
+    /// This reads the kind byte and the length varint and nothing else, so it
+    /// cannot accept a frame [`Frame::decode`] would reject — it only says
+    /// where the next one starts.
+    pub fn framed_len(bytes: &[u8]) -> Result<usize> {
+        let mut r = Reader::new(bytes);
+        let _kind = r.u8()?;
+        let len = usize::try_from(r.varint()?).map_err(|_| DecodeError::BadVarint)?;
+        if len > MAX_FRAME_BYTES {
+            return Err(DecodeError::LimitExceeded("frame length"));
+        }
+        let header = r.position();
+        header.checked_add(len).ok_or(DecodeError::BadVarint)
+    }
+
+    /// Decode the frame at the start of `bytes`, and say how many bytes it
+    /// used. Trailing bytes are the caller's business here, not an error.
+    pub fn decode_prefix(bytes: &[u8]) -> Result<(Self, usize)> {
+        let used = Self::framed_len(bytes)?;
+        let frame = bytes.get(..used).ok_or(DecodeError::Truncated)?;
+        Ok((Self::decode(frame)?, used))
+    }
+
     /// Decode a complete WebSocket message.
     ///
     /// Rejects trailing bytes: a frame's declared length must account for every

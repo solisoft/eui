@@ -90,3 +90,14 @@ pub const MAX_FONT_ROLE: u8 = 9;
 /// Most faces one role may carry — a weight and a slant each, twice over.
 /// `font_weight` selects among them; nothing else does.
 pub const MAX_FACES_PER_ROLE: u32 = 8;
+
+/// Most frames one `application/vnd.eui.frames` body may carry (01 §2.4).
+///
+/// [`MAX_FRAME_BYTES`](crate::limits::MAX_FRAME_BYTES) bounds one frame and
+/// nothing bounded a *count*, because nothing ever handed a client a
+/// concatenation before. A body of two-byte frames at that ceiling is eight
+/// million iterations before the first pixel.
+pub const MAX_VIEW_FRAMES: usize = 64;
+
+/// Most bytes one such body may be.
+pub const MAX_VIEW_BYTES: usize = 4 * 1024 * 1024;
