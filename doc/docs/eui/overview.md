@@ -125,6 +125,63 @@ Each refusal is why the client stays small enough to audit.
   none of it, but the tab around it is a browser tab, with everything that
   implies. Read documentation in it; do not bank in it.
 
+## Getting it
+
+One line, on anything with a shell. It reads `uname`, picks the build that
+matches the machine, unpacks it, and leaves the binary in `~/.local/bin` —
+or wherever `EUI_DEST` says:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/solisoft/eui/main/scripts/install.sh | sh
+```
+
+It takes a tag, so `| sh -s v0.4.0` installs that release rather than the
+rolling one. And it refuses rather than guesses where there is no build: an
+Intel Mac and a Linux on ARM both `uname` perfectly well and have nothing to
+download.
+
+On macOS that installs the bare binary, which is the thing a `eui wss://…`
+command line wants. For **EUI.app** in `/Applications`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/solisoft/eui/main/scripts/install-macos.sh | bash
+```
+
+`curl` rather than a browser, and that is the whole point of the second
+script. The build is ad-hoc signed and not notarised, so Gatekeeper holds
+the first launch of anything wearing `com.apple.quarantine` — which is
+written by whatever downloaded it, afresh on every new download, which is
+why stripping it by hand never stays stripped. `curl` writes none.
+
+Or take the archive and unpack it yourself:
+
+| | file |
+|---|---|
+| Linux | [`eui-x86_64-linux.tar.gz`](https://github.com/solisoft/eui/releases/download/rolling/eui-x86_64-linux.tar.gz) |
+| macOS | [`EUI-aarch64-macos.dmg`](https://github.com/solisoft/eui/releases/download/rolling/EUI-aarch64-macos.dmg) |
+| Windows | [`eui-x86_64-windows.zip`](https://github.com/solisoft/eui/releases/download/rolling/eui-x86_64-windows.zip) |
+| Android | [`eui.apk`](https://github.com/solisoft/eui/releases/download/rolling/eui.apk) |
+
+`rolling` is rebuilt on every push to `main`; a version tag in place of it
+gets that release instead.
+
+### And then the applications
+
+Once the client is installed, an application can be too — `eui --install
+<address>` writes a launcher entry that opens it in its own window: a
+`.desktop` file on Linux, a bundle in `~/Applications` on macOS, a Start
+menu shortcut on Windows. The arrow beside the padlock in the address bar
+does the same thing, and becomes a tick once it is there.
+
+Nothing is packaged and nothing is downloaded by that: the entry runs the
+client with the application's address, so updating the client updates every
+installed application at once. The icon is the one the publisher signed into
+their manifest ([Transport](/docs/transport) §2.1) — an application that
+publishes none cannot be installed, because the alternative is a launcher
+full of identical pictures. `--installed` lists what is there and says
+where; `--uninstall` takes an address, or an `app_id` to remove every entry
+an application has.
+
 ## Four ways to open an application, and one of them is a courier
 
 - `eui <wss://host/_eui/session/app> [--allow cap,cap]` — the standalone
