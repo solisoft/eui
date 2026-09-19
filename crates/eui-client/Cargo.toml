@@ -158,6 +158,13 @@ workspace = true
 # Its own crate because attaching to winit's `wl_display` needs `unsafe`,
 # and this one is `#![forbid(unsafe_code)]`.
 eui-wayland = { path = "../eui-wayland", version = "0.1.0" }
+# The XDG desktop portal, for the one thing winit will not answer on this
+# platform: whether the desktop is light or dark. `org.freedesktop.appearance`
+# is where GNOME, KDE and the rest keep it, and it is what a browser answers
+# `prefers-color-scheme` from. Nothing new in the lock file -- AccessKit's
+# AT-SPI bridge already resolves zbus for this target, and this is the same
+# crate with its blocking API turned on.
+zbus = "5"
 landlock = "0.4.7"
 libc = "0.2.189"
 rustix = { version = "1", features = ["process"] }

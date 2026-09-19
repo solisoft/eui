@@ -87,7 +87,17 @@ impl Connection {
         let notify = std::sync::Arc::clone(&self.notify);
         let cookie = self.cookie.clone();
         let _ = thread::Builder::new().name("eui-asset".into()).spawn(move || {
+            // `EUI_TRACE=1` times this. There was no trace on the asset path
+            // at all, and it is the one part of opening a picture that is
+            // neither the server's nor the frame's -- a viewer that took six
+            // seconds to show a photograph could be measured everywhere
+            // except where the time was going.
+            let t0 = crate::time::Instant::now();
             let result = crate::assets::fetch(&origin, &hash, cookie.as_deref()).map_err(|e| e.to_string());
+            crate::driver::trace(|| match &result {
+                Ok(bytes) => format!("asset {} fetched {} bytes in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), bytes.len(), t0.elapsed().as_millis()),
+                Err(e) => format!("asset {} failed in {} ms: {e}", crate::assets::hex(&hash).get(..8).unwrap_or(""), t0.elapsed().as_millis()),
+            });
             let _ = tx.send(Incoming::Asset(hash, result));
             notify();
         });

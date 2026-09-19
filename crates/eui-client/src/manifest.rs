@@ -69,8 +69,12 @@ pub fn pins_dir() -> Option<PathBuf> {
 }
 
 /// The corner of the person's configuration this client keeps things in.
+///
+/// Public because it is the client's one answer to "where do my things
+/// go": the pins, the grants, the recents and the record of what is
+/// installed are all the same question, and four answers to it would drift.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn config_dir() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(d).join("eui"));
     }
@@ -82,13 +86,13 @@ fn config_dir() -> Option<PathBuf> {
 
 /// The directory the platform gave this application, inside its own sandbox.
 #[cfg(target_os = "android")]
-fn config_dir() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     crate::android::data_dir()
 }
 
 /// The application's own container, under `Library/Application Support`.
 #[cfg(target_os = "ios")]
-fn config_dir() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     crate::ios::data_dir()
 }
 

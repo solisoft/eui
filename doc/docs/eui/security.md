@@ -35,6 +35,16 @@ draws without the grant: it is the client's own program over the client's own
 shape, and asking someone to allow that would be a toll on nothing — which is
 how people learn to grant without reading.
 
+`notifications` is the odd one in a third way: nothing in the tree asks for
+it. Every other capability is reached through something the document
+contains — a `camera` node, a `pick` prop, a node carrying `open` — so
+refusing the thing refuses the power. A notification is an op, and an op
+arrives whether or not anybody is looking, so the grant is the only thing
+between an application and someone's attention. A client that was not
+granted it drops the op and carries on drawing; at most four may ride in one
+batch; and nothing at all goes back — not shown, not clicked, not dismissed,
+not "this machine has no notifier".
+
 `net.open` is the odd one at the other end: the only capability that hands
 something to the world *outside* the client. Granted, a person clicking a node
 that carries an `https:` address has it opened in their own browser — their

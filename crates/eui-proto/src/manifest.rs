@@ -10,8 +10,13 @@ use crate::writer::Writer;
 
 /// Record magic.
 pub const MAGIC: [u8; 4] = *b"EUIM";
-/// Record version.
+/// Record version for a manifest with no icon — the only version there
+/// was before icons, and still what an iconless manifest is written as, so
+/// that every record published before this stayed byte-for-byte what its
+/// publisher signed.
 pub const VERSION: u8 = 1;
+/// Record version for a manifest that carries an `icon`.
+pub const VERSION_ICON: u8 = 2;
 /// Longest string field.
 pub const MAX_STR: usize = 256;
 
@@ -39,7 +44,30 @@ pub mod key {
     /// `rotation`, `List[Str previous key, Str signature]` or `Null`.
     pub const ROTATION: u64 = 9;
     /// `signature`, `Str` of 128 hex digits; always last, never signed.
+    ///
+    /// Last is what fixes its key, and the count of fields before it is
+    /// what the version says — so the signature is field 10 of a version 1
+    /// record and field 11 of a version 2 one, where slot 10 is the icon.
     pub const SIGNATURE: u64 = 10;
+    /// `icon`, `Str` of 64 hex digits: the BLAKE3 of a PNG at the
+    /// application's own origin, which is what a launcher entry made for
+    /// this application shows. Version 2 records only, and never `Null` —
+    /// a manifest with no icon is written as version 1, so that there is
+    /// exactly one encoding of every manifest and a decoder can rebuild
+    /// the signed bytes exactly.
+    pub const ICON: u64 = 10;
+    /// `signature` of a version 2 record. See [`SIGNATURE`].
+    pub const SIGNATURE_ICON: u64 = 11;
+}
+
+/// How many fields a record of this version signs, and the key its
+/// signature takes. `None` for a version this crate does not know.
+const fn shape(version: u8) -> Option<(u64, u64)> {
+    match version {
+        VERSION => Some((10, key::SIGNATURE)),
+        VERSION_ICON => Some((11, key::SIGNATURE_ICON)),
+        _ => None,
+    }
 }
 
 /// A publisher key rotation: the previous key, and its signature over the
@@ -72,6 +100,12 @@ pub struct Manifest {
     pub capabilities: u32,
     /// BLAKE3 of the default theme asset, if any.
     pub theme: Option<[u8; 32]>,
+    /// BLAKE3 of a PNG at the application's origin, if the publisher
+    /// offers one: the icon a launcher entry for this application wears.
+    /// Signed, like everything else here — a dock tile that says which
+    /// application this is should not be a thing an intermediary can
+    /// change.
+    pub icon: Option<[u8; 32]>,
     /// Session path, `/_eui/session` by default.
     pub entry: String,
     /// A key rotation, if the publisher key changed.
@@ -89,6 +123,7 @@ impl Default for Manifest {
             publisher_key: [0; 32],
             capabilities: 0,
             theme: None,
+            icon: None,
             entry: "/_eui/session".into(),
             rotation: None,
         }
@@ -141,10 +176,18 @@ impl Manifest {
             (key::ENTRY, Value::Str(self.entry.clone())),
             (key::ROTATION, self.rotation.as_ref().map_or(Value::Null, |r| Value::List(vec![Value::Str(hex(&r.previous_key)), Value::Str(hex(&r.signature))]))),
         ];
-        if let Some(sig) = signature {
-            fields.push((key::SIGNATURE, Value::Str(hex(sig))));
+        // An icon makes it a version 2 record, and nothing else does: the
+        // field is only ever written with a value in it, so there is one
+        // encoding of every manifest and `signed_bytes` of a decoded one
+        // is the byte string that was signed.
+        let version = if self.icon.is_some() { VERSION_ICON } else { VERSION };
+        if let Some(icon) = self.icon {
+            fields.push((key::ICON, Value::Str(hex(&icon))));
         }
-        w.raw(&MAGIC).u8(VERSION).varint(fields.len() as u64);
+        if let Some(sig) = signature {
+            fields.push((if self.icon.is_some() { key::SIGNATURE_ICON } else { key::SIGNATURE }, Value::Str(hex(sig))));
+        }
+        w.raw(&MAGIC).u8(version).varint(fields.len() as u64);
         for (k, v) in &fields {
             w.varint(*k);
             v.encode(w);
@@ -160,12 +203,12 @@ impl Manifest {
         if r.array::<4>()? != MAGIC {
             return Err(DecodeError::UnknownTag("manifest magic"));
         }
-        if r.u8()? != VERSION {
+        let Some((signed, sig_key)) = shape(r.u8()?) else {
             return Err(DecodeError::UnknownTag("manifest version"));
-        }
+        };
         let count = r.varint()?;
-        if count != 11 {
-            return Err(DecodeError::IllegalValue("a manifest has exactly eleven fields"));
+        if count != signed.saturating_add(1) {
+            return Err(DecodeError::IllegalValue("a manifest has every field of its version, and its signature"));
         }
         let mut m = Manifest::default();
         let mut signature = None;
@@ -208,7 +251,11 @@ impl Manifest {
                         _ => return Err(DecodeError::IllegalValue("rotation is [previous key, signature]")),
                     }
                 }
-                key::SIGNATURE => signature = Some(unhex::<64>(&text(&v)?)?),
+                // Before the icon, not after: slot 10 is the signature in a
+                // version 1 record and the icon in a version 2 one, and the
+                // version is what says which.
+                k if k == sig_key => signature = Some(unhex::<64>(&text(&v)?)?),
+                key::ICON => m.icon = Some(unhex::<32>(&text(&v)?)?),
                 _ => return Err(DecodeError::UnknownTag("manifest key")),
             }
         }

@@ -135,7 +135,10 @@ EUI_ALLOW_INSECURE_LOOPBACK=1 cargo run -p eui-client -- ws://127.0.0.1:5011/_eu
 
 # Atrium, the messenger. Open it twice against the one server: the two
 # windows are two people, and each sees what the other types, sends, reacts
-# to and attaches. What happened is pushed — `eui_wake` renders the other
+# to and attaches. The second `eui` hands its address to the first and
+# exits, so the two windows are two windows of one process -- one adapter,
+# one device, one set of pipelines, and still a confined worker each
+# (08 §10). `--standalone` keeps a launch in a process of its own. What happened is pushed — `eui_wake` renders the other
 # sessions where the counter moves — and what went stale on its own is found
 # by the view's `wake` (06 §1.1), a tick, and a sequence number.
 # The room lives in a module global, and a global belongs to one realtime

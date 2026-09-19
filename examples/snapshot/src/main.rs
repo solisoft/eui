@@ -52,6 +52,9 @@ fn granted() -> u32 {
     list.split(',').map(str::trim).filter(|n| !n.is_empty()).map(|n| eui_proto::caps::from_name(n).unwrap_or_else(|| panic!("SNAPSHOT_ALLOW: no capability called {n:?}"))).fold(0, |a, b| a | b)
 }
 
+static ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static GOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = args.get(1).cloned().unwrap_or_else(|| ".".into());
@@ -173,6 +176,7 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
             for hash in driver.pending_assets() {
                 conn.request_asset(hash);
                 outstanding += 1;
+                ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             if driver.session().root().is_some() && outstanding == 0 {
                 // One more short wait for a straggling batch, then done.
@@ -416,28 +420,24 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         if let Some(dy) = std::env::var("SNAPSHOT_SCROLL").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
             let _ = driver.paint(dw, dh);
             driver.input(Input::PointerMove(w / 2.0, h / 2.0));
-            driver.input(Input::Wheel(0.0, dy));
+            // A wheel reports where it left the view (06 §8, `scroll`), and a
+            // server that subscribed to that is owed the report: dropping the
+            // frames here left the application believing the offset it last
+            // set, which is exactly the bug this option exists to photograph.
+            for f in driver.input(Input::Wheel(0.0, dy)) {
+                conn.tx.send(f.encode()).unwrap();
+            }
             // A scroll glides: it lands on the clock, not on the wheel
             // event, so the frames it wants are run here rather than
-            // painting the page half way there.
+            // painting the page half way there. The landing reports too.
             let mut clock = Instant::now();
             for _ in 0..60 {
                 clock += Duration::from_millis(16);
                 driver.tick(clock);
                 let _ = driver.paint(dw, dh);
-            }
-        }
-        // SNAPSHOT_SETTLE=<ms> — let time pass before the last paint, ticking
-        // the driver's clock and applying whatever arrives.
-        //
-        // Without this the tool paints but never ticks, so anything the clock
-        // drives is invisible to it: a `wake` never fires, a transition never
-        // eases, a glide never lands. An application that shows a loader until
-        // its first wake would be photographed mid-load forever.
-        if let Some(ms) = std::env::var("SNAPSHOT_SETTLE").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
-            let until = Instant::now() + Duration::from_millis(ms);
-            while Instant::now() < until {
-                let _ = wake_rx.recv_timeout(Duration::from_millis(16));
+                for f in driver.take_pending() {
+                    conn.tx.send(f.encode()).unwrap();
+                }
                 while let Ok(msg) = conn.rx.try_recv() {
                     match msg {
                         Incoming::Message(b) => {
@@ -446,35 +446,49 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                                 conn.tx.send(f.encode()).unwrap();
                             }
                         }
-                        Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                        Incoming::Asset(hash, Ok(bytes)) => {
+                            GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            driver.asset_ready(hash, bytes)
+                        }
                         Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
                         Incoming::Closed(e) => panic!("closed: {e}"),
                     }
                 }
-                driver.tick(Instant::now());
-                let _ = driver.paint(dw, dh);
-                // Painting is what raises a wake, a time update or a viewport
-                // frame; `take_pending` is what lets them leave. A tool that
-                // paints and never drains generates them and sends none.
-                for f in driver.take_pending() {
-                    conn.tx.send(f.encode()).unwrap();
-                }
-                for hash in driver.pending_assets() {
-                    conn.request_asset(hash);
-                }
             }
         }
-        // SNAPSHOT_KEYS="Tab;Escape" — keys pressed in order before the last
+        // SNAPSHOT_KEYS="Tab;Escape;^z;~ArrowUp" — keys pressed in order
+        // before the last paint, with `$` shift, `^` control, `~` alt and
+        // `#` super on the front of one that wants a modifier.
         // paint, so a focus ring, a trapped Tab or a surface that closes on
         // Escape can be looked at without a keyboard. Each press waits for
         // whatever the server sends back, the way a click does.
         if let Ok(keys) = std::env::var("SNAPSHOT_KEYS") {
-            for key in keys.split(';').map(str::trim).filter(|k| !k.is_empty()) {
+            for entry in keys.split(';').map(str::trim).filter(|k| !k.is_empty()) {
+                // A leading `^`, `~`, `$` or `#` is control, alt, shift or
+                // super (06 §1: 1 shift, 2 control, 4 alt, 8 super). Without
+                // them the accelerators cannot be photographed at all — and
+                // an accelerator is exactly the kind of key a node has to
+                // *claim* to hear, so the path it takes is the one worth a
+                // picture.
+                let mut modifiers: u32 = 0;
+                let mut key = entry;
+                loop {
+                    let bit = match key.as_bytes().first() {
+                        Some(b'$') => 1,
+                        Some(b'^') => 2,
+                        Some(b'~') => 4,
+                        Some(b'#') => 8,
+                        _ => break,
+                    };
+                    modifiers |= bit;
+                    key = &key[1..];
+                }
+                let key = key.to_owned();
                 let _ = driver.paint(dw, dh);
-                for f in driver.input(Input::Key { key: key.to_owned(), modifiers: 0, down: true }) {
+                for f in driver.input(Input::Key { key: key.clone(), modifiers, down: true }) {
                     conn.tx.send(f.encode()).unwrap();
                 }
-                for f in driver.input(Input::Key { key: key.to_owned(), modifiers: 0, down: false }) {
+                for f in driver.input(Input::Key { key: key.clone(), modifiers, down: false }) {
                     conn.tx.send(f.encode()).unwrap();
                 }
                 let deadline = Instant::now() + Duration::from_secs(5);
@@ -497,6 +511,53 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     if answered {
                         break;
                     }
+                }
+            }
+        }
+        // SNAPSHOT_SETTLE=<ms> — let time pass before the last paint, ticking
+        // the driver's clock and applying whatever arrives.
+        //
+        // Without this the tool paints but never ticks, so anything the clock
+        // drives is invisible to it: a `wake` never fires, a transition never
+        // eases, a glide never lands. An application that shows a loader until
+        // its first wake would be photographed mid-load forever.
+        //
+        // After the keys, because what a key sets going is the usual reason
+        // to want time to pass: an application that answers a press by arming
+        // work for its next `wake` -- a send, a fetch, a mark -- was
+        // unphotographable while this ran first, and every such press looked
+        // like a press that did nothing.
+        if let Some(ms) = std::env::var("SNAPSHOT_SETTLE").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            let until = Instant::now() + Duration::from_millis(ms);
+            while Instant::now() < until {
+                let _ = wake_rx.recv_timeout(Duration::from_millis(16));
+                while let Ok(msg) = conn.rx.try_recv() {
+                    match msg {
+                        Incoming::Message(b) => {
+                            let frame = Frame::decode(&b).expect("frame");
+                            for f in driver.handle_frame(frame) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                        Incoming::Asset(hash, Ok(bytes)) => {
+                            GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            driver.asset_ready(hash, bytes)
+                        }
+                        Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
+                        Incoming::Closed(e) => panic!("closed: {e}"),
+                    }
+                }
+                driver.tick(Instant::now());
+                let _ = driver.paint(dw, dh);
+                // Painting is what raises a wake, a time update or a viewport
+                // frame; `take_pending` is what lets them leave. A tool that
+                // paints and never drains generates them and sends none.
+                for f in driver.take_pending() {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                for hash in driver.pending_assets() {
+                    conn.request_asset(hash);
+                    ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         }
@@ -599,7 +660,13 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         let px = renderer.read_back(&target).expect("read back");
         let file = format!("{name}-{mode_name}");
         write_image(out, &file, &px, dw, dh);
-        println!("{file} {dw} {dh} quads={} nodes={}", list.quads.len(), driver.session().live_nodes());
+        println!(
+            "{file} {dw} {dh} quads={} nodes={} assets={}/{}",
+            list.quads.len(),
+            driver.session().live_nodes(),
+            GOT.load(std::sync::atomic::Ordering::Relaxed),
+            ASKED.load(std::sync::atomic::Ordering::Relaxed)
+        );
         if std::env::var_os("SNAPSHOT_DUMP").is_some() {
             if let Some(root) = driver.session().root() {
                 dump(&driver, root, 0);

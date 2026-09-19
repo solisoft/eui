@@ -389,13 +389,42 @@ impl ImageAtlas {
         self.map.get(hash).copied().flatten()
     }
 
+    /// Forget everything packed. The texels stay allocated and are marked
+    /// for re-upload; what is still on screen is packed again by whoever
+    /// notices it is missing.
+    ///
+    /// This exists because the sheet is one 2048² texture and it fills: six
+    /// photographs of 800×600 are enough. Without a way to start again, the
+    /// seventh picture of a session was never drawn — not an error, not a
+    /// failed fetch, simply absent, and a different set of absences on
+    /// every load.
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.shelves.clear();
+        self.next_y = 0;
+        if !self.pixels.is_empty() {
+            self.pixels.iter_mut().for_each(|b| *b = 0);
+            self.mark_dirty_all();
+        }
+    }
+
     /// Pack an image. `None` when it does not fit; the hash is remembered
     /// either way so a failure is not retried every frame.
+    ///
+    /// "Does not fit" means *in an empty sheet*: a picture that is simply
+    /// larger than the texture is refused for good, and one that would fit
+    /// on its own empties the sheet and takes it. The cost of emptying is
+    /// one re-upload and packing again whatever is still on screen; the
+    /// cost of not doing it was a picture that never appeared.
     pub fn insert(&mut self, hash: [u8; 32], width: u32, height: u32, rgba: &[u8]) -> Option<Region> {
         if let Some(r) = self.map.get(&hash) {
             return *r;
         }
-        let region = self.pack(width, height, rgba);
+        let mut region = self.pack(width, height, rgba);
+        if region.is_none() && !self.map.is_empty() && width + 2 <= self.size && height + 2 <= self.size {
+            self.clear();
+            region = self.pack(width, height, rgba);
+        }
         self.map.insert(hash, region);
         region
     }
@@ -497,6 +526,33 @@ mod tests {
 
         // The same hash again is the cached region, not a second pack.
         assert_eq!(atlas.insert([7; 32], 8, 8, &rgba), region);
+    }
+
+    #[test]
+    fn a_full_sheet_empties_itself_rather_than_refusing_for_ever() {
+        // One 2048² sheet holds six photographs of 800×600 — two to a
+        // shelf, three shelves — and the seventh used to be refused and
+        // the refusal remembered, so it was never drawn again. In a mail
+        // client with seventeen pictures attached, six appeared.
+        let edge = 1500;
+        let rgba = vec![200u8; (edge as usize).pow(2) * 4];
+        let mut atlas = ImageAtlas::new();
+
+        let first = atlas.insert([1; 32], edge, edge, &rgba);
+        assert!(first.is_some(), "the first fits");
+
+        // The second cannot share the shelf and cannot start another, so
+        // the sheet empties and takes it.
+        let second = atlas.insert([2; 32], edge, edge, &rgba);
+        assert!(second.is_some(), "the second fits, in an emptied sheet");
+        assert_eq!(atlas.get(&[1; 32]), None, "and the first is gone");
+
+        // Something larger than the sheet itself is still refused, and the
+        // sheet is left alone.
+        let huge = ImageAtlas::SIZE + 10;
+        let big = vec![0u8; (huge as usize) * 4];
+        assert_eq!(atlas.insert([3; 32], huge, 1, &big), None);
+        assert!(atlas.get(&[2; 32]).is_some(), "a refusal costs nothing");
     }
 
     #[test]

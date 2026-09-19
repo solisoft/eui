@@ -271,6 +271,17 @@ beyond the coarse fields in the `Viewport` frame.
   of this but the mode. The reference client follows Omarchy on Linux
   (`~/.local/state/omarchy/current/theme/colors.toml`), live; the mapping
   is in `eui-client/src/desktop_theme.rs`.
+- **The viewer's light or dark.** A client MUST send the mode the viewer
+  is actually in on the first `Hello`, not on a viewport that corrects it
+  afterwards: a server renders for what the `Hello` said, and a client
+  that opens light and corrects itself has already made the server draw
+  the wrong palette once. Where the platform will not say — winit reports
+  a theme on macOS, on Windows and in a page, and on no Linux backend —
+  the reference client asks the desktop instead: the palette above where
+  there is one, and otherwise `color-scheme` from the XDG desktop portal
+  (`org.freedesktop.appearance`), which is the setting a browser answers
+  `prefers-color-scheme` from. A change of mode goes to every open
+  session, not only the one in front.
 
 ## 6. Literal colours
 

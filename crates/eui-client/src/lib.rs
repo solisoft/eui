@@ -101,6 +101,16 @@ pub mod cursor;
 #[cfg(has_desktop_theme)]
 pub mod desktop_theme;
 pub mod driver;
+/// A launcher entry with the application's own icon, so an address is
+/// something the desktop can start. Needs somewhere to write one, which
+/// neither phone has; see `has_launchers` in `build.rs`.
+#[cfg(has_launchers)]
+pub mod install;
+/// One process for every window: the socket a second `eui` hands its
+/// launch to, so a launcher does not build a GPU stack beside the one
+/// already running.
+#[cfg(has_instance)]
+pub mod instance;
 /// The signed manifest of 01 §2.1 and the pin store behind it. Needs a
 /// signature verifier and somewhere durable to keep a key, and a page has
 /// neither; see `has_pins` in `build.rs`.

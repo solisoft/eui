@@ -287,6 +287,7 @@ Op    := opcode:u8  payload
 | `0x29` | `ClearHandler` | `node:varint event:u8` |
 | `0x2A` | `Focus` | `node:varint` |
 | `0x2B` | `ScrollTo` | `node:varint x:svarint y:svarint` |
+| `0x2C` | `Notify` | `title:str body:str tag:str` — §5.2 |
 
 Definition ops (`0x1x`) within a batch MUST precede any op that references what
 they define. A decoder MAY rely on this and MUST reject a forward reference.
@@ -330,6 +331,45 @@ A client MUST NOT resolve a face by name, by URL, or from the machine it runs
 on. The faces a session shapes with are exactly the embedded ones and the
 assets its own origin served ([`08-security.md`](08-security.md) §8).
 
+### 5.2 Saying something to the person
+
+`Notify` is the one op that names no node. What it changes is not the
+document but what somebody is *told*: a line raised by the machine's own
+notifier, which outlives the batch, sits outside the window, and is read by
+a person who may not be looking at the application at all.
+
+| Field | |
+|---|---|
+| `title` | At most `MAX_NOTIFY_TITLE` bytes. Required in practice: a notification with no title is a blank rectangle, and a client SHOULD show nothing rather than that. |
+| `body` | At most `MAX_NOTIFY_BODY` bytes; may be empty. |
+| `tag` | At most `MAX_NOTIFY_TAG` bytes; may be empty. An identity, not prose: a notification carrying the tag of one still on screen **replaces** it rather than stacking beside it, so ten replies to one thread are one notification. |
+
+A client MUST NOT show one without the `notifications` capability
+([`01-transport.md`](01-transport.md) §2.1), and MUST NOT fail the session
+for it either: the op is decoded, counted against the limit below, and
+dropped. A batch carrying one is a batch like any other — applied whole,
+acked once — and a batch whose tree is refused shows nothing, because the
+op never applied.
+
+At most `MAX_NOTIFY_PER_BATCH` of them may appear in one batch, and a batch
+carrying more MUST be refused. This is the only limit in §6 that bounds
+something other than the client's memory: what it bounds is how often one
+batch may interrupt somebody, which nothing else in this protocol measures.
+A client MAY drop the oldest of several it has not shown yet.
+
+**Nothing is reported back.** There is no event for a notification shown,
+clicked, replaced or dismissed, and none for a machine that has no notifier
+at all. An application learns exactly as much by sending one as it does by
+sending an address to `open` (03 §3.5), and for the same reason: an answer
+would be a probe for what this machine is and who is at it, with a clock
+beside it ([`08-security.md`](08-security.md) §8). What a client MAY do with
+a click is bring its own window forward.
+
+A client MUST NOT hand any part of a `Notify` to a shell, and a title
+carrying control characters MUST be cleaned or refused before it reaches a
+platform notifier — a notification's text is a server's string, and every
+platform has an argument parser somewhere behind it.
+
 ## 6. Limits
 
 A conforming client MUST enforce all of these and MUST fail the session, not
@@ -355,6 +395,10 @@ truncate, when one is exceeded.
 | `MAX_INLINE_STR` | 4 KiB |
 | `MAX_VALUE_DEPTH` | 4 |
 | `MAX_VALUE_LIST` | 1 000 000 elements (a windowed list's `heights`, 04 §7.1; bounded in bytes by the frame) |
+| `MAX_NOTIFY_TITLE` | 256 bytes |
+| `MAX_NOTIFY_BODY` | 1 KiB |
+| `MAX_NOTIFY_TAG` | 64 bytes |
+| `MAX_NOTIFY_PER_BATCH` | 4 (§5.2) |
 
 `MAX_ATOM_TOTAL_BYTES`, and the rule that an id is defined once and referenced
 only after, are session state and belong to the tree layer, not the decoder.

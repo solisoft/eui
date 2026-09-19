@@ -120,6 +120,7 @@ MoveChild(parent, from, to)
 SetHandler(node, event, handler)
 ClearHandler(node, event)
 Focus(node)   ScrollTo(node, x, y)
+Notify(title, body, tag)                    say one line to the person
 ```
 
 `MoveChild` is the one worth pointing at. Soli's current LiveView diff works on

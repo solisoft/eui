@@ -1,4 +1,6 @@
-//! `eui [<wss://host/_eui/session/app>...] [--allow cap,cap]`.
+//! `eui [<wss://host/_eui/session/app>...] [--allow cap,cap]`, and the
+//! three flags that put an application in the desktop's own launcher
+//! rather than opening it.
 //!
 //! With no address, the shell: one window with a tab strip and an empty tab
 //! to type into, where every application opened gets a tab beside the
@@ -21,9 +23,24 @@ fn main() {
     }
     let mut urls: Vec<String> = Vec::new();
     let mut allowed = 0u32;
+    // Whether to keep to ourselves. A window process is shared by default
+    // now (`instance.rs`); this is the way back to one process per launch,
+    // for a build under a debugger, a session that must not share the fate
+    // of the others, or two builds side by side.
+    let mut alone = std::env::var_os("EUI_STANDALONE").is_some();
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        if a == "--allow" {
+        // The three that do their work and leave, rather than opening a
+        // window. They are handled in the loop and not after it because
+        // each takes the rest of the line as its own subject and there is
+        // nothing to open afterwards.
+        #[cfg(has_launchers)]
+        if a == "--install" || a == "--uninstall" || a == "--installed" {
+            std::process::exit(launcher(a, it.next()));
+        }
+        if a == "--standalone" {
+            alone = true;
+        } else if a == "--allow" {
             let Some(list) = it.next() else { usage() };
             for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
                 // `all` is the ten names without typing the ten names. It
@@ -57,10 +74,104 @@ fn main() {
     // opened asked for a capability it could never be given, and a file
     // dialog that will not open looks exactly like a button that is not
     // wired to anything.
-    let result = if urls.is_empty() { eui_client::app::shell(allowed) } else { eui_client::app::launch_all(urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect()) };
+    let chrome = urls.is_empty();
+    let launches: Vec<eui_client::app::Launch> = urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect();
+    // The instance already running opens it, if there is one and it
+    // answers. Nothing is lost when it does not: this process goes on and
+    // opens the window itself, which is what every build before this did.
+    #[cfg(has_instance)]
+    if !alone && eui_client::instance::hand_over(&launches, chrome, allowed) {
+        return;
+    }
+    #[cfg(has_instance)]
+    let result = if alone {
+        if chrome {
+            eui_client::app::shell(allowed)
+        } else {
+            eui_client::app::launch_all(launches)
+        }
+    } else {
+        eui_client::app::joined(launches, chrome, allowed)
+    };
+    #[cfg(not(has_instance))]
+    let result = {
+        let _ = alone;
+        if chrome {
+            eui_client::app::shell(allowed)
+        } else {
+            eui_client::app::launch_all(launches)
+        }
+    };
     if let Err(e) = result {
         eprintln!("eui: {e}");
         std::process::exit(1);
+    }
+}
+
+/// `--install <address>`, `--uninstall <app id>`, `--installed`.
+///
+/// Installing writes a launcher entry that runs this binary with the
+/// address — so the application is the session it always was, started by
+/// an icon. See [`eui_client::install`].
+#[cfg(has_launchers)]
+fn launcher(flag: &str, arg: Option<&String>) -> i32 {
+    use eui_client::install;
+    match flag {
+        "--installed" => {
+            let entries = install::list();
+            if entries.is_empty() {
+                println!("nothing is installed");
+            }
+            for e in entries {
+                println!("{}\t{}\t{}", e.app_id, e.name, e.url);
+            }
+            0
+        }
+        "--uninstall" => {
+            let Some(app_id) = arg else { usage() };
+            match install::uninstall(app_id) {
+                Ok(gone) if gone.is_empty() => {
+                    eprintln!("eui: {app_id} was not installed");
+                    0
+                }
+                Ok(gone) => {
+                    for f in gone {
+                        println!("removed {}", f.display());
+                    }
+                    0
+                }
+                Err(e) => {
+                    eprintln!("eui: {e}");
+                    1
+                }
+            }
+        }
+        _ => {
+            let Some(url) = arg else { usage() };
+            #[cfg(all(has_pins, has_native_net))]
+            match install::from_url(url).and_then(|app| {
+                let name = app.name.clone();
+                install::install(&app).map(|files| (name, files))
+            }) {
+                Ok((name, files)) => {
+                    for f in files {
+                        println!("wrote {}", f.display());
+                    }
+                    println!("{name} is in the launcher");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("eui: {e}");
+                    1
+                }
+            }
+            #[cfg(not(all(has_pins, has_native_net)))]
+            {
+                let _ = url;
+                eprintln!("eui: this build cannot verify a manifest, so it will not install one");
+                1
+            }
+        }
     }
 }
 
@@ -70,6 +181,7 @@ fn usage() -> ! {
     // `scene` -- and a usage message that omits the flag somebody needs is
     // worse than none, because it reads as a list of everything there is.
     let all = eui_proto::caps::NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(",");
-    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}]");
+    eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}] [--standalone]");
+    eprintln!("       eui --install <wss://host/...> | --uninstall <app id> | --installed");
     std::process::exit(2);
 }

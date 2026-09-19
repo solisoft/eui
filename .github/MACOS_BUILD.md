@@ -138,8 +138,31 @@ gh workflow run build-macos-demo.yml -r main
 - `EUI-Demo-aarch64-macos.dmg` — installer
 - `EUI-Demo-aarch64-macos.zip` — app bundle
 
-Neither is signed or notarized, so the first launch of a downloaded build
-needs right-click → Open, or `xattr -dr com.apple.quarantine <app>`.
+Neither is signed by a Developer ID nor notarized. The bundle is ad-hoc
+signed — enough that Apple Silicon does not refuse it outright — but a
+download still arrives wearing `com.apple.quarantine`, which the browser
+writes, so Gatekeeper holds the first launch. Stripping the attribute by
+hand does not stay stripped: the next download gets a fresh one.
+
+Two ways to stop repeating it:
+
+- **Fetch it with something that does not quarantine.** `curl`, `wget` and
+  `gh release download` set no attribute at all; only apps that opt into
+  `LSFileQuarantineEnabled` — browsers, Mail, AirDrop, Messages — do.
+  `scripts/install-macos.sh` is that download plus the install:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/solisoft/eui/main/scripts/install-macos.sh | bash
+  ```
+
+- **Notarize, and staple the ticket to the bundle.** The attribute is still
+  written, and Gatekeeper reads the stapled ticket and lets it through
+  anyway — for everyone who downloads it, not just whoever knows the
+  incantation. This is the only fix that works for a person who clicked the
+  link in the README. The workflow and the wrapper already do it; they are
+  waiting on a paid Apple Developer account and the secrets under
+  [Signing & Notarization](#signing--notarization) below, and take the
+  ad-hoc path until those exist.
 
 ### Creating a Release
 
@@ -231,21 +254,86 @@ The default features roughly double the build, and none of them are needed to
 package a desktop artifact. This cost — ten minutes of toolchain on three
 runners — is the reason the job is gone.
 
-## Signing & Notarization (Future)
+## Signing & Notarization
 
-For distribution outside GitHub Releases, macOS requires:
+Wired up, and dormant until the secrets exist. `scripts/wrap-macos-app.sh`
+reads the environment and takes one of two paths:
 
-1. **Code signing**: Sign with developer certificate
-   ```bash
-   codesign -s "Developer ID Application" dist/EUI-Demo.app
-   ```
+- **No `MACOS_SIGNING_IDENTITY`** — ad-hoc, no certificate. What a local
+  build and a fork's CI get. The bundle runs, but a *download* of it wears
+  `com.apple.quarantine` and Gatekeeper holds the first launch.
+- **`MACOS_SIGNING_IDENTITY` set** — a Developer ID signature, with
+  `--options runtime` and `--timestamp`, which notarization requires and
+  which are not the default. With notary credentials beside it the app is
+  submitted to Apple, the ticket is stapled into the bundle *before* the zip
+  and the DMG are made from it, and the DMG is then signed, submitted and
+  stapled in its own right. Quarantine is still written on download;
+  Gatekeeper reads the staple and lets it through.
 
-2. **Notarization** (for Gatekeeper bypass): Submit DMG to Apple
-   ```bash
-   xcrun notarytool submit dist/EUI-Demo.dmg --keychain-profile notarize
-   ```
+It fails loudly rather than quietly downgrading: an identity the keychain
+does not have, or notary credentials with no identity to go with them, stops
+the build instead of shipping something weaker than was asked for.
 
-These steps can be added to the GitHub Actions workflow with secrets for the developer certificate and Apple credentials.
+### The secrets
+
+Set these on the repository (Settings → Secrets and variables → Actions).
+The workflow's signing step returns immediately when `MACOS_CERTIFICATE` is
+absent, so a repository with none of them keeps building exactly as it does
+now.
+
+| secret | what it is |
+|---|---|
+| `MACOS_CERTIFICATE` | the Developer ID Application certificate and key, exported from Keychain Access as a `.p12`, then `base64` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password set on that `.p12` export |
+| `MACOS_SIGNING_IDENTITY` | the identity's full name, e.g. `Developer ID Application: Your Name (TEAMID)` — `security find-identity -v -p codesigning` prints it |
+
+And one set of notary credentials. Prefer the App Store Connect API key: it
+is scoped to notarization and can be revoked by itself, where an
+app-specific password rides on the Apple ID that owns the account.
+
+| secret | what it is |
+|---|---|
+| `APPLE_API_KEY_P8` | the `.p8` key file from App Store Connect → Users and Access → Integrations, `base64` |
+| `APPLE_API_KEY_ID` | the key's ID, from the same page |
+| `APPLE_API_ISSUER` | the issuer UUID, from the same page |
+
+or, the older shape:
+
+| secret | what it is |
+|---|---|
+| `APPLE_ID` | the Apple ID of the developer account |
+| `APPLE_APP_PASSWORD` | an app-specific password made at appleid.apple.com, **not** the account password |
+| `APPLE_TEAM_ID` | the ten-character team ID |
+
+All of it needs a paid Apple Developer account; there is no free Developer
+ID certificate.
+
+### By hand
+
+The same two paths, run locally:
+
+```bash
+# ad-hoc, which is what happens with nothing set
+./scripts/build-macos-app.sh release
+
+# signed and notarized
+export MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export APPLE_API_KEY=~/private_keys/AuthKey_XXXXXXXXXX.p8
+export APPLE_API_KEY_ID=XXXXXXXXXX APPLE_API_ISSUER=....
+./scripts/build-macos-app.sh release
+```
+
+Notarization adds a few minutes per submission — two of them, the app and
+the DMG — and the wrapper prints the notary's report as it goes. On a
+refusal it fetches the per-submission log, because the summary says only
+"Invalid" while the log says which binary and why.
+
+Check the result on a Mac that has never seen the build:
+
+```bash
+spctl --assess --type execute -vv /Applications/EUI.app   # expect: accepted, source=Notarized Developer ID
+xcrun stapler validate /Applications/EUI.app
+```
 
 ## Troubleshooting
 

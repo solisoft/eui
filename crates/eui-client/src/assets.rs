@@ -238,6 +238,19 @@ pub fn fit_to_atlas(img: &Image) -> Option<Image> {
     let scale = f64::from(ATLAS_EDGE) / f64::from(long);
     let nw = ((f64::from(img.width) * scale).round() as u32).clamp(1, ATLAS_EDGE);
     let nh = ((f64::from(img.height) * scale).round() as u32).clamp(1, ATLAS_EDGE);
+    resized(img, nw, nh)
+}
+
+/// `img` at exactly `nw × nh`, by the filter [`fit_to_atlas`] describes.
+///
+/// Split out because the atlas is no longer the only thing that wants it:
+/// an icon handed to a desktop has to be the size that desktop's format
+/// declares — 512 for an `.icns` entry, 256 for an `.ico` — and an
+/// application's own PNG is whatever the publisher drew.
+pub fn resized(img: &Image, nw: u32, nh: u32) -> Option<Image> {
+    if nw == 0 || nh == 0 || img.width == 0 || img.height == 0 {
+        return None;
+    }
     let (w, h) = (img.width as usize, img.height as usize);
     if img.rgba.len() != w.checked_mul(h)?.checked_mul(4)? {
         return None;

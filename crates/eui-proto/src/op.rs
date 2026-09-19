@@ -6,7 +6,7 @@
 //! fuzzed against raw bytes with no setup.
 
 use crate::error::{DecodeError, Result};
-use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_FACES_PER_ROLE, MAX_FONT_ROLE, MAX_OPS_PER_BATCH};
+use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_FACES_PER_ROLE, MAX_FONT_ROLE, MAX_NOTIFY_BODY, MAX_NOTIFY_PER_BATCH, MAX_NOTIFY_TAG, MAX_NOTIFY_TITLE, MAX_OPS_PER_BATCH};
 use crate::node::{EventKind, Handler, Subtree, TextRef, Value};
 use crate::reader::Reader;
 use crate::style::StyleRecord;
@@ -158,6 +158,27 @@ pub enum Op {
         /// Vertical offset in px.
         y: i64,
     },
+    /// Say one line to the person through the machine they are using
+    /// (`spec/02-wire-format.md` §5.2).
+    ///
+    /// The only op that names no node: what it changes is not the document
+    /// but what somebody is told, and it is the only one a client may
+    /// decline outright -- without `notifications` (01 §2.1) it is decoded,
+    /// counted and dropped. Nothing goes back either way, so an application
+    /// learns neither that it was shown nor that it was not.
+    Notify {
+        /// The line, at most [`MAX_NOTIFY_TITLE`] bytes. Required in
+        /// practice: a notification with no title is a blank rectangle.
+        title: String,
+        /// What is under it, at most [`MAX_NOTIFY_BODY`] bytes. May be
+        /// empty.
+        body: String,
+        /// An identity, at most [`MAX_NOTIFY_TAG`] bytes. A second
+        /// notification carrying the tag of one still on screen replaces
+        /// it rather than stacking beside it -- ten replies to one thread
+        /// are one notification. Empty means this one stands alone.
+        tag: String,
+    },
 }
 
 impl Op {
@@ -206,6 +227,11 @@ impl Op {
             0x29 => Ok(Self::ClearHandler { node: nonzero(r.varint32()?, "node id")?, event: EventKind::from_u8(r.u8()?)? }),
             0x2A => Ok(Self::Focus { node: nonzero(r.varint32()?, "node id")? }),
             0x2B => Ok(Self::ScrollTo { node: nonzero(r.varint32()?, "node id")?, x: r.svarint()?, y: r.svarint()? }),
+            0x2C => Ok(Self::Notify {
+                title: r.str(MAX_NOTIFY_TITLE, "notification title")?.to_owned(),
+                body: r.str(MAX_NOTIFY_BODY, "notification body")?.to_owned(),
+                tag: r.str(MAX_NOTIFY_TAG, "notification tag")?.to_owned(),
+            }),
             _ => Err(DecodeError::UnknownTag("opcode")),
         }
     }
@@ -277,6 +303,9 @@ impl Op {
             Self::ScrollTo { node, x, y } => {
                 w.u8(0x2B).varint32(*node).svarint(*x).svarint(*y);
             }
+            Self::Notify { title, body, tag } => {
+                w.u8(0x2C).str(title).str(body).str(tag);
+            }
         }
     }
 }
@@ -296,8 +325,21 @@ impl Batch {
         let seq = r.varint()?;
         let count = r.varint32_max(MAX_OPS_PER_BATCH, "ops per batch")?;
         let mut ops = Vec::with_capacity((count as usize).min(1024));
+        // The one op counted here rather than in `eui-tree`: every other
+        // limit bounds what the client must hold, and holding four
+        // notifications costs nothing. What this bounds is how often one
+        // batch may interrupt somebody, which is not session state and has
+        // no natural ceiling anywhere else (02 §5.2).
+        let mut notifications: u32 = 0;
         for _ in 0..count {
-            ops.push(Op::decode(r)?);
+            let op = Op::decode(r)?;
+            if matches!(op, Op::Notify { .. }) {
+                notifications = notifications.saturating_add(1);
+                if notifications > MAX_NOTIFY_PER_BATCH {
+                    return Err(DecodeError::LimitExceeded("notifications per batch"));
+                }
+            }
+            ops.push(op);
         }
         Ok(Self { seq, ops })
     }

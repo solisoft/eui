@@ -831,7 +831,25 @@ def ed_panel(state, opts)
     "p": {"typing": true},
     "c": panel_rows
   }
-  panel_frame = {"gap": 0, "width": "100%", "bg": "surface.base"}
+  # An outer edge, because without one the editor ends wherever the page's
+  # own `surface.base` happens to stop and there is nothing to say which
+  # part of the window is the buffer. The bar and the status line already
+  # carry hairlines, but those are the seams *inside* it — they draw the
+  # editor's own parts apart and never its outline.
+  #
+  # `clip` is not decoration here: the bar and the status line fill
+  # `surface.raised` to their own square corners, and over a rounded frame
+  # that paints the corners back in. Clipping is what makes the radius
+  # something you can see.
+  panel_frame = {
+    "gap": 0,
+    "width": "100%",
+    "bg": "surface.base",
+    "border": [1, 1, 1, 1],
+    "border_color": "border.default",
+    "radius": 2,
+    "overflow": "clip"
+  }
   panel_frame["height"] = "100%" if panel_lines.nil?
   column(
     panel_frame,

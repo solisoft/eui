@@ -81,8 +81,33 @@ fn every_op() {
         Op::ClearHandler { node: 1, event: EventKind::Blur },
         Op::Focus { node: 1 },
         Op::ScrollTo { node: 1, x: -120, y: 4096 },
+        Op::Notify { title: "Nouveau message".into(), body: "Ana: on déjeune ?".into(), tag: "thread-7".into() },
+        Op::Notify { title: "Sans corps".into(), body: String::new(), tag: String::new() },
     ];
     roundtrip(&Frame::Batch(Batch { seq: 1, ops }));
+}
+
+/// 02 §5.2: four notifications is a burst; the fifth ends the session.
+///
+/// Encoded by hand, because `Batch::encode` is not the thing under test —
+/// a server that wanted to shout would not be using this writer.
+#[test]
+fn a_batch_may_not_carry_a_fifth_notification() {
+    use eui_proto::{DecodeError, Reader, Writer};
+
+    for (count, expected) in [(4, true), (5, false)] {
+        let mut w = Writer::new();
+        w.varint(1).varint32(count);
+        for _ in 0..count {
+            Op::Notify { title: "ping".into(), body: String::new(), tag: String::new() }.encode(&mut w);
+        }
+        let bytes = w.into_vec();
+        let got = Batch::decode(&mut Reader::new(&bytes));
+        assert_eq!(got.is_ok(), expected, "{count} notifications in one batch");
+        if !expected {
+            assert_eq!(got.unwrap_err(), DecodeError::LimitExceeded("notifications per batch"));
+        }
+    }
 }
 
 #[test]

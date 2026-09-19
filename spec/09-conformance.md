@@ -38,7 +38,7 @@ them unchanged.
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
 | `reject.rs` | 62 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
-| `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused |
+| `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused, and an `icon` makes it a version 2 record while a manifest without one stays byte-for-byte version 1 |
 
 `roundtrip.rs` and `vectors.rs` cover 01 §4.1 and §6 as well: a `Hello` that
 offers a session back, a `Welcome` that resumed one, and a transfer in each
@@ -129,6 +129,14 @@ scheme that is not literally `https://` — `file:`, `ms-msdt:`, plain `http:`,
 or an authority carrying credentials — never reaches the platform. The same
 cases are pinned a layer down on `https_host` itself, where whitespace,
 quotes and control characters are refused with them.
+
+02 §5.2's notification is pinned there too, and the same way: a batch with
+the `notifications` grant yields its lines exactly once, with control
+characters gone and an untitled one dropped; the same batch without the
+grant yields nothing and still mounts the tree it carried, because a
+notification is not part of the document. The per-batch ceiling is pinned a
+layer down, in `crates/eui-proto/tests/roundtrip.rs`, where a fifth
+notification in one batch is a decode error and four are not.
 
 ### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
 
@@ -248,6 +256,14 @@ a tree declaring nothing is provably exposed as it was before §6.1 existed.
 
 Signature, protocol range, trust on first use, refusal of a changed key,
 acceptance of a rotation the pinned key signed, and garbage.
+
+### 7.4 Installing — `crates/eui-client/tests/install.rs`
+
+A signed manifest with an `icon` is verified, its icon fetched by hash and
+written at the size the platform's format declares, and a launcher entry
+written and then removed exactly. `install.rs`'s own unit tests pin what an
+`app_id` may become as a file name, and that a path the record names but
+this client never writes to is left alone by an uninstall.
 
 ## 8. Painting — `crates/eui-render/tests/render.rs`
 

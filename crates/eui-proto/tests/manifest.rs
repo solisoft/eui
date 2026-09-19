@@ -14,6 +14,7 @@ fn sample() -> Manifest {
         publisher_key: [7; 32],
         capabilities: caps::CLIPBOARD_READ | caps::NOTIFICATIONS,
         theme: Some([9; 32]),
+        icon: None,
         entry: "/_eui/session".into(),
         rotation: Some(Rotation { previous_key: [1; 32], signature: [2; 64] }),
     }
@@ -48,8 +49,13 @@ fn malformed_manifests_are_refused() {
     bad[0] = b'X';
     assert_eq!(Manifest::decode(&bad).unwrap_err(), DecodeError::UnknownTag("manifest magic"));
     let mut bad = good.clone();
-    bad[4] = 2;
+    bad[4] = 3;
     assert_eq!(Manifest::decode(&bad).unwrap_err(), DecodeError::UnknownTag("manifest version"));
+    // Version 2 says twelve fields; a version 1 record wearing a 2 is short
+    // one and is refused rather than read as far as it goes.
+    let mut bad = good.clone();
+    bad[4] = 2;
+    assert!(Manifest::decode(&bad).is_err());
     // Trailing bytes.
     let mut bad = good.clone();
     bad.push(0);
@@ -71,6 +77,28 @@ fn malformed_manifests_are_refused() {
         assert!(Manifest::decode(&bad.encode(&[0; 64])).is_err(), "{what}");
     }
     let _ = key::SIGNATURE;
+}
+
+#[test]
+fn an_icon_makes_it_a_version_two_record_and_nothing_else_does() {
+    // Without one the bytes are what they always were: version 1, eleven
+    // fields, so every manifest signed before icons existed still verifies.
+    let plain = sample();
+    let bytes = plain.encode(&[3; 64]);
+    assert_eq!(bytes[4], 1, "version 1");
+    assert_eq!(bytes[5], 11, "eleven fields");
+
+    let m = Manifest { icon: Some([0xab; 32]), ..sample() };
+    let sig = [3u8; 64];
+    let bytes = m.encode(&sig);
+    assert_eq!(bytes[4], 2, "version 2");
+    assert_eq!(bytes[5], 12, "twelve fields, the icon among them");
+    assert_eq!(m.signed_bytes()[5], 11, "eleven signed");
+    let (back, back_sig) = Manifest::decode(&bytes).unwrap();
+    assert_eq!(back, m);
+    assert_eq!(back_sig, sig);
+    assert_eq!(back.signed_bytes(), m.signed_bytes(), "a decoder rebuilds exactly what was signed");
+    let _ = (key::ICON, key::SIGNATURE_ICON);
 }
 
 #[test]

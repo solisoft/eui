@@ -43,9 +43,25 @@ pub enum Wake {
     /// window event, and there is nothing to be woken for.
     #[cfg(target_os = "linux")]
     Drop,
+    /// The person clicked a notification this window raised (02 §5.2), so
+    /// the window it came from should come forward.
+    ///
+    /// The whole of what a notification does here. Nothing goes to the
+    /// server -- it is not told that one was shown, clicked or ignored --
+    /// so this travels no further than the loop.
+    #[cfg(not(no_subprocess))]
+    Raise(WindowId),
+    /// An install or an uninstall finished on its own thread, so the
+    /// address row has to be drawn again to show which it is now.
+    #[cfg(has_launchers)]
+    Installed,
     /// AccessKit has something for the window.
     #[cfg(has_a11y)]
     Access(accesskit_winit::Event),
+    /// Another `eui` handed this process its launch rather than building a
+    /// second GPU stack beside this one (`crate::instance`).
+    #[cfg(has_instance)]
+    Open(Box<Opening>),
     /// The adapter and the device are ready, and the window that was made
     /// to ask for them is inside.
     ///
@@ -100,6 +116,21 @@ struct Shared {
     /// renderer does, which is the opposite of every other target.
     #[cfg(target_arch = "wasm32")]
     made: Option<(Arc<Window>, wgpu::Surface<'static>)>,
+}
+
+/// A launch that arrived from another process: what one `eui` hands to the
+/// one already running (`crate::instance`).
+#[cfg(has_instance)]
+#[derive(Debug, Clone)]
+pub struct Opening {
+    /// The applications to open, one tab each. Empty asks for a shell.
+    pub launches: Vec<Launch>,
+    /// Whether the window gets a tab strip and an address bar.
+    pub chrome: bool,
+    /// What the person granted on *that* command line, which is theirs to
+    /// grant: the socket is same-user only, and running the binary is the
+    /// same act.
+    pub allowed: u32,
 }
 
 /// How to open an application: what the `eui` binary parses from its
@@ -344,6 +375,10 @@ struct Tab {
     files: Files,
     /// The link word the chrome was last told about.
     shown_link: Option<&'static str>,
+    /// Whether this application can go in the desktop's launcher, and
+    /// whether it is there. `None` until the manifest says, and for every
+    /// manifest that publishes no icon.
+    installable: Option<Installable>,
     /// How much larger this page is drawn than the display asks for.
     ///
     /// Per tab, as a browser's zoom is per site: two applications open
@@ -470,6 +505,14 @@ struct Shell {
     /// The window's, not a tab's: the chrome is drawn once, whatever is
     /// open below it, so what it was last told is a property of the window.
     chrome_mode: Option<eui_proto::ThemeMode>,
+    /// The palette the *platform* says it is in, as last heard.
+    ///
+    /// Kept apart from `chrome_mode`, which follows whatever the visible
+    /// application ended up in and is overwritten every pass. This one is
+    /// what the machine said, and it is what a tab opened later is built
+    /// in: a driver made in the wrong palette sends a `Hello` saying so,
+    /// and the server renders a light page before anything can correct it.
+    platform_mode: Option<eui_proto::ThemeMode>,
     /// The desktop palette last applied.
     #[cfg(has_desktop_theme)]
     desktop_theme: Option<crate::desktop_theme::DesktopTheme>,
@@ -659,6 +702,18 @@ fn read_chunks(path: &std::path::Path, tx: &mpsc::SyncSender<Result<(Vec<u8>, bo
     }
 }
 
+/// Fetch what an entry needs and write it. On the install thread.
+#[cfg(all(has_launchers, has_pins, has_native_net))]
+fn add(url: &str) -> Result<(), String> {
+    crate::install::install(&crate::install::from_url(url)?).map(|_| ())
+}
+
+/// A build that cannot verify a manifest will not install one either.
+#[cfg(all(has_launchers, not(all(has_pins, has_native_net))))]
+fn add(_url: &str) -> Result<(), String> {
+    Err("this build cannot verify a manifest, so it will not install one".into())
+}
+
 /// Read a file for an upload on its own thread, a chunk at a time.
 ///
 /// The channel holds two chunks: the disk runs ahead of the socket by that
@@ -708,7 +763,7 @@ fn split_origin(url: &str) -> (&str, &str) {
 /// key was pinned to — the same origin the client was about to connect to
 /// anyway.
 #[cfg_attr(not(has_pins), allow(dead_code))]
-fn completed(url: &str, entry: &str) -> Option<String> {
+pub fn completed(url: &str, entry: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
     if !path.is_empty() || host.is_empty() || !entry.starts_with('/') {
@@ -729,13 +784,29 @@ fn name_from_url(url: &str) -> String {
     }
 }
 
+/// An application that can go in the desktop's launcher, and whether it
+/// already is there.
+///
+/// Only an application whose manifest publishes an icon (01 §2.1) is
+/// installable, so this is `None` for most of them and the control is
+/// absent rather than inert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Installable {
+    /// The manifest's `app_id`, which the record is keyed on.
+    app_id: String,
+    /// Whether an entry for it exists now. Held rather than asked for on
+    /// every rebuild: the chrome is rebuilt on every keystroke in the
+    /// address bar and the answer is a file read.
+    there: bool,
+}
+
 impl Tab {
     /// Open an application: its worker, its manifest check, its connection.
     ///
     /// `None` only when the worker could not be started — a refused
     /// manifest is reported in the tab rather than losing it, because in a
     /// shell the tab is where a person would look for the reason.
-    fn open(launch: Launch, proxy: Proxy, renderer: &eui_render::Renderer, w: f32, h: f32, scale: f32) -> Self {
+    fn open(launch: Launch, proxy: Proxy, renderer: &eui_render::Renderer, w: f32, h: f32, scale: f32, mode: Option<eui_proto::ThemeMode>) -> Self {
         // The driver — decoding, layout, the VM — in its own confined
         // process where the platform allows (08 §10); this process keeps
         // the window, the GPU and the network. One per tab: an application
@@ -776,10 +847,15 @@ impl Tab {
             tries: 0,
             files: Files::default(),
             shown_link: None,
+            installable: None,
             zoom: 1.0,
             history: Vec::new(),
             at: 0,
         };
+
+        // Before the manifest and before `dial`: the driver is born light,
+        // and a `Hello` built from it would tell the server so.
+        tab.start_in(mode);
 
         // Spec 01 §2.1: the manifest first. Its signature is verified and
         // its key pinned before a byte of the session is trusted; only the
@@ -845,6 +921,12 @@ impl Tab {
                     tab.url = whole;
                     tab.title = name_from_url(&tab.url);
                 }
+                // Installable only with an icon to install it as, which
+                // is the one thing an entry cannot do without (01 §2.1).
+                #[cfg(has_launchers)]
+                if m.icon.is_some() {
+                    tab.installable = Some(Installable { there: crate::install::installed(&m.app_id), app_id: m.app_id.clone() });
+                }
                 if !m.name.is_empty() {
                     tab.title = m.name;
                 }
@@ -881,6 +963,20 @@ impl Tab {
         }
         tab.dial(&proxy);
         tab
+    }
+
+    /// The palette the machine is in, told to a driver that has only just
+    /// been made.
+    ///
+    /// Before `dial`, which is the whole point: `Hello` carries the
+    /// viewport and the viewport carries the mode, so a server asked after
+    /// this renders for the palette the person is actually looking at.
+    /// Whatever frames the change produces are dropped — there is no
+    /// socket yet for them to go down, and the `Hello` about to be built
+    /// says the same thing.
+    fn start_in(&mut self, mode: Option<eui_proto::ThemeMode>) {
+        let Some(m) = mode else { return };
+        let _ = self.backend.input(Input::Mode(m));
     }
 
     /// The person answered the consent sheet: keep what they said, tell
@@ -1018,6 +1114,9 @@ impl Tab {
             link: self.link_word(),
             can_back: self.backend.takes_back() || self.at > 0,
             can_forward: self.at + 1 < self.history.len(),
+            // Held rather than asked: this is rebuilt on every keystroke in
+            // the address bar, and the answer is a file read.
+            installed: self.installable.as_ref().map(|a| a.there),
         }
     }
 
@@ -1177,6 +1276,24 @@ fn refusal(why: &str) -> String {
 /// and the task switcher and Windows in the taskbar; Wayland has no such
 /// call and matches a `.desktop` file by app id instead (`deploy/eui.desktop`),
 /// and macOS reads the bundle's `.icns`. Three kilobytes, decoded once.
+/// Which palette the machine is in, before a driver exists to ask.
+///
+/// winit answers this on macOS, on Windows and in a page, and on no other
+/// platform: its Wayland answer is the decoration theme *this* process
+/// asked for — `None` until it asks — and its X11, Android and iOS ones
+/// are flatly `None`. So the desktop is asked first where there is one to
+/// ask, and the window only where winit has a real answer.
+fn platform_mode(window: &Window) -> Option<eui_proto::ThemeMode> {
+    #[cfg(has_desktop_theme)]
+    if let Some(m) = crate::desktop_theme::os_mode() {
+        return Some(m);
+    }
+    window.theme().map(|t| match t {
+        winit::window::Theme::Dark => eui_proto::ThemeMode::Dark,
+        winit::window::Theme::Light => eui_proto::ThemeMode::Light,
+    })
+}
+
 fn window_icon() -> Option<winit::window::Icon> {
     let image = crate::assets::decode_png(include_bytes!("../../../assets/icon/png/eui-64.png")).ok()?;
     winit::window::Icon::from_rgba(image.rgba, image.width, image.height).ok()
@@ -1417,8 +1534,33 @@ impl Shell {
 
         let textures = gpu_shared.renderer.session();
         let (logical_w, logical_h) = (size.width as f32 / scale, size.height as f32 / scale);
+
+        // Which of the two palettes this machine is in — asked here, where
+        // the window exists and no driver does yet.
+        //
+        // It used to be asked after the tabs were open, and a driver is
+        // born light: the first `Hello` said light whatever the desktop
+        // was, and the correction that followed only ever reached the tab
+        // that was active at the time. Every tab opened afterwards — a
+        // typed address, a link, a reload, anything through `go_to` — got
+        // a fresh driver in the light and nothing to tell it otherwise.
+        //
+        // Linux hid that too. There the Omarchy palette is handed to each
+        // new tab by `theme_one`, and it carries a mode with it, so the
+        // one desktop this was developed on corrected itself. macOS and
+        // Windows have no such palette: the shell came up dark, the person
+        // opened an application, and it was light from then on.
+        let mode = platform_mode(&window);
+        match mode {
+            Some(m) => eprintln!("eui: the platform is in the {}", if m == eui_proto::ThemeMode::Dark { "dark" } else { "light" }),
+            None => eprintln!("eui: the platform does not say which palette it is in; light unless an application asks for another"),
+        }
+
         let mut chrome = chrome.then(|| {
             let mut c = crate::chrome::Chrome::new(logical_w, logical_h, scale);
+            if let Some(m) = mode {
+                c.set_mode(m);
+            }
             c.set_recents(crate::recent::load());
             (c, textures)
         });
@@ -1447,7 +1589,8 @@ impl Shell {
             cursor: eui_proto::Cursor::Default,
             ime_area: None,
             covered: 0.0,
-            chrome_mode: None,
+            chrome_mode: mode,
+            platform_mode: mode,
             locating: false,
             theme_watch: None,
             #[cfg(has_desktop_theme)]
@@ -1464,23 +1607,10 @@ impl Shell {
         let renderer = &gpu_shared.renderer;
         let (w, h) = shell.content_size();
         for l in launches {
-            let tab = Tab::open(l, Arc::clone(&shell.proxy), renderer, w, h, scale);
+            let tab = Tab::open(l, Arc::clone(&shell.proxy), renderer, w, h, scale, mode);
             shell.tabs.push(tab);
         }
         shell.rebuild_chrome();
-
-        // Which of the two palettes the platform is in, *before* the first
-        // frame. Only `ThemeChanged` used to say, and that fires when the
-        // desktop changes its mind — never when a window opens into a
-        // choice already made. A client started in the dark drew itself
-        // light and stayed that way until somebody toggled the system.
-        //
-        // Linux hid it: the Omarchy palette below carries a mode with it,
-        // so the one desktop this was developed on always knew. macOS and
-        // Windows have no such file and were simply wrong.
-        if let Some(theme) = shell.window.theme() {
-            shell.set_mode(theme, renderer);
-        }
 
         // The desktop's own colours, before the first frame; and again
         // whenever the desktop changes them.
@@ -1673,7 +1803,7 @@ impl Shell {
         // An empty shell still shows one tab, so there is something to
         // click and something to type into.
         if views.is_empty() {
-            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None, grants: None, can_back: false, can_forward: false };
+            let blank = crate::chrome::TabView { title: "New tab", origin: "", path: "", trust: None, link: None, grants: None, can_back: false, can_forward: false, installed: None };
             chrome.set_trouble(None);
             chrome.rebuild(&[blank], 0);
         } else {
@@ -1735,7 +1865,7 @@ impl Shell {
         // to be granted anything at all. A dialog that never opens and a
         // dropped file that never arrives were both this.
         let launch = Launch::new(url, self.allowed);
-        let mut tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale);
+        let mut tab = Tab::open(launch, Arc::clone(&self.proxy), renderer, w, h, scale, self.platform_mode);
         tab.zoom = zoom;
         tab.history = history;
         tab.at = at;
@@ -1809,6 +1939,19 @@ impl Shell {
             // That is honest rather than convenient — a capability taken
             // away has to stop being true, and a session that kept running
             // would still be holding it.
+            // Into the desktop's launcher, or out of it.
+            //
+            // On a thread, because installing is two HTTPS round trips —
+            // the manifest and the icon — and a window that stops painting
+            // while a button is pressed is the thing this client is most
+            // careful not to be. The record is the only shared state and
+            // the wake is what says it moved.
+            #[cfg(has_launchers)]
+            A::Install => self.launcher_entry(true),
+            #[cfg(has_launchers)]
+            A::Uninstall => self.launcher_entry(false),
+            #[cfg(not(has_launchers))]
+            A::Install | A::Uninstall => {}
             A::Permissions => {
                 if let Some(t) = self.tabs.get_mut(self.active) {
                     if let Some(p) = t.perms.clone() {
@@ -1911,12 +2054,55 @@ impl Shell {
         }
         if let Some(m) = mode {
             self.chrome_mode = Some(m);
+            // A desktop that publishes a palette has said which of the two
+            // it is in, and said it more directly than the window could.
+            self.platform_mode = Some(m);
         }
         for t in &mut self.tabs {
             let out = t.backend.desktop_theme(mode, colors.clone());
             t.send(out);
         }
         self.window.request_redraw();
+    }
+
+    /// Put the active tab's application in the desktop's launcher, or take
+    /// it out. Runs on a thread and wakes the loop when it is done.
+    #[cfg(has_launchers)]
+    fn launcher_entry(&mut self, adding: bool) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let Some(what) = t.installable.as_ref() else { return };
+        let (app_id, url) = (what.app_id.clone(), t.url.clone());
+        let proxy = Arc::clone(&self.proxy);
+        let spawned = std::thread::Builder::new().name("eui-install".into()).spawn(move || {
+            let done = if adding { add(&url) } else { crate::install::uninstall(&app_id).map(|_| ()) };
+            match done {
+                Ok(()) => eprintln!("eui: {app_id} {}", if adding { "is in the launcher" } else { "is out of the launcher" }),
+                Err(e) => eprintln!("eui: {e}"),
+            }
+            let _ = proxy.send_event(Wake::Installed);
+        });
+        if let Err(e) = spawned {
+            eprintln!("eui: no thread to install with: {e}");
+        }
+    }
+
+    /// An install or an uninstall finished: ask the record again for every
+    /// tab, and draw the address row if any of them changed.
+    #[cfg(has_launchers)]
+    fn installed_wake(&mut self) {
+        let mut moved = false;
+        for t in &mut self.tabs {
+            let Some(what) = t.installable.as_mut() else { continue };
+            let there = crate::install::installed(&what.app_id);
+            if there != what.there {
+                what.there = there;
+                moved = true;
+            }
+        }
+        if moved {
+            self.rebuild_chrome();
+            self.window.request_redraw();
+        }
     }
 
     /// The pointer takes the shape of what it is over — a hand on a button,
@@ -1980,6 +2166,18 @@ impl Shell {
             let list = crate::recent::remember(&url, &name);
             if let Some((c, _)) = &mut self.chrome {
                 c.set_recents(list);
+            }
+        }
+        // Spec 02 §5.2: what a batch asked to say to the person. Here
+        // rather than in `serve_files`, because a notification arrives with
+        // a frame and nothing else has to have happened for it — no input,
+        // no dialog, and no reason for the window to be in front.
+        #[cfg(not(no_subprocess))]
+        {
+            let id = self.window.id();
+            let proxy = Arc::clone(&self.proxy);
+            for note in self.tabs.iter_mut().flat_map(|t| t.backend.take_notes()) {
+                show_note(&note, id, &proxy);
             }
         }
         if redraw {
@@ -2455,15 +2653,37 @@ impl Shell {
     /// so does the chrome, which has a driver and a palette of its own and
     /// was never told: a tab strip and an address bar in the light above a
     /// page in the dark, which is exactly as odd as it sounds.
-    fn set_mode(&mut self, theme: winit::window::Theme, renderer: &eui_render::Renderer) {
+    fn set_mode(&mut self, theme: winit::window::Theme) {
         let mode = match theme {
             winit::window::Theme::Dark => eui_proto::ThemeMode::Dark,
             winit::window::Theme::Light => eui_proto::ThemeMode::Light,
         };
+        self.follow_platform_mode(mode);
+    }
+
+    /// The machine is in this palette now: remember it, and put everything
+    /// open into it.
+    ///
+    /// Every tab, not the active one. A mode is not an event aimed at
+    /// whoever has the pointer — it is a fact about the machine, and a tab
+    /// in the background is a live session whose server was told a mode
+    /// and would otherwise keep rendering for the wrong one until somebody
+    /// clicked on it.
+    fn follow_platform_mode(&mut self, mode: eui_proto::ThemeMode) {
+        if self.platform_mode == Some(mode) {
+            return;
+        }
         crate::driver::trace(|| format!("platform palette: {mode:?}"));
-        self.send_to_tab(Input::Mode(mode));
+        self.platform_mode = Some(mode);
+        for t in &mut self.tabs {
+            let out = t.backend.input(Input::Mode(mode));
+            t.send(out);
+        }
+        if let Some((c, _)) = &mut self.chrome {
+            c.set_mode(mode);
+        }
         self.chrome_mode = Some(mode);
-        self.chrome_input(Input::Mode(mode), renderer);
+        self.window.request_redraw();
     }
 
     /// Where the keyboard belongs: the chrome's address bar when the chrome
@@ -2912,6 +3132,13 @@ impl Shell {
         self.theme_pending.store(false, std::sync::atomic::Ordering::SeqCst);
         #[cfg(has_desktop_theme)]
         self.follow_desktop_theme();
+        // A desktop with no palette to publish can still have changed its
+        // mind about light and dark — that is what the portal's
+        // `SettingChanged` is — and `follow_desktop_theme` has nothing to
+        // compare in that case and returns having done nothing.
+        if let Some(m) = platform_mode(&self.window) {
+            self.follow_platform_mode(m);
+        }
     }
 
     /// One event for this window. `false` when it should close.
@@ -3241,7 +3468,7 @@ impl Shell {
             // client did cared that the window had come back, and now
             // something does (06 §3).
             WindowEvent::Focused(true) => self.send_to_tab(Input::Refocused),
-            WindowEvent::ThemeChanged(t) => self.set_mode(t, renderer),
+            WindowEvent::ThemeChanged(t) => self.set_mode(t),
             _ => {}
         }
         true
@@ -3598,6 +3825,11 @@ pub struct App {
     loop_stats: Option<LoopStats>,
     /// The next frame's deadline, kept off the event loop. See [`Timer`].
     timer: Option<Timer>,
+    /// The socket other `eui` processes hand their launches to, while this
+    /// process is the one holding it (`crate::instance`). `None` in an
+    /// embedding host, and in the second process of a race.
+    #[cfg(has_instance)]
+    door: Option<crate::instance::Door>,
 }
 
 impl App {
@@ -3607,7 +3839,16 @@ impl App {
         let proxy = Arc::new(proxy);
         let timer = Timer::start(Arc::clone(&proxy));
         let pending = launches.into_iter().map(|l| Pending { allowed: l.allowed, launches: vec![l], chrome: false }).collect();
-        Self { proxy, shared: None, pending, shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
+        Self {
+            proxy,
+            shared: None,
+            pending,
+            shells: std::collections::HashMap::new(),
+            loop_stats: LoopStats::asked_for(),
+            timer,
+            #[cfg(has_instance)]
+            door: None,
+        }
     }
 
     /// Build for one window with a tab strip in it, and nothing open.
@@ -3621,7 +3862,16 @@ impl App {
         let proxy = Arc::new(proxy);
         let timer = Timer::start(Arc::clone(&proxy));
         let pending = vec![Pending { launches: Vec::new(), chrome: true, allowed }];
-        Self { proxy, shared: None, pending, shells: std::collections::HashMap::new(), loop_stats: LoopStats::asked_for(), timer }
+        Self {
+            proxy,
+            shared: None,
+            pending,
+            shells: std::collections::HashMap::new(),
+            loop_stats: LoopStats::asked_for(),
+            timer,
+            #[cfg(has_instance)]
+            door: None,
+        }
     }
 
     /// One window closed. The last one takes the process with it: a client
@@ -3862,6 +4112,12 @@ impl ApplicationHandler<Wake> for App {
                 Wake::Drop => 6,
                 #[cfg(target_arch = "wasm32")]
                 Wake::Gpu(_) => 7,
+                #[cfg(has_instance)]
+                Wake::Open(_) => 8,
+                #[cfg(not(no_subprocess))]
+                Wake::Raise(_) => 9,
+                #[cfg(has_launchers)]
+                Wake::Installed => 10,
                 Wake::Exit => usize::MAX,
             };
             if let Some(slot) = stats.wakes.get_mut(which) {
@@ -3894,11 +4150,40 @@ impl ApplicationHandler<Wake> for App {
             // waiting. The wake is the whole message.
             Wake::Frame => {}
             Wake::Theme => self.shells.values_mut().for_each(Shell::theme_wake),
+            // The launcher changed under us. Which window asked is not in
+            // the wake and does not need to be: every address row shows
+            // whether *its* application is installed, and they are all
+            // looking at the same record.
+            #[cfg(has_launchers)]
+            Wake::Installed => self.shells.values_mut().for_each(Shell::installed_wake),
             // Which window the file was over is not in the wake either;
             // the same `try_recv` on an empty channel answers it.
             #[cfg(target_os = "linux")]
             Wake::Drop => self.shells.values_mut().for_each(Shell::drain_drops),
             Wake::Exit => event_loop.exit(),
+            // Somebody clicked a notification (02 §5.2). The window that
+            // raised it comes forward, and that is all that happens: the
+            // server is not told, the tab is not changed, and a compositor
+            // that refuses to move focus without a token of its own has
+            // refused nothing the session can see.
+            #[cfg(not(no_subprocess))]
+            Wake::Raise(id) => {
+                if let Some(s) = self.shells.get(&id) {
+                    s.window.set_minimized(false);
+                    s.window.focus_window();
+                }
+            }
+            // A launch from another process. It opens a window here, with
+            // its own tab and its own confined worker -- everything that
+            // was separate about it stays separate; what it does not do is
+            // ask this machine for a second adapter, device and pipeline
+            // set (`crate::instance`).
+            #[cfg(has_instance)]
+            Wake::Open(open) => {
+                let Opening { launches, chrome, allowed } = *open;
+                self.pending.push(Pending { launches, chrome, allowed });
+                self.open_pending(event_loop);
+            }
             #[cfg(has_a11y)]
             Wake::Access(e) => {
                 if let Some(s) = self.shells.get_mut(&e.window_id) {
@@ -4199,6 +4484,22 @@ pub fn launch_all(launches: Vec<Launch>) -> Result<(), String> {
     run_loop(move |proxy| App::new(launches, proxy))
 }
 
+/// The desktop binary's way in: run the loop, and hold the socket that lets
+/// a later `eui` open its window in this process instead of building a
+/// second GPU stack (`crate::instance`).
+///
+/// Separate from [`launch_all`] and [`shell`] because an embedding host has
+/// no business taking a machine-wide socket: it is the `eui` command that
+/// is launched many times over, and only it.
+#[cfg(has_instance)]
+pub fn joined(launches: Vec<Launch>, chrome: bool, allowed: u32) -> Result<(), String> {
+    run_loop(move |proxy| {
+        let mut app = if chrome { App::shell(allowed, proxy) } else { App::new(launches, proxy) };
+        app.door = crate::instance::listen(Arc::clone(&app.proxy));
+        app
+    })
+}
+
 /// One handle on the loop, held by everything that has to wake it.
 ///
 /// Shared rather than cloned, because on macOS `EventLoopProxy::clone` is
@@ -4323,6 +4624,154 @@ fn open_in_browser(url: &str) {
             eprintln!("eui: no {opener} on this machine; the address was not opened");
         }
     }
+}
+
+/// Say one line to the person through the machine's own notifier
+/// (02 §5.2).
+///
+/// The second place this client starts another program, and the same
+/// shape as the first: one program, arguments that were checked before
+/// they got here, nothing waited on that the session can see. The driver
+/// decided — the capability is granted, the batch was within its four, the
+/// line carries no control character — and the platform is the window's.
+///
+/// The child outlives this call. `notify-send` given an action waits for
+/// the notification to be clicked or to expire, and that wait is the whole
+/// mechanism by which a click reaches the loop: it prints the action key
+/// and exits, and the thread turns that into a [`Wake::Raise`]. A machine
+/// whose notifier has no actions at all does the rest of this correctly
+/// and simply never prints one.
+/// Notification ids by tag, so a second notification carrying a tag still
+/// on screen replaces the first (02 §5.2).
+///
+/// The freedesktop way, which is the only one every daemon implements: the
+/// id comes back from the daemon, and `replaces_id` on the next call is
+/// that id. The hint some desktops take instead (`x-canonical-private-
+/// synchronous`) is honoured by two of them and ignored by the rest.
+///
+/// Filled by the thread that reads `--print-id` and read by the next
+/// notification with the same tag, so two of a tag raised before the first
+/// id came back stack rather than replace. That is the right way for this
+/// to be wrong: a person sees one notification too many, never one too few.
+#[cfg(all(not(no_subprocess), target_os = "linux"))]
+static TAGGED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> = std::sync::OnceLock::new();
+
+/// The map, made on first use. A `OnceLock` rather than a `LazyLock`
+/// because this crate builds on Rust 1.75 and that is 1.80.
+#[cfg(all(not(no_subprocess), target_os = "linux"))]
+fn tagged() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    TAGGED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Tags remembered before the map is emptied. A session that notifies with
+/// a thousand distinct tags is not replacing anything, and the ids of the
+/// ones it has stopped showing are worth nothing.
+#[cfg(all(not(no_subprocess), target_os = "linux"))]
+const MAX_TAGS: usize = 64;
+
+/// Say one line to the person through the machine's own notifier
+/// (02 §5.2).
+///
+/// The second place this client starts another program, and the same shape
+/// as the first: one program, arguments that were checked before they got
+/// here, nothing the session can observe. The driver decided — the
+/// capability is granted, the batch was within its four, the line carries
+/// no control character — and the platform is the window's.
+///
+/// The child outlives this call. `notify-send` given an action waits for
+/// the notification to be clicked or to expire, and that wait is the whole
+/// mechanism by which a click reaches the loop: it prints the action's name
+/// and exits, and the thread turns that into a [`Wake::Raise`]. A daemon
+/// with no actions at all does the rest of this correctly and simply never
+/// prints one.
+#[cfg(not(no_subprocess))]
+fn show_note(note: &crate::driver::Note, window: WindowId, proxy: &Proxy) {
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (window, proxy);
+        eprintln!("eui: this platform has no notifier this client can reach; \"{}\" was not shown", note.title);
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::process::{Command, Stdio};
+
+        #[cfg(target_os = "linux")]
+        let mut cmd = {
+            let mut c = Command::new("notify-send");
+            // `--print-id` writes the daemon's id on the first line, before
+            // the wait; `--action` puts a name on the second, after it.
+            c.arg("--app-name=eui").arg("--print-id").arg("--action=default=Open");
+            if !note.tag.is_empty() {
+                if let Some(id) = tagged().lock().ok().and_then(|m| m.get(&note.tag).copied()) {
+                    c.arg(format!("--replace-id={id}"));
+                }
+            }
+            // `--` because a title is the server's string: one beginning
+            // with a dash is a title, never a flag.
+            c.arg("--").arg(&note.title);
+            if !note.body.is_empty() {
+                c.arg(&note.body);
+            }
+            c
+        };
+        // `display notification` takes AppleScript rather than arguments,
+        // so the two characters that could end a string in that language
+        // are escaped. Nothing else can: the driver took the control
+        // characters out, and a script this short has nowhere for a
+        // newline to hide. There is no tag here and no click: `osascript`
+        // neither replaces a notification nor reports one.
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let script = format!("display notification \"{}\" with title \"{}\"", applescript(&note.body), applescript(&note.title));
+            let mut c = Command::new("osascript");
+            c.arg("-e").arg(script);
+            c
+        };
+        let Ok(mut child) = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+            eprintln!("eui: no notifier on this machine; \"{}\" was not shown", note.title);
+            return;
+        };
+        let proxy = Arc::clone(proxy);
+        #[cfg(target_os = "linux")]
+        let tag = note.tag.clone();
+        // A thread each, because the wait *is* the click. They are as many
+        // as there are notifications on screen — bounded by the four an
+        // application may send in one batch and by how long a daemon keeps
+        // one up — and each ends when its notification does.
+        std::thread::Builder::new()
+            .name("eui-notify".into())
+            .spawn(move || {
+                use std::io::BufRead;
+                let Some(out) = child.stdout.take() else { return };
+                for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                    let line = line.trim();
+                    #[cfg(target_os = "linux")]
+                    if !tag.is_empty() {
+                        if let Ok(id) = line.parse::<u32>() {
+                            if let Ok(mut map) = tagged().lock() {
+                                if map.len() >= MAX_TAGS {
+                                    map.clear();
+                                }
+                                map.insert(tag.clone(), id);
+                            }
+                            continue;
+                        }
+                    }
+                    if line == "default" {
+                        let _ = proxy.send_event(Wake::Raise(window));
+                    }
+                }
+                let _ = child.wait();
+            })
+            .ok();
+    }
+}
+
+/// A string as AppleScript will read it back: the two characters that
+/// would end it, escaped.
+#[cfg(all(target_os = "macos", not(no_subprocess)))]
+fn applescript(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

@@ -18,14 +18,16 @@
 # did not (08 §8). The other way round -- fetching a family from Google at
 # boot and serving it from your own origin afterwards -- is in the demo
 # app's `google_fonts.sl`, and it ends in the same call.
-eui_font("Playfair Display", [
-  "public/fonts/playfair-display-400.ttf",
-  "public/fonts/playfair-display-700.ttf"
-])
+# `rescue` because the faces are not in the repository -- `.gitignore`
+# excludes `public/fonts/` -- and a checkout without them must still boot.
+# Without this the server dies at line one with `EUI: asset ... not found`,
+# and the whole application is unreachable over a typeface. It then draws
+# in the client's own Inter, which is the fallback the views already expect
+# from their own `rescue`.
 eui_font("Space Grotesk", [
   "public/fonts/space-grotesk-400.ttf",
   "public/fonts/space-grotesk-700.ttf"
-])
+]) rescue nil
 
 # The one thing this page asks of the machine: hand an https address to
 # your browser when *you* click one. There is no op that opens an address

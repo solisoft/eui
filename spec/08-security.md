@@ -266,6 +266,33 @@ It is written here rather than discovered later because §8's claim is that
 the fingerprinting surface is the viewport frame. With `net.open` granted,
 that claim has an asterisk, and this paragraph is the asterisk.
 
+### 8.2 A notification is the one thing a server may do while nobody looks
+
+Everything else in this protocol happens inside a window somebody has open
+in front of them. A notification (02 §5.2) does not: it is raised by the
+machine, it outlives the batch that asked for it, and it reaches somebody
+who had gone to do something else. That is what makes it worth having and
+what makes it the loudest thing a server can reach for, so three things
+hold it down.
+
+The **capability** is the whole of the gate, because nothing in the tree
+asks for a notification and there is therefore nothing else to refuse; a
+client not granted it drops the op and says so once, to its own error
+output and never to the server. The **count** is the second: four to a
+batch, refused past that, which is the only limit in 02 §6 that bounds
+attention rather than memory. And **nothing comes back** — not shown, not
+clicked, not dismissed, not "this machine has no notifier". A server that
+notifies learns exactly what a server that offers an address learns, which
+is nothing, and for the reason §8.1 gives at length: an answer is a probe
+for what this machine is and who is at it, with a clock beside it.
+
+The text itself is a server's string on its way to a platform that parses
+arguments, so it is cleaned before it is handed over — control characters
+out of the title, the body and the tag, nothing passed through a shell, and
+no notifier started with a string that could be read as a flag.
+*Enforced: `eui-client/src/driver.rs::note` and `one_line`, pinned by
+`a_notification_needs_the_capability_and_a_title`.*
+
 ## 9. Server side
 
 Every client event is validated against the tree the server last sent: the
@@ -336,6 +363,20 @@ compilation in a validation scope, because the alternative — the host API's
 default — is a panic in the window process, which is the one outcome this
 section exists to prevent.
 
+**One window process may hold several applications, and that is a choice
+about cost rather than about this boundary.** A window process carries the
+GPU instance, the adapter, the device and the compiled pipelines, which is
+most of what a first pixel costs; a client MAY therefore open a second
+application's window in a process that is already running rather than
+starting another. What it MUST NOT do is share a worker: the confinement
+above is per session, and two applications in one worker would be two
+servers' bytes in one address space. What it accepts in exchange is shared
+fate — a lost device or a panic in the event loop takes every window in
+the process — so a client that does this MUST offer a way to launch one
+alone. The reference client hands a launch to the running instance over a
+`0600` socket in the user's runtime directory, keyed to the exact build on
+both ends, and `--standalone` opts out.
+
 `EUI_SANDBOX=0` runs the driver in the window process, for debugging; the
 window prints which of the two it did and what the sandbox enforced. macOS
 (`sandbox_init`) and Windows (AppContainer) are not done: there the worker
@@ -343,7 +384,9 @@ is still its own process — a crash is contained — but a compromised worker
 is not confined, and the window says so.
 
 *Enforced: `eui-client/src/sandbox.rs` (Landlock, seccomp, dumpable),
-`eui-client/src/worker.rs` (the boundary and the wire). Tested:
+`eui-client/src/worker.rs` (the boundary and the wire),
+`eui-client/src/instance.rs` (the shared window process and its socket).
+Tested:
 `eui-client/tests/worker.rs` — the counter end to end through a confined
 worker, a hostile frame, a dead worker, and self-tests that a file read, a
 TCP connect and an exec are refused.*

@@ -582,6 +582,223 @@ fn enter_and_space_click_the_focused_button_at_its_centre() {
     assert!(events(&d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true })).iter().all(|e| e.0 != EventKind::Click));
 }
 
+/// The shape every keyboard-driven application has: one `key_down` at the
+/// root, carrying `autofocus` and a `keys` claim, over some content.
+fn shortcut_root_batch() -> Batch {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
+        props: (0, 2), handlers: (0, 1), child_count: 1,
+    });
+    tree.props.push((4, Value::Bool(true)));
+    tree.props.push((5, Value::List(vec![Value::Str("j".into()), Value::Str("G".into())])));
+    tree.handlers.push((EventKind::KeyDown, Handler::Server(1)));
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Text, id: 2, style: 0, key: 0,
+        text: Some(TextRef::Inline("a list".into())),
+        props: (0, 0), handlers: (0, 0), child_count: 0,
+    });
+    Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "key".into() },
+            Op::DefAtom { id: 4, value: "autofocus".into() },
+            Op::DefAtom { id: 5, value: "keys".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], gap: 4, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }
+}
+
+#[test]
+fn a_root_that_asked_for_the_keyboard_has_it_before_anything_is_clicked() {
+    // The other half of the focus story: not a window coming back, but a
+    // window that has never been touched. An application whose shortcuts
+    // live on a `key_down` at the root has to answer the first key
+    // someone presses, with no click and no Tab first -- which is what
+    // `autofocus` is for (03 §3.1).
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(shortcut_root_batch()));
+
+    assert_eq!(d.focused(), d.session().lookup(1), "the root took focus on arrival");
+    let out = d.input(Input::Key { key: "G".into(), modifiers: 0, down: true });
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 1, 1)], "and the first key reaches it");
+}
+
+#[test]
+fn a_failed_asset_is_asked_for_again_before_it_is_given_up_on() {
+    // Every asset is its own thread and its own request, so a page that
+    // mounts seventeen pictures opens seventeen connections at once: some
+    // lose, and a failure used to be final — the hole it left was
+    // permanent, and a different set of holes appeared on every load.
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    let h = [7u8; 32];
+
+    d.asset_failed(h, "connect refused".into());
+    assert!(d.pending_assets().is_empty(), "not immediately: it waits");
+
+    d.tick(Instant::now() + Duration::from_millis(500));
+    assert_eq!(d.pending_assets(), vec![h], "and then asks again");
+
+    // Three failures is enough to believe it.
+    d.asset_failed(h, "connect refused".into());
+    d.tick(Instant::now() + Duration::from_secs(2));
+    let _ = d.pending_assets();
+    d.asset_failed(h, "connect refused".into());
+    d.tick(Instant::now() + Duration::from_secs(4));
+    assert!(d.pending_assets().is_empty(), "a broken asset settles");
+}
+
+#[test]
+fn up_and_down_in_a_textarea_move_the_caret_and_not_the_page() {
+    // A letter of more than one line could be typed and never navigated:
+    // the editing arms stopped at the ends of a line, so the arrows fell
+    // through to the scroller -- the view moved, the caret stayed.
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(letter_batch()));
+    let field = d.session().lookup(2).expect("the letter");
+    d.activate_node(field);
+    let _ = d.paint(400, 300);
+
+    // The caret lands at the end of the text: line three ("tail"),
+    // column four.
+    d.input(Input::Key { key: "ArrowUp".into(), modifiers: 0, down: true });
+    assert_eq!(caret_of(&d, 2), 8, "up keeps the column where the line above is long enough");
+    d.input(Input::Key { key: "ArrowUp".into(), modifiers: 0, down: true });
+    assert_eq!(caret_of(&d, 2), 3, "and clamps it to a shorter one");
+    d.input(Input::Key { key: "ArrowUp".into(), modifiers: 0, down: true });
+    assert_eq!(caret_of(&d, 2), 0, "the first line leads to the start of the text");
+    d.input(Input::Key { key: "ArrowDown".into(), modifiers: 0, down: true });
+    assert_eq!(caret_of(&d, 2), 4, "and down comes back");
+}
+
+/// One textarea holding three lines of different lengths.
+fn letter_batch() -> Batch {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
+        props: (0, 0), handlers: (0, 0), child_count: 1,
+    });
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::TextArea, id: 2, style: 1, key: 0,
+        // "abc" / "longer line" / "tail"
+        text: Some(TextRef::Inline("abc\nlonger line\ntail".into())),
+        props: (0, 0), handlers: (0, 0), child_count: 0,
+    });
+    Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }
+}
+
+/// Where the caret sits in node `id`'s local edit.
+fn caret_of(d: &Driver, id: u32) -> usize {
+    d.caret_in(id).expect("the field is being edited")
+}
+
+/// Shortcuts on the root, named in `keys`, over content taller than the
+/// window — the shape of every keyboard-driven page.
+fn shortcut_scroller_batch() -> Batch {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
+        props: (0, 2), handlers: (0, 1), child_count: 1,
+    });
+    tree.props.push((4, Value::Bool(true)));
+    tree.props.push((5, Value::List(vec![Value::Str("j".into()), Value::Str("k".into())])));
+    tree.handlers.push((EventKind::KeyDown, Handler::Server(1)));
+    tree.nodes.push(FlatNode {
+        kind: NodeKind::Scroll, id: 2, style: 2, key: 0, text: None,
+        props: (0, 0), handlers: (0, 0), child_count: 40,
+    });
+    for i in 0..40 {
+        tree.nodes.push(FlatNode {
+            kind: NodeKind::Text, id: 100 + i, style: 0, key: 0,
+            text: Some(TextRef::Inline(format!("line {i}"))),
+            props: (0, 0), handlers: (0, 0), child_count: 0,
+        });
+    }
+    Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "key".into() },
+            Op::DefAtom { id: 4, value: "autofocus".into() },
+            Op::DefAtom { id: 5, value: "keys".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::DefStyle { id: 2, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }
+}
+
+#[test]
+fn a_root_shortcut_does_not_take_the_scrolling_keys_it_never_asked_for() {
+    // 03 §3.1: a node carrying `keys` "is sent **only** the keys it names,
+    // and **only those** are withheld from the client's own meaning". The
+    // arrows and the page keys are not in this root's list, so they stay
+    // the client's and scroll.
+    //
+    // The gate used to ask whether anybody up the path listened for keys
+    // at all — true of every page that has shortcuts — so once an
+    // application put a `key_down` on its root, nothing in it could be
+    // scrolled from the keyboard again.
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(shortcut_scroller_batch()));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.focused(), d.session().lookup(1), "the root holds the keyboard");
+
+    let first = d.session().lookup(100).expect("the first line");
+    let before = d.layout().rect(first).expect("laid out").y;
+    d.input(Input::Key { key: "PageDown".into(), modifiers: 0, down: true });
+    let _ = d.paint(400, 300);
+    let after = d.layout().rect(first).expect("laid out").y;
+    assert!(after < before, "PageDown scrolled the page: {before} -> {after}");
+
+    // A key it *did* name is still its own.
+    let out = d.input(Input::Key { key: "j".into(), modifiers: 0, down: true });
+    assert!(
+        out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::KeyDown)),
+        "a claimed key still reaches the application"
+    );
+}
+
+#[test]
+fn a_window_that_comes_back_has_its_keyboard_back() {
+    // Losing the input drops focus, and for a long time nothing put it
+    // back: a window that had been away answered no key at all until
+    // something in it was clicked, because with no focused node there is
+    // no path to dispatch along. Most visible under a compositor where
+    // focus follows the pointer, and it cost every application whose
+    // shortcuts live on a `key_down` at the root.
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Batch(form_batch()));
+    tab(&mut d, false);
+    tab(&mut d, false);
+    let was = d.focused();
+    assert!(was.is_some(), "something is focused to begin with");
+
+    d.input(Input::Unfocused);
+    assert_eq!(d.focused(), None, "focus is dropped while the window is away");
+
+    d.input(Input::Refocused);
+    assert_eq!(d.focused(), was, "and handed back when it returns");
+
+    // And the keyboard works again without a click: Enter presses the
+    // button that has it.
+    let out = d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
+    assert!(
+        out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Click)),
+        "the key reaches the tree again"
+    );
+}
+
 #[test]
 fn the_focus_ring_is_painted_for_keyboard_and_server_focus_only() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
@@ -2635,6 +2852,72 @@ fn a_session_that_ends_replaces_the_tree_with_the_reason() {
 }
 
 /// Spec 06 §1.1: a node that asks to be woken is, on its own period and
+/// A period that changes on every answer keeps its cadence.
+///
+/// This is what an application that paces itself does: each answer says
+/// how long the next wait should be, a few milliseconds different from
+/// the last because the work it timed was. The clock is re-armed whenever
+/// the period changes (`collect_wakes`), and re-arming it *from now* is
+/// right -- what would be wrong is a re-arm that forgot to, or one that
+/// left the old deadline in place and fired on the old cadence.
+///
+/// Measured because a mail client that asked for 283 ms was answering
+/// every 137, and the arithmetic of who was at fault -- the clock, the
+/// queue, or the application -- could not be settled by reading either
+/// end.
+#[test]
+fn a_period_that_changes_every_frame_is_still_a_period() {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    const A_WAKE: u32 = 40;
+    const A_TICK: u32 = 41;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 1), handlers: (0, 1), child_count: 0 });
+    tree.props.push((A_WAKE, Value::Int(300)));
+    tree.handlers.push((EventKind::Wake, Handler::Server(A_TICK)));
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 2,
+        ops: vec![
+            Op::DefAtom { id: A_WAKE, value: "wake".into() },
+            Op::DefAtom { id: A_TICK, value: "tick".into() },
+            Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let woken = |d: &mut Driver| d.take_pending().iter().filter(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Wake)).count();
+
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let _ = woken(&mut d);
+    // Fifty milliseconds at a time for three seconds, answering every
+    // wake the way a server would: a frame back, carrying a period a few
+    // milliseconds different from the last.
+    let mut fired: Vec<u64> = Vec::new();
+    let mut period = 300i64;
+    let mut seq = 3u64;
+    for step in 1..=60u64 {
+        let at = step * 50;
+        d.tick(t0 + Duration::from_millis(at));
+        let _ = d.paint(400, 300);
+        if woken(&mut d) > 0 {
+            fired.push(at);
+            // The answer: the same node, a period that drifts.
+            period = 300 + (step as i64 % 7) - 3;
+            d.handle_frame(Frame::Batch(Batch {
+                seq,
+                ops: vec![Op::SetProp { node: 1, prop: A_WAKE, value: Value::Int(period) }],
+            }));
+            seq += 1;
+        }
+    }
+    assert!(fired.len() >= 8, "three seconds of a 300 ms clock is about ten wakes, got {}: {fired:?}", fired.len());
+    let gaps: Vec<u64> = fired.windows(2).map(|w| w[1] - w[0]).collect();
+    // Every gap is the period the node asked for, to within the 50 ms
+    // step this test looks in. None is a fraction of it.
+    assert!(gaps.iter().all(|g| (250..=400).contains(g)), "the cadence holds: {gaps:?}");
+}
+
 /// nobody's action; the floor holds, the phase survives a re-render, and
 /// dropping the prop stops the clock.
 #[test]
@@ -3595,6 +3878,49 @@ fn level_and_time_update_share_one_clock() {
     // The next paint is the same tick: neither is sent again.
     let _ = d.paint(400, 300);
     assert!(d.take_pending().is_empty(), "one clock, not two");
+}
+
+/// Spec 02 §5.2: a batch says one line to the person, and the capability
+/// is the whole of the gate.
+#[test]
+fn a_notification_needs_the_capability_and_a_title() {
+    let mut d = Driver::new(1280.0, 800.0, 2.0, caps::NOTIFICATIONS);
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 2,
+        ops: vec![
+            Op::Notify { title: "Nouveau message".into(), body: "Ana : on déjeune ?".into(), tag: "thread-7".into() },
+            // No title is a blank rectangle on every platform; it is not
+            // shown, and it does not take the session with it.
+            Op::Notify { title: "   ".into(), body: "orphan".into(), tag: String::new() },
+            // A control character is how one line becomes two, or an
+            // argument becomes a flag. It is a space by the time the
+            // window sees it.
+            Op::Notify { title: "Fin\u{1b}[31m de course".into(), body: "deux\nlignes".into(), tag: "t\u{7}g".into() },
+        ],
+    }));
+    let notes = d.take_notes();
+    assert_eq!(notes.len(), 2, "the untitled one is dropped: {notes:?}");
+    assert_eq!(notes[0].title, "Nouveau message");
+    assert_eq!(notes[0].body, "Ana : on déjeune ?");
+    assert_eq!(notes[0].tag, "thread-7");
+    assert_eq!(notes[1].title, "Fin [31m de course", "control characters become spaces");
+    assert_eq!(notes[1].body, "deux\nlignes", "a body may have a second line");
+    assert_eq!(notes[1].tag, "t g");
+    // Taken, so a window that looks twice notifies once.
+    assert!(d.take_notes().is_empty(), "one batch, one notification each");
+}
+
+/// Without the grant there is no notification — and the batch is applied
+/// all the same: a notification is not part of the document, so declining
+/// one changes nothing that is drawn.
+#[test]
+fn a_notification_without_the_capability_shows_nothing() {
+    let mut d = Driver::new(1280.0, 800.0, 2.0, 0);
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 1, style: 0, key: 0, text: Some(TextRef::Inline("bonjour".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::Mount(tree), Op::Notify { title: "Nouveau message".into(), body: String::new(), tag: String::new() }] }));
+    assert!(d.take_notes().is_empty(), "no grant, nothing shown");
+    assert!(d.session().lookup(1).is_some(), "the tree in the same batch still arrived");
 }
 
 /// Spec 03 §3.5: an address opens because the person activated it, the

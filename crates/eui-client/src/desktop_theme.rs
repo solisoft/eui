@@ -44,6 +44,73 @@ pub fn omarchy_dir() -> Option<PathBuf> {
     dir.join("theme.name").is_file().then_some(dir)
 }
 
+/// Which of the two palettes the machine is in, asked of the desktop.
+///
+/// Separate from [`current`] because it is a smaller question with more
+/// answers: a desktop that publishes no colours at all still knows whether
+/// it is light or dark, and winit will not say on this platform — its
+/// Wayland `theme()` is the decoration theme *this* process asked for, and
+/// its X11 one is flatly `None`. Without this a GNOME or KDE desktop in
+/// the dark got a light client and no way to say otherwise.
+///
+/// Asked before any window is built, which is the point: a driver made in
+/// the wrong palette sends a `Hello` that says so.
+#[cfg(target_os = "linux")]
+pub fn os_mode() -> Option<ThemeMode> {
+    if disabled() {
+        return None;
+    }
+    // The palette in force answers first and answers exactly. The portal
+    // is the fallback, and on Omarchy it is usually the *desktop's* idea
+    // of light and dark rather than the theme's.
+    current().map(|t| t.mode).or_else(portal_mode)
+}
+
+/// Every other platform: winit answers for the window, and there is no
+/// desktop file to read behind it. macOS and Windows report a real theme;
+/// a page reports `prefers-color-scheme`; Android and iOS report nothing
+/// and come up light until the application asks for otherwise.
+#[cfg(not(target_os = "linux"))]
+pub fn os_mode() -> Option<ThemeMode> {
+    None
+}
+
+/// `color-scheme` from the XDG desktop portal — the setting a browser
+/// answers `prefers-color-scheme` from, and the one cross-desktop place a
+/// light/dark preference lives on Linux.
+///
+/// `1` is a preference for dark and `2` for light; `0` is "no preference",
+/// which is not the same as light and is answered here as no answer, so
+/// the application's own theme decides as it did before.
+///
+/// `ReadOne` is the current call and answers a variant. Portals older than
+/// 0.19 have only `Read`, whose answer is a variant holding another — so
+/// the value is unwrapped through however many layers it arrives in and
+/// one code path serves both.
+#[cfg(target_os = "linux")]
+fn portal_mode() -> Option<ThemeMode> {
+    let conn = zbus::blocking::Connection::session().ok()?;
+    let call = |method: &str| {
+        conn.call_method(Some("org.freedesktop.portal.Desktop"), "/org/freedesktop/portal/desktop", Some("org.freedesktop.portal.Settings"), method, &("org.freedesktop.appearance", "color-scheme"))
+            .ok()
+    };
+    let reply = call("ReadOne").or_else(|| call("Read"))?;
+    let body = reply.body();
+    let value = body.deserialize::<zbus::zvariant::Value<'_>>().ok()?;
+    scheme(&value)
+}
+
+/// A `color-scheme` value, through however many variants it is wrapped in.
+#[cfg(target_os = "linux")]
+fn scheme(v: &zbus::zvariant::Value<'_>) -> Option<ThemeMode> {
+    match v {
+        zbus::zvariant::Value::U32(1) => Some(ThemeMode::Dark),
+        zbus::zvariant::Value::U32(2) => Some(ThemeMode::Light),
+        zbus::zvariant::Value::Value(inner) => scheme(inner),
+        _ => None,
+    }
+}
+
 /// The desktop's palette, if there is one to follow.
 pub fn current() -> Option<DesktopTheme> {
     if disabled() {
@@ -174,9 +241,69 @@ pub fn parse_omarchy(text: &str) -> Option<(ThemeMode, Vec<(Role, u32)>)> {
 /// Watch the desktop's theme and call `changed` (from another thread)
 /// whenever it does. Returns the watcher to keep alive, `None` when there
 /// is nothing to watch or watching is unavailable.
+///
+/// Two desktops to watch, not one. Omarchy publishes a directory and the
+/// files in it are the theme, so the files are watched. Every other Linux
+/// desktop publishes light or dark through the portal and says so with a
+/// signal, so the signal is listened for. Neither is the other's fallback
+/// in any interesting sense — a machine has one or the other.
 pub fn watch(changed: impl Fn() + Send + 'static) -> Option<Box<dyn std::any::Any + Send>> {
+    match omarchy_dir() {
+        Some(dir) => watch_files(dir, changed),
+        #[cfg(target_os = "linux")]
+        None => watch_portal(changed),
+        #[cfg(not(target_os = "linux"))]
+        None => None,
+    }
+}
+
+/// The portal's `SettingChanged`, which is how every other Linux desktop
+/// says it has changed its mind about light and dark.
+///
+/// The signal's own body is not read. Anything the rule lets through means
+/// "ask again", and asking again is a method call that costs nothing and
+/// settles to the same answer when nothing moved — which is a great deal
+/// less code than decoding a variant to learn what a re-read would tell us
+/// anyway.
+///
+/// The thread outlives its usefulness by up to one signal: it is parked in
+/// the iterator, and the flag it checks is only looked at when something
+/// wakes it. One idle thread per window, ended when the window is.
+#[cfg(target_os = "linux")]
+fn watch_portal(changed: impl Fn() + Send + 'static) -> Option<Box<dyn std::any::Any + Send>> {
+    let conn = zbus::blocking::Connection::session().ok()?;
+    let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.freedesktop.portal.Settings").ok()?.member("SettingChanged").ok()?.build();
+    let signals = zbus::blocking::MessageIterator::for_match_rule(rule, &conn, None).ok()?;
+    let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mine = std::sync::Arc::clone(&alive);
+    std::thread::Builder::new()
+        .name("eui-theme-portal".into())
+        .spawn(move || {
+            for _ in signals {
+                if !mine.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                changed();
+            }
+        })
+        .ok()?;
+    Some(Box::new(Stop(alive)))
+}
+
+/// Dropped with the window: the watching thread stops calling back.
+#[cfg(target_os = "linux")]
+struct Stop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(target_os = "linux")]
+impl Drop for Stop {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Omarchy's theme directory, watched as files.
+fn watch_files(dir: PathBuf, changed: impl Fn() + Send + 'static) -> Option<Box<dyn std::any::Any + Send>> {
     use notify::Watcher;
-    let dir = omarchy_dir()?;
     let mut watcher = notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
         // Only what a theme switch touches — the `theme` link and the
         // `theme.name` file — and only a write, a creation, a rename or a

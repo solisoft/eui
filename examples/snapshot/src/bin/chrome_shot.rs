@@ -46,10 +46,10 @@ fn main() {
             // CHROME_PICK=<n> — the keyboard standing on the nth recent, as
             // ArrowDown leaves it.
             let pick: usize = std::env::var("CHROME_PICK").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-            chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }], 0);
+            chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None, installed: None }], 0);
             for _ in 0..pick {
                 let _ = chrome.input(eui_client::Input::Key { key: "ArrowDown".into(), modifiers: 0, down: true });
-                chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None }], 0);
+                chrome.rebuild(&[TabView { title: "New tab", origin: "", path: "", trust: None, link: None, can_back: false, can_forward: false, grants: None, installed: None }], 0);
             }
         } else {
             let views: Vec<TabView<'_>> = tabs
@@ -64,6 +64,13 @@ fn main() {
                     can_forward: std::env::var("CHROME_FWD").is_ok(),
                     // CHROME_GRANTS — the padlock, for a plate that wants it.
                     grants: std::env::var("CHROME_GRANTS").is_ok().then_some(eui_proto::caps::CAMERA),
+                    // CHROME_INSTALL=in|out — the launcher control, which
+                    // is absent for an application that publishes no icon.
+                    installed: match std::env::var("CHROME_INSTALL").as_deref() {
+                        Ok("in") => Some(true),
+                        Ok("out") => Some(false),
+                        _ => None,
+                    },
                 })
                 .collect();
             if std::env::var("CHROME_EDIT").is_ok() {

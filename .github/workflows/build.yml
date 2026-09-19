@@ -155,14 +155,92 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/${{ matrix.exe }}"
           ls -lh dist/
 
+      # Developer ID signing, and the notarisation it is the prerequisite
+      # for. That pair is what actually stops Gatekeeper holding a download:
+      # Apple issues a ticket, the ticket is stapled into the bundle and the
+      # image, and com.apple.quarantine stops meaning anything to the person
+      # who clicked the link. Without it the build is ad-hoc signed and they
+      # have to go to System Settings, or fetch it with
+      # `scripts/install-macos.sh`, which never picks the attribute up.
+      #
+      # Only where the repository has the secrets: a fork, and a pull
+      # request from one, are handed none of them and take the ad-hoc path.
+      # The secrets are listed in .github/MACOS_BUILD.md.
+      #
+      # The certificate goes into a keychain made for this job and deleted
+      # at the end of it. Importing into the login keychain would leave a
+      # private key behind on a machine somebody else's build runs on next.
+      - name: Unlock a signing identity
+        if: matrix.platform == 'macos'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          # The `secrets` context is not one of the contexts a step's `if`
+          # can read — written there it evaluates to nothing and the step is
+          # skipped forever, which looks exactly like a repository with no
+          # certificate. So the question is asked here, where the secret is
+          # actually in scope.
+          if [ -z "${MACOS_CERTIFICATE:-}" ]; then
+            echo "no signing certificate in this repository's secrets — the build will be ad-hoc signed"
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          # Guards a keychain that outlives nothing, so it is generated here
+          # rather than being one more secret to rotate.
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          # Without this it relocks on its own timer partway through and
+          # codesign is refused in the middle of the build.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+          # Otherwise the first codesign raises the "allow access to this
+          # key" dialog on a machine with nobody sitting at it, and the job
+          # waits there until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          # codesign only looks at the search list, and a new keychain is
+          # not on it. The login keychain stays alongside so nothing else in
+          # the job loses what it was already using.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          # notarytool wants the App Store Connect key as a file. Its path
+          # is what the wrapper reads; the key itself never lands anywhere
+          # the artifacts are made from.
+          if [ -n "${APPLE_API_KEY_P8:-}" ]; then
+            printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            chmod 600 "$RUNNER_TEMP/notary.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+          fi
+
       # Allowed to fail so the binaries below still reach the artifacts: the
       # DMG is the last thing the script makes, and `hdiutil` failing on it
       # once cost a run every download it had already built. The job is still
       # failed for it, after the upload — see the step at the end.
+      #
+      # Every signing variable below is empty in a repository without the
+      # secrets, and the wrapper reads an empty one as "not set": that is
+      # the ad-hoc path, and it is the path this takes today.
       - name: Wrap in a .app bundle, with a DMG beside it
         id: wrap
         if: matrix.platform == 'macos'
         continue-on-error: true
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           mv dist/eui dist/eui-${{ matrix.arch }}-macos
           ./scripts/wrap-macos-app.sh dist/eui-${{ matrix.arch }}-macos EUI com.soli.eui dist
@@ -204,6 +282,14 @@ jobs:
         run: |
           echo "wrap-macos-app failed; whatever it built is in the artifacts above" >&2
           exit 1
+
+      # Always, including after a failure above: a job that died holding a
+      # private key should not be the reason one is left on the runner.
+      - name: Put the signing identity away
+        if: always() && matrix.platform == 'macos'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/certificate.p12"
 
   # The two phones, built so somebody can put them on a device. Neither is
   # covered by `build-matrix`: an APK is not a binary and an iOS .app is not

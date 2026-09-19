@@ -296,3 +296,61 @@ An application that needs this properly — several servers, or a pool that has
 to stay wide — keeps the shared thing in `Cache` (SoliKV) and pays a round
 trip per event for it. A global is the demo's bargain, and it is worth
 knowing it is one.
+
+## Telling somebody something when they are not looking
+
+`eui_notify(title, body, opts)` raises a real notification on the machine the
+window is on — the desktop's own, the one every other application uses. It is
+the one thing an application can do that reaches somebody who has gone to do
+something else.
+
+```soli
+def mail_arrived(event)
+  msg = Mail.latest()
+  eui_notify("Nouveau message", "#{msg.from} : #{msg.subject}", {
+    "tag": "thread-#{msg.thread_id}"
+  })
+  { "state": { "unseen": Mail.unseen() } }
+end
+```
+
+It is a call and not a node, because a notification is something an
+application *does* once where something happened, not something a view *is*.
+So it belongs in a handler; a view that calls it says the same thing again on
+every render.
+
+- **`title`** is required — a notification with no title is a blank rectangle,
+  and an empty one raises rather than showing that.
+- **`body`** is the line under it, and may be left out.
+- **`opts["tag"]`** is an identity. A second notification carrying the tag of
+  one still on screen *replaces* it, so ten replies to one thread are one
+  notification rather than ten. Without a tag each one stands alone.
+- Long strings are cut to the protocol's limits (256 bytes of title, 1 KiB of
+  body) rather than refused: a mail subject is not an attack.
+
+It returns whether it was **sent**, never whether it was seen. The client
+shows it only if the person granted `notifications`, and the protocol carries
+nothing back — not shown, not clicked, not dismissed, not "this machine has no
+notifier". Ask for the capability in `config/routes.sl`, like any other:
+
+```soli
+eui_capabilities("notifications")
+```
+
+**It goes to the session whose handler is running, and to no other.** That is
+the whole rule, and it is what makes the pairing with `eui_wake` the shape to
+reach for: something happens in a job, a controller or another window, that
+code wakes the component, and each woken session decides for itself whether
+its own machine should say anything.
+
+```soli
+# in the job that took the mail delivery
+eui_wake("mail", "arrived")     # every other window renders, and notifies itself
+```
+
+Called where no session is rendering — a controller, a cron job, `soli run` —
+there is no window to say it to, and it returns `false` having done nothing.
+
+At most four notifications ride in one batch; a handler that says more sends
+them in several, which costs nothing but is worth knowing before writing a
+loop that notifies per row.

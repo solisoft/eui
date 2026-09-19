@@ -57,6 +57,25 @@ pub const MAX_SAVE_BYTES: u64 = 256 * 1024 * 1024;
 /// Largest reason string on an aborted transfer, in bytes.
 pub const MAX_ABORT_REASON: usize = 256;
 
+/// Largest title on a `Notify` op (02 §5.2), in bytes. A notification is a
+/// line somebody reads on their way past, and every platform truncates a
+/// long one anyway -- so the protocol truncates nothing and refuses this
+/// instead, which an application finds out about while it is being written
+/// rather than on a machine whose notifier is stricter than the last one.
+pub const MAX_NOTIFY_TITLE: usize = 256;
+/// Largest body on a `Notify` op, in bytes.
+pub const MAX_NOTIFY_BODY: usize = 1024;
+/// Largest tag on a `Notify` op, in bytes. It is an identity, not prose:
+/// long enough for a record's key, short enough that it is never a message.
+pub const MAX_NOTIFY_TAG: usize = 64;
+/// Most `Notify` ops one batch may carry (02 §5.2).
+///
+/// The one op whose cost is not the client's memory but the person's
+/// attention, and the only defence against a server that spends it all at
+/// once is a number. Four is a burst -- a message, a reply and two more --
+/// past which a batch is not notifying somebody, it is shouting.
+pub const MAX_NOTIFY_PER_BATCH: u32 = 4;
+
 /// Size of a `StyleRecord` on the wire, in bytes.
 pub const STYLE_RECORD_BYTES: usize = 64;
 /// Size of a BLAKE3 asset hash, in bytes.

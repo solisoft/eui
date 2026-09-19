@@ -657,6 +657,11 @@ pub struct Status {
     pub nfc: Vec<crate::driver::NfcAsk>,
     /// Bytes a save is owed, for the window to put on disk.
     pub writes: Vec<FileWrite>,
+    /// Lines a batch asked to say to the person, for the window to hand
+    /// the machine's notifier (02 §5.2). The worker has no session bus and
+    /// no `exec`; the decision is the driver's and the platform call is
+    /// the window's.
+    pub notes: Vec<crate::driver::Note>,
     /// A node is asking where the machine is, the capability is granted and
     /// the window has the input — so the platform's positioning should be
     /// running, and should not be a moment longer than this stays true.
@@ -793,6 +798,12 @@ impl Reply {
             w.u8(f.flag as u8);
             w.bytes(&f.bytes);
         }
+        w.u32(u32::try_from(s.notes.len()).unwrap_or(u32::MAX));
+        for n in &s.notes {
+            w.str(&n.title);
+            w.str(&n.body);
+            w.str(&n.tag);
+        }
         match &self.payload {
             Payload::None => w.u8(0),
             Payload::Sandbox(r) => {
@@ -924,7 +935,12 @@ impl Reply {
             let flag = eui_proto::Chunked::from_u8(r.u8()?).map_err(|_| "chunk flag")?;
             writes.push(FileWrite { token, flag, bytes: r.bytes()?.to_vec() });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, opening, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes };
+        let n = r.u32()? as usize;
+        let mut notes = Vec::with_capacity(n.min(crate::driver::MAX_PENDING_NOTES));
+        for _ in 0..n {
+            notes.push(crate::driver::Note { title: r.str()?, body: r.str()?, tag: r.str()? });
+        }
+        let status = Status { outbound, needs_redraw, closed, ime, clipboard, opening, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes, notes };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -1555,6 +1571,7 @@ fn status_of(d: &mut Driver) -> Status {
         files: d.take_file_asks(),
         nfc: d.take_nfc_asks(),
         writes: d.take_writes(),
+        notes: d.take_notes(),
     }
 }
 
@@ -1861,6 +1878,14 @@ impl Worker {
             let mut writes = std::mem::take(&mut self.status.writes);
             writes.append(&mut status.writes);
             status.writes = writes;
+        }
+        // A notification is an event like a dialog: a reply that came back
+        // between the batch and the window's next look must not take it
+        // with it (02 §5.2).
+        if !self.status.notes.is_empty() {
+            let mut notes = std::mem::take(&mut self.status.notes);
+            notes.append(&mut status.notes);
+            status.notes = notes;
         }
         if status.opening.is_none() {
             status.opening = self.status.opening.take();
@@ -2386,6 +2411,12 @@ impl Backend {
         self.with_local(|d| d.take_open()).or_else(|| self.with_worker(|w| w.status.opening.take())).flatten()
     }
 
+    /// The lines a batch asked to say to the person since the last call,
+    /// with the capability already checked (02 §5.2).
+    pub fn take_notes(&mut self) -> Vec<crate::driver::Note> {
+        self.with_local(Driver::take_notes).or_else(|| self.with_worker(|w| std::mem::take(&mut w.status.notes))).unwrap_or_default()
+    }
+
     /// Spec 01 §2.1: raise the consent sheet, before anything is dialled.
     pub fn ask_consent(&mut self, asked: u32, name: &str) {
         if self.with_local(|d| d.ask_consent(asked, name)).is_some() {
@@ -2782,6 +2813,10 @@ mod tests {
             ],
             nfc: vec![crate::driver::NfcAsk { token: 6, node: 12, prompt: "Hold it near the label".into() }],
             writes: vec![FileWrite { token: 4, flag: eui_proto::Chunked::Last, bytes: vec![7, 7, 7] }],
+            notes: vec![
+                crate::driver::Note { title: "Nouveau message".into(), body: "Ana: on déjeune ?".into(), tag: "thread-7".into() },
+                crate::driver::Note { title: "Sans corps".into(), body: String::new(), tag: String::new() },
+            ],
         };
         let list = DrawList {
             quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8] }],

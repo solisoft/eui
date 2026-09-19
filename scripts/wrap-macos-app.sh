@@ -82,19 +82,116 @@ if [ -n "${BUNDLE_KEY:-}" ]; then
   echo "wrap-macos-app: wrote the launch key beside the executable"
 fi
 
-# Sign the bundle, ad-hoc, with no certificate. Assembling a .app by copying
-# a binary and writing a plist leaves the bundle itself unsigned, and Apple
-# Silicon refuses to run an unsigned bundle outright — reporting it to the
-# user as "damaged", which sends them looking for a corrupt download. This
-# is not notarisation and does not clear Gatekeeper's quarantine on a
-# download; it turns a hard refusal into the ordinary unidentified-developer
-# prompt, which right-click - Open can answer.
+# Sign the bundle. Assembling a .app by copying a binary and writing a plist
+# leaves the bundle itself unsigned, and Apple Silicon refuses to run an
+# unsigned bundle outright — reporting it to the user as "damaged", which
+# sends them looking for a corrupt download.
+#
+# Which signature depends on what the environment carries:
+#
+#   MACOS_SIGNING_IDENTITY unset — ad-hoc, no certificate. This is what a
+#   local build and a fork's CI get. It turns the hard refusal into the
+#   unidentified-developer stop, which is still a stop: a download wears
+#   com.apple.quarantine, Gatekeeper reads it, and the person has to go to
+#   System Settings to let the app through. scripts/install-macos.sh
+#   sidesteps it by fetching with curl, which writes no quarantine at all.
+#
+#   MACOS_SIGNING_IDENTITY set — a real Developer ID, with the hardened
+#   runtime and a trusted timestamp, both of which notarisation requires
+#   and neither of which is the default. With notary credentials beside it
+#   the bundle is then submitted to Apple and the returned ticket stapled
+#   into it, which is the only arrangement that clears quarantine for
+#   somebody who just clicked the link in the README.
+SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:--}"
+
+if [ "$SIGN_IDENTITY" != "-" ] && command -v security >/dev/null 2>&1; then
+  # Asked for a named identity and the keychain has no such thing: that is
+  # a build that would quietly ship ad-hoc under a name that promised
+  # otherwise, so it stops here instead.
+  security find-identity -v -p codesigning | grep -qF "$SIGN_IDENTITY" || {
+    echo "wrap-macos-app: no codesigning identity matching '$SIGN_IDENTITY' in the keychain" >&2
+    exit 1; }
+fi
+
 if command -v codesign >/dev/null 2>&1; then
-  codesign --force --deep --sign - "$APP" 2>&1 | sed 's/^/wrap-macos-app: /' || {
-    echo "wrap-macos-app: codesign failed" >&2; exit 1; }
+  if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --deep --sign - "$APP" 2>&1 | sed 's/^/wrap-macos-app: /' || {
+      echo "wrap-macos-app: codesign failed" >&2; exit 1; }
+    echo "wrap-macos-app: ad-hoc signed"
+  else
+    # No --deep: it is deprecated for signing, and there is nothing nested
+    # to reach anyway — the bundle is one executable and an icon.
+    codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP" 2>&1 |
+      sed 's/^/wrap-macos-app: /' || {
+      echo "wrap-macos-app: codesign failed" >&2; exit 1; }
+    echo "wrap-macos-app: signed with a Developer ID, hardened runtime on"
+  fi
   codesign --verify --deep --strict "$APP" || {
     echo "wrap-macos-app: signature did not verify" >&2; exit 1; }
-  echo "wrap-macos-app: ad-hoc signed"
+fi
+
+# Notary credentials, in either of the two shapes `notarytool` takes. The
+# App Store Connect API key is the one to prefer in CI — it is scoped to
+# notarisation and revocable on its own, where an app-specific password
+# rides on the Apple ID that owns the account.
+NOTARY_CREDS=()
+NOTARIZE=0
+if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+  NOTARY_CREDS=(--key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+  NOTARIZE=1
+elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+  NOTARY_CREDS=(--apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID")
+  NOTARIZE=1
+fi
+
+# An ad-hoc signature cannot be notarised — Apple will not issue a ticket
+# for code it cannot attribute to a team — so credentials without an
+# identity are a misconfiguration worth saying out loud rather than a
+# quieter build.
+if [ "$NOTARIZE" = 1 ] && [ "$SIGN_IDENTITY" = "-" ]; then
+  echo "wrap-macos-app: notary credentials but no MACOS_SIGNING_IDENTITY — an ad-hoc signature cannot be notarised" >&2
+  exit 1
+fi
+
+# Submit one container, wait for the verdict, staple the ticket onto the
+# thing that will be downloaded.
+#
+# `notarytool submit --wait` has been known to exit 0 on a rejection, so
+# the verdict is read out of its report rather than out of its status: an
+# "Accepted" that is not there is a failure, whatever the exit code said.
+# On anything else the per-submission log is fetched, because the summary
+# says only "Invalid" and the log says which binary and why.
+notarize() {
+  local container="$1" target="$2" out id
+  echo "wrap-macos-app: notarising $(basename "$container")"
+  out="$(xcrun notarytool submit "$container" "${NOTARY_CREDS[@]}" --wait --timeout 30m 2>&1)" || true
+  printf '%s\n' "$out" | sed 's/^/wrap-macos-app: notary: /'
+  if ! printf '%s\n' "$out" | grep -q "status: Accepted"; then
+    id="$(printf '%s\n' "$out" | awk '/ *id: /{ print $2; exit }')"
+    if [ -n "$id" ]; then
+      xcrun notarytool log "$id" "${NOTARY_CREDS[@]}" 2>&1 | sed 's/^/wrap-macos-app: notary log: /' || true
+    fi
+    echo "wrap-macos-app: notarisation was refused" >&2
+    return 1
+  fi
+  # The ticket is fetched by the code's hash, so stapling works on the
+  # bundle itself and not only on the container that was submitted.
+  xcrun stapler staple "$target" 2>&1 | sed 's/^/wrap-macos-app: /' || {
+    echo "wrap-macos-app: could not staple $target" >&2; return 1; }
+  xcrun stapler validate "$target" >/dev/null || {
+    echo "wrap-macos-app: the staple did not validate on $target" >&2; return 1; }
+  echo "wrap-macos-app: stapled $(basename "$target")"
+}
+
+# Before the archives, so both of them carry a bundle that already has its
+# ticket in it: a ticket stapled after the zip was made is a ticket the
+# download does not have. ditto, not zip, for what goes to the notary —
+# it is the archiver Apple's own instructions name, and the one that hands
+# back a bundle byte for byte.
+if [ "$NOTARIZE" = 1 ]; then
+  ditto -c -k --keepParent "$APP" "$OUT_DIR/.notarize.zip"
+  notarize "$OUT_DIR/.notarize.zip" "$APP" || { rm -f "$OUT_DIR/.notarize.zip"; exit 1; }
+  rm -f "$OUT_DIR/.notarize.zip"
 fi
 
 echo "wrap-macos-app: built $APP"
@@ -301,6 +398,22 @@ if command -v hdiutil >/dev/null 2>&1; then
     echo "wrap-macos-app: could not build the DMG" >&2
     rm -rf "$OUT_DIR/.dmg-stage" "$OUT_DIR/.$APP_NAME-rw.dmg"
     exit 1
+  fi
+
+  # The image carries a stapled app — it was staged from one — but the image
+  # itself is a downloaded file too, and it is the one that wears the
+  # quarantine. So it gets its own signature and its own ticket; without
+  # them, mounting it on a machine that is offline has nothing to check
+  # against, and Gatekeeper stops the volume before the app inside it is
+  # ever reached.
+  if [ "$SIGN_IDENTITY" != "-" ]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG" 2>&1 |
+      sed 's/^/wrap-macos-app: /' || {
+      echo "wrap-macos-app: could not sign the DMG" >&2; exit 1; }
+    echo "wrap-macos-app: signed $DMG"
+  fi
+  if [ "$NOTARIZE" = 1 ]; then
+    notarize "$DMG" "$DMG" || exit 1
   fi
 fi
 

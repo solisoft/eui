@@ -62,6 +62,23 @@ fn platform_parts() {
     if phone || page {
         println!("cargo:rustc-cfg=no_subprocess");
     }
+    // A launcher entry to install an application into: the freedesktop
+    // one, the macOS Applications folder, the Windows Start menu. Neither
+    // phone has anywhere a process may write an entry the system will read
+    // — an application is installed there by being packaged — and a page
+    // is already inside one.
+    println!("cargo:rustc-check-cfg=cfg(has_launchers)");
+    if !phone && !page {
+        println!("cargo:rustc-cfg=has_launchers");
+    }
+    // One process for every window rather than for every launch: a Unix
+    // socket a later `eui` hands its addresses to (`instance.rs`). A phone
+    // and a page launch nothing twice; Windows has no `UnixListener`, and
+    // the named pipe that would stand in for one is not written yet.
+    println!("cargo:rustc-check-cfg=cfg(has_instance)");
+    if !phone && !page && std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default().split(',').any(|f| f == "unix") {
+        println!("cargo:rustc-cfg=has_instance");
+    }
     // The socket and the two devices this process opens for itself. A page
     // is handed a WebSocket that has already done its TLS, and an audio
     // graph it may not write samples into; neither is a thing to ask the

@@ -114,6 +114,24 @@ pub struct NfcAsk {
     pub prompt: String,
 }
 
+/// One line a batch asked to say to the person (02 §5.2).
+///
+/// Held for the window rather than acted on here, like a dialog and a
+/// scan: the driver may be running in the confined worker of 08 §10, which
+/// has no session bus, no `exec` and nothing else a notifier needs. What
+/// the driver owns is the decision -- the capability, the count, whether
+/// the line is fit to hand a platform -- and the window owns the platform.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    /// The line.
+    pub title: String,
+    /// What goes under it; may be empty.
+    pub body: String,
+    /// The identity a later notification replaces this one by; empty when
+    /// it stands alone.
+    pub tag: String,
+}
+
 /// One record off a tag.
 ///
 /// Deliberately not a general NDEF model: a client that shipped one would
@@ -900,6 +918,20 @@ pub fn trace(line: impl FnOnce() -> String) {
     }
 }
 
+/// Notifications held for a window that has not looked yet (02 §5.2).
+///
+/// Four per batch is the protocol's ceiling; this is the one that matters
+/// when a window is slow to pump and batches keep arriving. Past it the
+/// oldest goes, because a person coming back to their machine wants the
+/// last thing that happened and not the first.
+pub(crate) const MAX_PENDING_NOTES: usize = 16;
+
+/// How many times a failed asset fetch is tried again before it is final.
+///
+/// Two. A broken asset fails the same way each time and settles quickly;
+/// a connection that lost a race against sixteen siblings gets another go.
+const ASSET_TRIES: u8 = 2;
+
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
 /// How often a `spin` alone asks for a frame: 30 a second. A transition
@@ -1071,6 +1103,9 @@ pub struct Driver {
     /// than a mouse (spec 06 §5).
     touch: Touch,
     focused: Option<NodeIx>,
+    /// Where focus was when the window last lost the input, so that
+    /// getting it back costs nothing. See `Input::Refocused`.
+    refocus: Option<NodeIx>,
     /// Focus came from the keyboard or the server: draw the ring (spec 03 §3).
     focus_visible: bool,
     /// How much of the window's bottom edge a soft keyboard is over
@@ -1120,6 +1155,13 @@ pub struct Driver {
     /// An address the person asked to open, for the window to hand the
     /// platform. At most one per input: a click opens one page.
     opening: Option<String>,
+    /// Lines the server asked to say to the person, for the window to hand
+    /// the machine's notifier (02 §5.2).
+    notes: Vec<Note>,
+    /// Whether this session has already been told that it asked to notify
+    /// somebody who said no. Once is a diagnosis; once per batch is a log
+    /// an application can fill up from the other end of a socket.
+    said_no_notify: bool,
     /// What the caret's blink is timed from: the moment it last moved.
     caret_since: Instant,
     /// Where it was then — node, selection and offset — so that a caret that
@@ -1221,6 +1263,12 @@ pub struct Driver {
     /// When a scroll offset last changed: a windowed list asks for rows
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
+    /// How many times each asset's fetch has failed, and when to try the
+    /// ones that are owed another go (see [`Self::asset_failed`]).
+    asset_tries: HashMap<Hash, u8>,
+    asset_retry: Vec<(Hash, Instant)>,
+    /// Something changed that may have left a picture out of the sheet.
+    repack: bool,
     /// The scroller that last moved and when, for the bar it wears.
     scrolled: Option<(NodeIx, Instant)>,
     /// Spec 03 §8: the moving pictures in the tree, and where each node
@@ -1333,6 +1381,7 @@ impl Driver {
             pointer: Pointer::default(),
             touch: Touch::default(),
             focused: None,
+            refocus: None,
             focus_visible: false,
             covered: 0.0,
             window_h: h,
@@ -1350,6 +1399,8 @@ impl Driver {
             preedit: String::new(),
             clipboard: None,
             opening: None,
+            notes: Vec::new(),
+            said_no_notify: false,
             caret_since: Instant::now(),
             caret_was: None,
             caret_due: None,
@@ -1388,6 +1439,9 @@ impl Driver {
             paint_cache: PaintCache::new(),
             last_paint_stats: eui_render::PaintStats::default(),
             scroll_touched: None,
+            asset_tries: HashMap::new(),
+            asset_retry: Vec::new(),
+            repack: false,
             scrolled: None,
             movies: HashMap::new(),
             players: HashMap::new(),
@@ -1627,6 +1681,7 @@ impl Driver {
                 self.resyncing = false;
                 self.audio_dirty = true;
                 self.video_dirty = true;
+                self.repack = true;
                 self.wake_dirty = true;
                 self.locate_dirty = true;
                 self.invalidate();
@@ -1694,8 +1749,14 @@ impl Driver {
                 }
                 self.acked = batch.seq;
                 for op in &batch.ops {
-                    if let eui_proto::Op::ScrollTo { node, .. } = op {
+                    if let eui_proto::Op::ScrollTo { node, x, y } = op {
+                        trace(|| format!("batch asked {node} to {x},{y}"));
                         self.scroll_asked.push(*node);
+                    }
+                }
+                for op in &batch.ops {
+                    if let eui_proto::Op::Notify { title, body, tag } = op {
+                        self.note(title, body, tag);
                     }
                 }
                 let mut out = vec![Frame::Ack { seq: batch.seq }];
@@ -2309,6 +2370,29 @@ impl Driver {
             Input::PointerOut => self.clear_hover(),
             Input::Refocused => {
                 self.in_front = true;
+                // Focus was dropped when the window lost the input, and
+                // nothing put it back: a window that had been away
+                // answered no key at all until something in it was
+                // clicked, because with no focused node there is no path
+                // to dispatch along (06 §2). That is most visible under a
+                // compositor where focus follows the pointer, and it hits
+                // every application whose shortcuts live on a `key_down`
+                // at the root.
+                //
+                // So the node that had it gets it back, if it is still
+                // there; failing that, `autofocus` is asked, which is the
+                // same question the tree answers when it first arrives.
+                // The ring stays off — this is a window coming back, not
+                // someone tabbing — and if neither applies, nothing
+                // changes and the behaviour is what it was.
+                if self.focused.is_none() {
+                    if let Some(back) = self.refocus.take() {
+                        if self.session.node(back).is_some() {
+                            return self.set_focus(Some(back), false);
+                        }
+                    }
+                    return self.take_autofocus();
+                }
                 Vec::new()
             }
             Input::Unfocused => {
@@ -2329,6 +2413,10 @@ impl Driver {
                 // be left open.
                 let mut out = self.finish_drag(true);
                 out.extend(self.track_cancel());
+                // Focus is dropped while the window is not the one being
+                // used, but where it *was* is remembered: coming back
+                // should not cost the keyboard.
+                self.refocus = self.focused;
                 out.extend(self.set_focus(None, false));
                 if let Some(pressed) = self.pointer.pressed_on.take() {
                     let (x, y) = (self.pointer.x, self.pointer.y);
@@ -2386,6 +2474,18 @@ impl Driver {
     /// `src` props, font roles' faces, and chunks defined by hash. The caller
     /// fetches them from the session's origin and calls [`Self::asset_ready`].
     pub fn pending_assets(&mut self) -> Vec<Hash> {
+        // Anything whose retry has come round is wanted again. `want` is
+        // the only way into the queue, and it refuses what is already
+        // held or finally failed, so this cannot ask twice for one that
+        // arrived in the meantime.
+        if !self.asset_retry.is_empty() {
+            let now = self.now;
+            let due: Vec<Hash> = self.asset_retry.iter().filter(|(_, at)| *at <= now).map(|(h, _)| *h).collect();
+            self.asset_retry.retain(|(_, at)| *at > now);
+            for h in due {
+                self.assets.want(h);
+            }
+        }
         // A font role's faces come from the session's tables rather than
         // from the tree: a role is bound once and used by however many
         // styles, and a face nothing happens to reference this frame is
@@ -2426,6 +2526,68 @@ impl Driver {
         self.assets.take_pending()
     }
 
+    /// Pack the pictures this tree needs that the sheet does not hold.
+    ///
+    /// The sheet is one texture and it fills (`ImageAtlas`); it can now
+    /// empty itself to make room, which means a picture that *was* packed
+    /// may be gone by the time the next frame wants it. Nothing else would
+    /// put it back: an image is packed when its bytes arrive and never
+    /// again, and the painter only reads the sheet — it cannot reach the
+    /// asset store from there. So the driver checks, once per change,
+    /// which pictures the tree names and which of those the sheet is
+    /// missing, and packs them from the bytes it already holds. No fetch,
+    /// no decode: they are decoded in the store.
+    ///
+    /// Twice at most. A pass that empties the sheet halfway through drops
+    /// what the first half packed, and the second pass puts back whatever
+    /// is still wanted. If a single frame needs more pictures than the
+    /// sheet can hold at once, it converges on the last ones it packed,
+    /// which is the most that can be true.
+    fn repack_images(&mut self) {
+        if !self.repack {
+            return;
+        }
+        self.repack = false;
+        let Some(root) = self.session.root() else {
+            return;
+        };
+        let hashes: Vec<Hash> = self
+            .session
+            .preorder(root)
+            .filter_map(|ix| self.session.node(ix))
+            .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Video))
+            .flat_map(|n| {
+                n.props
+                    .iter()
+                    .filter_map(|(_, v)| match v {
+                        Value::Asset(h) => Some(*h),
+                        _ => None,
+                    })
+                    .collect::<Vec<Hash>>()
+            })
+            .collect();
+        if hashes.iter().all(|h| self.images.get(h).is_some()) {
+            return;
+        }
+        for _ in 0..2 {
+            for h in &hashes {
+                if self.images.get(h).is_some() {
+                    continue;
+                }
+                let Some(img) = self.assets.image(h) else {
+                    continue;
+                };
+                match crate::assets::fit_to_atlas(&img) {
+                    Some(small) => self.images.insert(*h, small.width, small.height, &small.rgba),
+                    None => self.images.insert(*h, img.width, img.height, &img.rgba),
+                };
+            }
+            if hashes.iter().all(|h| self.images.get(h).is_some()) {
+                break;
+            }
+        }
+    }
+
     /// Deliver verified bytes for a hash. Images are decoded and packed for
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
@@ -2453,7 +2615,10 @@ impl Driver {
                 Err(e) => self.assets.fail(hash, e.to_string()),
             }
         }
+        let t0 = crate::time::Instant::now();
+        let n = bytes.len();
         self.assets.deliver(hash, bytes);
+        let decoded = t0.elapsed();
         self.load_font(hash);
         // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
@@ -2463,11 +2628,18 @@ impl Driver {
             // refuses what will not fit and remembers the refusal, so a
             // picture handed over whole would be drawn as nothing, for
             // ever, in silence.
+            let t1 = crate::time::Instant::now();
+            let (w, h) = (img.width, img.height);
             match crate::assets::fit_to_atlas(&img) {
                 Some(small) => self.images.insert(hash, small.width, small.height, &small.rgba),
                 None => self.images.insert(hash, img.width, img.height, &img.rgba),
             };
+            // Where the time goes on a picture, in the three pieces it is
+            // made of. Silent unless `EUI_TRACE=1`.
+            let packed = t1.elapsed();
+            trace(|| format!("asset {} {n} bytes -> {w}x{h}: decoded in {} ms, shrunk and packed in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), decoded.as_millis(), packed.as_millis()));
         }
+        self.repack = true;
         // An image's intrinsic size just changed under nodes nothing marked
         // dirty: the memoised measures cannot be trusted.
         self.layout.invalidate_all();
@@ -2523,8 +2695,31 @@ impl Driver {
     }
 
     /// Record that a hash could not be fetched.
+    /// A fetch that failed, and may be tried again.
+    ///
+    /// A failure used to be final: `want` skips anything in the failed map,
+    /// so one bad fetch meant that picture was gone for the rest of the
+    /// session. Every asset is its own thread and its own request (see
+    /// `transport::request_asset`), so a page that mounts seventeen
+    /// pictures opens seventeen connections at once — against a server
+    /// with one worker, some of them lose, and the holes they leave are
+    /// permanent and different on every load.
+    ///
+    /// Two more tries, spaced, before it is final. A genuinely broken
+    /// asset — the wrong hash, too large, not an image — fails the same
+    /// way three times and settles; a connection that lost a race gets
+    /// another go.
     pub fn asset_failed(&mut self, hash: Hash, why: String) {
         self.touched = true;
+        let tries = self.asset_tries.entry(hash).or_insert(0);
+        *tries += 1;
+        if *tries <= ASSET_TRIES {
+            let wait = Duration::from_millis(200 * u64::from(*tries));
+            let at = self.now + wait;
+            self.asset_retry.push((hash, at));
+            self.next_due = Some(self.next_due.map_or(at, |d| d.min(at)));
+            return;
+        }
         eprintln!("eui: asset {}: {why}", crate::assets::hex(&hash));
         self.assets.fail(hash, why);
     }
@@ -5055,6 +5250,15 @@ impl Driver {
         vec![(ix, 1.0 - gone)]
     }
 
+    /// Where the caret sits in the local edit of node `id`, in bytes, or
+    /// `None` when that node is not being edited.
+    ///
+    /// The caret is the client's (03 §3) and never crosses the wire, so a
+    /// test of a key that moves it has nothing else to look at.
+    pub fn caret_in(&self, id: u32) -> Option<usize> {
+        self.edits.get(&id).map(|e| e.caret)
+    }
+
     fn is_editable(&self, ix: NodeIx) -> bool {
         matches!(self.session.node(ix).map(|n| n.kind), Some(NodeKind::Input | NodeKind::TextArea))
     }
@@ -5230,6 +5434,41 @@ impl Driver {
         // and this line is not.
         eprintln!("eui: opening {host} in your browser, because you activated node {id}");
         self.opening = Some(url);
+    }
+
+    /// Spec 02 §5.2: a batch asked to say one line to the person.
+    ///
+    /// Unlike every other op this one is *declined* rather than refused: a
+    /// session whose person said no to notifications goes on running and
+    /// draws everything it drew before, because a notification is not part
+    /// of the document. Nothing is reported either way, so an application
+    /// cannot tell a machine with no notifier from a person who said no
+    /// (08 §8) -- which is the same answer `open` gives, for the same
+    /// reason.
+    fn note(&mut self, title: &str, body: &str, tag: &str) {
+        if self.granted & caps::NOTIFICATIONS == 0 {
+            if !self.said_no_notify {
+                self.said_no_notify = true;
+                eprintln!("eui: the application asked to notify you, which needs a capability you did not grant; nothing is shown");
+            }
+            return;
+        }
+        // A platform draws the title and nothing else when there is no
+        // body, and a blank rectangle when there is no title. The second is
+        // not worth raising.
+        let title = one_line(title, false);
+        if title.is_empty() {
+            eprintln!("eui: the application asked to notify you with no title; nothing is shown");
+            return;
+        }
+        // The window may not have looked since the last batch -- it looks
+        // when it pumps, and a session that arrived in the background can
+        // pump late. A queue is not a backlog: what is stale here is the
+        // notification nobody has seen yet, so the oldest goes.
+        while self.notes.len() >= MAX_PENDING_NOTES {
+            self.notes.remove(0);
+        }
+        self.notes.push(Note { title, body: one_line(body, true), tag: one_line(tag, false) });
     }
 
     /// The nearest node at or above `from` carrying `atom`.
@@ -5573,6 +5812,17 @@ impl Driver {
         self.opening.take()
     }
 
+    /// The lines a batch asked to say to the person since the last call,
+    /// already decided on: the capability is granted, the batch was within
+    /// its four, and every one of them has a title.
+    ///
+    /// The window hands these to the machine's notifier. Nothing goes back
+    /// to the server -- not that one was shown, not that it was clicked,
+    /// not that this machine has no notifier at all (08 §8).
+    pub fn take_notes(&mut self) -> Vec<Note> {
+        std::mem::take(&mut self.notes)
+    }
+
     /// What the painter needs to draw the focused field's caret and
     /// selection, with the scroll that keeps the caret in view — updated
     /// here, once per paint.
@@ -5739,7 +5989,27 @@ impl Driver {
                 return out;
             }
         }
-        let claimed = self.focused.is_some_and(|f| self.is_editable(f) || self.ancestor_keyed(f).is_some());
+        // Whether the *key* was claimed, not merely whether somebody up the
+        // path listens for keys at all.
+        //
+        // `ancestor_keyed(f).is_some()` was too blunt: it withheld every
+        // scrolling key the moment any ancestor carried a `key_down`
+        // handler, however narrow that handler's `keys` prop was. An
+        // application that puts its shortcuts on the root — which is the
+        // only place a page-wide shortcut can live, since there is no
+        // global key handler (06 §5) — therefore lost the arrows, the page
+        // keys and the ends everywhere, and its pages could not be
+        // scrolled from the keyboard at all.
+        //
+        // 03 §3.1 is explicit that the two are different: a node carrying
+        // `keys` "is sent **only** the keys it names, and **only those**
+        // are withheld from the client's own meaning". `key_claim` already
+        // answers exactly that question; this asks it instead.
+        //
+        // An editable node still keeps them unconditionally: inside one,
+        // the arrows and the ends are editing the text and no prop may
+        // take them away.
+        let claimed = self.focused.is_some_and(|f| self.is_editable(f) || self.key_claim(f, key) == Claim::Claimed);
         if down && modifiers & 0b1110 == 0 && matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End") && !claimed {
             if let Some(out) = self.scroll_key(key) {
                 return out;
@@ -5908,6 +6178,39 @@ impl Driver {
                     }
                     edit.delete(false);
                 }
+            }
+            // Up and down a textarea are the caret's, not the scroller's.
+            //
+            // They were nobody's: the arms below `ArrowLeft` stopped at the
+            // ends of *a* line and there was no way to leave one, so a
+            // letter of more than one line could be typed and never
+            // navigated -- the keys fell through to the scroller, the view
+            // moved and the caret stayed. Logical lines, like `Home` and
+            // `End` beside them: the column is kept where the next line is
+            // long enough to hold it, and the first and last lines lead to
+            // the ends of the text, which is where every editor puts them.
+            "ArrowUp" | "ArrowDown" if multiline => {
+                let (start, end) = line_bounds(&edit.value, edit.caret);
+                let col = edit.caret.saturating_sub(start);
+                let mut at = if key == "ArrowUp" {
+                    if start == 0 {
+                        0
+                    } else {
+                        let (above, above_end) = line_bounds(&edit.value, start - 1);
+                        above + col.min(above_end - above)
+                    }
+                } else if end >= edit.value.len() {
+                    edit.value.len()
+                } else {
+                    let (below, below_end) = line_bounds(&edit.value, end + 1);
+                    below + col.min(below_end - below)
+                };
+                // A column counted in bytes can land inside a character
+                // when the line above is not the same text.
+                while at > 0 && at < edit.value.len() && !edit.value.is_char_boundary(at) {
+                    at -= 1;
+                }
+                edit.place(at, shift);
             }
             "Enter" if multiline => edit.insert("\n"),
             _ => return false,
@@ -6436,6 +6739,10 @@ impl Driver {
         // yet, so the two must not be resolved in the other order.
         self.note_exits();
         self.note_entrances();
+        // Before the layout measures anything: a picture's size comes from
+        // the sheet, and the sheet may have emptied itself since the last
+        // frame to make room.
+        self.repack_images();
         // Spec 03 §7 and §8: the tree says what should be playing, and a
         // picture that just decoded has a size the layout must know before
         // it measures anything.
@@ -7578,6 +7885,32 @@ fn cap_in_words(name: &str) -> &'static str {
 /// which is the right answer for a sample that went bad.
 fn level_pct(v: f32) -> i64 {
     (v.clamp(0.0, 1.0) * 100.0).round() as i64
+}
+
+/// One line of a notification, as a platform may be handed it.
+///
+/// A notifier takes its arguments as text and draws them; what it must not
+/// be handed is a control character, which is how a title becomes two
+/// lines on one platform, a stray escape on another, and an argument the
+/// next one reads as a flag. `\n` survives in a body, where a server may
+/// reasonably want a second line, and nowhere else.
+///
+/// Whitespace is trimmed at both ends so that a title of spaces is the
+/// empty title it already was, and not a notification that looks broken.
+fn one_line(s: &str, keep_newlines: bool) -> String {
+    s.chars()
+        .map(|c| {
+            if c == '\n' && keep_newlines {
+                c
+            } else if c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// The host of an `https:` URL, or `None` if it is not one.

@@ -27,11 +27,15 @@
 # them draws the page in the client's own Inter rather than naming a font
 # nothing declared.
 
+# One family across the whole hierarchy, the way kv.solisoft.net does it:
+# Space Grotesk for everything that is words, JetBrains Mono for everything
+# that is notation. There is no serif here any more.
+#
+# With a single face the hierarchy has to come from weight and size rather
+# than from a contrast of shape, which is why the display lines are bold at
+# the top of the scale and the prose sits four steps below them.
 def site_display()
-  eui_font("Playfair Display", [
-    "public/fonts/playfair-display-400.ttf",
-    "public/fonts/playfair-display-700.ttf"
-  ]) rescue "sans"
+  site_body()
 end
 
 def site_body()

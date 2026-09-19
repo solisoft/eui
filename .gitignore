@@ -6,6 +6,19 @@
 /crates/*/fuzz/artifacts/
 # A Soli app's publisher key, generated on first serve; never committed.
 **/config/eui_publisher.pkcs8
+# a saved mail account: an address and an app password, never committed
+**/config/account.json
+# a local copy of a mailbox
+**/config/messages.json
+**/config/messages-*.json
+**/config/accounts.json
+# pictures fetched out of a mail: someone else's bytes, never committed
+**/public/mail-img/
+**/public/mail-att/
+# A letter written out as a page, for the browser button. Someone else's
+# correspondence, rendered: it belongs on the machine that fetched it.
+**/public/mail-page/
+**/tmp/eui-uploads/
 
 # A Soli app's environment: never committed.
 **/.env
@@ -70,3 +83,7 @@ examples/eui-site/public/fonts/
 # submodule: it is cloned and pushed on its own, and this tree only ever
 # has a copy of it sitting here.
 /clients/
+
+# Worktrees an agent made for itself. Each one is a clone of this
+# repository, and a repository inside a repository is nobody's friend.
+.claude/worktrees/

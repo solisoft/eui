@@ -53,6 +53,11 @@ pub enum Action {
     /// Put the consent sheet up again for the active tab, so what an
     /// application was allowed can be seen and changed after the fact.
     Permissions,
+    /// Put the active tab's application in the desktop's own launcher, or
+    /// take it out again.
+    Install,
+    /// See [`Action::Install`].
+    Uninstall,
     /// Leave the address bar and show the address again. Enter on an
     /// unchanged address produces this and nothing else: the driver emits
     /// `Change` only when the text actually moved, so without this a person
@@ -107,6 +112,16 @@ pub struct TabView<'a> {
     /// and for a manifest that asks for nothing — there is no question to
     /// reopen, and an icon that opens an empty sheet is worse than no icon.
     pub grants: Option<u32>,
+    /// Whether this application is in the desktop's launcher, when it is
+    /// the kind of application that can be: `Some(true)` installed,
+    /// `Some(false)` installable and not installed.
+    ///
+    /// `None` is most applications. An application is installable only if
+    /// its manifest publishes an icon, because an entry has to have a
+    /// picture and the publisher's is the only one that is the
+    /// application's own — so the control is absent rather than inert,
+    /// which is the same choice the padlock makes.
+    pub installed: Option<bool>,
 }
 
 /// The chrome: a driver, a tree, and what its node ids mean.
@@ -157,6 +172,8 @@ const FWD_TEXT: u32 = 25;
 const LINK: u32 = 20;
 const GRANTS: u32 = 26;
 const GRANTS_TEXT: u32 = 27;
+const INSTALL: u32 = 28;
+const INSTALL_TEXT: u32 = 29;
 const LINK_TEXT: u32 = 21;
 const ADDR: u32 = 4;
 const FIELD: u32 = 5;
@@ -235,6 +252,15 @@ impl Chrome {
     /// Follow the desktop palette, as an application's driver does.
     pub fn set_desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(Role, u32)>) {
         let _ = self.driver.set_desktop_theme(mode, colors);
+    }
+
+    /// The palette the machine is in, told to the chrome as it is built.
+    ///
+    /// The chrome draws the box under everything, so a chrome born light
+    /// on a dark desktop *is* the flash of a light window, whatever the
+    /// application above it does.
+    pub fn set_mode(&mut self, mode: ThemeMode) {
+        let _ = self.driver.input(Input::Mode(mode));
     }
 
     /// Whether the chrome wants the next frame drawn.
@@ -898,12 +924,34 @@ impl Chrome {
                 self.actions.insert(GRANTS, Action::Permissions);
                 self.actions.insert(GRANTS_TEXT, Action::Permissions);
             }
+            // Beside the padlock, which is the other thing in the field
+            // that is about the application rather than about the address.
+            // An arrow down to put it in the launcher, a tick once it is
+            // there — and the tick takes it out again, because the only
+            // place a person would look to undo this is the place they
+            // did it.
+            if let Some(there) = t.installed {
+                let what = if there { Action::Uninstall } else { Action::Install };
+                self.actions.insert(INSTALL, what.clone());
+                self.actions.insert(INSTALL_TEXT, what);
+            }
             b.click();
-            b.open(NodeKind::Box, FIELD, s_field, u32::from(t.grants.is_some()) + u32::from(chip.is_some()) + u32::from(t.link.is_some()) + if editing { 1 } else { 2 });
+            b.open(
+                NodeKind::Box,
+                FIELD,
+                s_field,
+                u32::from(t.grants.is_some()) + u32::from(t.installed.is_some()) + u32::from(chip.is_some()) + u32::from(t.link.is_some()) + if editing { 1 } else { 2 },
+            );
             if t.grants.is_some() {
                 b.click();
                 b.open(NodeKind::Box, GRANTS, s_reload, 1);
                 b.icon(GRANTS_TEXT, s_step_icon, "lock");
+                b.close();
+            }
+            if let Some(there) = t.installed {
+                b.click();
+                b.open(NodeKind::Box, INSTALL, s_reload, 1);
+                b.icon(INSTALL_TEXT, s_step_icon, if there { "check" } else { "arrow_down" });
                 b.close();
             }
             if let Some((label, s)) = chip {

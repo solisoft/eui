@@ -598,6 +598,16 @@ impl Session {
                 Ok(())
             }
             Op::Mount(subtree) => self.mount(subtree),
+            // The one op that names no node (02 §5.2): what it changes is
+            // not the document but what somebody is told. So it is here,
+            // beside the definitions, rather than below the two questions
+            // this crate asks of a tree op — a notification in the same
+            // batch as the mount that opens a window is a legitimate thing
+            // for a server to send, and so is one during a resync.
+            //
+            // Nothing is kept: the client reads it off the batch again,
+            // and who acts on it is not this crate.
+            Op::Notify { .. } => Ok(()),
             _ => {
                 if self.poisoned {
                     return Err(ApplyError::Poisoned);
@@ -752,7 +762,9 @@ impl Session {
                 self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
-            Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::DefFont { .. } | Op::Mount(_) => Err(ApplyError::Internal),
+            Op::Notify { .. } | Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::DefFont { .. } | Op::Mount(_) => {
+                Err(ApplyError::Internal)
+            }
         }
     }
 

@@ -47,6 +47,11 @@ record (see [`02-wire-format.md`](02-wire-format.md) §7) carrying:
 - `signature` — Ed25519 over the manifest body excluding the signature field
 - `capabilities` — the set requested; the client grants none of them implicitly
 - `theme` — blake3 of the default theme asset
+- `icon` — blake3 of a PNG, fetched as an asset (§2.2): the icon a
+  launcher entry made for this application wears. OPTIONAL, and signed
+  like everything else here, because a tile in a dock claiming to be an
+  application is exactly the thing an intermediary should not be able to
+  change.
 - `entry` — session path, defaults to `/_eui/session`. A client given an
   address with no path MUST take the origin's manifest and connect to
   `entry` on it, so that `wss://host` is an address and not half of one:
@@ -71,11 +76,25 @@ each document):
 | 7 | `theme` | `Str`, 64 hex digits, or `Null` |
 | 8 | `entry` | `Str`, an absolute path |
 | 9 | `rotation` | `List[Str previous key, Str signature]` or `Null` |
-| 10 | `signature` | `Str`, 128 hex digits; always last |
+| 10 | `icon` | `Str`, 64 hex digits — **record version 2 only** |
+| 10 / 11 | `signature` | `Str`, 128 hex digits; always last |
+
+The signature is always the record's last field, so its key is the count of
+the fields before it: **10** in a version 1 record, **11** in a version 2
+one, where slot 10 is the icon. The version byte is what says which, and a
+decoder MUST NOT guess from the field count.
+
+A manifest with no icon MUST be written as version 1, and `icon` MUST NOT
+be `Null` in a version 2 record. Both rules exist so there is exactly one
+encoding of any manifest: a record published before icons existed is still
+byte-for-byte what its publisher signed, and a decoder can always rebuild
+the signed bytes exactly. A client that does not know version 2 rejects
+such a manifest, which is the same answer it gives any record it cannot
+verify — publishing an icon is opting into that.
 
 Strings are at most 256 bytes. The signature is Ed25519 over the record
-encoded with fields 0–9 only (`field_count` 10), which a decoder can rebuild
-exactly because the order is fixed. Capability names and bits: `camera` 1,
+encoded with the signed fields only (`field_count` 10, or 11 with an icon),
+which a decoder can rebuild exactly because the order is fixed. Capability names and bits: `camera` 1,
 `microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
 16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256, `scene` 512,
 `net.open` 1024.
@@ -94,6 +113,15 @@ however the scene is drawn; the **grant** is about running somebody's code. An a
 advertise `protocol_min` of at least 2, because a client that cannot decode
 `0x11` cannot be shown it at all; the refusal then happens at the handshake,
 with a reason, rather than mid-session on a batch.
+
+`notifications` is a capability with no node behind it. Everything else in
+this list is asked for by something in the tree — a `camera` node, a `pick`
+prop, a node carrying `open` — and can therefore be refused by refusing what
+asked. A notification is asked for by an op ([`02-wire-format.md`](02-wire-format.md)
+§5.2), which arrives whether or not anybody is looking at the window, so the
+grant is the only thing between an application and the person's attention. A
+client that was not granted it decodes the op, counts it, and shows nothing;
+the session goes on, because a notification is not part of the document.
 
 `net.open` is the other one worth a sentence, for the opposite reason:
 it is the only capability that hands something to the world outside this
