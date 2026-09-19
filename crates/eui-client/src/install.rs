@@ -508,6 +508,34 @@ fn write_entry(app: &App, slug: &str) -> Result<Vec<PathBuf>, String> {
     let stub = format!("#!/bin/sh\nexec {exe} {url}\n", exe = sh(&exe.to_string_lossy()), url = sh(&app.url));
     put(&stub_at, stub.as_bytes())?;
     executable(&stub_at)?;
+
+    // Two calls the platform wants, both best effort and both silent —
+    // the same shape as `update-desktop-database` on Linux, and for the
+    // same reason: an entry the desktop has not noticed is an entry that
+    // is not there as far as anybody looking for it is concerned.
+    //
+    // Signing first. `scripts/wrap-macos-app.sh` says why in more detail
+    // than fits here: assembling a bundle by writing files into it leaves
+    // it unsigned, and Apple Silicon refuses to run an unsigned bundle
+    // outright — reporting it as "damaged", which sends somebody looking
+    // for a corrupt download. Ad hoc is enough here and notarisation is
+    // not wanted: nothing downloaded this, so nothing wrote
+    // `com.apple.quarantine` on it and there is no Gatekeeper hold to
+    // clear.
+    let _ = std::process::Command::new("codesign").args(["--force", "--sign", "-"]).arg(&bundle).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    // And then Launch Services, which is what Spotlight and Launchpad ask.
+    // `~/Applications` is a directory macOS honours and does not create,
+    // so on most machines this one is making it for the first time — and a
+    // directory that did not exist a moment ago is one nothing has
+    // indexed. Finder shows the bundle either way; without this, searching
+    // for it does not.
+    let _ = std::process::Command::new("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+        .arg("-f")
+        .arg(&bundle)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
     // One path recorded, not four: removing an application means removing
     // its bundle, and a bundle is a directory.
     Ok(vec![bundle])

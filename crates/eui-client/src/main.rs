@@ -122,8 +122,17 @@ fn launcher(flag: &str, arg: Option<&String>) -> i32 {
             if entries.is_empty() {
                 println!("nothing is installed");
             }
+            // The files, not only the names. "Where did it go" is the first
+            // question anybody asks of an installer, and an answer that
+            // needs the reader to know this client's conventions is not
+            // one. A file the record names but that is no longer there is
+            // marked, because that is the whole of the difference between
+            // an entry that works and an entry that does not.
             for e in entries {
                 println!("{}\t{}\t{}", e.app_id, e.name, e.url);
+                for f in &e.files {
+                    println!("  {}{}", f.display(), if f.exists() { "" } else { "   (MISSING)" });
+                }
             }
             0
         }
