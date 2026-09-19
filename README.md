@@ -71,6 +71,31 @@ under [releases](https://github.com/solisoft/eui/releases).
 The window carries the commit it was built from in its title, so a build
 from the wrong run can be told from the right one at a glance.
 
+On anything with a shell, `scripts/install.sh` is the table above done by
+`uname`: it picks the build that matches the machine, unpacks it, and leaves
+the binary in `~/.local/bin` — or wherever `EUI_DEST` says.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/solisoft/eui/main/scripts/install.sh | sh
+```
+
+It takes a tag, so `| sh -s v0.4.0` installs that release rather than the
+rolling one, and it refuses rather than guesses where there is no build: an
+Intel Mac and a Linux on ARM both `uname` perfectly well and have nothing to
+download. On macOS it installs the bare binary, which is the thing a
+`eui wss://…` command line wants; for `EUI.app` in `/Applications`, use the
+script below instead.
+
+On macOS, a build fetched by a browser is quarantined by the browser, and
+the app is ad-hoc signed rather than notarised, so Gatekeeper refuses that
+first launch — every time, on every new download. `scripts/install-macos.sh`
+fetches the same zip with `curl`, which sets no quarantine at all, and puts
+it in `/Applications`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/solisoft/eui/main/scripts/install-macos.sh | bash
+```
+
 The APK is signed with Android's own debug key — the conventional
 `~/.android/debug.keystore`, reused where it exists and minted where it does
 not — which is what makes it installable without an account or a store. A CI
