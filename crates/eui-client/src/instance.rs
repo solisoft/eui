@@ -239,6 +239,11 @@ fn read_ask(stream: &UnixStream) -> Option<Opening> {
 
 #[cfg(test)]
 mod tests {
+    // The same line every test module in this crate carries: a test that
+    // cannot reach its own fixture should say so by panicking, and the
+    // lints that forbid that in the decode path have no business here.
+    #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     /// The wire, both ways, at a socket of the test's own: a launch

@@ -586,18 +586,11 @@ fn enter_and_space_click_the_focused_button_at_its_centre() {
 /// root, carrying `autofocus` and a `keys` claim, over some content.
 fn shortcut_root_batch() -> Batch {
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
-        props: (0, 2), handlers: (0, 1), child_count: 1,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 1 });
     tree.props.push((4, Value::Bool(true)));
     tree.props.push((5, Value::List(vec![Value::Str("j".into()), Value::Str("G".into())])));
     tree.handlers.push((EventKind::KeyDown, Handler::Server(1)));
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Text, id: 2, style: 0, key: 0,
-        text: Some(TextRef::Inline("a list".into())),
-        props: (0, 0), handlers: (0, 0), child_count: 0,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: 0, text: Some(TextRef::Inline("a list".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
     Batch {
         seq: 1,
         ops: vec![
@@ -677,23 +670,19 @@ fn up_and_down_in_a_textarea_move_the_caret_and_not_the_page() {
 /// One textarea holding three lines of different lengths.
 fn letter_batch() -> Batch {
     let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode {
-        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
-        props: (0, 0), handlers: (0, 0), child_count: 1,
-    });
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::TextArea, id: 2, style: 1, key: 0,
+        kind: NodeKind::TextArea,
+        id: 2,
+        style: 1,
+        key: 0,
         // "abc" / "longer line" / "tail"
         text: Some(TextRef::Inline("abc\nlonger line\ntail".into())),
-        props: (0, 0), handlers: (0, 0), child_count: 0,
+        props: (0, 0),
+        handlers: (0, 0),
+        child_count: 0,
     });
-    Batch {
-        seq: 1,
-        ops: vec![
-            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
-            Op::Mount(tree),
-        ],
-    }
+    Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)] }
 }
 
 /// Where the caret sits in node `id`'s local edit.
@@ -705,23 +694,13 @@ fn caret_of(d: &Driver, id: u32) -> usize {
 /// window — the shape of every keyboard-driven page.
 fn shortcut_scroller_batch() -> Batch {
     let mut tree = Subtree::default();
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None,
-        props: (0, 2), handlers: (0, 1), child_count: 1,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 1), child_count: 1 });
     tree.props.push((4, Value::Bool(true)));
     tree.props.push((5, Value::List(vec![Value::Str("j".into()), Value::Str("k".into())])));
     tree.handlers.push((EventKind::KeyDown, Handler::Server(1)));
-    tree.nodes.push(FlatNode {
-        kind: NodeKind::Scroll, id: 2, style: 2, key: 0, text: None,
-        props: (0, 0), handlers: (0, 0), child_count: 40,
-    });
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 40 });
     for i in 0..40 {
-        tree.nodes.push(FlatNode {
-            kind: NodeKind::Text, id: 100 + i, style: 0, key: 0,
-            text: Some(TextRef::Inline(format!("line {i}"))),
-            props: (0, 0), handlers: (0, 0), child_count: 0,
-        });
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 100 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("line {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
     }
     Batch {
         seq: 1,
@@ -762,10 +741,7 @@ fn a_root_shortcut_does_not_take_the_scrolling_keys_it_never_asked_for() {
 
     // A key it *did* name is still its own.
     let out = d.input(Input::Key { key: "j".into(), modifiers: 0, down: true });
-    assert!(
-        out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::KeyDown)),
-        "a claimed key still reaches the application"
-    );
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::KeyDown)), "a claimed key still reaches the application");
 }
 
 #[test]
@@ -793,10 +769,7 @@ fn a_window_that_comes_back_has_its_keyboard_back() {
     // And the keyboard works again without a click: Enter presses the
     // button that has it.
     let out = d.input(Input::Key { key: "Enter".into(), modifiers: 0, down: true });
-    assert!(
-        out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Click)),
-        "the key reaches the tree again"
-    );
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.event == EventKind::Click)), "the key reaches the tree again");
 }
 
 #[test]
@@ -2894,7 +2867,6 @@ fn a_period_that_changes_every_frame_is_still_a_period() {
     // wake the way a server would: a frame back, carrying a period a few
     // milliseconds different from the last.
     let mut fired: Vec<u64> = Vec::new();
-    let mut period = 300i64;
     let mut seq = 3u64;
     for step in 1..=60u64 {
         let at = step * 50;
@@ -2902,12 +2874,11 @@ fn a_period_that_changes_every_frame_is_still_a_period() {
         let _ = d.paint(400, 300);
         if woken(&mut d) > 0 {
             fired.push(at);
-            // The answer: the same node, a period that drifts.
-            period = 300 + (step as i64 % 7) - 3;
-            d.handle_frame(Frame::Batch(Batch {
-                seq,
-                ops: vec![Op::SetProp { node: 1, prop: A_WAKE, value: Value::Int(period) }],
-            }));
+            // The answer: the same node, a period that drifts. Bound here
+            // rather than before the loop: the 300 it started at was never
+            // read, and an assignment nothing reads is a warning.
+            let period = 300 + (step as i64 % 7) - 3;
+            d.handle_frame(Frame::Batch(Batch { seq, ops: vec![Op::SetProp { node: 1, prop: A_WAKE, value: Value::Int(period) }] }));
             seq += 1;
         }
     }
