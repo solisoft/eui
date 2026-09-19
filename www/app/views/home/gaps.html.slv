@@ -143,7 +143,7 @@
                 force, so one beside a label needs no measurement from the server. An
                 unknown name draws nothing and keeps its space &mdash; which is the rule
                 that lets the set grow without a client release, and is a MUST in
-                <a href="https://github.com/solisoft/eui/blob/main/spec/03-widgets.md">03 &sect;2</a>
+                <a href="/spec/03-widgets">03 &sect;2</a>
                 now rather than an accident of the implementation.
             </p>
             <p class="note">

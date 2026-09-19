@@ -13,7 +13,7 @@
             </p>
 
             <div class="actions">
-                <a href="https://github.com/solisoft/eui/tree/main/spec">Read the specification</a>
+                <a href="/spec">Read the specification</a>
                 <a href="https://github.com/solisoft/eui">Source and tests</a>
             </div>
 
@@ -316,7 +316,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
 
     <footer>
         <span>EUI · a protocol, a client, a specification</span>
-        <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui/status.md">Status, in full</a>
+        <a href="/docs/status">Status, in full</a>
         <a href="https://github.com/solisoft/eui">Source</a>
         <a href="https://soli-lang.com">Soli</a>
     </footer>

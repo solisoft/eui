@@ -1,0 +1,29 @@
+<main class="sheet docs">
+    <%- partial("layouts/top", {"here": here}) %>
+
+    <div class="docs-shell">
+        <nav class="docs-rail" aria-label="Documentation">
+            <% for section in sections %>
+                <h2><%= section["title"] %></h2>
+                <ol>
+                    <% for item in section["items"] %>
+                        <li>
+                            <a href="/<%= item["slug"] %>"<% if item["slug"] == slug %> aria-current="page"<% end %>><%= item["title"] %></a>
+                        </li>
+                    <% end %>
+                </ol>
+            <% end %>
+        </nav>
+
+        <article class="docs-page">
+            <div class="prose"><%- html %></div>
+
+            <p class="colophon">
+                Rendered from <code><%= source %></code> in the repository. The
+                normative text is <code>spec/</code>; where it and a prose page
+                disagree the spec wins, and that is a bug worth reporting.
+                <a href="https://github.com/solisoft/eui/blob/main/<%= source %>">Edit this page</a>
+            </p>
+        </article>
+    </div>
+</main>

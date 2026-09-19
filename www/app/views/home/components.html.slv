@@ -916,7 +916,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <footer>
         <span>EUI &middot; a protocol, a client, a specification</span>
         <a href="/">The argument</a>
-        <a href="https://github.com/solisoft/eui/tree/main/doc/docs/eui">Docs</a>
+        <a href="/docs">Docs</a>
         <a href="https://github.com/solisoft/eui">Source</a>
     </footer>
 </main>

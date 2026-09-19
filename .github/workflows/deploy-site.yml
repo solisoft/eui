@@ -23,6 +23,13 @@ on:
     # the canvas-size fix spent a morning not reaching the page it fixed.
     paths:
       - "www/**"
+      # The documentation's sources. A page edited in `doc/docs/eui/` or a
+      # clause changed in `spec/` is a change to the site, because the site
+      # is what serves them — and without these two lines the edit would
+      # sit in `main` unpublished.
+      - "doc/docs/eui/**"
+      - "spec/**"
+      - "scripts/sync-docs.sh"
       - "crates/**"
       - "assets/web/**"
       - "xtask-web/**"
@@ -85,6 +92,14 @@ jobs:
 
       - name: Build the browser client
         run: cargo run -p xtask-web
+
+      # The site serves the documentation and the specification, and the
+      # only directory this deploy rsyncs is `www/` — so both live there as
+      # copies, written by one script from `doc/docs/eui/` and `spec/`. A
+      # page edited at the source and not synced would deploy the old text
+      # and say nothing, which is the failure this turns into a red run.
+      - name: The site's documentation matches its sources
+        run: ./scripts/sync-docs.sh --check
 
       - name: Format
         working-directory: ${{ env.APP_DIR }}

@@ -20,6 +20,14 @@ get("/samples", "home#samples")
 # application under this host so that the origin matches (see the controller).
 get("/demo", "home#demo")
 
+# The documentation and the specification, served here rather than handed
+# to a file browser on github.com. `:page` is a key into a whitelist in the
+# controller, not a path fragment.
+get("/docs", "docs#index")
+get("/docs/:page", "docs#show")
+get("/spec", "docs#spec_index")
+get("/spec/:page", "docs#spec")
+
 # Health check endpoint
 get("/health", "home#health")
 
