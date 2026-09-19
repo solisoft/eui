@@ -199,6 +199,12 @@ enum Link {
     /// `Hello` carries the grant, so the question has to be answered
     /// before there is a socket to ask it on.
     Asking,
+    /// The page came over `GET /_eui/view/<component>` (01 §2.4) and there
+    /// is no socket, because nothing has needed one. This is not a degraded
+    /// state and not a broken one: for a component whose first render is the
+    /// same for everybody it is the whole session, and the server is holding
+    /// nothing at all for this reader.
+    Static,
 }
 
 /// A consent sheet that is up, and what it will have to remember.
@@ -334,6 +340,25 @@ struct Tab {
     /// The driver: in a worker process when one could be started.
     backend: Backend,
     conn: Option<Connection>,
+    /// How this tab fetches assets, with or without a socket. A page that
+    /// arrived over HTTPS may still name a picture.
+    fetch: Option<crate::transport::Fetcher>,
+    /// Where answers land while there is no `Connection` to carry them.
+    inbox: Option<std::sync::mpsc::Receiver<Incoming>>,
+    /// BLAKE3 of the batches this tab's tree was built from, when it came
+    /// over HTTPS. Kept for the moment a socket is opened: it names the tree
+    /// the server may recognise rather than re-send.
+    held: Option<[u8; 32]>,
+    /// Something needed the server, so a socket is wanted before the next
+    /// frame is drawn. A flag rather than a dial on the spot: `send` is
+    /// called from deep inside the input path and has no event loop proxy to
+    /// hand `dial`, and the difference to a person is one frame.
+    want_socket: bool,
+    /// Frames the driver produced while there was no socket, held until one
+    /// is open and has answered. Not flushed on connect: they name node ids
+    /// from the tree this tab is looking at, and a server that mounts a
+    /// fresh one would place them somewhere else entirely.
+    queued: Vec<Vec<u8>>,
     /// The cookie this tab presents, if a host set one. Per tab rather than
     /// per process: two applications must not present each other's.
     cookie: Option<String>,
@@ -841,6 +866,11 @@ impl Tab {
             perms: None,
             trust: crate::chrome::Trust::Unverified,
             link: Link::Ended,
+            fetch: None,
+            inbox: None,
+            want_socket: false,
+            held: None,
+            queued: Vec::new(),
             tries: 0,
             files: Files::default(),
             shown_link: None,
@@ -973,6 +1003,14 @@ impl Tab {
         if matches!(tab.link, Link::Asking) {
             return tab;
         }
+        // The page first, the socket only if there is no page. A component
+        // whose first render is the same for everybody costs this server
+        // nothing once a cache is in front of it, and costs it a resident
+        // session per reader otherwise.
+        #[cfg(has_native_net)]
+        if tab.try_static(&proxy, w) {
+            return tab;
+        }
         tab.dial(&proxy);
         tab
     }
@@ -1015,6 +1053,53 @@ impl Tab {
         // it.
         self.backend.grant(self.allowed);
         self.dial(proxy);
+    }
+
+    /// Try to have this page over HTTPS instead of over a socket (01 §2.4).
+    ///
+    /// `true` when it worked, and then nothing is dialled: the tree is drawn,
+    /// its pictures are fetched, its `local(...)` handlers run, and the
+    /// server is holding nothing whatever for this reader. A socket is opened
+    /// later only if something happens that the server has to answer.
+    ///
+    /// A `404` is the ordinary answer for most components and is not logged.
+    /// Anything else says its piece once and falls through to dialling,
+    /// because this path must never be the reason a page fails to open.
+    #[cfg(has_native_net)]
+    fn try_static(&mut self, proxy: &Proxy, width: f32) -> bool {
+        let component = crate::chrome::component_of(&self.url);
+        if component.is_empty() {
+            return false;
+        }
+        let view = match crate::transport::fetch_view(&self.url, component, eui_proto::PROTOCOL_VERSION, width.max(1.0) as u32, self.cookie.as_deref()) {
+            Ok(view) => view,
+            Err(crate::transport::ViewError::NotOffered) => return false,
+            Err(e) => {
+                eprintln!("eui: {component} is not served as a page ({e}); opening a session instead");
+                return false;
+            }
+        };
+        let Ok(origin) = crate::assets::origin_for(&self.url) else { return false };
+
+        let p = Arc::clone(proxy);
+        let (fetch, inbox) = crate::transport::Fetcher::alone(origin, self.cookie.clone(), move || {
+            let _ = p.send_event(Wake::Transport);
+        });
+        self.fetch = Some(fetch);
+        self.inbox = Some(inbox);
+        self.held = Some(view.tree);
+
+        // Fed frame by frame through the ordinary path, so the driver ends
+        // up in a state indistinguishable from a socket that welcomed and
+        // mounted. Whatever it answers is an `Ack` to nobody.
+        for frame in view.frames {
+            let _ = self.backend.frame(frame);
+        }
+        // The address answered, which is what `offline` later means by it.
+        self.answered = true;
+        self.link = Link::Static;
+        crate::driver::trace(|| format!("{component} drawn from a page; no session opened"));
+        true
     }
 
     /// Open a socket for this tab's URL, with whatever the driver says the
@@ -1097,6 +1182,10 @@ impl Tab {
             Link::Ended if self.answered => Some("offline"),
             Link::Ended => None,
             Link::Asking => Some("permission"),
+            // A page, not a socket that is down. There is nothing to say,
+            // and "offline" over a page that is fully drawn and answering
+            // its own clicks would name a fault that does not exist.
+            Link::Static => None,
         }
     }
 
@@ -1133,6 +1222,17 @@ impl Tab {
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {
+        if matches!(self.link, Link::Static) {
+            let wanted: Vec<Vec<u8>> = frames.into_iter().filter(|f| f.first().copied().is_some_and(crate::transport::kind_needs_server)).collect();
+            if wanted.is_empty() {
+                // A `local(...)` handler ran and changed the tree in place,
+                // or the window was resized. Nothing to tell anybody.
+                return;
+            }
+            self.queued.extend(wanted);
+            self.want_socket = true;
+            return;
+        }
         let Some(conn) = &self.conn else { return };
         for f in frames {
             if conn.tx.send(f).is_err() {
@@ -1148,8 +1248,11 @@ impl Tab {
     fn pump(&mut self) -> bool {
         let mut frames = Vec::new();
         let mut closed = None;
-        if let Some(conn) = &self.conn {
-            while let Ok(msg) = conn.rx.try_recv() {
+        // Either the socket's channel or, with no socket, the tab's own —
+        // a page fetched over HTTPS still asks for its pictures.
+        let rx = self.conn.as_ref().map(|c| &c.rx).or(self.inbox.as_ref());
+        if let Some(rx) = rx {
+            while let Ok(msg) = rx.try_recv() {
                 match msg {
                     // Decoded by the driver, wherever it runs: the window
                     // never reads a frame.
@@ -1175,9 +1278,23 @@ impl Tab {
             self.send(out);
         }
         for hash in self.backend.pending_assets() {
-            if let Some(conn) = &self.conn {
-                conn.request_asset(hash);
+            if let Some(fetch) = &self.fetch {
+                fetch.request_asset(hash);
             }
+        }
+        // The socket has spoken, so what the page queued can go. It is sent
+        // *after* the first frame rather than on connect, because until the
+        // server has answered there is no telling whether it kept the tree
+        // this reader is looking at or mounted a fresh one.
+        //
+        // The honest caveat, until a session can adopt a fetched tree
+        // (01 §2.6): a fresh mount is the same render of the same state, so
+        // its node ids are the same ids and the held event lands where it
+        // was aimed — but that is a property of the encoder being
+        // deterministic rather than a promise the protocol makes yet.
+        if matches!(self.link, Link::Up) && !self.queued.is_empty() {
+            let held = std::mem::take(&mut self.queued);
+            self.send(held);
         }
         if let Some(why) = closed {
             // Spec 01 §4.1. The session is the server's; only the socket
@@ -2209,6 +2326,17 @@ impl Shell {
         let mut due: Option<crate::time::Instant> = None;
         let mut changed = false;
         for t in &mut self.tabs {
+            // Something happened on a page that only the server can answer.
+            // This is the moment the session this endpoint avoided becomes
+            // one it needs, and it is the reader's own doing rather than
+            // ours: a window opened, a form filled, a row asked for.
+            if t.want_socket && matches!(t.link, Link::Static) {
+                t.want_socket = false;
+                eprintln!("eui: {} needs the server; opening a session", t.url);
+                t.dial(&proxy);
+                changed = true;
+                continue;
+            }
             match t.link {
                 Link::Lost { at } if at <= now => {
                     eprintln!("eui: reconnecting to {}", t.url);
@@ -2923,7 +3051,7 @@ impl Shell {
         // Both states mean the same thing to the page: there is something on
         // this canvas that the reader is meant to look at.
         #[cfg(target_arch = "wasm32")]
-        if !self.announced && self.tabs.get(self.active).is_some_and(|t| matches!(t.link, Link::Up | Link::Asking)) {
+        if !self.announced && self.tabs.get(self.active).is_some_and(|t| matches!(t.link, Link::Up | Link::Asking | Link::Static)) {
             self.announced = true;
             self.announce_first_frame();
         }

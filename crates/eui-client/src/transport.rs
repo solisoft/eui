@@ -78,7 +78,39 @@ impl std::fmt::Debug for Connection {
     }
 }
 
-impl Connection {
+/// Everything asset fetching needed, without the socket it used to hang off.
+///
+/// A page fetched over `GET /_eui/view/<component>` (01 §2.4) has no session
+/// and may still name a picture, so the half of a `Connection` that goes and
+/// gets bytes has to outlive the half that does not exist. Cheap to clone;
+/// one per tab.
+#[derive(Clone)]
+pub struct Fetcher {
+    origin: String,
+    in_tx: mpsc::Sender<Incoming>,
+    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    cookie: Option<String>,
+}
+
+impl std::fmt::Debug for Fetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetcher").field("origin", &self.origin).finish()
+    }
+}
+
+impl Fetcher {
+    /// A fetcher with no socket behind it, and the channel its answers
+    /// arrive on.
+    pub fn alone(origin: String, cookie: Option<String>, notify: impl Fn() + Send + Sync + 'static) -> (Self, mpsc::Receiver<Incoming>) {
+        let (in_tx, rx) = mpsc::channel::<Incoming>();
+        (Self { origin, in_tx, notify: std::sync::Arc::new(notify), cookie }, rx)
+    }
+
+    /// The HTTPS origin this fetches from.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
     /// Fetch an asset on a worker thread; the result arrives as
     /// [`Incoming::Asset`] and the notifier is called.
     pub fn request_asset(&self, hash: [u8; 32]) {
@@ -101,6 +133,18 @@ impl Connection {
             let _ = tx.send(Incoming::Asset(hash, result));
             notify();
         });
+    }
+}
+
+impl Connection {
+    /// This session's asset fetching, as a handle that outlives the socket.
+    pub fn fetcher(&self) -> Fetcher {
+        Fetcher { origin: self.origin.clone(), in_tx: self.in_tx.clone(), notify: std::sync::Arc::clone(&self.notify), cookie: self.cookie.clone() }
+    }
+
+    /// Fetch an asset on a worker thread. Unchanged for every caller.
+    pub fn request_asset(&self, hash: [u8; 32]) {
+        self.fetcher().request_asset(hash);
     }
 }
 
@@ -204,6 +248,130 @@ pub fn check_url(url: &str, host_loopback: bool) -> Result<(), TransportError> {
         Ok(())
     } else {
         Err(TransportError::Insecure(url.to_owned()))
+    }
+}
+
+/// A first render fetched over HTTPS, with no session behind it (01 §2.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    /// BLAKE3 of the `Batch` frames — the identity of the *tree*, computed
+    /// here and never taken from a header. Deliberately not the body's hash:
+    /// the `Welcome` differs between the two roads a tree can arrive by, so
+    /// hashing the whole body would name something the socket can never
+    /// agree to.
+    pub tree: [u8; 32],
+    /// The `ETag` verbatim, for a later `If-None-Match`.
+    pub etag: Option<String>,
+    /// The body split on frame boundaries, in order, still encoded — the
+    /// window hands encoded bytes to the worker and never reads a frame
+    /// itself.
+    pub frames: Vec<Vec<u8>>,
+}
+
+/// Why a view could not be had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewError {
+    /// A `404`: this component is not served that way. Not an error — the
+    /// ordinary answer for most components, and the caller opens a socket.
+    NotOffered,
+    /// Anything else, with the reason, for the log.
+    Refused(String),
+}
+
+impl std::fmt::Display for ViewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotOffered => f.write_str("this component is not served as a one-shot render"),
+            Self::Refused(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Fetch `GET /_eui/view/<component>?v=<version>` and walk it into frames.
+///
+/// Blocking, and called from where the manifest fetch already blocks. The
+/// whole body is validated before a byte of it is handed on: a body that
+/// half-applies cannot be recovered by opening a socket afterwards, because
+/// the driver would already have mounted a piece of a tree.
+#[cfg(has_native_net)]
+pub fn fetch_view(url: &str, component: &str, version: u32, width: u32, cookie: Option<&str>) -> Result<View, ViewError> {
+    use eui_proto::limits::{MAX_VIEW_BYTES, MAX_VIEW_FRAMES};
+
+    // Normalised here rather than left to the caller: this is reachable from
+    // a tool and from a typed address, and `https://host/...` is how a person
+    // writes the thing `wss://host/...` names.
+    let url = crate::assets::normalise_url(url);
+    let origin = crate::assets::origin_for(&url).map_err(|e| ViewError::Refused(e.to_string()))?;
+    // The width joins the cache key, because a view that derives its
+    // measurements from the viewport renders differently at each one. A
+    // server that declared breakpoints snaps this to one of them, so the
+    // cache holds a handful of entries rather than one per reader; a server
+    // that declared none ignores it and renders at its nominal width.
+    let path = format!("/_eui/view/{component}?v={version}&w={width}");
+    let got = match crate::assets::get_full(&origin, &path, VIEW_MEDIA_TYPE, cookie) {
+        Ok(got) => got,
+        Err(crate::assets::AssetError::Status(404)) => return Err(ViewError::NotOffered),
+        Err(e) => return Err(ViewError::Refused(e.to_string())),
+    };
+    // A body that is not what was asked for is not a body to walk. An origin
+    // that answers this path with a login page is the case worth refusing.
+    if got.content_type.as_deref() != Some(VIEW_MEDIA_TYPE) {
+        return Err(ViewError::Refused(format!("answered {} rather than {VIEW_MEDIA_TYPE}", got.content_type.unwrap_or_else(|| "nothing".into()))));
+    }
+    if got.body.len() > MAX_VIEW_BYTES {
+        return Err(ViewError::Refused(format!("{} bytes is past the ceiling for one render", got.body.len())));
+    }
+
+    let mut frames = Vec::new();
+    let mut at = 0usize;
+    while at < got.body.len() {
+        let rest = got.body.get(at..).unwrap_or(&[]);
+        let used = eui_proto::Frame::framed_len(rest).map_err(|e| ViewError::Refused(format!("frame {}: {e:?}", frames.len())))?;
+        let frame = rest.get(..used).ok_or_else(|| ViewError::Refused("the body ends inside a frame".into()))?;
+        if frames.len() >= MAX_VIEW_FRAMES {
+            return Err(ViewError::Refused(format!("more than {MAX_VIEW_FRAMES} frames")));
+        }
+        frames.push(frame.to_vec());
+        at = at.saturating_add(used);
+    }
+    // The shape 01 §2.4 promises: a `Welcome`, then batches, and nothing
+    // else. Checked by kind byte alone — the window does not read frames.
+    match frames.split_first() {
+        Some((welcome, batches)) if welcome.first() == Some(&0x02) && batches.iter().all(|b| b.first() == Some(&0x03)) && !batches.is_empty() => {
+            let mut hasher = blake3::Hasher::new();
+            for batch in batches {
+                hasher.update(batch);
+            }
+            Ok(View { tree: *hasher.finalize().as_bytes(), etag: got.etag, frames })
+        }
+        _ => Err(ViewError::Refused("not a Welcome followed by batches".into())),
+    }
+}
+
+/// The media type this endpoint speaks, sent as `Accept` and required back.
+pub const VIEW_MEDIA_TYPE: &str = "application/vnd.eui.frames";
+
+/// Would this outgoing frame be pointless without a server?
+///
+/// The question a page fetched over HTTPS has to answer before it opens a
+/// socket it may never need. An **allowlist**, and the difference matters:
+/// "anything but `Ack` and `Pong`" reads as the safe rule and is not, because
+/// the driver emits a `Viewport` on every resize and every palette change —
+/// so dragging a window edge or turning on dark mode would open a session,
+/// which is the exact cost this endpoint exists to avoid. That frame is
+/// waste anyway: `Hello` rebuilds the viewport when a socket is finally
+/// dialled, so it says nothing that is not about to be said again.
+///
+/// The three that genuinely cannot be answered here: an `Event` (including
+/// the one an `emit(...)` inside a local handler produces), a `Resync`, and
+/// an `Upload`.
+pub const fn kind_needs_server(kind: u8) -> bool {
+    match kind {
+        0x04 | 0x09 | 0x0B => true,         // Event, Resync, Upload
+        0x05 | 0x07 | 0x0A | 0x08 => false, // Ack, Pong, Viewport, Error
+        // A `Hello` is sent by dialling rather than through this path, and a
+        // kind this client does not know is not one this client produced.
+        _ => false,
     }
 }
 

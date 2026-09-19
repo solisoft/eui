@@ -60,8 +60,12 @@ fn a_fetch_verifies_the_hash() {
 #[test]
 fn the_reader_is_strict() {
     let body = b"x".to_vec();
+    // A status the server really sent comes back as itself, so a caller can
+    // tell `404` — which for a view means "not served that way, open a
+    // socket" — from a reply that could not be read at all, without matching
+    // on the text of a status line.
     let origin = serve_once("404 Not Found", "", body.clone());
-    assert!(matches!(assets::fetch(&origin, &hash_of(&body), None), Err(AssetError::Http(_))));
+    assert_eq!(assets::fetch(&origin, &hash_of(&body), None), Err(AssetError::Status(404)));
     let origin = serve_once("200 OK", "Transfer-Encoding: chunked\r\n", body.clone());
     assert!(matches!(assets::fetch(&origin, &hash_of(&body), None), Err(AssetError::Http(_))));
     assert!(matches!(assets::fetch("http://127.0.0.1:1", &hash_of(&body), None), Err(AssetError::Connect(_))));

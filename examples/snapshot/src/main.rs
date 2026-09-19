@@ -58,6 +58,21 @@ static GOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = args.get(1).cloned().unwrap_or_else(|| ".".into());
+    // `snapshot <out> --view <url> <component> <w> <h>` — the same page,
+    // fetched over HTTPS with no session at all (01 §2.4). The point of
+    // having it here is the comparison: run it beside `--soli` against the
+    // same component and the two `.rgba` files should be identical, which is
+    // what "a page drawn without a socket is the same page" means when it is
+    // checked rather than asserted.
+    if args.get(2).map(String::as_str) == Some("--view") {
+        let url = args.get(3).expect("url");
+        let component = args.get(4).expect("component");
+        let w: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1000.0);
+        let h: f32 = args.get(6).and_then(|s| s.parse().ok()).unwrap_or(900.0);
+        let scale: f32 = args.get(7).and_then(|s| s.parse().ok()).unwrap_or(2.0);
+        snapshot_view(&out, url, component, w, h, scale);
+        return;
+    }
     if args.get(2).map(String::as_str) == Some("--soli") {
         let url = args.get(3).expect("session url");
         let name = args.get(4).expect("name");
@@ -127,6 +142,87 @@ fn write_image(out: &str, file: &str, px: &[u8], w: u32, h: u32) {
 }
 
 /// Render a component served by a running Soli, in both modes.
+/// One render, fetched rather than subscribed to.
+///
+/// No socket is opened at any point, which is the whole claim: if this draws
+/// the page, then a reader who only reads costs the server one cached
+/// response and nothing resident.
+fn snapshot_view(out: &str, url: &str, component: &str, w: f32, h: f32, scale: f32) {
+    use eui_client::transport::{fetch_view, Fetcher};
+    use eui_client::Incoming;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let cookie = std::env::var("SNAPSHOT_COOKIE").ok();
+    let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
+    let mut renderer = Renderer::new_headless().expect("a GPU adapter");
+    let mut textures = renderer.session();
+    let view = fetch_view(url, component, eui_proto::PROTOCOL_VERSION, w as u32, cookie.as_deref()).expect("a page");
+    let origin = eui_client::assets::origin_for(&eui_client::normalise_url(url)).expect("an origin");
+
+    for (mode_name, mode) in [("light", ThemeMode::Light), ("dark", ThemeMode::Dark)] {
+        let mut driver = Driver::new(w, h, scale, granted());
+        let (wake_tx, wake_rx) = mpsc::channel::<()>();
+        let (fetch, rx) = Fetcher::alone(origin.clone(), cookie.clone(), move || {
+            let _ = wake_tx.send(());
+        });
+        driver.input(Input::Mode(mode));
+        // The frames as they arrived, through the ordinary path: the driver
+        // cannot tell this from a socket that welcomed and mounted.
+        for bytes in &view.frames {
+            let frame = Frame::decode(bytes).expect("frame");
+            driver.handle_frame(frame);
+        }
+        // Whatever the tree names, fetched with no session behind it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut outstanding: usize = 0;
+        let (mut asked, mut got) = (0usize, 0usize);
+        loop {
+            for hash in driver.pending_assets() {
+                fetch.request_asset(hash);
+                outstanding += 1;
+                asked += 1;
+            }
+            if outstanding == 0 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "timed out fetching assets");
+            let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    Incoming::Asset(hash, Ok(bytes)) => {
+                        driver.asset_ready(hash, bytes);
+                        got += 1;
+                        outstanding = outstanding.saturating_sub(1);
+                    }
+                    Incoming::Asset(hash, Err(e)) => {
+                        eprintln!("snapshot: asset failed: {e}");
+                        driver.asset_failed(hash, e);
+                        outstanding = outstanding.saturating_sub(1);
+                    }
+                    other => panic!("nothing else can arrive without a socket: {other:?}"),
+                }
+            }
+        }
+        driver.tick(Instant::now());
+        let list = driver.paint(dw, dh);
+        let target = renderer.offscreen(dw, dh);
+        load_scene_assets(&mut driver, &mut renderer, &mut textures);
+        let (atlas, images) = driver.atlases_mut();
+        renderer.render_offscreen(&mut textures, &target, 0.0, &list, atlas, images);
+        let px = renderer.read_back(&target).expect("read back");
+        let file = format!("{component}-{mode_name}");
+        write_image(out, &file, &px, dw, dh);
+        println!(
+            "{file} {dw} {dh} quads={} nodes={} frames={} bytes={} assets={got}/{asked}",
+            list.quads.len(),
+            driver.session().live_nodes(),
+            view.frames.len(),
+            view.frames.iter().map(Vec::len).sum::<usize>()
+        );
+    }
+}
+
 fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
     use eui_client::{connect, Incoming, Input};
     use std::sync::mpsc;
@@ -163,6 +259,12 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                         }
                     }
                     Incoming::Asset(hash, Ok(bytes)) => {
+                        // Counted here as well as in the click loops below:
+                        // the mount loop is where most assets actually
+                        // arrive, so a run that fetched everything it named
+                        // reported `assets=0/2` and looked like one that had
+                        // fetched nothing.
+                        GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         driver.asset_ready(hash, bytes);
                         outstanding = outstanding.saturating_sub(1);
                     }

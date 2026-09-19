@@ -31,6 +31,11 @@ pub enum AssetError {
     Connect(String),
     /// The server did not answer `200` with a `Content-Length`.
     Http(String),
+    /// The server answered, with this status. Separate from [`Self::Http`]
+    /// because a caller has to be able to tell a `404` — which for a view is
+    /// "not served that way, open a socket instead" — from a malformed reply,
+    /// without matching on the text of a status line.
+    Status(u16),
     /// The body exceeded [`MAX_ASSET_BYTES`].
     TooLarge,
     /// The body's hash is not the name it was fetched by.
@@ -45,6 +50,7 @@ impl fmt::Display for AssetError {
             Self::Origin(e) => write!(f, "bad origin: {e}"),
             Self::Connect(e) => write!(f, "connect: {e}"),
             Self::Http(e) => write!(f, "http: {e}"),
+            Self::Status(code) => write!(f, "http {code}"),
             Self::TooLarge => f.write_str("asset too large"),
             Self::HashMismatch => f.write_str("asset bytes do not match their hash"),
             Self::Decode(e) => write!(f, "decode: {e}"),
@@ -114,6 +120,24 @@ pub fn origin_for(session_url: &str) -> Result<String, AssetError> {
 // decoders. The split is here rather than inside each function because
 // there is nothing in common between the two but the bytes.
 
+/// What a `GET` returned, for a caller that needs more than the body.
+///
+/// The asset path never did: an asset is named by its own hash, so the
+/// headers say nothing the bytes do not. A view is named by a path, so its
+/// `ETag` is the only thing that makes a second fetch cheap and its
+/// `Content-Type` the only thing that says the body is what was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The body.
+    pub body: Vec<u8>,
+    /// The `ETag` exactly as the server spelled it, quotes and all. Never
+    /// rebuilt from a hash of the body: a server may send a weak or suffixed
+    /// tag, and the only correct `If-None-Match` is the bytes it sent.
+    pub etag: Option<String>,
+    /// The `Content-Type`, lowercased, without its parameters.
+    pub content_type: Option<String>,
+}
+
 /// Fetch and verify one asset. Blocking; runs its own small runtime, so call
 /// it from a worker thread.
 #[cfg(has_native_net)]
@@ -130,12 +154,18 @@ pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>,
 /// every asset come through here and nothing else does.
 #[cfg(has_native_net)]
 pub fn get(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
+    Ok(get_full(origin, path, accept, cookie)?.body)
+}
+
+/// The same `GET`, with the two headers a view fetch needs. Blocking.
+#[cfg(has_native_net)]
+pub fn get_full(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
     rt.block_on(get_async(origin, path, accept, cookie))
 }
 
 #[cfg(has_native_net)]
-async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
+async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
@@ -144,7 +174,7 @@ async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>)
     // The caller's cookie, not a process-wide one: two sessions in one
     // process must not present each other's.
     let cookie = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\n{cookie}\r\n");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\n{cookie}\r\n");
 
     let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
     let mut raw = Vec::new();
@@ -181,17 +211,29 @@ async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> R
 }
 
 /// The smallest HTTP/1.1 response reader that is still strict: status 200,
-/// a `Content-Length`, exactly that many body bytes.
+/// a `Content-Length`, exactly that many body bytes — and now the two
+/// headers a view fetch reads.
+///
+/// Chunked is still refused, and the endpoint is specified to send a length
+/// (01 §2.4) precisely so it never has to be: a server that computed the
+/// body's ETag has the whole body in hand and can say how long it is. What
+/// this reader will not do is guess, because every guess here is a guess
+/// about where somebody else's bytes end.
 #[cfg(has_native_net)]
-fn parse_response(raw: &[u8]) -> Result<Vec<u8>, AssetError> {
+fn parse_response(raw: &[u8]) -> Result<Fetched, AssetError> {
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| AssetError::Http("no header terminator".into()))?;
     let head = std::str::from_utf8(raw.get(..split).unwrap_or(&[])).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
     let mut lines = head.split("\r\n");
     let status = lines.next().unwrap_or("");
     if !status.starts_with("HTTP/1.1 200") && !status.starts_with("HTTP/1.0 200") {
-        return Err(AssetError::Http(status.to_string()));
+        // A well-formed status line the caller can branch on; anything else
+        // is a reply we could not read at all.
+        let code = status.split(' ').nth(1).and_then(|c| c.parse::<u16>().ok());
+        return Err(code.map_or_else(|| AssetError::Http(status.to_string()), AssetError::Status));
     }
     let mut length: Option<usize> = None;
+    let mut etag: Option<String> = None;
+    let mut content_type: Option<String> = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             if k.eq_ignore_ascii_case("content-length") {
@@ -199,6 +241,15 @@ fn parse_response(raw: &[u8]) -> Result<Vec<u8>, AssetError> {
             }
             if k.eq_ignore_ascii_case("transfer-encoding") {
                 return Err(AssetError::Http("chunked bodies are not accepted".into()));
+            }
+            if k.eq_ignore_ascii_case("etag") {
+                etag = Some(v.trim().to_owned());
+            }
+            if k.eq_ignore_ascii_case("content-type") {
+                // The type without its parameters: `application/vnd.eui.frames`
+                // and `application/vnd.eui.frames; charset=utf-8` are the same
+                // answer to the only question being asked of it.
+                content_type = Some(v.split(';').next().unwrap_or("").trim().to_ascii_lowercase());
             }
         }
     }
@@ -210,7 +261,7 @@ fn parse_response(raw: &[u8]) -> Result<Vec<u8>, AssetError> {
     if body.len() != length {
         return Err(AssetError::Http(format!("body is {} bytes, header says {length}", body.len())));
     }
-    Ok(body.to_vec())
+    Ok(Fetched { body: body.to_vec(), etag, content_type })
 }
 
 // ------------------------------------------- everything below is portable
