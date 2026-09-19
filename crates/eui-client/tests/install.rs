@@ -1,8 +1,10 @@
 //! Installing an application: the manifest's icon fetched and verified,
 //! the launcher entry written, and removing it again.
 //!
-//! One test and one process, because the three directories it works in are
-//! named by environment variables and those are the whole process's.
+//! The directories these work in are named by environment variables, and
+//! those belong to the whole process — so the tests that set them take a
+//! lock and run one at a time. Without it they pass alone and fail
+//! together, which is the worst way for a test to be wrong.
 #![allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::arithmetic_side_effects)]
 
 use std::io::{Read, Write};
@@ -10,6 +12,12 @@ use std::net::TcpListener;
 
 use eui_proto::{Manifest, PROTOCOL_VERSION};
 use ring::signature::{Ed25519KeyPair, KeyPair};
+
+/// Held for the length of any test that names a directory by environment
+/// variable. Poisoning is ignored: a panic in one of these leaves nothing
+/// behind but a temporary directory, and turning that into a second
+/// failure hides the first.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A small square PNG, as a publisher's icon would be.
 fn icon() -> Vec<u8> {
@@ -61,6 +69,7 @@ fn serve(manifest: Vec<u8>, asset_path: String, asset: Vec<u8>) -> String {
 
 #[test]
 fn an_application_with_a_signed_icon_installs_and_uninstalls() {
+    let _one_at_a_time = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let here = std::env::temp_dir().join(format!("eui-install-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&here);
     std::env::set_var("EUI_PINS_DIR", here.join("pins"));
@@ -91,11 +100,16 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
     // before anything is written.
     let app = eui_client::install::from_url(&url).unwrap();
     assert_eq!(app.app_id, "counter.example");
-    assert_eq!(app.name, "Counter");
     assert!(app.url.ends_with("/_eui/session/demo"), "{}", app.url);
+    // The manifest's `entry` is `/_eui/session`, so `/demo` is a component
+    // of the application and not the application itself: it is named for
+    // itself, so a launcher holding several of them reads as several
+    // things rather than the same word repeated.
+    assert_eq!(app.component.as_deref(), Some("demo"));
+    assert_eq!(app.name, "Counter — Demo");
 
     let files = eui_client::install::install(&app).unwrap().files;
-    assert!(eui_client::install::installed("counter.example"));
+    assert!(eui_client::install::installed(&app.url));
     assert_eq!(eui_client::install::list().len(), 1);
 
     // Everything it wrote is inside the directory it was pointed at, and
@@ -112,7 +126,7 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
         assert_eq!(files.first().and_then(|f| f.extension()).and_then(|e| e.to_str()), Some("desktop"), "the launcher entry leads the list");
         let desktop = files.iter().find(|f| f.extension().is_some_and(|e| e == "desktop")).expect("a .desktop file");
         let text = std::fs::read_to_string(desktop).unwrap();
-        assert!(text.contains("Name=Counter"), "{text}");
+        assert!(text.contains("Name=Counter — Demo"), "{text}");
         assert!(text.contains("X-EUI-AppId=counter.example"), "{text}");
         // The address is quoted as the desktop entry specification asks,
         // not as a shell would, and it is the whole session URL.
@@ -129,10 +143,54 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
 
     let gone = eui_client::install::uninstall("counter.example").unwrap();
     assert_eq!(gone.len(), files.len());
-    assert!(!eui_client::install::installed("counter.example"));
+    assert!(!eui_client::install::installed(&app.url));
     for f in &files {
         assert!(!f.exists(), "{} survived the uninstall", f.display());
     }
+    let _ = std::fs::remove_dir_all(&here);
+}
+
+/// Two components of one application are two entries.
+///
+/// A Soli application serves every component at one origin under one
+/// `app_id`, because the id is what a publisher key is pinned against.
+/// Keying the record on it said the music player was installed because
+/// somebody had installed the gallery: a tick on a page nobody had
+/// installed, and a launcher entry that opened something else.
+#[test]
+fn one_application_two_components_two_entries() {
+    let _one_at_a_time = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let here = std::env::temp_dir().join(format!("eui-install-two-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&here);
+    std::env::set_var("EUI_INSTALLED_FILE", here.join("installed"));
+    std::env::set_var("XDG_DATA_HOME", here.join("share"));
+    std::fs::create_dir_all(&here).unwrap();
+
+    let png = icon();
+    let one = eui_client::install::App { app_id: "demo-app".into(), name: "Meridian".into(), url: "wss://demo.example/_eui/session/gallery".into(), icon: png.clone(), component: None };
+    let two =
+        eui_client::install::App { app_id: "demo-app".into(), name: "Meridian — Music".into(), url: "wss://demo.example/_eui/session/music".into(), icon: png, component: Some("music".into()) };
+
+    let a = eui_client::install::install(&one).unwrap();
+    // The second is not installed because the first is.
+    assert!(eui_client::install::installed(&one.url));
+    assert!(!eui_client::install::installed(&two.url), "the gallery is not the music player");
+
+    let b = eui_client::install::install(&two).unwrap();
+    assert_eq!(eui_client::install::list().len(), 2, "two entries, one application");
+    assert!(eui_client::install::installed(&one.url) && eui_client::install::installed(&two.url));
+    // Different files, or the second wrote over the first.
+    assert_ne!(a.files, b.files);
+
+    // Removing one leaves the other.
+    eui_client::install::uninstall(&two.url).unwrap();
+    assert!(eui_client::install::installed(&one.url));
+    assert!(!eui_client::install::installed(&two.url));
+
+    // And the `app_id` removes whatever is left of the application.
+    eui_client::install::install(&two).unwrap();
+    eui_client::install::uninstall("demo-app").unwrap();
+    assert!(eui_client::install::list().is_empty(), "an app_id removes every entry it has");
     let _ = std::fs::remove_dir_all(&here);
 }
 

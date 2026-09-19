@@ -137,10 +137,14 @@ fn launcher(flag: &str, arg: Option<&String>) -> i32 {
             0
         }
         "--uninstall" => {
-            let Some(app_id) = arg else { usage() };
-            match install::uninstall(app_id) {
+            // An address removes that one entry; an `app_id` removes every
+            // entry an application has, because somebody who put three of
+            // its components in their launcher should not need three
+            // addresses to be rid of them.
+            let Some(what) = arg else { usage() };
+            match install::uninstall(what) {
                 Ok(gone) if gone.is_empty() => {
-                    eprintln!("eui: {app_id} was not installed");
+                    eprintln!("eui: {what} was not installed");
                     0
                 }
                 Ok(gone) => {
@@ -193,6 +197,6 @@ fn usage() -> ! {
     // worse than none, because it reads as a list of everything there is.
     let all = eui_proto::caps::NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(",");
     eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}] [--standalone]");
-    eprintln!("       eui --install <wss://host/...> | --uninstall <app id> | --installed");
+    eprintln!("       eui --install <wss://host/...> | --uninstall <address|app id> | --installed");
     std::process::exit(2);
 }

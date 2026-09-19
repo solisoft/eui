@@ -39,6 +39,15 @@ pub struct App {
     pub url: String,
     /// The PNG the manifest's `icon` named, already verified against it.
     pub icon: Vec<u8>,
+    /// The component this address opens, when it is not the one the
+    /// manifest's `entry` names.
+    ///
+    /// A Soli application serves many components at one origin — a
+    /// gallery, a music player, a chat — under one `app_id`, because the
+    /// `app_id` is what a publisher key is pinned against. They are
+    /// separate things to a person, so they are separate entries: this is
+    /// what tells two of them apart, in the file name and in the label.
+    pub component: Option<String>,
 }
 
 /// An application that is installed, and what it put on disk.
@@ -129,9 +138,15 @@ fn load_from(path: &Path) -> Vec<Entry> {
         .collect()
 }
 
-/// Whether this application has an entry on this machine.
-pub fn installed(app_id: &str) -> bool {
-    list().iter().any(|e| e.app_id == app_id)
+/// Whether *this address* has an entry on this machine.
+///
+/// The address and not the `app_id`. One Soli application serves every
+/// component at one origin under one id, so asking by id answered yes for
+/// the music player because somebody had installed the gallery — a tick on
+/// a page nobody had installed, and a launcher entry that opened something
+/// else.
+pub fn installed(url: &str) -> bool {
+    list().iter().any(|e| e.url == url)
 }
 
 /// Write the record back, whole.
@@ -197,7 +212,33 @@ pub fn from_url(url: &str) -> Result<App, String> {
     // so that the launcher records a whole address and not half of one.
     let whole = crate::app::completed(url, &m.entry).unwrap_or_else(|| url.to_owned());
     let name = if m.name.trim().is_empty() { m.app_id.clone() } else { m.name };
-    Ok(App { app_id: m.app_id, name, url: whole, icon: bytes })
+    // Which component this address opens, when it is not the one the
+    // manifest calls the application's own. `entry` is the default and
+    // wears the application's plain name; anything else is named for
+    // itself, so a launcher holding three of them reads as three things.
+    let component = last(&whole).filter(|c| Some(c.as_str()) != last(&m.entry).as_deref());
+    let name = match &component {
+        Some(c) => format!("{name} — {}", titled(c)),
+        None => name,
+    };
+    Ok(App { app_id: m.app_id, name, url: whole, icon: bytes, component })
+}
+
+/// The last non-empty segment of a path or an address.
+#[cfg(all(has_pins, has_native_net))]
+fn last(path: &str) -> Option<String> {
+    path.rsplit('/').find(|s| !s.is_empty()).map(str::to_owned)
+}
+
+/// `music` as `Music`: a path segment is lowercase because paths are, and
+/// a label beside an application's name should not be.
+#[cfg(all(has_pins, has_native_net))]
+fn titled(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
 }
 
 /// Install `app`: write its icon and its launcher, and record both.
@@ -206,14 +247,20 @@ pub fn from_url(url: &str) -> Result<App, String> {
 /// person who clicks it twice means and also how an application that
 /// changed its name or its icon is updated.
 pub fn install(app: &App) -> Result<Entry, String> {
-    let Some(slug) = slug(&app.app_id) else {
+    let Some(base) = slug(&app.app_id) else {
         return Err(format!("{:?} is not a name anything can be filed under", app.app_id));
+    };
+    // One file name per address, not per application: two components of
+    // one application are two entries and must not write over each other.
+    let slug = match app.component.as_deref().and_then(slug) {
+        Some(part) => format!("{base}-{part}"),
+        None => base,
     };
     // The old entry goes first, so that a rename does not leave the
     // previous name behind in the launcher beside the new one.
-    let _ = uninstall(&app.app_id);
+    let _ = uninstall(&app.url);
     let files = write_entry(app, &slug)?;
-    let mut entries: Vec<Entry> = list().into_iter().filter(|e| e.app_id != app.app_id).collect();
+    let mut entries: Vec<Entry> = list().into_iter().filter(|e| e.url != app.url).collect();
     let mine = Entry { app_id: app.app_id.clone(), name: app.name.clone(), url: app.url.clone(), files };
     entries.push(mine.clone());
     save(&entries)?;
@@ -282,15 +329,26 @@ pub fn launch(entry: &Entry) {
     let _ = cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 }
 
-/// Remove this application's entry. Removing one that is not installed is
-/// not an error: the end state is the one that was asked for.
-pub fn uninstall(app_id: &str) -> Result<Vec<PathBuf>, String> {
+/// Remove an entry: `what` is an address, or an `app_id` to remove every
+/// entry an application has. Removing one that is not installed is not an
+/// error — the end state is the one that was asked for.
+///
+/// An address first, because that is the thing that was installed. An
+/// `app_id` is the convenience the command line wants: somebody who typed
+/// three components of one application into their launcher should not have
+/// to remember three addresses to be rid of them.
+pub fn uninstall(what: &str) -> Result<Vec<PathBuf>, String> {
     let entries = list();
-    let Some(mine) = entries.iter().find(|e| e.app_id == app_id) else {
-        return Ok(Vec::new());
+    let mine: Vec<Entry> = match entries.iter().find(|e| e.url == what) {
+        Some(one) => vec![one.clone()],
+        None => entries.iter().filter(|e| e.app_id == what).cloned().collect(),
     };
+    if mine.is_empty() {
+        return Ok(Vec::new());
+    }
+    let doomed: Vec<String> = mine.iter().map(|e| e.url.clone()).collect();
     let mut gone = Vec::new();
-    for f in &mine.files {
+    for f in mine.iter().flat_map(|e| &e.files) {
         // Only inside what this module writes to. The record is a file in
         // the person's own configuration and could have been edited, by
         // hand or by something else; a path in it is a path this process
@@ -303,7 +361,7 @@ pub fn uninstall(app_id: &str) -> Result<Vec<PathBuf>, String> {
             gone.push(f.clone());
         }
     }
-    let rest: Vec<Entry> = entries.into_iter().filter(|e| e.app_id != app_id).collect();
+    let rest: Vec<Entry> = entries.into_iter().filter(|e| !doomed.contains(&e.url)).collect();
     save(&rest)?;
     Ok(gone)
 }
@@ -827,7 +885,7 @@ mod tests {
 
     #[test]
     fn installing_needs_a_usable_app_id() {
-        let bad = App { app_id: "///".into(), name: "Demo".into(), url: "wss://x/s".into(), icon: dot() };
+        let bad = App { app_id: "///".into(), name: "Demo".into(), url: "wss://x/s".into(), icon: dot(), component: None };
         assert!(install(&bad).is_err(), "nothing is written under a name that is not one");
     }
 }

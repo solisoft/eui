@@ -375,10 +375,13 @@ struct Tab {
     files: Files,
     /// The link word the chrome was last told about.
     shown_link: Option<&'static str>,
-    /// Whether this application can go in the desktop's launcher, and
-    /// whether it is there. `None` until the manifest says, and for every
-    /// manifest that publishes no icon.
-    installable: Option<Installable>,
+    /// Whether this address can go in the desktop's launcher, and whether
+    /// it is there. `None` until the manifest says, and for every manifest
+    /// that publishes no icon.
+    ///
+    /// Held rather than asked for on every rebuild: the chrome is rebuilt
+    /// on every keystroke in the address bar and the answer is a file read.
+    installable: Option<bool>,
     /// How much larger this page is drawn than the display asks for.
     ///
     /// Per tab, as a browser's zoom is per site: two applications open
@@ -788,22 +791,6 @@ fn name_from_url(url: &str) -> String {
     }
 }
 
-/// An application that can go in the desktop's launcher, and whether it
-/// already is there.
-///
-/// Only an application whose manifest publishes an icon (01 §2.1) is
-/// installable, so this is `None` for most of them and the control is
-/// absent rather than inert.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Installable {
-    /// The manifest's `app_id`, which the record is keyed on.
-    app_id: String,
-    /// Whether an entry for it exists now. Held rather than asked for on
-    /// every rebuild: the chrome is rebuilt on every keystroke in the
-    /// address bar and the answer is a file read.
-    there: bool,
-}
-
 impl Tab {
     /// Open an application: its worker, its manifest check, its connection.
     ///
@@ -936,9 +923,13 @@ impl Tab {
                 #[cfg(has_launchers)]
                 match m.icon {
                     Some(_) => {
-                        let there = crate::install::installed(&m.app_id);
+                        // By address, not by `app_id`: one Soli application
+                        // serves every component at one origin under one id,
+                        // so asking by id put a tick on the music player
+                        // because somebody had installed the gallery.
+                        let there = crate::install::installed(&tab.url);
                         eprintln!("eui: {} publishes an icon — the address bar offers to {} it", m.app_id, if there { "remove" } else { "install" });
-                        tab.installable = Some(Installable { there, app_id: m.app_id.clone() });
+                        tab.installable = Some(there);
                     }
                     None => eprintln!("eui: {} publishes no icon, so it cannot be installed (01 §2.1)", m.app_id),
                 }
@@ -1131,7 +1122,7 @@ impl Tab {
             can_forward: self.at + 1 < self.history.len(),
             // Held rather than asked: this is rebuilt on every keystroke in
             // the address bar, and the answer is a file read.
-            installed: self.installable.as_ref().map(|a| a.there),
+            installed: self.installable,
         }
     }
 
@@ -2085,13 +2076,15 @@ impl Shell {
     #[cfg(has_launchers)]
     fn launcher_entry(&mut self, adding: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
-        let Some(what) = t.installable.as_ref() else { return };
-        let (app_id, url) = (what.app_id.clone(), t.url.clone());
+        if t.installable.is_none() {
+            return;
+        }
+        let url = t.url.clone();
         let proxy = Arc::clone(&self.proxy);
         let spawned = std::thread::Builder::new().name("eui-install".into()).spawn(move || {
-            let done = if adding { add(&url) } else { crate::install::uninstall(&app_id).map(|_| ()) };
+            let done = if adding { add(&url) } else { crate::install::uninstall(&url).map(|_| ()) };
             match done {
-                Ok(()) => eprintln!("eui: {app_id} {}", if adding { "is in the launcher" } else { "is out of the launcher" }),
+                Ok(()) => eprintln!("eui: {url} {}", if adding { "is in the launcher" } else { "is out of the launcher" }),
                 Err(e) => eprintln!("eui: {e}"),
             }
             let _ = proxy.send_event(Wake::Installed);
@@ -2107,10 +2100,10 @@ impl Shell {
     fn installed_wake(&mut self) {
         let mut moved = false;
         for t in &mut self.tabs {
-            let Some(what) = t.installable.as_mut() else { continue };
-            let there = crate::install::installed(&what.app_id);
-            if there != what.there {
-                what.there = there;
+            let Some(was) = t.installable else { continue };
+            let there = crate::install::installed(&t.url);
+            if there != was {
+                t.installable = Some(there);
                 moved = true;
             }
         }
