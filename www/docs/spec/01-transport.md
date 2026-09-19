@@ -34,7 +34,7 @@ behind ordinary proxies and CDNs.
 | `GET` | `/.well-known/eui` | Application manifest |
 | `GET` | `/_eui/asset/<blake3-hex>` | Content-addressed asset |
 | — | `wss://<host>/_eui/session` | Interactive session |
-| `POST` | `/_eui/rpc` | One-shot render, for non-interactive applications |
+| `GET` | `/_eui/view/<component>` | One-shot render, cacheable (§2.4) |
 
 ### 2.1 Manifest
 
@@ -176,6 +176,60 @@ Rationale for WebSocket in v1: it traverses every proxy in existence today and
 Soli already speaks it (`lang/src/live/socket.rs`). The framing layer below is
 specified independently of the transport so that HTTP/3 + WebTransport can be
 substituted without changing a single message byte.
+
+### 2.4 One-shot render
+
+A session costs a server a resident session per reader: the interned tables,
+the previous tree, and an instance to hang them on. For a page whose readers
+mostly read — documentation, a catalogue, anything with a link to it — that is
+the wrong shape, and the socket buys nothing, because nothing on such a page
+changes without the reader.
+
+`GET /_eui/view/<component>?v=<protocol>` answers
+`application/vnd.eui.frames`: **exactly the frames a fresh socket would have
+sent**, up to and including the first `Mount` — a `Welcome`, then one or more
+`Batch`, each in the framing of §3. There is no second encoding, and a client
+that can read a socket can read this by feeding the body through the same
+decoder.
+
+- The client's protocol version is a **query parameter and not a header**
+  because it is part of the cache key: a client at 3 and a client at 5 are
+  owed different bytes, and a shared cache must not hand one the other's. The
+  `Welcome` names `min(client, server)`, as the socket's does. A server MUST
+  answer `400` to a version it cannot read as one, rather than clamping: a
+  `Welcome` naming version 0 ends the session it was meant to open.
+- The `Welcome` MUST carry a session id of sixteen zero bytes. It names no
+  session, because this body is everyone's — and a server that put a real
+  handle there would give every response a different ETag and cache nothing
+  while appearing to.
+- The request carries **no cookie and no session**, exactly as an asset's does
+  (§2.2). A component whose render depends on who is asking MUST NOT be served
+  this way, and a server MUST refuse the endpoint for a component that
+  requires a session. This is the whole of what makes a shared cache in front
+  of it safe, and it is why no `Vary` is sent.
+- A strong `ETag` is the BLAKE3 of the body. `If-None-Match` is read as a list
+  and `*` matches. `Cache-Control` is the application's to choose.
+- The render is given a **nominal viewport**, since there is nobody to ask.
+  A view that branches on width may take one from `?w=`, which then joins the
+  cache key; a server SHOULD snap it to a small declared set rather than
+  render a variant per reader.
+- A server MUST NOT offer this for a component whose first render is not the
+  same for everyone, and an application declaring a component this way is
+  promising that its `connect` is a **read**. `GET` is exempt from any
+  same-origin check by construction — a resource a CDN is meant to hold cannot
+  have one — so an `<img>` on any page anywhere reaches this endpoint.
+
+**Determinism is normative here.** Two renders of the same component, at the
+same version and viewport, MUST produce the same bytes, because the ETag is
+the identity of those bytes and because anything that later has to recognise
+the same tree arriving by another road does so by hashing them. What breaks
+it is application code, not the protocol: a view that reads the clock, a
+random, or a counter that moves per render. Such a view is still correct — it
+simply caches nothing.
+
+Note for anything that compares two of these: the **ETag covers the whole
+body** and the `Welcome` differs between the two roads a tree can arrive by,
+so the identity of a *tree* is the hash of its `Batch` frames alone.
 
 ## 3. Framing
 

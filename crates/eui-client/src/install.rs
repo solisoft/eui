@@ -202,6 +202,9 @@ fn put(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// draws.
 #[cfg(all(has_pins, has_native_net))]
 pub fn from_url(url: &str) -> Result<App, String> {
+    // `eui install https://host` is the same address as `wss://host`, and
+    // the launcher entry should record it the way the protocol writes it.
+    let url = &crate::assets::normalise_url(url);
     let origin = crate::assets::origin_for(url).map_err(|e| e.to_string())?;
     let pins = crate::manifest::pins_dir().ok_or_else(|| "no pin store; refusing to install an unverified application".to_owned())?;
     let m = crate::manifest::check(&origin, &pins, None).map_err(|e| e.to_string())?;

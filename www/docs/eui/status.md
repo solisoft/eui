@@ -247,6 +247,30 @@ ship with, per `spec/07-bytecode.md`, now normative.
   silent when a chunk fails verification; the Soli end-to-end counter uses
   one.
 
+**A render with no session, and what a session costs.** `GET
+/_eui/view/<component>` on the Soli side answers
+`application/vnd.eui.frames` — the exact frames a fresh socket would have
+sent, `Welcome` and the batches through the first `Mount`, with a strong
+`ETag` over the body and the `Cache-Control` the component declared. A
+component opts in with `router_eui(..., {"static": "public, max-age=60"})`,
+which is refused alongside `{"session": "required"}` because a static view is
+rendered for nobody.
+
+The numbers behind it, measured against `examples/eui-site` on 2026-09-19:
+a socket costs **50–60 kB of resident memory per reader who is doing
+nothing**, linear to 400 sessions, and does not come back promptly when the
+socket closes. The page is 4 799 B on the wire, so the server holds about
+twelve times the page per reader — the previous tree plus the four interned
+tables. Six hundred *distinct* one-shot renders of the same page, each at a
+different viewport so nothing could be reused, moved resident memory by
+**4 kB in total**. The bytes are the socket's own: compared frame by frame,
+the batches are identical and only the `Welcome`'s session handle differs,
+which is sixteen zeroes here because this body is everyone's.
+
+What is not built yet: interaction over plain verbs, and a session that
+adopts a tree the client already fetched instead of re-mounting it. Both are
+specified in `spec/01-transport.md` §2.4's neighbourhood and neither has code.
+
 **Assets and images.** `GET /_eui/asset/<blake3>` on the Soli side, from a
 process-wide content-addressed store: an image in a view is a file path,
 hashed and served immutable, so a client caches it forever and nothing on

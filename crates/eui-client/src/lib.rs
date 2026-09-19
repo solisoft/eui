@@ -134,7 +134,7 @@ pub mod transport;
 pub mod wayland;
 pub mod worker;
 
-pub use assets::{AssetError, AssetStore, Image};
+pub use assets::{normalise_url, AssetError, AssetStore, Image};
 pub use driver::{Close, Driver, FileAsk, FileWant, FileWrite, Fix, Input, NfcAsk, NfcRecord, PickSource};
 pub use transport::{check_url, connect, Connection, Incoming, TransportError};
 pub use worker::Backend;

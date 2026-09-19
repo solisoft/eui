@@ -153,7 +153,13 @@ pub struct Launch {
 
 impl Launch {
     /// A network session, as the `eui` binary opens it.
+    ///
+    /// The address is normalised here, at the one door a typed address comes
+    /// through, rather than in each place that later looks at its scheme:
+    /// `eui https://host/...` is what somebody copying their address bar
+    /// will write, and it names the same origin as `wss://host/...`.
     pub fn new(url: String, allowed: u32) -> Self {
+        let url = crate::assets::normalise_url(&url);
         Self { url, allowed, title: "EUI".into(), cookie: None, host_loopback: false }
     }
 }

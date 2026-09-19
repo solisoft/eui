@@ -223,3 +223,25 @@ mod grants {
         assert!(!stray, "and every name in it is hex, so none of them is a path");
     }
 }
+
+/// Spec 01 §2.1: "the protocol's own prefix is the part nobody should have
+/// to type." A person pasting what their browser shows them is doing the
+/// obvious thing, and it names the same origin.
+#[test]
+fn an_address_is_taken_the_way_a_person_writes_it() {
+    use eui_client::normalise_url;
+
+    assert_eq!(normalise_url("https://app.example/_eui/session/x"), "wss://app.example/_eui/session/x");
+    assert_eq!(normalise_url("http://127.0.0.1:5190/_eui/session/x"), "ws://127.0.0.1:5190/_eui/session/x");
+    // Already the protocol's own spelling: untouched.
+    assert_eq!(normalise_url("wss://app.example/x"), "wss://app.example/x");
+    assert_eq!(normalise_url("ws://127.0.0.1:9/x"), "ws://127.0.0.1:9/x");
+    // A bare host can only be the public scheme.
+    assert_eq!(normalise_url("app.example"), "wss://app.example");
+    assert_eq!(normalise_url("  app.example/path  "), "wss://app.example/path");
+
+    // It is a spelling, not a way past the rule: plain http off loopback is
+    // still refused, exactly as the ws:// it stands for would be.
+    assert!(eui_client::check_url(&normalise_url("http://app.example/x"), false).is_err());
+    assert!(eui_client::check_url(&normalise_url("https://app.example/x"), false).is_ok());
+}

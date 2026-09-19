@@ -53,6 +53,10 @@ pub fn start(canvas: &str, url: &str, allow: &str) -> Result<(), JsValue> {
     // 01 §1, before a socket is opened. There is no loopback exception in
     // a page — `EUI_ALLOW_INSECURE_LOOPBACK` cannot be set where there is
     // no environment — so this refuses everything but `wss://` on its own.
+    // The page may hand this an `https://` address — it is the one the page
+    // itself was served from — and that names the same origin as `wss://`.
+    let url = eui_client::normalise_url(url);
+    let url = url.as_str();
     eui_client::check_url(url, false).map_err(|e| JsValue::from_str(&format!("eui: {e}")))?;
 
     eui_client::web::start(element);

@@ -64,7 +64,42 @@ written.
 | `GET /.well-known/eui` | The application manifest |
 | `GET /_eui/asset/<blake3-hex>` | A content-addressed asset |
 | `wss://host/_eui/session` | The interactive session |
-| `POST /_eui/rpc` | One-shot render, for applications that are not interactive |
+| `GET /_eui/view/<component>` | One render, cacheable, with no session behind it |
+
+### One render, and no session
+
+A socket costs the server a session per reader — the interned tables, the
+previous tree, an instance to hang them on. Measured against the EUI site that
+is 50–60 kB for somebody who is only reading, which is the wrong shape for a
+page whose readers mostly read, and the socket buys nothing there: nothing on
+such a page changes unless the reader changes it.
+
+`GET /_eui/view/<component>?v=4` answers `application/vnd.eui.frames` — the
+exact frames a fresh socket would have sent, a `Welcome` and the batches
+through the first `Mount`. No second encoding: a client feeds the body through
+the same decoder it uses on the socket. The body carries a strong `ETag`, so a
+CDN or a browser cache answers the second reader and the origin renders once
+per revalidation rather than once per reader. Six hundred distinct renders of
+the EUI site's page cost the server 4 kB, against 50–60 kB apiece for the
+sockets they replace.
+
+A component opts in, because its first render has to be the same for
+everybody:
+
+```soli
+router_eui("site", "site#site", "site#site_view", {"static": "public, max-age=60"})
+```
+
+`{"static": true}` means `no-cache`, which still saves the session and still
+revalidates against the ETag. It cannot be combined with
+`{"session": "required"}` — a static view is rendered for nobody — and saying
+both is refused where it is written rather than at request time.
+
+Two things follow from "rendered for nobody". The render sees no session, no
+cookie and no locale, so a view that greets somebody by name does not belong
+here. And a `GET` has no same-origin check — a resource a CDN is meant to hold
+cannot have one — so declaring a component static is promising that its
+`connect` handler is a *read*: an `<img src>` on any page anywhere reaches it.
 
 ### The manifest
 

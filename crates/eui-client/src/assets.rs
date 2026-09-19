@@ -59,6 +59,32 @@ pub fn hex(hash: &Hash) -> String {
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The address somebody typed, as the protocol spells it.
+///
+/// Spec 01 §2.1 already takes the view that "the protocol's own prefix is
+/// the part nobody should have to type". Somebody pasting what their browser
+/// shows them is doing the obvious thing, so `https://` is read as `wss://`
+/// and `http://` as `ws://` — the same origin, named the way the rest of the
+/// web names it — and a bare host gets `wss://`, since that is the only
+/// scheme a public address can have.
+///
+/// This relaxes nothing. [`crate::check_url`] still refuses plain `ws://`
+/// anywhere but loopback, so `http://` is a spelling of an address and not a
+/// way past the rule.
+pub fn normalise_url(url: &str) -> String {
+    let url = url.trim();
+    if let Some(rest) = url.strip_prefix("https://") {
+        return format!("wss://{rest}");
+    }
+    if let Some(rest) = url.strip_prefix("http://") {
+        return format!("ws://{rest}");
+    }
+    if url.contains("://") {
+        return url.to_owned();
+    }
+    format!("wss://{url}")
+}
+
 /// The HTTPS origin an asset is fetched from, derived from the session URL:
 /// `wss://host/_eui/session/x` → `https://host`. A `ws://` session (debug
 /// loopback only) fetches over `http://` from the same host.
@@ -71,7 +97,9 @@ pub fn origin_for(session_url: &str) -> Result<String, AssetError> {
     let http = match scheme {
         "wss" => "https",
         "ws" => "http",
-        other => return Err(AssetError::Origin(format!("unsupported scheme {other}"))),
+        // `normalise_url` turns `https`/`http` into these two before any
+        // address reaches here, so anything else is a caller that skipped it.
+        other => return Err(AssetError::Origin(format!("unsupported scheme {other}: an address is ws:// or wss:// by the time it gets here"))),
     };
     Ok(format!("{http}://{host}"))
 }

@@ -44,4 +44,4 @@ eui_capabilities("net.open")
 
 get("/health", "home#health")
 
-router_eui("site", "site#site", "site#site_view")
+router_eui("site", "site#site", "site#site_view", {"static": "public, max-age=60"})
