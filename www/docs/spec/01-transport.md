@@ -231,6 +231,64 @@ Note for anything that compares two of these: the **ETag covers the whole
 body** and the `Welcome` differs between the two roads a tree can arrive by,
 so the identity of a *tree* is the hash of its `Batch` frames alone.
 
+### 2.6 Adopting a tree
+
+A component that is fetched over §2.4 and later needs the server has a tree
+already. Mounting it again would work and would be wrong: the client's
+`Mount` handling discards the tree, the layout, focus, every scroll offset and
+anything half-typed, so a reader halfway down a page who clicks something is
+returned to the top with nothing focused. On the pages §2.4 exists for, that
+is the most visible thing about it.
+
+So a client that holds a fetched tree offers it, in the `resume` field of its
+`Hello` (§4.1), as a third tag:
+
+```
+resume := 0x00                       -- nothing
+        | 0x01 session:16  acked:varint
+        | 0x02 tree:32
+```
+
+`tree` is the BLAKE3 of the **`Batch` frames** of the body it holds, in order,
+and **not of the body**. The two differ because a body's `Welcome` carries
+sixteen zero bytes and a socket's carries a session handle, so a hash over the
+whole body would name something no socket could ever agree to. A server
+comparing the wrong one finds no match, ever, and the only symptom is that
+adoption never happens — so it is said here rather than left to be discovered.
+
+The offer is not a claim. A `Resume` names a session and is a bearer
+credential for it; this names only a tree, there is no session yet, and the
+worst a wrong hash can do is cost a `Mount` that would have been sent anyway.
+A client MUST NOT send both, and a client whose tree came over a socket MUST
+offer `0x01`.
+
+The server renders what it would have rendered, hashes those frames, and
+answers in `Welcome.start`:
+
+```
+start := 0x00 Fresh | 0x01 Resumed | 0x02 Adopted
+```
+
+- **`Adopted`** — the hash matched. **No `Mount` follows.** The session
+  continues from the tree the client has, and its batch sequence continues
+  from where the one-shot render left off (§2.4 numbers from 1). The client
+  keeps its tree, its layout, its focus and its scroll precisely by not
+  tearing them down.
+- **`Fresh`** — it did not match, or nothing was offered. The client MUST
+  discard what it holds, and the server sends the frames it just rendered
+  **as they are**. There is no second render: the comparison is of bytes the
+  server produced once.
+
+**This is one render either way**, and a server that renders twice to answer
+it has misread this section.
+
+A `Welcome` naming `Adopted` to a client that offered no tree is a protocol
+error, as `Resumed` naming an unoffered session is (§4.1).
+
+A server MAY decline to adopt for any reason — it need not implement the
+comparison at all — and `Fresh` is always a correct answer. `Adopted` is an
+optimisation the protocol makes possible, not an obligation it imposes.
+
 ## 3. Framing
 
 Each WebSocket binary message carries exactly one frame:
@@ -245,8 +303,8 @@ trailing bytes are an error, not padding.
 
 | kind | Name | Direction | Payload |
 |---|---|---|---|
-| `0x01` | `Hello` | C→S | protocol version, viewport, theme mode, density, font scale, granted capabilities, and a session offered back (§4.1) |
-| `0x02` | `Welcome` | S→C | negotiated version, session id, whether the offered session was resumed (§4.1) |
+| `0x01` | `Hello` | C→S | protocol version, viewport, theme mode, density, font scale, granted capabilities, and what the client brings — a session (§4.1) or a tree (§2.6) |
+| `0x02` | `Welcome` | S→C | negotiated version, session id, and how the session starts — fresh, resumed (§4.1) or adopted (§2.6) |
 | `0x03` | `Batch` | S→C | a sequence of ops (§02 wire format) |
 | `0x04` | `Event` | C→S | node id, event kind, payload |
 | `0x05` | `Ack` | C→S | last applied batch sequence number |
@@ -308,24 +366,27 @@ and shows that it is doing so (§4).
 ```
 resume := 0x00                       -- nothing; a first socket
         | 0x01 session:16  acked:varint
+        | 0x02 tree:32                -- a tree fetched over §2.4, not a session
 ```
 
 `acked` is the highest batch sequence the client has applied. The server
 answers in `Welcome`:
 
-- **`resumed = 1`** — the session named is still here, nothing else is on
+(`0x02` is §2.6's; the rest of this section is about `0x01`.)
+
+- **`start = Resumed`** — the session named is still here, nothing else is on
   it, and the server can still send everything after `acked`. The session
   id MUST be the one the client offered. The client keeps its tree, its
   tables, its focus and what was typed into it; the server then sends the
   batches after `acked`, in order, and the session goes on.
-- **`resumed = 0`** — a session that starts empty, whether or not one was
+- **`start = Fresh`** — a session that starts empty, whether or not one was
   offered. A client that was holding a tree MUST discard it, along with its
   tables and everything keyed to them, before it applies the `Mount` that
   follows. This is also every first `Hello`'s answer.
 
 A client MUST believe that answer over its own memory: a tree kept against a
 server that has forgotten the session would answer clicks the server cannot
-place. A `Welcome` with `resumed = 1` naming a session the client did not
+place. A `Welcome` with `start = Resumed` naming a session the client did not
 offer is a protocol error.
 
 A server decides for itself how long a session outlives its socket and how

@@ -46,7 +46,7 @@ fn tree_with(props: Vec<(u32, Value)>, atoms: &[&str], clickable: bool, kind: No
 
 fn snap(batch: Batch) -> AccessSnapshot {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     d.handle_frame(Frame::Batch(batch));
     let _ = d.paint(400, 300);
     d.access_snapshot()
@@ -215,7 +215,7 @@ fn a_field_that_is_disabled_is_not_focusable() {
 #[test]
 fn an_assistive_technologys_click_still_reaches_the_handler() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     d.handle_frame(Frame::Batch(tree_with(vec![(1, Value::Str("check_box".into())), (2, Value::Bool(false))], &["role", "checked"], true, NodeKind::Box, Some("Ship it"))));
     let _ = d.paint(400, 300);
     let snapshot = d.access_snapshot();
@@ -237,7 +237,7 @@ fn a_row_that_can_be_moved_offers_the_two_moves_where_there_is_somewhere_to_go()
     const A_ACCEPTS: u32 = 31;
     const A_GRAB: u32 = 32;
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.props.push((A_ACCEPTS, Value::Bool(true)));
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 3 });

@@ -169,6 +169,9 @@ pub enum Request {
     },
     /// Change the grant before the session opens.
     Grant(u32),
+    /// Name the tree just fed in as one fetched over HTTPS (01 §2.6), so a
+    /// later `Hello` can offer its hash instead of a session.
+    Fetched([u8; 32]),
     /// End the session with a reason, and show it. The window uses this
     /// where it refuses to open one at all — a manifest that did not check
     /// out — so that the reason is on the glass and not only on a stderr
@@ -298,6 +301,10 @@ impl Request {
             Request::Grant(g) => {
                 w.u8(1);
                 w.u32(*g);
+            }
+            Request::Fetched(tree) => {
+                w.u8(26);
+                w.bytes(tree);
             }
             Request::Hello => w.u8(2),
             Request::Frame(b) => {
@@ -435,6 +442,7 @@ impl Request {
             0 => Request::Config { w: r.f32()?, h: r.f32()?, scale: r.f32()?, granted: r.u32()? },
             1 => Request::Grant(r.u32()?),
             2 => Request::Hello,
+            26 => Request::Fetched(r.bytes()?.try_into().map_err(|_| "a tree hash is thirty-two bytes")?),
             3 => Request::Frame(r.bytes()?.to_vec()),
             4 => Request::Input(get_input(&mut r)?),
             5 => Request::AssetReady(r.hash()?, r.bytes()?.to_vec()),
@@ -1435,6 +1443,10 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.scan_ended(token);
                         Payload::None
                     }
+                    Request::Fetched(tree) => {
+                        d.fetched_tree(tree);
+                        Payload::None
+                    }
                     Request::Grant(g) => {
                         d.grant(g);
                         Payload::None
@@ -2188,6 +2200,14 @@ impl Backend {
         self.with_local(|d| d.grant(granted));
         self.with_worker(|w| {
             w.call(&Request::Grant(granted));
+        });
+    }
+
+    /// Name the tree just fed in as one fetched over HTTPS (01 §2.6).
+    pub fn fetched_tree(&mut self, tree: [u8; 32]) {
+        self.with_local(|d| d.fetched_tree(tree));
+        self.with_worker(|w| {
+            w.call(&Request::Fetched(tree));
         });
     }
 

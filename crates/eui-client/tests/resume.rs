@@ -24,7 +24,7 @@ fn tree(seq: u64) -> Batch {
 
 fn mounted(session: [u8; 16]) -> Driver {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session, resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session, start: Start::Fresh })).is_empty());
     assert_eq!(d.handle_frame(Frame::Batch(tree(1))), vec![Frame::Ack { seq: 1 }]);
     d
 }
@@ -40,7 +40,7 @@ fn the_first_hello_offers_nothing() {
 fn a_later_hello_offers_the_session_and_the_last_batch_applied() {
     let d = mounted([5; 16]);
     let Frame::Hello(h) = d.hello() else { panic!() };
-    assert_eq!(h.resume, Some(Resume { session: [5; 16], acked: 1 }));
+    assert_eq!(h.resume, Some(Offer::Resume(Resume { session: [5; 16], acked: 1 })));
 }
 
 /// The server is the one that decides. A client that kept its tree against
@@ -50,7 +50,7 @@ fn a_later_hello_offers_the_session_and_the_last_batch_applied() {
 fn a_welcome_that_did_not_resume_takes_the_tree_with_it() {
     let mut d = mounted([5; 16]);
     assert!(d.session().lookup(2).is_some());
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [6; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [6; 16], start: Start::Fresh })).is_empty());
     assert!(d.session().lookup(2).is_none(), "the tree from the old session is gone");
     assert_eq!(d.acked(), 0, "and so is what it had applied");
     // The new session mounts from seq 1 again, which the old `acked`
@@ -62,7 +62,7 @@ fn a_welcome_that_did_not_resume_takes_the_tree_with_it() {
 #[test]
 fn a_resume_of_a_session_the_client_never_had_ends_it() {
     let mut d = mounted([5; 16]);
-    let out = d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [9; 16], resumed: true }));
+    let out = d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [9; 16], start: Start::Resumed }));
     assert!(matches!(&out[0], Frame::Error { code: 103, .. }), "{out:?}");
     assert!(d.closed().is_some());
 }
@@ -161,7 +161,7 @@ fn a_session_survives_the_socket_it_was_opened_on() {
 
     // A second socket, offering the session back.
     let Frame::Hello(h) = driver.hello() else { panic!() };
-    assert_eq!(h.resume, Some(Resume { session, acked: driver.acked() }));
+    assert_eq!(h.resume, Some(Offer::Resume(Resume { session, acked: driver.acked() })));
     let (conn, wake) = dial(&url, &driver);
 
     // The tree was never torn down, and the count is where it was: a

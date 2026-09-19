@@ -559,12 +559,13 @@ fn a_hello_with_an_unknown_resume_tag_is_refused() {
     assert!(matches!(frame_err(&framed(0x01, w.as_slice())), E::UnknownTag("resume")));
 }
 
-/// And a `Welcome` either resumed one or it did not.
+/// And a `Welcome` starts fresh, resumed, or adopted (01 §2.6) — a fourth
+/// value is refused rather than taken for one of the three.
 #[test]
-fn a_welcome_with_an_unknown_resumed_byte_is_refused() {
+fn a_welcome_with_an_unknown_start_byte_is_refused() {
     let mut w = Writer::new();
     w.varint32(1).raw(&[0u8; 16]).u8(2);
-    assert!(matches!(frame_err(&framed(0x02, w.as_slice())), E::UnknownTag("resumed")));
+    assert!(matches!(frame_err(&framed(0x02, w.as_slice())), E::UnknownTag("start")));
 }
 
 /// A `Hello` that ends before its resume flag is truncated, not tolerated.

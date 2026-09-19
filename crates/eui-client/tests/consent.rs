@@ -93,7 +93,7 @@ fn the_sheet_can_be_answered_on_a_hidpi_window() {
 /// mounting anything.
 #[test]
 fn a_session_can_start_once_the_sheet_has_been_answered() {
-    use eui_proto::{AlignItems, Batch, Display, FlatNode, Frame, NodeKind, Op, StyleRecord, Subtree, TextRef, Welcome};
+    use eui_proto::{AlignItems, Batch, Display, FlatNode, Frame, NodeKind, Op, Start, StyleRecord, Subtree, TextRef, Welcome};
 
     let mut d = driver();
     d.ask_consent(caps::CAMERA | caps::FS_PICK, "demo-app");
@@ -101,7 +101,7 @@ fn a_session_can_start_once_the_sheet_has_been_answered() {
     assert_eq!(d.take_consent(), Some(caps::CAMERA | caps::FS_PICK));
 
     // What the window does next: dial, and the server says hello.
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [7; 16], start: Start::Fresh })).is_empty());
 
     // An application's first batch, using the same low ids the sheet did.
     let mut tree = Subtree::default();

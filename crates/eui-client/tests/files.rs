@@ -74,7 +74,7 @@ fn tree() -> Batch {
 
 fn driver(granted: u32) -> Driver {
     let mut d = Driver::new(400.0, 300.0, 1.0, granted);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [1; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [1; 16], start: Start::Fresh })).is_empty());
     assert_eq!(d.handle_frame(Frame::Batch(tree())), vec![Frame::Ack { seq: 1 }]);
     d
 }

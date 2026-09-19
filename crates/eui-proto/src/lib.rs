@@ -79,7 +79,7 @@ pub mod style;
 pub mod writer;
 
 pub use error::{DecodeError, Result};
-pub use frame::{caps, Chunked, Density, EventFrame, Frame, Hello, Resume, ThemeMode, Transfer, Viewport, Welcome};
+pub use frame::{caps, Chunked, Density, EventFrame, Frame, Hello, Offer, Resume, Start, ThemeMode, Transfer, Viewport, Welcome};
 pub use manifest::{Manifest, Rotation};
 pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
@@ -99,7 +99,17 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
+// 5 carries `Offer::Adopt` and `Start::Adopted` (01 §2.6): a client that
+// fetched a tree over `GET /_eui/view/<component>` can offer its hash, and a
+// server that renders to the same bytes keeps that tree rather than sending
+// it again. Both ride on tag bytes that were previously refused — `Hello`'s
+// resume tag and `Welcome`'s start byte — because neither frame can grow a
+// field: their decoders end in `finish()`, so an appended field is
+// `TrailingBytes` to every peer built before it. A version rather than a
+// silent extension because an old *server* meeting tag `0x02` answers
+// `UnknownTag` and ends the session, which is a dead socket on the one path
+// that exists to make a page cheaper.
 // 4 carries `DefFont` (02 §5) and the open half of `font_family`: roles
 // `2..` are the application's faces. Both are a version for the same reason
 // the `scene` kind was — a client at 3 meets opcode `0x15` as an unknown

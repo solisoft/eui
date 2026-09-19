@@ -300,8 +300,8 @@ impl Sessions {
     /// Take the session a `Hello` offered, if it is still here and nothing
     /// else is on it, and if everything after `acked` can still be replayed.
     /// `None` means the client is told to start again.
-    fn take(&self, resume: Option<Resume>) -> Option<([u8; 16], Held, Vec<Vec<u8>>)> {
-        let r = resume?;
+    fn take(&self, resume: Option<Offer>) -> Option<([u8; 16], Held, Vec<Vec<u8>>)> {
+        let Some(Offer::Resume(r)) = resume else { return None };
         let mut map = self.0.lock().ok()?;
         let held = map.get(&r.session)?;
         // A session with a socket on it is not one to hand over: two
@@ -353,11 +353,43 @@ pub async fn serve_session(stream: TcpStream, sessions: Sessions) {
         None => ([Sessions::fresh_id()][0], Held { counter: Counter::default(), sent: std::collections::VecDeque::new(), idle_since: None }, Vec::new()),
     };
     let resumed = !replay.is_empty() || held.counter.seq > 0;
-    let welcome = Frame::Welcome(Welcome { version: PROTOCOL_VERSION, session: id, resumed });
+
+    // 01 §2.6: the client fetched this tree over HTTPS and is offering its
+    // hash rather than a session. Render what would have been sent, and if it
+    // comes out as the very bytes the client already has, keep them — the
+    // reader's scroll, focus and caret survive, and nothing goes on the wire
+    // but the `Welcome`. One render either way: on a miss the frames just
+    // rendered are sent as they are, rather than rendering a second time.
+    let adopting = match hello.resume {
+        Some(Offer::Adopt(offered)) if !resumed => {
+            let batch = Frame::Batch(held.counter.first()).encode();
+            // The tree's identity is the batches alone. The `Welcome` is not
+            // in it, because this one carries a session handle and the one
+            // the client holds carries sixteen zero bytes.
+            let mine: [u8; 32] = *blake3::hash(&batch).as_bytes();
+            held.sent.push_back((held.counter.seq, batch.clone()));
+            Some((mine == offered, batch))
+        }
+        _ => None,
+    };
+    let start = match (&adopting, resumed) {
+        (Some((true, _)), _) => Start::Adopted,
+        (_, true) => Start::Resumed,
+        _ => Start::Fresh,
+    };
+    let welcome = Frame::Welcome(Welcome { version: PROTOCOL_VERSION, session: id, start });
     if sink.send(Message::Binary(welcome.encode())).await.is_err() {
         return;
     }
-    let mut first: Vec<Vec<u8>> = if resumed {
+    let mut first: Vec<Vec<u8>> = if let Some((matched, batch)) = adopting {
+        // Adopted: the client has these bytes already. Missed: it does not,
+        // and here they are.
+        if matched {
+            Vec::new()
+        } else {
+            vec![batch]
+        }
+    } else if resumed {
         replay
     } else {
         let batch = Frame::Batch(held.counter.first()).encode();

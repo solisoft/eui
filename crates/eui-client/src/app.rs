@@ -1104,6 +1104,11 @@ impl Tab {
         for frame in view.frames {
             let _ = self.backend.frame(frame);
         }
+        // What the tree is, so that a socket opened later can be told and the
+        // server may keep it rather than send it again (01 §2.6). Until this
+        // existed the hash was computed, stored on the tab and read by
+        // nobody.
+        self.backend.fetched_tree(view.tree);
         // The address answered, which is what `offline` later means by it.
         self.answered = true;
         self.link = Link::Static;

@@ -10,12 +10,12 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 
 use eui_client::transport::{fetch_view, ViewError, VIEW_MEDIA_TYPE};
-use eui_proto::{Batch, Frame, Op, StyleRecord, Welcome};
+use eui_proto::{Batch, Frame, Op, Start, StyleRecord, Welcome};
 
 /// The bytes a server answers with: a `Welcome` naming no session, then
 /// batches.
 fn frames() -> (Vec<u8>, usize) {
-    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], resumed: false }).encode();
+    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], start: Start::Fresh }).encode();
     let one = Frame::Batch(Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: StyleRecord::default() }, Op::DefColor { id: 1, rgba: 0x1122_3344 }] }).encode();
     let two = Frame::Batch(Batch { seq: 2, ops: vec![Op::DefColor { id: 2, rgba: 0x5566_7788 }] }).encode();
     let mut body = welcome;
@@ -108,7 +108,7 @@ fn a_truncated_body_is_refused_whole_rather_than_applied_in_part() {
 #[test]
 fn a_welcome_on_its_own_is_not_a_render() {
     // Nothing to mount. Better to dial than to show an empty window.
-    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], resumed: false }).encode();
+    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], start: Start::Fresh }).encode();
     let url = serve("200 OK", VIEW_MEDIA_TYPE, welcome, None);
     assert!(matches!(fetch_view(&url, "demo", 4, 1000, None), Err(ViewError::Refused(_))));
 }

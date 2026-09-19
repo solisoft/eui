@@ -70,7 +70,7 @@ fn board(rows: u32, handles: bool) -> Batch {
 
 fn open(rows: u32, handles: bool) -> Driver {
     let mut d = Driver::new(400.0, 600.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh })).is_empty());
     assert_eq!(d.handle_frame(Frame::Batch(board(rows, handles))), vec![Frame::Ack { seq: 1 }]);
     let _ = d.paint(400, 600);
     d
@@ -223,7 +223,7 @@ fn ghosted(hears_drop: bool) -> Driver {
     ];
 
     let mut d = Driver::new(400.0, 600.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh })).is_empty());
     assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 1, ops })), vec![Frame::Ack { seq: 1 }]);
     let _ = d.paint(400, 600);
     d
@@ -497,7 +497,7 @@ fn a_windowed_list_reports_the_row_and_not_the_place_in_the_window() {
     }
 
     let mut d = Driver::new(400.0, 600.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh })).is_empty());
     let ops = vec![
         Op::DefAtom { id: A_DRAG, value: "drag".into() },
         Op::DefAtom { id: A_ACCEPTS, value: "accepts".into() },
@@ -552,7 +552,7 @@ fn a_drag_at_the_foot_of_a_list_carries_the_view_and_reports_once() {
     }
 
     let mut d = Driver::new(400.0, 600.0, 1.0, 0);
-    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false })).is_empty());
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh })).is_empty());
     let mut ops = vec![
         Op::DefAtom { id: A_DRAG, value: "drag".into() },
         Op::DefAtom { id: A_ACCEPTS, value: "accepts".into() },

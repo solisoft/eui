@@ -8,7 +8,7 @@
 use eui_proto::*;
 
 fn body() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], resumed: false }).encode();
+    let welcome = Frame::Welcome(Welcome { version: 4, session: [0u8; 16], start: Start::Fresh }).encode();
     let one = Frame::Batch(Batch { seq: 1, ops: vec![Op::DefColor { id: 1, rgba: 0x1122_3344 }] }).encode();
     let two = Frame::Batch(Batch { seq: 2, ops: vec![Op::DefColor { id: 2, rgba: 0x5566_7788 }] }).encode();
     (welcome, one, two)

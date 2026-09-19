@@ -140,8 +140,8 @@ fn frame_envelope_bytes() {
     assert_eq!(Frame::Upload(Transfer { id: 3, seq: 0, flag: Chunked::More, bytes: vec![1, 2, 3] }).encode(), vec![0x0B, 0x07, 0x03, 0x00, 0x00, 0x03, 1, 2, 3]);
     assert_eq!(Frame::Blob(Transfer { id: 1, seq: 2, flag: Chunked::Last, bytes: Vec::new() }).encode(), vec![0x0C, 0x04, 0x01, 0x02, 0x01, 0x00]);
     // 01 §4.1: the resumed byte is the last of a `Welcome`.
-    assert_eq!(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: true }).encode()[..3], [0x02, 0x12, 0x01]);
-    assert_eq!(*Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: true }).encode().last().unwrap(), 0x01);
+    assert_eq!(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Resumed }).encode()[..3], [0x02, 0x12, 0x01]);
+    assert_eq!(*Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Resumed }).encode().last().unwrap(), 0x01);
 }
 
 /// Colour references: the top bit picks role space or literal space.

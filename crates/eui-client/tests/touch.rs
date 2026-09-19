@@ -19,7 +19,7 @@ const VIEW: u32 = 2;
 
 fn welcomed() -> Driver {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     d
 }
 

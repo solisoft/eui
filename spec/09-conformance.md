@@ -233,6 +233,21 @@ already applied being acked again and **not applied again**. The last drops
 a real socket mid-session and opens another: the tree is still standing, the
 count is where it was, and the session goes on.
 
+### 7.9 Adopting a tree — `crates/eui-client/tests/adopt.rs`
+
+Spec 01 §2.6, seven vectors. A client holding a tree that came over §2.4
+offers **the tree** and not the sixteen zero bytes that body's `Welcome`
+carried; one holding no tree offers nothing. `Adopted` keeps the tree, sends
+nothing back, and leaves a real session behind — so the socket after it
+resumes rather than offering the tree twice. `Fresh` tears the tree down
+**before** the mount that follows, which is the vector that matters: a fresh
+mount numbers from 1 again, so a client that kept its acked sequence would
+drop it as one already applied and show an empty window with nothing in the
+log. `Adopted` to a client that offered nothing is a protocol error. And the
+two tag bytes are checked for what they are — extension points on frames that
+cannot grow a field — by giving `start` a fourth value and requiring
+`UnknownTag`.
+
 ### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
 
 §6.1's declared half: a `role` prop beating the kind it would have been

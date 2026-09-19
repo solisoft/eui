@@ -129,7 +129,7 @@ fn the_store_asks_once_and_remembers_failures() {
 fn an_image_node_is_fetched_then_sized_then_painted() {
     let h = hash_of(AVATAR);
     let mut d = Driver::new(300.0, 200.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
     // No explicit size: the image takes its intrinsic size once fetched.
@@ -240,7 +240,7 @@ fn what_is_transparent_lends_no_colour_to_what_is_not() {
 fn a_scene_asks_for_its_shader_and_its_mesh() {
     let (shader, mesh) = ([5u8; 32], [6u8; 32]);
     let mut d = Driver::new(300.0, 200.0, 1.0, caps::SCENE);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
@@ -273,7 +273,7 @@ fn a_scene_asks_for_its_shader_and_its_mesh() {
 fn a_scene_asks_for_nothing_without_the_grant() {
     let (shader, mesh) = ([5u8; 32], [6u8; 32]);
     let mut d = Driver::new(300.0, 200.0, 1.0, 0);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
@@ -332,7 +332,7 @@ struct VOut { @builtin(position) pos: vec4<f32> }
     let hash = hash_of(&asset);
 
     let mut d = Driver::new(64.0, 64.0, 1.0, caps::SCENE);
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Scene, id: 2, style: 1, key: 0, text: None, props: (0, 2), handlers: (0, 0), child_count: 0 });
@@ -388,7 +388,7 @@ const A_FACE: &[u8] = include_bytes!("../../eui-text/fonts/NotoSansSymbols-Regul
 /// `hash`. A row that starts its children rather than stretching them is
 /// what makes the text's own measured width visible in its rect.
 fn text_in_role(d: &mut Driver, role: u8, hash: Option<[u8; 32]>) {
-    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 2, key: 0, text: Some(TextRef::Inline("Hamburgefonstiv".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });

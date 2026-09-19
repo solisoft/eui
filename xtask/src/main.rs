@@ -215,7 +215,7 @@ fn bench() -> Vec<Row> {
     // --- the full client driver: real text engine, paint ------------------
     let before = rss_kb();
     let mut driver = Driver::new(800.0, 600.0, 1.0, 0);
-    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     driver.handle_frame(Frame::Batch(table_batch(10_000)));
     let s = Instant::now();
     let list = driver.paint(800, 600);
@@ -311,7 +311,7 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) normal: vec3<f32> 
     // page around it.
     let paint_of = |with_scene: bool| -> Duration {
         let mut driver = Driver::new(800.0, 600.0, 1.0, eui_proto::caps::SCENE);
-        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
         let mut tree = Subtree::default();
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: u32::from(with_scene) });
         if with_scene {
@@ -371,7 +371,7 @@ fn prose_batch() -> Batch {
 fn prose_rows() -> Vec<Row> {
     let mut rows = Vec::new();
     let mut driver = Driver::new(800.0, 600.0, 1.0, 0);
-    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+    driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
     driver.handle_frame(Frame::Batch(prose_batch()));
     let s = Instant::now();
     let list = driver.paint(800, 600);
@@ -556,7 +556,7 @@ fn through_a_worker(in_process: Duration) -> Vec<Row> {
         rows.push(Row { what: "worker: no worker started, nothing to measure", value: "skipped".into(), budget: "info", ok: true });
         return rows;
     }
-    backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }).encode());
+    backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }).encode());
     backend.frame(Frame::Batch(table_batch(10_000)).encode());
     let s = Instant::now();
     let (list, _) = backend.paint(800, 600);

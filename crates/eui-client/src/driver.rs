@@ -10,8 +10,8 @@ use eui_audio::Control;
 use eui_layout::{Env, FontSpec, Layout, Rect, Size, TextMeasurer, TextMetrics};
 use eui_proto::limits::{DEFAULT_UPLOAD_BYTES, MAX_SAVE_BYTES, MAX_TRANSFER_CHUNK_BYTES, MAX_TREE_DEPTH, MAX_UPLOAD_BYTES};
 use eui_proto::{
-    caps, AlignItems, Batch, Chunked, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Op, Resume, StyleRecord, Subtree,
-    TextAlign, TextRef, ThemeMode, Transfer, Value, Viewport, PROTOCOL_VERSION,
+    caps, AlignItems, Batch, Chunked, ColorRef, Cursor, Dim, Display, EventFrame, EventKind, FlatNode, FontWeight, Frame, Handler, Hello, Justify, NodeKind, Offer, Op, Resume, Start, StyleRecord,
+    Subtree, TextAlign, TextRef, ThemeMode, Transfer, Value, Viewport, PROTOCOL_VERSION,
 };
 use eui_render::{colors_of, paint, scrollbar_thumb, Atlas, Colors, DrawList, Editing, Glide, GpuAnim, ImageAtlas, PaintCache, Scene, SCROLLBAR_WIDTH};
 
@@ -1190,7 +1190,18 @@ pub struct Driver {
     welcomed: bool,
     /// The session the server named in `Welcome`, and what to offer it if
     /// the socket breaks (spec 01 §4.1).
+    ///
+    /// `None` after a one-shot render, whose `Welcome` names no session:
+    /// there is nothing to resume, and offering the sixteen zero bytes it
+    /// carries would be claiming a session nobody has.
     session_id: Option<[u8; 16]>,
+    /// The BLAKE3 of the batches this tree was built from, when it arrived as
+    /// a render over HTTPS rather than down a socket (01 §2.6).
+    ///
+    /// It is what a later `Hello` offers in place of a session, and it is
+    /// cleared by the answer either way: taken, there is a session now;
+    /// refused, the tree it named is gone.
+    fetched: Option<[u8; 32]>,
     /// The last batch sequence applied, which is also the last acked.
     acked: u64,
     /// Dialogs the tree asked for that the window has not been handed yet.
@@ -1366,6 +1377,7 @@ impl Driver {
         let viewer = Viewer::default();
         let resolved = theme.resolve(viewer);
         Self {
+            fetched: None,
             session: Session::new(),
             layout: Layout::new(),
             theme,
@@ -1509,14 +1521,40 @@ impl Driver {
         self.fix
     }
 
+    /// Say that the tree just fed in came as a render over HTTPS, and name
+    /// it (01 §2.6).
+    ///
+    /// The window calls this after feeding the frames of a fetched body. It
+    /// is what a later `Hello` offers, so that a server which renders to the
+    /// same bytes can keep this tree rather than send it again — and with it
+    /// the reader's scroll, focus and caret.
+    pub fn fetched_tree(&mut self, tree: [u8; 32]) {
+        self.fetched = Some(tree);
+    }
+
     /// The opening frame.
     ///
-    /// On the first socket it offers nothing. On a later one — the client
-    /// reconnecting after the network went away — it offers the session it
-    /// still holds a tree for and the last batch it applied (spec 01 §4.1).
-    /// Whether that offer is taken is the server's to say.
+    /// On the first socket it offers nothing. On a later one it offers
+    /// whichever of two things this client actually has.
+    ///
+    /// A **session** (01 §4.1) — the network went away and the tree is still
+    /// here, so the session id and the last batch applied go back, and the
+    /// server says whether it still has the other half.
+    ///
+    /// A **tree** (01 §2.6) — the page came over `GET /_eui/view/<component>`
+    /// and there is no session at all, so what goes back is the hash of the
+    /// batches, and the server may recognise its own render rather than send
+    /// it twice. The two are never both true: a tree fetched over HTTPS has
+    /// no session id to offer, which is exactly why it offers a hash instead.
+    ///
+    /// Whether either offer is taken is the server's to say.
     pub fn hello(&self) -> Frame {
-        let resume = self.session_id.filter(|_| self.session.root().is_some()).map(|session| Resume { session, acked: self.acked });
+        let has_tree = self.session.root().is_some();
+        let resume = match (self.session_id.filter(|_| has_tree), self.fetched.filter(|_| has_tree)) {
+            (Some(session), _) => Some(Offer::Resume(Resume { session, acked: self.acked })),
+            (None, Some(tree)) => Some(Offer::Adopt(tree)),
+            (None, None) => None,
+        };
         Frame::Hello(Hello { version: PROTOCOL_VERSION, viewport: self.viewport(), granted: self.granted, resume })
     }
 
@@ -1542,6 +1580,8 @@ impl Driver {
     /// too and re-reading bytes the process still holds buys nothing.
     fn start_over(&mut self) {
         self.session = Session::new();
+        // The tree that hash named is the tree being thrown away.
+        self.fetched = None;
         self.text.clear_roles();
         self.layout = Layout::new();
         self.focused = None;
@@ -1640,15 +1680,44 @@ impl Driver {
                 // client offered is still there, and the client believes
                 // it: a tree kept against a server that has forgotten it
                 // would answer clicks the server cannot place.
-                if w.resumed {
-                    if self.session_id != Some(w.session) {
-                        self.closed = Some(Close::Protocol("resumed a session the client did not offer"));
-                        return vec![Frame::Error { code: 103, message: "resumed a session the client did not offer".into() }];
+                match w.start {
+                    Start::Resumed => {
+                        if self.session_id != Some(w.session) {
+                            self.closed = Some(Close::Protocol("resumed a session the client did not offer"));
+                            return vec![Frame::Error { code: 103, message: "resumed a session the client did not offer".into() }];
+                        }
                     }
-                } else if self.welcomed {
-                    self.start_over();
+                    // 01 §2.6. The tree this client fetched over HTTPS is the
+                    // tree this session starts from: no `Mount` follows, and
+                    // the scroll, focus and caret the reader had are kept
+                    // precisely by not tearing them down. The session id is
+                    // the server's, and it is a *new* one — the sixteen zero
+                    // bytes a one-shot render carries name no session, so
+                    // this is the first real one and there is nothing to
+                    // check it against.
+                    Start::Adopted => {
+                        if self.fetched.is_none() || !self.welcomed {
+                            self.closed = Some(Close::Protocol("adopted a tree the client did not offer"));
+                            return vec![Frame::Error { code: 103, message: "adopted a tree the client did not offer".into() }];
+                        }
+                        self.fetched = None;
+                    }
+                    // Every first `Welcome`, and every one that refused what
+                    // was offered. `start_over` is what makes the `Mount`
+                    // that follows land on an empty session — without it the
+                    // fresh batch is dropped as one already applied, because
+                    // its sequence starts again at 1.
+                    Start::Fresh => {
+                        if self.welcomed {
+                            self.start_over();
+                        }
+                        self.fetched = None;
+                    }
                 }
-                self.session_id = Some(w.session);
+                // Sixteen zero bytes name no session (01 §2.4): a one-shot
+                // render is everyone's, so there is nothing here to resume
+                // and nothing to offer back.
+                self.session_id = (w.session != [0u8; 16]).then_some(w.session);
                 self.welcomed = true;
                 Vec::new()
             }

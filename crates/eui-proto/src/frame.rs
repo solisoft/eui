@@ -190,6 +190,56 @@ pub struct Resume {
     pub acked: u64,
 }
 
+/// What a client brings to a socket that is not its first.
+///
+/// Two different claims, and the difference matters. A [`Resume`] names a
+/// *session* the server may still be holding — state, tables, a tree — and is
+/// a bearer credential for it. An [`Self::Adopt`] names only a **tree**: the
+/// client fetched one over `GET /_eui/view/<component>` (01 §2.4), there is no
+/// session yet, and it is saying "if your first render comes out as these
+/// very bytes, do not send them to me again". Nothing is claimed and nothing
+/// is owed; the worst a wrong hash can do is cost a `Mount` that would have
+/// been sent anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offer {
+    /// `0x01` — a session the server may still have.
+    Resume(Resume),
+    /// `0x02` — the BLAKE3 of the `Batch` frames this client already applied.
+    ///
+    /// Deliberately not the hash of the body they arrived in: the `Welcome`
+    /// differs between the two roads a tree can travel — sixteen zero bytes
+    /// over HTTP, a session handle on a socket — so hashing the whole body
+    /// would name something no socket could ever agree to.
+    Adopt([u8; 32]),
+}
+
+/// How a session begins, in the server's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Start {
+    /// `0x00` — an empty session. A client holding a tree MUST discard it.
+    #[default]
+    Fresh,
+    /// `0x01` — the session the `Hello` named is still here.
+    Resumed,
+    /// `0x02` — the tree the client offered is the tree this session starts
+    /// from. No `Mount` follows, sequence numbers carry on from where the
+    /// one-shot render left them, and the client keeps its scroll, its focus
+    /// and its caret.
+    Adopted,
+}
+
+impl Start {
+    /// Decode.
+    pub const fn from_u8(v: u8) -> Result<Self> {
+        match v {
+            0 => Ok(Self::Fresh),
+            1 => Ok(Self::Resumed),
+            2 => Ok(Self::Adopted),
+            _ => Err(DecodeError::UnknownTag("start")),
+        }
+    }
+}
+
 /// The client's opening frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hello {
@@ -199,9 +249,9 @@ pub struct Hello {
     pub viewport: Viewport,
     /// Capabilities the user has granted this application.
     pub granted: u32,
-    /// A session this client is trying to pick up again, if this is not
-    /// its first socket.
-    pub resume: Option<Resume>,
+    /// What this client brings, if this is not its first socket: a session
+    /// to pick up, or a tree it already has.
+    pub resume: Option<Offer>,
 }
 
 /// The server's answer.
@@ -216,7 +266,7 @@ pub struct Welcome {
     /// every batch after `acked`. False — including for a first `Hello` —
     /// means a session that starts empty, and a client with a tree from
     /// before MUST discard it.
-    pub resumed: bool,
+    pub start: Start,
 }
 
 /// What one chunk of a transfer says about the chunks after it.
@@ -389,7 +439,8 @@ impl Frame {
                 }
                 let resume = match p.u8()? {
                     0 => None,
-                    1 => Some(Resume { session: p.array::<16>()?, acked: p.varint()? }),
+                    1 => Some(Offer::Resume(Resume { session: p.array::<16>()?, acked: p.varint()? })),
+                    2 => Some(Offer::Adopt(p.array::<32>()?)),
                     _ => return Err(DecodeError::UnknownTag("resume")),
                 };
                 Self::Hello(Hello { version, viewport, granted, resume })
@@ -397,12 +448,8 @@ impl Frame {
             0x02 => {
                 let version = p.varint32()?;
                 let session = p.array::<16>()?;
-                let resumed = match p.u8()? {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(DecodeError::UnknownTag("resumed")),
-                };
-                Self::Welcome(Welcome { version, session, resumed })
+                let start = Start::from_u8(p.u8()?)?;
+                Self::Welcome(Welcome { version, session, start })
             }
             0x03 => Self::Batch(Batch::decode(&mut p)?),
             0x04 => Self::Event(EventFrame { node: p.varint32()?, event: EventKind::from_u8(p.u8()?)?, name: p.varint32()?, payload: Value::decode(&mut p)? }),
@@ -435,8 +482,11 @@ impl Frame {
                 h.viewport.encode(&mut body);
                 body.varint32(h.granted);
                 match &h.resume {
-                    Some(r) => {
+                    Some(Offer::Resume(r)) => {
                         body.u8(1).raw(&r.session).varint(r.acked);
+                    }
+                    Some(Offer::Adopt(tree)) => {
+                        body.u8(2).raw(tree);
                     }
                     None => {
                         body.u8(0);
@@ -445,7 +495,7 @@ impl Frame {
                 0x01
             }
             Self::Welcome(v) => {
-                body.varint32(v.version).raw(&v.session).u8(u8::from(v.resumed));
+                body.varint32(v.version).raw(&v.session).u8(v.start as u8);
                 0x02
             }
             Self::Batch(b) => {

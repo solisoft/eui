@@ -36,10 +36,10 @@ fn every_frame_kind() {
         version: PROTOCOL_VERSION,
         viewport: Viewport::default(),
         granted: caps::FS_PICK | caps::FS_SAVE,
-        resume: Some(Resume { session: [9; 16], acked: 4_294_967_297 }),
+        resume: Some(Offer::Resume(Resume { session: [9; 16], acked: 4_294_967_297 })),
     }));
-    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: false }));
-    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], resumed: true }));
+    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], start: Start::Fresh }));
+    roundtrip(&Frame::Welcome(Welcome { version: 1, session: [7; 16], start: Start::Resumed }));
     // Both directions of a transfer (01 §6), and all three flags.
     roundtrip(&Frame::Upload(Transfer { id: 3, seq: 0, flag: Chunked::More, bytes: vec![1, 2, 3] }));
     roundtrip(&Frame::Upload(Transfer { id: 3, seq: 1, flag: Chunked::Last, bytes: Vec::new() }));

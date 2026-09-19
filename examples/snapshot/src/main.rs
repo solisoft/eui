@@ -14,7 +14,7 @@
 
 use eui_client::driver::SceneAsset;
 use eui_client::{Driver, Input};
-use eui_proto::{Frame, ThemeMode, Welcome};
+use eui_proto::{Frame, Start, ThemeMode, Welcome};
 use eui_render::{Renderer, SessionTextures};
 
 /// Hand the renderer whatever a scene is waiting for.
@@ -91,7 +91,7 @@ fn main() {
     for (name, mode, clicks) in [("light-0", ThemeMode::Light, 0), ("light-3", ThemeMode::Light, 3), ("dark-3", ThemeMode::Dark, 3)] {
         let mut driver = Driver::new(w, h, scale, granted());
         let mut counter = counter_server::Counter::default();
-        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], resumed: false }));
+        driver.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
         let first = counter.first();
         let wire = Frame::Batch(first.clone()).encode().len();
         driver.handle_frame(Frame::Batch(first));
