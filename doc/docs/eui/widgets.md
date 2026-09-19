@@ -14,7 +14,7 @@ shipping a new client.
 
 ## Tier 0 — primitives
 
-Implemented in the client. **Sixteen kinds, and the set is closed.** This is
+Implemented in the client. **Seventeen kinds, and the set is closed.** This is
 the entire vocabulary the protocol can express.
 
 | Kind | What it is |
@@ -65,7 +65,12 @@ nested, keyboard-movable), `resizable`, `stepper`
 
 **Data.** `table` (sortable, virtualised), `data_grid` (editable cells, header outside the scroll), `multi_select_list`
 and `multi_select_window` (tickable rows, select-all across the whole count rather than the window), `list_item`, `chart`
-(line, bar, area, donut, drawn on `canvas`), `stat`, `code_block`, `markdown`
+(line, bar, area, donut, drawn on `canvas`), `stat`, `code_block`
+
+**Markdown.** `markdown` and `markdown_file` (a document as a tree of nodes),
+`md_doc_rows` (the same as rows for a windowed list), `markdown_editor` and
+`markdown_editor_step` (a block editor that writes one, with pictures and
+files), and the pure `md_edit_*` model the two of them move
 
 **Feedback.** `toast`, `banner`, `progress`, `spinner`, `skeleton`,
 `empty_state`, `avatar`, `badge`, `chip`

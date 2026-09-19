@@ -1227,7 +1227,7 @@ impl Painter<'_, '_> {
             NodeKind::Canvas => self.canvas(node, rect, &style, opacity),
             NodeKind::Icon if !virtual_ => self.icon(node, rect, &style, fg, opacity),
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea if !virtual_ => {
-                self.text(ix, rect, &style, fg, opacity);
+                self.text(ix, rect, &style, fg, opacity, record.text_decoration);
             }
             _ => {}
         }
@@ -1393,7 +1393,10 @@ impl Painter<'_, '_> {
         }
     }
 
-    fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32) {
+    /// `decoration` is 02 §3's `text_decoration` byte, which the layout's
+    /// `Style` has no field for — it changes nothing about a box, only what
+    /// is drawn over the run.
+    fn text(&mut self, ix: NodeIx, rect: Rect, style: &Style, fg: [f32; 4], opacity: f32, decoration: u8) {
         let Some(node) = self.scene.session.node(ix) else {
             return;
         };
@@ -1523,6 +1526,47 @@ impl Painter<'_, '_> {
                 self.animate(&mut q, Some(from), None);
             }
             built.push(q);
+        }
+        // 02 §3, offset 55: `text_decoration`, bit 0 underline and bit 1
+        // strikethrough. One rule per line, grouped from the same glyph runs
+        // the selection above is measured from — so a decoration on text
+        // that wrapped underlines each line to its own end rather than
+        // drawing one bar the width of the box.
+        //
+        // The two offsets are fractions of the font size rather than font
+        // metrics: the shaper hands back a baseline and an advance and not
+        // an underline position, and a rule a fifth of the size below the
+        // baseline is where every face puts one to within a pixel at the
+        // sizes this scale reaches.
+        if decoration != 0 && !shaped.glyphs.is_empty() {
+            let mut runs: Vec<(f32, f32, f32)> = Vec::new(); // baseline, min x, max x
+            for g in &shaped.glyphs {
+                match runs.iter_mut().find(|r| r.0 == g.y) {
+                    Some(r) => {
+                        r.1 = r.1.min(g.x);
+                        r.2 = r.2.max(g.x + g.w);
+                    }
+                    None => runs.push((g.y, g.x, g.x + g.w)),
+                }
+            }
+            // One device pixel at 1x, growing with the scale, exactly as the
+            // caret does: a rule thinner than that is lost on a 2x screen and
+            // one thicker reads as a strike where an underline was meant.
+            let thick = scale.round().max(1.0);
+            let size = style.font.size;
+            for (y, x0, x1) in runs {
+                for (on, drop) in [(decoration & 1 != 0, size * 0.16), (decoration & 2 != 0, -size * 0.28)] {
+                    if !on {
+                        continue;
+                    }
+                    let rect = [((origin_x + x0) * scale).round(), ((origin_y + y + drop) * scale).round(), ((x1 - x0) * scale).round().max(1.0), thick];
+                    let mut rule = Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
+                    if let Some(from) = self.own.and_then(|o| o.fg_from) {
+                        self.animate(&mut rule, Some(from), None);
+                    }
+                    built.push(rule);
+                }
+            }
         }
         for &q in &built {
             self.push(q);

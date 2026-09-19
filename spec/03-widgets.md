@@ -64,7 +64,17 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    An `icon` with no width or height of its own takes a square from the
    font size in force, so an icon set beside a label needs no measurement
    from the server.
-4. Children paint in order; `stack` children in ascending `z`. An `overlay`
+4. If `s.text_decoration` is non-zero, `text`, `input` and `textarea` draw a
+   rule in the same colour the glyphs took, **one per line of the shaped
+   run** and no wider than the glyphs on that line — so a decoration on text
+   that wrapped underlines each line to its own end rather than drawing one
+   bar the width of the box. Bit 0 puts it below the baseline, bit 1 through
+   the middle of the x-height, and both together draw both. It is one device
+   pixel at 1× and grows with the scale, exactly as the caret does. The
+   offsets are the client's: the shaper hands back a baseline and an advance,
+   not an underline position, and a server that wanted a rule somewhere
+   precise would be asking for a layout it cannot see.
+5. Children paint in order; `stack` children in ascending `z`. An `overlay`
    paints in the **top layer**: after every other node in the tree, overlays
    among themselves in tree order, clipped by the window and by no ancestor —
    so a dialog inside a card and a popover inside a scroller are both whole.
@@ -83,7 +93,7 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    control is a press on the widget. Were the rule the overlay alone, a
    select would shut on the press and its own click would open it again, and
    no select could ever be closed by clicking it.
-5. `scroll` and `list` clip their children to their border box, and one
+6. `scroll` and `list` clip their children to their border box, and one
    whose content is taller than its box wears a vertical scrollbar along
    its right edge: a thumb in `text.muted` at 45 % opacity, as long as
    view ÷ content of the track and never under 24 px, painted after the
@@ -881,9 +891,9 @@ catalogue implementation MUST:
   event name.
 
 The reference catalogue ships with `examples/demo-app` as
-`app/controllers/eui_builders.sl` and its `_forms`, `_charts` and `_feed`
-companions, and `soli new <app> --eui` writes those same files into a new
-application beside a component that uses them. Its
+`app/controllers/eui_builders.sl` and its `_forms`, `_charts`, `_feed` and
+`_markdown` companions, and `soli new <app> --eui` writes those same files
+into a new application beside a component that uses them. Its
 families: actions (button variants,
 split button, segmented control, toggle group, menu, context menu, command palette,
 popconfirm, toolbar), input (field, password field, currency field, checkbox, switch, select,
@@ -892,7 +902,8 @@ structure (card, panel, sheet,
 dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper, shortcut sheet),
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 expandable row, tree table, grid, multi-select list, list item, chart, stat, code block,
-diff, markdown, filter builder), feedback (toast,
+diff, filter builder), markdown (document, document rows for a windowed
+list, block editor and its model), feedback (toast,
 banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip).
 
 ## 7. Sound

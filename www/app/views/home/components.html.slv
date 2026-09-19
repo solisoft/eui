@@ -4,7 +4,7 @@
     <section class="hero">
         <div class="mark">Reference<span>&sect;03</span></div>
         <div>
-            <h1>Two hundred and twenty-nine functions, and the vocabulary they speak.</h1>
+            <h1>Two hundred and sixty-four functions, and the vocabulary they speak.</h1>
             <p class="lede">
                 An EUI component is a Soli function that returns a hash. There is no
                 widget runtime, no component registry and no client release behind any
@@ -16,7 +16,7 @@
                 <a href="#node"><b>The node</b><span>eight keys, seventeen kinds</span></a>
                 <a href="#style"><b>Style</b><span>thirty-nine keys, thirty-three roles</span></a>
                 <a href="#events"><b>Events</b><span>thirty-two names, two handler forms</span></a>
-                <a href="#catalogue"><b>The catalogue</b><span>all 229, by family</span></a>
+                <a href="#catalogue"><b>The catalogue</b><span>all 264, by family</span></a>
                 <a href="#patterns"><b>Patterns</b><span>state, identity, windows</span></a>
             </nav>
         </div>
@@ -254,7 +254,7 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
     <section id="catalogue">
         <div class="mark">Catalogue<span>&sect;03</span></div>
         <div>
-            <h2>All 229</h2>
+            <h2>All 264</h2>
             <p>
                 They live in four files under
                 <code>examples/demo-app/app/controllers/</code>, starting with
@@ -495,11 +495,56 @@ checkbox(item[<span class="s">"title"</span>], item[<span class="s">"done"</span
                     <dt><b>file_field(label, accept, on_pick, o)</b><i>file_field("Attach", "png,jpg", "took_file", {"max": 2000000})</i></dt>
                     <dd><span class="d">A <code>control</code> that opens the platform&rsquo;s open dialog. <code>accept</code> is extensions without dots, empty for any file. <code>o["flags"]</code> takes <code>PICK_CAMERA</code> or <code>PICK_MICROPHONE</code>; <code>o["multiple"]</code> takes more than one file, which the capture flags ignore; <code>o["max"]</code> is the largest one file may be, in bytes, defaulting to the client&rsquo;s 16 MiB</span><div class="p"><span class="w-btn">Attach&hellip;</span></div></dd>
                     <dt><b>file_drop(label, accept, on_pick, o)</b><i>file_drop("Drop a picture here", "png,jpg", "took_file", {"over": dragging})</i></dt>
-                    <dd><span class="d">A surface a file can be let go over. <code>drop</code> is the same prop as <code>pick</code>, so a drop <em>is</em> a <code>file_pick</code> and one handler covers both ways in. <code>o["on_drag"]</code> is <code>file_drag</code>; <code>o["over"]</code> lights the box; <code>o["pick"]</code> (default true) also opens the dialog on a click</span><div class="p"><span class="g-drop">Drop a picture here</span></div></dd>
+                    <dd><span class="d">A surface a file can be let go over. <code>drop</code> is the same prop as <code>pick</code>, so a drop <em>is</em> a <code>file_pick</code> and one handler covers both ways in. <code>o["on_drag"]</code> is <code>file_drag</code>; <code>o["over"]</code> fills the box with the accent and puts <code>accent.on</code> on the words, which is the pair the theme guarantees; <code>o["pick"]</code> (default true) also opens the dialog on a click, and answers the pointer locally while it can</span><div class="p"><span class="g-drop">Drop a picture here</span></div></dd>
                     <dt><b>attachment_card(name, note, o)</b><i>attachment_card("invoice.pdf", "212 KB", {"badge": text("PDF", {})})</i></dt>
                     <dd><span class="d">What was attached. <code>o["src"]</code> draws a small square of it &mdash; an asset from <code>eui_asset(bytes)</code>, or a path; <code>o["badge"]</code> draws a node there instead, usually the extension; neither draws just the name and the note, which is what a file whose bytes have gone gets. Resolve the bytes <em>before</em> choosing: a <code>src</code> naming nothing is a view that cannot be encoded, and that ends the session (01 &sect;4)</span><div class="p"><span class="g-r"><span class="g-sq">PDF</span><span class="g-c"><span class="g-t">invoice.pdf</span><span class="g-dim">212 KB</span></span></span></div></dd>
                     <dt><b>pick_prop(accept, o)</b><i>pick_prop("png,jpg", {"max": 2000000})</i></dt>
                     <dd><span class="d">The <code>pick</code> value itself, for a node built by hand &mdash; a string when nothing else is asked for, <code>[accept, flags, max]</code> otherwise</span><div class="p val">&rarr; <em>["png,jpg", 0, 2000000]</em></div></dd>
+                </dl>
+            </div>
+
+            <div class="family">
+                <h3>Markdown <span>35</span></h3>
+                <p class="soft">A document, both ways: markdown as a tree of nodes, and an editor that writes one. A <code>text</code> node carries one weight for its whole run and the client reports no caret, so the editor is blocks and the marks stay visible while a block is being written.</p>
+                <dl class="api">
+                    <dt><b>markdown(source, opts)</b><i>markdown(File.read("CHANGELOG.md"), {"width": 640})</i></dt>
+                    <dd><span class="d">A whole document as one column. Headings, lists, tables, quotes, fences and pictures; inline runs become several <code>text</code> nodes in a wrapping row, because one node is one weight (02 &sect;3). <code>opts["width"]</code> is the measure a picture is fitted to</span><div class="p"><span class="g-r"><span class="g-h2">Release note</span><span class="g-m">and the blocks under it</span></span></div></dd>
+                    <dt><b>markdown_file(path, opts)</b><i>markdown_file("docs/handbook.md", {})</i></dt>
+                    <dd><span class="d">The same, read from disk and parsed once: cached on the path and the measure, because between them they are the whole input</span><div class="p val">&rarr; <em>a column, built once</em></div></dd>
+                    <dt><b>md_blocks(source, width)</b> / <b>md_doc_rows(path, width)</b><i>list_window(s, 0, r["rows"].length(), r["heights"], shown, "window")</i></dt>
+                    <dd><span class="d">The blocks on their own, and a long document as rows for a windowed <code>list</code> (04 &sect;7.1) with a height guessed for each &mdash; so a handbook costs the client one window of blocks rather than the handbook</span><div class="p val">&rarr; <em>{"rows": [&hellip;], "heights": [&hellip;]}</em></div></dd>
+                    <dt><b>markdown_editor(doc, o)</b><i>markdown_editor(state["doc"], {"width": 640, "key": "note", "on_change": "md_change"})</i></dt>
+                    <dd><span class="d">The editor. Every block is an <code>input</code> of an explicit width, so it wraps and grows; <code>Enter</code> is the <code>submit</code> that starts a block, <code>Backspace</code> at the head of one is reported because the client had no use for it (03 &sect;3.1 rule 3), and the arrows move the caret between blocks. It holds no state</span><div class="p"><span class="g-r"><span class="w-btn">H1</span><span class="w-btn">&bull;</span><span class="w-btn">B</span><span class="g-m">and a block under them</span></span></div></dd>
+                    <dt><b>markdown_editor_bar(doc, o)</b><i>column({}, [markdown_editor_bar(doc, o), scroll({}, [markdown_editor(doc, o.merge({"bar": false}))])])</i></dt>
+                    <dd><span class="d">The toolbar on its own, for a caller that wants it <em>outside</em> the scroller &mdash; which is the only way a bar stays put while a long document moves. Sticky positioning is not in version 1 (04 &sect;9) and no scroll offset reaches the server to move one with (06 &sect;8), so a bar drawn inside the document goes up with it. Both halves read the same <code>doc</code>, so the buttons still light for the block the caret is in</span><div class="p"><span class="g-r"><span class="w-btn">H1</span><span class="w-btn">&bull;</span><span class="w-btn">B</span><span class="g-m">above the scroller</span></span></div></dd>
+                    <dt><b>markdown_editor_step(doc, what, params)</b><i>markdown_editor_step(doc, "submit", params)</i></dt>
+                    <dd><span class="d">One handler for all of it. <code>what</code> is what happened &mdash; <code>change</code>, <code>submit</code>, <code>key</code>, <code>focus</code>, <code>tool</code>, <code>upload</code>, <code>drag</code>, <code>drop</code>, <code>preview</code> &mdash; so an application may name its events anything and route them in one line</span><div class="p val">&rarr; <em>the document, moved</em></div></dd>
+                    <dt><b>md_edit_parse(source)</b> / <b>md_edit_source(blocks)</b><i>md_edit_source(md_edit_parse(said)) == said</i></dt>
+                    <dd><span class="d">Markdown in, blocks out, and back. One line is one block: a paragraph in an editor is a thing you put a caret in, not a run of lines the renderer will join. An empty document is still one empty paragraph</span><div class="p val">&rarr; <em>[{"id": 1, "kind": "h2", "t": "Release note"}, &hellip;]</em></div></dd>
+                    <dt><b>md_edit_set(blocks, id, said, next_id)</b><i>md_edit_set(blocks, 4, "## Title", md_edit_fresh(blocks))</i></dt>
+                    <dd><span class="d">What <code>change</code> does. A marker typed at the head of a block becomes that kind and comes off the text; a value with newlines in it can only be a paste, and becomes one block a line</span><div class="p val">&rarr; <em>{"kind": "h2", "t": "Title"}</em></div></dd>
+                    <dt><b>md_edit_split(blocks, id, next_id)</b> / <b>md_edit_merge(blocks, id)</b><i>md_edit_split(blocks, focus, md_edit_fresh(blocks))</i></dt>
+                    <dd><span class="d"><code>Enter</code> and <code>Backspace</code>. A list carries on, an empty list item leaves the list; a marked block loses its marker before it joins what is above, and a picture above is removed rather than merged into</span><div class="p val">&rarr; <em>one block more, or one less</em></div></dd>
+                    <dt><b>md_edit_kind(blocks, id, kind)</b> / <b>md_edit_wrap(blocks, id, mark)</b><i>md_edit_wrap(blocks, focus, "**")</i></dt>
+                    <dd><span class="d">The toolbar. Pressing the kind a block already is puts it back to a paragraph; <code>B</code> and <code>I</code> mark the <em>block</em>, never a selection, because no selection reaches a server (08 &sect;7.1). <code>md_edit_wrap</code> takes any mark, not only the two the bar carries</span><div class="p val">&rarr; <em>"**a whole block**"</em></div></dd>
+                    <dt><b>md_edit_put(blocks, id, one)</b> / <b>md_edit_drop(blocks, id)</b><i>md_edit_put(blocks, focus, {"id": 9, "kind": "image", "src": path})</i></dt>
+                    <dd><span class="d">A picture, a file or a rule in after the block the caret was in, and out again. Dropping the last block leaves an empty paragraph: an editor with nothing to type into is one nobody can start</span><div class="p val">&rarr; <em>the list, one block longer</em></div></dd>
+                    <dt><b>md_edit_events(prefix)</b> / <b>md_edit_mine?(prefix, event)</b> / <b>md_edit_what(prefix, event)</b><i>markdown_editor(doc, md_edit_events("note").merge({"width": 640}))</i></dt>
+                    <dd><span class="d">Seventeen gestures is seventeen handler names, and an application that wrote them out twice &mdash; once in the options, once in its reducer &mdash; would have thirty-four places for a typo that fails silently, because a handler nobody declared is a press that does nothing (08 &sect;3). So they come from one prefix, and the reducer is one line: <code>step(doc, md_edit_what("note", event), params) if md_edit_mine?("note", event)</code></span><div class="p val">&rarr; <em>{"on_change": "note_change", &hellip;}</em></div></dd>
+                    <dt><b>md_edit_check(blocks, id)</b><i>md_edit_check(blocks, params["props"]["block"])</i></dt>
+                    <dd><span class="d">Ticks a task and only a task. <code>- [ ]</code> and <code>- [x]</code> are markdown&rsquo;s own, and the marker beside the block is a real <code>checkbox</code>: a tick you can press is the difference between a note with a list in it and a note with a list you keep</span><div class="p"><span class="g-r"><span class="g-sq">&#10003;</span><span class="g-t">a task</span></span></div></dd>
+                    <dt><b>md_edit_table(id)</b> / <b>md_edit_cell(blocks, id, row, col, said)</b> / <b>md_edit_row_add</b> / <b>md_edit_col_add</b><i>md_edit_cell(blocks, id, p["row"], p["col"], params["payload"])</i></dt>
+                    <dd><span class="d">A table, and the four things done to one. Every cell is its own <code>input</code> carrying where it is, so one handler serves a table of any size and <code>Tab</code> walks them in reading order for free. A ragged table is not an error in markdown and is not one here: a row is padded to the column being written, and to the widest on the way out</span><div class="p val">&rarr; <em>| Ref | Amount |</em></div></dd>
+                    <dt><b>md_edit_shift(blocks, id, delta)</b> / <b>md_edit_move_to(blocks, id, slot)</b><i>md_edit_move_to(blocks, id, drag_slot(params))</i></dt>
+                    <dd><span class="d">One place up or down, which is what <code>Alt</code> and an arrow do, and anywhere, which is what a drop does. A <code>drop</code> reports the slot it landed in with the block still in the document (06 &sect;6), so the correction is in <code>md_edit_move_to</code> rather than in every caller. At either end a shift is a no-op and never a wrap: a block that reappears at the other end of a document is one nobody finds again</span><div class="p val">&rarr; <em>the same blocks, in another order</em></div></dd>
+                    <dt><b>md_edit_remember(doc, why, id, cap)</b> / <b>md_edit_undo(doc)</b> / <b>md_edit_redo(doc)</b><i>md_edit_undo(doc)</i></dt>
+                    <dd><span class="d">A stack of block lists, which is the cheapest thing that works. Typing is coalesced and has to be: <code>change</code> arrives when a field goes quiet (06 &sect;2), so an uncoalesced stack would walk back through a sentence a breath at a time. <code>Ctrl+Z</code> reaches it because the block <em>claims</em> <code>z</code> &mdash; and a printable character cannot be withheld (03 &sect;3.1 rule 1), so the key report arrives <em>and</em> the letter still types, which is why the modifiers are checked</span><div class="p val">&rarr; <em>the document, one step back</em></div></dd>
+                    <dt><b>md_edit_tools()</b> / <b>md_edit_slash_hits(said)</b><i>md_edit_slash_hits("/tab")</i></dt>
+                    <dd><span class="d">What the bar offers, and what is still worth offering under what has been typed after a <code>/</code>. Typing <code>/</code> at the head of a block opens that list <em>where the caret is</em>, which is the gesture people reach for and the one a bar cannot be: a bar is somewhere else on the screen</span><div class="p val">&rarr; <em>[{"tool": "table", &hellip;}]</em></div></dd>
+                    <dt><b>md_edit_attach(doc, payload)</b> / <b>md_edit_wants?(doc, params)</b><i>md_edit_attach(doc, params["payload"])</i></dt>
+                    <dd><span class="d">Keeping an upload the simple way: the bytes go to the asset store and the block names them <code>eui-asset:&lt;hex&gt;</code>. <code>file_upload</code> is the server&rsquo;s own event and names no node, so the second says whether this editor is the one that asked. An application with somewhere better to put the bytes handles the event itself and calls <code>md_edit_put</code></span><div class="p val">&rarr; <em>a picture, in the document</em></div></dd>
+                    <dt><b>md_src(src)</b> / <b>md_fit(w, h, width)</b><i>md_fit(1600, 1200, 800)</i></dt>
+                    <dd><span class="d">An address as a node&rsquo;s <code>src</code> &mdash; an asset, or a path under <code>public/</code> &mdash; and a box of at most <code>width</code> that keeps the shape the picture has. The size travels in markdown&rsquo;s own title field, <code>![alt](src "1600x1200")</code>, because the server cannot decode a JPEG to ask and a node with a width and no height stretches</span><div class="p val">&rarr; <em>[693, 520]</em></div></dd>
                 </dl>
             </div>
 

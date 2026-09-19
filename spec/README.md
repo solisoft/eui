@@ -16,7 +16,7 @@ who did not write it.
 | [`00-rationale.md`](00-rationale.md) | draft | Why this exists, what it deliberately refuses to do |
 | [`01-transport.md`](01-transport.md) | draft | HTTPS discovery, manifest, `wss://` session, framing |
 | [`02-wire-format.md`](02-wire-format.md) | **normative** | Atoms, styles, nodes, patches — byte level |
-| [`03-widgets.md`](03-widgets.md) | **normative** | The fourteen primitives, painting, focus, the catalogue contract |
+| [`03-widgets.md`](03-widgets.md) | **normative** | The seventeen primitives, painting, focus, the catalogue contract |
 | [`04-layout.md`](04-layout.md) | **normative** | The layout algorithm; §9 lists what v1 omits |
 | [`05-theme.md`](05-theme.md) | **normative** | Roles, scales, modes, the resolution algorithm |
 | [`06-events.md`](06-events.md) | **normative** | Event kinds, payloads, dispatch and emission rules |

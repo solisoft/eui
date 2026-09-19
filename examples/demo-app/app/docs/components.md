@@ -158,7 +158,7 @@ unknown colour role.
 | `weight` | `regular` · `medium` · `semibold` · `bold` |
 | `text_align` | `start` · `center` · `end` · `justify` |
 | `clamp` | Maximum lines, then ellipsis |
-| `underline`, `strike` | `true` / `false` |
+| `underline`, `strike` | `true` / `false` — a rule per line of the shaped run, in the glyphs' own colour (03 §2) |
 | `overflow` | `visible` · `clip` · `scroll` |
 | `transition` | `none` · `fast` · `base` · `slow` |
 | `animation` | `none` · `spin` |
@@ -561,6 +561,93 @@ does not pay for a month of day cells on every render.
 | `number_within?(value, min, max)` | A number, and inside the bounds the caller gave |
 | `number_stepped(value, delta, o)` | What − and + mean, clamped to `o["min"]`/`o["max"]` |
 | `field_shell(label, control, o)` / `field_error(…)` / `field_style(…)` / `field_props(…)` | The parts, for a field of your own |
+
+## Markdown
+
+A document, both ways: markdown as a tree of nodes, and an editor that writes
+one. It is the fifth catalogue file, `eui_builders_markdown.sl`.
+
+Two rules of the protocol decide the shape of the editor, and no amount of
+work gets around either. A `text` node carries one family, one size and one
+weight for its whole run (02 §3), so a field cannot show a bold word inside a
+sentence. And the client owns the caret and the selection and reports
+neither (03 §3, 08 §7.1), so no button here can wrap "what is selected".
+Between them they rule out a WYSIWYG of the kind a browser has.
+
+What is left is a **block editor**, and 03 §3.1 rule 3 is what makes it
+work: a key in a position where it does nothing — `Backspace` with nothing
+before the caret, an arrow at the end of the text — is never the client's,
+and is reported if `keys` asked for it.
+
+| Gesture | Mechanism |
+|---|---|
+| `Enter` starts a block | `change` then `submit` on an `input` (03 §3.1 rule 2) |
+| `Backspace` at the head joins | nothing for the client to do, so it is reported |
+| The arrows change block | never a single-line field's, so they are reported |
+| The caret lands where the server put it | the `focus_to` prop, which is a `Focus` op |
+
+So a block is an `input` of an explicit pixel width — it wraps and grows,
+because an editable node is measured by the same shaper a `text` is. What is
+lost against one big `textarea` is that `Enter` cannot split a block at the
+caret, because there is no caret to split at: it adds an empty block after
+the one being typed in, which is where `Enter` is pressed nearly every time.
+A code block is a `textarea`, where a newline is the whole point.
+
+The marks stay visible while a block is being edited — `**bold**` reads as
+`**bold**` — and become bold in the preview and everywhere the document is
+read. That is the compromise, and it is structural rather than unfinished:
+`B` and `I` mark the **block** and unmark it when pressed again, because a
+button that promised anything else would be lying about what a server can
+know.
+
+| Signature | Notes |
+|---|---|
+| `markdown(source, opts)` | A whole document as one column. `opts["gap"]` is the space between blocks, `opts["width"]` the measure a picture is fitted to |
+| `markdown_file(path, opts)` | The same, read from disk and parsed once — cached on the path *and* the measure, because between them they are the whole input |
+| `md_blocks(source, width)` | The blocks on their own |
+| `md_doc_rows(path, width)` | A long document as rows for a windowed `list` (04 §7.1), with a height guessed for each, so a handbook costs the client one window of blocks rather than the handbook |
+| `markdown_editor(doc, o)` | The editor. `o`: `width` (required, in pixels), `key`, `placeholder`, `accept`, `max`, `files`, and one handler name each for `on_change`, `on_submit`, `on_key`, `on_focus`, `on_tool`, `on_pick`, `on_drag`, `on_drop`, `on_preview`. It holds no state |
+| `markdown_editor_bar(doc, o)` | The toolbar on its own, for a caller that wants it **outside** the scroller. That is the only way a bar stays put while a long document moves: sticky positioning is not in version 1 (04 §9) and no scroll offset reaches the server to move one with (06 §8). Pass `bar: false` to `markdown_editor` and draw this above the `scroll` holding it; both halves read the same `doc` |
+| `markdown_editor_step(doc, what, params)` | One handler for all of it. `what` is what happened — `change`, `submit`, `key`, `focus`, `tool`, `pick`, `upload`, `drag`, `drop`, `preview` — so an application may name its events anything and route them in a line each |
+| `md_edit_parse(source)` / `md_edit_source(blocks)` | Markdown in, blocks out, and back. Thirteen kinds: `p`, `h1`–`h3`, `quote`, `bullet`, `number`, `task`, `code`, `rule`, `image`, `file` and `table`. One line is one block: a paragraph in an editor is a thing you put a caret in, not a run of lines the renderer will join. An empty document is still one empty paragraph, because an editor with nothing to put the caret in is one nobody can start typing in |
+| `md_edit_set(blocks, id, said, next_id)` | What `change` does. A marker typed at the head of a block becomes that kind and comes off the text; a value with newlines can only be a paste, and becomes one block a line |
+| `md_edit_split(blocks, id, next_id)` | `Enter`. A list carries on; an empty list item leaves the list instead of making another |
+| `md_edit_merge(blocks, id)` | `Backspace` at the head. A marked block loses its marker first, then joins what is above; a picture above is removed rather than merged into, which is the only way one is deleted with the keyboard |
+| `md_edit_kind(blocks, id, kind)` | The toolbar. Pressing the kind a block already is puts it back to a paragraph |
+| `md_edit_wrap(blocks, id, mark)` | `B` and `I`, round the whole block, and off again. Any mark, not only the two the bar carries |
+| `md_edit_put(blocks, id, one)` / `md_edit_drop(blocks, id)` | A block in after the one the caret was in, and out again. Dropping the last leaves an empty paragraph |
+| `md_edit_step(blocks, id, delta)` / `md_edit_at` / `md_edit_index` / `md_edit_fresh` | Where the caret goes, what is there, and an id nothing is using |
+| `md_edit_events(prefix)` / `md_edit_mine?(prefix, event)` / `md_edit_what(prefix, event)` | Seventeen gestures is seventeen handler names, and writing them out twice — once in the options, once in the reducer — is thirty-four places for a typo that fails silently (08 §3). They come from one prefix instead, and the reducer is one line: `step(doc, md_edit_what("note", event), params) if md_edit_mine?("note", event)` |
+| `md_edit_check(blocks, id)` | Ticks a task and only a task. `- [ ]` / `- [x]` are markdown's own; the marker is a real `checkbox`, because a tick you can press is the difference between a note with a list in it and a note with a list you keep |
+| `md_edit_table(id)` / `md_edit_cell(blocks, id, row, col, said)` / `md_edit_row_add` / `md_edit_col_add` | A table, and the four things done to one. Every cell is its own `input` carrying where it is, so one handler serves a table of any size and `Tab` walks them in reading order for free. A ragged table is not an error in markdown and is not one here |
+| `md_edit_shift(blocks, id, delta)` / `md_edit_move_to(blocks, id, slot)` | One place up or down (`Alt` and an arrow), and anywhere (a drop). A `drop` reports the slot with the block still in the document (06 §6), so the correction lives in `md_edit_move_to` and not in every caller. A shift at either end is a no-op, never a wrap |
+| `md_edit_remember(doc, why, id, cap)` / `md_edit_undo(doc)` / `md_edit_redo(doc)` | A stack of block lists. Typing is coalesced and has to be: `change` arrives when a field goes quiet (06 §2), so an uncoalesced stack would walk back through a sentence a breath at a time. `Ctrl+Z` reaches it because the block *claims* `z` — and a printable character cannot be withheld (03 §3.1 rule 1), so the key report arrives *and* the letter still types, which is why the modifiers are checked |
+| `md_edit_tools()` / `md_edit_slash_hits(said)` | What the bar offers, and what is still worth offering under what was typed after a `/`. Typing `/` at the head of a block opens that list *where the caret is*, which is the gesture people reach for and the one a bar cannot be |
+| `md_edit_attach(doc, payload)` | Keeping an upload the simple way: `slurp` then `eui_asset`, and the block names the bytes `eui-asset:<hex>` |
+| `md_edit_wants?(doc, params)` | Whether this editor is the one that asked for this `file_upload` |
+| `md_src(src)` / `md_fit(w, h, width)` | An address as a node's `src`, and a box of at most `width` that keeps the shape the picture has |
+
+**A picture's size travels in markdown's own title field.** `![alt](src
+"1600x1200")`, which every other reader shows as a tooltip and this one reads
+as a measure. It has to come from somewhere: an `image` draws its texture
+across whatever box it ends up with, so a photograph given the wrong box is
+not cropped but squashed, and this process cannot decode a JPEG to ask —
+the bytes are in the asset store and the picture is the client's to fetch
+(01 §5). Whoever put the file there knew its size and writing it down costs
+nothing; one that arrives without gets a modest box and sits in it.
+
+**An `eui-asset:` address means something to a client talking to this server
+and to nothing else.** An asset is addressed by its content and served from
+`/_eui/asset/<hex>`; it is not a URL on the web, and a document that leaves
+the application — a mail that is sent, a page that is published — has to turn
+its assets into whatever that destination understands. `md_edit_attach` is
+the default because it is the one thing that works with no infrastructure at
+all, not because it is right everywhere. An application with somewhere better
+to put the bytes handles `file_upload` itself and calls `md_edit_put` with
+the block it built; the mail example does exactly that, writing each
+attachment under `public/mail-att` and turning it into a real MIME part on
+the way out.
+
 
 ## Calendar and pickers
 

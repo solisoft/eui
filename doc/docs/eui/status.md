@@ -608,6 +608,57 @@ server never sees a colour; it sees the mode, as the next viewport.
 `EUI_DESKTOP_THEME=0` leaves the application's theme alone. macOS and
 Windows accent colours are not read yet.
 
+**Installing an application (01 §2.1).** An EUI application is an address,
+and an address is something you have to have somewhere to type. A manifest
+that publishes an `icon` can be put in the desktop's own launcher instead:
+`eui --install <address>`, or the arrow beside the padlock in the address
+bar, writes a `.desktop` file and a PNG on Linux, a bundle in
+`~/Applications` on macOS, and a Start menu shortcut with an `.ico` on
+Windows. `--uninstall <app id>` takes it out again, `--installed` lists
+what is there, and the tick the arrow becomes does the same from the
+address bar.
+
+Nothing is packaged and nothing is downloaded: the entry runs the client
+with the application's address, so an installed application is the session
+it always was and updating the client updates every one of them at once.
+The icon is fetched as a content-addressed asset and checked against the
+hash the publisher signed — which matters more here than anywhere else,
+because everything else a session draws is inside a window that says whose
+it is, and this is a tile in a dock with nothing around it. An application
+without an icon is not installable rather than being given the client's
+own: a launcher full of identical pictures is worse than an absent button.
+
+The `icon` field made the manifest a version 2 record. A manifest without
+one is still written as version 1, byte for byte what it always was, so
+every record signed before this still verifies; a decoder is told which it
+is reading by the version byte and never guesses from the field count. On
+the Soli side the whole of publishing one is a PNG at `public/icon.png`,
+or `eui_icon("...")` for a file kept somewhere else.
+
+**Light or dark, before the first frame (05 §5).** Which of the two the
+machine is in is asked once, before any driver exists, and every driver
+is built in it — so the first `Hello` carries the right mode and a server
+never renders a light page for somebody sitting in the dark. It used to be
+asked after the tabs were open: a driver is born light, the correction
+reached only the tab that happened to be active, and every tab opened
+afterwards — a typed address, a link, a reload — started light again with
+nothing to tell it otherwise. Linux hid that, because the Omarchy palette
+is handed to each new tab and carries a mode with it; on macOS the shell
+came up dark, you opened an application, and it was light from then on.
+A change now reaches every open tab rather than the front one, which is
+what a background session's server was missing.
+
+Where the platform will not answer, the desktop is asked. winit reports a
+theme on macOS, on Windows and in a page, and on no Linux backend at all —
+its Wayland answer is the decoration theme the process itself asked for,
+its X11 one is `None` — so a GNOME or KDE desktop in the dark got a light
+client and no way to say otherwise. The client now reads `color-scheme`
+from the XDG desktop portal (`org.freedesktop.appearance`, the setting a
+browser answers `prefers-color-scheme` from) and listens for the portal's
+`SettingChanged`, so those desktops follow live as Omarchy's do. "No
+preference" is not light: it is no answer, and the application's own
+theme decides as before.
+
 **Keys, cursor, theme switch (03 §3, 07).** `ArrowDown`/`ArrowUp` land a
 list on its next/previous row — the layout keeps each virtualised list's
 row tops, so the feed's cards of two heights snap exactly — `PageDown`/
@@ -1192,14 +1243,133 @@ None of them has local handlers, file transfers or session resume yet.
 [Servers in six languages](/docs/clients) has the rest, including what each
 costs against Soli on the same application.
 
+## A catalogue that can write, not only show
+
+The catalogue could show a document and could not compose one. The gap was
+not the widgets — the picker, the drop zone and the attachment card have been
+there since files worked — it was that there was nothing to put them in:
+every long piece of text in this repository was a `textarea` with a line
+under it saying which marks it understood.
+
+`eui_builders_markdown.sl` is the fifth catalogue file, and the first half of
+it is the renderer that was already here, promoted: `markdown`,
+`markdown_file` and `md_doc_rows` were `markdown_builders.sl`, outside the
+catalogue, while `doc/docs/eui/widgets.md` had listed `markdown` in Tier 1
+since the beginning. They now travel with the other four, and
+`scripts/sync-catalogue.sh` keeps every copy byte for byte. It learnt
+pictures on the way: `![alt](src "1600x1200")`, where the title field carries
+the measure because an `image` draws its texture across whatever box it ends
+up with and this process cannot decode a JPEG to ask.
+
+The second half is `markdown_editor`, and what is worth saying about it is
+what it *cannot* be. A `text` node carries one weight for its whole run
+(02 §3) and the client reports no caret (03 §3, 08 §7.1), so a field cannot
+show a bold word inside a sentence and no button can wrap a selection. That
+rules out a WYSIWYG of the kind a browser has, and no amount of work gets
+around either rule.
+
+What it leaves is better than it sounds, because 03 §3.1 rule 3 already
+describes a block editor without naming one: a key in a position where it
+does nothing is never the client's, and is reported if `keys` asked for it.
+So `Enter` is the `submit` of an `input`, `Backspace` at offset 0 is reported
+because there was nothing to delete, the arrows are reported because a
+single-line field has no use for them, and `focus_to` puts the caret in the
+block the server just made. A block is an `input` of an explicit pixel width,
+which wraps and grows. The one thing lost is that `Enter` cannot split a
+block at the caret — there is no caret to split at — so it adds an empty
+block after the one being typed in.
+
+The marks stay visible while a block is edited and become bold in the
+preview: `B` and `I` mark the block, not a selection, because a selection is
+not something a server can know. A hundred and sixty assertions in
+`examples/demo-app/tests/markdown_editor_spec.sl` pin the model, the round
+trip among them — a document that goes through the editor and comes back is
+the document that went in.
+
+Writing the toolbar meant fixing something older on the way. `text_decoration`
+has been in the wire format since the beginning — offset 55, bit 0 underline
+and bit 1 strikethrough — decoded, range-checked, and then ignored: the
+painter drew nothing for either, so a style key the component documentation
+offered did nothing at all. It draws them now, one rule per line of the shaped
+run and no wider than the glyphs on that line, so a decoration on text that
+wrapped underlines each line to its own end rather than drawing one bar the
+width of the box. `spec/03-widgets.md` §2 says what it looks like; it said
+nothing before, which is how a key stays inert for a year without anyone
+calling it a bug.
+
+The bar does not write either mark. It carries `B` and `I` and stops there:
+`~~x~~` and `<u>x</u>` are read and drawn, because a document arrives from
+somewhere else as often as it is written here, and a mark the editor mangles
+is a word that changed meaning on the way through.
+
+One thing the widget cannot do for itself: keep its toolbar on screen while
+a long document scrolls. Sticky positioning is not in version 1 (04 §9) and
+no scroll offset reaches the server to move a bar with (06 §8), so there is
+nothing to follow the document with. What there is, is being *outside* the
+scroller — which is what every masthead here already does — so
+`markdown_editor_bar` draws the bar on its own and `bar: false` leaves it out
+of the document. The mail composer puts it in the column above its scroller,
+beside the Discard row.
+
+Then six more, because the first version was an editor you could write a
+paragraph in and not much else.
+
+**Undo**, which is the one whose absence costs work. The document is a list
+of small hashes, so the stack is a list of those lists and forty of them cost
+less than the frame that drew them once. Typing is coalesced: `change` arrives
+when a field goes quiet (06 §2), so an uncoalesced stack would walk back
+through a sentence a breath at a time. `Ctrl+Z` reaches it because the block
+**claims** `z` — and 03 §3.1 rule 1 says a printable character can never be
+withheld, so the key report arrives *and* the letter still types. That is why
+the modifiers are checked rather than assumed, and why the editor's frame
+claims the same keys: a tick on a task leaves focus on a control, and dispatch
+walks up from there.
+
+**The `/` menu**, which is the gesture people reach for. Typing `/` at the head
+of a block opens the list of kinds where the caret is, filtered by what follows
+it, arrows to walk it and `Enter` to take one — and while it is open `Enter`
+means the panel rather than a new block, because a key means what the thing in
+front of you does with it.
+
+**Moving a block**: `Alt` and an arrow, and a grip that drags. One drop zone for
+the whole document rather than one per block, because a `drop` already reports
+the slot it landed in (06 §6).
+
+**Tasks**, **tables** and a **link** tool. A task is `- [ ]`, markdown's own,
+and its marker is a real `checkbox`. A table is a grid of `input`s, each
+carrying where it is, so one handler serves a table of any size and `Tab` walks
+the cells for free. A link asks for its address in a `dialog`, because a bar
+that grows a text box when you press one of its buttons is a bar that moves
+under the hand.
+
+Two things were learned the hard way and are written down where they bit.
+**A tree that changes shape under a field loses what is in it**: the grip first
+appeared on focus, which made the block a different node, so the client
+replaced it rather than patching it and the first character typed after
+clicking in went nowhere, silently. The grip is drawn on every block now and
+only its contents change. And an array of arrays whose first element is a
+string **lexes as a string** in Soli 2.3.7; a space after the outer bracket is
+what makes it an array. The widget shipped a table whose rows were a sentence
+until a spec assertion said so.
+
+The gallery's Catalogue section has an entry to type in, and the mail example
+composes with it: its letter is a document now rather than a `textarea`, its
+pictures are written under `public/mail-att` rather than into the asset
+store, and `mail_send_source` turns each one into a real MIME part with an
+absolute address in the markdown on the way out. An `eui-asset:` address is
+resolvable by a client talking to this server and by nothing else, which is
+the whole reason the widget's own default is not what a mail uses.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.
-- Files and session resume **on the Soli side**: the client and the
-  reference server do both, `lang/src/serve/eui/` does neither, and it
-  cannot until the pinned protocol revision moves.
+- Session resume **on the Soli side**: the client and the reference server
+  do it, `lang/src/serve/eui/` does not, and it cannot until the pinned
+  protocol revision moves. Files are no longer on this list — `session.rs`
+  spools an upload and posts its own `file_upload`, and this paragraph said
+  otherwise long after it stopped being true.
 - Selecting text that is not in a field, and copying it. Selection and
   `Ctrl+C` belong to `input` and `textarea`; a table cell, a label or a
   `code_block` cannot be selected, which is a browser freebie people reach

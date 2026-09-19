@@ -715,7 +715,7 @@ def gallery_code_viewer
   code_viewer(source, {"line_numbers": true, "spans": code_spans(source)})
 end
 
-# A page of documentation, rendered from markdown by `markdown_builders.sl`.
+# A page of documentation, rendered from markdown by `eui_builders_markdown.sl`.
 # The sample exercises what this project's own docs actually lean on: a lot
 # of inline code, tables, and the occasional fence.
 # The editor, in a card. It is the `editor` component's own code — the same
@@ -754,21 +754,14 @@ def gallery_editor_reset(state)
 end
 
 def gallery_editor(state)
-  frame = {
-    "k": "box",
-    "s": {
-      "display": "column",
-      "width": "100%",
-      "radius": 2,
-      "overflow": "clip",
-      "border": 1,
-      "border_color": "border.subtle"
-    },
-    "c": [ed_panel(
-      gallery_editor_state(state),
-      {"key": "ed_key", "click": "ed_click", "reload": "ed_reload", "lines": 12, "clean": "unchanged"}
-    )]
-  }
+  # No frame of its own any more: `ed_panel` carries the border, the radius
+  # and the clipping now, so that an editor is outlined wherever it is put
+  # rather than wherever somebody remembered to wrap one. Two of them drew
+  # two rules a pixel apart.
+  frame = ed_panel(
+    gallery_editor_state(state),
+    {"key": "ed_key", "click": "ed_click", "reload": "ed_reload", "lines": 12, "clean": "unchanged"}
+  )
   card(
     {"gap": 3, "width": "100%"},
     [
@@ -1775,6 +1768,32 @@ def spec_of(name, node)
 end
 
 # For the ones whose whole point is that they fill the width they are given.
+# What the editor opens on. Short, and with one of everything in it, because
+# the point of the entry is that a person can put a caret in it and find out
+# what the keys do.
+ERP_CAT_MD = [
+  "## Release note",
+  "",
+  "Meridian **1.4** ships the new files section. The picker, the drop zone and the cards below are the same three widgets this note is written with.",
+  "",
+  "> One line is one block, so this is one quote.",
+  "",
+  "- Enter starts a new block",
+  "- Backspace at the head of one joins it to what is above",
+  "- The arrows move the caret between blocks",
+  "- **Bold**, *italic*, `code`, ~~struck through~~ and <u>underlined</u>",
+  "",
+  "- [x] A task, which is a bullet with a box you can press",
+  "- [ ] And one still to do",
+  "",
+  "| Widget | Where it came from |",
+  "| --- | --- |",
+  "| markdown_editor | this file |",
+  "| file_drop | the Files family |",
+  "",
+  "![A picture is a block, and its caption is a field](public/images/formats/sample.png \"360x240\")"
+].join("\n")
+
 def spec_wide(name, node)
   column({"gap": 1, "width": "100%"}, [muted(name), node])
 end
@@ -1890,8 +1909,44 @@ def erp_inputs_card(state, lay)
         "on_blur": "inv_tag_blur"
       })), narrow)
     ]),
-    spec_wide("file_drop", file_drop("Drop a file here", ERP_FILES_ACCEPT, "file_pick", {"key": "cat_drop", "hint": "or click to choose"}))
+    spec_wide("file_drop", file_drop("Drop a file here", ERP_FILES_ACCEPT, "file_pick", {"key": "cat_drop", "hint": "or click to choose"})),
+    spec_wide("markdown_editor", markdown_editor(erp_cat_md(state), md_edit_events("cat_md").merge({
+      "width": erp_cat_md_px(lay),
+      "key": "cat_md",
+      "placeholder": "Write something, or press / for the list. \"## \" makes a heading and \"- \" a list; Enter starts a block."
+    })))
   ])
+end
+
+# The editor's measure. A canvas and a picture are both drawn at the size
+# the *server* chose (04 §6), so this is a number and not a percentage — and
+# `max_width` would not do, because it does not constrain measurement and a
+# paragraph that wraps would be laid out one line tall.
+def erp_cat_md_px(lay)
+  cmd_px = erp_content_px(lay) - 140
+  cmd_px = 280 if cmd_px < 280
+  cmd_px > 720 ? 720 : cmd_px
+end
+
+def erp_cat_md(state)
+  state["cat_md"] ?? erp_cat_md_doc()
+end
+
+# The demonstration document, with an empty paragraph on the end: a document
+# whose last block is a table is one there is nowhere to start typing in,
+# and `/` is what this entry is for.
+def erp_cat_md_doc()
+  cmd_blocks = md_edit_parse(ERP_CAT_MD)
+  {
+    "blocks": md_edit_splice(cmd_blocks, cmd_blocks.length(), 0, [{
+      "id": md_edit_fresh(cmd_blocks), "kind": "p", "t": ""
+    }]),
+    "focus": 0
+  }
+end
+
+def erp_cat_md_step(state, what, params)
+  set_key(state, "cat_md", markdown_editor_step(erp_cat_md(state), what, params))
 end
 
 def erp_feedback_card(state, lay)
@@ -4163,6 +4218,7 @@ def erp_chrome_defaults
     "cat_switch": false,
     "cat_radio": "Standard",
     "cat_tab": "Overview",
+    "cat_md": erp_cat_md_doc(),
     "cat_open": "a",
     "cat_page": 2,
     "cat_text": "Meridian SA",
@@ -4354,6 +4410,15 @@ def gallery(event_data)
   return erp_picker(state, picker, event, props) unless picker == ""
 
   return erp_board_event(state, event, params, props) if event == "kan_grab" || event == "kan_over" || event == "kan_drop"
+
+  # `file_upload` is the server's own event and names no node, so two
+  # pickers on one page are told apart by the transfer id the `file_pick`
+  # carried — this line, before whatever else claims the event.
+  return erp_cat_md_step(state, "upload", params) if event == "file_upload" && md_edit_wants?(erp_cat_md(state), params)
+
+  # Seventeen gestures, one line: the editor names its own handlers from the
+  # prefix and takes them apart again, so nothing here has to list them.
+  return erp_cat_md_step(state, md_edit_what("cat_md", event), params) if md_edit_mine?("cat_md", event)
 
   return erp_files_event(state, event, params, props) if erp_files_owns?(event)
 
