@@ -9,6 +9,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 
 use eui_proto::{Manifest, PROTOCOL_VERSION};
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -18,6 +19,27 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 /// behind but a temporary directory, and turning that into a second
 /// failure hides the first.
 static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A directory of this test's own, with every variable that decides where
+/// an install lands pointed into it.
+///
+/// All five, not the one this machine happens to read. `XDG_DATA_HOME`
+/// means nothing on macOS, which writes a bundle under `$HOME/Applications`,
+/// or on Windows, which writes a shortcut under `%APPDATA%` — so a test
+/// that redirected only the first installed itself into the runner's own
+/// home on two platforms out of three. It failed there for the right
+/// reason, and it left a launcher entry behind on the way.
+fn sandbox(name: &str) -> PathBuf {
+    let here = std::env::temp_dir().join(format!("eui-install-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&here);
+    std::fs::create_dir_all(&here).unwrap();
+    std::env::set_var("EUI_PINS_DIR", here.join("pins"));
+    std::env::set_var("EUI_INSTALLED_FILE", here.join("installed"));
+    std::env::set_var("XDG_DATA_HOME", here.join("share"));
+    std::env::set_var("HOME", &here);
+    std::env::set_var("APPDATA", &here);
+    here
+}
 
 /// A small square PNG, as a publisher's icon would be.
 fn icon() -> Vec<u8> {
@@ -70,11 +92,7 @@ fn serve(manifest: Vec<u8>, asset_path: String, asset: Vec<u8>) -> String {
 #[test]
 fn an_application_with_a_signed_icon_installs_and_uninstalls() {
     let _one_at_a_time = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let here = std::env::temp_dir().join(format!("eui-install-e2e-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&here);
-    std::env::set_var("EUI_PINS_DIR", here.join("pins"));
-    std::env::set_var("EUI_INSTALLED_FILE", here.join("installed"));
-    std::env::set_var("XDG_DATA_HOME", here.join("share"));
+    let here = sandbox("e2e");
 
     let png = icon();
     let hash = *blake3::hash(&png).as_bytes();
@@ -160,11 +178,7 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
 #[test]
 fn one_application_two_components_two_entries() {
     let _one_at_a_time = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let here = std::env::temp_dir().join(format!("eui-install-two-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&here);
-    std::env::set_var("EUI_INSTALLED_FILE", here.join("installed"));
-    std::env::set_var("XDG_DATA_HOME", here.join("share"));
-    std::fs::create_dir_all(&here).unwrap();
+    let here = sandbox("two");
 
     let png = icon();
     let one = eui_client::install::App { app_id: "demo-app".into(), name: "Meridian".into(), url: "wss://demo.example/_eui/session/gallery".into(), icon: png.clone(), component: None };
