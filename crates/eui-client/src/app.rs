@@ -1067,13 +1067,22 @@ impl Tab {
     /// because this path must never be the reason a page fails to open.
     #[cfg(has_native_net)]
     fn try_static(&mut self, proxy: &Proxy, width: f32) -> bool {
-        let component = crate::chrome::component_of(&self.url);
-        if component.is_empty() {
+        // The whole session shape, not just the last segment: a fetch built
+        // from `wss://host/blog/site` would otherwise mount whatever
+        // component happens to be called `site`.
+        let Some(component) = crate::chrome::session_component(&self.url) else {
             return false;
-        }
+        };
         let view = match crate::transport::fetch_view(&self.url, component, eui_proto::PROTOCOL_VERSION, width.max(1.0) as u32, self.cookie.as_deref()) {
             Ok(view) => view,
-            Err(crate::transport::ViewError::NotOffered) => return false,
+            Err(crate::transport::ViewError::NotOffered) => {
+                // The ordinary answer for most components, so not a warning —
+                // but said somewhere, because a component that is simply not
+                // static and one whose name was mistyped look identical from
+                // here, and the second is the one somebody is debugging.
+                crate::driver::trace(|| format!("{component} is not served as a page; opening a session"));
+                return false;
+            }
             Err(e) => {
                 eprintln!("eui: {component} is not served as a page ({e}); opening a session instead");
                 return false;
@@ -1222,7 +1231,12 @@ impl Tab {
     }
 
     fn send(&mut self, frames: Vec<Vec<u8>>) {
-        if matches!(self.link, Link::Static) {
+        // No socket, for whatever reason — never dialled, or dialled and
+        // lost. Either way a frame the server must answer is held rather
+        // than dropped: a reader whose click disappeared because the socket
+        // happened to be down between two attempts has no way to know that,
+        // and no reason to suspect it.
+        if self.conn.is_none() && !matches!(self.link, Link::Ended) {
             let wanted: Vec<Vec<u8>> = frames.into_iter().filter(|f| f.first().copied().is_some_and(crate::transport::kind_needs_server)).collect();
             if wanted.is_empty() {
                 // A `local(...)` handler ran and changed the tree in place,
@@ -1265,7 +1279,7 @@ impl Tab {
                         frames.push(bytes);
                     }
                     Incoming::Closed(e) => {
-                        closed = Some(e.to_string());
+                        closed = Some(e);
                         break;
                     }
                     Incoming::Asset(hash, Ok(bytes)) => self.backend.asset_ready(hash, bytes),
@@ -1296,11 +1310,26 @@ impl Tab {
             let held = std::mem::take(&mut self.queued);
             self.send(held);
         }
-        if let Some(why) = closed {
+        match closed {
+            // An HTTP status is the server answering, not the network
+            // failing: this address is not a session and will not become
+            // one, so trying again would ask the same question and be told
+            // the same thing, on a ladder, for ever. The reason goes on the
+            // glass, where a window that never drew anything can show it.
+            Some(e @ transport::TransportError::Refused(..)) => {
+                eprintln!("eui: {e}");
+                self.trouble = Some(e.to_string());
+                self.backend.close(e.to_string());
+                self.conn = None;
+                self.link = Link::Ended;
+            }
             // Spec 01 §4.1. The session is the server's; only the socket
             // broke. Say so, and go and get it back.
-            eprintln!("eui: the connection went away: {why}");
-            self.lost();
+            Some(e) => {
+                eprintln!("eui: the connection went away: {e}");
+                self.lost();
+            }
+            None => {}
         }
         if let Some(c) = self.backend.closed() {
             // The session itself ended — a version, a refused tree, an

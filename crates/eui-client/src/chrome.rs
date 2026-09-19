@@ -1035,6 +1035,21 @@ pub fn component_of(url: &str) -> &str {
     path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("")
 }
 
+/// The component a **session address** names, or `None` when the address is
+/// not one.
+///
+/// [`component_of`] is the last path segment and nothing more, which is right
+/// for a tab's label and wrong for anything that acts on the answer:
+/// `wss://host/blog/site` ends in `site`, and a fetch built from that would
+/// cheerfully mount a component called `site` that has nothing to do with the
+/// address. This requires the whole shape, so a path that is not a session
+/// path has no component rather than a plausible one.
+pub fn session_component(url: &str) -> Option<&str> {
+    let (_, path) = split_origin_str(url);
+    let name = path.strip_prefix("/_eui/session/")?.trim_end_matches('/');
+    (!name.is_empty() && !name.contains('/')).then_some(name)
+}
+
 /// The origin half of a URL, for a sigil's colour and a fallback label.
 fn split_origin_str(url: &str) -> (&str, &str) {
     let after = url.find("//").map_or(0, |i| i + 2);

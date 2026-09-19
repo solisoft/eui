@@ -16,8 +16,17 @@ pub enum TransportError {
     /// The URL is not `wss://`, and the debug-only loopback exception did not
     /// apply.
     Insecure(String),
-    /// The URL could not be parsed or the handshake failed.
+    /// The URL could not be parsed, or the socket could not be reached.
     Connect(String),
+    /// The server answered the upgrade with an HTTP status rather than
+    /// switching protocols.
+    ///
+    /// Separate from [`Self::Connect`] because it is **not** a network fault
+    /// and must not be retried: a `404` here means this address is not a
+    /// session and will not become one, and a client that treats it as a
+    /// dropped connection climbs a backoff ladder for ever against a server
+    /// that is answering perfectly well.
+    Refused(u16, String),
     /// The server sent a text frame; the protocol is binary only.
     TextFrame,
     /// The socket closed.
@@ -29,6 +38,8 @@ impl std::fmt::Display for TransportError {
         match self {
             Self::Insecure(u) => write!(f, "refusing insecure session URL {u}"),
             Self::Connect(e) => write!(f, "connect failed: {e}"),
+            Self::Refused(code, why) if why.is_empty() => write!(f, "the server answered {code} rather than opening a session"),
+            Self::Refused(code, why) => write!(f, "the server answered {code}: {why}"),
             Self::TextFrame => f.write_str("server sent a text frame"),
             Self::Closed => f.write_str("connection closed"),
         }
@@ -428,6 +439,17 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
                 let connector = tokio_tungstenite::Connector::Rustls(crate::transport::tls_config());
                 let (ws, _) = match tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector)).await {
                     Ok(ok) => ok,
+                    // An HTTP status is an answer, not a failure to reach
+                    // anyone: the server understood the request and declined
+                    // it. Carried through as itself so the window can stop
+                    // rather than retry.
+                    Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                        let code = response.status().as_u16();
+                        let why = response.into_body().and_then(|b| String::from_utf8(b).ok()).unwrap_or_default();
+                        let _ = in_tx.send(Incoming::Closed(TransportError::Refused(code, why.trim().to_owned())));
+                        notify();
+                        return;
+                    }
                     Err(e) => {
                         let _ = in_tx.send(Incoming::Closed(TransportError::Connect(e.to_string())));
                         notify();
