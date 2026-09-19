@@ -377,3 +377,47 @@ fn the_arrows_before_the_address_step_through_the_tabs_trail() {
     assert_eq!(click(&mut chrome, 300.0, 58.0), field, "and the address is where it was");
     assert_eq!(field, vec![Action::EditAddress], "which is the address bar");
 }
+
+/// The launcher control: a press on it asks to install, and the same press
+/// once it is installed asks to remove.
+///
+/// It sits beside the padlock, and both halves of it have gone wrong in the
+/// same way before — a box the right size with nothing in it and nothing
+/// behind it — so this presses along the row rather than at a coordinate
+/// somebody worked out once.
+#[test]
+fn the_address_row_offers_to_install_the_application() {
+    let mut chrome = Chrome::new(W, H, 1.0);
+
+    let mut offering = tabs();
+    if let Some(first) = offering.first_mut() {
+        first.installed = Some(false);
+    }
+    chrome.rebuild(&offering, 0);
+    let at = (0..40).find_map(|i| {
+        let x = 100.0 + f64::from(i) as f32 * 4.0;
+        click(&mut chrome, x, 54.0).contains(&Action::Install).then_some(x)
+    });
+    assert!(at.is_some(), "nothing along the address row asks to install");
+
+    // Installed, the same place asks for the opposite.
+    let mut there = tabs();
+    if let Some(first) = there.first_mut() {
+        first.installed = Some(true);
+    }
+    chrome.rebuild(&there, 0);
+    let out = (0..40).find_map(|i| {
+        let x = 100.0 + f64::from(i) as f32 * 4.0;
+        click(&mut chrome, x, 54.0).contains(&Action::Uninstall).then_some(x)
+    });
+    assert!(out.is_some(), "an installed application offers no way out");
+
+    // And nothing at all for an application that publishes no icon: the
+    // control is absent, not inert, so no press anywhere may produce one.
+    chrome.rebuild(&tabs(), 0);
+    for i in 0..40 {
+        let x = 100.0 + f64::from(i) as f32 * 4.0;
+        let got = click(&mut chrome, x, 54.0);
+        assert!(!got.contains(&Action::Install) && !got.contains(&Action::Uninstall), "a launcher control at {x} for an application with no icon");
+    }
+}

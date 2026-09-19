@@ -923,9 +923,20 @@ impl Tab {
                 }
                 // Installable only with an icon to install it as, which
                 // is the one thing an entry cannot do without (01 §2.1).
+                //
+                // Said on stderr either way. The control is *absent* rather
+                // than inert for an application that publishes no icon —
+                // which is the right thing to draw and the wrong thing to
+                // debug, because a missing button and a broken one look
+                // exactly alike. This is the line that tells them apart.
                 #[cfg(has_launchers)]
-                if m.icon.is_some() {
-                    tab.installable = Some(Installable { there: crate::install::installed(&m.app_id), app_id: m.app_id.clone() });
+                match m.icon {
+                    Some(_) => {
+                        let there = crate::install::installed(&m.app_id);
+                        eprintln!("eui: {} publishes an icon — the address bar offers to {} it", m.app_id, if there { "remove" } else { "install" });
+                        tab.installable = Some(Installable { there, app_id: m.app_id.clone() });
+                    }
+                    None => eprintln!("eui: {} publishes no icon, so it cannot be installed (01 §2.1)", m.app_id),
                 }
                 if !m.name.is_empty() {
                     tab.title = m.name;
