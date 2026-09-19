@@ -35,6 +35,12 @@ eui_font("Space Grotesk", [
 # can use on its own (03 §3.5).
 eui_capabilities("net.open")
 
+# What a client calls this application, and — with `public/icon.png` beside
+# it — what it installs as. The EUI mark is this site's own: it is EUI's
+# site, which is the one application for which that picture is not somebody
+# else's.
+eui_name("EUI")
+
 get("/health", "home#health")
 
 router_eui("site", "site#site", "site#site_view")

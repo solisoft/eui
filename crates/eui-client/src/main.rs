@@ -158,15 +158,17 @@ fn launcher(flag: &str, arg: Option<&String>) -> i32 {
         _ => {
             let Some(url) = arg else { usage() };
             #[cfg(all(has_pins, has_native_net))]
-            match install::from_url(url).and_then(|app| {
-                let name = app.name.clone();
-                install::install(&app).map(|files| (name, files))
-            }) {
-                Ok((name, files)) => {
-                    for f in files {
+            match install::from_url(url).and_then(|app| install::install(&app)) {
+                Ok(entry) => {
+                    for f in &entry.files {
                         println!("wrote {}", f.display());
                     }
-                    println!("{name} is in the launcher");
+                    println!("{} is in the launcher", entry.name);
+                    // And opened, through the entry rather than by running
+                    // this binary again: what the desktop will do every
+                    // time from now on is the thing worth proving once,
+                    // while somebody is watching.
+                    install::launch(&entry);
                     0
                 }
                 Err(e) => {

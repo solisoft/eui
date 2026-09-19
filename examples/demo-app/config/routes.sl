@@ -12,6 +12,10 @@
 # to say so explicitly, and this file does not use it: the deploy installs a
 # *released* soli, and a routes file that only loads under an unreleased one
 # is a routes file that does not load.
+# What a client calls this application, and the picture it installs as.
+# `public/icon.png` is found without being named; this one is not.
+eui_name("Meridian")
+
 router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("counter", "live#counter", "live#counter_view")
 router_eui("todo", "live#todo", "live#todo_view")

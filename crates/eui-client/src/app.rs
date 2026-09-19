@@ -705,6 +705,10 @@ fn read_chunks(path: &std::path::Path, tx: &mpsc::SyncSender<Result<(Vec<u8>, bo
 /// Fetch what an entry needs and write it. On the install thread.
 #[cfg(all(has_launchers, has_pins, has_native_net))]
 fn add(url: &str) -> Result<(), String> {
+    // Not launched here, unlike the command line's `--install`: the
+    // application is already open in the tab the person pressed the button
+    // in, and a second window of what they are looking at is not what they
+    // asked for.
     crate::install::install(&crate::install::from_url(url)?).map(|_| ())
 }
 

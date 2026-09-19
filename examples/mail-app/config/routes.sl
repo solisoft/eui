@@ -29,4 +29,9 @@
 # the composer working with nothing to attach.
 eui_capabilities("net.open", "notifications", "fs.pick")
 
+# What a client calls this application: the tab strip, and the launcher
+# entry once somebody installs it. Without this the manifest carries the
+# directory's name, and the dock tile would read `mail-app`.
+eui_name("Mail")
+
 router_eui("mail", "mail#mail", "mail#mail_view")

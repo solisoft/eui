@@ -50,7 +50,11 @@ pub struct Entry {
     pub name: String,
     /// The address it opens.
     pub url: String,
-    /// Every file written for it, in the order it was written.
+    /// Every file written for it, **the launcher entry first**.
+    ///
+    /// The order is load-bearing: [`launch`] starts `files[0]`, and on two
+    /// of the three platforms the icon is written before the entry that
+    /// names it. Launching the icon is what that cost the first time.
     pub files: Vec<PathBuf>,
 }
 
@@ -201,7 +205,7 @@ pub fn from_url(url: &str) -> Result<App, String> {
 /// Installing something already installed replaces it, which is what a
 /// person who clicks it twice means and also how an application that
 /// changed its name or its icon is updated.
-pub fn install(app: &App) -> Result<Vec<PathBuf>, String> {
+pub fn install(app: &App) -> Result<Entry, String> {
     let Some(slug) = slug(&app.app_id) else {
         return Err(format!("{:?} is not a name anything can be filed under", app.app_id));
     };
@@ -210,9 +214,72 @@ pub fn install(app: &App) -> Result<Vec<PathBuf>, String> {
     let _ = uninstall(&app.app_id);
     let files = write_entry(app, &slug)?;
     let mut entries: Vec<Entry> = list().into_iter().filter(|e| e.app_id != app.app_id).collect();
-    entries.push(Entry { app_id: app.app_id.clone(), name: app.name.clone(), url: app.url.clone(), files: files.clone() });
+    let mine = Entry { app_id: app.app_id.clone(), name: app.name.clone(), url: app.url.clone(), files };
+    entries.push(mine.clone());
     save(&entries)?;
-    Ok(files)
+    Ok(mine)
+}
+
+/// Start an application through the entry that was just written for it.
+///
+/// The point of installing something is having it; a person who has just
+/// said yes to an application has said they want it, and making them go
+/// and find the icon they asked for is a step with nothing in it.
+///
+/// Through the *entry*, not by running the client again. That is what the
+/// desktop will do every time afterwards, so it is the thing worth being
+/// sure of on the one occasion somebody is watching: a bundle that will
+/// not open, or a `.desktop` whose `Exec` is wrong, says so now rather
+/// than the next time they reach for it.
+///
+/// Best effort. An entry that was written and did not start is still an
+/// entry, so this never turns an install into a failure.
+pub fn launch(entry: &Entry) {
+    // `files[0]` and not "the one that looks right": every arm of
+    // `write_entry` puts the launcher entry first, and that is the
+    // contract [`Entry::files`] states.
+    let Some(what) = entry.files.first() else { return };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(what);
+        c
+    };
+    #[cfg(target_os = "linux")]
+    let mut cmd = {
+        // `gio launch` reads the entry the way the launcher does. Failing
+        // that — a desktop without GLib's tools — the address goes to this
+        // binary directly, which is what the entry says anyway.
+        let mut c = std::process::Command::new("gio");
+        c.arg("launch").arg(what);
+        if std::process::Command::new("gio").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() {
+            c = std::process::Command::new(me().unwrap_or_else(|_| PathBuf::from("eui")));
+            c.arg(&entry.url);
+        }
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]).arg(what);
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let mut cmd = std::process::Command::new(me().unwrap_or_else(|_| PathBuf::from("eui")));
+    // Its own process group, or it does not outlive us.
+    //
+    // This process is about to exit — installing is the whole of what it
+    // was for — and a child left in our group goes down with the group the
+    // moment whatever started us reaps it. The application appeared to
+    // start and was gone before anything drew: the same launch by hand
+    // worked every time, which is what made it look like the launcher and
+    // not the launching.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let _ = cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 }
 
 /// Remove this application's entry. Removing one that is not installed is
@@ -327,7 +394,13 @@ fn centred(img: &crate::assets::Image, edge: u32) -> crate::assets::Image {
 /// chunk per size. PNG is a legal payload for every type named here, so
 /// the pictures go in as they are and nothing has to speak Apple's older
 /// packed formats.
-#[cfg(target_os = "macos")]
+///
+/// Compiled everywhere, called on macOS. It is byte-shuffling with no
+/// platform behind it, and a build machine that cannot run the result can
+/// still check that what it produced says what it contains — which is more
+/// than an encoder behind a `cfg` nobody here compiles ever gets. Dead on
+/// every other platform, and deliberately so.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn icns(png: &[u8]) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
     for (kind, edge) in [(*b"ic07", 128u32), (*b"ic08", 256), (*b"ic09", 512)] {
@@ -348,7 +421,9 @@ fn icns(png: &[u8]) -> Result<Vec<u8>, String> {
 /// An `.ico`: a directory of pictures, each a PNG. Windows has taken PNG
 /// inside an icon since Vista, so this is a table of contents and the same
 /// pictures again rather than five bitmaps and their masks.
-#[cfg(target_os = "windows")]
+///
+/// Compiled everywhere, for [`icns`]'s reason.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn ico(png: &[u8]) -> Result<Vec<u8>, String> {
     let edges = [16u32, 32, 48, 256];
     let pictures: Vec<Vec<u8>> = edges.iter().map(|e| square(png, *e)).collect::<Result<_, _>>()?;
@@ -451,7 +526,8 @@ fn write_entry(app: &App, slug: &str) -> Result<Vec<PathBuf>, String> {
     // directory, and the ones that do not are the ones where a person
     // logs out anyway.
     let _ = std::process::Command::new("update-desktop-database").arg(home.join("applications")).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-    Ok(vec![icon_at, desktop_at])
+    // The entry first: it is what `launch` starts, and what the icon is for.
+    Ok(vec![desktop_at, icon_at])
 }
 
 // ------------------------------------------------------------------- macOS
@@ -601,7 +677,8 @@ fn write_entry(app: &App, slug: &str) -> Result<Vec<PathBuf>, String> {
     if !out.status.success() {
         return Err(format!("the shortcut was refused: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    Ok(vec![icon_at, link_at])
+    // The shortcut first, for the reason the Linux arm gives.
+    Ok(vec![link_at, icon_at])
 }
 
 /// `s` as one single-quoted PowerShell string.
@@ -697,6 +774,55 @@ mod tests {
         assert!(!ours(Path::new("/")));
         let inside = roots().first().map(|r| r.join("eui-demo.desktop"));
         assert!(inside.is_none_or(|p| ours(&p)), "what we write, we may remove");
+    }
+
+    /// `.icns` and `.ico` are byte formats nobody on this build machine can
+    /// open, so what is checked is that each says what it contains: the
+    /// magic, the lengths that have to add up, and a picture at every
+    /// declared size that really is a PNG of that size. A declared size
+    /// that is not the real one is an icon the platform draws wrong or
+    /// refuses, and it is the one mistake neither of them reports.
+    #[test]
+    fn the_two_icon_containers_declare_what_they_hold() {
+        let png = dot();
+
+        let icns = icns(&png).unwrap();
+        assert_eq!(icns.get(..4), Some(b"icns".as_slice()));
+        let total = u32::from_be_bytes([icns[4], icns[5], icns[6], icns[7]]) as usize;
+        assert_eq!(total, icns.len(), "the header's length is the file's");
+        let mut at = 8;
+        let mut seen = Vec::new();
+        while at < icns.len() {
+            let kind = icns[at..at + 4].to_vec();
+            let len = u32::from_be_bytes([icns[at + 4], icns[at + 5], icns[at + 6], icns[at + 7]]) as usize;
+            assert!(len >= 8 && at + len <= icns.len(), "chunk {kind:?} runs past the end");
+            let img = crate::assets::decode_png(&icns[at + 8..at + len]).unwrap();
+            assert_eq!(img.width, img.height, "an icon entry is square");
+            seen.push((kind, img.width));
+            at += len;
+        }
+        assert_eq!(seen.iter().map(|(_, w)| *w).collect::<Vec<_>>(), vec![128, 256, 512]);
+        assert_eq!(seen.first().map(|(k, _)| k.as_slice()), Some(b"ic07".as_slice()), "128 is ic07");
+
+        let ico = ico(&png).unwrap();
+        assert_eq!(u16::from_le_bytes([ico[0], ico[1]]), 0);
+        assert_eq!(u16::from_le_bytes([ico[2], ico[3]]), 1, "an icon, not a cursor");
+        let count = u16::from_le_bytes([ico[4], ico[5]]) as usize;
+        assert_eq!(count, 4);
+        for i in 0..count {
+            let e = 6 + i * 16;
+            let declared = ico[e];
+            let len = u32::from_le_bytes([ico[e + 8], ico[e + 9], ico[e + 10], ico[e + 11]]) as usize;
+            let off = u32::from_le_bytes([ico[e + 12], ico[e + 13], ico[e + 14], ico[e + 15]]) as usize;
+            assert_eq!(ico[e], ico[e + 1], "square");
+            assert_eq!(u16::from_le_bytes([ico[e + 6], ico[e + 7]]), 32, "32 bits per pixel");
+            assert!(off + len <= ico.len(), "entry {i} points past the end");
+            let img = crate::assets::decode_png(&ico[off..off + len]).unwrap();
+            // 256 is written as zero: the field is one byte and 256 does
+            // not fit in it, which is the format's own convention.
+            let expected = if declared == 0 { 256 } else { u32::from(declared) };
+            assert_eq!(img.width, expected, "entry {i} says {declared} and holds {}", img.width);
+        }
     }
 
     #[test]

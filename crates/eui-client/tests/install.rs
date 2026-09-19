@@ -94,7 +94,7 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
     assert_eq!(app.name, "Counter");
     assert!(app.url.ends_with("/_eui/session/demo"), "{}", app.url);
 
-    let files = eui_client::install::install(&app).unwrap();
+    let files = eui_client::install::install(&app).unwrap().files;
     assert!(eui_client::install::installed("counter.example"));
     assert_eq!(eui_client::install::list().len(), 1);
 
@@ -106,6 +106,10 @@ fn an_application_with_a_signed_icon_installs_and_uninstalls() {
     }
 
     if cfg!(target_os = "linux") {
+        // First, not merely present: `install::launch` starts `files[0]`,
+        // and this list used to lead with the icon — so installing an
+        // application opened its PNG and nothing happened.
+        assert_eq!(files.first().and_then(|f| f.extension()).and_then(|e| e.to_str()), Some("desktop"), "the launcher entry leads the list");
         let desktop = files.iter().find(|f| f.extension().is_some_and(|e| e == "desktop")).expect("a .desktop file");
         let text = std::fs::read_to_string(desktop).unwrap();
         assert!(text.contains("Name=Counter"), "{text}");
