@@ -44,4 +44,10 @@ eui_capabilities("net.open")
 
 get("/health", "home#health")
 
+# One page, two representations, one address. A browser gets HTML; an EUI
+# client asking for frames gets the interface already resolved. Nothing is
+# held between requests either way, so a thousand readers cost a thousand
+# cached responses and no sessions at all.
+get("/hello", "home#hello")
+
 router_eui("site", "site#site", "site#site_view", {"static": "public, max-age=60"})
