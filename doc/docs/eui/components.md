@@ -159,6 +159,14 @@ unknown colour role.
 | `text_align` | `start` · `center` · `end` · `justify` |
 | `clamp` | Maximum lines, then ellipsis |
 | `underline`, `strike` | `true` / `false` — a rule per line of the shaped run, in the glyphs' own colour (03 §2) |
+
+**There is no italic.** The style record has a family, a size and a weight
+and no slant at all (02 §3), and its last reserved byte went to `motion_kind`,
+so there will not be one. A real italic is a *face* an application ships with
+`eui_font(name, paths)`; `markdown`'s `em_font` names it. Without one, `*mark*`
+is drawn a weight heavier — which says emphasis, where the old `text.muted`
+said the opposite.
+
 | `overflow` | `visible` · `clip` · `scroll` |
 | `transition` | `none` · `fast` · `base` · `slow` |
 | `animation` | `none` · `spin` |
@@ -561,7 +569,7 @@ know.
 
 | Signature | Notes |
 |---|---|
-| `markdown(source, opts)` | A whole document as one column. `opts["gap"]` is the space between blocks, `opts["width"]` the measure a picture is fitted to |
+| `markdown(source, opts)` | A whole document as one column. `opts["gap"]` is the space between blocks, `opts["width"]` the measure a picture is fitted to, `opts["em_font"]` a face for `*emphasis*` |
 | `markdown_file(path, opts)` | The same, read from disk and parsed once — cached on the path *and* the measure, because between them they are the whole input |
 | `md_blocks(source, width)` | The blocks on their own |
 | `md_doc_rows(path, width)` | A long document as rows for a windowed `list` (04 §7.1), with a height guessed for each, so a handbook costs the client one window of blocks rather than the handbook |
