@@ -29,9 +29,11 @@
 # the composer working with nothing to attach.
 eui_capabilities("net.open", "notifications", "fs.pick")
 
-# What a client calls this application: the tab strip, and the launcher
-# entry once somebody installs it. Without this the manifest carries the
-# directory's name, and the dock tile would read `mail-app`.
-eui_name("Mail")
+# The application's own name would go here — `eui_name("Mail")` — and does
+# not yet. The builtin is on `soli_lang` main and in no release, the deploy
+# pins an exact Soli, and `rescue` does not help: an unknown identifier is
+# a *static* error and the routes never run. Re-add it with the pin, not
+# before. Until then the manifest carries the directory's name, which is
+# what a launcher entry is labelled with.
 
 router_eui("mail", "mail#mail", "mail#mail_view")

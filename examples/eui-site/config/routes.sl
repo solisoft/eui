@@ -35,11 +35,12 @@ eui_font("Space Grotesk", [
 # can use on its own (03 §3.5).
 eui_capabilities("net.open")
 
-# What a client calls this application, and — with `public/icon.png` beside
-# it — what it installs as. The EUI mark is this site's own: it is EUI's
-# site, which is the one application for which that picture is not somebody
-# else's.
-eui_name("EUI")
+# The application's own name would go here — `eui_name("EUI")` — and does
+# not yet. The builtin is on `soli_lang` main and in no release, the deploy
+# pins an exact Soli, and `rescue` does not help: an unknown identifier is
+# a *static* error and the routes never run. Re-add it with the pin, not
+# before. Until then the manifest carries the directory's name, which is
+# what a launcher entry is labelled with.
 
 get("/health", "home#health")
 

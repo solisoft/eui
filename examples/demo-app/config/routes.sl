@@ -12,9 +12,12 @@
 # to say so explicitly, and this file does not use it: the deploy installs a
 # *released* soli, and a routes file that only loads under an unreleased one
 # is a routes file that does not load.
-# What a client calls this application, and the picture it installs as.
-# `public/icon.png` is found without being named; this one is not.
-eui_name("Meridian")
+# The application's own name would go here — `eui_name("Meridian")` — and does
+# not yet. The builtin is on `soli_lang` main and in no release, the deploy
+# pins an exact Soli, and `rescue` does not help: an unknown identifier is
+# a *static* error and the routes never run. Re-add it with the pin, not
+# before. Until then the manifest carries the directory's name, which is
+# what a launcher entry is labelled with.
 
 router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("counter", "live#counter", "live#counter_view")
