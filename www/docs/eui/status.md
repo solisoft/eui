@@ -305,6 +305,19 @@ a live server: 4 799 B fetched over HTTPS, the socket answers
 the six language SDKs need no change, because they negotiate `min(client,
 ours)` and can only receive the offer if they serve §2.4, which none do.
 
+**And the shell now says when there is no session.** A typed `https://host`
+is normalised to `wss://host` at one door, because somebody copying their
+browser's address bar writes the first and it names the same origin; the
+manifest's `entry` then completes the path. So a tab served entirely over
+`GET /_eui/view/<component>` — no socket, nothing held for the reader —
+showed `wss://eui-site.solisoft.test/_eui/session/site` in the bar and
+nothing to say it was not connected. `Link::Static` existed and
+`link_word` deliberately returned `None` for it, on the reasoning that there
+was no fault to report: true, and not the question. It is `page` now, beside
+where `reconnecting` and `offline` go, and it goes when a socket is dialled.
+The rule moved out of the method into `link_word_of` so that all five states
+are one vector rather than something only a standing tab can be asked.
+
 **Session resume on the Soli side** (01 §4.1) is built, as of 2026-09-20.
 `lang/src/serve/eui/` answered `Start::Fresh` on every reconnect, so a dropped
 wifi hop was a fresh mount and the reader went back to the top with nothing

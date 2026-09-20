@@ -837,6 +837,37 @@ fn name_from_url(url: &str) -> String {
     }
 }
 
+/// Which of those words a socket in this state is owed, as a rule rather
+/// than as a method, so it can be checked without standing a tab up: the
+/// states it distinguishes are the states a person reads off the address
+/// bar, and three of the five say nothing at all.
+fn link_word_of(link: Link, answered: bool) -> Option<&'static str> {
+    match link {
+        Link::Up => None,
+        Link::Trying { .. } | Link::Lost { .. } => Some("reconnecting"),
+        // A tab that never had a session says nothing: the reason it
+        // has none is already in the tab, and "offline" over an
+        // address that was refused would name the wrong fault.
+        Link::Ended if answered => Some("offline"),
+        Link::Ended => None,
+        Link::Asking => Some("permission"),
+        // 01 §2.4: a page, not a socket that is down — so the word has
+        // to be one that names a state and not a fault. "offline" over
+        // a page that is fully drawn and answering its own clicks names
+        // one that does not exist.
+        //
+        // But saying nothing was worse, and this is the line that was
+        // wrong. The address bar shows the manifest's `entry`, which is
+        // a `wss://…/_eui/session/<component>` — the application's
+        // address, and the right thing to show — while this tab has no
+        // session at all and the server is holding nothing for the
+        // reader. With no word beside it, a `wss://` in the bar reads as
+        // a socket, and the one state the endpoint exists to produce is
+        // the one a person cannot see they are in.
+        Link::Static => Some("page"),
+    }
+}
+
 impl Tab {
     /// Open an application: its worker, its manifest check, its connection.
     ///
@@ -1293,20 +1324,7 @@ impl Tab {
 
     /// The word the address bar puts on the socket, if it needs one.
     fn link_word(&self) -> Option<&'static str> {
-        match self.link {
-            Link::Up => None,
-            Link::Trying { .. } | Link::Lost { .. } => Some("reconnecting"),
-            // A tab that never had a session says nothing: the reason it
-            // has none is already in the tab, and "offline" over an
-            // address that was refused would name the wrong fault.
-            Link::Ended if self.answered => Some("offline"),
-            Link::Ended => None,
-            Link::Asking => Some("permission"),
-            // A page, not a socket that is down. There is nothing to say,
-            // and "offline" over a page that is fully drawn and answering
-            // its own clicks would name a fault that does not exist.
-            Link::Static => None,
-        }
+        link_word_of(self.link, self.answered)
     }
 
     /// How the strip should show this tab.
@@ -5177,6 +5195,33 @@ mod tests {
         drop(tx);
         assert!(matches!(rx.into_iter().next(), Some(Err(_))));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 01 §2.4: a tab whose page came over `GET /_eui/view/<component>`
+    /// holds no session, and has to say so.
+    ///
+    /// The address bar shows the manifest's `entry` — `wss://host/_eui/…`,
+    /// which is the application's address and the right thing to show — so
+    /// without a word beside it a page reads exactly like a socket. This
+    /// used to be `None`, on the reasoning that there was no fault to
+    /// report: true, and not the question. The word names a state.
+    #[test]
+    fn a_page_says_it_is_a_page_and_a_socket_that_is_up_says_nothing() {
+        use crate::time::Instant;
+        let at = Instant::now();
+        assert_eq!(link_word_of(Link::Static, false), Some("page"), "no session, and the bar shows a wss:// address");
+        assert_eq!(link_word_of(Link::Up, false), None, "a socket that is talking is the ordinary case and needs no word");
+
+        // The three that were already right, so that a change to one of
+        // them has to come through here.
+        assert_eq!(link_word_of(Link::Trying { until: at }, false), Some("reconnecting"));
+        assert_eq!(link_word_of(Link::Lost { at }, false), Some("reconnecting"));
+        assert_eq!(link_word_of(Link::Asking, false), Some("permission"));
+
+        // A tab that never had a session says nothing: the reason is
+        // already in the tab, and "offline" would name the wrong fault.
+        assert_eq!(link_word_of(Link::Ended, false), None, "refused before it ever connected");
+        assert_eq!(link_word_of(Link::Ended, true), Some("offline"), "it had a session and lost it for good");
     }
 
     #[test]

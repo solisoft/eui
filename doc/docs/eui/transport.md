@@ -101,6 +101,23 @@ here. And a `GET` has no same-origin check — a resource a CDN is meant to hold
 cannot have one — so declaring a component static is promising that its
 `connect` handler is a *read*: an `<img src>` on any page anywhere reaches it.
 
+### What the shell shows while there is no session
+
+The reference shell normalises a typed address at one door: `https://host`
+becomes `wss://host`, because somebody copying their browser's address bar
+writes the first and it names the same origin. The manifest's `entry` then
+completes it, so an address with no path lands on
+`wss://host/_eui/session/<component>` — the application's own address, and
+the right thing to show.
+
+Which leaves a `wss://` in the bar over a tab that may have no socket at all.
+So the address row carries a word for it, beside the trust chip and where
+`reconnecting` and `offline` go: **`page`**. It is not a fault and not a
+degraded state — the tree is drawn, its pictures are fetched, its `local(…)`
+handlers run, and the server is holding nothing whatever for this reader —
+but it is a state, and the one this endpoint exists to produce. The word goes
+when a socket is dialled.
+
 ### When a page needs the server after all
 
 A page fetched that way opens no socket until something happens that only the

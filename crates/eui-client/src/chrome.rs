@@ -102,10 +102,15 @@ pub struct TabView<'a> {
     pub can_forward: bool,
     /// What the socket is doing, when that is worth a word: `reconnecting`
     /// while the client is getting the session back, `offline` once it has
-    /// given up. `None` while it is simply talking.
+    /// given up, `page` for a tab that has no socket because it never
+    /// needed one (01 §2.4). `None` while it is simply talking.
     ///
     /// Spec 01 §4: a window that stopped talking to its application must
-    /// not look like one that is merely idle.
+    /// not look like one that is merely idle. And the converse, which is
+    /// what `page` is for: a window holding no session must not look like
+    /// one that is, which it otherwise does — the address bar shows the
+    /// manifest's `entry`, and that is a `wss://` whether or not anything
+    /// was ever dialled.
     pub link: Option<&'a str>,
     /// What this application's manifest asked for, once it has arrived, so
     /// the address row can offer the answer back. `None` before the manifest
