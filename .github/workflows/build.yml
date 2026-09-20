@@ -33,6 +33,67 @@ jobs:
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
 
+  # The two shapes nobody's machine compiles, checked in the time it takes
+  # to say so.
+  #
+  # `cargo xtask conform` runs both of these and every developer is meant to
+  # run `conform`; the day one did not, `app.rs` reached for three things
+  # only the native transport had and the browser client stopped compiling —
+  # which the `web` job below does catch, but only after installing
+  # `wasm-bindgen-cli` from source, six minutes in. A `cargo check` is one,
+  # and a gate that answers before the coffee is poured is a gate people
+  # wait for.
+  #
+  # A `cfg` nobody compiles is a `cfg` nobody checks, and these are the two
+  # that no ordinary build reaches: the page, where four capabilities are
+  # off and `transport_web.rs` replaces a module, and the phone, where
+  # `no_subprocess` turns on a body of code a desktop never sees.
+  shapes:
+    name: The shapes no desktop build compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libxkbcommon-dev libwayland-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The shape a page builds in
+        run: cargo check -p eui-client --target wasm32-unknown-unknown --no-default-features
+
+      # Its own target directory: these flags are part of a build's
+      # fingerprint, so sharing one with the step above would have each run
+      # evict what the other left.
+      - name: The shape a phone builds in
+        run: cargo check -p eui-client --all-targets
+        env:
+          RUSTFLAGS: --cfg no_subprocess
+          CARGO_TARGET_DIR: target/phone
+
+  # `deny.toml` carries three RUSTSEC exceptions, each with the reason it is
+  # accepted and the condition that removes it, plus the licence allowlist
+  # and `unknown-git = "deny"`. None of that meant anything until now: the
+  # file was written, documented in the README, and run by whoever
+  # remembered. A waiver nobody re-reads is a waiver that outlives its
+  # reason.
+  deny:
+    name: Advisories and licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   web:
     name: Build the browser client
     runs-on: ubuntu-latest

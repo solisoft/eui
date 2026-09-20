@@ -19,6 +19,11 @@ ignore = [
     # reviewed when the upstream crates move.
     "RUSTSEC-2026-0206",
     "RUSTSEC-2024-0436",
+    # instant is unmaintained (RUSTSEC-2024-0384). It arrives under
+    # notify 7, by way of notify-types, and is a clock rather than a parser:
+    # nothing hostile reaches it. `notify` 8 drops it, so this exception ends
+    # with that bump and not with an argument about whether it matters.
+    "RUSTSEC-2024-0384",
 ]
 
 [licenses]

@@ -1,0 +1,101 @@
+name: Fuzz
+
+# Five targets, all of them over bytes a server sends: the frame decoder,
+# a session applying batches, a theme, a layout pass, and the shader
+# verifier. A panic in any of them is a bug rather than a curiosity — these
+# are the crates whose whole job is to be handed something hostile and
+# refuse it, and `eui-proto` takes no dependencies precisely so that every
+# line of it is ours to fuzz.
+#
+# The targets have existed since the crates did and had never been run by
+# anything but a person who remembered. Nightly gives each a real budget; a
+# short smoke runs when the surface under it changes.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  pull_request:
+    paths:
+      - "crates/eui-proto/**"
+      - "crates/eui-tree/**"
+      - "crates/eui-theme/**"
+      - "crates/eui-layout/**"
+      - "crates/eui-shader/**"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: eui-proto
+            target: frame_decode
+          - crate: eui-proto
+            target: session_apply
+          - crate: eui-proto
+            target: theme_decode
+          - crate: eui-proto
+            target: layout
+          - crate: eui-shader
+            target: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo fuzz` builds with `-Z sanitizer=address`, which is nightly's.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/${{ matrix.crate }}/fuzz/target
+          key: ${{ runner.os }}-eui-fuzz-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-eui-fuzz-${{ matrix.target }}-
+
+      # The corpus is what makes a ten-minute budget worth anything: without
+      # one, every run rediscovers that a frame starts with a kind byte
+      # before it can reach anything interesting. It is deliberately not in
+      # git (`.gitignore:5`), so it is carried here instead. `run_id` in the
+      # key makes every run save a fresh entry and `restore-keys` picks up
+      # the newest previous one, so it accumulates across nights.
+      - name: Restore the corpus
+        uses: actions/cache@v4
+        with:
+          path: crates/${{ matrix.crate }}/fuzz/corpus/${{ matrix.target }}
+          key: eui-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: eui-corpus-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Ten minutes a target at night, twenty seconds on a pull request. The
+      # short one is not there to find anything; it is there so that a change
+      # which makes a target stop *building* is caught by the change rather
+      # than by the next night.
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: crates/${{ matrix.crate }}
+        run: |
+          budget=20
+          if [ "${{ github.event_name }}" != "pull_request" ]; then budget=600; fi
+          cargo fuzz run ${{ matrix.target }} -- \
+            -max_total_time=$budget -rss_limit_mb=4096 -timeout=25
+
+      # A crash is a file, and a file nobody keeps is a bug nobody can
+      # reproduce.
+      - name: Keep what crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eui-fuzz-artifacts-${{ matrix.target }}
+          path: crates/${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

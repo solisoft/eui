@@ -198,11 +198,22 @@ full layout of the table from 1.6 ms to about 0.15 ms. Along the way:
 no longer allocates on a hit, and the per-frame layout reset no longer
 memsets a per-node style cache.
 
-`cargo deny check` passes with three tracked exceptions (unmaintained
-`ttf-parser`, `rustybuzz` and `paste`, all under cosmic-text or wgpu), each
-with its reason in `deny.toml`. Four `cargo fuzz` targets exist — frame
-decoding, session apply, theme documents, layout — and want a nightly
-toolchain to run; the in-tree hostile-input tests run on every `cargo test`.
+`cargo deny check` passes with four tracked exceptions — unmaintained
+`ttf-parser`, `rustybuzz`, `paste` and `instant`, under cosmic-text, wgpu
+and notify — each with its reason and the condition that ends it in
+`deny.toml`. It is a CI job now, and the first run of it earned its place:
+a live advisory against `rustls` 0.23.43 (RUSTSEC-2026-0285, TLS 1.3
+handshake messages accepted across encryption-level boundaries) had landed
+in the stack that spec 01 §1 makes the whole client rest on, and the file
+that would have said so was being run by whoever remembered. Fixed by the
+bump it asks for.
+
+Five `cargo fuzz` targets exist — frame decoding, session apply, theme
+documents, layout, and the shader verifier — and want a nightly toolchain
+to run. They had never run in CI either; `fuzz.yml` now gives each ten
+minutes a night and twenty seconds on a pull request that touches the
+crate under it, and carries the corpus between runs. The in-tree
+hostile-input tests still run on every `cargo test`.
 
 **`eui-shader` — what a scene's module must be.** The second verifier, and
 the second exception to "no code from the network".
