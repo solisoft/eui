@@ -462,6 +462,12 @@ charts. The tag field is there too, because it is where §3.1's three tiers
 meet: `Enter` arrives as a `submit` and the field empties itself, and the
 same `Backspace` deletes a character on one press and a whole tag on the next.
 
+And 03 §5.3's shared element, which needs a server to be worth anything: the
+gallery's customers section is a stack narrow, the account's disc is the one
+node on both of its pages, and pushing into a row gives that disc a transform
+carrying its partner's width. Nothing else produces a scale, and the disc is
+not the node the change named — the server swapped the page.
+
 ## 11. Scenes — `crates/eui-shader/tests`, `crates/eui-client/tests/mesh.rs`, `crates/eui-render/tests/render.rs`
 
 **A scene's pixels are not a conformance surface**, and this section is short

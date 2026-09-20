@@ -3202,6 +3202,58 @@ fn a_tap_on_a_grip_leaves_no_ghost_behind() {
 /// that moved nothing in the text — which is why naming it does not make the
 /// field undeletable, and why the same key deletes a character one press and
 /// a whole tag the next.
+/// 03 §5.3, against a real server: the customers section's avatar flies from
+/// the list row into the detail header.
+///
+/// The section is the one place in the demo that pushes and pops, and the
+/// disc is the one node on both pages. What proves the pair is the **scale**
+/// in the transform slot — no other motion produces one — and that the node
+/// carrying it is not the node the change named: the server swapped the
+/// page, and the disc is somewhere inside it.
+#[test]
+fn a_shared_element_flies_between_two_pages_of_the_customers_stack() {
+    let Ok(bin) = std::env::var("EUI_SOLI_BIN") else { return };
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (_server, port) = start_soli(&bin);
+    // Narrow: under `md` the list and the detail are a stack rather than a
+    // split, and a split is two live nodes under one name.
+    let (mut d, conn, wake) = open(port, "gallery", 700.0, 900.0);
+    let has = |d: &Driver, t: &str| texts(d, root(d)).iter().any(|x| x == t);
+    pump(&mut d, &conn, &wake, |d| has(d, "The week's work"));
+
+    // The press lands on the text and the hit test walks up to whatever
+    // answers a click, exactly as a finger does.
+    let by_text = |d: &Driver, t: &str| d.session().preorder(root(d)).find(|ix| d.session().text_of(*ix) == Some(t)).unwrap_or_else(|| panic!("nothing reads {t:?}"));
+
+    // Into Customers, which opens on a customer; back out to the list, so
+    // that the row's disc is the one on screen when the next push happens.
+    let to = by_text(&d, "Customers");
+    click(&mut d, &conn, to);
+    pump(&mut d, &conn, &wake, |d| has(d, "Ada SARL"));
+    let _ = d.paint(700, 900);
+    let back = d.session().atom_id("nav_back").and_then(|a| d.session().lookup_key(a)).expect("the way out");
+    click(&mut d, &conn, back);
+    pump(&mut d, &conn, &wake, |d| has(d, "Grace Ltd"));
+    // The frame that puts the rows on screen is the frame their boxes are
+    // remembered on: §5.3 pairs with what was painted, not with what exists.
+    let list = d.paint(700, 900);
+    let discs = list.quads.iter().filter(|q| q.rect[2] == 24.0 && q.rect[3] == 24.0).count();
+    assert!(discs > 1, "the list is drawn, with a disc a row: {discs}");
+
+    // And back in, to a different account than the one it opened on.
+    let row = by_text(&d, "Grace Ltd");
+    click(&mut d, &conn, row);
+    pump(&mut d, &conn, &wake, |d| has(d, "Grace Ltd") && !has(d, "Ada SARL"));
+    let detail = d.paint(700, 900);
+    let header = detail.quads.iter().find(|q| q.rect[2] == 36.0 && q.rect[3] == 36.0).expect("the header's disc");
+    let slot = (header.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_ne!(slot, 0, "the disc is on the move, though the page named nothing about it");
+    let x = detail.xforms[slot as usize - 1];
+    assert!((x.from[2] - 24.0 / 36.0).abs() < 0.01, "at its partner's width: {}", x.from[2]);
+    assert_eq!((x.to[0], x.to[1], x.to[2]), (0.0, 0.0, 1.0), "ending where the layout put it");
+    assert!(x.from[0] != 0.0 || x.from[1] != 0.0, "and it came from somewhere else on the page");
+}
+
 /// The demo's page-transition picker opens and picks.
 ///
 /// It defaults to `none`, which is the whole point of it — nothing the client
