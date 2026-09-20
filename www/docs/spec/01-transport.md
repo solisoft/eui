@@ -289,6 +289,69 @@ A server MAY decline to adopt for any reason — it need not implement the
 comparison at all — and `Fresh` is always a correct answer. `Adopted` is an
 optimisation the protocol makes possible, not an obligation it imposes.
 
+### 2.7 Live regions
+
+§2.4 makes a page cost nothing to serve and §2.6 makes the session that
+follows it seamless, but both are all-or-nothing: the moment one corner of a
+page needs to be live, the whole page is a session again, and every reader
+pays a session's memory for a comment count that changes twice a day.
+
+A **live region** is a node whose *content* comes from a session of its own.
+The page around it stays a cached render that no session is held for.
+
+```
+{"k": "slot", "live": "/_eui/session/comments?for=1042", "c": [ … ]}
+```
+
+`live` is an absolute path on **the same origin**, and a client MUST refuse
+one that names another: a tree that could open a socket elsewhere would make
+every page a way to reach any host the reader can reach. It is an ordinary
+prop (§02 §4.4), so it needs no protocol version of its own — and a client
+that does not know it ignores it and draws the node as it stands, which is
+the whole degradation story and it is free.
+
+**The node's own children are what shows until the region speaks**, and they
+came from the cached render. An application can therefore put something
+useful there — the count as it was when the page was rendered, a skeleton,
+last night's build status — and the live version replaces it if and when a
+session opens. A page whose regions never connect is a page that is merely
+out of date, not a page with holes in it.
+
+**The two trees never share a node id space.** The page's ids come from the
+render that produced it; the region's come from its own session's encoder,
+which starts at 1 like any other. A region's `Mount` replaces that region's
+content and nothing else; its ops address its own nodes; and an event raised
+inside it carries its own ids and goes to **its own socket**. How a client
+reconciles the two is the client's business and this document does not say —
+only that a server may reason about its own session alone, and that no id it
+sends can name a node it did not create.
+
+The boundary is the node carrying the prop: that node belongs to the page,
+everything below it belongs to the region.
+
+- A client MUST open **one session per distinct `live` path**. Two regions
+  naming the same path share one session; two naming the same component with
+  different queries do not, because the query is what tells the application
+  which region it is rendering.
+- A client MAY defer opening until the node is first laid out, and SHOULD for
+  one that is not visible — a comment thread below the fold on a page nobody
+  scrolls should cost what the rest of the page costs, which is nothing.
+- A region whose session cannot be opened, or which ends, **leaves the page
+  alone**: the node keeps the children it had, the reason is the client's to
+  report, and nothing else on the page is torn down. A live part failing must
+  never be able to take a still page with it.
+- At most `MAX_LIVE_REGIONS` sessions may be open for one page
+  ([`10-budgets.md`](10-budgets.md) §1). Past it a client opens no more and
+  leaves those regions as they were rendered. The ceiling exists because a
+  tree is data: a view that derives a region per row would otherwise open a
+  socket per row.
+- A region's tree may itself carry `live`. Each is a session like any other,
+  and the same ceiling counts them all.
+
+Nothing here adds a frame, an op or a version. A live region is an ordinary
+session that happens to be addressed by a prop, which is why an application
+can adopt one without its clients being rebuilt.
+
 ## 3. Framing
 
 Each WebSocket binary message carries exactly one frame:

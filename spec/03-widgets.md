@@ -41,6 +41,24 @@ the JPEG or the WebP decoder — they are counted in
 with the format in the reason, and the node draws nothing. Anything else is a
 decode failure in every build.
 
+### 1.3 A node whose content is live
+
+Any node may carry a **`live` prop** — an absolute path on the same origin —
+and then its content comes from a session of its own rather than from the
+tree it sits in (01 §2.7). `slot` is the natural carrier, being "a named
+insertion point" already, but the prop is not tied to a kind.
+
+The node's own children are what shows until that session speaks, and they
+came from whatever rendered the page. So a live region degrades in three
+directions at once and needs no special handling in any of them: an older
+client ignores a prop it does not know and draws the children; a session that
+cannot be opened leaves the children; and a page served from a cache shows
+the children until the region connects. In each case the page is out of date
+rather than broken, which is the difference between a stale number and a hole.
+
+A client MUST refuse a `live` naming another origin, and opens at most
+`MAX_LIVE_REGIONS` of them for one page (10 §1).
+
 ## 2. Painting
 
 Everything paints as a rounded rectangle. For a node with style `s`:

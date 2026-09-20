@@ -19,6 +19,15 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, scroll | 60 fps, < 2 ms CPU per frame |
 | 10 000-row virtualised table, drag | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
+| `MAX_LIVE_REGIONS` — sessions one page may open (01 §2.7) | **8** |
+
+`MAX_LIVE_REGIONS` is a ceiling and not a target: most pages want none and a
+page that wants one wants one. It is here because a tree is data — a view that
+derived a region per row would open a socket per row, and the reader whose
+machine pays for that is not the one who wrote the view. Past the ceiling a
+client opens no more sessions and leaves those regions showing what the page
+was rendered with, which is the same thing that happens when a region's
+session cannot be opened at all.
 
 An edited field is what an *input* arms a deadline for: 06 §2's idle
 `change`, one per burst of typing, disarmed by the event it produces and by the
