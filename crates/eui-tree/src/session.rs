@@ -6,6 +6,7 @@
 //! resync, rebuild — so there is no need to snapshot the tree before every
 //! batch to be able to roll back.
 
+use eui_proto::limits::MAX_ISLANDS;
 use eui_proto::{limits as proto, Batch, ColorRef, EventKind, Handler, NodeKind, Op, StyleRecord, Subtree, TextRef, Value};
 
 use crate::arena::{dirty, Arena, Node, NodeIx};
@@ -79,6 +80,28 @@ pub struct Session {
     /// layout needs one tree; table ids are not, because nobody needs them to
     /// be and the arithmetic does not work.
     tables: Tables,
+    /// Which session's batch is being applied right now (01 §2.7): `0` for
+    /// the page, an island's index for one of its batches.
+    ///
+    /// A field rather than an argument threaded through forty call sites,
+    /// and it is set and cleared by the two entry points that can change it.
+    /// Everything below reads it to know whose ids an op names and whose
+    /// tables a reference resolves against.
+    applying: u16,
+    /// One [`Tables`] per island, in the order they were opened (01 §2.7).
+    ///
+    /// Not one `Session` per island, which was the other design and is
+    /// worse: the page would then need an arena, a layout and a paint for
+    /// each, and neither the layout engine nor the painter would be able to
+    /// stay ignorant of islands. One tree, one arena, and a node that says
+    /// which set of tables its ids mean.
+    ///
+    /// Empty for every page that has no island, which is almost all of them.
+    islands: Vec<Tables>,
+    /// Where each island's content hangs: its owner index and the page node
+    /// carrying the `island` prop. The boundary 01 §2.7 draws — that node
+    /// belongs to the page, everything below it to the island.
+    island_roots: Vec<(u16, NodeIx)>,
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
@@ -152,6 +175,9 @@ impl Session {
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
             entrances: Vec::new(),
+            applying: 0,
+            islands: Vec::new(),
+            island_roots: Vec::new(),
             exits: Vec::new(),
             media: Vec::new(),
             wakers: Vec::new(),
@@ -181,9 +207,47 @@ impl Session {
         self.arena.get(ix)
     }
 
-    /// A node's index by server id.
+    /// The interned tables `owner` reads: the page's for `0`, an island's
+    /// for `1..` (01 §2.7).
+    ///
+    /// An owner that names no open island falls back to the page's, which
+    /// cannot happen from a batch — `apply_region` refuses an index it did
+    /// not hand out — and is the harmless answer for a node left over from
+    /// an island that has since been closed.
+    fn tables_of(&self, owner: u16) -> &Tables {
+        usize::from(owner).checked_sub(1).and_then(|i| self.islands.get(i)).unwrap_or(&self.tables)
+    }
+
+    /// The tables of whichever session's batch is being applied.
+    fn cur(&self) -> &Tables {
+        self.tables_of(self.applying)
+    }
+
+    fn cur_mut(&mut self) -> &mut Tables {
+        match usize::from(self.applying).checked_sub(1).and_then(|i| self.islands.get_mut(i)) {
+            Some(t) => t,
+            None => &mut self.tables,
+        }
+    }
+
+    /// The tables the node at `ix` reads — its owner's.
+    fn tables_at(&self, ix: NodeIx) -> &Tables {
+        self.arena.get(ix).map_or(&self.tables, |n| self.tables_of(n.owner))
+    }
+
+    /// A node's index by server id, **in the page's space**.
+    ///
+    /// An island's ids are its own (01 §2.7), so this cannot answer for one:
+    /// `1` names a node on the page and a different node in every island
+    /// open on it. [`Session::lookup_in`] takes the owner.
     pub fn lookup(&self, id: u32) -> Option<NodeIx> {
-        self.arena.lookup(id)
+        self.arena.lookup(0, id)
+    }
+
+    /// A node's index by server id in `owner`'s space — `0` for the page,
+    /// and an island's index for one of its nodes.
+    pub fn lookup_in(&self, owner: u16, id: u32) -> Option<NodeIx> {
+        self.arena.lookup(owner, id)
     }
 
     /// The first live node whose key is the atom `key`. This is how a local
@@ -200,14 +264,14 @@ impl Session {
     /// The node's text, atom resolved.
     pub fn text_of(&self, ix: NodeIx) -> Option<&str> {
         match self.arena.get(ix)?.text.as_ref()? {
-            TextRef::Atom(id) => self.tables.atoms.get(*id).map(String::as_str),
+            TextRef::Atom(id) => self.tables_at(ix).atoms.get(*id).map(String::as_str),
             TextRef::Inline(s) => Some(s.as_str()),
         }
     }
 
     /// The node's computed style; id 0 is the default record.
     pub fn style_of(&self, ix: NodeIx) -> StyleRecord {
-        self.arena.get(ix).and_then(|n| self.tables.styles.get(n.style)).copied().unwrap_or_default()
+        self.arena.get(ix).and_then(|n| self.tables_of(n.owner).styles.get(n.style)).copied().unwrap_or_default()
     }
 
     /// The node's handler for `event`.
@@ -323,13 +387,13 @@ impl Session {
     /// Point a node at a style id from a local handler. The id must exist;
     /// a chunk cannot invent styles, only pick among the session's.
     pub fn set_style_local(&mut self, ix: NodeIx, style: u32) -> Option<bool> {
-        if style != 0 && self.tables.styles.get(style).is_none() {
+        if style != 0 && self.cur().styles.get(style).is_none() {
             return None;
         }
         let old = self.arena.get(ix)?.style;
         // A restyle that only recolours -- a hover, mostly -- owes a
         // repaint and not a layout: nothing the node measures changed.
-        let record = |id: u32| if id == 0 { Some(StyleRecord::default()) } else { self.tables.styles.get(id).copied() };
+        let record = |id: u32| if id == 0 { Some(StyleRecord::default()) } else { self.cur().styles.get(id).copied() };
         let paint_only = matches!((record(old), record(style)), (Some(a), Some(b)) if same_layout(&a, &b));
         let n = self.arena.get_mut(ix)?;
         n.style = style;
@@ -527,11 +591,14 @@ impl Session {
             return;
         }
         let Some(node) = self.arena.get(ix) else { return };
-        let (id, style, key) = (node.id, node.style, node.key);
+        let (id, style, key, owner) = (node.id, node.style, node.key, node.owner);
         if style == 0 {
             return;
         }
-        if let Some(r) = self.tables.styles.get(style) {
+        // The node's own tables: a node leaving an island wears a style the
+        // island defined, and the page's table would answer for a different
+        // record under the same id.
+        if let Some(r) = self.tables_of(owner).styles.get(style) {
             if r.animation & eui_proto::ANIMATION_EXIT != 0 {
                 self.exits.push((id, r.motion, key));
             }
@@ -589,6 +656,98 @@ impl Session {
         Ok(())
     }
 
+    /// Open an island (01 §2.7): a session of its own whose content hangs
+    /// under `at`, a node of the page.
+    ///
+    /// Returns the owner index its batches must be applied under. `None`
+    /// when the page already holds [`MAX_ISLANDS`] of them — past the
+    /// ceiling a client opens no more and leaves the node as it was
+    /// rendered, which §2.7 asks for in as many words and 10 §1 counts.
+    /// The ceiling exists because a tree is data: a view that derived an
+    /// island per row would otherwise open a socket per row.
+    pub fn open_island(&mut self, at: NodeIx) -> Option<u16> {
+        if self.islands.len() >= MAX_ISLANDS || self.arena.get(at).is_none() {
+            return None;
+        }
+        self.islands.push(Tables::new(self.limits));
+        let owner = u16::try_from(self.islands.len()).ok()?;
+        self.island_roots.push((owner, at));
+        Some(owner)
+    }
+
+    /// Apply a batch that came from an island's socket.
+    ///
+    /// Everything inside is resolved in that island's space: its node ids,
+    /// its atoms, its styles, its colours, its chunks and its font roles.
+    /// The one thing it may not do is reach the page — `find` cannot see a
+    /// node the island did not create, because the id index is keyed by
+    /// owner — which is 01 §2.7's "no id it sends can name a node it did
+    /// not create", enforced by the shape of the map rather than by a check
+    /// that could be forgotten.
+    ///
+    /// An island's `Mount` replaces **that island's content and nothing
+    /// else**: the node carrying the prop belongs to the page, everything
+    /// below it to the island.
+    pub fn apply_region(&mut self, owner: u16, batch: &Batch) -> Result<()> {
+        let at = self.island_roots.iter().find(|(o, _)| *o == owner).map(|(_, ix)| *ix).ok_or(ApplyError::Internal)?;
+        let prev = std::mem::replace(&mut self.applying, owner);
+        let out = self.apply_within(at, batch);
+        self.applying = prev;
+        out
+    }
+
+    /// The body of [`Session::apply_region`], so that `applying` is put back
+    /// on every road out of it — including the error ones, of which there
+    /// are several and each of which would otherwise leave the whole session
+    /// resolving the page's ops against an island's tables.
+    fn apply_within(&mut self, at: NodeIx, batch: &Batch) -> Result<()> {
+        for op in &batch.ops {
+            match op {
+                // An island's `Mount` is a graft under its node, not a new
+                // document: the page keeps its root, its focus and every
+                // other island.
+                Op::Mount(subtree) => {
+                    let old: Vec<NodeIx> = self.children(at).to_vec();
+                    for child in old {
+                        if self.focused_within(child) {
+                            self.focused = NodeIx::NONE;
+                        }
+                        self.note_exit(child);
+                        self.arena.release(child)?;
+                    }
+                    if let Some(n) = self.arena.get_mut(at) {
+                        n.children.clear();
+                    }
+                    self.prune_sets();
+                    let depth = self.depth_of(at).saturating_add(1);
+                    let root = self.graft(subtree, at, depth)?;
+                    if let Some(n) = self.arena.get_mut(at) {
+                        n.children.push(root);
+                    }
+                    self.arena.mark_dirty(at)?;
+                }
+                other => self.apply_op(other)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// How deep `ix` sits, so an island's graft is checked against the same
+    /// depth ceiling as the page it hangs in — an island cannot be a way
+    /// round 02's limit.
+    fn depth_of(&self, ix: NodeIx) -> u32 {
+        let mut d = 1u32;
+        let mut cur = self.arena.get(ix).map_or(NodeIx::NONE, |n| n.parent);
+        while cur.is_some() {
+            d = d.saturating_add(1);
+            cur = match self.arena.get(cur) {
+                Some(n) => n.parent,
+                None => break,
+            };
+        }
+        d
+    }
+
     /// Put every previewed style back to what the server last said, so a
     /// batch diffs against the tree the server believes it sent. The
     /// client re-runs the pointer's `enter` after the batch, so a card
@@ -617,28 +776,31 @@ impl Session {
     pub fn apply_op(&mut self, op: &Op) -> Result<()> {
         match op {
             Op::DefAtom { id, value } => {
-                let total = self.tables.atom_bytes.saturating_add(value.len());
+                let total = self.cur().atom_bytes.saturating_add(value.len());
                 if total > self.limits.max_atom_total_bytes {
                     return Err(ApplyError::AtomBudget);
                 }
-                self.tables.atoms.define(*id, value.clone())?;
-                self.tables.atom_ids.entry(value.clone()).or_insert(*id);
+                self.cur_mut().atoms.define(*id, value.clone())?;
+                self.cur_mut().atom_ids.entry(value.clone()).or_insert(*id);
+                // The well-known names stay the page's: they are how *this*
+                // client recognises a prop, and an island that interns
+                // `item_height` under an id of its own means the same by it.
                 self.known.note(*id, value);
-                self.tables.atom_bytes = total;
+                self.cur_mut().atom_bytes = total;
                 Ok(())
             }
             Op::DefStyle { id, record } => {
                 self.check_style_record(record)?;
-                self.tables.styles.define(*id, *record)
+                self.cur_mut().styles.define(*id, *record)
             }
-            Op::DefColor { id, rgba } => self.tables.colors.define(*id, *rgba),
-            Op::DefChunk { id, hash } => self.tables.chunks.define(*id, Chunk::Hash(*hash)),
-            Op::DefChunkBytes { id, bytes } => self.tables.chunks.define(*id, Chunk::Bytes(bytes.clone())),
+            Op::DefColor { id, rgba } => self.cur_mut().colors.define(*id, *rgba),
+            Op::DefChunk { id, hash } => self.cur_mut().chunks.define(*id, Chunk::Hash(*hash)),
+            Op::DefChunkBytes { id, bytes } => self.cur_mut().chunks.define(*id, Chunk::Bytes(bytes.clone())),
             Op::DefFont { role, faces } => {
                 // The decoder already bounded the role and the face count;
                 // this is the slot's own check, so a session built by hand
                 // in a test cannot write past the array either.
-                let slot = self.tables.fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
+                let slot = self.cur_mut().fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
                 *slot = Some(faces.clone());
                 Ok(())
             }
@@ -670,7 +832,7 @@ impl Session {
             Op::Replace { node, subtree } => self.replace(*node, subtree),
             Op::SetStyle { node, style } => {
                 if *style != 0 {
-                    self.tables.styles.require(*style)?;
+                    self.cur().styles.require(*style)?;
                 }
                 let ix = self.find(*node)?;
                 let n = self.arena.require_mut(ix)?;
@@ -692,7 +854,7 @@ impl Session {
             }
             Op::SetProp { node, prop, value } => {
                 let ix = self.find(*node)?;
-                self.tables.atoms.require(*prop)?;
+                self.cur().atoms.require(*prop)?;
                 self.check_value(value)?;
                 let n = self.arena.require_mut(ix)?;
                 if n.kind.is_inert() {
@@ -871,19 +1033,19 @@ impl Session {
         // does not leave half a graft in the arena before poisoning.
         for flat in &subtree.nodes {
             if flat.style != 0 {
-                self.tables.styles.require(flat.style)?;
+                self.cur().styles.require(flat.style)?;
             }
             if let Some(t) = &flat.text {
                 self.check_text(t)?;
             }
             for (prop, value) in subtree.props_of(flat) {
-                self.tables.atoms.require(*prop)?;
+                self.cur().atoms.require(*prop)?;
                 self.check_value(value)?;
             }
             for (_, handler) in subtree.handlers_of(flat) {
                 self.check_handler(handler)?;
             }
-            if self.arena.lookup(flat.id).is_some() {
+            if self.arena.lookup(self.applying, flat.id).is_some() {
                 return Err(ApplyError::DuplicateNode(flat.id));
             }
         }
@@ -912,6 +1074,7 @@ impl Session {
                 children: Vec::with_capacity(flat.child_count as usize),
                 scroll: (0, 0),
                 dirty: dirty::SELF,
+                owner: self.applying,
             })?;
             if root.is_none() {
                 root = ix;
@@ -919,7 +1082,7 @@ impl Session {
             // Every new node in the session passes through here — `Mount`,
             // `Replace` and `InsertChild` all graft — so this is the one
             // place an entrance can be noticed.
-            if flat.style != 0 && self.tables.styles.get(flat.style).is_some_and(|r| r.animation & eui_proto::ANIMATION_ENTER != 0) {
+            if flat.style != 0 && self.cur().styles.get(flat.style).is_some_and(|r| r.animation & eui_proto::ANIMATION_ENTER != 0) {
                 self.entrances.push(ix);
             }
             if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {
@@ -953,8 +1116,11 @@ impl Session {
 
     // ---------------------------------------------------------- checking
 
+    /// The node an op names, in the space of the session whose batch is
+    /// being applied (01 §2.7). `applying` is `0` for the page and the
+    /// island's index inside one of its batches.
     fn find(&self, id: u32) -> Result<NodeIx> {
-        self.arena.lookup(id).ok_or(ApplyError::UnknownNode(id))
+        self.arena.lookup(self.applying, id).ok_or(ApplyError::UnknownNode(id))
     }
 
     fn focused_within(&self, ix: NodeIx) -> bool {
@@ -970,14 +1136,14 @@ impl Session {
 
     fn check_text(&self, text: &TextRef) -> Result<()> {
         if let TextRef::Atom(id) = text {
-            self.tables.atoms.require(*id)?;
+            self.cur().atoms.require(*id)?;
         }
         Ok(())
     }
 
     fn check_color(&self, c: ColorRef) -> Result<()> {
         if c.is_literal() {
-            self.tables.colors.require(u32::from(c.index()))?;
+            self.cur().colors.require(u32::from(c.index()))?;
         }
         Ok(())
     }
@@ -990,7 +1156,7 @@ impl Session {
 
     fn check_value(&self, v: &Value) -> Result<()> {
         match v {
-            Value::Atom(id) => self.tables.atoms.require(*id).map(|_| ()),
+            Value::Atom(id) => self.cur().atoms.require(*id).map(|_| ()),
             Value::Color(c) => self.check_color(*c),
             Value::List(items) => items.iter().try_for_each(|i| self.check_value(i)),
             _ => Ok(()),
@@ -999,11 +1165,11 @@ impl Session {
 
     fn check_handler(&self, h: &Handler) -> Result<()> {
         match h {
-            Handler::Server(name) => self.tables.atoms.require(*name).map(|_| ()),
-            Handler::Local(chunk) => self.tables.chunks.require(*chunk).map(|_| ()),
+            Handler::Server(name) => self.cur().atoms.require(*name).map(|_| ()),
+            Handler::Local(chunk) => self.cur().chunks.require(*chunk).map(|_| ()),
             Handler::LocalThenServer { chunk, name } => {
-                self.tables.chunks.require(*chunk)?;
-                self.tables.atoms.require(*name).map(|_| ())
+                self.cur().chunks.require(*chunk)?;
+                self.cur().atoms.require(*name).map(|_| ())
             }
         }
     }

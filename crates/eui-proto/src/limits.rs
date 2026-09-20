@@ -101,3 +101,14 @@ pub const MAX_VIEW_FRAMES: usize = 64;
 
 /// Most bytes one such body may be.
 pub const MAX_VIEW_BYTES: usize = 4 * 1024 * 1024;
+
+/// Most sessions one page may open for its islands (01 §2.7, 10 §1).
+///
+/// A ceiling and not a target: most pages want none and a page that wants
+/// one wants one. It is here because **a tree is data** — a view that
+/// derived an island per row would open a socket per row, and a client that
+/// obeyed it would be doing the one thing the whole feature exists to avoid.
+/// Past it a client opens no more and leaves those nodes as they were
+/// rendered, which is the same degradation as an island whose session never
+/// answers: content that is out of date rather than missing.
+pub const MAX_ISLANDS: usize = 8;

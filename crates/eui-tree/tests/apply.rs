@@ -602,3 +602,128 @@ fn a_mount_does_not_unbind_a_font_role() {
     one(&mut s, 3, Op::Mount(sample())).unwrap();
     assert_eq!(s.font(3), Some(&[[5u8; 32]][..]), "tables outlive the tree");
 }
+
+// ------------------------------------------------------- 01 §2.7, islands
+
+/// The page's tree, with node 2 standing in for the node that carries the
+/// `island` prop. What hangs under it is what an island replaces.
+fn page_with_a_slot() -> Batch {
+    let mut t = Subtree::default();
+    t.nodes.push(flat(NodeKind::Box, 1, 1, 2));
+    t.nodes.push(flat(NodeKind::Slot, 2, 0, 1));
+    t.nodes.push(text_node(3, TextRef::Inline("the count, as it was rendered".into())));
+    t.nodes.push(text_node(4, TextRef::Atom(1)));
+    Batch { seq: 1, ops: vec![Op::DefAtom { id: 1, value: "the page".into() }, Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(t)] }
+}
+
+/// 01 §2.7: **the two trees never share a node id space**, and neither do
+/// their interned tables.
+///
+/// This is the whole of why an island could not simply be re-interned into
+/// the page: an island's encoder starts at 1 like any other, so both sides
+/// allocate atom 1, style 1 and node 1 — and a `DefineOnce` answers a second
+/// write to a live id with `Redefined`. Keyed by owner, both live.
+#[test]
+fn an_island_has_its_own_ids_and_its_own_tables() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).expect("the first island of eight");
+    assert_eq!(owner, 1);
+
+    // The island interns *its* atom 1 and defines *its* style 1 and node 1,
+    // every one of which the page already has.
+    let mut t = Subtree::default();
+    t.nodes.push(flat(NodeKind::Box, 1, 1, 1));
+    t.nodes.push(text_node(2, TextRef::Atom(1)));
+    let batch =
+        Batch { seq: 1, ops: vec![Op::DefAtom { id: 1, value: "142 comments".into() }, Op::DefStyle { id: 1, record: StyleRecord { display: Display::Row, ..Default::default() } }, Op::Mount(t)] };
+    s.apply_region(owner, &batch).expect("an island's ids are its own");
+
+    // Both atoms live, each answering in its own space.
+    let page_text = s.lookup(4).unwrap();
+    let island_text = s.lookup_in(owner, 2).unwrap();
+    assert_eq!(s.text_of(page_text), Some("the page"));
+    assert_eq!(s.text_of(island_text), Some("142 comments"));
+
+    // And both styles, which is the half that would have been silent: a
+    // shared table would have had the island's `row` overwrite the page's
+    // `column`, or be refused as a redefinition.
+    assert_eq!(s.style_of(s.lookup(1).unwrap()).display, Display::Column);
+    assert_eq!(s.style_of(s.lookup_in(owner, 1).unwrap()).display, Display::Row);
+}
+
+/// 01 §2.7: "no id it sends can name a node it did not create."
+///
+/// Enforced by the shape of the id index rather than by a check that could
+/// be forgotten: it is keyed by owner, so an island asking for node 4 asks
+/// for *its* node 4, and there is none.
+#[test]
+fn an_island_cannot_reach_a_node_on_the_page() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).unwrap();
+    s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
+
+    // Node 4 is the page's text. The island names it and reaches nothing.
+    let out = s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::SetText { node: 4, text: TextRef::Inline("mine now".into()) }] });
+    assert_eq!(out, Err(E::UnknownNode(4)));
+    assert_eq!(s.text_of(s.lookup(4).unwrap()), Some("the page"), "the page's text is untouched");
+}
+
+/// 01 §2.7: "an island's `Mount` replaces **that island's content and
+/// nothing else**". The page keeps its root, and so does every other island.
+#[test]
+fn an_islands_mount_replaces_its_own_content_and_nothing_else() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let root = s.root().unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).unwrap();
+
+    // Before it speaks, the node keeps the children the page rendered —
+    // §2.7's "the node's own children are what shows until the island
+    // speaks".
+    assert_eq!(s.children(at).len(), 1);
+    assert_eq!(s.text_of(s.children(at)[0]), Some("the count, as it was rendered"));
+
+    s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
+    assert_eq!(s.root(), Some(root), "the page still has its root");
+    assert_eq!(s.children(at).len(), 1, "the island's content, in place of the placeholder");
+    assert_eq!(s.text_of(s.children(at)[0]), None, "which is a box, not the text that was there");
+    assert_eq!(s.lookup(1).map(|_| ()), Some(()), "and the page's node 1 is still the page's");
+
+    // A second mount replaces the island again, and still nothing else.
+    s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::Mount(leaf(9))] }).unwrap();
+    assert_eq!(s.root(), Some(root));
+    assert!(s.lookup_in(owner, 1).is_none(), "the island's old node is gone");
+    assert!(s.lookup_in(owner, 9).is_some());
+    assert!(s.lookup(1).is_some(), "the page's is not");
+}
+
+/// 10 §1: at most `MAX_ISLANDS` sessions for one page. Past it a client
+/// opens no more and leaves those nodes as they were rendered — a tree is
+/// data, and a view that derived an island per row would otherwise open a
+/// socket per row.
+#[test]
+fn a_page_opens_at_most_eight_islands() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    for n in 1..=8u16 {
+        assert_eq!(s.open_island(at), Some(n));
+    }
+    assert_eq!(s.open_island(at), None, "the ninth opens nothing");
+}
+
+/// An owner nobody handed out is refused rather than resolved against the
+/// page's tables, which is the failure that would be silent: the island's
+/// ops would land on the page.
+#[test]
+fn a_batch_for_an_island_that_was_never_opened_is_refused() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    assert_eq!(s.apply_region(3, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }), Err(E::Internal));
+    assert_eq!(s.root().map(|_| ()), Some(()), "and the page stands");
+}

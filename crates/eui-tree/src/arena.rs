@@ -94,6 +94,22 @@ pub struct Node {
     pub scroll: (i64, i64),
     /// See [`dirty`].
     pub dirty: u8,
+    /// Which session's space this node's ids and table references belong to
+    /// (01 §2.7): `0` is the page, and `1..` are its islands in the order
+    /// they were opened.
+    ///
+    /// **The two trees never share a node id space**, and neither do their
+    /// four interned tables. An island's encoder starts at 1 like any other,
+    /// so an island's `DefAtom{id: 1}` and the page's are two different
+    /// strings — and a `DefineOnce` is a dense `Vec` indexed by the id a
+    /// *server* allocated, which is why they cannot simply be re-interned
+    /// into one table. The owner is how a node says which set to read.
+    ///
+    /// One byte's worth of meaning in two, and it costs the arena two bytes
+    /// a node rather than a second arena, a second layout and a second
+    /// paint: a page keeps one tree, and neither the layout nor the painter
+    /// learns that islands exist.
+    pub owner: u16,
 }
 
 impl Node {
@@ -113,7 +129,11 @@ impl Node {
 pub(crate) struct Arena {
     nodes: Vec<Node>,
     free: Vec<NodeIx>,
-    by_id: HashMap<u32, NodeIx>,
+    /// `(owner, server id) -> index`. Keyed by both because 01 §2.7 gives
+    /// every island its own id space, so `1` names one node on the page and
+    /// another in each island; a map on the id alone would have the second
+    /// `Mount` refuse the first's ids as duplicates.
+    by_id: HashMap<(u16, u32), NodeIx>,
     /// Key atom -> the node carrying it, most recently placed. Keys are unique
     /// among siblings by contract and usually unique per component, so the two
     /// are almost always the same node.
@@ -138,8 +158,8 @@ impl Arena {
         self.nodes.len()
     }
 
-    pub(crate) fn lookup(&self, id: u32) -> Option<NodeIx> {
-        self.by_id.get(&id).copied()
+    pub(crate) fn lookup(&self, owner: u16, id: u32) -> Option<NodeIx> {
+        self.by_id.get(&(owner, id)).copied()
     }
 
     pub(crate) fn lookup_key(&self, key: u32) -> Option<NodeIx> {
@@ -167,10 +187,10 @@ impl Arena {
     /// Fails on a live duplicate id; the caller has already checked the node
     /// budget.
     pub(crate) fn alloc(&mut self, node: Node) -> Result<NodeIx> {
-        if self.by_id.contains_key(&node.id) {
+        if self.by_id.contains_key(&(node.owner, node.id)) {
             return Err(ApplyError::DuplicateNode(node.id));
         }
-        let id = node.id;
+        let (id, owner) = (node.id, node.owner);
         let key = node.key;
         let ix = match self.free.pop() {
             Some(ix) => {
@@ -184,7 +204,7 @@ impl Arena {
                 NodeIx(ix)
             }
         };
-        self.by_id.insert(id, ix);
+        self.by_id.insert((owner, id), ix);
         if key != 0 {
             self.by_key.insert(key, ix);
         }
@@ -204,7 +224,7 @@ impl Arena {
                 return Err(ApplyError::Internal);
             }
             stack.append(&mut node.children);
-            self.by_id.remove(&node.id);
+            self.by_id.remove(&(node.owner, node.id));
             if node.key != 0 && self.by_key.get(&node.key) == Some(&cur) {
                 self.by_key.remove(&node.key);
             }

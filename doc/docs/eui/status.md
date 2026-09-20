@@ -308,12 +308,30 @@ render with one corner that is not; the node's own children show until that
 session speaks, which makes an older client, a failed session and a stale
 cache all degrade the same way — to *out of date* rather than to a hole.
 Nothing is added to the wire. Soli's half is done: a session address may
-carry a query (`?for=1042`) and it arrives as `connect` params. The client's
-half is not: node ids are to be translated into the page's space so layout
-keeps one tree, but each island needs its own four tables, because
-`DefineOnce` is a dense vector the *server* allocates into and an island's ids
-cannot be re-interned there. `Session` now groups its tables for that; the
-owner field on `Node` and `apply_region` are still to come.
+carry a query (`?for=1042`) and it arrives as `connect` params.
+
+**The tree's half is done too, as of 2026-09-20**, and it is the half the
+design turns on. `Node` carries an `owner`; `Session` holds one set of
+interned tables per island beside the page's; `text_of`, `style_of` and every
+reference checked while a batch is applied resolve through it; and the arena's
+id index is keyed by `(owner, id)`. That last one is not a detail — it is the
+enforcement. An island's encoder starts at 1 like any other, so a page and an
+island both define atom 1, style 1 and node 1, and a shared table would answer
+the second with `Redefined`. Keyed by owner, both live, and an island naming
+one of the page's nodes finds nothing at all: 01 §2.7's "no id it sends can
+name a node it did not create", held by the shape of a map rather than by a
+check somebody has to remember. `apply_region(owner, batch)` grafts under the
+node carrying the prop and touches nothing else, and puts `applying` back on
+every road out, including the error ones — leaving it set would have the whole
+session resolve the page's ops against an island's tables. Eight islands a
+page (`MAX_ISLANDS`), and a batch for an owner nobody handed out is refused.
+One arena, one layout, one paint: neither the layout engine nor the painter
+learns that islands exist.
+
+Five vectors in `eui-tree/tests/apply.rs`. What is left is the client's
+socket half — opening one session per distinct path, deferring one that is not
+visible, and sending an event raised inside an island back to its own socket —
+plus `crates/eui-client/tests/islands.rs`, which `spec/09` §7.10 names.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same

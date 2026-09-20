@@ -334,9 +334,25 @@ two tag bytes are checked for what they are — extension points on frames that
 cannot grow a field — by giving `start` a fourth value and requiring
 `UnknownTag`.
 
-### 7.10 Islands — `crates/eui-client/tests/islands.rs`
+### 7.10 Islands — `crates/eui-tree/tests/apply.rs`, `crates/eui-client/tests/islands.rs`
 
-Spec 01 §2.7. Not yet written, and the vectors are named here first because
+Spec 01 §2.7, in two halves. **The tree's half is written**, in
+`eui-tree/tests/apply.rs`, and it is the half the whole design turns on: an
+island has its own node ids *and* its own four interned tables, so a page and
+an island may both define atom 1, style 1 and node 1 and both live — which a
+shared table could not do, since a `DefineOnce` answers a second write to a
+live id with `Redefined`. An island naming a node of the page reaches
+nothing, because the id index is keyed by owner and there is no such node in
+its space: §2.7's "no id it sends can name a node it did not create",
+enforced by the shape of the map rather than by a check that could be
+forgotten. An island's `Mount` replaces that island's content and leaves the
+page's root, the page's nodes and every other island alone; the node's own
+children show until it speaks. A ninth island opens nothing, and a batch for
+an owner nobody handed out is refused rather than resolved against the page's
+tables — which is the failure that would otherwise be silent, since the
+island's ops would land on the page.
+
+**The client's half is not**, and the vectors are named here first because
 the ones that matter are the refusals. An `island` naming another origin is
 refused, and a client that opened it would make every page a way to reach any
 host its reader can. A ninth island on one page opens nothing and leaves the
