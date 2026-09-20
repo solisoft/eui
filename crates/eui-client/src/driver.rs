@@ -384,12 +384,30 @@ struct Pointer {
     /// was last stepped. 06 §6.4: the offset moves every frame and the
     /// `scroll` event goes once, when the movement stops.
     autoscroll: Option<(NodeIx, Instant)>,
+    /// 06 §2: the handler the last `click` resolved to, and when. A second
+    /// click on the same one inside [`DOUBLE_CLICK`] is a `double_click`.
+    ///
+    /// The **handler's** node and not the hit node, for the same reason a
+    /// click is: two clicks that land on different words of one button are
+    /// two clicks on that button, and a person who hit the label the first
+    /// time and the icon the second has double-clicked the control.
+    last_click: Option<(NodeIx, Instant)>,
 }
 
 /// How long a contact must be held still before it becomes a grab, per
 /// 06 §5.1. Both phones use half a second for their own long press and a
 /// person's expectation is theirs, not ours.
 const TOUCH_HOLD_MS: u64 = 500;
+
+/// How long after a click a second one on the same handler is a
+/// `double_click` (06 §2).
+///
+/// Half a second, the same number and for the same reason as the long press
+/// above: it is a property of hands. It is deliberately not a style key or a
+/// prop — an application that could shorten it would be building a control
+/// nobody can hit, and one that could lengthen it would make a pause between
+/// two deliberate clicks mean something the person did not intend.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 /// How close to a scroller's edge a drag has to be held before the view
 /// starts moving, in logical pixels — or a fifth of the viewport, whichever is
@@ -1245,6 +1263,25 @@ pub struct Driver {
     /// Spec 04 §7.1: the row range last reported by each windowed list,
     /// by node id, so a range is reported once.
     windows: HashMap<u32, (u32, u32)>,
+    /// Spec 06 §2: the size last reported by each node that asked for
+    /// `resize`, by node id, so a size is reported once and a node that only
+    /// *moved* reports nothing.
+    ///
+    /// A node enters this map the first time it is laid out and no event
+    /// goes with that entry: a size that was never anything else has not
+    /// changed. That is the rule §2 states, and it is also the only one that
+    /// makes the first frame of a page quiet.
+    sizes: HashMap<u32, (f32, f32)>,
+    /// Which nodes hold a `resize` handler, and whether that list is stale.
+    ///
+    /// Rebuilt when the tree changes rather than per frame. Walking the tree
+    /// every frame to find handlers would put the cost of this event on every
+    /// application whether or not it uses it — and on the ten-thousand-row
+    /// table most of all, which is the one place in this client where a
+    /// per-node cost has ever mattered. Tree edits are rarer than frames by
+    /// orders of magnitude, so the walk goes there.
+    resize_watch: Vec<NodeIx>,
+    resize_watch_stale: bool,
     /// When a moving scroll last asked for rows it had outrun.
     outrun_at: Option<Instant>,
     /// The last list painted, while it may be drawn again: everything
@@ -1442,6 +1479,9 @@ impl Driver {
             desktop_colors: Vec::new(),
             desktop_mode: None,
             windows: HashMap::new(),
+            sizes: HashMap::new(),
+            resize_watch: Vec::new(),
+            resize_watch_stale: true,
             outrun_at: None,
             cached: None,
             touched: true,
@@ -1595,6 +1635,9 @@ impl Driver {
         self.anims.clear();
         self.scroll_anim = None;
         self.windows.clear();
+        self.sizes.clear();
+        self.resize_watch.clear();
+        self.resize_watch_stale = true;
         self.cached = None;
         self.uploads.clear();
         self.saves.clear();
@@ -1753,6 +1796,10 @@ impl Driver {
                 self.repack = true;
                 self.wake_dirty = true;
                 self.locate_dirty = true;
+                // 06 §2: a batch may have added or removed a `resize`
+                // handler, so the watch list is walked again before the
+                // next frame rather than every frame.
+                self.resize_watch_stale = true;
                 self.invalidate();
                 self.note_style_changes();
                 self.note_entrances();
@@ -4320,6 +4367,22 @@ impl Driver {
                     let p = self.point_payload(ix, kind, x, y);
                     out.extend(self.emit(ix, kind, p));
                     if matches!(kind, EventKind::Click) {
+                        // 06 §2: a second click on the same handler inside
+                        // the window, reported **as well as** that click and
+                        // never instead of it. Taken rather than read, so a
+                        // third click starts a new pair: three clicks are not
+                        // two double-clicks.
+                        let target = self.target(ix, EventKind::Click).map(|t| t.0);
+                        let now = self.now;
+                        let doubled = self.pointer.last_click.take().is_some_and(|(n, t)| Some(n) == target && now.duration_since(t) <= DOUBLE_CLICK);
+                        if doubled {
+                            let p = self.point_payload(ix, EventKind::DoubleClick, x, y);
+                            out.extend(self.emit(ix, EventKind::DoubleClick, p));
+                        } else if let Some(t) = target {
+                            self.pointer.last_click = Some((t, now));
+                        }
+                    }
+                    if matches!(kind, EventKind::Click) {
                         // Before the two offers, and in place of them while
                         // the sheet is up: nothing on it carries `pick` or
                         // `nfc`, and there is no session for either to
@@ -6877,6 +6940,8 @@ impl Driver {
         // frame, and rows that will be scrolled past before they arrive.
         let settled = self.scroll_anim.is_none() && self.scroll_touched.map_or(true, |t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
         let mut settle_due = None;
+        let resized = self.resize_events();
+        self.pending.extend(resized);
         if settled {
             let asked = self.window_events();
             self.pending.extend(asked);
@@ -7615,6 +7680,56 @@ impl Driver {
         }
         self.windows.retain(|id, _| seen.contains(id));
         out
+    }
+
+    /// Spec 06 §2: every node that asked for `resize` and whose laid-out box
+    /// is a different size than the one last reported for it.
+    ///
+    /// Size only. A node pushed sideways by a sibling is the same node at the
+    /// same size and has nothing to say, and reporting a move as a resize
+    /// would make a list that scrolls into a storm of events.
+    fn resize_events(&mut self) -> Vec<Frame> {
+        if self.resize_watch_stale {
+            self.rebuild_resize_watch();
+        }
+        if self.resize_watch.is_empty() {
+            self.sizes.clear();
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut seen = Vec::with_capacity(self.resize_watch.len());
+        for ix in std::mem::take(&mut self.resize_watch) {
+            let Some(node) = self.session.node(ix) else { continue };
+            let id = node.id;
+            let Some(r) = self.layout.rect(ix) else { continue };
+            seen.push(id);
+            let size = (r.w, r.h);
+            match self.sizes.insert(id, size) {
+                // First sight of this node. Recorded, and silent: §2 says a
+                // size that was never anything else has not changed.
+                None => {}
+                Some(was) if was == size => {}
+                Some(_) => {
+                    out.extend(self.emit(ix, EventKind::Resize, Value::List(vec![Value::Float(f64::from(size.0)), Value::Float(f64::from(size.1))])));
+                }
+            }
+            self.resize_watch.push(ix);
+        }
+        self.sizes.retain(|id, _| seen.contains(id));
+        out
+    }
+
+    /// Walk the tree for the nodes holding a `resize` handler. Called when
+    /// the tree has changed under us, never per frame.
+    fn rebuild_resize_watch(&mut self) {
+        self.resize_watch.clear();
+        self.resize_watch_stale = false;
+        let Some(root) = self.session.root() else { return };
+        for ix in self.session.preorder(root) {
+            if self.session.handler(ix, EventKind::Resize).is_some() {
+                self.resize_watch.push(ix);
+            }
+        }
     }
 
     /// Spec 04 §7.1, while the view is moving: for each windowed list whose

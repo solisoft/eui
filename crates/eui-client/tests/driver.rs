@@ -3988,3 +3988,114 @@ fn only_an_https_address_reaches_the_platform() {
         assert_eq!(d.take_open(), None, "{url} must not reach the platform");
     }
 }
+
+/// 06 §2: a second click on the same handler inside 500 ms is a
+/// `double_click`, **as well as** that click and not instead of it.
+///
+/// The kind has been in §1's table and in the decoder since the beginning,
+/// and the Soli server maps the word — so a view that attached a handler to
+/// it waited for an event no client had ever produced.
+#[test]
+fn a_second_click_on_one_handler_is_a_double_click_as_well_as_a_click() {
+    let mut d = welcomed();
+    // The button already carries `click`; give it `double_click` too, which
+    // is the only reason either is emitted (06 §2, first rule).
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::DoubleClick, Handler::Server(ATOM_LABEL)));
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::Replace { node: 3, subtree: tree }] })), vec![Frame::Ack { seq: 2 }]);
+
+    let (x, y) = centre(&mut d, 3);
+    let click = |d: &mut Driver| {
+        d.input(Input::PointerMove(x, y));
+        d.input(Input::PointerDown(0));
+        d.input(Input::PointerUp(0))
+    };
+
+    // The first click is a click and nothing else: there is no pair yet.
+    let first: Vec<EventKind> = click(&mut d).iter().filter_map(|f| if let Frame::Event(e) = f { Some(e.event) } else { None }).collect();
+    assert_eq!(first, vec![EventKind::Click], "{first:?}");
+
+    // The second is both, in that order — the click it is, and the double
+    // it completes.
+    let second: Vec<EventKind> = click(&mut d).iter().filter_map(|f| if let Frame::Event(e) = f { Some(e.event) } else { None }).collect();
+    assert_eq!(second, vec![EventKind::Click, EventKind::DoubleClick], "{second:?}");
+
+    // A third starts a new pair rather than reporting a second double:
+    // three clicks are not two double-clicks.
+    let third: Vec<EventKind> = click(&mut d).iter().filter_map(|f| if let Frame::Event(e) = f { Some(e.event) } else { None }).collect();
+    assert_eq!(third, vec![EventKind::Click], "{third:?}");
+}
+
+/// And a pair too far apart is two clicks.
+#[test]
+fn two_clicks_more_than_half_a_second_apart_are_two_clicks() {
+    let mut d = welcomed();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 2), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(ATOM_INC)));
+    tree.handlers.push((EventKind::DoubleClick, Handler::Server(ATOM_LABEL)));
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::Replace { node: 3, subtree: tree }] }));
+
+    // `input_at` rather than `input`: the second reads the wall clock, and
+    // a test that cannot move the clock cannot ask this question at all.
+    let t0 = std::time::Instant::now();
+    let (x, y) = centre(&mut d, 3);
+    d.input_at(Input::PointerMove(x, y), t0);
+    d.input_at(Input::PointerDown(0), t0);
+    d.input_at(Input::PointerUp(0), t0);
+
+    // Six hundred milliseconds later, which is a hand that meant two things.
+    let later = t0 + std::time::Duration::from_millis(600);
+    d.input_at(Input::PointerDown(0), later);
+    let out: Vec<EventKind> = d.input_at(Input::PointerUp(0), later).iter().filter_map(|f| if let Frame::Event(e) = f { Some(e.event) } else { None }).collect();
+    assert_eq!(out, vec![EventKind::Click], "{out:?}");
+}
+
+/// 06 §2: a node that asked for `resize` hears about a box that changed
+/// size — once, and never about one that only moved.
+#[test]
+fn a_node_hears_its_own_box_change_size_and_not_its_position() {
+    let narrow = StyleRecord { width: Dim::Px(100), height: Dim::Px(40), ..Default::default() };
+    let wide = StyleRecord { width: Dim::Px(180), height: Dim::Px(40), ..Default::default() };
+    let spacer = StyleRecord { width: Dim::Px(20), height: Dim::Px(10), ..Default::default() };
+
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Resize, Handler::Server(ATOM_INC)));
+    let ops = vec![
+        Op::DefAtom { id: ATOM_INC, value: "resized".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { display: Display::Row, ..Default::default() } },
+        Op::DefStyle { id: 2, record: narrow },
+        Op::DefStyle { id: 3, record: wide },
+        Op::DefStyle { id: 4, record: spacer },
+        Op::Mount(tree),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops }));
+
+    // The first layout says nothing: a size that was never anything else
+    // has not changed.
+    let sizes = |d: &mut Driver| -> Vec<Value> {
+        let _ = d.paint(400, 300);
+        d.take_pending().iter().filter_map(|f| if let Frame::Event(e) = f { (e.event == EventKind::Resize).then(|| e.payload.clone()) } else { None }).collect()
+    };
+    assert!(sizes(&mut d).is_empty(), "the first box reports nothing");
+
+    // Moved, not resized: a sibling inserted before it pushes it sideways.
+    let mut spacer_tree = Subtree::default();
+    spacer_tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 4, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::InsertChild { parent: 1, index: 0, subtree: spacer_tree }] }));
+    assert!(sizes(&mut d).is_empty(), "a node that only moved says nothing");
+
+    // Resized.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetStyle { node: 2, style: 3 }] }));
+    let out = sizes(&mut d);
+    assert_eq!(out, vec![Value::List(vec![Value::Float(180.0), Value::Float(40.0)])], "{out:?}");
+
+    // And once: the same box painted again is not a second event.
+    assert!(sizes(&mut d).is_empty(), "reported once, not per frame");
+}

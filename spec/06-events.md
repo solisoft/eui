@@ -147,6 +147,26 @@ for anything provisional — it has to be able to put it back.
 
 ## 2. Emission rules
 
+- **`double_click` is a second `click` on the same handler within 500 ms**,
+  and it is emitted **in addition to** that second `click`, never instead of
+  it. Both are in §1's table as separate kinds, and the previous rule already
+  says a client emits neither unless a handler wants it — so a node that
+  handles only `click` sees two clicks, and one that handles both sees the
+  second click and the double. A third click inside the window starts a new
+  pair rather than reporting a second double: what a person means by three
+  clicks is not two double-clicks. The interval is fixed here and is not a
+  field: it is a property of hands, not of applications, and an application
+  that could shorten it would be building a control nobody can hit.
+
+- **`resize` is emitted when a node's laid-out box changes size**, carrying
+  the new width and height in logical px, and only for a node that asked for
+  it. It is per-frame coalesced like the others, and it does **not** fire for
+  a move: a node pushed sideways by a sibling is the same size and has
+  nothing to report. The first layout of a node reports nothing either — a
+  size that was never anything else has not changed — so a server that wants
+  the initial box asks for it in `connect` rather than waiting for an event
+  that is not coming.
+
 - A client emits an event only for a node that has a handler for that kind.
   There is no bubbling: the server composed the tree and attached handlers
   where it wanted them. A `click` on a `text` inside a button reaches the

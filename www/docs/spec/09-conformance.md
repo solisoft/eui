@@ -119,6 +119,12 @@ flow, grow, shrink with the automatic minimum, wrap, justify, align, baseline,
 percent, stack (stretch on both axes, absolute layers), grid, scroll clamping,
 virtualised lists, display none, depth 255 within a 1 MiB stack.
 
+Plus **what a node's kind says about its layout**, which 03 §1's table states
+and nothing checked: a `slot` lays out as a column where a `box` with the same
+style lays out as a row, and a `slot` that is `display: none` is still gone —
+the kind decides the direction and must not put back a node the author took
+out of the flow.
+
 ## 5. Theme — `crates/eui-theme/tests`
 
 Every default pair in 05 §6 meets its contrast; a seed produces a ramp whose
@@ -149,6 +155,15 @@ and server focus only, editing and commit, wheel and scroll offsets, local
 handlers with and without a following server event, resync on a bad batch,
 transitions on a style change, a back reaching the mounted root and a back
 reaching nobody when the root holds no handler for one.
+
+And the two kinds that had payloads, decoders and a server mapping the word
+while no client had ever produced one (§2): **`double_click`** — the first
+click is a click alone, the second is a click *and* a double in that order,
+a third starts a new pair rather than reporting a second double, and a pair
+600 ms apart is two clicks; and **`resize`** — a node's first layout says
+nothing, a node pushed sideways by an inserted sibling says nothing, a node
+whose style changes its width reports the new box once, and painting it
+again reports nothing.
 
 Sound reports on one clock and says nothing about the machine: `level` and
 `time_update` are emitted on the same tick and neither twice in it; a
@@ -341,6 +356,12 @@ target for the clear colour, a filled box, a clipped scroll, a canvas line,
 and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.
+
+Plus 03 §1's one word about a kind that the painter has to obey: a `sizer`
+carrying a background, a border and a shadow draws **none** of them, and its
+child still draws. The same tree with a `box` in that place draws more. The
+word in the table is the whole specification of the kind, and it was the one
+thing this file did not do.
 
 ## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
 

@@ -972,3 +972,58 @@ fn a_drag_does_not_find_a_target_inside_what_it_is_carrying() {
     let below = r_(&l, &s, 4);
     assert_eq!(l.hit_skipping(&s, below.x + 1.0, below.y + below.h / 2.0, Some(carried)), Some(other));
 }
+
+/// 03 §1: "`slot` — a named insertion point; **lays out as a `column`**."
+///
+/// It did not. A `slot` had no arm anywhere in this crate, so it fell to the
+/// default, and a `StyleRecord`'s default `display` is `Row` — meaning every
+/// `slot` that did not override it laid out as the opposite of the one thing
+/// the table says about it. Nothing caught it because nothing emits a `slot`
+/// yet, which is exactly when a vector is worth writing.
+#[test]
+fn a_slot_lays_out_as_a_column_where_a_box_lays_out_as_a_row() {
+    let mut b = B::default();
+    // "No style": the id a slot and a box share, constantly, and the reason
+    // the per-kind rule cannot live inside the style-id cache.
+    let none = 0;
+    let box_child = b.style(StyleRecord { width: px(40), height: px(20), ..st() });
+
+    // A `box` with no style: a row, so two children sit side by side.
+    b.push(NodeKind::Box, none, 2);
+    b.push(NodeKind::Box, box_child, 0);
+    b.push(NodeKind::Box, box_child, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 300.0);
+    let (first, second) = (r_(&l, &s, 2), r_(&l, &s, 3));
+    assert_eq!(first.y, second.y, "a box with no style is a row");
+    assert!(second.x > first.x);
+
+    // The same tree with a `slot` at the top: a column, so they stack.
+    let mut b = B::default();
+    let child = b.style(StyleRecord { width: px(40), height: px(20), ..st() });
+    b.push(NodeKind::Slot, none, 2);
+    b.push(NodeKind::Box, child, 0);
+    b.push(NodeKind::Box, child, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 300.0);
+    let (first, second) = (r_(&l, &s, 2), r_(&l, &s, 3));
+    assert_eq!(first.x, second.x, "a slot is a column whatever its style says");
+    assert_eq!(second.y, first.y + 20.0);
+}
+
+/// And `display: none` still hides one: the kind decides the *direction*, so
+/// it must not resurrect a node the author took out of the flow.
+#[test]
+fn a_slot_that_is_display_none_is_still_gone() {
+    let mut b = B::default();
+    let hidden = b.style(StyleRecord { display: Display::None, ..st() });
+    let child = b.style(StyleRecord { width: px(40), height: px(20), ..st() });
+    let outer = b.style(col());
+    b.push(NodeKind::Box, outer, 2);
+    b.push(NodeKind::Slot, hidden, 1);
+    b.push(NodeKind::Box, child, 0);
+    b.push(NodeKind::Box, child, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 400.0, 300.0);
+    assert_eq!(r_(&l, &s, 4).y, 0.0, "the hidden slot took no room");
+}

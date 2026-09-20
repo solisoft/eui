@@ -2112,3 +2112,42 @@ fn a_scene_that_names_no_module_draws_without_the_grant() {
     assert_eq!(list.scenes[0].mesh, [9; 32], "and the shape the server sent, which is data and not a program");
     assert!(list.quads.iter().any(|q| q.params[2] as u32 & eui_render::SCENE != 0), "and a quad samples it");
 }
+
+/// 03 §1: "`sizer` — an **invisible** box that only imposes constraints."
+///
+/// It had no arm in `paint.rs`, so it drew its background, its border and
+/// its shadow exactly like a `box`. The word in the table is the whole
+/// specification of the kind, and it was the one thing the renderer did not
+/// do. Its children still paint: what is invisible is the node, not what is
+/// inside it.
+#[test]
+fn a_sizer_draws_nothing_of_its_own_and_its_children_still_draw() {
+    let decorated = StyleRecord {
+        bg: ColorRef::role(Role::AccentBase.id()),
+        border_width: [2, 2, 2, 2],
+        border_color: ColorRef::role(Role::AccentBase.id()),
+        shadow: 1,
+        width: Dim::Px(100),
+        height: Dim::Px(40),
+        ..Default::default()
+    };
+    let child = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(20), height: Dim::Px(10), ..Default::default() };
+
+    // The same tree twice, differing only in the kind of the middle node.
+    let count = |kind: NodeKind| {
+        let mut fx = fixture(
+            vec![StyleRecord { display: Display::Column, ..Default::default() }, decorated, child],
+            vec![node(NodeKind::Box, 1, 1, 1), node(kind, 2, 2, 1), node(NodeKind::Box, 3, 3, 0)],
+            vec![],
+            &[],
+            200.0,
+            100.0,
+        );
+        draw(&mut fx, 200, 100, 1.0).quads.len()
+    };
+
+    let as_box = count(NodeKind::Box);
+    let as_sizer = count(NodeKind::Sizer);
+    assert!(as_box > as_sizer, "a decorated box draws more than an invisible one: {as_box} vs {as_sizer}");
+    assert_eq!(as_sizer, 1, "exactly the child's quad, and nothing the sizer would have drawn");
+}

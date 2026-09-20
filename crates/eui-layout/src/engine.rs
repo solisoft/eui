@@ -17,6 +17,28 @@ use crate::geom::{Constraint, Rect, Size};
 use crate::measure::TextMeasurer;
 use crate::style::{Length, Style};
 
+/// What a node's kind says about its style, after the record has had its say.
+///
+/// Only one kind says anything, and 03 §1 says it flatly: a `slot` "lays out
+/// as a column". It is not phrased as a default and cannot be one — a
+/// `StyleRecord`'s `display` is `Row` when the author wrote nothing and `Row`
+/// when they wrote `row`, and by the time a record is decoded the two are the
+/// same bytes. So the kind wins, which is what the table promises.
+///
+/// This is applied *after* the style-id cache rather than inside it, and that
+/// is deliberate: the cache is keyed by style id, so a `slot` and a `box`
+/// sharing style `0` — which they do, constantly, since `0` is "no style" —
+/// would otherwise write each other's answer into one entry.
+///
+/// Until this existed a `slot` laid out as a **row**, the opposite of the
+/// documented behaviour, and nothing noticed because nothing in the catalogue
+/// emits one yet.
+fn by_kind(kind: NodeKind, st: &mut Style) {
+    if kind == NodeKind::Slot && st.display != Display::None {
+        st.display = Display::Column;
+    }
+}
+
 /// Border-box size and first baseline, margins excluded. `content_w` /
 /// `content_h` are the border-box size the content alone asks for, before the
 /// node's own `width`/`height` and the parent's `Exact` constraint apply —
@@ -403,6 +425,12 @@ impl Layout {
 
     /// The style resolved this frame for a style id, for a painter that
     /// would otherwise resolve it again per node.
+    ///
+    /// **By id alone**, so it carries no [`by_kind`] adjustment: the cache
+    /// behind it is keyed by style id and two nodes of different kinds
+    /// share an entry. The painter wants colours, radii and borders, none
+    /// of which a kind changes; the one thing that does — a `slot`'s
+    /// direction — is the layout's business and never the painter's.
     pub fn style_for_id(&self, style_id: u32) -> Option<Style> {
         self.by_style_id.get(&style_id).copied()
     }
@@ -468,17 +496,22 @@ impl Layout {
     /// style id that no laid-out node used, which hit-testing treats as
     /// "not a stack" rather than guessing.
     fn style_of(&self, s: &Session, ix: NodeIx) -> Option<Style> {
-        let style_id = s.node(ix)?.style;
-        self.by_style_id.get(&style_id).copied()
+        let node = s.node(ix)?;
+        let mut st = self.by_style_id.get(&node.style).copied()?;
+        by_kind(node.kind, &mut st);
+        Some(st)
     }
 
     fn style(&mut self, f: &Env<'_>, ix: NodeIx) -> Style {
         let style_id = f.session.node(ix).map_or(0, |n| n.style);
-        if let Some(st) = self.by_style_id.get(&style_id) {
-            return *st;
-        }
-        let st = Style::resolve(&f.session.style_of(ix), f.theme);
-        self.by_style_id.insert(style_id, st);
+        let mut st = if let Some(st) = self.by_style_id.get(&style_id) {
+            *st
+        } else {
+            let st = Style::resolve(&f.session.style_of(ix), f.theme);
+            self.by_style_id.insert(style_id, st);
+            st
+        };
+        by_kind(f.session.node(ix).map_or(NodeKind::Box, |n| n.kind), &mut st);
         st
     }
 

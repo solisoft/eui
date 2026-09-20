@@ -999,9 +999,18 @@ impl Painter<'_, '_> {
         let dev = self.device(rect);
         let radius = self.scene.theme.radius(record.radius).unwrap_or(0.0) * scale;
 
+        // 03 §1: a `sizer` is "an invisible box that only imposes
+        // constraints". It had no arm anywhere in this file, so it fell
+        // through to the ordinary box and drew its background, its border
+        // and its shadow like one — which is not a smaller kind of
+        // invisible, it is visible. Its children still paint: what the word
+        // means is that the node itself is not there to be seen, not that
+        // nothing inside it is.
+        let invisible = node.kind == NodeKind::Sizer;
+
         // Spec 03 §2: the shadow first — black, offset, grown by the blur,
         // fading across it (`extra[1]` is the blur for the fragment stage).
-        if let Some(&(dy, blur, alpha)) = self.scene.theme.shadow.get(usize::from(record.shadow)).filter(|_| record.shadow != 0) {
+        if let Some(&(dy, blur, alpha)) = self.scene.theme.shadow.get(usize::from(record.shadow)).filter(|_| record.shadow != 0 && !invisible) {
             let (dy, blur) = (dy * scale, blur * scale);
             let [x, y, w, h] = dev;
             self.push(Quad {
@@ -1019,15 +1028,19 @@ impl Painter<'_, '_> {
         // Background and border. A uniform border is one stroked quad; a
         // border that differs per side — a tab's underline, a banner's left
         // bar — is the fill plus up to four thin quads, square-cornered.
-        let (fill, fill_from) = match anim {
-            Some(a) if a.baked => (a.at.bg, None),
-            Some(a) => endpoints(a.from.bg, a.to.bg),
-            None => (self.color(record.bg, None), None),
+        let (fill, fill_from) = if invisible {
+            (None, None)
+        } else {
+            match anim {
+                Some(a) if a.baked => (a.at.bg, None),
+                Some(a) => endpoints(a.from.bg, a.to.bg),
+                None => (self.color(record.bg, None), None),
+            }
         };
         let b = style.border;
         let uniform = b.t == b.r && b.r == b.b && b.b == b.l;
         let border_w = b.t.max(b.r).max(b.b).max(b.l) * scale;
-        let (stroke, stroke_from) = if border_w > 0.0 {
+        let (stroke, stroke_from) = if border_w > 0.0 && !invisible {
             match anim {
                 Some(a) if a.baked => (a.at.border, None),
                 Some(a) => endpoints(a.from.border, a.to.border),
@@ -1039,7 +1052,7 @@ impl Painter<'_, '_> {
         // 03 §2: a `blur` shows the backdrop through the border box, and the
         // background is composited over that. It is therefore worth a quad
         // even when `bg` is none — a pane of clear frosted glass.
-        let sigma = anim.map_or_else(|| f32::from(record.blur), |a| a.at.blur) * scale;
+        let sigma = if invisible { 0.0 } else { anim.map_or_else(|| f32::from(record.blur), |a| a.at.blur) * scale };
         let frosted = sigma > 0.0 && dev[2] > 0.0 && dev[3] > 0.0 && self.visible(dev);
         let (chain, flags) = if frosted { (self.note_blur(sigma, dev), BLURRED as f32) } else { (0, 0.0) };
         if uniform {

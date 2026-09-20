@@ -1458,7 +1458,31 @@ the whole reason the widget's own default is not what a mail uses.
 **Specified, and not built — found by auditing `spec/` against the tree on
 2026-09-20, and written here rather than left to be rediscovered.** Each of
 these is decodable, several are emitted by the Soli server, and none of them
-does anything on a client:
+does anything on a client.
+
+Four came off this list the same day. **`slot` lays out as a column** (03 §1)
+now: it fell to the default arm and a `StyleRecord`'s default `display` is
+`Row`, so every `slot` laid out as the opposite of the one thing its row in
+the table says. The fix is not in the style cache — that is keyed by style id,
+and a `slot` and a `box` share id `0` constantly — but in a `by_kind` applied
+after it. And **`sizer` is invisible**: it had no arm in `paint.rs` and drew
+its background, border and shadow like any box; its children still draw, since
+what is invisible is the node and not what is inside it. Vectors in
+`eui-layout/tests/layout.rs` and `eui-render/tests/render.rs`.
+
+**`double_click` and `resize`** (06 §1) are emitted now too. Both had a
+payload, a coalescing rule, a decoder and a Soli server that maps the word,
+and no client had ever produced one — so a view that attached a handler
+waited for ever. §2 gained the two rules that were never written down: a
+double is a second click on the same *handler* within 500 ms and is emitted
+**as well as** that click, and a third click starts a new pair rather than
+reporting a second double; a `resize` fires on a change of size and never on
+a move, and a node's first layout reports nothing, since a size that was
+never anything else has not changed. The watch list for `resize` is rebuilt
+when the tree changes rather than walked per frame, so an application that
+does not use it pays nothing.
+
+The rest are still open:
 
 - **`motion_kind = 6` (`paired`, 03 §5.3).** A whole normative section, a
   style byte, and `lang/.../tree.rs` maps the word — and `driver.rs` returns
@@ -1466,16 +1490,6 @@ does anything on a client:
   writes `motion: "paired"` gets no motion and no diagnostic. §5.3's "a
   client MUST bound the number of pairs it resolves in one change" is
   vacuous while no pair is ever resolved, and `spec/09` names no vector.
-- **`double_click` (0x02) and `resize` (0x10), 06 §1.** Both have payloads,
-  both have coalescing rules, both are decodable, and the Soli server maps
-  both. Nothing emits either, so a handler attached to one waits for ever.
-- **`slot` lays out as a column (03 §1).** It falls to the default arm, and
-  `StyleRecord`'s default `display` is **Row** — so a `slot` that does not
-  override it lays out as the opposite of what the table says. Fixing it is
-  not one line: `engine.rs`'s `style()` memoises by style id alone, so a
-  per-kind default needs the cache keyed by kind as well.
-- **`sizer` is invisible (03 §1).** It has no arm in `paint.rs`, so it draws
-  its background and its border like any box.
 - **The manifest's `pin` field (01 §2.1).** Listed among the fields and
   absent from the normative key table three lines below it, so there is no
   wire encoding for it; `grep -ri spki crates/` is empty. 08 §1's "a client
