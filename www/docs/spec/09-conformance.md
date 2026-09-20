@@ -248,18 +248,18 @@ two tag bytes are checked for what they are — extension points on frames that
 cannot grow a field — by giving `start` a fourth value and requiring
 `UnknownTag`.
 
-### 7.10 Live regions — `crates/eui-client/tests/regions.rs`
+### 7.10 Islands — `crates/eui-client/tests/islands.rs`
 
 Spec 01 §2.7. Not yet written, and the vectors are named here first because
-the ones that matter are the refusals. A `live` naming another origin is
+the ones that matter are the refusals. An `island` naming another origin is
 refused, and a client that opened it would make every page a way to reach any
-host its reader can. A ninth region on one page opens nothing and leaves the
-node as it was rendered (10 §1). A region whose session cannot be opened, or
-which ends, leaves the page standing and its own children showing — the
-vector that says a live part can never take a still page with it. Two regions
-naming one path share one session; two naming one component with different
-queries do not. And an event raised inside a region carries that region's node
-ids and goes to that region's socket, never the page's.
+host its reader can. A ninth island on one page opens nothing and leaves the
+node as it was rendered (10 §1). An island whose session cannot be opened, or
+which ends, leaves the page standing and its own children showing — the vector
+that says a live part can never take a still page with it. Two islands naming
+one path share one session; two naming one component with different queries do
+not. And an event raised inside an island carries that island's node ids and
+goes to that island's socket, never the page's.
 
 ### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
 

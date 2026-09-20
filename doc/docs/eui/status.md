@@ -280,22 +280,22 @@ a live server: 4 799 B fetched over HTTPS, the socket answers
 the six language SDKs need no change, because they negotiate `min(client,
 ours)` and can only receive the offer if they serve §2.4, which none do.
 
-**Live regions** (01 §2.7) are specified and half built. A node carrying
-`live` takes its content from a session of its own, so a page can be a cached
+**Islands** (01 §2.7) are specified and half built. A node carrying `island`
+takes its content from a session of its own, so a page can be a cached
 render with one corner that is not; the node's own children show until that
 session speaks, which makes an older client, a failed session and a stale
 cache all degrade the same way — to *out of date* rather than to a hole.
 Nothing is added to the wire. Soli's half is done: a session address may
 carry a query (`?for=1042`) and it arrives as `connect` params. The client's
 half is not: node ids are to be translated into the page's space so layout
-keeps one tree, but each region needs its own four tables, because
-`DefineOnce` is a dense vector the *server* allocates into and a region's ids
+keeps one tree, but each island needs its own four tables, because
+`DefineOnce` is a dense vector the *server* allocates into and an island's ids
 cannot be re-interned there. `Session` now groups its tables for that; the
 owner field on `Node` and `apply_region` are still to come.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same
-question as live regions from the other end, and two ways to do one thing is
+question as islands from the other end, and two ways to do one thing is
 worse than either.
 
 **Assets and images.** `GET /_eui/asset/<blake3>` on the Soli side, from a

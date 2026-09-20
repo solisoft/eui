@@ -126,15 +126,17 @@ only symptom would be that adoption silently never happened.
 
 A server may decline for any reason; fresh is always a correct answer.
 
-### One corner of a page that is live
+### Islands
 
 A whole page becoming a session because one part of it must be live is the
 wrong trade — every reader then pays a session's memory for a comment count
-that changes twice a day. A node may instead carry a `live` prop, an absolute
-path on the same origin, and take its **content** from a session of its own:
+that changes twice a day. A node may instead carry an `island` prop, an
+absolute path on the same origin, and take its **content** from a session of
+its own. The name is the web's own: a page that is mostly still, with islands
+in it that are not.
 
 ```soli
-{"k": "slot", "live": "/_eui/session/comments?for=" + page["id"], "c": [
+{"k": "slot", "island": "/_eui/session/comments?for=" + page["id"], "c": [
   comment_count_as_rendered(page)
 ]}
 ```
@@ -144,10 +146,10 @@ came from the cached render — so an older client that ignores the prop, a
 session that cannot be opened, and a page served from a cache all end in the
 same place: content that is out of date rather than missing.
 
-The query is how two regions of one component tell the application which of
-them is being rendered; it reaches `connect` alongside `viewport`. Regions
+The query is how two islands of one component tell the application which of
+them is being rendered; it reaches `connect` alongside `viewport`. Islands
 naming the same path share one session, at most eight are opened for a page,
-and a `live` naming another origin is refused — a tree that could open a
+and an `island` naming another origin is refused — a tree that could open a
 socket elsewhere would make every page a way to reach any host its reader can.
 
 ### The manifest
