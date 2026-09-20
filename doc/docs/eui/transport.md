@@ -101,6 +101,55 @@ here. And a `GET` has no same-origin check — a resource a CDN is meant to hold
 cannot have one — so declaring a component static is promising that its
 `connect` handler is a *read*: an `<img src>` on any page anywhere reaches it.
 
+### When a page needs the server after all
+
+A page fetched that way opens no socket until something happens that only the
+server can answer. When one is finally dialled, the naive thing is to mount
+the page again — and that discards the tree, the layout, focus, every scroll
+offset and anything half-typed, so a reader partway down is returned to the
+top with nothing focused.
+
+So the client offers what it has. Its `Hello` carries the BLAKE3 of the
+batches it holds, as a third resume tag beside "nothing" and "a session"; the
+server renders `connect` as it would have anyway, compares, and answers in
+`Welcome.start`:
+
+- **adopted** — the hash matched. No `Mount` follows, sequence numbers carry
+  on, and the reader keeps scroll, focus and caret by nothing being torn down.
+- **fresh** — it did not, and the server sends the frames it *just* rendered.
+  Not a second render: the comparison is of bytes it produced once.
+
+The hash covers the batches and **not** the body they arrived in. A one-shot
+render's `Welcome` carries sixteen zero bytes and a socket's carries a session
+handle, so a server hashing the whole body would find no match ever and the
+only symptom would be that adoption silently never happened.
+
+A server may decline for any reason; fresh is always a correct answer.
+
+### One corner of a page that is live
+
+A whole page becoming a session because one part of it must be live is the
+wrong trade — every reader then pays a session's memory for a comment count
+that changes twice a day. A node may instead carry a `live` prop, an absolute
+path on the same origin, and take its **content** from a session of its own:
+
+```soli
+{"k": "slot", "live": "/_eui/session/comments?for=" + page["id"], "c": [
+  comment_count_as_rendered(page)
+]}
+```
+
+The node's own children are what shows until that session speaks, and they
+came from the cached render — so an older client that ignores the prop, a
+session that cannot be opened, and a page served from a cache all end in the
+same place: content that is out of date rather than missing.
+
+The query is how two regions of one component tell the application which of
+them is being rendered; it reaches `connect` alongside `viewport`. Regions
+naming the same path share one session, at most eight are opened for a page,
+and a `live` naming another origin is refused — a tree that could open a
+socket elsewhere would make every page a way to reach any host its reader can.
+
 ### The manifest
 
 The manifest carries the application id, the protocol range it supports, an

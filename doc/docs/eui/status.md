@@ -267,9 +267,36 @@ different viewport so nothing could be reused, moved resident memory by
 the batches are identical and only the `Welcome`'s session handle differs,
 which is sixteen zeroes here because this body is everyone's.
 
-What is not built yet: interaction over plain verbs, and a session that
-adopts a tree the client already fetched instead of re-mounting it. Both are
-specified in `spec/01-transport.md` §2.4's neighbourhood and neither has code.
+**A session that adopts the tree instead of re-sending it.** 01 §2.6, and the
+reason it exists: without it the first interaction on a fetched page
+re-mounts it, and `start_over` takes the tree, the layout, focus, every
+scroll offset and anything half-typed with it — a reader partway down a page
+clicks something and is returned to the top. The client offers the BLAKE3 of
+the batches it holds as a third `Hello` resume tag; Soli renders `connect` as
+it would have anyway, compares, and either sends a `Welcome` and nothing else
+or sends the frames it just rendered. One render either way. Verified against
+a live server: 4 799 B fetched over HTTPS, the socket answers
+`Welcome.start = Adopted` and no `Mount` follows. `PROTOCOL_VERSION` is 5;
+the six language SDKs need no change, because they negotiate `min(client,
+ours)` and can only receive the offer if they serve §2.4, which none do.
+
+**Live regions** (01 §2.7) are specified and half built. A node carrying
+`live` takes its content from a session of its own, so a page can be a cached
+render with one corner that is not; the node's own children show until that
+session speaks, which makes an older client, a failed session and a stale
+cache all degrade the same way — to *out of date* rather than to a hole.
+Nothing is added to the wire. Soli's half is done: a session address may
+carry a query (`?for=1042`) and it arrives as `connect` params. The client's
+half is not: node ids are to be translated into the page's space so layout
+keeps one tree, but each region needs its own four tables, because
+`DefineOnce` is a dense vector the *server* allocates into and a region's ids
+cannot be re-interned there. `Session` now groups its tables for that; the
+owner field on `Node` and `apply_region` are still to come.
+
+Interaction over plain verbs — a `POST` carrying one event — was specified in
+an earlier draft and is deliberately **not** being built: it answers the same
+question as live regions from the other end, and two ways to do one thing is
+worse than either.
 
 **Assets and images.** `GET /_eui/asset/<blake3>` on the Soli side, from a
 process-wide content-addressed store: an image in a view is a file path,
