@@ -549,14 +549,27 @@ fn an_oversized_abort_reason_is_refused() {
     assert!(matches!(frame_err(&framed(0x0B, w.as_slice())), E::LimitExceeded("transfer chunk")));
 }
 
-/// 01 §4.1: a `Hello` either offers a session or it does not.
+/// A `Hello` offers nothing, a session (01 §4.1) or a tree (01 §2.6) — and a
+/// fourth tag is refused rather than taken for one of the three.
+///
+/// Tag `2` was this test's unknown value until adoption gave it a meaning,
+/// which is the whole point of extending on the tag byte: the byte that used
+/// to be refused is the one that now carries the new thing, so an old peer
+/// meets it as a refusal rather than misreading it.
 #[test]
 fn a_hello_with_an_unknown_resume_tag_is_refused() {
     let mut w = Writer::new();
     w.varint32(1);
     Viewport::default().encode(&mut w);
-    w.varint32(0).u8(2);
+    w.varint32(0).u8(3);
     assert!(matches!(frame_err(&framed(0x01, w.as_slice())), E::UnknownTag("resume")));
+
+    // And the two that do mean something decode.
+    let mut ok = Writer::new();
+    ok.varint32(1);
+    Viewport::default().encode(&mut ok);
+    ok.varint32(0).u8(2).raw(&[7u8; 32]);
+    assert!(Frame::decode(&framed(0x01, ok.as_slice())).is_ok());
 }
 
 /// And a `Welcome` starts fresh, resumed, or adopted (01 §2.6) — a fourth
@@ -564,8 +577,14 @@ fn a_hello_with_an_unknown_resume_tag_is_refused() {
 #[test]
 fn a_welcome_with_an_unknown_start_byte_is_refused() {
     let mut w = Writer::new();
-    w.varint32(1).raw(&[0u8; 16]).u8(2);
+    w.varint32(1).raw(&[0u8; 16]).u8(3);
     assert!(matches!(frame_err(&framed(0x02, w.as_slice())), E::UnknownTag("start")));
+
+    for start in 0..=2u8 {
+        let mut ok = Writer::new();
+        ok.varint32(1).raw(&[0u8; 16]).u8(start);
+        assert!(Frame::decode(&framed(0x02, ok.as_slice())).is_ok(), "start {start}");
+    }
 }
 
 /// A `Hello` that ends before its resume flag is truncated, not tolerated.
