@@ -727,6 +727,40 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
             let _ = driver.paint(dw, dh);
             std::thread::sleep(Duration::from_millis(200));
             driver.tick(Instant::now());
+            // SNAPSHOT_CURSOR=<ms> — hold the pointer still for that long and
+            // print the shape it takes on every frame. A cursor that flickers
+            // on a live page is a node going out from under a pointer that
+            // never moved, and there is no other way to see it happen: a
+            // screenshot cannot hold a pointer and the shape is not in the
+            // pixels.
+            if let Some(ms) = std::env::var("SNAPSHOT_CURSOR").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+                let until = Instant::now() + Duration::from_millis(ms);
+                let mut was = None;
+                let mut frames = 0u32;
+                let mut changes = 0u32;
+                while Instant::now() < until {
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        if let Incoming::Message(b) = msg {
+                            if let Ok(frame) = Frame::decode(&b) {
+                                for out in driver.handle_frame(frame) {
+                                    conn.tx.send(out.encode()).unwrap();
+                                }
+                            }
+                        }
+                    }
+                    driver.tick(Instant::now());
+                    let _ = driver.paint(dw, dh);
+                    let now = driver.cursor();
+                    frames += 1;
+                    if Some(now) != was {
+                        changes += 1;
+                        println!("cursor {:?} at frame {frames}", now);
+                        was = Some(now);
+                    }
+                    std::thread::sleep(Duration::from_millis(16));
+                }
+                println!("cursor: {changes} change(s) over {frames} frames with the pointer still");
+            }
         }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);

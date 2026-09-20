@@ -846,7 +846,13 @@ row tops, so the feed's cards of two heights snap exactly — `PageDown`/
 `PageUp` move a viewport, `Home`/`End` the whole way, all eased like a
 wheel notch and chaining onto a scroll in flight. The pointer takes the
 shape of what it is over: a `cursor` style, a beam on a field, a hand on
-anything clickable. And a local handler can switch the viewer's palette —
+anything clickable — and where it *is* now comes from the move that put it
+there rather than from whichever code path is asking. It used to be an
+argument, and each call site passed the truth about itself: the chrome's
+event path said "over the chrome" and the paint path said "over the page",
+so a page that repaints on a clock took the shape back ten times a second
+while the pointer stood still on a tab. A page that never repaints never
+showed it. And a local handler can switch the viewer's palette —
 `theme.toggle()`, `theme.mode = "dark"`, bytecode `set_mode` — so an app
 can carry its own light/dark switch at no round trip (`theme_toggle()` in
 the example builders; the feed does not show it, since the client follows

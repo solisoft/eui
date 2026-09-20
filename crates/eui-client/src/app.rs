@@ -2397,7 +2397,17 @@ impl Shell {
 
     /// The pointer takes the shape of what it is over — a hand on a button,
     /// a beam on a field — told to the window only on a change.
-    fn sync_cursor(&mut self, over_chrome: bool) {
+    ///
+    /// Where the pointer *is* comes from `pointer_in_app`, which the move
+    /// that put it there set, and not from the call site. It used to be an
+    /// argument, and every call site passed the truth about itself rather
+    /// than about the pointer: the chrome's own event path said "over the
+    /// chrome", and the paint path said "over the page" — so a page that
+    /// repaints on a clock stole the shape back ten times a second while
+    /// the pointer stood still on a tab. A page that never repaints never
+    /// showed it, which is why it survived this long.
+    fn sync_cursor(&mut self) {
+        let over_chrome = !self.pointer_in_app;
         let want = match (over_chrome, self.chrome.as_ref()) {
             (true, Some((c, _))) => c.cursor(),
             _ => self.tabs.get(self.active).map_or(eui_proto::Cursor::Default, |t| t.backend.cursor()),
@@ -2949,7 +2959,7 @@ impl Shell {
         if self.tabs.get(self.active).is_some_and(|t| t.backend.needs_redraw()) {
             self.window.request_redraw();
         }
-        self.sync_cursor(false);
+        self.sync_cursor();
     }
 
     /// The platform changed palette, or has just said which one it was in.
@@ -3382,7 +3392,7 @@ impl Shell {
             t.sync_audio(&proxy);
         }
         // Hover settles at paint; so does what the pointer is over.
-        self.sync_cursor(false);
+        self.sync_cursor();
         // A screen reader that is listening gets the tree as painted; one
         // that is not costs nothing here.
         #[cfg(has_a11y)]
@@ -3805,7 +3815,7 @@ impl Shell {
         if redraw {
             self.window.request_redraw();
         }
-        self.sync_cursor(true);
+        self.sync_cursor();
         for a in actions {
             if !self.chrome_action(a, renderer) {
                 return false;

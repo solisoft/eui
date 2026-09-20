@@ -354,3 +354,94 @@ there is no window to say it to, and it returns `false` having done nothing.
 At most four notifications ride in one batch; a handler that says more sends
 them in several, which costs nothing but is worth knowing before writing a
 loop that notifies per row.
+
+## Ten things that cost a restart each
+
+None of these is a missing feature; each is a place where a view author's
+habit from the web is a fact of this protocol instead, and the failure is
+quiet enough to spend an afternoon on. They were collected writing one
+application that draws a terminal — a dense grid inside a composed frame —
+which is the shape that meets most of them at once.
+
+**There is no margin.** A node cannot push its neighbours away; spacing is
+the container's, through `gap` and `pad`, and both are indices into the
+`space` scale (`0 2 4 8 12 16 20 24 32 …`, 05 §2) rather than pixels. A
+design is therefore laid out as a rhythm of containers — 8 between panels,
+12 inside one, a row that is 28 tall whatever it holds — and not as a set of
+offsets on the things themselves. Reaching for a margin and finding none is
+the first surprise; planning the rhythm instead is the answer.
+
+**`height: "100%"` inside a row is 100% of the *parent*.** Not of the height
+the row was allotted. One child asking for it makes the row as tall as the
+window and pushes whatever follows off the bottom — a footer that is simply
+not on screen, with no error anywhere. In a column whose last child is a
+fixed-height bar, give the body an explicit pixel height computed from the
+viewport rather than trusting `grow`.
+
+**`opacity` is a byte.** `0.62` is refused with *expected 0–255*; `150` is
+what was meant.
+
+**`text_align` is `start`, `center`, `end`, `justify`.** `"right"` is
+*unknown value 'right'* — the names are writing-direction-relative, which is
+the point of them.
+
+**There is no `accent.subtle`.** `success`, `warning`, `danger` and `info`
+each have `.base`, `.subtle` and `.on`; accent has `base`, `hover`, `active`
+and `on`. A selected row wanting a faint accent wash uses `info.subtle`.
+
+**Two children of one box may not share a `key`.** Easy to hit without a
+loop in sight: a sidebar that lists workspaces *and* the agents inside them
+will name the same identifier twice. Prefix the key with the list it belongs
+to, not just the thing it names.
+
+**A text node measured a tenth of a pixel short wraps inside its own box.**
+Give a mono run an explicit width from a cumulative column position —
+`round(n × advance)` — and the rounding can land under what the glyphs need,
+so they wrap to a second line *inside* the node, which reads as one word on
+top of another. `clamp: 1` stops the wrap and truncates instead, which is
+usually not what was wanted either. The fix is two nodes: a box holding the
+exact column width, and inside it the text with its own width rounded *up*,
+overflowing by the missing fraction — `overflow: visible` is the default and
+paints it.
+
+**A grid is the server's arithmetic, and the server does not know the font
+scale.** The client multiplies every text size by the viewer's setting
+(05 §5); a server that computed pixel widths from an assumed advance is
+right only at scale 1.0. Nothing reports the scale, so a cell grid is
+honest only as a local tool — worth knowing before designing one for
+somebody else's machine.
+
+**There is no absolute placement.** No `left`/`top`, and `position` does not
+take coordinates: something that must sit *at* a point — a caret over a
+character, a label on a plot — is either drawn inside the flow that produces
+that point, or drawn in a `canvas`, whose paths do take coordinates.
+
+**`Tab` is the client's, unless the focused node declares `typing`.** That
+prop reads as "this node takes typed text without being a field", and 03
+§3.1 now hangs the tab character on it: such a node is sent `Tab` and
+`Shift+Tab` as keys and the focus does not move. Everything else keeps the
+client's order. The way out of a surface holding both is `Ctrl+Shift+Tab`,
+which nothing may claim — so a terminal can have its completion key without
+anyone being stranded in it. A node that wants the *old* behaviour simply
+does not carry `typing`, and a node that carries it for the soft keyboard
+alone now also owns two keys it may not have wanted: check before adding it.
+
+**A `click` handler makes every pixel under it a hand.** The pointer's shape
+is the nearest ancestor that names a `cursor`, else a beam over an editable
+node, else a hand over anything with a `click` handler (03 §3,
+`driver.rs: fn cursor`). So a handler on the *root* — the usual way to close
+a sheet by pressing outside it — quietly turns the whole window into a
+button, and the moment anything under a stationary pointer shifts by a
+pixel, the shape alternates between that hand and whatever the region
+underneath says. It reads as a flickering cursor and looks like a client
+bug. Put the handler on the scrim that wants it, and give each large region
+its own `cursor` so nothing has to walk to the root to find out what it is
+over.
+
+**A tree rebuilt at the `wake` floor is work nobody asked for.** Ten frames
+a second of a large tree is ten conversions and ten diffs of everything,
+most of it unchanged. Return the **identical object** for a subtree that has
+not changed and the encoder keeps it without converting or diffing it — a
+terminal that redraws two of its forty lines then costs two lines. It wants
+a number that changes when the content does; inventing one on the server is
+usually harder than having the thing that produced the content carry it.
