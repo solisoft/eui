@@ -328,10 +328,27 @@ page (`MAX_ISLANDS`), and a batch for an owner nobody handed out is refused.
 One arena, one layout, one paint: neither the layout engine nor the painter
 learns that islands exist.
 
-Five vectors in `eui-tree/tests/apply.rs`. What is left is the client's
-socket half — opening one session per distinct path, deferring one that is not
-visible, and sending an event raised inside an island back to its own socket —
-plus `crates/eui-client/tests/islands.rs`, which `spec/09` §7.10 names.
+**And the client's half, the same day.** `Driver` finds the nodes carrying the
+prop, refuses any path that is not an absolute one on this origin, opens one
+session per *distinct path* — query and all, because the query is what tells
+the application which island it is rendering — stops at eight, applies an
+island's batches under its owner, and answers `owner_of` so that an event
+raised inside an island goes to that island's socket rather than naming a node
+the page's server never created. `island_ended` releases nothing: 01 §2.7's
+"leaves the page alone" is the vector the whole feature rests on, since a live
+part that could take a still page with it would make every island a liability.
+
+`crates/eui-client/tests/islands.rs` exists now — it was the one file `spec/09`
+named that did not — with eight vectors, five more in
+`eui-tree/tests/apply.rs`. The refusal worth naming is `//host/path`: a
+protocol-relative URL is a different origin *and* starts with a slash, which
+is exactly how the obvious spelling of that check lets it through.
+
+What is left is the socket plumbing in `app.rs`: dialling the path, feeding
+what comes back to `apply_region`, routing an island's events to its own
+connection, and deferring an island that has not been laid out yet — §2.7's
+`MAY` that a comment thread below the fold should cost what the rest of the
+page costs, which is nothing.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same

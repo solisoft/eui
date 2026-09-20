@@ -352,16 +352,24 @@ an owner nobody handed out is refused rather than resolved against the page's
 tables — which is the failure that would otherwise be silent, since the
 island's ops would land on the page.
 
-**The client's half is not**, and the vectors are named here first because
+**The client's half is written too**, in `eui-client/tests/islands.rs`, and
 the ones that matter are the refusals. An `island` naming another origin is
-refused, and a client that opened it would make every page a way to reach any
-host its reader can. A ninth island on one page opens nothing and leaves the
+refused — `https://`, `wss://`, a bare relative path, a backslash UNC, and
+`//host/path`, which is the one worth naming: a protocol-relative URL is a
+different origin *and* starts with a slash, so the obvious spelling of the
+check lets it through. Refused in the listing **and** in the opening, so a
+caller that asks directly is refused too.
+
+A ninth island on one page opens nothing and leaves the
 node as it was rendered (10 §1). An island whose session cannot be opened, or
 which ends, leaves the page standing and its own children showing — the vector
 that says a live part can never take a still page with it. Two islands naming
 one path share one session; two naming one component with different queries do
 not. And an event raised inside an island carries that island's node ids and
-goes to that island's socket, never the page's.
+goes to that island's socket, never the page's — the boundary being the node
+carrying the prop, which belongs to the page while everything below it does
+not. And a page with an island still draws, lays out and answers a pointer as
+**one** tree: the layout engine and the painter never learn islands exist.
 
 ### 7.11 Installing — `crates/eui-client/tests/install.rs`
 

@@ -821,6 +821,21 @@ struct Departing {
     size: (u32, u32),
 }
 
+/// An island's session, as the driver holds it (01 §2.7).
+#[derive(Debug, Clone)]
+struct Island {
+    /// The page node carrying the prop. The boundary 01 §2.7 draws: that
+    /// node belongs to the page, everything below it to the island.
+    at: NodeIx,
+    /// Its index in the session's tables, which its batches apply under.
+    owner: u16,
+    /// The path it was opened for, whole. Two islands naming one path share
+    /// a session; two naming one component with different queries do not,
+    /// because the query is what tells the application which it is
+    /// rendering — so the key is the path and not the component.
+    path: String,
+}
+
 /// One subtree on the move (03 §5), as the driver keeps it: where it starts,
 /// where it ends, and either a clock or the hand.
 ///
@@ -1302,6 +1317,10 @@ pub struct Driver {
     /// Which nodes wear `paired` and carry a key. Rebuilt with the `resize`
     /// watch below and for the same reason.
     paired_watch: Vec<NodeIx>,
+    /// 01 §2.7: the islands this tree asks for, and the ones already open.
+    island_watch: Vec<(NodeIx, String)>,
+    island_watch_stale: bool,
+    islands: Vec<Island>,
     /// Which nodes hold a `resize` handler, and whether that list is stale.
     ///
     /// Rebuilt when the tree changes rather than per frame. Walking the tree
@@ -1513,6 +1532,9 @@ impl Driver {
             paired_boxes: HashMap::new(),
             departed_keys: Vec::new(),
             paired_watch: Vec::new(),
+            island_watch: Vec::new(),
+            island_watch_stale: true,
+            islands: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
             outrun_at: None,
@@ -1672,6 +1694,9 @@ impl Driver {
         self.paired_boxes.clear();
         self.departed_keys.clear();
         self.paired_watch.clear();
+        self.island_watch.clear();
+        self.island_watch_stale = true;
+        self.islands.clear();
         self.resize_watch.clear();
         self.resize_watch_stale = true;
         self.cached = None;
@@ -1834,8 +1859,10 @@ impl Driver {
                 self.locate_dirty = true;
                 // 06 §2: a batch may have added or removed a `resize`
                 // handler, so the watch list is walked again before the
-                // next frame rather than every frame.
+                // next frame rather than every frame. 01 §2.7: and an
+                // island.
                 self.resize_watch_stale = true;
+                self.island_watch_stale = true;
                 self.invalidate();
                 self.note_style_changes();
                 // 03 §5.3: before the entrances, because a pair is one
@@ -1950,6 +1977,131 @@ impl Driver {
     fn invalidate(&mut self) {
         self.layout_valid = false;
         self.redraw = true;
+    }
+
+    // ------------------------------------------------- 01 §2.7, islands
+
+    /// The islands this tree asks for that are not open yet: the node
+    /// carrying the prop and the path it names.
+    ///
+    /// In tree order, so a client that stops at `MAX_ISLANDS` opens the ones
+    /// nearest the top of the page. That is an arbitrary rule, but an
+    /// arbitrary rule that gives the same answer on every run beats one that
+    /// depends on the order a hash map happens to iterate in.
+    pub fn islands_wanted(&mut self) -> Vec<(NodeIx, String)> {
+        if self.island_watch_stale {
+            self.rebuild_island_watch();
+        }
+        let open: Vec<NodeIx> = self.islands.iter().map(|i| i.at).collect();
+        self.island_watch.iter().filter(|(ix, _)| !open.contains(ix)).cloned().collect()
+    }
+
+    /// Is this what 01 §2.7 calls an island's address — an **absolute path
+    /// on the same origin**?
+    ///
+    /// A `MUST`, and not a nicety: a tree that could open a socket elsewhere
+    /// would make every page a way to reach any host its reader can reach,
+    /// and the tree is the one thing on the page that came from the network.
+    ///
+    /// `//host/path` is the shape that makes this worth a function. It is a
+    /// protocol-relative URL — a different origin — and it starts with a
+    /// slash, so the obvious spelling of this check lets it through.
+    fn is_same_origin_path(path: &str) -> bool {
+        path.starts_with('/') && !path.starts_with("//") && !path.contains('\\') && !path.contains("://")
+    }
+
+    fn rebuild_island_watch(&mut self) {
+        self.island_watch.clear();
+        self.island_watch_stale = false;
+        let Some(atom) = self.session.atoms().island else { return };
+        let Some(root) = self.session.root() else { return };
+        let found: Vec<(NodeIx, String)> = self
+            .session
+            .preorder(root)
+            .filter_map(|ix| {
+                let node = self.session.node(ix)?;
+                let path = match node.prop(atom)? {
+                    Value::Str(s) => s.clone(),
+                    Value::Atom(id) => self.session.atom(*id)?.to_owned(),
+                    _ => return None,
+                };
+                Some((ix, path))
+            })
+            .collect();
+        for (ix, path) in found {
+            if Self::is_same_origin_path(&path) {
+                self.island_watch.push((ix, path));
+            } else {
+                // Said once, and then the node is left as the page rendered
+                // it. A refusal nobody can see is a refusal nobody fixes.
+                eprintln!("eui: refusing island {path:?} — an island is an absolute path on this origin (01 §2.7)");
+            }
+        }
+    }
+
+    /// Open an island's session for the node at `ix`. `None` past
+    /// `MAX_ISLANDS`, or for a path that is not this origin's.
+    ///
+    /// The owner it returns is what that island's batches are applied under
+    /// and what an event raised inside it is reported with.
+    pub fn open_island(&mut self, ix: NodeIx, path: &str) -> Option<u16> {
+        if !Self::is_same_origin_path(path) {
+            return None;
+        }
+        let owner = self.session.open_island(ix)?;
+        self.islands.push(Island { at: ix, owner, path: path.to_owned() });
+        Some(owner)
+    }
+
+    /// The owner already open for `path`, if any.
+    ///
+    /// 01 §2.7: one session per **distinct path**. Two islands naming the
+    /// same path share one; two naming the same component with different
+    /// queries do not, because the query is what tells the application which
+    /// island it is rendering — so the whole path is the key, query and all.
+    pub fn island_for_path(&self, path: &str) -> Option<u16> {
+        self.islands.iter().find(|i| i.path == path).map(|i| i.owner)
+    }
+
+    /// How many islands are open, against `MAX_ISLANDS`.
+    pub fn islands_open(&self) -> usize {
+        self.islands.len()
+    }
+
+    /// Apply a batch that arrived on an island's socket.
+    pub fn apply_region(&mut self, owner: u16, batch: &Batch) -> Result<(), eui_tree::ApplyError> {
+        let out = self.session.apply_region(owner, batch);
+        if out.is_ok() {
+            self.invalidate();
+            self.island_watch_stale = true;
+            self.resize_watch_stale = true;
+        }
+        out
+    }
+
+    /// An island's session ended, or could not be opened.
+    ///
+    /// 01 §2.7: it **leaves the page alone**. The node keeps the children it
+    /// has — which, until that session spoke, are the ones the cached render
+    /// put there — and nothing else is torn down. A live part failing must
+    /// never be able to take a still page with it, so this releases no node,
+    /// poisons nothing and does not touch the root: it forgets the island,
+    /// and the page carries on being a page.
+    pub fn island_ended(&mut self, owner: u16) {
+        self.islands.retain(|i| i.owner != owner);
+    }
+
+    /// Which island a node belongs to, or `None` for one of the page's.
+    ///
+    /// This is how an event raised inside an island goes to **its own**
+    /// socket: §2.7 says its ops address its own nodes and its events carry
+    /// its own ids, so sending one to the page's server would be naming a
+    /// node that server never created.
+    pub fn owner_of(&self, ix: NodeIx) -> Option<u16> {
+        match self.session.node(ix).map(|n| n.owner) {
+            Some(0) | None => None,
+            Some(o) => Some(o),
+        }
     }
 
     // ---------------------------------------------------------- transitions

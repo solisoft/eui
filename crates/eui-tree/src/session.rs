@@ -1213,6 +1213,10 @@ pub struct WellKnown {
     pub count: Option<u32>,
     /// A windowed list's row heights.
     pub heights: Option<u32>,
+    /// The path of the session an **island** takes its content from
+    /// (01 §2.7). An absolute path on the same origin; anything else is
+    /// refused by the client rather than dialled.
+    pub island: Option<u32>,
     /// A node's wake period.
     pub wake: Option<u32>,
     /// How often a node wants to be told where the machine is, in ms.
@@ -1286,6 +1290,7 @@ impl WellKnown {
             "item_height" => &mut self.item_height,
             "count" => &mut self.count,
             "heights" => &mut self.heights,
+            "island" => &mut self.island,
             "wake" => &mut self.wake,
             "locate" => &mut self.locate,
             "drag_only" => &mut self.drag_only,
