@@ -1130,6 +1130,16 @@ FA-1028 with its scrollbar, laying out only the rows that have boxes. The
 canvas is 914×685 CSS and 1828×1370 device, which is the page's own box at
 its own pixel ratio.
 
+**Not cut, just not wired: a page always dials.** The one-shot render of
+01 §2.4 — fetch the tree over HTTPS, draw it, open no socket until something
+happens that only a server can answer — is `#[cfg(has_native_net)]` and so
+native only. Nothing about it is unavailable here: the page's own `fetch`
+already goes and gets assets, verifies a BLAKE3 before anything is decoded
+and refuses a redirect, and the half above it that walks a body into frames
+carries no platform at all. What is missing is `fetch_view` on this side and
+the call that reaches for it. Until then the target that would gain most
+from costing a server nothing is the one that always costs it a session.
+
 **Honest about the rest:** TLS and the publisher key are the browser's, not
 ours ([Transport](/docs/transport)), and the decoder does not get a process
 of its own ([Security](/docs/security)). Both are named where they matter

@@ -99,3 +99,40 @@ fn a_refusal_reads_as_one() {
 fn err_text(code: u16, why: &str) -> String {
     TransportError::Refused(code, why.to_owned()).to_string()
 }
+
+/// Every frame kind the protocol defines, classified on purpose.
+///
+/// The allowlist decides whether a page that opened no socket has to open
+/// one, and its failure mode is quiet in both directions: a kind wrongly
+/// `true` dials a session when somebody drags a window edge, and a kind
+/// wrongly `false` drops a click into nothing. Neither says anything.
+///
+/// So the twelve of `spec/01-transport.md` §7 are written out here rather
+/// than sampled, and `0x0D` is asserted not to be a kind yet — the line
+/// that fails on the day a thirteenth is added, which is the day somebody
+/// has to decide which side of this it falls.
+#[test]
+fn every_frame_kind_is_classified_on_purpose() {
+    use eui_client::dial::kind_needs_server;
+
+    // Only a server can answer these: an `Event` (including the one an
+    // `emit(...)` in a local handler produces), a `Resync`, an `Upload`.
+    for kind in [0x04, 0x09, 0x0B] {
+        assert!(kind_needs_server(kind), "{kind:#04x} must dial");
+    }
+
+    // And these must not. `Viewport` is the one that matters: it fires on
+    // every resize and every palette change, so a denylist would open a
+    // session for a window being dragged.
+    for kind in [0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0C] {
+        assert!(!kind_needs_server(kind), "{kind:#04x} must not dial");
+    }
+
+    // A kind this client does not know is not a kind this client produced.
+    assert!(!kind_needs_server(0x0D));
+    assert!(!kind_needs_server(0xFF));
+
+    // The guard: `Frame::decode` knows twelve kinds. When it knows
+    // thirteen, the loop above is missing one and this line says so.
+    assert_eq!(eui_proto::Frame::decode(&[0x0D, 0x00]), Err(eui_proto::DecodeError::UnknownTag("frame kind")), "a thirteenth frame kind exists; classify it above");
+}

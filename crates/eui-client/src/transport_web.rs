@@ -1,7 +1,7 @@
 //! The session socket, where the host already owns one: a browser's
 //! `WebSocket`, binary frames only.
 //!
-//! The same three types as [`crate::transport`], the same [`Connection`],
+//! The same types as [`crate::transport`], the same [`Connection`],
 //! and `app.rs` cannot tell which one it has. What differs is everything
 //! underneath: there is no runtime, no thread and no TLS here, because a
 //! page is handed a socket that has already done its handshake, checked
@@ -9,10 +9,15 @@
 //! client that is not permitted to do those things, which is the honest
 //! difference and the one `doc/docs/eui/security.md` has to state.
 //!
-//! The four types are written out again rather than shared behind a trait.
-//! Two of them are enums `app.rs` matches on exhaustively, so a variant
-//! added on one side and not the other is a compile error at the match and
-//! not a silent divergence — which is the property a trait would cost.
+//! The types are written out again rather than shared behind a trait. Two
+//! of them are enums `app.rs` matches on exhaustively, so a variant added
+//! on one side and not the other is a compile error at the match and not a
+//! silent divergence — which is the property a trait would cost, and the
+//! whole of what pays for writing them twice.
+//!
+//! It buys nothing for a `const fn`, where the two copies would simply
+//! disagree and say nothing about it, so [`kind_needs_server`] is written
+//! once in [`crate::dial`] and re-exported from both sides.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -29,6 +34,20 @@ pub enum TransportError {
     Insecure(String),
     /// The URL could not be parsed or the handshake failed.
     Connect(String),
+    /// The server answered the upgrade with an HTTP status rather than
+    /// switching protocols.
+    ///
+    /// **A page never builds this one.** The `WebSocket` API does not
+    /// expose the handshake response, so a `404` from an address that is
+    /// not a session arrives here as an `error` event and nothing more —
+    /// indistinguishable from a socket that broke. The variant exists
+    /// because `app.rs` matches this enum exhaustively and the two
+    /// transports are written out twice precisely so that a case present
+    /// on one side and absent on the other is a compile error rather than
+    /// a silent divergence. What it does not do is give a page the refusal
+    /// that stops the retry ladder on a desktop; that gap is the browser's
+    /// to carry until the address is checked before it is dialled.
+    Refused(u16, String),
     /// The server sent a text frame; the protocol is binary only.
     TextFrame,
     /// The socket closed.
@@ -40,6 +59,8 @@ impl std::fmt::Display for TransportError {
         match self {
             Self::Insecure(u) => write!(f, "refusing insecure session URL {u}"),
             Self::Connect(e) => write!(f, "connect failed: {e}"),
+            Self::Refused(code, why) if why.is_empty() => write!(f, "the server answered {code} rather than opening a session"),
+            Self::Refused(code, why) => write!(f, "the server answered {code}: {why}"),
             Self::TextFrame => f.write_str("server sent a text frame"),
             Self::Closed => f.write_str("connection closed"),
         }
@@ -47,6 +68,8 @@ impl std::fmt::Display for TransportError {
 }
 
 impl std::error::Error for TransportError {}
+
+pub use crate::dial::kind_needs_server;
 
 /// What arrives from the socket, or from an asset fetch.
 #[derive(Debug)]
@@ -121,7 +144,48 @@ impl Drop for Connection {
     }
 }
 
-impl Connection {
+/// Everything asset fetching needed, without the socket it used to hang off.
+///
+/// A page fetched over `GET /_eui/view/<component>` (01 §2.4) has no session
+/// and may still name a picture, so the half of a `Connection` that goes and
+/// gets bytes has to outlive the half that does not exist. Cheap to clone;
+/// one per tab.
+#[derive(Clone)]
+pub struct Fetcher {
+    origin: String,
+    in_tx: mpsc::Sender<Incoming>,
+    /// `Rc` and no `Send`, for the reason [`Connection::notify`] carries one:
+    /// winit's web `EventLoopProxy` holds an `std::rc::Weak`.
+    notify: Rc<dyn Fn()>,
+}
+
+impl std::fmt::Debug for Fetcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetcher").field("origin", &self.origin).finish()
+    }
+}
+
+impl Fetcher {
+    /// A fetcher with no socket behind it, and the channel its answers
+    /// arrive on.
+    ///
+    /// `cookie` is taken and dropped, where a desktop keeps it. That is not
+    /// an oversight and not a smaller client: `fetch_bytes` sends
+    /// `credentials: omit` because 01 §1 forbids a client identifier, and
+    /// the loopback cookie a desktop carries to reach its own `soli serve`
+    /// has no analogue in a page. The argument stays so that the one caller
+    /// reads the same on every target.
+    pub fn alone(origin: String, cookie: Option<String>, notify: impl Fn() + 'static) -> (Self, mpsc::Receiver<Incoming>) {
+        let _ = cookie;
+        let (in_tx, rx) = mpsc::channel::<Incoming>();
+        (Self { origin, in_tx, notify: Rc::new(notify) }, rx)
+    }
+
+    /// The HTTPS origin this fetches from.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
     /// Fetch an asset; the result arrives as [`Incoming::Asset`] and the
     /// notifier is called — the same contract as a desktop's, with the
     /// thread replaced by the task the browser was going to run anyway.
@@ -140,6 +204,18 @@ impl Connection {
             let _ = tx.send(Incoming::Asset(hash, result));
             notify();
         });
+    }
+}
+
+impl Connection {
+    /// This session's asset fetching, as a handle that outlives the socket.
+    pub fn fetcher(&self) -> Fetcher {
+        Fetcher { origin: self.origin.clone(), in_tx: self.in_tx.clone(), notify: Rc::clone(&self.notify) }
+    }
+
+    /// Fetch an asset. Unchanged for every caller.
+    pub fn request_asset(&self, hash: [u8; 32]) {
+        self.fetcher().request_asset(hash);
     }
 }
 

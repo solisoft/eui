@@ -830,6 +830,7 @@ dependencies = [
 name = "counter-server"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "eui-proto",
  "futures-util",
  "tokio",
@@ -1134,6 +1135,7 @@ dependencies = [
  "webpki-roots 0.26.11",
  "wgpu",
  "winit",
+ "zbus",
  "zune-jpeg",
 ]
 
@@ -1166,6 +1168,9 @@ dependencies = [
 [[package]]
 name = "eui-proto"
 version = "0.1.0"
+dependencies = [
+ "flate2",
+]
 
 [[package]]
 name = "eui-render"

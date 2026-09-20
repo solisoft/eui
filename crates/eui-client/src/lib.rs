@@ -100,6 +100,7 @@ pub mod cursor;
 /// is not this: winit reports that on every target, the web included.
 #[cfg(has_desktop_theme)]
 pub mod desktop_theme;
+pub mod dial;
 pub mod driver;
 /// A launcher entry with the application's own icon, so an address is
 /// something the desktop can start. Needs somewhere to write one, which

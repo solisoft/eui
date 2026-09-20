@@ -345,10 +345,6 @@ struct Tab {
     fetch: Option<crate::transport::Fetcher>,
     /// Where answers land while there is no `Connection` to carry them.
     inbox: Option<std::sync::mpsc::Receiver<Incoming>>,
-    /// BLAKE3 of the batches this tab's tree was built from, when it came
-    /// over HTTPS. Kept for the moment a socket is opened: it names the tree
-    /// the server may recognise rather than re-send.
-    held: Option<[u8; 32]>,
     /// Something needed the server, so a socket is wanted before the next
     /// frame is drawn. A flag rather than a dial on the spot: `send` is
     /// called from deep inside the input path and has no event loop proxy to
@@ -869,7 +865,6 @@ impl Tab {
             fetch: None,
             inbox: None,
             want_socket: false,
-            held: None,
             queued: Vec::new(),
             tries: 0,
             files: Files::default(),
@@ -1096,7 +1091,6 @@ impl Tab {
         });
         self.fetch = Some(fetch);
         self.inbox = Some(inbox);
-        self.held = Some(view.tree);
 
         // Fed frame by frame through the ordinary path, so the driver ends
         // up in a state indistinguishable from a socket that welcomed and
@@ -1105,9 +1099,9 @@ impl Tab {
             let _ = self.backend.frame(frame);
         }
         // What the tree is, so that a socket opened later can be told and the
-        // server may keep it rather than send it again (01 §2.6). Until this
-        // existed the hash was computed, stored on the tab and read by
-        // nobody.
+        // server may keep it rather than send it again (01 §2.6). The driver
+        // is the only place it is kept: the tab used to hold a copy as well,
+        // which nothing ever read.
         self.backend.fetched_tree(view.tree);
         // The address answered, which is what `offline` later means by it.
         self.answered = true;
