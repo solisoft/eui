@@ -381,6 +381,12 @@ by style id alone, so an island's style 1 was served the page's: a box asking
 for 80×20 came out 400×0, and nothing said a word. Both caches are keyed by
 `(owner, id)` now, and `Layout::style_for` takes the owner.
 
+The worker's pipe carries islands too, and `replies_round_trip` in
+`worker.rs` pins it: a reply's `island_outbound` survives the encode with its
+owners, in a field of its own rather than tagged inside `outbound` — a
+separate field has to be read to be sent, and so cannot become the page's by
+being forgotten.
+
 ### 7.11 Installing — `crates/eui-client/tests/install.rs`
 
 A signed manifest with an `icon` is verified, its icon fetched by hash and

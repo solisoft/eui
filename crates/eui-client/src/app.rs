@@ -328,6 +328,21 @@ impl std::fmt::Debug for Files {
 /// This is the isolation boundary, and it is deliberately narrow. A tab has
 /// its own confined worker *process* — where the platform allows one — its
 /// own connection and cookie, its own glyph and image textures, and its own
+/// One island's socket (01 §2.7).
+///
+/// An island is an ordinary session that happens to be addressed by a prop,
+/// so this is an ordinary `Connection` — the only thing that makes it an
+/// island is that its frames apply under an owner and its events go back
+/// here rather than to the page.
+struct IslandSocket {
+    /// Its index in the driver's tables.
+    owner: u16,
+    /// The path it was opened for, whole. The key for sharing: two islands
+    /// naming one path share this socket.
+    path: String,
+    conn: Connection,
+}
+
 /// sound. It has no handle on the window, no handle on any other tab, and
 /// no way to ask for either: everything it could reach that is shared is
 /// either read-only (the wgpu device) or lives in the window's process and
@@ -343,6 +358,10 @@ struct Tab {
     /// How this tab fetches assets, with or without a socket. A page that
     /// arrived over HTTPS may still name a picture.
     fetch: Option<crate::transport::Fetcher>,
+    /// 01 §2.7: a socket per island, beside the page's — which the page may
+    /// not even have. Empty for every page with no island, which is almost
+    /// all of them.
+    islands: Vec<IslandSocket>,
     /// Where answers land while there is no `Connection` to carry them.
     inbox: Option<std::sync::mpsc::Receiver<Incoming>>,
     /// Something needed the server, so a socket is wanted before the next
@@ -863,6 +882,7 @@ impl Tab {
             trust: crate::chrome::Trust::Unverified,
             link: Link::Ended,
             fetch: None,
+            islands: Vec::new(),
             inbox: None,
             want_socket: false,
             queued: Vec::new(),
@@ -1110,6 +1130,98 @@ impl Tab {
         true
     }
 
+    /// 01 §2.7: the islands this tab's tree asks for, drained and dialled.
+    ///
+    /// Called from `pump`, after the page's frames have been applied — the
+    /// tree that names an island is the tree that just arrived.
+    fn pump_islands(&mut self) {
+        // What arrived on the ones already open. A batch changes only that
+        // island's content; anything else it says is its own business.
+        let mut ended: Vec<u16> = Vec::new();
+        let mut frames: Vec<(u16, Vec<u8>)> = Vec::new();
+        for island in &self.islands {
+            while let Ok(msg) = island.conn.rx.try_recv() {
+                match msg {
+                    Incoming::Message(bytes) => frames.push((island.owner, bytes)),
+                    // 01 §2.7: "leaves the page alone". The socket is
+                    // forgotten, the node keeps the children the page
+                    // rendered, and nothing else is torn down. Not retried
+                    // here: an island that fails on every attempt would
+                    // otherwise cost the page a dial per pump for as long as
+                    // it stays open.
+                    Incoming::Closed(e) => {
+                        eprintln!("eui: island {} ended: {e}", island.path);
+                        ended.push(island.owner);
+                        break;
+                    }
+                    // An island's pictures are the page's: one asset store,
+                    // content-addressed, so the same bytes fetched twice are
+                    // the same bytes.
+                    Incoming::Asset(hash, Ok(bytes)) => self.backend.asset_ready(hash, bytes),
+                    Incoming::Asset(hash, Err(why)) => self.backend.asset_failed(hash, why),
+                }
+            }
+        }
+        for (owner, bytes) in frames {
+            self.backend.island_frame(owner, bytes);
+        }
+        for owner in ended {
+            self.backend.island_ended(owner);
+            self.islands.retain(|i| i.owner != owner);
+        }
+
+        // What the islands owe their own servers. Never `self.send`: an
+        // island's event names a node the page's server never created.
+        for (owner, bytes) in self.backend.take_island_outbound() {
+            let Some(island) = self.islands.iter().find(|i| i.owner == owner) else { continue };
+            if island.conn.tx.send(bytes).is_err() {
+                eprintln!("eui: island {} went away", island.path);
+                self.backend.island_ended(owner);
+                self.islands.retain(|i| i.owner != owner);
+            }
+        }
+    }
+
+    /// Dial the islands this tree asks for that are not open yet.
+    ///
+    /// Separate from `pump_islands` because it needs the event-loop proxy to
+    /// build a waker, and `pump` has none.
+    fn dial_islands(&mut self, proxy: &Proxy) {
+        let Ok(origin) = crate::assets::origin_for(&self.url) else { return };
+        for (node, path) in self.backend.islands_wanted() {
+            // One session per distinct path (01 §2.7). A second island
+            // naming a path already open is the same island as far as the
+            // server is concerned, and opening a second socket for it would
+            // cost exactly what the feature exists to save.
+            if let Some(shared) = self.islands.iter().find(|i| i.path == path).map(|i| i.owner) {
+                let _ = shared;
+                continue;
+            }
+            let Some(owner) = self.backend.open_island(node, &path) else {
+                // Past the ceiling, or a path this client will not dial.
+                // Either way the node stays as the page rendered it.
+                continue;
+            };
+            // The address is the page's origin and the island's path, and
+            // it is built here rather than taken from the tree: §2.7 allows
+            // a path and nothing else, so nothing the tree says can decide
+            // where this connects.
+            let url = format!("{}{path}", origin.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
+            let p = Arc::clone(proxy);
+            match transport::connect(&url, self.backend.hello(), self.cookie.clone(), self.host_loopback, move || {
+                let _ = p.send_event(Wake::Transport);
+            }) {
+                Ok(conn) => self.islands.push(IslandSocket { owner, path, conn }),
+                Err(e) => {
+                    // 01 §2.7 again: an island that cannot be opened leaves
+                    // the page alone, and is simply not open.
+                    eprintln!("eui: island {path}: {e}");
+                    self.backend.island_ended(owner);
+                }
+            }
+        }
+    }
+
     /// Open a socket for this tab's URL, with whatever the driver says the
     /// opening frame is now — a fresh `Hello` on the first attempt, and one
     /// offering the session back on every attempt after it (spec 01 §4.1).
@@ -1309,6 +1421,7 @@ impl Tab {
             let held = std::mem::take(&mut self.queued);
             self.send(held);
         }
+        self.pump_islands();
         match closed {
             // An HTTP status is the server answering, not the network
             // failing: this address is not a session and will not become
@@ -2310,9 +2423,13 @@ impl Shell {
         let active = self.active;
         let mut redraw = false;
         let mut remember = None;
+        let proxy = Arc::clone(&self.proxy);
         for (i, t) in self.tabs.iter_mut().enumerate() {
             let before = t.answered;
             let wants = t.pump();
+            // 01 §2.7, after the frames that may have named one: the tree
+            // that asks for an island is the tree that just arrived.
+            t.dial_islands(&proxy);
             redraw |= wants && i == active;
             // The first frame of a session is what makes its address worth
             // keeping: it answered. An address that was merely typed, or

@@ -152,6 +152,15 @@ impl<'a> R<'a> {
     }
 }
 
+/// An owner index off the pipe, refused rather than truncated.
+///
+/// It travels as a `u32` because every other number here does, and it comes
+/// from a peer process: a value that cannot be an owner is a malformed
+/// request, not a number to wrap.
+fn owner16(v: u32) -> Wire<u16> {
+    u16::try_from(v).map_err(|_| "an island owner is a u16")
+}
+
 /// What the window asks the worker.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -172,6 +181,18 @@ pub enum Request {
     /// Name the tree just fed in as one fetched over HTTPS (01 §2.6), so a
     /// later `Hello` can offer its hash instead of a session.
     Fetched([u8; 32]),
+    /// 01 §2.7: the islands this tree asks for that are not open — the
+    /// **server id** of the node carrying the prop, and the path.
+    ///
+    /// An id and not an index, because a `NodeIx` is the worker's own
+    /// arena's and means nothing on this side of the pipe.
+    IslandsWanted,
+    /// Open an island for the node with this id, at this path.
+    OpenIsland(u32, String),
+    /// A frame that arrived on an island's socket, applied under its owner.
+    IslandFrame(u16, Vec<u8>),
+    /// An island's session ended, or could not be opened. The page stands.
+    IslandEnded(u16),
     /// End the session with a reason, and show it. The window uses this
     /// where it refuses to open one at all — a manifest that did not check
     /// out — so that the reason is on the glass and not only on a stderr
@@ -305,6 +326,21 @@ impl Request {
             Request::Fetched(tree) => {
                 w.u8(26);
                 w.bytes(tree);
+            }
+            Request::IslandsWanted => w.u8(27),
+            Request::OpenIsland(node, path) => {
+                w.u8(28);
+                w.u32(*node);
+                w.str(path);
+            }
+            Request::IslandFrame(owner, b) => {
+                w.u8(29);
+                w.u32(u32::from(*owner));
+                w.bytes(b);
+            }
+            Request::IslandEnded(owner) => {
+                w.u8(30);
+                w.u32(u32::from(*owner));
             }
             Request::Hello => w.u8(2),
             Request::Frame(b) => {
@@ -443,6 +479,10 @@ impl Request {
             1 => Request::Grant(r.u32()?),
             2 => Request::Hello,
             26 => Request::Fetched(r.bytes()?.try_into().map_err(|_| "a tree hash is thirty-two bytes")?),
+            27 => Request::IslandsWanted,
+            28 => Request::OpenIsland(r.u32()?, r.str()?),
+            29 => Request::IslandFrame(owner16(r.u32()?)?, r.bytes()?.to_vec()),
+            30 => Request::IslandEnded(owner16(r.u32()?)?),
             3 => Request::Frame(r.bytes()?.to_vec()),
             4 => Request::Input(get_input(&mut r)?),
             5 => Request::AssetReady(r.hash()?, r.bytes()?.to_vec()),
@@ -635,6 +675,15 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
 pub struct Status {
     /// Frames to send to the server, encoded.
     pub outbound: Vec<Vec<u8>>,
+    /// 01 §2.7: frames an **island's** socket owes, each tagged with the
+    /// owner that owes it.
+    ///
+    /// A field of its own rather than a tag inside `outbound`, for the
+    /// reason the driver keeps two queues: an island's event names a node
+    /// the page's server never created, so the one thing this must not be
+    /// able to do is reach the page's socket by being forgotten about. A
+    /// separate field cannot be forgotten — it has to be read to be sent.
+    pub island_outbound: Vec<(u16, Vec<u8>)>,
     /// A frame should be drawn.
     pub needs_redraw: bool,
     /// Why the session ended, if it did.
@@ -699,6 +748,11 @@ pub enum Payload {
     Hello(Vec<u8>),
     /// `PendingAssets`.
     Assets(Vec<Hash>),
+    /// `IslandsWanted`: the node id and path of each island not yet open.
+    Islands(Vec<(u32, String)>),
+    /// `OpenIsland`: the owner its batches apply under, or `None` past the
+    /// ceiling or for a path this client will not dial.
+    Owner(Option<u16>),
     /// `Paint`: the draw list, and the rows of each atlas that changed
     /// since the last paint — bands of `(edge length, y0, y1, bytes)` for
     /// the glyph atlas, which grows, `(y0, y1, bytes)` for the image atlas.
@@ -741,6 +795,11 @@ impl Reply {
     fn encode(&self) -> Vec<u8> {
         let mut w = W(Vec::new());
         let s = &self.status;
+        w.u32(u32::try_from(s.island_outbound.len()).unwrap_or(u32::MAX));
+        for (owner, f) in &s.island_outbound {
+            w.u32(u32::from(*owner));
+            w.bytes(f);
+        }
         w.u32(u32::try_from(s.outbound.len()).unwrap_or(u32::MAX));
         for f in &s.outbound {
             w.bytes(f);
@@ -838,6 +897,18 @@ impl Reply {
                     w.hash(h);
                 }
             }
+            Payload::Islands(v) => {
+                w.u8(10);
+                w.u32(u32::try_from(v.len()).unwrap_or(u32::MAX));
+                for (node, path) in v {
+                    w.u32(*node);
+                    w.str(path);
+                }
+            }
+            Payload::Owner(o) => {
+                w.u8(11);
+                w.u32(o.map_or(u32::MAX, u32::from));
+            }
             Payload::Paint { list, glyphs, images, scenes } => {
                 w.u8(4);
                 put_list(&mut w, list);
@@ -903,6 +974,11 @@ impl Reply {
     fn decode(b: &[u8]) -> Wire<Self> {
         let mut r = R { b, i: 0 };
         let n = r.u32()? as usize;
+        let mut island_outbound = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            island_outbound.push((owner16(r.u32()?)?, r.bytes()?.to_vec()));
+        }
+        let n = r.u32()? as usize;
         let mut outbound = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             outbound.push(r.bytes()?.to_vec());
@@ -948,7 +1024,27 @@ impl Reply {
         for _ in 0..n {
             notes.push(crate::driver::Note { title: r.str()?, body: r.str()?, tag: r.str()? });
         }
-        let status = Status { outbound, needs_redraw, closed, ime, clipboard, opening, next_due_ms, cursor, mode, audio, video, wants_location, takes_back, consent, files, nfc, writes, notes };
+        let status = Status {
+            outbound,
+            island_outbound,
+            needs_redraw,
+            closed,
+            ime,
+            clipboard,
+            opening,
+            next_due_ms,
+            cursor,
+            mode,
+            audio,
+            video,
+            wants_location,
+            takes_back,
+            consent,
+            files,
+            nfc,
+            writes,
+            notes,
+        };
         let payload = match r.u8()? {
             0 => Payload::None,
             1 => Payload::Sandbox(if r.bool()? { Ok(r.str()?) } else { Err(r.str()?) }),
@@ -960,6 +1056,22 @@ impl Reply {
                     hs.push(r.hash()?);
                 }
                 Payload::Assets(hs)
+            }
+            10 => {
+                let n = r.u32()? as usize;
+                // 10 §1 bounds the islands a page may open; this is the
+                // list of ones it *asks* for, which a tree could make long.
+                let mut v = Vec::with_capacity(n.min(64));
+                for _ in 0..n {
+                    v.push((r.u32()?, r.str()?));
+                }
+                Payload::Islands(v)
+            }
+            11 => {
+                // `u32::MAX` is "no owner": an `Option<u16>` over a wire
+                // that carries numbers, with a sentinel that cannot be one.
+                let v = r.u32()?;
+                Payload::Owner(if v == u32::MAX { None } else { Some(owner16(v)?) })
             }
             4 => {
                 let list = get_list(&mut r)?;
@@ -1476,6 +1588,34 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         Payload::None
                     }
                     Request::PendingAssets => Payload::Assets(d.pending_assets()),
+                    Request::IslandsWanted => Payload::Islands(d.islands_wanted().into_iter().filter_map(|(ix, path)| Some((d.session().node(ix)?.id, path))).collect()),
+                    Request::OpenIsland(node, path) => Payload::Owner(d.session().lookup(node).and_then(|ix| d.open_island(ix, &path))),
+                    Request::IslandFrame(owner, bytes) => {
+                        match eui_proto::Frame::decode(&bytes) {
+                            // An island sends what any session sends, and
+                            // only a `Batch` changes its tree. Anything else
+                            // is the island's server saying something a
+                            // client answers the same way it always did —
+                            // except that it must not reach the page's
+                            // driver as though the page had said it.
+                            Ok(eui_proto::Frame::Batch(b)) => {
+                                if let Err(e) = d.apply_region(owner, &b) {
+                                    eprintln!("eui: island {owner}: {e:?}");
+                                    d.island_ended(owner);
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                eprintln!("eui: island {owner}: bad frame: {e:?}");
+                                d.island_ended(owner);
+                            }
+                        }
+                        Payload::None
+                    }
+                    Request::IslandEnded(owner) => {
+                        d.island_ended(owner);
+                        Payload::None
+                    }
                     Request::Paint(w, h) => {
                         // The window answers ticks itself while it draws
                         // the last list again, so the clock here has to be
@@ -1567,6 +1707,7 @@ fn status_of(d: &mut Driver) -> Status {
     let now = Instant::now();
     Status {
         outbound: d.take_pending().iter().map(Frame::encode).collect(),
+        island_outbound: d.take_island_pending().iter().map(|(o, f)| (*o, f.encode())).collect(),
         needs_redraw: d.needs_redraw(),
         closed: d.closed().map(|c| format!("{c:?}")),
         ime: d.ime_area().map(|r| [r.x, r.y, r.w, r.h]),
@@ -1682,6 +1823,13 @@ pub struct Worker {
     /// an instant.
     due: Option<Instant>,
     dead: Option<String>,
+    /// 01 §2.7: frames islands' sockets owe, gathered from every reply.
+    ///
+    /// A reply can carry these whatever the request was — an island's button
+    /// is clicked by an `Input`, its tree arrives on an `IslandFrame`, and
+    /// either may raise one — so they accumulate here and the window drains
+    /// them once per pump, rather than each call having to remember to look.
+    island_out: Vec<(u16, Vec<u8>)>,
     /// Bytes written to and read from the pipe since the worker started,
     /// framing included. What the process boundary costs is a number the
     /// budgets ask for (10 §1), and only this side can count it.
@@ -1783,8 +1931,18 @@ impl Worker {
         let mut child = cmd.spawn().map_err(|e| format!("cannot start the worker {}: {e}", program.display()))?;
         let input = child.stdin.take().ok_or("worker has no stdin")?;
         let output = child.stdout.take().ok_or("worker has no stdout")?;
-        let mut worker =
-            Self { child, input: BufWriter::new(input), output: BufReader::new(output), status: Status::default(), due: None, dead: None, traffic: (0, 0), repeat: None, received: Instant::now() };
+        let mut worker = Self {
+            child,
+            input: BufWriter::new(input),
+            output: BufReader::new(output),
+            status: Status::default(),
+            due: None,
+            dead: None,
+            island_out: Vec::new(),
+            traffic: (0, 0),
+            repeat: None,
+            received: Instant::now(),
+        };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
             Some(Payload::Sandbox(s)) => Ok((worker, s)),
@@ -1843,6 +2001,7 @@ impl Worker {
         match result {
             Ok(reply) => {
                 let now = Instant::now();
+                self.island_out.extend(reply.status.island_outbound.iter().cloned());
                 self.keep(reply.status.clone());
                 self.due = Some(now);
                 if let Payload::Paint { .. } = reply.payload {
@@ -2200,6 +2359,83 @@ impl Backend {
         self.with_local(|d| d.grant(granted));
         self.with_worker(|w| {
             w.call(&Request::Grant(granted));
+        });
+    }
+
+    // ------------------------------------------------- 01 §2.7, islands
+
+    /// The islands this tree asks for that are not open: the **server id**
+    /// of the node carrying the prop, and the path.
+    pub fn islands_wanted(&mut self) -> Vec<(u32, String)> {
+        if let Some(v) = self.with_local(|d| d.islands_wanted().into_iter().filter_map(|(ix, path)| Some((d.session().node(ix)?.id, path))).collect::<Vec<_>>()) {
+            return v;
+        }
+        match self.with_worker(|w| w.call(&Request::IslandsWanted).map(|r| r.payload)) {
+            Some(Some(Payload::Islands(v))) => v,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Open an island for the node with this id. `None` past the ceiling or
+    /// for a path this client will not dial.
+    pub fn open_island(&mut self, node: u32, path: &str) -> Option<u16> {
+        if let Some(o) = self.with_local(|d| d.session().lookup(node).and_then(|ix| d.open_island(ix, path))) {
+            return o;
+        }
+        match self.with_worker(|w| w.call(&Request::OpenIsland(node, path.to_owned())).map(|r| r.payload)) {
+            Some(Some(Payload::Owner(o))) => o,
+            _ => None,
+        }
+    }
+
+    /// A frame that arrived on an island's socket. What it owes back comes
+    /// out of [`Backend::take_island_outbound`], never the page's outbound.
+    pub fn island_frame(&mut self, owner: u16, bytes: Vec<u8>) {
+        if let Some(out) = self.with_local(|d| {
+            match Frame::decode(&bytes) {
+                // An island sends what any session sends, and only a `Batch`
+                // changes its tree. A frame that is not one is not the
+                // page's business either way.
+                Ok(Frame::Batch(b)) => {
+                    if let Err(e) = d.apply_region(owner, &b) {
+                        eprintln!("eui: island {owner}: {e:?}");
+                        d.island_ended(owner);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("eui: island {owner}: bad frame: {e:?}");
+                    d.island_ended(owner);
+                }
+            }
+        }) {
+            return out;
+        }
+        self.with_worker(|w| {
+            w.call(&Request::IslandFrame(owner, bytes));
+        });
+    }
+
+    /// Everything islands' sockets owe, whichever call raised it.
+    ///
+    /// One drain rather than a return value on each call, because an island's
+    /// event can come out of an `Input`, a `Paint` or its own frame, and a
+    /// path that has to be remembered at three call sites is a path that will
+    /// be forgotten at one of them.
+    pub fn take_island_outbound(&mut self) -> Vec<(u16, Vec<u8>)> {
+        if let Some(v) = self.with_local(|d| d.take_island_pending().iter().map(|(o, f)| (*o, f.encode())).collect::<Vec<_>>()) {
+            return v;
+        }
+        self.with_worker(|w| std::mem::take(&mut w.island_out)).unwrap_or_default()
+    }
+
+    /// An island's session ended, or could not be opened. 01 §2.7: the page
+    /// stands, keeps its nodes, and keeps the children that island's node
+    /// was rendered with.
+    pub fn island_ended(&mut self, owner: u16) {
+        self.with_local(|d| d.island_ended(owner));
+        self.with_worker(|w| {
+            w.call(&Request::IslandEnded(owner));
         });
     }
 
@@ -2813,6 +3049,9 @@ mod tests {
     fn replies_round_trip() {
         let status = Status {
             outbound: vec![vec![1], vec![2, 3]],
+            // 01 §2.7: tagged with the owner that owes them, and carried in
+            // a field of their own so that they cannot become the page's.
+            island_outbound: vec![(1, vec![4, 5]), (7, vec![6])],
             needs_redraw: true,
             closed: Some("x".into()),
             ime: Some([1.0, 2.0, 3.0, 4.0]),

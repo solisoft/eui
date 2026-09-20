@@ -353,11 +353,30 @@ alone, so an island's style `1` was served the page's, and a box asking for
 80×20 came out 400×0 with nothing anywhere saying so. Both style caches take
 the owner now.
 
-What is left is the socket plumbing in `app.rs`: dialling the path, feeding
-what comes back to `apply_region`, handing `take_island_pending()` to the
-right connection, and deferring an island that has not been laid out yet —
-§2.7's `MAY` that a comment thread below the fold should cost what the rest of
-the page costs, which is nothing.
+**And the sockets, which is the rest of it.** A `Tab` holds an
+`IslandSocket` per island beside the page's connection — which the page may
+not even have, since this is exactly the case where it has none. `pump`
+drains each one into `apply_region`, dials the ones the tree asks for that
+are not open, shares a socket between two islands naming one path, and hands
+`take_island_outbound()` back to the connection that owes it. The address is
+built from the page's own origin plus the path, here rather than taken from
+the tree: §2.7 allows a path and nothing else, so nothing the tree says can
+decide where a socket connects.
+
+It reaches the worker, so the protocol grew four requests — `IslandsWanted`,
+`OpenIsland`, `IslandFrame`, `IslandEnded` — two payloads and one status
+field. `island_outbound` is a field of its own rather than a tag inside
+`outbound`, for the same reason the driver keeps two queues: a separate field
+has to be read to be sent, and so cannot become the page's by being
+forgotten. `Backend::take_island_outbound()` is one drain rather than a
+return value on each call, because an island's event can come out of an
+`Input`, a `Paint` or its own frame, and a path that must be remembered at
+three call sites will be forgotten at one of them.
+
+What is left is §2.7's one `MAY`: deferring an island that has not been laid
+out yet, so a comment thread below the fold on a page nobody scrolls costs
+what the rest of the page costs, which is nothing. And an end-to-end run
+against a Soli server serving one, which `soli_e2e` is the place for.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same
