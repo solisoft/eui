@@ -26,16 +26,19 @@ pub enum Chunk {
     Bytes(Vec<u8>),
 }
 
-/// Session state: tables, tree, focus, and poison.
+/// One namespace of interned definitions: everything a server names by id.
+///
+/// A session has its own, and one more per live region it is showing
+/// (01 §2.7). The set a node's ids are read against is the set belonging to
+/// whoever sent that node.
 #[derive(Debug)]
-pub struct Session {
-    limits: Limits,
-    atoms: DefineOnce<String>,
-    atom_ids: std::collections::HashMap<String, u32>,
-    atom_bytes: usize,
-    styles: DefineOnce<StyleRecord>,
-    colors: DefineOnce<u32>,
-    chunks: DefineOnce<Chunk>,
+pub(crate) struct Tables {
+    pub(crate) atoms: DefineOnce<String>,
+    pub(crate) atom_ids: std::collections::HashMap<String, u32>,
+    pub(crate) atom_bytes: usize,
+    pub(crate) styles: DefineOnce<StyleRecord>,
+    pub(crate) colors: DefineOnce<u32>,
+    pub(crate) chunks: DefineOnce<Chunk>,
     /// Font roles, by role byte, each holding the asset hashes of its faces
     /// (02 §5). A fixed, tiny namespace rather than a `DefineOnce` table:
     /// an id table hands out names, and these are not handed out — roles
@@ -43,7 +46,39 @@ pub struct Session {
     /// and the rest are slots an application fills. Rebinding one is
     /// therefore a change of mind, not a redefinition, and is allowed: the
     /// client drops what it shaped in the old face.
-    fonts: [Option<Vec<[u8; proto::HASH_BYTES]>>; FONT_ROLES],
+    pub(crate) fonts: [Option<Vec<[u8; proto::HASH_BYTES]>>; FONT_ROLES],
+}
+
+impl Tables {
+    fn new(limits: Limits) -> Self {
+        Self {
+            atoms: DefineOnce::new(Table::Atom, limits.max_atoms),
+            atom_ids: std::collections::HashMap::new(),
+            atom_bytes: 0,
+            styles: DefineOnce::new(Table::Style, limits.max_styles),
+            colors: DefineOnce::new(Table::Color, limits.max_colors),
+            chunks: DefineOnce::new(Table::Chunk, limits.max_chunks),
+            fonts: [const { None }; FONT_ROLES],
+        }
+    }
+}
+
+/// Session state: tables, tree, focus, and poison.
+#[derive(Debug)]
+pub struct Session {
+    limits: Limits,
+    /// What this session's own server has defined.
+    ///
+    /// Grouped rather than six fields because a live region (01 §2.7) has a
+    /// set of its own: its ids are its server's, allocated from 1 like every
+    /// other session's, and they mean nothing in here. They cannot be
+    /// re-interned into this set either — `DefineOnce` is a dense vector
+    /// filled by ids *this* server allocates, so any id the client chose for
+    /// a region might be the next one the page is given, and the second write
+    /// is a `Redefined`. Node ids are translated into one space because
+    /// layout needs one tree; table ids are not, because nobody needs them to
+    /// be and the arithmetic does not work.
+    tables: Tables,
     arena: Arena,
     root: NodeIx,
     focused: NodeIx,
@@ -112,13 +147,7 @@ impl Session {
     pub fn with_limits(limits: Limits) -> Self {
         Self {
             limits,
-            atoms: DefineOnce::new(Table::Atom, limits.max_atoms),
-            atom_ids: std::collections::HashMap::new(),
-            atom_bytes: 0,
-            styles: DefineOnce::new(Table::Style, limits.max_styles),
-            colors: DefineOnce::new(Table::Color, limits.max_colors),
-            chunks: DefineOnce::new(Table::Chunk, limits.max_chunks),
-            fonts: [const { None }; FONT_ROLES],
+            tables: Tables::new(limits),
             arena: Arena::default(),
             root: NodeIx::NONE,
             focused: NodeIx::NONE,
@@ -171,14 +200,14 @@ impl Session {
     /// The node's text, atom resolved.
     pub fn text_of(&self, ix: NodeIx) -> Option<&str> {
         match self.arena.get(ix)?.text.as_ref()? {
-            TextRef::Atom(id) => self.atoms.get(*id).map(String::as_str),
+            TextRef::Atom(id) => self.tables.atoms.get(*id).map(String::as_str),
             TextRef::Inline(s) => Some(s.as_str()),
         }
     }
 
     /// The node's computed style; id 0 is the default record.
     pub fn style_of(&self, ix: NodeIx) -> StyleRecord {
-        self.arena.get(ix).and_then(|n| self.styles.get(n.style)).copied().unwrap_or_default()
+        self.arena.get(ix).and_then(|n| self.tables.styles.get(n.style)).copied().unwrap_or_default()
     }
 
     /// The node's handler for `event`.
@@ -188,13 +217,13 @@ impl Session {
 
     /// An atom's value.
     pub fn atom(&self, id: u32) -> Option<&str> {
-        self.atoms.get(id).map(String::as_str)
+        self.tables.atoms.get(id).map(String::as_str)
     }
 
     /// The first atom defined with this exact value, if any. Used to find
     /// well-known prop names such as `columns` and `item_height`.
     pub fn atom_id(&self, value: &str) -> Option<u32> {
-        self.atom_ids.get(value).copied()
+        self.tables.atom_ids.get(value).copied()
     }
 
     /// The atom ids of the names the client reads per node, as far as the
@@ -244,28 +273,28 @@ impl Session {
 
     /// A style record.
     pub fn style(&self, id: u32) -> Option<&StyleRecord> {
-        self.styles.get(id)
+        self.tables.styles.get(id)
     }
 
     /// A literal colour, `0xRRGGBBAA`.
     pub fn color(&self, id: u32) -> Option<u32> {
-        self.colors.get(id).copied()
+        self.tables.colors.get(id).copied()
     }
 
     /// A chunk, by hash or inline.
     pub fn chunk(&self, id: u32) -> Option<&Chunk> {
-        self.chunks.get(id)
+        self.tables.chunks.get(id)
     }
 
     /// The faces bound to a font role, or `None` for one nothing bound.
     pub fn font(&self, role: u8) -> Option<&[[u8; proto::HASH_BYTES]]> {
-        self.fonts.get(usize::from(role))?.as_deref()
+        self.tables.fonts.get(usize::from(role))?.as_deref()
     }
 
     /// Every bound role, lowest first, with its faces. What the client turns
     /// into asset requests.
     pub fn fonts(&self) -> impl Iterator<Item = (u8, &[[u8; proto::HASH_BYTES]])> {
-        self.fonts.iter().enumerate().filter_map(|(role, faces)| Some((role as u8, faces.as_deref()?)))
+        self.tables.fonts.iter().enumerate().filter_map(|(role, faces)| Some((role as u8, faces.as_deref()?)))
     }
 
     /// The props of the root node: a component's local state
@@ -294,13 +323,13 @@ impl Session {
     /// Point a node at a style id from a local handler. The id must exist;
     /// a chunk cannot invent styles, only pick among the session's.
     pub fn set_style_local(&mut self, ix: NodeIx, style: u32) -> Option<bool> {
-        if style != 0 && self.styles.get(style).is_none() {
+        if style != 0 && self.tables.styles.get(style).is_none() {
             return None;
         }
         let old = self.arena.get(ix)?.style;
         // A restyle that only recolours -- a hover, mostly -- owes a
         // repaint and not a layout: nothing the node measures changed.
-        let record = |id: u32| if id == 0 { Some(StyleRecord::default()) } else { self.styles.get(id).copied() };
+        let record = |id: u32| if id == 0 { Some(StyleRecord::default()) } else { self.tables.styles.get(id).copied() };
         let paint_only = matches!((record(old), record(style)), (Some(a), Some(b)) if same_layout(&a, &b));
         let n = self.arena.get_mut(ix)?;
         n.style = style;
@@ -400,12 +429,12 @@ impl Session {
 
     /// Bytes of atom values defined so far.
     pub fn atom_bytes(&self) -> usize {
-        self.atom_bytes
+        self.tables.atom_bytes
     }
 
     /// Number of atoms, styles, colours and chunks defined.
     pub fn table_sizes(&self) -> [usize; 4] {
-        [self.atoms.len(), self.styles.len(), self.colors.len(), self.chunks.len()]
+        [self.tables.atoms.len(), self.tables.styles.len(), self.tables.colors.len(), self.tables.chunks.len()]
     }
 
     /// True after a failed apply, until the next successful `Mount`.
@@ -486,7 +515,7 @@ impl Session {
         if style == 0 {
             return;
         }
-        if let Some(r) = self.styles.get(style) {
+        if let Some(r) = self.tables.styles.get(style) {
             if r.animation & eui_proto::ANIMATION_EXIT != 0 {
                 self.exits.push((id, r.motion));
             }
@@ -572,28 +601,28 @@ impl Session {
     pub fn apply_op(&mut self, op: &Op) -> Result<()> {
         match op {
             Op::DefAtom { id, value } => {
-                let total = self.atom_bytes.saturating_add(value.len());
+                let total = self.tables.atom_bytes.saturating_add(value.len());
                 if total > self.limits.max_atom_total_bytes {
                     return Err(ApplyError::AtomBudget);
                 }
-                self.atoms.define(*id, value.clone())?;
-                self.atom_ids.entry(value.clone()).or_insert(*id);
+                self.tables.atoms.define(*id, value.clone())?;
+                self.tables.atom_ids.entry(value.clone()).or_insert(*id);
                 self.known.note(*id, value);
-                self.atom_bytes = total;
+                self.tables.atom_bytes = total;
                 Ok(())
             }
             Op::DefStyle { id, record } => {
                 self.check_style_record(record)?;
-                self.styles.define(*id, *record)
+                self.tables.styles.define(*id, *record)
             }
-            Op::DefColor { id, rgba } => self.colors.define(*id, *rgba),
-            Op::DefChunk { id, hash } => self.chunks.define(*id, Chunk::Hash(*hash)),
-            Op::DefChunkBytes { id, bytes } => self.chunks.define(*id, Chunk::Bytes(bytes.clone())),
+            Op::DefColor { id, rgba } => self.tables.colors.define(*id, *rgba),
+            Op::DefChunk { id, hash } => self.tables.chunks.define(*id, Chunk::Hash(*hash)),
+            Op::DefChunkBytes { id, bytes } => self.tables.chunks.define(*id, Chunk::Bytes(bytes.clone())),
             Op::DefFont { role, faces } => {
                 // The decoder already bounded the role and the face count;
                 // this is the slot's own check, so a session built by hand
                 // in a test cannot write past the array either.
-                let slot = self.fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
+                let slot = self.tables.fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
                 *slot = Some(faces.clone());
                 Ok(())
             }
@@ -625,7 +654,7 @@ impl Session {
             Op::Replace { node, subtree } => self.replace(*node, subtree),
             Op::SetStyle { node, style } => {
                 if *style != 0 {
-                    self.styles.require(*style)?;
+                    self.tables.styles.require(*style)?;
                 }
                 let ix = self.find(*node)?;
                 let n = self.arena.require_mut(ix)?;
@@ -647,7 +676,7 @@ impl Session {
             }
             Op::SetProp { node, prop, value } => {
                 let ix = self.find(*node)?;
-                self.atoms.require(*prop)?;
+                self.tables.atoms.require(*prop)?;
                 self.check_value(value)?;
                 let n = self.arena.require_mut(ix)?;
                 if n.kind.is_inert() {
@@ -826,13 +855,13 @@ impl Session {
         // does not leave half a graft in the arena before poisoning.
         for flat in &subtree.nodes {
             if flat.style != 0 {
-                self.styles.require(flat.style)?;
+                self.tables.styles.require(flat.style)?;
             }
             if let Some(t) = &flat.text {
                 self.check_text(t)?;
             }
             for (prop, value) in subtree.props_of(flat) {
-                self.atoms.require(*prop)?;
+                self.tables.atoms.require(*prop)?;
                 self.check_value(value)?;
             }
             for (_, handler) in subtree.handlers_of(flat) {
@@ -874,7 +903,7 @@ impl Session {
             // Every new node in the session passes through here — `Mount`,
             // `Replace` and `InsertChild` all graft — so this is the one
             // place an entrance can be noticed.
-            if flat.style != 0 && self.styles.get(flat.style).is_some_and(|r| r.animation & eui_proto::ANIMATION_ENTER != 0) {
+            if flat.style != 0 && self.tables.styles.get(flat.style).is_some_and(|r| r.animation & eui_proto::ANIMATION_ENTER != 0) {
                 self.entrances.push(ix);
             }
             if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {
@@ -925,14 +954,14 @@ impl Session {
 
     fn check_text(&self, text: &TextRef) -> Result<()> {
         if let TextRef::Atom(id) = text {
-            self.atoms.require(*id)?;
+            self.tables.atoms.require(*id)?;
         }
         Ok(())
     }
 
     fn check_color(&self, c: ColorRef) -> Result<()> {
         if c.is_literal() {
-            self.colors.require(u32::from(c.index()))?;
+            self.tables.colors.require(u32::from(c.index()))?;
         }
         Ok(())
     }
@@ -945,7 +974,7 @@ impl Session {
 
     fn check_value(&self, v: &Value) -> Result<()> {
         match v {
-            Value::Atom(id) => self.atoms.require(*id).map(|_| ()),
+            Value::Atom(id) => self.tables.atoms.require(*id).map(|_| ()),
             Value::Color(c) => self.check_color(*c),
             Value::List(items) => items.iter().try_for_each(|i| self.check_value(i)),
             _ => Ok(()),
@@ -954,11 +983,11 @@ impl Session {
 
     fn check_handler(&self, h: &Handler) -> Result<()> {
         match h {
-            Handler::Server(name) => self.atoms.require(*name).map(|_| ()),
-            Handler::Local(chunk) => self.chunks.require(*chunk).map(|_| ()),
+            Handler::Server(name) => self.tables.atoms.require(*name).map(|_| ()),
+            Handler::Local(chunk) => self.tables.chunks.require(*chunk).map(|_| ()),
             Handler::LocalThenServer { chunk, name } => {
-                self.chunks.require(*chunk)?;
-                self.atoms.require(*name).map(|_| ())
+                self.tables.chunks.require(*chunk)?;
+                self.tables.atoms.require(*name).map(|_| ())
             }
         }
     }
