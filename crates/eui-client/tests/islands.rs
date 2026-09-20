@@ -272,3 +272,40 @@ fn a_page_with_an_island_is_one_tree_to_everything_above_the_session() {
     let r = d.layout().rect(inside).unwrap();
     assert!(d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0)).is_empty(), "nothing handles it, and nothing panics");
 }
+
+/// §2.7: "a client MAY defer opening until the node is first laid out, and
+/// SHOULD for one that is not visible — a comment thread below the fold on a
+/// page nobody scrolls should cost what the rest of the page costs, which is
+/// nothing."
+///
+/// This is the difference between an island being cheap and an island being
+/// a socket per row of a list nobody scrolled.
+#[test]
+fn an_island_below_the_fold_is_not_opened_until_it_is_seen() {
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: PROTOCOL_VERSION, session: [0u8; 16], start: Start::Fresh }));
+
+    // A tall spacer, then the island node: 900 px down a 300 px window.
+    let mut t = Subtree::default();
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 2 });
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 8, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    t.nodes.push(FlatNode { kind: NodeKind::Slot, id: 2, style: 3, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 0 });
+    t.props.push((A_ISLAND, Value::Str("/_eui/session/comments".to_owned())));
+    let ops = vec![
+        Op::DefAtom { id: A_ISLAND, value: "island".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::DefStyle { id: 2, record: StyleRecord { height: Dim::Px(900), ..Default::default() } },
+        Op::DefStyle { id: 3, record: StyleRecord { height: Dim::Px(40), ..Default::default() } },
+        Op::Mount(t),
+    ];
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops }));
+
+    assert!(d.islands_wanted().is_empty(), "nine hundred pixels down a three-hundred-pixel window");
+
+    // The spacer shrinks — the same thing a scroll does to where a node
+    // sits — and now it is on the glass.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 4, record: StyleRecord { height: Dim::Px(10), ..Default::default() } }, Op::SetStyle { node: 8, style: 4 }] }));
+    let wanted = d.islands_wanted();
+    assert_eq!(wanted.len(), 1, "seen, and now worth a socket");
+    assert_eq!(wanted[0].1, "/_eui/session/comments");
+}

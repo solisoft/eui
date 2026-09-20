@@ -387,6 +387,10 @@ owners, in a field of its own rather than tagged inside `outbound` — a
 separate field has to be read to be sent, and so cannot become the page's by
 being forgotten.
 
+And §2.7's `MAY`: an island nine hundred pixels down a three-hundred-pixel
+window is not offered at all, and is offered the moment the page above it
+shrinks — the same thing a scroll does to where a node sits.
+
 ### 7.11 Installing — `crates/eui-client/tests/install.rs`
 
 A signed manifest with an `icon` is verified, its icon fetched by hash and

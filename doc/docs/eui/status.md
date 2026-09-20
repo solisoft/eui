@@ -373,10 +373,16 @@ return value on each call, because an island's event can come out of an
 `Input`, a `Paint` or its own frame, and a path that must be remembered at
 three call sites will be forgotten at one of them.
 
-What is left is §2.7's one `MAY`: deferring an island that has not been laid
-out yet, so a comment thread below the fold on a page nobody scrolls costs
-what the rest of the page costs, which is nothing. And an end-to-end run
-against a Soli server serving one, which `soli_e2e` is the place for.
+§2.7's one `MAY` is taken: an island is not opened until its node has been
+laid out **and is on the glass**, so a comment thread below the fold on a page
+nobody scrolls costs what the rest of the page costs, which is nothing. Not
+laid out is not the same as not there — a node the layout has not reached has
+no rect at all, and opening a session for it would be guessing — so both wait,
+and both are asked again on the next pump, because a scroll that brings one
+into view is a frame and a frame is a pump.
+
+What is left is an end-to-end run against a Soli server serving one, which
+`soli_e2e` is the place for and which no CI has a server to do.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same

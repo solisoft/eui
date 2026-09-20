@@ -821,6 +821,16 @@ struct Departing {
     size: (u32, u32),
 }
 
+/// Do two rectangles share any area at all?
+///
+/// Zero-area counts as touching rather than missing: a node laid out with no
+/// height yet — a list whose rows have not arrived, a box sized by content
+/// that has none — is on the page and about to have a size, and treating it
+/// as off-screen would defer an island for ever.
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x <= b.x + b.w && a.x + a.w >= b.x && a.y <= b.y + b.h && a.y + a.h >= b.y
+}
+
 /// An island's session, as the driver holds it (01 §2.7).
 #[derive(Debug, Clone)]
 struct Island {
@@ -1999,8 +2009,24 @@ impl Driver {
         if self.island_watch_stale {
             self.rebuild_island_watch();
         }
+        if self.island_watch.is_empty() {
+            return Vec::new();
+        }
+        // 01 §2.7: "a client MAY defer opening until the node is first laid
+        // out, and SHOULD for one that is not visible — a comment thread
+        // below the fold on a page nobody scrolls should cost what the rest
+        // of the page costs, which is nothing."
+        //
+        // Not laid out is not the same as not there: a node the layout has
+        // not reached yet has no rect at all, and opening a session for it
+        // would be guessing. Both cases wait, and both are asked again on
+        // the next pump — a scroll that brings one into view is a frame, and
+        // a frame is a pump.
+        self.ensure_layout();
+        let viewport = Rect::new(0.0, 0.0, self.size.w.max(0.0), self.size.h.max(0.0));
         let open: Vec<NodeIx> = self.islands.iter().map(|i| i.at).collect();
-        self.island_watch.iter().filter(|(ix, _)| !open.contains(ix)).cloned().collect()
+        let watch = self.island_watch.clone();
+        watch.into_iter().filter(|(ix, _)| !open.contains(ix)).filter(|(ix, _)| self.layout.rect(*ix).is_some_and(|r| overlaps(r, viewport))).collect()
     }
 
     /// Is this what 01 §2.7 calls an island's address — an **absolute path
