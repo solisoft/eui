@@ -193,12 +193,7 @@ fn compressed_html_is_smaller_and_that_is_worth_knowing() {
     println!("  {:<10} {:>7} {:>9}", "", "raw", "gzip -9");
     println!("  {:<10} {:>7} {:>9}", "EUI", eui.len(), eui_gz);
     println!("  {:<10} {:>7} {:>9}", "HTML", html.len(), html_gz);
-    println!(
-        "  {:<10} {:>6.1}x {:>8.1}x  (>1 means EUI is smaller)",
-        "ratio",
-        html.len() as f64 / eui.len() as f64,
-        html_gz as f64 / eui_gz as f64
-    );
+    println!("  {:<10} {:>6.1}x {:>8.1}x  (>1 means EUI is smaller)", "ratio", html.len() as f64 / eui.len() as f64, html_gz as f64 / eui_gz as f64);
 
     // Nothing here is a budget. These numbers move with the compressor and
     // with how repetitive the fixture's text happens to be, and a threshold
