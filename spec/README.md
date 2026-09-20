@@ -13,8 +13,8 @@ who did not write it.
 
 | File | Status | Contents |
 |---|---|---|
-| [`00-rationale.md`](00-rationale.md) | draft | Why this exists, what it deliberately refuses to do |
-| [`01-transport.md`](01-transport.md) | draft | HTTPS discovery, manifest, `wss://` session, framing |
+| [`00-rationale.md`](00-rationale.md) | **normative** | Why this exists, what it deliberately refuses to do |
+| [`01-transport.md`](01-transport.md) | **normative** | HTTPS discovery, manifest, `wss://` session, framing |
 | [`02-wire-format.md`](02-wire-format.md) | **normative** | Atoms, styles, nodes, patches — byte level |
 | [`03-widgets.md`](03-widgets.md) | **normative** | The seventeen primitives, painting, focus, the catalogue contract |
 | [`04-layout.md`](04-layout.md) | **normative** | The layout algorithm; §9 lists what v1 omits |

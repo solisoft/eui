@@ -99,7 +99,10 @@ text that must not be reinvented.
   The key holds the *role*, so rebinding one drops what was shaped under it.
 - Glyph rasterisation at a device scale behind an opaque key, for the
   renderer's atlas.
-- Line clamping truncates; it does not yet append an ellipsis.
+- Line clamping appends the face's own `…`, shaped at the text's size, and
+  drops trailing glyphs of the last line so the mark fits inside the width it
+  was given — otherwise the one line that says "there is more" would be the
+  one line that overflows (04 §3).
 - 24 tests, one of which lays out real glyphs through `eui-layout`.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per

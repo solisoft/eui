@@ -467,8 +467,11 @@ impl TextEngine {
         let mut width = 0.0f32;
         let mut lines = 0u32;
         let mut baseline = None;
+        let mut truncated = false;
         for run in buffer.layout_runs() {
             if line_clamp > 0 && lines >= u32::from(line_clamp) {
+                // There was another line, so something is not being shown.
+                truncated = true;
                 break;
             }
             lines = lines.saturating_add(1);
@@ -497,6 +500,48 @@ impl TextEngine {
             }
             rows.push(row);
         }
+        // 04 §3: `line_clamp` truncates "with an ellipsis". It did the
+        // truncating and not the ellipsis, so a clamped paragraph ended on a
+        // word that happened to fall there and read as a rendering fault
+        // rather than as a summary — the one visual difference between "this
+        // is all of it" and "there is more" was missing.
+        //
+        // The character is shaped in the same face and size as the text, not
+        // drawn as three dots: a face's own `…` is kerned as one glyph and is
+        // what its designer intended at this size.
+        if truncated {
+            let mut probe = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
+            probe.set_text(&mut self.fonts, "…", attrs, Shaping::Advanced);
+            probe.shape_until_scroll(&mut self.fonts, false);
+            let ellipsis = probe.layout_runs().next().and_then(|r| r.glyphs.first().map(|g| (g.w, g.font_size, GlyphKey { font: g.font_id, glyph: g.glyph_id, size_bits: g.font_size.to_bits() })));
+            if let (Some((ew, gsize, key)), Some(last)) = (ellipsis, rows.last().copied()) {
+                // Make room for it. With a width to fit, trailing glyphs of
+                // the last line go until the ellipsis fits beside them —
+                // otherwise the line it marks would be the one line that
+                // overflows. With no width, nothing is dropped: the clamp cut
+                // by lines and there is no edge to respect.
+                if let Some(limit) = max_width {
+                    while let Some(g) = glyphs.last() {
+                        if g.y != last.y || g.x + g.w + ew <= limit {
+                            break;
+                        }
+                        glyphs.pop();
+                    }
+                }
+                let x = glyphs.iter().filter(|g| g.y == last.y).map(|g| g.x + g.w).fold(0.0f32, f32::max);
+                // Its byte range is empty and sits where the text stops
+                // being shown. The ellipsis is not in the string, and a
+                // `spans` prop, a caret and a hit test all index the string —
+                // so it must name a real offset and claim no character.
+                let at = glyphs.iter().filter(|g| g.y == last.y).map(|g| g.end).max().unwrap_or(last.end);
+                glyphs.push(Glyph { x, y: last.y, w: ew, size: gsize, key, start: at, end: at });
+                width = width.max(x + ew);
+                if let Some(row) = rows.last_mut() {
+                    row.end = at;
+                }
+            }
+        }
+
         // cosmic-text cuts a text into buffer lines the way `str::lines`
         // does, so the empty line a trailing newline opens is never laid
         // out: Return pressed at the end of a field added no height and

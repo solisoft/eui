@@ -1,13 +1,20 @@
 # Security model
 
-Each item below is a requirement of the design, and each will be a MUST in
-`spec/08-security.md` when that document is written — it is not yet. Where
-something is built, this page says so; everything else is design.
+This page is the readable form of [`spec/08-security.md`](/docs/spec/08-security),
+which is normative and names, requirement by requirement, the code that
+enforces it. Where the two differ the specification wins; where something is
+not built, this page says so.
 
 ## Transport
 
-TLS 1.3 only, with no downgrade path and no exception for loopback in a release
-build. A manifest may declare an SPKI pin set for its origin.
+TLS 1.3 only, with no downgrade path. One exception, and it is narrow: a
+**loopback host** — `127.0.0.1`, `localhost`, `[::1]` and nothing else — may
+be reached in plain text when the person running the client has asked for it,
+and a release client says so on stderr when it does. A host and not a prefix:
+`ws://localhost.evil.example/` is somebody else's server. 01 §1 used to add
+"in a debug build", which no client ever obeyed — every measurement in this
+repository is a release binary on loopback — so the rule now names what
+actually bounds the risk.
 
 ## Provenance
 

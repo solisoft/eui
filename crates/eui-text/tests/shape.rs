@@ -400,3 +400,41 @@ fn sans_can_be_replaced_and_restored() {
     assert_eq!(t.role_family(1), Some("JetBrains Mono"));
     assert_eq!(t.shape("Hamburgefonstiv", base(), None, 0).metrics.width, sans);
 }
+
+/// 04 §3: `line_clamp > 0` truncates "with an ellipsis". It did the
+/// truncating and not the ellipsis, so a clamped paragraph ended on whatever
+/// word happened to fall there — the one visual difference between "this is
+/// all of it" and "there is more" was missing.
+#[test]
+fn a_clamp_that_cuts_says_so_with_an_ellipsis() {
+    let mut e = TextEngine::new();
+    let text = "the quick brown fox jumps over the lazy dog";
+
+    // Two lines of a text that wants four: the last glyph is the ellipsis,
+    // and it is one glyph — a face's own `…`, not three periods.
+    let cut = e.shape(text, base(), Some(100.0), 2);
+    let last = cut.glyphs.last().copied().expect("glyphs");
+    let ell = e.shape("…", base(), None, 0);
+    let mark = ell.glyphs[0].key;
+    assert_eq!(last.key, mark, "the face's own ellipsis, shaped in the text's face and size");
+    assert_eq!(cut.glyphs.iter().filter(|g| g.key == mark).count(), 1, "exactly one");
+
+    // It stays inside the width it was given. Without this the one line that
+    // marks an overflow would be the one line that overflows.
+    assert!(cut.metrics.width <= 100.0 + 0.5, "width {}", cut.metrics.width);
+    assert!(last.x + last.w <= 100.0 + 0.5);
+
+    // It sits on the last line, after everything still shown there.
+    assert!(cut.glyphs.iter().filter(|g| g.y == last.y).all(|g| g.x <= last.x));
+
+    // Its byte range is empty and names a real offset: a `spans` prop and a
+    // hit test index the string, and the ellipsis is not in the string.
+    assert_eq!(last.start, last.end);
+    assert!(last.end <= text.len());
+
+    // A text that fits gets none of this.
+    let whole = e.shape(text, base(), Some(100.0), 0);
+    assert!(!whole.glyphs.iter().any(|g| g.key == mark), "nothing was cut");
+    let short = e.shape("fox", base(), Some(100.0), 2);
+    assert!(!short.glyphs.iter().any(|g| g.key == mark), "three letters, two lines allowed");
+}
