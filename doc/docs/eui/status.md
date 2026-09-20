@@ -344,11 +344,20 @@ named that did not — with eight vectors, five more in
 protocol-relative URL is a different origin *and* starts with a slash, which
 is exactly how the obvious spelling of that check lets it through.
 
+An island's events go to their own queue rather than the page's, tagged with
+the owner that owes them — `take_island_pending()` beside `take_pending()`,
+kept apart rather than tagged inside it so that an island's event cannot reach
+the page's server by being forgotten about. Writing the vector for it found a
+real bug three crates away: the **layout's** style cache was keyed by style id
+alone, so an island's style `1` was served the page's, and a box asking for
+80×20 came out 400×0 with nothing anywhere saying so. Both style caches take
+the owner now.
+
 What is left is the socket plumbing in `app.rs`: dialling the path, feeding
-what comes back to `apply_region`, routing an island's events to its own
-connection, and deferring an island that has not been laid out yet — §2.7's
-`MAY` that a comment thread below the fold should cost what the rest of the
-page costs, which is nothing.
+what comes back to `apply_region`, handing `take_island_pending()` to the
+right connection, and deferring an island that has not been laid out yet —
+§2.7's `MAY` that a comment thread below the fold should cost what the rest of
+the page costs, which is nothing.
 
 Interaction over plain verbs — a `POST` carrying one event — was specified in
 an earlier draft and is deliberately **not** being built: it answers the same

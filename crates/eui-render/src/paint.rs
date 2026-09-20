@@ -980,7 +980,7 @@ impl Painter<'_, '_> {
         let Some(node) = session.node(ix) else { return };
         // The layout resolved this style id already; a 10 000-row table has
         // four of them.
-        let style = self.scene.layout.style_for_id(node.style).unwrap_or_else(|| Style::resolve(record, self.scene.theme));
+        let style = self.scene.layout.style_for(node.owner, node.style).unwrap_or_else(|| Style::resolve(record, self.scene.theme));
         if style.display == Display::None {
             return;
         }

@@ -371,6 +371,16 @@ carrying the prop, which belongs to the page while everything below it does
 not. And a page with an island still draws, lays out and answers a pointer as
 **one** tree: the layout engine and the painter never learn islands exist.
 
+The vector that found a real bug is the event one. An island's click must not
+join the page's outbound, and the failure if it does is quiet: an island's
+node 1 and the page's node 1 are different nodes, so the page's server gets a
+well-formed event naming a node it created for something else — which its own
+06 §4 validation may accept, since the id exists and may even carry a handler
+of that kind. Writing it turned up that the *layout's* style cache was keyed
+by style id alone, so an island's style 1 was served the page's: a box asking
+for 80×20 came out 400×0, and nothing said a word. Both caches are keyed by
+`(owner, id)` now, and `Layout::style_for` takes the owner.
+
 ### 7.11 Installing — `crates/eui-client/tests/install.rs`
 
 A signed manifest with an `icon` is verified, its icon fetched by hash and

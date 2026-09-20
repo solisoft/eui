@@ -179,6 +179,81 @@ fn a_node_says_which_socket_its_events_belong_to() {
     assert_eq!(d.owner_of(inside), Some(owner), "everything below it is the island's");
 }
 
+/// §2.7: "an event raised inside it carries its own ids and goes to **its
+/// own socket**."
+///
+/// The failure this stops is not loud. An island's node 1 and the page's node
+/// 1 are different nodes, so an island's click sent to the page's server is a
+/// well-formed event naming a node that server created for something else —
+/// which its own §4 validation may well accept, because the id exists and may
+/// even carry a handler of that kind. The page would then do something the
+/// reader did not ask for, and nothing anywhere would say so.
+#[test]
+fn an_islands_event_never_joins_the_pages_outbound() {
+    let mut d = welcomed("/_eui/session/comments");
+    let at = d.session().lookup(2).unwrap();
+    let owner = d.open_island(at, "/_eui/session/comments").unwrap();
+
+    // The island mounts a button. Its node 1 is not the page's node 1.
+    let mut t = Subtree::default();
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    t.handlers.push((EventKind::Click, Handler::Server(1)));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![Op::DefAtom { id: 1, value: "reply".into() }, Op::DefStyle { id: 1, record: StyleRecord { width: Dim::Px(80), height: Dim::Px(20), ..Default::default() } }, Op::Mount(t)],
+    };
+    d.apply_region(owner, &batch).unwrap();
+
+    let inner = d.session().children(at)[0];
+    let r = {
+        let _ = d.paint(400, 300);
+        d.layout().rect(inner).unwrap()
+    };
+    let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    let to_the_page = d.input(Input::PointerUp(0));
+
+    assert!(!to_the_page.iter().any(|f| matches!(f, Frame::Event(_))), "the page's socket was offered an island's event: {to_the_page:?}");
+    let owed = d.take_island_pending();
+    assert_eq!(owed.len(), 1, "{owed:?}");
+    assert_eq!(owed[0].0, owner, "tagged with the socket that owes it");
+    let Frame::Event(e) = &owed[0].1 else { panic!("{owed:?}") };
+    assert_eq!(e.node, 1, "and carrying the island's own id");
+    assert_eq!(e.event, EventKind::Click);
+
+    // Taken once.
+    assert!(d.take_island_pending().is_empty());
+}
+
+/// And the page's own events are untouched by any of this.
+#[test]
+fn the_pages_own_events_still_go_to_the_page() {
+    let mut d = welcomed("/_eui/session/comments");
+    let at = d.session().lookup(2).unwrap();
+    d.open_island(at, "/_eui/session/comments").unwrap();
+
+    // Give the page's node 1 a handler and click it.
+    let mut t = Subtree::default();
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    t.handlers.push((EventKind::Click, Handler::Server(A_PATH)));
+    let sized = StyleRecord { width: Dim::Px(80), height: Dim::Px(20), ..Default::default() };
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 2, record: sized }, Op::InsertChild { parent: 1, index: 0, subtree: t }] }));
+
+    let ix = d.session().lookup(9).unwrap();
+    let r = {
+        let _ = d.paint(400, 300);
+        d.layout().rect(ix).unwrap()
+    };
+    let (x, y) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    let out = d.input(Input::PointerUp(0));
+
+    assert!(out.iter().any(|f| matches!(f, Frame::Event(e) if e.node == 9)), "{out:?}");
+    assert!(d.take_island_pending().is_empty(), "and nothing was diverted");
+}
+
 /// A page with an island still draws, still lays out and still handles a
 /// pointer: one arena, one layout, one paint, and neither the layout engine
 /// nor the painter knows islands exist.

@@ -1321,6 +1321,11 @@ pub struct Driver {
     island_watch: Vec<(NodeIx, String)>,
     island_watch_stale: bool,
     islands: Vec<Island>,
+    /// Frames raised inside an island, each tagged with whose socket owes
+    /// them (01 §2.7). Kept apart from `pending` rather than tagged inside
+    /// it, so the page's path is exactly what it was and an island's event
+    /// cannot reach the page's server by being forgotten about.
+    island_out: Vec<(u16, Frame)>,
     /// Which nodes hold a `resize` handler, and whether that list is stale.
     ///
     /// Rebuilt when the tree changes rather than per frame. Walking the tree
@@ -1535,6 +1540,7 @@ impl Driver {
             island_watch: Vec::new(),
             island_watch_stale: true,
             islands: Vec::new(),
+            island_out: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
             outrun_at: None,
@@ -1697,6 +1703,7 @@ impl Driver {
         self.island_watch.clear();
         self.island_watch_stale = true;
         self.islands.clear();
+        self.island_out.clear();
         self.resize_watch.clear();
         self.resize_watch_stale = true;
         self.cached = None;
@@ -3752,6 +3759,15 @@ impl Driver {
         };
         if let Some(name) = name {
             out.push(Frame::Event(EventFrame { node, event: kind, name, payload }));
+        }
+        // 01 §2.7: an event raised inside an island "carries its own ids and
+        // goes to **its own socket**". So it never joins the page's
+        // outbound: the page's server did not create the node this names,
+        // and an id it cannot resolve is the one thing §2.7 promises it will
+        // never be sent.
+        if let Some(owner) = self.owner_of(target) {
+            self.island_out.extend(out.into_iter().map(|f| (owner, f)));
+            return Vec::new();
         }
         out
     }
@@ -8086,6 +8102,13 @@ impl Driver {
     /// for the window to send after drawing.
     pub fn take_pending(&mut self) -> Vec<Frame> {
         std::mem::take(&mut self.pending)
+    }
+
+    /// The frames an island's own socket owes, each with the owner that owes
+    /// it (01 §2.7). Empty for every page that has no island, which is
+    /// almost all of them.
+    pub fn take_island_pending(&mut self) -> Vec<(u16, Frame)> {
+        std::mem::take(&mut self.island_out)
     }
 
     /// The atlases, for the renderer's upload.

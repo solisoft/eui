@@ -112,7 +112,15 @@ pub struct Layout {
     /// Resolved records by style id: a 10 000-row table has four distinct
     /// styles, so resolving per node was 10 000 resolves for four answers —
     /// and a per-node cache was seven megabytes of memset per frame.
-    by_style_id: HashMap<u32, Style>,
+    /// Resolved styles, keyed by **(owner, style id)**.
+    ///
+    /// By both, because 01 §2.7 gives every island its own style table: the
+    /// page's style `1` and an island's style `1` are two different records,
+    /// and a cache on the id alone hands whichever was resolved first to
+    /// both. What that looks like is an island laid out with the page's
+    /// sizes — a box asking for 80×20 that comes out 400×0 — with nothing
+    /// anywhere saying a word about it.
+    by_style_id: HashMap<(u16, u32), Style>,
     memo: HashMap<MemoKey, (Metrics, u32)>,
     /// The frame being computed; memo entries not read or written in it
     /// are dropped at its end, so the memo never outgrows one frame's work.
@@ -426,13 +434,15 @@ impl Layout {
     /// The style resolved this frame for a style id, for a painter that
     /// would otherwise resolve it again per node.
     ///
-    /// **By id alone**, so it carries no [`by_kind`] adjustment: the cache
-    /// behind it is keyed by style id and two nodes of different kinds
-    /// share an entry. The painter wants colours, radii and borders, none
-    /// of which a kind changes; the one thing that does — a `slot`'s
-    /// direction — is the layout's business and never the painter's.
-    pub fn style_for_id(&self, style_id: u32) -> Option<Style> {
-        self.by_style_id.get(&style_id).copied()
+    /// It carries no [`by_kind`] adjustment: the painter wants colours,
+    /// radii and borders, none of which a kind changes; the one thing that
+    /// does — a `slot`'s direction — is the layout's business and never the
+    /// painter's.
+    ///
+    /// `owner` is the node's, because 01 §2.7 gives every island its own
+    /// style table and an id means nothing without it.
+    pub fn style_for(&self, owner: u16, style_id: u32) -> Option<Style> {
+        self.by_style_id.get(&(owner, style_id)).copied()
     }
 
     fn hit_in(&self, s: &Session, ix: NodeIx, x: f32, y: f32, clip: Rect, skip: Option<NodeIx>) -> Option<NodeIx> {
@@ -497,21 +507,23 @@ impl Layout {
     /// "not a stack" rather than guessing.
     fn style_of(&self, s: &Session, ix: NodeIx) -> Option<Style> {
         let node = s.node(ix)?;
-        let mut st = self.by_style_id.get(&node.style).copied()?;
+        let mut st = self.by_style_id.get(&(node.owner, node.style)).copied()?;
         by_kind(node.kind, &mut st);
         Some(st)
     }
 
     fn style(&mut self, f: &Env<'_>, ix: NodeIx) -> Style {
-        let style_id = f.session.node(ix).map_or(0, |n| n.style);
-        let mut st = if let Some(st) = self.by_style_id.get(&style_id) {
+        let (owner, style_id, kind) = f.session.node(ix).map_or((0, 0, NodeKind::Box), |n| (n.owner, n.style, n.kind));
+        let mut st = if let Some(st) = self.by_style_id.get(&(owner, style_id)) {
             *st
         } else {
+            // `Session::style_of` already resolves through the node's owner,
+            // so this is the record that node really wears.
             let st = Style::resolve(&f.session.style_of(ix), f.theme);
-            self.by_style_id.insert(style_id, st);
+            self.by_style_id.insert((owner, style_id), st);
             st
         };
-        by_kind(f.session.node(ix).map_or(NodeKind::Box, |n| n.kind), &mut st);
+        by_kind(kind, &mut st);
         st
     }
 
