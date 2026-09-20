@@ -247,7 +247,7 @@ pub fn check_url(url: &str, host_loopback: bool) -> Result<(), TransportError> {
     if url.starts_with("wss://") {
         return Ok(());
     }
-    let loopback = url.starts_with("ws://127.0.0.1") || url.starts_with("ws://localhost") || url.starts_with("ws://[::1]");
+    let loopback = crate::dial::is_loopback_url(url);
     // Loopback only, and only when asked by name: a developer running a
     // local Soli should get to use the fast build of the client too.
     let asked = std::env::var("EUI_ALLOW_INSECURE_LOOPBACK").as_deref() == Ok("1");

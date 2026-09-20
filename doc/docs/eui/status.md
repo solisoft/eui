@@ -22,7 +22,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 87 tests: 10 round-trip, 7 byte-level vectors, 3 size budgets, 3 manifest,
+- 93 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
+  4 frame-walking,
   **62 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
@@ -138,10 +139,18 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 95 tests.
+  trip. 103 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
-  only. `ws://` is refused except on loopback in a debug build with an
-  explicit opt-in.
+  only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
+  or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
+  on a desktop, or, in a page, the browser's own answer to whether the
+  document itself came from loopback, which nothing the document contains
+  can forge. A host and not a prefix: `ws://localhost.evil.example/` passes
+  a `starts_with` and is somebody else's server, which is what the check
+  used to be and what `dial.rs` now refuses. 01 §1 used to add "in a debug
+  build" and no client ever obeyed it — every measurement in this
+  repository is a release binary on loopback — so the rule now says what
+  bounds the risk instead.
 - The **window**: winit in `ControlFlow::Wait` over a wgpu surface. There is
   no render loop; a redraw happens when a frame arrived, the viewer acted, or
   the OS asked. Compiled, not yet exercised on a display.
@@ -169,13 +178,13 @@ binary builds exactly as before.
 - `examples/demo-app` holds three components as a Soli app — the counter,
   a todo list (keyed rows, a text field, checkboxes that report which item
   they belong to through the node's props), and a 10 000-row table sorted by
-  `MoveChild` — plus `eui_builders.sl`, twenty-odd widgets composed from the
+  `MoveChild` — plus `eui_builders.sl`, a catalogue of widgets composed from the
   primitives: buttons in four variants, checkbox, switch, badge, card, tabs,
   spinner, toast, dialog, field, form, table header and rows. Nothing native.
 - Measured against a **debug** `soli`: ten thousand rows mount in about 2 s
   and paint in about 50 ms as 423 quads; a non-virtualised paint would be
   around 200 000.
-- Three end-to-end tests start the real `soli serve` and drive it through
+- Forty end-to-end tests start the real `soli serve` and drive it through
   the real client transport: the counter's clicks leave the same nine nodes
   with the same ids and a resync carries Soli's state; the todo toggles a row
   in place by prop, adds a keyed row from a typed field, and clears three
@@ -240,7 +249,9 @@ ship with, per `spec/07-bytecode.md`, now normative.
 - A chunk is a tiny stack machine: integers, booleans, strings, the root
   node's props as local state, `set_text` and `set_prop` on nodes, `emit` to
   queue a server event. No I/O, no clock, no allocation beyond its operand
-  stack. The `Host` trait has six methods and nothing else is reachable.
+  stack. The `Host` trait has ten methods and nothing else is reachable:
+  `atom`, `load`, `store`, `set_text`, `set_prop`, `set_style`, `emit`,
+  `set_mode`, `go_back` and `set_scene_uniform`.
 - The verifier decodes every instruction, checks that every jump lands on an
   instruction boundary, and proves the stack depth along every path before a
   chunk runs once. A run has 4 096 units of fuel; a type error or an
@@ -321,7 +332,7 @@ explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
 the end-to-end test fetches from the real server.
 
-**The catalogue, second half.** `eui_builders.sl` now composes forty-odd
+**The catalogue, second half.** `eui_builders.sl` now composes 490 builders
 widgets from the primitives: buttons in four variants with local states,
 checkbox, switch, badge, chip, card, stat, tabs, segmented control,
 accordion, stepper, breadcrumb, pagination, progress, skeleton, spinner,
@@ -1079,9 +1090,15 @@ implements it and the vectors that pin it:
 - **Security** (`08`) — each requirement naming where it is enforced.
 - **Conformance** (`09`) — `cargo run -p xtask -- conform`.
 - **Budgets** (`10`) — `cargo run --release -p xtask -- bench`.
-- **Transport** (`01`) — the session and content-addressed assets are
-  implemented; the signed manifest and key pinning are specified, not yet
-  checked by the client.
+- **Transport** (`01`) — the session, the one-shot render of §2.4, tree
+  adoption (§2.6) and content-addressed assets are implemented, and so are
+  the signed manifest and its pin store: `crates/eui-client/src/manifest.rs`
+  verifies the Ed25519 signature, pins under `app_id` and refuses a changed
+  key without a rotation, with vectors in `tests/manifest.rs` and
+  `tests/install.rs`. This line said otherwise for some time after it
+  stopped being true. Still specified and not built: the `pin` field of
+  §2.1's manifest, which has no slot in the key table below it and no code
+  in either repository.
 
 ## The browser: it paints, and what that cost
 
@@ -1437,6 +1454,46 @@ the whole reason the widget's own default is not what a mail uses.
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.
+
+**Specified, and not built — found by auditing `spec/` against the tree on
+2026-09-20, and written here rather than left to be rediscovered.** Each of
+these is decodable, several are emitted by the Soli server, and none of them
+does anything on a client:
+
+- **`motion_kind = 6` (`paired`, 03 §5.3).** A whole normative section, a
+  style byte, and `lang/.../tree.rs` maps the word — and `driver.rs` returns
+  `None` for it at both sites that could move a node. A view author who
+  writes `motion: "paired"` gets no motion and no diagnostic. §5.3's "a
+  client MUST bound the number of pairs it resolves in one change" is
+  vacuous while no pair is ever resolved, and `spec/09` names no vector.
+- **`double_click` (0x02) and `resize` (0x10), 06 §1.** Both have payloads,
+  both have coalescing rules, both are decodable, and the Soli server maps
+  both. Nothing emits either, so a handler attached to one waits for ever.
+- **`slot` lays out as a column (03 §1).** It falls to the default arm, and
+  `StyleRecord`'s default `display` is **Row** — so a `slot` that does not
+  override it lays out as the opposite of what the table says. Fixing it is
+  not one line: `engine.rs`'s `style()` memoises by style id alone, so a
+  per-kind default needs the cache keyed by kind as well.
+- **`sizer` is invisible (03 §1).** It has no arm in `paint.rs`, so it draws
+  its background and its border like any box.
+- **The manifest's `pin` field (01 §2.1).** Listed among the fields and
+  absent from the normative key table three lines below it, so there is no
+  wire encoding for it; `grep -ri spki crates/` is empty. 08 §1's "a client
+  that supports pinning MUST honour them" is satisfied by no client
+  supporting it.
+- **`Ping` from the client (01 §7).** The rule is symmetric — whichever side
+  has been silent for 30 s sends one — and only the server does. The client
+  answers a `Ping` and never starts one.
+- **`Blob` (01 §6), server to client.** `examples/counter-server` sends one;
+  `lang/src/serve/eui/session.rs` refuses it and none of the six SDKs
+  implements it. The client half is built and has nothing to talk to.
+- **Server-side payload validation (06 §4).** The spec names three checks
+  and `lang/.../session.rs::validate` does two: the node exists and carries
+  a handler of that kind. The payload's shape is not checked, so a `click`
+  carrying a string, a null or a thousand-element list reaches a view
+  handler. The same section says a failure "ends the session"; the server
+  deliberately logs and continues, for a reason worth keeping — the spec is
+  what needs changing there, not the code.
 - Session resume **on the Soli side**: the client and the reference server
   do it, `lang/src/serve/eui/` does not, and it cannot until the pinned
   protocol revision moves. Files are no longer on this list — `session.rs`
@@ -1462,8 +1519,11 @@ Android, and saying that plainly is worth more than a fifteenth widget.
 
 ## The Soli integration is additive
 
-`lang/` is a production binary at 2.0.7, 276 000 lines. EUI enters it as
-`src/serve/eui/` behind a cargo feature that is **off by default** — a child
-of `serve` rather than the planned `src/eui/`, so it can reuse `serve`'s
-private helpers instead of duplicating them. With the feature off, none of it
-is compiled.
+`lang/` is a production binary at 2.3.7, 294 339 lines. EUI enters it as
+`src/serve/eui/` behind a cargo feature, `eui` — a child of `serve` rather
+than the planned `src/eui/`, so it can reuse `serve`'s private helpers
+instead of duplicating them. With the feature off, none of it is compiled.
+It is **on** by default now, and was described here as off long after it
+stopped being: it is in `lang/Cargo.toml`'s `default` list, which is why a
+stale `rev =` pin on the eui crates takes the whole of `cargo test` down
+with it rather than one optional job.

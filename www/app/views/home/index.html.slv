@@ -290,9 +290,9 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
                     <tr><th>Piece</th><th>State</th><th>Evidence</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>86 tests, 4 fuzz targets</td></tr>
-                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>128 tests, golden pixels</td></tr>
-                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>333 tests</td></tr>
+                    <tr><td>Wire format, decoder, fuzzing</td><td class="yes">Built</td><td>93 tests, 4 fuzz targets</td></tr>
+                    <tr><td>Layout, text, renderer</td><td class="yes">Built</td><td>129 tests, golden pixels</td></tr>
+                    <tr><td>Client: session, input, IME, accessibility</td><td class="yes">Built</td><td>374 tests</td></tr>
                     <tr><td>Local handlers: the bytecode VM</td><td class="yes">Built</td><td>16 tests</td></tr>
                     <tr><td>Sound and moving pictures</td><td class="yes">Built</td><td>14 in the mixer, 9 in the video decoder</td></tr>
                     <tr><td>3D scenes and the shader verifier</td><td class="yes">Built</td><td>41 tests, 1 fuzz target</td></tr>
@@ -303,7 +303,7 @@ router_eui(<span class="s">"counter"</span>, <span class="s">"live#counter"</spa
             </table>
 
             <p class="note">
-                704 tests in all, counted on 2026-09-16, and every figure above
+                753 tests in all, counted on 2026-09-20, and every figure above
                 is a number <code>cargo test --workspace</code> will give you back.
                 A desktop artifact is 52.6 MB today against a 15 MB promise — it was
                 76 MB until the runtime it embeds learned to drop what an application

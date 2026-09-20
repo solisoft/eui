@@ -10,9 +10,28 @@ behind ordinary proxies and CDNs.
 
 - TLS 1.3 is REQUIRED, and a client MUST offer no earlier version: a server
   that answers `wss://` with TLS 1.2 is refused, not accommodated. A client
-  MUST refuse `http://` origins with no exception, including loopback in
-  release builds. (`EUI_ALLOW_INSECURE_LOOPBACK=1` MAY relax this in debug
-  builds only; a release client MUST NOT honour it.)
+  MUST refuse `ws://` and `http://` origins, with **one** exception, which is
+  narrow and is stated here rather than left to each implementation:
+  a **loopback address** — `127.0.0.1`, `localhost`, `[::1]` and nothing
+  else — MAY be reached in plain text when the person running the client has
+  asked for it, and a **release** client that allows this MUST say so on its
+  diagnostic channel (a debug build is already somebody's own). A client
+  MUST NOT offer the exception for any other address, and MUST NOT infer it
+  from the address alone: it is granted, never assumed. "Loopback" is a
+  judgement about the **host**, not about how the address is spelled:
+  `ws://localhost.example.com/` is not loopback, and a client that decides
+  by prefix has given the exception away to whoever registers the name.
+  See 08 §1 for how the reference client is asked — an environment variable
+  on a desktop, and on the web the browser's own answer to "was this page
+  itself served from loopback?", which nothing the page contains can forge.
+
+  *This rule used to read "debug builds only; a release client MUST NOT
+  honour it", which no implementation has ever obeyed and which nothing
+  could obey and still be testable: a release binary talking to a
+  `soli serve` on the same machine is how this project measures everything
+  it claims. A requirement that the reference client violates on every run
+  is not a requirement, it is a comment. What actually bounds the risk is
+  the address and the asking, and those are now what the rule says.*
 - A client verifies the certificate chain. The public web's roots are the
   baseline, but an application on a private network or behind a development
   proxy is signed by a root no public list carries, so a client SHOULD also

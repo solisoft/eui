@@ -272,7 +272,7 @@ pub fn check_url(url: &str, _host_loopback: bool) -> Result<(), TransportError> 
     if url.starts_with("wss://") {
         return Ok(());
     }
-    let loopback = url.starts_with("ws://127.0.0.1") || url.starts_with("ws://localhost") || url.starts_with("ws://[::1]");
+    let loopback = crate::dial::is_loopback_url(url);
     if loopback && page_is_loopback() {
         return Ok(());
     }

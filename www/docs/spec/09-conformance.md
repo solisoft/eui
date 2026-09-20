@@ -13,22 +13,59 @@ changed, and changing a vector is a protocol change.
 
 Two profiles:
 
-- A **client** MUST pass §2 (wire), §3 (tree), §4 (layout), §5 (theme),
-  §6 (bytecode) and §7 (events); §8 (painting) applies when it draws, and
-  §11 (scenes) when it draws those.
+- A **client** MUST pass §1.1 (transport), §2 (wire), §3 (tree),
+  §4 (layout), §5 (theme), §6 (bytecode) and §7 (events); §8 (painting)
+  applies when it draws, and §11 (scenes) when it draws those.
 - A **server** MUST pass §2 and §6 for what it emits, and §9 (diff) if it
   patches rather than re-mounts.
 
-The harness also builds `eui-proto`, `eui-tree`, `eui-theme`, `eui-layout`,
-`eui-text` and `eui-vm` for `aarch64-linux-android` and `aarch64-apple-ios`
+The harness also builds the seven portable crates — `eui-proto`, `eui-tree`,
+`eui-theme`, `eui-layout`, `eui-text`, `eui-vm` and `eui-shader` — for
+`aarch64-linux-android`, `aarch64-apple-ios` and `wasm32-unknown-unknown`
 where those targets' standard libraries are installed, and skips each with a
-note where it is not. Both, because they fail differently: one catches a
-`cfg` written for Unix that Android happens to satisfy, the other one
-written for Apple that a Mac satisfies and a device does not.
-This is not a vector and nothing conforms by passing it. It is there because
-those six crates carry no `cfg` for any platform and the claim is worth
-keeping true: a client for a phone, or for anything else, starts by taking
-them unchanged.
+note where one is not. Three, because they fail differently: the first
+catches a `cfg` written for Unix that Android happens to satisfy, the second
+one written for Apple that a Mac satisfies and a device does not, and the
+third one written for anything with an operating system at all. It then
+builds `eui-client` twice more, in the two shapes no ordinary build reaches:
+`--target wasm32-unknown-unknown --no-default-features`, where four
+capabilities are off and a different transport module is compiled, and
+`--cfg no_subprocess`, where a body of code a desktop never sees is turned
+on. A `cfg` nobody compiles is a `cfg` nobody checks.
+
+None of that is a vector and nothing conforms by passing it. It is there
+because those seven crates carry no `cfg` for any platform and the claim is
+worth keeping true: a client for a phone, or for a page, or for anything
+else, starts by taking them unchanged.
+
+### 1.1 Transport — `crates/eui-client/tests/driver.rs`, `crates/eui-client/tests/dial.rs`
+
+01 §1 and §2.3, which had no vectors at all until the rule they state was
+found to be two rules that contradicted each other.
+
+1. **`wss://` always, `ws://` only to loopback, and only when asked.**
+   `plain_text_reaches_loopback_and_only_when_it_is_asked_for` in
+   `driver.rs` walks every case: the three addresses §1 names, each with and
+   without a port; each of them refused when nobody has asked; each allowed
+   when somebody has, **in whatever build this is**; and the exception
+   buying nothing for any other origin.
+2. **Loopback is a host, not a prefix.** `dial.rs`'s unit tests refuse
+   `ws://localhost.evil.example/`, `ws://127.0.0.1.evil.example/` and
+   `ws://localhost@evil.example/` — all three of which pass a
+   `starts_with`, and one of which is a request to somebody else's server.
+   A client that decides by prefix has handed the exception to whoever
+   registers the name.
+3. **An embedded host vouches for its own session only.** The trust is a
+   parameter and not a process flag, so one embedded session cannot turn
+   `ws://` on for a network session opened beside it.
+4. **An HTTP status is an answer, not a dropped socket.** `dial.rs` pins
+   that a refused upgrade ends the tab with the server's reason rather than
+   climbing a retry ladder, and that the reason reads as a sentence.
+5. **Every frame kind is classified for lazy dialling.** All twelve of §7,
+   written out rather than sampled, plus a line that fails the day a
+   thirteenth is added — because the failure modes either way are silent: a
+   kind wrongly dialling opens a session when a window is dragged, and one
+   wrongly not dialling drops a click into nothing.
 
 ## 2. Wire format — `crates/eui-proto/tests`
 
@@ -46,22 +83,6 @@ direction with each of its three flags, byte for byte. `reject.rs` refuses an
 unknown transfer flag, an oversized chunk, an oversized abort reason, an
 unknown resume tag, an unknown `resumed` byte, and a `Hello` that ends
 before its resume flag.
-
-## 3. Tree — `crates/eui-tree/tests`
-
-Tables never cleared — including by a `Mount`; a batch that fails leaves the
-session poisoned until the next `Mount`; every reference (atom, style, chunk,
-node, key) validated before anything is placed; `MoveChild` indexes after
-removal. Font roles are the one table that is not define-once: a role holds
-the faces bound to it, may be bound again, and one past the last is refused
-in the session as well as in the decoder.
-
-## 4. Layout — `crates/eui-layout/tests/layout.rs`
-
-Goldens against the fixed-pitch measurer (9 px per character, 22 px lines):
-flow, grow, shrink with the automatic minimum, wrap, justify, align, baseline,
-percent, stack (stretch on both axes, absolute layers), grid, scroll clamping,
-virtualised lists, display none, depth 255 within a 1 MiB stack.
 
 ### 2.1 Font roles — `crates/eui-text/tests/shape.rs`, `crates/eui-client/tests/assets.rs`, `crates/eui-tree/tests/apply.rs`
 
@@ -81,6 +102,22 @@ rest is the behaviour the section promises and the client owes:
    draw in `sans`, and the session stands in all three.
 5. **The faces are asked for from the session**, not from the tree: a role's
    hashes are wanted because a `DefFont` bound them, and asked for once.
+
+## 3. Tree — `crates/eui-tree/tests`
+
+Tables never cleared — including by a `Mount`; a batch that fails leaves the
+session poisoned until the next `Mount`; every reference (atom, style, chunk,
+node, key) validated before anything is placed; `MoveChild` indexes after
+removal. Font roles are the one table that is not define-once: a role holds
+the faces bound to it, may be bound again, and one past the last is refused
+in the session as well as in the decoder.
+
+## 4. Layout — `crates/eui-layout/tests/layout.rs`
+
+Goldens against the fixed-pitch measurer (9 px per character, 22 px lines):
+flow, grow, shrink with the automatic minimum, wrap, justify, align, baseline,
+percent, stack (stretch on both axes, absolute layers), grid, scroll clamping,
+virtualised lists, display none, depth 255 within a 1 MiB stack.
 
 ## 5. Theme — `crates/eui-theme/tests`
 
@@ -138,22 +175,6 @@ notification is not part of the document. The per-batch ceiling is pinned a
 layer down, in `crates/eui-proto/tests/roundtrip.rs`, where a fifth
 notification in one batch is a decode error and four are not.
 
-### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
-
-03 §5's two lifecycles, which are exactly the kind of thing two clients would
-diverge on: `animation` read as a bit set, so `enter | exit` still enters; an
-entrance that names a direction arriving from it rather than fading; a
-released page painting on after the tree has let it go, with the way it goes
-being the mirror of the way its replacement came, along the accelerate curve;
-one kept painting at a time; and the frame after it is over holding one page,
-with the driver at rest and no frame owed.
-
-06 §5's edge clause — `crates/eui-client/tests/touch.rs`: a stroke inwards
-from the leading edge carrying the page and reporting a `back` when it is let
-go past halfway; the press given back with no `click`; a stroke let go early
-springing back and reporting nothing at all; a stroke along the edge still
-scrolling; and a tap inside the slop still being the tap it was aimed at.
-
 ### 7.1 Keyboard — `crates/eui-client/tests/keyboard.rs`
 
 §3.1: `Escape` reaching a handler on the path and leaving focus alone, and
@@ -173,6 +194,55 @@ claimed `Enter` reporting the value *before* the key and withholding only the
 swallowing the `Enter` that presses a button inside it; and a printable
 character landing in the field whatever the prop says, because text never
 arrives as a key.
+
+### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
+
+§6.1's declared half: a `role` prop beating the kind it would have been
+inferred as; `checked` in all three of its states; a `label` overriding the
+text inside; a disabled node keeping its role and accepting neither action;
+a container role keeping the children a leaf role would swallow; `set_size`
+carrying a count virtualisation left out of the tree; a slider's value and
+range, including a present zero; an unknown role name falling back rather
+than failing; a live region's urgency; and every role discriminant surviving
+the `to_u8`/`from_u8` round trip the worker boundary makes of it.
+
+Rule 4: a field naming an option that is its *sibling* and not its child —
+which is where a combo box's panel is, and is the whole reason a relation
+exists here at all — and a name pointing at nothing being dropped without
+refusing the batch, because a panel that has shut leaves exactly that.
+
+The kind-mapping default of §6 is pinned separately, in `driver.rs`, so that
+a tree declaring nothing is provably exposed as it was before §6.1 existed.
+
+### 7.3 Manifest — `crates/eui-client/tests/manifest.rs`
+
+Signature, protocol range, trust on first use, refusal of a changed key,
+acceptance of a rotation the pinned key signed, and garbage.
+
+### 7.4 Files — `crates/eui-client/tests/files.rs`
+
+Spec 03 §3.2 and 01 §6, twenty-one vectors. A click on a node carrying `pick`
+asking the window for a dialog with the accept list, multiplicity and
+ceiling the tree declared; **nothing opening** without the capability, and
+nothing opening for a tree that merely arrived; what was picked becoming one
+`file_pick` naming the file and not its path, then chunks that fit a frame;
+a file past the ceiling announced and aborted, and accepting no bytes after
+it; a dismissed dialog reported to nobody and its token spent; a save
+becoming a `file_save` and the server's `Blob` frames becoming writes for
+the window; a `Blob` for a save nobody asked for **ending the session**; and
+a `Blob` out of order losing the save without ending it. The last vector
+runs the two gestures against the reference server over a real socket: the
+bytes of a picked file reach it, and the bytes it owes a save come back.
+
+### 7.5 Resuming — `crates/eui-client/tests/resume.rs`
+
+Spec 01 §4.1, six vectors. A first `Hello` offering nothing and a later one
+offering the session and the last batch applied; a `Welcome` that did not
+resume taking the tree, the tables and the acked sequence with it; a
+`resumed` naming a session the client never offered ending it; a batch
+already applied being acked again and **not applied again**. The last drops
+a real socket mid-session and opens another: the tree is still standing, the
+count is where it was, and the session goes on.
 
 ### 7.6 Touch — `crates/eui-client/tests/touch.rs`
 
@@ -208,30 +278,21 @@ resolving nothing; `Escape`, a lost window and a vanished source each ending
 it with `slot = -1`; and a drag at the foot of a list scrolling it and
 reporting one `scroll` rather than one a frame.
 
-### 7.4 Files — `crates/eui-client/tests/files.rs`
+### 7.8 Arriving and leaving — `crates/eui-client/tests/driver.rs`
 
-Spec 03 §3.2 and 01 §6, twenty-one vectors. A click on a node carrying `pick`
-asking the window for a dialog with the accept list, multiplicity and
-ceiling the tree declared; **nothing opening** without the capability, and
-nothing opening for a tree that merely arrived; what was picked becoming one
-`file_pick` naming the file and not its path, then chunks that fit a frame;
-a file past the ceiling announced and aborted, and accepting no bytes after
-it; a dismissed dialog reported to nobody and its token spent; a save
-becoming a `file_save` and the server's `Blob` frames becoming writes for
-the window; a `Blob` for a save nobody asked for **ending the session**; and
-a `Blob` out of order losing the save without ending it. The last vector
-runs the two gestures against the reference server over a real socket: the
-bytes of a picked file reach it, and the bytes it owes a save come back.
+03 §5's two lifecycles, which are exactly the kind of thing two clients would
+diverge on: `animation` read as a bit set, so `enter | exit` still enters; an
+entrance that names a direction arriving from it rather than fading; a
+released page painting on after the tree has let it go, with the way it goes
+being the mirror of the way its replacement came, along the accelerate curve;
+one kept painting at a time; and the frame after it is over holding one page,
+with the driver at rest and no frame owed.
 
-### 7.5 Resuming — `crates/eui-client/tests/resume.rs`
-
-Spec 01 §4.1, six vectors. A first `Hello` offering nothing and a later one
-offering the session and the last batch applied; a `Welcome` that did not
-resume taking the tree, the tables and the acked sequence with it; a
-`resumed` naming a session the client never offered ending it; a batch
-already applied being acked again and **not applied again**. The last drops
-a real socket mid-session and opens another: the tree is still standing, the
-count is where it was, and the session goes on.
+06 §5's edge clause — `crates/eui-client/tests/touch.rs`: a stroke inwards
+from the leading edge carrying the page and reporting a `back` when it is let
+go past halfway; the press given back with no `click`; a stroke let go early
+springing back and reporting nothing at all; a stroke along the edge still
+scrolling; and a tap inside the slop still being the tap it was aimed at.
 
 ### 7.9 Adopting a tree — `crates/eui-client/tests/adopt.rs`
 
@@ -261,31 +322,7 @@ one path share one session; two naming one component with different queries do
 not. And an event raised inside an island carries that island's node ids and
 goes to that island's socket, never the page's.
 
-### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
-
-§6.1's declared half: a `role` prop beating the kind it would have been
-inferred as; `checked` in all three of its states; a `label` overriding the
-text inside; a disabled node keeping its role and accepting neither action;
-a container role keeping the children a leaf role would swallow; `set_size`
-carrying a count virtualisation left out of the tree; a slider's value and
-range, including a present zero; an unknown role name falling back rather
-than failing; a live region's urgency; and every role discriminant surviving
-the `to_u8`/`from_u8` round trip the worker boundary makes of it.
-
-Rule 4: a field naming an option that is its *sibling* and not its child —
-which is where a combo box's panel is, and is the whole reason a relation
-exists here at all — and a name pointing at nothing being dropped without
-refusing the batch, because a panel that has shut leaves exactly that.
-
-The kind-mapping default of §6 is pinned separately, in `driver.rs`, so that
-a tree declaring nothing is provably exposed as it was before §6.1 existed.
-
-### 7.3 Manifest — `crates/eui-client/tests/manifest.rs`
-
-Signature, protocol range, trust on first use, refusal of a changed key,
-acceptance of a rotation the pinned key signed, and garbage.
-
-### 7.4 Installing — `crates/eui-client/tests/install.rs`
+### 7.11 Installing — `crates/eui-client/tests/install.rs`
 
 A signed manifest with an `icon` is verified, its icon fetched by hash and
 written at the size the platform's format declares, and a launcher entry

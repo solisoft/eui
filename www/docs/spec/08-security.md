@@ -85,7 +85,7 @@ it.
   rejected unknown discriminants, rejected trailing bytes, every limit
   checked before allocation, iterative tree decoding. *Enforced: `eui-proto`,
   under `clippy::indexing_slicing`, `panic`, `unwrap_used`, `expect_used`,
-  `arithmetic_side_effects` as errors; 55 rejection tests; 40 000 hostile
+  `arithmetic_side_effects` as errors; 62 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
 - A batch that is well-formed but incoherent — undefined atom, duplicate
   node, index past the end — is refused before anything is placed, and the

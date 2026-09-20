@@ -101,7 +101,8 @@ the application's good manners.
 | Static steps per fragment invocation | 4 096 (= the VM's fuel) |
 | Mesh vertices / indices | 65 536 / 196 608 |
 | Render targets alive per session | 8 |
-| Target edge, before the device's own limit trims it | 2 048 device px |
+| Target edge, before the device's own limit trims it | 4 096 device px (`scene::MAX_EDGE`), rounded up to a multiple of 64 |
+| Target memory, per scene | 4 B/px colour, **+4 B/px per sample** when `msaa` > 1, **+4 B/px per sample** for depth |
 | Author's uniforms | 8 floats |
 | Verifying a module | < 2 ms — **measured 81.5 µs** |
 | Decoding and checking a 60 000-vertex mesh (2.5 MB) | < 20 ms — **measured 739 µs** |
@@ -114,6 +115,24 @@ The target quota is the one with a concrete attacker behind it: a virtualised
 otherwise ask for ten thousand render targets. Past the quota a scene draws
 its own background, which is what one whose module has not compiled yet
 already does — so the application has no new failure to handle.
+
+**What the quota is worth, arithmetically.** The edge row said 2 048 until
+2026-09-20, when it was read against `crates/eui-render/src/scene.rs:104`
+and found to be half the real number — which is a quarter of the real
+*area*, and area is what a texture costs. The formula is
+`make_scene_target`'s, read off the three allocations it makes: a colour
+texture always, an MSAA colour texture only when `samples > 1`, and a depth
+texture only when the module wants one, the last two at `sample_count`
+samples each. So a scene at the default `msaa: 4` with depth is 36 B/px,
+one without MSAA is 8 B/px, and colour alone is 4 B/px.
+
+Eight targets at the full 4 096 × 4 096, with MSAA and depth, is therefore
+**4.8 GB** and not the 1.2 GB the old row implied. That is the ceiling a
+device's own `max_texture_dimension_2d` is expected to cut into long before
+an application reaches it, and it is written here because a budget nobody
+can multiply out is not a budget. For scale, the demo's own scene node —
+260 × 200 logical at 2×, quantised to 576 × 448 — is 9.3 MB with MSAA and
+depth, and 2.1 MB without.
 
 The two zero lines are the ones that keep the paragraph below honest, and
 they are *structural*, not tuned: an animating scene is the same draw list

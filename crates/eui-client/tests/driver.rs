@@ -413,14 +413,46 @@ fn wheel_over_an_open_select_scrolls_its_options_not_the_page() {
     assert_eq!(d.session().node(d.session().root().unwrap()).unwrap().scroll.1, 0, "the page behind did not");
 }
 
+/// Spec 01 §1: plain text reaches loopback and nothing else, and only when
+/// somebody has asked for it.
+///
+/// Both halves are the rule. The address alone must not be enough — an
+/// exception that is *inferred* is one an attacker gets for free by naming
+/// `localhost` — and the asking alone must not be enough either, or the
+/// variable becomes a way to turn TLS off for the whole web.
+///
+/// §1 used to say a release client must refuse the variable outright. It
+/// said so while every measurement in this repository was taken by a
+/// release `snapshot` talking to a `soli serve` on loopback, which is to
+/// say: while nothing obeyed it and nothing could. The rule now names what
+/// actually bounds the risk, and this test is what holds it to that.
 #[test]
-fn insecure_urls_are_refused_outside_debug_loopback() {
+fn plain_text_reaches_loopback_and_only_when_it_is_asked_for() {
+    // The baseline, on any build.
     assert!(check_url("wss://app.example/_eui/session", false).is_ok());
     assert!(check_url("ws://app.example/_eui/session", false).is_err());
     assert!(check_url("http://127.0.0.1/_eui/session", false).is_err());
-    // Loopback over ws:// needs both a debug build and the explicit opt-in.
+
+    // Granted, never assumed: loopback with nobody asking is refused.
     std::env::remove_var("EUI_ALLOW_INSECURE_LOOPBACK");
     assert!(check_url("ws://127.0.0.1:1/_eui/session", false).is_err());
+    assert!(check_url("ws://localhost:1/_eui/session", false).is_err());
+    assert!(check_url("ws://[::1]:1/_eui/session", false).is_err());
+
+    // Asked for, and then it is allowed — **in this build**, whichever this
+    // build is. That is the line the old wording got wrong.
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    assert!(check_url("ws://127.0.0.1:1/_eui/session", false).is_ok());
+    assert!(check_url("ws://localhost:1/_eui/session", false).is_ok());
+    assert!(check_url("ws://[::1]:1/_eui/session", false).is_ok());
+
+    // And it buys nothing anywhere else. A variable that could turn TLS off
+    // for a real origin would be worse than no variable.
+    assert!(check_url("ws://app.example/_eui/session", false).is_err());
+    assert!(check_url("ws://127.0.0.1.evil.example/_eui/session", false).is_err());
+    assert!(check_url("http://127.0.0.1:1/_eui/session", false).is_err());
+    std::env::remove_var("EUI_ALLOW_INSECURE_LOOPBACK");
+
     // An embedded host vouches for its own session only. The trust is a
     // parameter, so it cannot spill onto a network session opened beside it.
     assert!(check_url("ws://127.0.0.1:1/_eui/session", true).is_ok());
