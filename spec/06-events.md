@@ -249,9 +249,30 @@ for anything provisional — it has to be able to put it back.
 
 The server validates every event against the node it names: the node exists
 in the tree it last sent, it has a handler of that kind naming that atom, and
-the payload has the shape in §1. A failure is a protocol error and ends the
-session. A local handler's effect is advisory; the server re-derives state
-from its own model before anything is trusted.
+the payload has the shape in §1. A local handler's effect is advisory; the
+server re-derives state from its own model before anything is trusted.
+
+*Enforced: `EventKind::payload_fits` in `crates/eui-proto/src/node.rs` for
+the shape, and `lang/src/serve/eui/session.rs::validate` for all three. The
+shape check lives in the wire crate rather than in a server because it is a
+fact about the format and there are seven servers.*
+
+**A failure drops the event; it does not end the session.** This paragraph
+said the opposite for a long time, and no implementation ever did it — for a
+good reason, which is now written down rather than left as a divergence. An
+event arrives from a client that may be a version behind, on a tree the
+server has since replaced, at a node that existed a moment ago. Ending the
+session for one of those costs a person their application for a mouse
+movement, and the tree they lose is the tree that would have told them why.
+A server MUST refuse the event and MAY log it; a server that also wants to
+end the session on a malformed payload MAY, but it is not the rule, because
+the cheap attack is then a single bad frame against every reader.
+
+A float where §1 asks for a float, and an **integer** where it does too: a
+coordinate of exactly zero is an integer to any encoder that writes the
+narrowest form of a number, and a server that refused it would refuse the
+top-left corner of every node. The reverse is not true — a fractional
+button, slot or row index is not a narrower spelling of anything.
 
 ## 5. Touch
 

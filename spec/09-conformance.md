@@ -73,8 +73,9 @@ found to be two rules that contradicted each other.
 |---|---|
 | `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, a `DefFont`, every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
-| `reject.rs` | 62 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
+| `reject.rs` | 64 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
+| `reject.rs`, again | **06 §4's payload shapes**, which are not decode failures: every payload there is a well-formed `Value` in a valid frame, and the question is whether it means what its kind says. A `click` carrying a string, a null, one coordinate, three, or a thousand; a fractional button, slot or scroll offset; a payload on a kind that declares `Null`; an NFC tag whose records are not pairs. Plus the two properties the rest rests on: an integer stands in for a float and never the reverse, and **no kind accepts a payload of nonsense** — the vector that stops a catch-all arm turning the whole check into a no-op |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused, and an `icon` makes it a version 2 record while a manifest without one stays byte-for-byte version 1 |
 
 `roundtrip.rs` and `vectors.rs` cover 01 §4.1 and §6 as well: a `Hello` that
@@ -164,6 +165,15 @@ a third starts a new pair rather than reporting a second double, and a pair
 nothing, a node pushed sideways by an inserted sibling says nothing, a node
 whose style changes its width reports the new box once, and painting it
 again reports nothing.
+
+**03 §5.3, pairing**, which had no entry at all while `motion_kind` 6 was a
+byte no client acted on: a node arriving under the key one that just left
+was wearing starts at its partner's box and its partner's width — the scale
+is what proves it, since no other motion produces one — ends where the
+layout put it, and never fades, because the element arrives rather than
+appears. A `paired` node whose key resolves to nothing is **accepted**, as
+§5.3 requires in as many words, and drawn where the layout put it carrying
+no transform of its own.
 
 Sound reports on one clock and says nothing about the machine: `level` and
 `time_update` are emitted on the same tick and neither twice in it; a

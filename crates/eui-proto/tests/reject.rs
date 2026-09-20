@@ -624,3 +624,81 @@ fn corrupted_valid_frames_never_panic() {
         let _ = Frame::decode(&buf);
     }
 }
+
+// ---------------------------------------------------- 06 §4, payload shapes
+
+/// Spec 06 §4 asks a server to check three things about an event, and names
+/// the third "the payload has the shape in §1". Nothing checked it: a `click`
+/// carrying a string reached an application's handler exactly as a pair of
+/// coordinates would.
+///
+/// These are not decode failures — every payload below is a well-formed
+/// `Value` and the frame carrying it is a valid frame. They are the layer
+/// above: bytes that parse and do not mean what the kind says they mean.
+#[test]
+fn a_payload_that_is_not_the_shape_its_kind_declares_is_refused() {
+    use EventKind as K;
+    let xy = || Value::List(vec![Value::Float(1.5), Value::Float(2.5)]);
+
+    // The shapes §1 writes down.
+    assert!(K::Click.payload_fits(&xy()));
+    assert!(K::DoubleClick.payload_fits(&xy()));
+    assert!(K::PointerDown.payload_fits(&Value::List(vec![Value::Float(1.0), Value::Float(2.0), Value::Int(0)])));
+    assert!(K::KeyDown.payload_fits(&Value::List(vec![Value::Str("a".into()), Value::Int(1)])));
+    assert!(K::TextInput.payload_fits(&Value::Str("hi".into())));
+    assert!(K::Scroll.payload_fits(&Value::List(vec![Value::Int(0), Value::Int(40)])));
+    assert!(K::Focus.payload_fits(&Value::Null));
+    assert!(K::FileDrag.payload_fits(&Value::List(vec![Value::Bool(true)])));
+    assert!(K::NfcTag.payload_fits(&Value::List(vec![Value::Str("04a2".into()), Value::List(vec![Value::List(vec![Value::Str("text".into()), Value::Str("hello".into())])])])));
+
+    // An integer stands in for a float, and has to: a coordinate of exactly
+    // zero is `Int(0)` to any encoder that writes the narrowest form of a
+    // number, and refusing it would refuse the top-left corner of every node.
+    assert!(K::Click.payload_fits(&Value::List(vec![Value::Int(0), Value::Int(0)])));
+    // The reverse is not true. A fractional button, slot or row index is not
+    // a narrower spelling of anything.
+    assert!(!K::PointerDown.payload_fits(&Value::List(vec![Value::Float(1.0), Value::Float(2.0), Value::Float(0.5)])));
+    assert!(!K::Scroll.payload_fits(&Value::List(vec![Value::Float(0.5), Value::Int(40)])));
+
+    // Wrong type altogether.
+    assert!(!K::Click.payload_fits(&Value::Str("wherever you like".into())));
+    assert!(!K::Click.payload_fits(&Value::Null));
+    assert!(!K::TextInput.payload_fits(&Value::Int(3)));
+
+    // Right type, wrong arity — the case a length check alone would let by.
+    assert!(!K::Click.payload_fits(&Value::List(vec![Value::Float(1.0)])));
+    assert!(!K::Click.payload_fits(&Value::List(vec![Value::Float(1.0), Value::Float(2.0), Value::Float(3.0)])));
+    assert!(!K::Click.payload_fits(&Value::List(vec![Value::Float(0.0); 1024])));
+
+    // A payload on a kind that declares `Null` is a peer saying something
+    // the protocol has no room for.
+    assert!(!K::Focus.payload_fits(&xy()));
+    assert!(!K::Back.payload_fits(&Value::Int(0)));
+
+    // `change` is the one kind with three legitimate shapes (§1): a field's
+    // whole value, a track's number, or a two-handle track's pair.
+    assert!(K::Change.payload_fits(&Value::Str("typed".into())));
+    assert!(K::Change.payload_fits(&Value::Int(40)));
+    assert!(K::Change.payload_fits(&Value::List(vec![Value::Int(10), Value::Int(90)])));
+    assert!(!K::Change.payload_fits(&Value::List(vec![Value::Int(10), Value::Int(90), Value::Int(100)])));
+    assert!(!K::Change.payload_fits(&Value::Null));
+
+    // A tag whose records are not `[kind, payload]` pairs. This one matters
+    // more than the rest: 03 §3.3's records are handed to an application
+    // whole, and "a list" is not the shape §1 wrote down.
+    assert!(!K::NfcTag.payload_fits(&Value::List(vec![Value::Str("04a2".into()), Value::List(vec![Value::Str("not a record".into())])])));
+    assert!(!K::NfcTag.payload_fits(&Value::List(vec![Value::Str("04a2".into()), Value::Str("not a list".into())])));
+}
+
+/// Every kind has an answer, and the answer is never "anything goes".
+///
+/// A `match` that grew a catch-all arm would make this whole function a
+/// no-op silently, which is the way a check like this usually dies.
+#[test]
+fn no_kind_accepts_everything() {
+    let absurd = Value::List(vec![Value::Asset([7u8; 32]), Value::Bool(false), Value::Null, Value::Color(ColorRef::NONE)]);
+    for byte in 0x01..=0x20u8 {
+        let Ok(kind) = EventKind::from_u8(byte) else { continue };
+        assert!(!kind.payload_fits(&absurd), "{kind:?} accepted a payload of nonsense");
+    }
+}

@@ -24,7 +24,7 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
 - `#![forbid(unsafe_code)]`.
 - 93 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
   4 frame-walking,
-  **62 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
+  **64 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
@@ -1075,7 +1075,7 @@ wrong conclusions here.
 Every document in `spec/` is normative now, and each names the code that
 implements it and the vectors that pin it:
 
-- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 62 rejection
+- **Wire format** (`02`) — `eui-proto`, byte-exact vectors, 64 rejection
   cases. The last of the style record's reserved bytes became `transition`.
 - **Primitives, painting, focus, canvas paths, transitions** (`03`) —
   `eui-render` and `eui-client`.
@@ -1460,7 +1460,7 @@ the whole reason the widget's own default is not what a mail uses.
 these is decodable, several are emitted by the Soli server, and none of them
 does anything on a client.
 
-Four came off this list the same day. **`slot` lays out as a column** (03 §1)
+Six came off this list the same day. **`slot` lays out as a column** (03 §1)
 now: it fell to the default arm and a `StyleRecord`'s default `display` is
 `Row`, so every `slot` laid out as the opposite of the one thing its row in
 the table says. The fix is not in the style cache — that is keyed by style id,
@@ -1482,14 +1482,38 @@ never anything else has not changed. The watch list for `resize` is rebuilt
 when the tree changes rather than walked per frame, so an application that
 does not use it pays nothing.
 
+**`paired` motion** (03 §5.3) is resolved now. A node arriving under the key
+one that just left was wearing flies between their two boxes instead of
+coming from a direction — a whole normative section, a style byte since the
+format had one, and `lang`'s `tree.rs` mapping the word, against two sites in
+`driver.rs` that both returned `None`. Nothing is laid out to do it: the
+arriving node was laid out for this frame and the departing node's box was
+recorded on the frame it was last seen, so the pair is one interpolation
+resolved once. `Session::exits()` borrows where `take_exits` consumes,
+because a pair is resolved while the batch is applied — both ends are one
+change — and the page animation of §5.1 is resolved at paint, where the
+painting of the departing subtree still exists. §5.3's required bound is
+sixteen pairs a change; a seventeenth is painted where the layout put it.
+
+**06 §4's third check** exists now. The section asks a server to verify that
+the node exists, that it carries a handler of that kind, and that the payload
+has the shape §1 declares — and named `validate` as the place all three
+happen. It did two. `EventKind::payload_fits` is the third, and it lives in
+`eui-proto` rather than in a server because it is a fact about the wire
+format and there are seven servers: six are separate ports of that crate and
+the one in this workspace can call it. An integer is accepted where §1 asks
+for a float — a coordinate of exactly zero is an integer to any encoder that
+writes the narrowest form of a number — and never the reverse, since a
+fractional button or row index is not a narrower spelling of anything.
+
+§4 also said a failure "ends the session", which no implementation has ever
+done and which `lang` argues against in twenty lines of comment. The spec now
+says what the code does and why: the event is dropped, because ending a
+session over one malformed frame costs a person their application for a mouse
+movement, and makes a single bad frame an attack on every reader.
+
 The rest are still open:
 
-- **`motion_kind = 6` (`paired`, 03 §5.3).** A whole normative section, a
-  style byte, and `lang/.../tree.rs` maps the word — and `driver.rs` returns
-  `None` for it at both sites that could move a node. A view author who
-  writes `motion: "paired"` gets no motion and no diagnostic. §5.3's "a
-  client MUST bound the number of pairs it resolves in one change" is
-  vacuous while no pair is ever resolved, and `spec/09` names no vector.
 - **The manifest's `pin` field (01 §2.1).** Listed among the fields and
   absent from the normative key table three lines below it, so there is no
   wire encoding for it; `grep -ri spki crates/` is empty. 08 §1's "a client
@@ -1501,13 +1525,6 @@ The rest are still open:
 - **`Blob` (01 §6), server to client.** `examples/counter-server` sends one;
   `lang/src/serve/eui/session.rs` refuses it and none of the six SDKs
   implements it. The client half is built and has nothing to talk to.
-- **Server-side payload validation (06 §4).** The spec names three checks
-  and `lang/.../session.rs::validate` does two: the node exists and carries
-  a handler of that kind. The payload's shape is not checked, so a `click`
-  carrying a string, a null or a thousand-element list reaches a view
-  handler. The same section says a failure "ends the session"; the server
-  deliberately logs and continues, for a reason worth keeping — the spec is
-  what needs changing there, not the code.
 - Session resume **on the Soli side**: the client and the reference server
   do it, `lang/src/serve/eui/` does not, and it cannot until the pinned
   protocol revision moves. Files are no longer on this list — `session.rs`

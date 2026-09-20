@@ -97,7 +97,7 @@ pub struct Session {
     /// leaving takes — the tree is not kept, and cannot be, which is what
     /// makes a departing page inert by construction rather than by a check at
     /// every door.
-    exits: Vec<(u32, eui_proto::Motion)>,
+    exits: Vec<(u32, eui_proto::Motion, u32)>,
     /// The `audio` and `video` nodes in the tree, in the order they were
     /// grafted: what the client's players are told to agree with (03 §7,
     /// §8), kept here so agreeing is a look at these rather than a walk of
@@ -496,8 +496,24 @@ impl Session {
 
     /// The nodes released since the last call whose style asked to leave
     /// rather than vanish (03 §5), as `(id, direction)`.
-    pub fn take_exits(&mut self) -> Vec<(u32, eui_proto::Motion)> {
+    /// Each entry is the node's id, the direction its style asked to leave
+    /// in, and its **key** — the last of which is what 03 §5.3 pairs on: a
+    /// node arriving under the same key is the same thing in a new place,
+    /// and the two fly between their boxes instead of each going the way its
+    /// page goes. `0` is a positional node and pairs with nothing.
+    pub fn take_exits(&mut self) -> Vec<(u32, eui_proto::Motion, u32)> {
         std::mem::take(&mut self.exits)
+    }
+
+    /// The same list, borrowed rather than taken.
+    ///
+    /// A client resolves 03 §5.3's pairing while applying a batch — the
+    /// arrival and the departure are one change and it has to see both — and
+    /// resolves the *page* animation of §5.1 at paint, where the painting of
+    /// the departing subtree still exists. Two readers, one of which must
+    /// not consume.
+    pub fn exits(&self) -> &[(u32, eui_proto::Motion, u32)] {
+        &self.exits
     }
 
     /// Record a subtree about to be released, if its root asked to leave.
@@ -511,13 +527,13 @@ impl Session {
             return;
         }
         let Some(node) = self.arena.get(ix) else { return };
-        let (id, style) = (node.id, node.style);
+        let (id, style, key) = (node.id, node.style, node.key);
         if style == 0 {
             return;
         }
         if let Some(r) = self.tables.styles.get(style) {
             if r.animation & eui_proto::ANIMATION_EXIT != 0 {
-                self.exits.push((id, r.motion));
+                self.exits.push((id, r.motion, key));
             }
         }
     }

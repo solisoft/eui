@@ -409,6 +409,20 @@ const TOUCH_HOLD_MS: u64 = 500;
 /// two deliberate clicks mean something the person did not intend.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
+/// How many pairs 03 §5.3 will resolve in one change.
+///
+/// The section requires a bound and does not name one, for the same reason
+/// it does not name a duration: what matters is that a tree cannot make a
+/// client do unbounded work by wearing one style. Sixteen is more shared
+/// elements than any change a person can follow, and a seventeenth is
+/// painted where the layout put it rather than refused.
+const MAX_PAIRS: u32 = 16;
+
+/// How many keys' boxes are kept before the map is swept of keys nothing
+/// wears any more. A window left open for a day would otherwise hold a
+/// rectangle for every key it had ever seen.
+const MAX_PAIRED_KEYS: usize = 256;
+
 /// How close to a scroller's edge a drag has to be held before the view
 /// starts moving, in logical pixels — or a fifth of the viewport, whichever is
 /// less. The fraction is what stops a short list scrolling from its middle
@@ -1272,6 +1286,22 @@ pub struct Driver {
     /// changed. That is the rule §2 states, and it is also the only one that
     /// makes the first frame of a page quiet.
     sizes: HashMap<u32, (f32, f32)>,
+    /// 03 §5.3: where each `paired` node was laid out last frame, by its
+    /// **key**. A node arriving under a key that just left flies from the
+    /// box in here rather than from a direction.
+    ///
+    /// By key and not by id: the whole point is that the arriving node is a
+    /// different node. Recorded each frame for the nodes that wear the
+    /// motion, which is the same bargain `resize` strikes — nothing is paid
+    /// by a tree that has none.
+    paired_boxes: HashMap<u32, Rect>,
+    /// The keys that left in the change being resolved, so an arrival pairs
+    /// only with a departure and never with a node still standing somewhere
+    /// else in the tree under the same key.
+    departed_keys: Vec<u32>,
+    /// Which nodes wear `paired` and carry a key. Rebuilt with the `resize`
+    /// watch below and for the same reason.
+    paired_watch: Vec<NodeIx>,
     /// Which nodes hold a `resize` handler, and whether that list is stale.
     ///
     /// Rebuilt when the tree changes rather than per frame. Walking the tree
@@ -1480,6 +1510,9 @@ impl Driver {
             desktop_mode: None,
             windows: HashMap::new(),
             sizes: HashMap::new(),
+            paired_boxes: HashMap::new(),
+            departed_keys: Vec::new(),
+            paired_watch: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
             outrun_at: None,
@@ -1636,6 +1669,9 @@ impl Driver {
         self.scroll_anim = None;
         self.windows.clear();
         self.sizes.clear();
+        self.paired_boxes.clear();
+        self.departed_keys.clear();
+        self.paired_watch.clear();
         self.resize_watch.clear();
         self.resize_watch_stale = true;
         self.cached = None;
@@ -1802,6 +1838,10 @@ impl Driver {
                 self.resize_watch_stale = true;
                 self.invalidate();
                 self.note_style_changes();
+                // 03 §5.3: before the entrances, because a pair is one
+                // change and the node arriving has to be able to ask what
+                // left under its key.
+                self.note_departed_keys();
                 self.note_entrances();
                 // The batch put back every style a local handler had
                 // previewed. Whatever the pointer is still over must light
@@ -2043,8 +2083,28 @@ impl Driver {
     /// from: a push sends the old page the way the new one did not come, and
     /// a pop is the same sentence read backwards. So the leaving record never
     /// has to name a direction, and a server never has to decide one.
+    /// 03 §5.3: which keys left in the change just applied.
+    ///
+    /// Read from the session rather than taken, and read **before**
+    /// `note_entrances`, because a pair is one change seen from both ends
+    /// and the arrival is resolved while the batch is being applied. The
+    /// *page* animation of §5.1 is resolved at paint instead, where the
+    /// painting of the departing subtree still exists — so the two readers
+    /// of this list run at different moments and only the later one
+    /// consumes it.
+    fn note_departed_keys(&mut self) {
+        self.departed_keys.clear();
+        let keys: Vec<u32> = self.session.exits().iter().filter(|(_, m, k)| *k != 0 && *m == eui_proto::Motion::Paired).map(|(_, _, k)| *k).collect();
+        self.departed_keys.extend(keys);
+    }
+
     fn note_exits(&mut self) {
         let exits = self.session.take_exits();
+        // The page animation needs a cached painting and a whole subtree; a
+        // pairing needs neither, and a node that could not slide out must
+        // still be able to hand its box to the node replacing it. So the
+        // keys are noted before anything below can return.
+        self.note_departed_keys();
         if exits.is_empty() {
             return;
         }
@@ -2054,7 +2114,7 @@ impl Driver {
         // once. Anything else makes the memory a function of how fast a
         // person can tap.
         self.departing = None;
-        for (id, motion) in exits {
+        for (id, motion, _key) in exits {
             let Some(d) = list.departures.iter().find(|d| d.id == id).copied() else { continue };
             // Not all of it is here: a menu was open, and its quads are in
             // the top layer outside this span. Let the page go at once
@@ -2140,13 +2200,76 @@ impl Driver {
             M::Bottom => [0.0, r.h, 1.0, 1.0],
             M::Scale => [0.0, 0.0, 0.92, 0.0],
             // A fade is the entrance this client has always had, and a
-            // pairing is resolved against its partner rather than from a
-            // direction; neither is a mover.
+            // pairing comes from its partner's box rather than from a
+            // direction, so it is resolved in `paired_from` above.
             M::Fade | M::Paired => return None,
         })
     }
 
+    /// 03 §5.3: where a `paired` node starts — the box its partner occupied
+    /// — as an offset, a scale and an opacity from where it now stands.
+    ///
+    /// Nothing is laid out to do this. The arriving node was laid out for
+    /// this frame and the leaving node's box was recorded on the frame it
+    /// was last on screen, so both rectangles are known before the first
+    /// frame of the movement and the pair is one interpolation resolved
+    /// once — the same bargain §5 strikes for a colour and 04 §7 for a
+    /// scroll.
+    ///
+    /// The scale is the width ratio and not two ratios, because a `Move`
+    /// carries one: a pair is a thing travelling, not a thing being
+    /// stretched, and the two boxes of a shared element are near enough in
+    /// shape that one number reads correctly. The opacity stays at 1 at
+    /// both ends — the element does not appear, it arrives.
+    ///
+    /// `None` when there is no partner, which §5.3 says explicitly is the
+    /// ordinary case and not an error: a panel is built and torn down as it
+    /// opens, so a key that does not resolve is what most frames look like.
+    /// The node then takes the motion of the page it is on, which is the
+    /// transform its ancestor already carries.
+    fn paired_from(&mut self, ix: NodeIx) -> Option<[f32; 4]> {
+        let key = self.session.node(ix)?.key;
+        if key == 0 || !self.departed_keys.contains(&key) {
+            return None;
+        }
+        let was = *self.paired_boxes.get(&key)?;
+        self.ensure_layout();
+        let now = self.layout.rect(ix)?;
+        if now.w <= 0.0 || now.h <= 0.0 || was.w <= 0.0 || was.h <= 0.0 {
+            return None;
+        }
+        Some([was.x - now.x, was.y - now.y, was.w / now.w, 1.0])
+    }
+
+    /// 03 §5.3: remember where every `paired` node stands, so that the node
+    /// arriving under its key on some later frame knows where to come from.
+    ///
+    /// Walked from the watch list rather than over the tree, and the watch
+    /// list is rebuilt only when the tree changes — so a tree with no
+    /// `paired` node in it pays for this exactly nothing.
+    fn note_paired_boxes(&mut self) {
+        if self.paired_watch.is_empty() {
+            return;
+        }
+        for ix in std::mem::take(&mut self.paired_watch) {
+            if let (Some(node), Some(r)) = (self.session.node(ix), self.layout.rect(ix)) {
+                if node.key != 0 {
+                    self.paired_boxes.insert(node.key, r);
+                }
+            }
+            self.paired_watch.push(ix);
+        }
+        // A key nobody wears any more is a key nothing can pair with.
+        // Without this the map is a leak with a person's navigation history
+        // in it, which on a long-lived window is unbounded.
+        if self.paired_boxes.len() > MAX_PAIRED_KEYS {
+            let live: Vec<u32> = self.paired_watch.iter().filter_map(|ix| self.session.node(*ix).map(|n| n.key)).collect();
+            self.paired_boxes.retain(|k, _| live.contains(k));
+        }
+    }
+
     fn note_entrances(&mut self) {
+        let mut pairs: u32 = 0;
         for ix in self.session.take_entrances() {
             if self.session.node(ix).is_none() {
                 continue;
@@ -2161,7 +2284,22 @@ impl Driver {
             // below, which is what a `fade` entrance has always been and
             // stays, byte for byte.
             if record.motion != eui_proto::Motion::Fade {
-                if let Some(from) = self.arriving_from(ix, record.motion) {
+                // 03 §5.3 first: a pair flies between two boxes, and only a
+                // node with no partner falls back to a direction. `pairs` is
+                // the bound §5.3 requires — past it a node is painted where
+                // the layout put it, which is the same answer §5 gives when
+                // a client runs out of room for a scroll in flight.
+                let paired = record.motion == eui_proto::Motion::Paired && pairs < MAX_PAIRS;
+                let from = if paired {
+                    let p = self.paired_from(ix);
+                    if p.is_some() {
+                        pairs = pairs.saturating_add(1);
+                    }
+                    p
+                } else {
+                    self.arriving_from(ix, record.motion)
+                };
+                if let Some(from) = from {
                     self.movers.retain(|(n, _)| *n != ix);
                     self.movers.push((ix, Move { from, to: [0.0, 0.0, 1.0, 1.0], start: self.now, duration: Duration::from_millis(u64::from(ms)), curve: 1, held: None }));
                     self.next_due = Some(self.now);
@@ -6942,6 +7080,9 @@ impl Driver {
         let mut settle_due = None;
         let resized = self.resize_events();
         self.pending.extend(resized);
+        // 03 §5.3: after the layout, so a node that pairs leaves behind the
+        // box it actually occupied on the frame it was last seen.
+        self.note_paired_boxes();
         if settled {
             let asked = self.window_events();
             self.pending.extend(asked);
@@ -7723,11 +7864,18 @@ impl Driver {
     /// the tree has changed under us, never per frame.
     fn rebuild_resize_watch(&mut self) {
         self.resize_watch.clear();
+        self.paired_watch.clear();
         self.resize_watch_stale = false;
         let Some(root) = self.session.root() else { return };
         for ix in self.session.preorder(root) {
             if self.session.handler(ix, EventKind::Resize).is_some() {
                 self.resize_watch.push(ix);
+            }
+            // 03 §5.3, in the same walk: a node that pairs has to have its
+            // box remembered every frame, and finding it here costs the
+            // second list nothing.
+            if self.session.node(ix).is_some_and(|n| n.key != 0) && self.session.style_of(ix).motion == eui_proto::Motion::Paired {
+                self.paired_watch.push(ix);
             }
         }
     }

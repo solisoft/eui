@@ -200,6 +200,99 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    /// Does this payload have the shape 06 §1 declares for this kind?
+    ///
+    /// §4 asks a server to check three things about an event — that the node
+    /// exists, that it carries a handler of this kind, and that **the
+    /// payload has the shape in §1** — and named where each is enforced. The
+    /// third was the one nothing did: a `click` carrying a string, a null,
+    /// or a thousand-element list reached an application's handler exactly
+    /// as a pair of coordinates would, and what happened next was the
+    /// application's problem.
+    ///
+    /// It lives here rather than in a server because it is a fact about the
+    /// wire format and there are seven servers. Six of them are separate
+    /// ports of this crate; the one in this workspace can call it.
+    ///
+    /// **Integers are accepted where §1 asks for a float.** A coordinate of
+    /// exactly zero is `Int(0)` to any encoder that writes the narrowest
+    /// form of a number, and refusing that would refuse the top-left corner
+    /// of every node. The reverse is not true: a float where an integer is
+    /// asked for is a fractional button, slot or row index, none of which
+    /// means anything.
+    #[must_use]
+    pub fn payload_fits(self, payload: &Value) -> bool {
+        fn num(v: &Value) -> bool {
+            matches!(v, Value::Float(_) | Value::Int(_))
+        }
+        fn int(v: &Value) -> bool {
+            matches!(v, Value::Int(_))
+        }
+        fn text(v: &Value) -> bool {
+            // An atom is a string the session already interned, and §1 does
+            // not distinguish: a client that has the atom may send it.
+            matches!(v, Value::Str(_) | Value::Atom(_))
+        }
+        // Slice patterns rather than an index: this crate denies
+        // `indexing_slicing` precisely so that a length checked on one line
+        // and relied on three lines later cannot drift apart.
+        let items: &[Value] = match payload {
+            Value::List(v) => v,
+            _ => &[],
+        };
+        match self {
+            // `Null`, and nothing else. A payload on one of these is a peer
+            // saying something the protocol has no room for.
+            Self::PointerEnter | Self::PointerLeave | Self::Focus | Self::Blur | Self::Submit | Self::Ended | Self::Wake | Self::Back => matches!(payload, Value::Null),
+
+            // `List[Float x, Float y]`, and `List[Float w, Float h]` for a
+            // resize: the same shape, a different meaning.
+            Self::Click | Self::DoubleClick | Self::PointerMove | Self::ContextMenu | Self::LongPress | Self::Resize => matches!(items, [a, b] if num(a) && num(b)),
+
+            // `List[Float x, Float y, Int button]`, and the same three with
+            // a slot in place of the button for a drag.
+            Self::PointerDown | Self::PointerUp | Self::DragStart | Self::DragOver | Self::Drop => matches!(items, [a, b, c] if num(a) && num(b) && int(c)),
+
+            // `List[Str key, Int modifiers]`.
+            Self::KeyDown | Self::KeyUp => matches!(items, [a, b] if text(a) && int(b)),
+
+            // `Str`.
+            Self::TextInput | Self::FileSave => text(payload),
+
+            // §1: a `Str` for an editable node, an `Int` for a track, or
+            // `List[Int lo, Int hi]` for one with two handles.
+            Self::Change => text(payload) || int(payload) || matches!(items, [a, b] if int(a) && int(b)),
+
+            // `List[Int x, Int y]`, `List[Int first, Int last]`, and the two
+            // other pairs of integers §1 declares.
+            Self::Scroll | Self::Window | Self::TimeUpdate | Self::Level => matches!(items, [a, b] if int(a) && int(b)),
+
+            // `List[Float latitude, Float longitude, Float accuracy_m]`.
+            Self::Location => matches!(items, [a, b, c] if num(a) && num(b) && num(c)),
+
+            // `List[Int upload, Str name, Int size]`.
+            Self::FilePick => matches!(items, [a, b, c] if int(a) && text(b) && int(c)),
+
+            // `List[Bool over]`.
+            Self::FileDrag => matches!(items, [Value::Bool(_)]),
+
+            // `List[Str uid, List[List[Str kind, Str payload]]]`. The
+            // records are walked: a tag is the one payload here that a
+            // reader hands straight to an application, and "a list" is not
+            // the shape §1 wrote down.
+            Self::NfcTag => match items {
+                [uid, Value::List(records)] => {
+                    text(uid)
+                        && records.iter().all(|r| match r {
+                            Value::List(fields) => matches!(fields.as_slice(), [k, v] if text(k) && text(v)),
+                            _ => false,
+                        })
+                }
+                _ => false,
+            },
+        }
+    }
+
     /// Decode from the wire.
     pub const fn from_u8(v: u8) -> Result<Self> {
         match v {

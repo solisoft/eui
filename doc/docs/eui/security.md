@@ -107,7 +107,7 @@ not granting `scene` at all — which is exactly why it is a capability.
 - The decode path is clean under `clippy` with `indexing_slicing`, `panic`,
   `unwrap_used`, `expect_used` and `arithmetic_side_effects` denied. It cannot
   panic by construction, not merely by inspection.
-- 62 rejection cases, plus bulk tests that push 40 000 random and
+- 64 rejection cases, plus bulk tests that push 40 000 random and
   bit-flipped buffers through every entry point and require that none panic.
 - `eui-tree` applies the same discipline one layer up: a batch whose ops are
   well-formed but incoherent — an undefined atom, a duplicate node id, a

@@ -4099,3 +4099,92 @@ fn a_node_hears_its_own_box_change_size_and_not_its_position() {
     // And once: the same box painted again is not a second event.
     assert!(sizes(&mut d).is_empty(), "reported once, not per frame");
 }
+
+/// 03 §5.3: a node arriving under the key one that just left was wearing
+/// flies **between their two boxes** instead of coming from a direction.
+///
+/// The section is a full page of normative text, `motion_kind` 6 has had a
+/// style byte since the format did, and the Soli server maps the word
+/// `paired` — and both sites in this client that could have moved such a
+/// node returned `None`. A view that asked for it got no motion and no
+/// diagnostic, which is the worst of the three possible answers.
+#[test]
+fn a_paired_node_flies_from_the_box_its_partner_had() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+
+    let paired = |w: u16, h: u16| StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(w),
+        height: Dim::Px(h),
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Paired,
+        transition: 2,
+        ..Default::default()
+    };
+    // A wide thumbnail at the top, and the tall pane it opens into. Both
+    // wear key 7: as far as §5.3 is concerned they are one thing.
+    let ops = vec![Op::DefStyle { id: 3, record: paired(120, 30) }, Op::DefStyle { id: 4, record: paired(60, 90) }];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+
+    let mut small = Subtree::default();
+    small.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 3, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::InsertChild { parent: 1, index: 0, subtree: small }] }));
+    // The frame that puts it on screen is the frame its box is remembered on.
+    let list = d.paint(400, 300);
+    let was = *list.quads.iter().find(|q| q.rect[2] == 120.0 && q.rect[3] == 30.0).expect("the thumbnail");
+
+    // It goes, and a differently shaped node under the same key takes its
+    // place — a `Replace`, which is one release and one graft.
+    let mut big = Subtree::default();
+    big.nodes.push(FlatNode { kind: NodeKind::Box, id: 10, style: 4, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::Replace { node: 9, subtree: big }] }));
+    assert!(d.animating(), "the graft started an entrance");
+
+    let list = d.paint(400, 300);
+    let quad = *list.quads.iter().find(|q| q.rect[2] == 60.0 && q.rect[3] == 90.0).expect("the pane");
+    let slot = (quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_ne!(slot, 0, "the pane is on the move");
+    let x = list.xforms[slot as usize - 1];
+
+    // It starts where its partner was and ends where the layout put it. The
+    // thumbnail was at the same origin here, so the offset is zero — what
+    // proves the pairing is the *scale*, which no other motion produces.
+    assert_eq!((x.from[0], x.to[0]), (was.rect[0] - quad.rect[0], 0.0), "from the box it had");
+    assert_eq!((x.from[1], x.to[1]), (was.rect[1] - quad.rect[1], 0.0));
+    assert_eq!(x.from[2], 120.0 / 60.0, "at its partner's width, growing to its own");
+    assert_eq!(x.to[2], 1.0);
+    assert_eq!(x.from[3], 1.0, "and it never fades: the element arrives, it does not appear");
+    assert_eq!(x.to[3], 1.0);
+}
+
+/// §5.3: "a `paired` node whose partner is missing is **not an error and
+/// MUST NOT refuse the batch**." A panel is built and torn down as it opens,
+/// so a key that resolves to nothing is the ordinary case.
+#[test]
+fn a_paired_node_with_no_partner_is_not_an_error() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+    let lonely = StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(50),
+        height: Dim::Px(50),
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        animation: eui_proto::ANIMATION_ENTER,
+        motion: eui_proto::Motion::Paired,
+        transition: 2,
+        ..Default::default()
+    };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 3, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let out = d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 3, record: lonely }, Op::InsertChild { parent: 1, index: 0, subtree: tree }] }));
+    assert_eq!(out, vec![Frame::Ack { seq: 2 }], "accepted, not refused: {out:?}");
+
+    // Drawn where the layout put it, carrying no transform of its own.
+    let list = d.paint(400, 300);
+    let quad = *list.quads.iter().find(|q| q.rect[2] == 50.0 && q.rect[3] == 50.0).expect("the node");
+    assert_eq!((quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT, 0);
+}
