@@ -355,3 +355,48 @@ fn a_printable_character_is_never_withheld() {
     type_it(&mut d, ",");
     assert_eq!(typed(&d), ",", "the comma landed in the field regardless");
 }
+
+/// 03 §3.1's tab clause. Node 2 declares `typing` and holds the key handler,
+/// so it is the node that means the tab character by `Tab`; the page around
+/// it keeps the client's order.
+fn typing_page(keyed: bool) -> Batch {
+    page(vec![(2, vec![(1, Value::Bool(true))])], &["typing"], keyed.then_some(2))
+}
+
+#[test]
+fn a_typing_node_is_sent_both_tabs_and_keeps_the_focus() {
+    let mut d = driver(typing_page(true));
+    tab(&mut d);
+    let held = d.focused();
+    assert_eq!(held, d.session().lookup(2), "the typing node has the caret");
+
+    let out = d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true });
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "Tab is the node's");
+    assert_eq!(d.focused(), held, "and focus did not move");
+
+    let out = d.input(Input::Key { key: "Tab".into(), modifiers: 1, down: true });
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "Shift+Tab too");
+    assert_eq!(d.focused(), held, "still where it was");
+}
+
+#[test]
+fn ctrl_shift_tab_is_the_way_out_and_the_node_cannot_take_it() {
+    let mut d = driver(typing_page(true));
+    tab(&mut d);
+    let held = d.focused();
+    // Modifiers: 1 shift, 2 control (06 §1).
+    let out = d.input(Input::Key { key: "Tab".into(), modifiers: 3, down: true });
+    assert!(events(&out).is_empty(), "the one chord nothing may claim is never reported");
+    assert_ne!(d.focused(), held, "and it moves the focus out");
+}
+
+#[test]
+fn a_node_without_typing_still_has_tab_taken_from_under_it() {
+    // Same page, same handler, no `typing` prop: the order is the client's.
+    let mut d = driver(page(vec![], &[], Some(2)));
+    tab(&mut d);
+    let first = d.focused();
+    let out = d.input(Input::Key { key: "Tab".into(), modifiers: 0, down: true });
+    assert!(events(&out).is_empty(), "Tab is not reported to a node that did not declare typing");
+    assert_ne!(d.focused(), first, "it moved on");
+}

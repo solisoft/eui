@@ -6491,9 +6491,22 @@ impl Driver {
     }
 
     fn key(&mut self, key: &str, modifiers: u32, down: bool) -> Vec<Frame> {
-        // Navigation keys belong to the client and are never reported.
+        // Navigation keys belong to the client and are never reported —
+        // except that `Tab` and `Shift+Tab` belong to a focused node that
+        // declared `typing` (03 §3.1). A terminal means the tab character by
+        // `Tab`, and the node that already said it takes typed text without
+        // being a field is the one that means it.
+        //
+        // `Ctrl+Shift+Tab` is the way out and nothing may take it: it moves
+        // focus backwards whatever the tree says, which is what keeps a
+        // surface that holds both tabs from stranding anyone in it.
         if key == "Tab" {
-            return if down { self.move_focus(modifiers & 1 != 0) } else { Vec::new() };
+            let shift = modifiers & 1 != 0;
+            let ctrl = modifiers & 2 != 0;
+            let held = !(ctrl && shift) && self.focused.is_some_and(|f| self.takes_typing(f));
+            if !held {
+                return if down { self.move_focus(shift) } else { Vec::new() };
+            }
         }
         // Spec 03 §3: the scrolling keys belong to the client only while
         // nothing that wants keys has focus. A field has them; so does a

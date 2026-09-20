@@ -220,6 +220,12 @@ notification in one batch is a decode error and four are not.
 
 ### 7.1 Keyboard — `crates/eui-client/tests/keyboard.rs`
 
+§3.1's tab clause: a focused node carrying `typing` receiving `Tab` and
+`Shift+Tab` as keys with focus left where it was, a node without the prop
+still having both moved out from under it, and `Ctrl+Shift+Tab` moving focus
+backwards past a node that carries `typing` and claims every key it can —
+the one chord a surface may not take.
+
 §3.1: `Escape` reaching a handler on the path and leaving focus alone, and
 still only blurring when nothing asked for it; `modal` keeping `Tab` inside a
 subtree, nesting so the innermost wins, and leaving an unmodal page alone;

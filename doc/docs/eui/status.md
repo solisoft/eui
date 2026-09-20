@@ -643,7 +643,11 @@ columns; neither needed a byte of client.
 
 **Keyboard focus, and the widgets that needed it.** The client walks `Tab`
 order itself — editable fields and anything with a `click` handler, in
-document order — draws the focus ring for keyboard and server focus only,
+document order, with the one exception 03 §3.1 now carves out: a focused
+node carrying `typing` is *sent* `Tab` and `Shift+Tab` instead, because a
+terminal or a code editor means the tab character by them, and
+`Ctrl+Shift+Tab` is the one chord nothing may claim so there is always a way
+out. It draws the focus ring for keyboard and server focus only,
 turns `Enter` and `Space` on a focused button into the `click` they stand
 for, and drops focus on `Escape`. On top of that the catalogue gained
 `select` (a dropdown the server opens and closes), `slider` (drag or click to
@@ -1024,8 +1028,9 @@ which is the check that can run without a screen reader — the todo's rows
 now read `CheckBox "Write the spec" checked=Yes` and
 `Button "Remove Write the spec"`, where the second used to be `Button "×"`.
 
-**What a server cannot do for itself.** It does not own `Tab`. It was never
-told about `Escape` — the client handled the key and returned before anything
+**What a server cannot do for itself.** It does not own `Tab` — save by
+declaring `typing`, which is a node saying it is the sort of surface that
+means the character. It was never told about `Escape` — the client handled the key and returned before anything
 was reported. And it cannot know which node the client will treat as pressed.
 So no dialog in the catalogue could trap focus, open with focus inside it, or
 close on the key every dialog closes on, and no amount of server-side work

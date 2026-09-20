@@ -609,9 +609,22 @@ nothing on the path asked, `Escape` drops focus, which is what it has always
 done. The editing rules above do not touch it — a panel that closes on
 `Escape` hears it with the caret still in the field below.
 
-`Tab` is never any of this. It moves focus, always, and a node cannot ask for
-it: the order is the client's (§3) and a surface that could take `Tab` could
+`Tab` moves focus, and one kind of node takes it instead: a focused node
+carrying **`typing`** is sent `Tab` and `Shift+Tab` as keys, and the client
+does not move focus for either. Nothing else may ask. A terminal, a code
+editor and a form-filling canvas all mean the tab character by `Tab`, and a
+node that has already declared it takes typed text without being a field
+(§3.1) is exactly the node that means it; every other surface keeps the
+client's order, because a surface that could take `Tab` on a whim could
 strand someone in it.
+
+**`Ctrl+Shift+Tab` is the way out, and nothing may claim it.** A client MUST
+move focus backwards on it, whatever `typing` and `keys` say, and MUST NOT
+report it. That is what keeps the paragraph above honest: a node may hold
+both tabs, and there is still one chord that leaves. It is chosen because a
+terminal has no byte for it — the sequence a tty receives for `Tab` is
+`0x09` and for `Shift+Tab` is `ESC [ Z`, and neither has a control-shifted
+form — so nothing is taken from the surface that wanted the other two.
 
 ### 3.2 What a node may claim of the filesystem
 
