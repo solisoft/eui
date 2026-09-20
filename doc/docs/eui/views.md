@@ -46,7 +46,7 @@ end
 ```
 
 `column`, `row`, `text`, `button` and the rest are ordinary Soli functions in
-`app/controllers/eui_builders.sl` and its three companions — all 343 of them
+`app/controllers/eui_builders.sl` and its four companions — all 491 of them
 are listed, with their signatures, in [Components](/docs/components). Each returns a hash:
 
 ```

@@ -945,6 +945,43 @@ fn a_held_transform_takes_its_fraction_from_the_hand() {
     }
 }
 
+/// 03 §5.3: a transform's offset moves the subtree's **centre**, and its
+/// scale is taken about the pivot the painter hands in — the node's own box
+/// centre. The two compose in that order, which is the whole of what a
+/// shared element is made of.
+///
+/// Every other vector here scales by 1, so this is the only one that can
+/// tell a centre convention from a corner one. The client used to hand this
+/// slot the delta between the two corners, and the element then started half
+/// the size difference away from the box it was supposed to fly out of.
+#[test]
+fn an_offset_and_a_scale_compose_about_the_pivot() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, mut list) = spinning_bar();
+    let slot = (1u32 << XFORM_SHIFT) as f32;
+    // A 40x20 bar at (30, 40): its centre, and so its pivot, is (50, 50).
+    list.quads = vec![Quad { rect: [30.0, 40.0, 40.0, 20.0], params: [0.0, 0.0, slot, 1.0], fill: [1.0, 1.0, 1.0, 1.0], ..Quad::default() }];
+    list.runs = vec![eui_render::Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }];
+    list.clips = vec![[0, 0, 100, 100]];
+    list.clear = [0.0, 0.0, 0.0, 1.0];
+    list.wants_frame = false;
+    // Twice the size, centred 10 px higher: 40 tall about y = 40, so rows 20
+    // to 59. A corner convention would put it at rows 30 to 69 instead.
+    list.xforms = vec![Xform { from: [0.0, -10.0, 2.0, 1.0], to: [0.0, 0.0, 1.0, 1.0], clock: [0.0, 1.0, 0.0, 0.0], pivot: [50.0, 50.0, 0.0, 0.0] }];
+    let target = r.offscreen(100, 100);
+    let mut span = |r: &mut Renderer, st: &mut SessionTextures, age: f32| -> (usize, usize) {
+        r.render_offscreen_at(st, &target, 0.0, age, &list, &mut fx.atlas, &mut fx.images);
+        let px = r.read_back(&target).unwrap();
+        let ink: Vec<usize> = (0..100).filter(|y| px[(y * 100 + 50) * 4] > 128).collect();
+        (*ink.first().expect("ink"), *ink.last().expect("ink"))
+    };
+    let (top, bottom) = span(&mut r, &mut st, 0.0);
+    assert!(top.abs_diff(20) <= 1 && bottom.abs_diff(59) <= 1, "scaled about the pivot and moved by the offset: {top}..{bottom}, wanted 20..59");
+    let (top, bottom) = span(&mut r, &mut st, 2.0);
+    assert!(top.abs_diff(40) <= 1 && bottom.abs_diff(59) <= 1, "past the end, where the layout put it: {top}..{bottom}, wanted 40..59");
+}
+
 /// 03 §5: a page slides as a layer, not as a list of moved quads. The window
 /// draws the list it already had, one `render` later, with four floats
 /// different — so a transition frame walks no tree, paints no quad and sends

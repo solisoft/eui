@@ -286,23 +286,54 @@ slid while its rows did not would read as a tear rather than as a page.
 ### 5.3 Pairing
 
 `motion_kind` `6` `paired`, on a node carrying a `key`, on **both** sides of a
-change: the node leaving and the node arriving fly between their two boxes
-rather than each going the way its page goes.
+change: the node **arriving** flies out of the box the node leaving under the
+same key had, rather than going the way its page goes.
+
+The arriving one, and not both. A shared element is one thing seen twice, and
+drawing it twice at once is the thing itself coming apart: the one that leaves
+is simply gone, and what a person follows is the one that is still there. This
+also costs nothing to say — the page's own departure (§5.1) is one kept
+painting and the element rides out inside it, or the page is not animating and
+there is nothing to ride.
+
+**Both ends are a rectangle, and the rectangle it starts on is its partner's.**
+A client MUST put the arriving node's **centre** on the centre its partner's
+box had, at its partner's **width**, and take it from there to where the
+layout put it. One scale and not two, because a pair is a thing travelling and
+not a thing being stretched, and the two boxes of a shared element are near
+enough in shape that one number reads correctly — but the point the two boxes
+are matched at has to be said, because a client that matched their corners
+instead would put the element out by half the difference in their sizes, which
+is every pair there is.
 
 Nothing is laid out per frame to do it. The arriving node was laid out for
-this frame, and the leaving node's box is frozen by §5.1 — both rectangles are
-known before the first frame of the movement, so the pair is one
-interpolation resolved once, which is the same bargain §5 strikes for a
+this frame, and the leaving node's box is the one it was last painted at —
+both rectangles are known before the first frame of the movement, so the pair
+is one interpolation resolved once, which is the same bargain §5 strikes for a
 colour and 04 §7 strikes for a scroll.
+
+**A key pairs wherever it sits.** The node that left is very often not the
+node the change names: a page swap removes the page, and the thumbnail the
+panel grows out of was somewhere inside it. A client MUST therefore recognise
+a departure by the key having gone, and not only by the released node being
+the one that wore it — a rule that costs it nothing, since a node that was
+never painted has no box to fly from and could not have paired anyway.
+
+Two nodes are a pair for one change and no longer, exactly as §5.2's push and
+pop are: a box is a partner's until a frame is painted without it.
 
 A `paired` node whose partner is missing is **not an error and MUST NOT
 refuse the batch**: it falls back to the motion of the page it is on. A
 panel is built and torn down as it opens, so a name that does not resolve is
-the ordinary case and not a broken one.
+the ordinary case and not a broken one. It is also, for the same reason, the
+one thing here nothing can diagnose for an author — a key spelt two ways is a
+page where nothing moves and nothing complains — so a client SHOULD have some
+way of saying which pairs it resolved and which it did not.
 
-A client MUST bound the number of pairs it resolves in one change, and a
-client that cannot resolve a pair paints the node where the layout put it —
-the same answer it gives when it runs out of room for a scroll in flight.
+A client MUST bound the number of pairs it resolves in one change — 10
+§"Going somewhere" names eight — and a client that cannot resolve a pair
+paints the node where the layout put it, the same answer it gives when it
+runs out of room for a scroll in flight.
 
 A record's `animation` bit `1` is **spin**: a
 node wearing it turns about its own centre, one revolution every 1.2 s,

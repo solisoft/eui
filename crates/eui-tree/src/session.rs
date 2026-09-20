@@ -569,17 +569,6 @@ impl Session {
         std::mem::take(&mut self.exits)
     }
 
-    /// The same list, borrowed rather than taken.
-    ///
-    /// A client resolves 03 §5.3's pairing while applying a batch — the
-    /// arrival and the departure are one change and it has to see both — and
-    /// resolves the *page* animation of §5.1 at paint, where the painting of
-    /// the departing subtree still exists. Two readers, one of which must
-    /// not consume.
-    pub fn exits(&self) -> &[(u32, eui_proto::Motion, u32)] {
-        &self.exits
-    }
-
     /// Record a subtree about to be released, if its root asked to leave.
     ///
     /// Only the root. A page is one node as far as leaving is concerned, and

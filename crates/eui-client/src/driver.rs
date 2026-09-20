@@ -413,10 +413,15 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 ///
 /// The section requires a bound and does not name one, for the same reason
 /// it does not name a duration: what matters is that a tree cannot make a
-/// client do unbounded work by wearing one style. Sixteen is more shared
-/// elements than any change a person can follow, and a seventeenth is
-/// painted where the layout put it rather than refused.
-const MAX_PAIRS: u32 = 16;
+/// client do unbounded work by wearing one style. 10 §"Going somewhere"
+/// names eight, and eight is what this is — it was sixteen, which the
+/// painter could not have delivered: a quad's transform slot is four bits
+/// (`eui_render::MAX_XFORMS` is 15) and the arriving and departing pages
+/// take one each, so a seventeenth pair had nowhere to go even before the
+/// count reached it. Eight is more shared elements than any change a person
+/// can follow, and a ninth is painted where the layout put it rather than
+/// refused.
+const MAX_PAIRS: u32 = 8;
 
 /// How many keys' boxes are kept before the map is swept of keys nothing
 /// wears any more. A window left open for a day would otherwise hold a
@@ -1312,18 +1317,25 @@ pub struct Driver {
     /// makes the first frame of a page quiet.
     sizes: HashMap<u32, (f32, f32)>,
     /// 03 §5.3: where each `paired` node was laid out last frame, by its
-    /// **key**. A node arriving under a key that just left flies from the
-    /// box in here rather than from a direction.
+    /// **key**, and which node that was. A node arriving under a key that
+    /// just left flies from the box in here rather than from a direction.
     ///
     /// By key and not by id: the whole point is that the arriving node is a
-    /// different node. Recorded each frame for the nodes that wear the
-    /// motion, which is the same bargain `resize` strikes — nothing is paid
-    /// by a tree that has none.
-    paired_boxes: HashMap<u32, Rect>,
+    /// different node. The id is carried alongside so that the *departure*
+    /// can be recognised — a key whose node the tree no longer has is a key
+    /// that left, wherever in the released subtree it sat. Recorded each
+    /// frame for the nodes that wear the motion, which is the same bargain
+    /// `resize` strikes — nothing is paid by a tree that has none.
+    ///
+    /// Keyed by `(owner, key)`. A key is an atom id and 01 §2.7 gives an
+    /// island its own atom table, so atom 7 on the page and atom 7 in an
+    /// island are different names wearing the same number; a bare key would
+    /// let a page's shared element pair with an island's.
+    paired_boxes: HashMap<(u16, u32), (u32, Rect)>,
     /// The keys that left in the change being resolved, so an arrival pairs
     /// only with a departure and never with a node still standing somewhere
     /// else in the tree under the same key.
-    departed_keys: Vec<u32>,
+    departed_keys: Vec<(u16, u32)>,
     /// Which nodes wear `paired` and carry a key. Rebuilt with the `resize`
     /// watch below and for the same reason.
     paired_watch: Vec<NodeIx>,
@@ -2270,17 +2282,29 @@ impl Driver {
     /// has to name a direction, and a server never has to decide one.
     /// 03 §5.3: which keys left in the change just applied.
     ///
-    /// Read from the session rather than taken, and read **before**
-    /// `note_entrances`, because a pair is one change seen from both ends
-    /// and the arrival is resolved while the batch is being applied. The
-    /// *page* animation of §5.1 is resolved at paint instead, where the
-    /// painting of the departing subtree still exists — so the two readers
-    /// of this list run at different moments and only the later one
-    /// consumes it.
+    /// Read from the box map and **not** from the session's exit list, which
+    /// is the difference between a mechanism that works and one that only
+    /// looks as though it does. A release notes its **root** alone
+    /// (`Session::note_exit`, and deliberately: walking the subtree would
+    /// hand a client a hundred thousand ids to throw away), and a server's
+    /// diff matches keys among siblings — so a page swap names the page and
+    /// nothing inside it. The thumbnail a panel grows out of is never the
+    /// node the change names, and pairing off the exit list therefore fired
+    /// for a shared element that *was* the page and for nothing else.
+    ///
+    /// A key whose recorded node the tree no longer holds is a key that
+    /// left, wherever it sat. The map has at most `MAX_PAIRED_KEYS` entries
+    /// and the lookup is a hash, so this is a bounded cost per change rather
+    /// than a walk — and a node that never painted has no box here and could
+    /// not have paired anyway, so nothing is lost with the exit list.
+    ///
+    /// Called **before** `note_entrances`, because a pair is one change seen
+    /// from both ends and the arrival is resolved while the batch is being
+    /// applied.
     fn note_departed_keys(&mut self) {
         self.departed_keys.clear();
-        let keys: Vec<u32> = self.session.exits().iter().filter(|(_, m, k)| *k != 0 && *m == eui_proto::Motion::Paired).map(|(_, _, k)| *k).collect();
-        self.departed_keys.extend(keys);
+        let gone: Vec<(u16, u32)> = self.paired_boxes.iter().filter(|((owner, _), (id, _))| self.session.lookup_in(*owner, *id).is_none()).map(|(k, _)| *k).collect();
+        self.departed_keys.extend(gone);
     }
 
     fn note_exits(&mut self) {
@@ -2407,23 +2431,48 @@ impl Driver {
     /// shape that one number reads correctly. The opacity stays at 1 at
     /// both ends — the element does not appear, it arrives.
     ///
+    /// **The offset is between the two centres and not the two corners.**
+    /// The vertex stage has one pivot and it is the arriving node's own
+    /// centre — 03 §5.2's `scale` is "92 % about the node's own centre", and
+    /// a page slides about it too. A corner delta composed with a scale
+    /// therefore lands the element half the size difference away from where
+    /// its partner stood, and `paired` is the only motion that carries an
+    /// offset *and* a scale, which is how a corner delta stood here looking
+    /// right: every other caller of this slot scales by 1.
+    ///
     /// `None` when there is no partner, which §5.3 says explicitly is the
     /// ordinary case and not an error: a panel is built and torn down as it
     /// opens, so a key that does not resolve is what most frames look like.
     /// The node then takes the motion of the page it is on, which is the
     /// transform its ancestor already carries.
     fn paired_from(&mut self, ix: NodeIx) -> Option<[f32; 4]> {
-        let key = self.session.node(ix)?.key;
-        if key == 0 || !self.departed_keys.contains(&key) {
+        let node = self.session.node(ix)?;
+        let (owner, key) = (node.owner, node.key);
+        if key == 0 {
             return None;
         }
-        let was = *self.paired_boxes.get(&key)?;
+        // Every way out of here but the last is silent by design — §5.3
+        // makes an unresolved pair the ordinary case — which also means a
+        // shared element that does not move says nothing about why. This is
+        // the line that tells the two apart.
+        if !self.departed_keys.contains(&(owner, key)) {
+            trace(|| format!("pair {:?}: nothing left under it", self.session.atom(key).unwrap_or("?")));
+            return None;
+        }
+        let Some((_, was)) = self.paired_boxes.get(&(owner, key)).copied() else {
+            trace(|| format!("pair {:?}: it left, but was never painted", self.session.atom(key).unwrap_or("?")));
+            return None;
+        };
         self.ensure_layout();
         let now = self.layout.rect(ix)?;
         if now.w <= 0.0 || now.h <= 0.0 || was.w <= 0.0 || was.h <= 0.0 {
+            trace(|| format!("pair {:?}: an empty box on one side", self.session.atom(key).unwrap_or("?")));
             return None;
         }
-        Some([was.x - now.x, was.y - now.y, was.w / now.w, 1.0])
+        let dx = (was.x + was.w / 2.0) - (now.x + now.w / 2.0);
+        let dy = (was.y + was.h / 2.0) - (now.y + now.h / 2.0);
+        trace(|| format!("pair {:?}: {:.0},{:.0} {:.0}x{:.0} -> {:.0},{:.0} {:.0}x{:.0}", self.session.atom(key).unwrap_or("?"), was.x, was.y, was.w, was.h, now.x, now.y, now.w, now.h));
+        Some([dx, dy, was.w / now.w, 1.0])
     }
 
     /// 03 §5.3: remember where every `paired` node stands, so that the node
@@ -2433,13 +2482,20 @@ impl Driver {
     /// list is rebuilt only when the tree changes — so a tree with no
     /// `paired` node in it pays for this exactly nothing.
     fn note_paired_boxes(&mut self) {
+        // A box whose node has gone is spent: 03 §5.2 makes two nodes a pair
+        // when one is released and one is grafted "with no paint between
+        // them", and this is that paint. Pruned before the recording below,
+        // so a node arriving under the key keeps the box rather than the id
+        // that is on its way out. Without it a key that left three screens
+        // ago would still hand its rectangle to whatever wore the name next.
+        self.paired_boxes.retain(|(owner, _), (id, _)| self.session.lookup_in(*owner, *id).is_some());
         if self.paired_watch.is_empty() {
             return;
         }
         for ix in std::mem::take(&mut self.paired_watch) {
             if let (Some(node), Some(r)) = (self.session.node(ix), self.layout.rect(ix)) {
                 if node.key != 0 {
-                    self.paired_boxes.insert(node.key, r);
+                    self.paired_boxes.insert((node.owner, node.key), (node.id, r));
                 }
             }
             self.paired_watch.push(ix);
@@ -2448,7 +2504,7 @@ impl Driver {
         // Without this the map is a leak with a person's navigation history
         // in it, which on a long-lived window is unbounded.
         if self.paired_boxes.len() > MAX_PAIRED_KEYS {
-            let live: Vec<u32> = self.paired_watch.iter().filter_map(|ix| self.session.node(*ix).map(|n| n.key)).collect();
+            let live: Vec<(u16, u32)> = self.paired_watch.iter().filter_map(|ix| self.session.node(*ix).map(|n| (n.owner, n.key))).collect();
             self.paired_boxes.retain(|k, _| live.contains(k));
         }
     }

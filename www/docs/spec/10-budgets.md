@@ -202,7 +202,7 @@ and these are what stop that from being unbounded:
 | Limit | Value | Why |
 |---|---:|---|
 | Kept paintings per session | 1 | a second supersedes the first, so the memory is a constant and not a function of how fast a person can tap |
-| Pairs resolved per change | 8 | a shared element is a slot in a small fixed table, as a scroll in flight is |
+| Pairs resolved per change | 8 | a shared element is a slot in a small fixed table, as a scroll in flight is — and the table is four bits wide, with the arriving and departing pages holding a slot each |
 | Leading-edge strip | ~20 logical px | a bezel's width: wide enough to find without looking, narrow enough that what it takes from the application is an edge nobody puts a control against |
 
 What is kept is the quads and not the nodes, so the cost is what was on

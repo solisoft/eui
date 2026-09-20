@@ -4149,15 +4149,94 @@ fn a_paired_node_flies_from_the_box_its_partner_had() {
     assert_ne!(slot, 0, "the pane is on the move");
     let x = list.xforms[slot as usize - 1];
 
-    // It starts where its partner was and ends where the layout put it. The
-    // thumbnail was at the same origin here, so the offset is zero — what
-    // proves the pairing is the *scale*, which no other motion produces.
-    assert_eq!((x.from[0], x.to[0]), (was.rect[0] - quad.rect[0], 0.0), "from the box it had");
-    assert_eq!((x.from[1], x.to[1]), (was.rect[1] - quad.rect[1], 0.0));
+    // It starts on its partner's box and ends where the layout put it. The
+    // transform is applied about the arriving node's own centre, so the
+    // offset that lands it there is between the two *centres* — here the two
+    // boxes share an origin, so that is the half-difference of their sizes.
+    let centre = |r: [f32; 4]| (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    let (wx, wy) = centre(was.rect);
+    let (nx, ny) = centre(quad.rect);
+    assert_eq!((x.from[0], x.to[0]), (wx - nx, 0.0), "from the box it had");
+    assert_eq!((x.from[1], x.to[1]), (wy - ny, 0.0));
     assert_eq!(x.from[2], 120.0 / 60.0, "at its partner's width, growing to its own");
     assert_eq!(x.to[2], 1.0);
     assert_eq!(x.from[3], 1.0, "and it never fades: the element arrives, it does not appear");
     assert_eq!(x.to[3], 1.0);
+}
+
+/// §5.3: "a key pairs wherever it sits" — the shared element is almost never
+/// the node the change names.
+///
+/// A server's diff matches keys among siblings, so swapping one page for
+/// another is a `Replace` of the *page*; and a release notes only the root of
+/// what it let go, deliberately, because walking the subtree would hand a
+/// client a hundred thousand ids to throw away. A client that read departures
+/// off that list therefore paired a shared element that *was* the whole page
+/// and nothing else — which is to say, never: a thumbnail growing into a
+/// panel is a node inside the page, not the page.
+///
+/// The box map is the list that has the answer, and it already existed: a key
+/// whose recorded node the tree no longer holds is a key that left.
+#[test]
+fn a_pair_resolves_across_a_page_and_not_only_at_its_root() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+
+    let page = StyleRecord { display: Display::Column, width: Dim::Percent(10000), ..Default::default() };
+    let avatar = |w: u16, margin: [u8; 4]| StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(w),
+        height: Dim::Px(w),
+        margin,
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Paired,
+        transition: 2,
+        ..Default::default()
+    };
+    let ops = vec![Op::DefStyle { id: 3, record: page }, Op::DefStyle { id: 4, record: avatar(24, [0; 4]) }, Op::DefStyle { id: 5, record: avatar(36, [6, 0, 0, 6]) }];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+
+    // The list page, with the avatar buried in it. Neither page wears a
+    // motion of its own: the pages cut, and only the disc moves.
+    let mut list = Subtree::default();
+    list.nodes.push(FlatNode { kind: NodeKind::Box, id: 20, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    list.nodes.push(FlatNode { kind: NodeKind::Box, id: 21, style: 4, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::InsertChild { parent: 1, index: 0, subtree: list }] }));
+    let drawn = d.paint(400, 300);
+    let was = *drawn.quads.iter().find(|q| q.rect[2] == 24.0).expect("the row's disc");
+
+    // The whole page goes, and a different page arrives carrying the same
+    // name on a bigger disc somewhere else.
+    let mut detail = Subtree::default();
+    detail.nodes.push(FlatNode { kind: NodeKind::Box, id: 22, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    detail.nodes.push(FlatNode { kind: NodeKind::Box, id: 23, style: 5, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::Replace { node: 20, subtree: detail }] }));
+
+    let drawn = d.paint(400, 300);
+    let quad = *drawn.quads.iter().find(|q| q.rect[2] == 36.0).expect("the header's disc");
+    let slot = (quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_ne!(slot, 0, "the disc flew, though the page named nothing about it");
+    let x = drawn.xforms[slot as usize - 1];
+    let centre = |r: [f32; 4]| (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    let (wx, wy) = centre(was.rect);
+    let (nx, ny) = centre(quad.rect);
+    assert_eq!((x.from[0], x.from[1]), (wx - nx, wy - ny), "out of the box the row's disc had");
+    assert_eq!(x.from[2], 24.0 / 36.0, "at its partner's width");
+
+    // And it is one change wide: a frame painted with no partner in it spends
+    // the box, so the same name arriving later comes from nowhere.
+    let mut again = Subtree::default();
+    again.nodes.push(FlatNode { kind: NodeKind::Box, id: 24, style: 3, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 5, ops: vec![Op::Replace { node: 22, subtree: again }] }));
+    let _ = d.paint(400, 300);
+    let mut third = Subtree::default();
+    third.nodes.push(FlatNode { kind: NodeKind::Box, id: 25, style: 5, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 6, ops: vec![Op::InsertChild { parent: 1, index: 0, subtree: third }] }));
+    let drawn = d.paint(400, 300);
+    let quad = *drawn.quads.iter().find(|q| q.rect[2] == 36.0).expect("the disc again");
+    assert_eq!((quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT, 0, "a paint went by: there is nothing left to pair with");
 }
 
 /// §5.3: "a `paired` node whose partner is missing is **not an error and
@@ -4187,4 +4266,67 @@ fn a_paired_node_with_no_partner_is_not_an_error() {
     let list = d.paint(400, 300);
     let quad = *list.quads.iter().find(|q| q.rect[2] == 50.0 && q.rect[3] == 50.0).expect("the node");
     assert_eq!((quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT, 0);
+}
+
+/// §5.3 again, with the two boxes at different origins — which the vector
+/// above cannot show, because both of its nodes are the first child of the
+/// same parent and so start at the same corner.
+///
+/// That mattered: the offset used to be the delta between the two *corners*,
+/// and the vertex stage scales about the arriving node's own **centre**
+/// (05 §2's `scale` is "92 % about the node's own centre", and there is one
+/// pivot). Composed, those two put the element half the size difference away
+/// from where its partner stood — always, since a shared element that is the
+/// same size on both sides is not one. Every other motion scales by 1, so
+/// `paired` is the only place the two conventions could disagree, and with a
+/// shared origin and a shared size they agree by accident.
+#[test]
+fn a_paired_node_at_another_origin_starts_on_its_partners_centre() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+
+    let paired = |w: u16, h: u16, margin: [u8; 4]| StyleRecord {
+        display: Display::Stack,
+        width: Dim::Px(w),
+        height: Dim::Px(h),
+        margin,
+        bg: ColorRef::role(Role::SurfaceOverlay.id()),
+        animation: eui_proto::ANIMATION_ENTER | eui_proto::ANIMATION_EXIT,
+        motion: eui_proto::Motion::Paired,
+        transition: 2,
+        ..Default::default()
+    };
+    // A wide thumbnail against the corner, and a tall pane inset from it: the
+    // two boxes differ in origin and in size, as a real shared element does.
+    let ops = vec![Op::DefStyle { id: 3, record: paired(120, 30, [0; 4]) }, Op::DefStyle { id: 4, record: paired(60, 90, [6, 0, 0, 6]) }];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+
+    let mut small = Subtree::default();
+    small.nodes.push(FlatNode { kind: NodeKind::Box, id: 9, style: 3, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::InsertChild { parent: 1, index: 0, subtree: small }] }));
+    let list = d.paint(400, 300);
+    let was = *list.quads.iter().find(|q| q.rect[2] == 120.0 && q.rect[3] == 30.0).expect("the thumbnail");
+
+    let mut big = Subtree::default();
+    big.nodes.push(FlatNode { kind: NodeKind::Box, id: 10, style: 4, key: 7, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::Replace { node: 9, subtree: big }] }));
+
+    let list = d.paint(400, 300);
+    let quad = *list.quads.iter().find(|q| q.rect[2] == 60.0 && q.rect[3] == 90.0).expect("the pane");
+    let slot = (quad.params[2] as u32 & eui_render::XFORM_MASK) >> eui_render::XFORM_SHIFT;
+    assert_ne!(slot, 0, "the pane is on the move");
+    let x = list.xforms[slot as usize - 1];
+
+    assert_ne!(was.rect[0], quad.rect[0], "the vector is worthless if the two share an origin");
+    let centre = |r: [f32; 4]| (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    let (wx, wy) = centre(was.rect);
+    let (nx, ny) = centre(quad.rect);
+    // Scaled about its own centre by `from[2]` and moved by `from.xy`, the
+    // pane covers its partner's box: same centre, same width.
+    assert_eq!((x.from[0], x.from[1]), (wx - nx, wy - ny), "onto its partner's centre, not its corner");
+    assert_eq!(x.from[2] * quad.rect[2], was.rect[2], "and at its partner's width");
+    assert_eq!((x.to[0], x.to[1], x.to[2]), (0.0, 0.0, 1.0), "ending where the layout put it");
+    // The corner delta is what this used to be, and it is not this.
+    assert_ne!(x.from[0], was.rect[0] - quad.rect[0], "a corner delta would miss by half the size difference");
 }

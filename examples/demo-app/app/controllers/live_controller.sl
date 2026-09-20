@@ -2745,7 +2745,16 @@ def erp_customer_list(state, px)
         "bg": one["id"] == selected ? "info.subtle" : "none"
       },
       [
-        initial_avatar(one["initial"], one["tone"], 24),
+        # 03 §5.3. Narrow, the list and the detail are two pages of a stack,
+        # and this disc is the one thing on both of them: tapping the row
+        # flies it from here into the detail's header rather than replacing
+        # it with a bigger one somewhere else. Wide, the two are side by side
+        # and nothing ever leaves, so there is no pair to make — and two live
+        # nodes under one name is a name that means two things.
+        #
+        # On every row, because which row is about to be the one is not known
+        # until it is tapped.
+        px > 0 ? initial_avatar(one["initial"], one["tone"], 24) : shared_element("cust:" + one["id"], initial_avatar(one["initial"], one["tone"], 24)),
         column(
           {"gap": 0, "grow": 1},
           [text(one["name"], {"weight": "semibold", "size": 1}), muted(one["city"] + " · " + one["country"])]
@@ -2778,7 +2787,9 @@ def erp_customer_detail(state, lay, px)
           # so the page starts moving on the tap rather than after a round
           # trip — and then told to the server, which is what actually pops.
           px > 0 ? spacer_none() : back_button("nav_back"),
-          initial_avatar(one["initial"], one["tone"], 36),
+          # The other half of the pair the list row carries: same name, a
+          # disc half again as large, somewhere else entirely on the page.
+          px > 0 ? initial_avatar(one["initial"], one["tone"], 36) : shared_element("cust:" + one["id"], initial_avatar(one["initial"], one["tone"], 36)),
           column(
             {"gap": 0, "grow": 1},
             [text(one["name"], {"weight": "bold", "size": 3}), muted(one["owner"] + " · since " + one["since"])]

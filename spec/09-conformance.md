@@ -175,6 +175,24 @@ appears. A `paired` node whose key resolves to nothing is **accepted**, as
 §5.3 requires in as many words, and drawn where the layout put it carrying
 no transform of its own.
 
+Two more, because the first of those vectors put both of its nodes at the
+same origin and so could not tell a **centre** from a **corner**: a pair
+whose two boxes differ in origin *and* in size starts with its centre on its
+partner's centre, which is not where a corner delta would have put it — off
+by half the difference in their sizes, and the two agree only when there is
+no difference, which is when there is no pair. The composition itself is
+pinned a layer down, in `crates/eui-render/tests/render.rs`: an offset and a
+scale taken about the same pivot, the only vector in that file that scales by
+anything but one, and the reason the arithmetic above has a right answer to
+be wrong about.
+
+And pairing across a page, which is what the section is for: a key that left
+inside a released subtree pairs, not only one that was the released node
+itself. A server's diff names the page and a release notes its root, so a
+client that read departures off that list alone paired a shared element that
+*was* the page and nothing else — passing every vector above while the
+feature did not work.
+
 Sound reports on one clock and says nothing about the machine: `level` and
 `time_update` are emitted on the same tick and neither twice in it; a
 `level` reaches only a node that holds a handler for one; a meter that has
@@ -268,6 +286,19 @@ resume taking the tree, the tables and the acked sequence with it; a
 already applied being acked again and **not applied again**. The last drops
 a real socket mid-session and opens another: the tree is still standing, the
 count is where it was, and the session goes on.
+
+**The server's half** — `lang/src/serve/eui/mod.rs`, five vectors, since
+2026-09-20. A resumed session is owed the batches after the one it
+acknowledged and not the tree. A handle alone opens nothing: the same bytes
+with another cookie, or naming another component, or a handle nobody minted,
+all resume nothing — §4.1 makes the handle a bearer, and a bearer that needs
+no other evidence is sixteen bytes standing between a reader and somebody
+else's data. A session whose socket is still attached is not picked up, or
+two live sockets would both be told they own its tree. A client that fell
+further behind than the replay reaches is **refused rather than half-filled**:
+told it was resumed and handed a tree with a hole in it, nothing would say so.
+And an `Ack` drops what it names, or the buffer would hold the last
+sixty-four batches of every session that ever ran.
 
 ### 7.6 Touch — `crates/eui-client/tests/touch.rs`
 

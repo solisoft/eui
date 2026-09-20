@@ -305,6 +305,25 @@ a live server: 4 799 B fetched over HTTPS, the socket answers
 the six language SDKs need no change, because they negotiate `min(client,
 ours)` and can only receive the offer if they serve §2.4, which none do.
 
+**Session resume on the Soli side** (01 §4.1) is built, as of 2026-09-20.
+`lang/src/serve/eui/` answered `Start::Fresh` on every reconnect, so a dropped
+wifi hop was a fresh mount and the reader went back to the top with nothing
+focused. It now mints a handle per EUI session, keeps the last sixty-four
+unacknowledged batches, and answers `Resumed` with only what that client
+missed — no `connect`, no resync, no tree.
+
+Three things in it are worth keeping written down. The handle used to be a
+digest of the cookie session, which names the **person**: two tabs of one
+reader share a cookie, so nothing could tell them apart and there was nothing
+to look up. It is minted per session now. The handle is also a bearer, so it
+is not the whole of the check — a resume requires the same cookie and the same
+component, or sixteen bytes would be enough to be handed somebody else's tree.
+And the encoder is no longer dropped when the socket goes: that single line is
+what made every reconnect a fresh mount, since the encoder holds the interned
+tables and the tree the next batch diffs against. A sweep frees it when the
+two-minute grace runs out. This paragraph said the work was blocked on the
+pinned protocol revision long after that stopped being true.
+
 **Islands** (01 §2.7) are specified and half built. A node carrying `island`
 takes its content from a session of its own, so a page can be a cached
 render with one corner that is not; the node's own children show until that
@@ -404,7 +423,7 @@ explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
 the end-to-end test fetches from the real server.
 
-**The catalogue, second half.** `eui_builders.sl` now composes 490 builders
+**The catalogue, second half.** `eui_builders.sl` now composes 491 builders
 widgets from the primitives: buttons in four variants with local states,
 checkbox, switch, badge, chip, card, stat, tabs, segmented control,
 accordion, stepper, breadcrumb, pagination, progress, skeleton, spinner,
@@ -1555,17 +1574,72 @@ when the tree changes rather than walked per frame, so an application that
 does not use it pays nothing.
 
 **`paired` motion** (03 §5.3) is resolved now. A node arriving under the key
-one that just left was wearing flies between their two boxes instead of
-coming from a direction — a whole normative section, a style byte since the
-format had one, and `lang`'s `tree.rs` mapping the word, against two sites in
+one that just left was wearing flies out of that node's box instead of coming
+from a direction — a whole normative section, a style byte since the format
+had one, and `lang`'s `tree.rs` mapping the word, against two sites in
 `driver.rs` that both returned `None`. Nothing is laid out to do it: the
 arriving node was laid out for this frame and the departing node's box was
 recorded on the frame it was last seen, so the pair is one interpolation
-resolved once. `Session::exits()` borrows where `take_exits` consumes,
-because a pair is resolved while the batch is applied — both ends are one
-change — and the page animation of §5.1 is resolved at paint, where the
-painting of the departing subtree still exists. §5.3's required bound is
-sixteen pairs a change; a seventeenth is painted where the layout put it.
+resolved once, and the page animation of §5.1 is resolved at paint, where the
+painting of the departing subtree still exists. §5.3's bound is 10 §"Going
+somewhere"'s eight pairs a change; a ninth is painted where the layout put
+it.
+
+**And then it was finished**, because the paragraph above described something
+no application could reach and that would have looked wrong if it could.
+Three things, each of which the vectors of the day before passed straight
+through.
+
+The **offset was between the two corners** and the vertex stage scales about
+the arriving node's own **centre** — 03 §5.2's `scale` is 92 % about that
+centre, and the painter has one pivot. Composed, they put the element half
+the difference in the two sizes away from the box it was supposed to fly out
+of: always, since a shared element the same size on both sides is not one.
+`paired` is the only motion that carries an offset *and* a scale, which is
+how a corner delta stood there looking right — and the vector that pinned it
+put both of its nodes at the same origin, where the two conventions agree by
+accident. The new one differs in origin and in size, and there is a second, a
+layer down in `eui-render`, on the composition itself: every other transform
+vector in that file scales by one.
+
+**Departures were read off the exit list**, which never had them. A release
+notes only the **root** of what it let go — deliberately, since walking the
+subtree would hand a client a hundred thousand ids to throw away — and a
+server's diff matches keys among siblings, so a page swap names the page and
+nothing inside it. The thumbnail a panel grows out of is never the node the
+change names, so pairing fired for a shared element that *was* the page and
+for nothing else. It is read from the box map now: a key whose recorded node
+the tree no longer holds is a key that left, wherever it sat. That map is
+swept at each paint rather than on a timer, which is also §5.2's "no paint
+between them" made structural — a box is a partner's for one change and not
+for the rest of the session. `Session::exits()` was added for the old route
+and has gone with it; `take_exits` is what the page animation uses and is
+untouched.
+
+The map is keyed by `(owner, key)` now, not by the bare atom. 01 §2.7 gives
+an island its own atom table, so atom 7 on the page and atom 7 in an island
+are two different names wearing one number, and a bare key would have let a
+page's shared element pair with an island's. (`Arena::by_key`, which a local
+handler's `set_style` resolves through, is still bare — a wider fault than
+this one and not fixed here.)
+
+`MAX_PAIRS` was sixteen and is eight, which is what 10 §"Going somewhere" has
+said all along. Sixteen was also undeliverable: a quad's transform slot is
+four bits, `MAX_XFORMS` is fifteen, and the arriving and departing pages take
+one each.
+
+The catalogue can ask for one now — `shared_element(name, node)` beside
+`nav_page`, restyling rather than wrapping for the reason `nav_page` gives —
+and the ERP demo's customers section is one: narrow, the list and the detail
+are two pages of a stack, and the account's disc flies from the row into the
+header, 24 px to 36 px, across the whole page. Wide, the two are side by side
+and nothing leaves, so no pair is made: two live nodes under one name is a
+name that means two things.
+
+Last, `EUI_TRACE=1` prints a line per pair — the two boxes when it resolves,
+and which of the three ways it failed when it does not. §5.3 makes an
+unresolved pair the ordinary case, which is exactly why a key spelt two ways
+had been a page where nothing moved and nothing said so.
 
 **06 §4's third check** exists now. The section asks a server to verify that
 the node exists, that it carries a handler of that kind, and that the payload
@@ -1597,11 +1671,6 @@ The rest are still open:
 - **`Blob` (01 §6), server to client.** `examples/counter-server` sends one;
   `lang/src/serve/eui/session.rs` refuses it and none of the six SDKs
   implements it. The client half is built and has nothing to talk to.
-- Session resume **on the Soli side**: the client and the reference server
-  do it, `lang/src/serve/eui/` does not, and it cannot until the pinned
-  protocol revision moves. Files are no longer on this list — `session.rs`
-  spools an upload and posts its own `file_upload`, and this paragraph said
-  otherwise long after it stopped being true.
 - Selecting text that is not in a field, and copying it. Selection and
   `Ctrl+C` belong to `input` and `textarea`; a table cell, a label or a
   `code_block` cannot be selected, which is a browser freebie people reach

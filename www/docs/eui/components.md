@@ -1,8 +1,8 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders*.sl` — 343 functions over
-> four files, all of them plain Soli, none of them native, and what
+> `examples/demo-app/app/controllers/eui_builders*.sl` — 491 functions over
+> five files, all of them plain Soli, none of them native, and what
 > `soli new <app> --eui` writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
@@ -168,12 +168,36 @@ is drawn a weight heavier — which says emphasis, where the old `text.muted`
 said the opposite.
 
 | `overflow` | `visible` · `clip` · `scroll` |
-| `transition` | `none` · `fast` · `base` · `slow` |
-| `animation` | `none` · `spin` |
+| `transition` | `none` · `fast` · `base` · `slow` · `slower` · `slowest` |
+| `animation` | A list: `spin` · `enter` · `exit`, or `none` |
 | `position` | `flow` · `absolute` |
 | `cursor` | `default` · `pointer` · `text` · `grab` · `grabbing` · `resize_h` · `resize_v` · `wait` · `not_allowed` |
 | `blur` | A backdrop radius, 0–255 — what is *behind* the node, not the node |
 | `motion` | `fade` · `leading` · `trailing` · `top` · `bottom` · `scale` · `paired` |
+
+**Arriving and leaving.** `animation` is a *set*, not one word: `["enter",
+"exit"]` is the ordinary spelling of a page, and `motion` says which way the
+entrance comes from — the one leaving takes the mirror without being told, so
+a push and a pop are one direction written once. A `motion` with neither an
+entrance nor an exit is refused on the wire, in every client and all six
+SDKs. `transition` is the *duration* of all of it, from the theme's five-step
+`motion` scale, and never a delay.
+
+**`paired` is a shared element** (03 §5.3) — one thing on two pages rather
+than a direction. Put it, with the **same** `key`, on the node that is
+leaving and on the node that is taking its place, and the arriving one flies
+out of the box its partner had instead of going the way its page goes: a
+row's avatar becoming a header's avatar, a thumbnail becoming a hero. Both
+ends are boxes the client already laid out, so nothing is laid out again and
+the whole flight is one interpolation. The catalogue spells it
+`shared_element(name, node)`, and the customers section of the ERP demo is
+one.
+
+A name that resolves to nothing is the ordinary case and not an error — a
+panel is built and torn down as it opens — which is also the one way to get
+this wrong silently: a key spelt two ways is a page where nothing moves and
+nothing complains. `EUI_TRACE=1` prints a line per pair, resolved or not, and
+says why.
 
 **Lengths.** `120` is pixels (0–65535), `"auto"`, `"50%"`, `"1fr"`, or
 `"sp:4"` for a space-scale index.
@@ -742,6 +766,21 @@ it. On loopback or a LAN that is invisible; over a long link it would not be.
 | `breadcrumb(crumbs, on_go)` | `{label, path}` crumbs; every one but the last is a link |
 | `pagination(page, pages, on_page)` | ‹ and ›, each carrying the page it would go to |
 | `tree_view(nodes, open_ids, on_toggle, depth)` | Recursive: `{id, label, children}`, indented by `depth` |
+
+### Pages, and the stack they move through
+
+A navigator is one page on screen, a stack in state, and the *client* owning
+the movement between them. Nothing here names a duration or a direction to
+come back by: the page says how it arrives, the client mirrors that for
+whatever is leaving, and a pop is the same sentence read backwards.
+
+| Signature | Notes |
+|---|---|
+| `nav_page(key, node, o)` | Restyles `node` into a page: keyed, `enter \| exit`, `o["motion"]` the way it comes in (default `trailing`), `"none"` for a cut |
+| `navigator(state, pages, o)` | `pages` is a hash of **thunks**, so only what is on screen is built; two are rendered when there is one underneath, so an edge swipe reveals it |
+| `nav_push(state, key)` · `nav_pop(state)` · `nav_top(state)` | The handler half: the stack, and which way it last moved |
+| `back_button(after)` | `back()` locally and `after` on the server — the same event the platform's own gesture makes (06 §1.3) |
+| `shared_element(name, node, o)` | One thing on two pages: give it to both, under the same name, and the arriving one flies out of the box the leaving one had (03 §5.3) |
 
 ## Data
 
