@@ -248,6 +248,33 @@ const ZOOM_ONE: usize = 5;
 /// The step it starts from is the nearest one rather than an exact match,
 /// so a level that came from somewhere else — a rounding, a future setting
 /// — still moves, instead of sticking because it is between two rungs.
+/// The modifier the window's own shortcuts are held with: **Command on
+/// macOS, Control everywhere else** (06 §1: 1 shift, 2 control, 4 alt,
+/// 8 super).
+///
+/// It is the platform's convention, and it is also what makes a terminal
+/// drawn inside a page usable: `Ctrl+W`, `Ctrl+T` and `Ctrl+V` are a word, a
+/// transposition and a quoted insert to every shell there is, and a window
+/// that ate them on a Mac left an application unable to receive the keys its
+/// subject is defined by.
+const SHELL_MOD: u32 = if cfg!(target_os = "macos") { 0b1000 } else { 0b0010 };
+
+/// And the one that goes back with `ArrowLeft`: `⌘←` on macOS, `Alt+←`
+/// elsewhere — where `Option+←` is "a word to the left" and nothing else.
+/// `back()` declines when there is nowhere to go, and the key then falls
+/// through to the page, so a window opened straight onto one address never
+/// takes it at all.
+const BACK_MOD: u32 = if cfg!(target_os = "macos") { 0b1000 } else { 0b0100 };
+
+/// Whether `Shift` must be held too for the window's own tab and paste
+/// chords. On a Mac it must not: `⌘T` is `⌘T`. Everywhere else it must,
+/// because plain `Ctrl+T`, `Ctrl+W` and `Ctrl+V` are **the application's** —
+/// transpose, delete-word and quoted-insert to every shell there is — and
+/// `Ctrl+Shift+` is what a terminal emulator has always used for its own
+/// tabs and its own paste. A window that took the unshifted three made an
+/// embedded terminal unusable on exactly the keys a terminal is used with.
+const SHELL_NEEDS_SHIFT: bool = !cfg!(target_os = "macos");
+
 fn zoom_step(z: f32, up: bool) -> f32 {
     let mut near = ZOOM_ONE;
     let mut best = f32::INFINITY;
@@ -1950,6 +1977,12 @@ impl Shell {
         self.window.scale_factor() as f32
     }
 
+    /// Whether what is held is the window's own modifier *and* whatever else
+    /// this platform asks for — see `SHELL_NEEDS_SHIFT`.
+    fn shell_chord(&self) -> bool {
+        self.modifiers & SHELL_MOD != 0 && (!SHELL_NEEDS_SHIFT || self.modifiers & 0b0001 != 0)
+    }
+
     /// The active tab's zoom, or 1.0 when there is no tab to ask.
     fn zoom(&self) -> f32 {
         self.tabs.get(self.active).map_or(1.0, |t| t.zoom)
@@ -2415,6 +2448,12 @@ impl Shell {
         if want == self.cursor {
             return;
         }
+        // `EUI_TRACE=1`: every change of shape, with the two things that
+        // decide it. A pointer that flickers while it is not moving is
+        // either the page changing its mind under it or this window
+        // changing which of the two it asks — and from a screen the two
+        // look identical. The line says which.
+        crate::driver::trace(|| format!("cursor {:?} -> {want:?} · in_app {} · chrome {}", self.cursor, self.pointer_in_app, self.chrome.is_some()));
         self.cursor = want;
         use eui_proto::Cursor as C;
         use winit::window::CursorIcon as I;
@@ -3642,17 +3681,63 @@ impl Shell {
                     return self.chrome_input(i, renderer);
                 }
             }
+            // The chords below are the *window's*, not the page's, and which
+            // modifier carries them is a platform's own business. On a Mac
+            // they are Command's: Control there belongs to the application,
+            // and a terminal drawn in a page needs it — `Ctrl+W` is a word,
+            // not a window, and `Option+Left` is a word, not a page. Taking
+            // those on macOS made an embedded terminal unusable for exactly
+            // the keys a terminal is used with.
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
                 self.modifiers = u32::from(s.shift_key()) | (u32::from(s.control_key()) << 1) | (u32::from(s.alt_key()) << 2) | (u32::from(s.super_key()) << 3);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
+                // 06 §1's `key` is the W3C key value, and for a printable
+                // that value is **what was typed** — `A` for Shift+a, `é`
+                // for a dead key and an e. winit's `logical_key` is not
+                // always that: on some backends and layouts it is the
+                // unshifted character, so an application reading key names
+                // (a terminal, an editor — anything 03 §3.1's `typing` is
+                // for, which is told in the same breath that it will never
+                // receive `text_input`) saw every capital arrive lowercase
+                // and every composed character not arrive at all.
+                //
+                // `text` is only consulted when no control, alt or super is
+                // held: with those, `text` is the control byte or nothing,
+                // and the letter is what a chord is named by.
                 let name = match &event.logical_key {
                     Key::Named(n) => named(*n),
-                    Key::Character(c) => c.to_string(),
+                    Key::Character(c) => match &event.text {
+                        Some(typed) if self.modifiers & 0b1110 == 0 && !typed.is_empty() => typed.to_string(),
+                        // No text with the event — a repeat, or a backend
+                        // that only fills it on the first press — so the
+                        // shift has to be applied here or a held key types
+                        // `Aaaa`. Only for a single character, and only
+                        // when the layout's own uppercase is a single
+                        // character too: `ß` uppercases to `SS`, which is
+                        // not a key name.
+                        _ if self.modifiers & 0b0001 != 0 && self.modifiers & 0b1110 == 0 => {
+                            let said = c.to_string();
+                            let up: String = said.to_uppercase();
+                            if said.chars().count() == 1 && up.chars().count() == 1 {
+                                up
+                            } else {
+                                said
+                            }
+                        }
+                        _ => c.to_string(),
+                    },
                     _ => return true,
                 };
+                // `EUI_TRACE=1`: every key as the window saw it, with the
+                // repeat flag winit gave it. A page that receives six
+                // hundred `ArrowDown` in twenty seconds is either a held key
+                // or a repeat the backend never stopped, and from the
+                // server's log the two are the same line; this one says
+                // which, and whether the release ever arrived.
+                crate::driver::trace(|| format!("key {name} · down {down} · repeat {} · mods {}", event.repeat, self.modifiers));
                 // Going back (06 §1.3). The window takes it before the
                 // application hears a keystroke, because 08 §7 says an
                 // application never sees one it did not ask for, and
@@ -3666,7 +3751,12 @@ impl Shell {
                 // runs. A session that does not take back therefore has to
                 // be let go of deliberately, or there is no way out of the
                 // application at all.
-                if down && (name == "BrowserBack" || (name == "ArrowLeft" && self.modifiers & 0b0100 != 0)) {
+                // …and the page is asked first about the chord, though not
+                // about the button: `BrowserBack` is a button that means one
+                // thing, while `Alt+←` is a key an application may have
+                // claimed (03 §3.1) — a terminal walks its tabs with it.
+                let chord_back = name == "ArrowLeft" && self.modifiers & BACK_MOD != 0 && !self.tabs.get(self.active).is_some_and(|t| t.backend.claims_left());
+                if down && (name == "BrowserBack" || chord_back) {
                     if self.back() {
                         return true;
                     }
@@ -3697,7 +3787,7 @@ impl Shell {
                 // as often as `+`; every browser accepts both, and a
                 // person who holds Shift gets `_`. The release is left to
                 // fall through to the page, as Ctrl+T's and Ctrl+W's are.
-                if down && self.modifiers & 0b1010 != 0 {
+                if down && self.modifiers & SHELL_MOD != 0 && self.modifiers & 0b0001 == 0 {
                     match name.as_str() {
                         "+" | "=" => return self.set_zoom(zoom_step(self.zoom(), true)),
                         "-" | "_" => return self.set_zoom(zoom_step(self.zoom(), false)),
@@ -3707,7 +3797,7 @@ impl Shell {
                 }
                 // Ctrl+T, Ctrl+W: the shell's own, and never the
                 // application's — a page must not be able to eat them.
-                if down && self.chrome.is_some() && self.modifiers & 0b1010 != 0 {
+                if down && self.chrome.is_some() && self.shell_chord() {
                     match name.as_str() {
                         "t" | "T" => {
                             return self.chrome_action(crate::chrome::Action::NewTab, renderer);
@@ -3749,7 +3839,7 @@ impl Shell {
                 // a field focused but not laid out refused the paste with
                 // no way of knowing why.
                 #[cfg(has_clipboard)]
-                if down && self.modifiers & 0b1010 != 0 && (name == "v" || name == "V") {
+                if down && self.shell_chord() && (name == "v" || name == "V") {
                     let text = self.clipboard().and_then(|c| c.get_text().ok());
                     crate::driver::trace(|| {
                         format!("paste: modifiers {:04b}, {} chars, to the {}", self.modifiers, text.as_ref().map_or(0, String::len), if to_chrome { "address bar" } else { "page" })

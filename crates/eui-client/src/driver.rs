@@ -2888,7 +2888,7 @@ impl Driver {
                 self.preedit(String::new());
                 self.text_input(&t)
             }
-            Input::Paste(t) => self.text_input(&t),
+            Input::Paste(t) => self.paste(&t),
             Input::Key { key, modifiers, down } => self.key(&key, modifiers, down),
             Input::PointerOut => self.clear_hover(),
             Input::Refocused => {
@@ -5681,6 +5681,18 @@ impl Driver {
         Vec::new()
     }
 
+    /// Whether the page has claimed this key at the focused node.
+    ///
+    /// The window keeps a handful of chords for itself, and one of them —
+    /// `Alt+←`, going back — is a key an application may mean something
+    /// by: a terminal walks its tabs with it, an editor its history. 03
+    /// §3.1 already decides who wins, and this is how the window can ask
+    /// before it takes one: a page that claimed the key gets it, a page
+    /// that did not leaves the chord to the shell around it.
+    pub fn claims(&self, key: &str) -> bool {
+        self.focused.is_some_and(|f| self.key_claim(f, key) == Claim::Claimed)
+    }
+
     /// The pointer's shape over what it is on: the nearest ancestor's
     /// `cursor` style if any names one, else a text beam over an editable
     /// node, else a hand over anything with a `click` handler, else the
@@ -5914,6 +5926,28 @@ impl Driver {
         let seed = self.session.text_of(f).unwrap_or("").to_owned();
         let len = seed.len();
         Some(self.edits.entry(id).or_insert_with(|| Edit { seed: seed.clone(), value: seed, caret: len, anchor: len, scroll_x: 0.0, typed_at: None }))
+    }
+
+    /// 03 §3.1: a paste reaches a node that declared `typing`, though its
+    /// typing does not.
+    ///
+    /// The difference is not a technicality. Typing is a stream of keys the
+    /// application already hears as `key_down` and means to interpret
+    /// itself; a paste is the person handing over a piece of text, and the
+    /// client has no buffer of this node's to put it in. Dropping it left a
+    /// terminal — the thing `typing` most exists for — unable to receive
+    /// text somebody deliberately gave it.
+    fn paste(&mut self, t: &str) -> Vec<Frame> {
+        let Some(f) = self.focused else {
+            return Vec::new();
+        };
+        if self.edit_mut(f).is_some() {
+            return self.text_input(t);
+        }
+        if !self.takes_typing(f) {
+            return Vec::new();
+        }
+        self.emit(f, EventKind::TextInput, Value::Str(t.to_owned()))
     }
 
     fn text_input(&mut self, t: &str) -> Vec<Frame> {

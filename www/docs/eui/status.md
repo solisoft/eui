@@ -1101,6 +1101,41 @@ driven through a real server, the gallery's sheet opens at 940 nodes carrying
 `Dialog "A sheet" modal`, and one `Escape` later it is 934 nodes with no
 dialog at all.
 
+A printable key is now named by **what was typed**, not by what the layout
+calls the key: `key_down` carries `event.text` when no control, alt or super
+is held, and winit's `logical_key` otherwise. 06 §1's `key` is the W3C key
+value, and for a printable that value is the character produced — `A` for
+Shift+a, `é` for a dead key and an e. The backends do not agree about
+`logical_key`, so an application that reads key names (a terminal, an
+editor — anything `typing` exists for, and 03 §3.1 tells it in the same
+breath that it will never receive `text_input`) saw every capital arrive
+lowercase and every composed character not arrive at all.
+
+Which chords the window keeps is now the platform's answer, not one answer
+everywhere: **`⌘T` / `⌘W` / `⌘V` on macOS, `Ctrl+Shift+T` / `Ctrl+Shift+W` /
+`Ctrl+Shift+V` elsewhere** — the terminal emulator's convention, and the
+reason for it is the same on both: plain `Ctrl+T`, `Ctrl+W` and `Ctrl+V` are
+transpose, delete-word and quoted-insert, and they belong to the page. The
+zooms keep the shell's modifier without Shift (so `Ctrl+_`, readline's undo,
+reaches the application), and going back is `⌘←` rather than `Alt+←`
+(`SHELL_MOD` / `BACK_MOD` in `eui-client/src/app.rs`, and 06 §1.3's sentence
+about the back chord). It is the platform's convention and it is also what
+makes an embedded terminal usable: `Ctrl+W`, `Ctrl+T` and `Ctrl+V` are a
+word, a transposition and a quoted insert to every shell there is, and a
+window that ate them on a Mac left the application unable to receive the keys
+its subject is defined by.
+
+`SNAPSHOT_KEYS` always runs before `SNAPSHOT_TEXT` and `SNAPSHOT_THEN` always
+after it, which is the right order for a form that is filled and then
+submitted and the wrong one for everything else: a second field reachable only
+by a key pressed in the first could not be typed into at all. `SNAPSHOT_DRIVE`
+interleaves them — `key:<k>` (the `$^~#` modifier prefixes as everywhere, and
+the `key:` optional), `text:<what>`, `wait:<ms>` — each step waiting for the
+server's answer the way a click does. A two-field sheet is now photographable
+from the outside: `^b;t;n;text:A title;Enter;text:A description;$Tab;Enter`
+opens it, fills both fields and submits, and the record it wrote can be read
+back from the application's own store.
+
 What this does not reach: roving focus and type-ahead, which a widget must
 still do over the wire at a round trip per arrow, and accelerators, which need
 the global key capture the specification still refuses.

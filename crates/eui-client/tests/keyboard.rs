@@ -20,6 +20,10 @@ fn page(props: Vec<(u32, Vec<(u32, Value)>)>, atoms: &[&str], keyed: Option<u32>
     // because a handler naming an atom the batch never defined is refused.
     let click_atom = u32::try_from(atoms.len()).unwrap() + 1;
     let key_atom = click_atom + 1;
+    // A node that hears keys hears pasted text too — 03 §3.1's paste clause
+    // is about a node like this one, and an event with no handler is not
+    // reported however the rule reads.
+    let text_atom = key_atom + 1;
     let mut flat: Vec<(NodeKind, u32, u32, bool)> =
         vec![(NodeKind::Box, 1, 3, false), (NodeKind::Box, 2, 0, true), (NodeKind::Box, 3, 2, false), (NodeKind::Input, 4, 0, false), (NodeKind::Box, 5, 0, true), (NodeKind::Box, 6, 0, true)];
     for (kind, id, children, click) in flat.drain(..) {
@@ -33,6 +37,7 @@ fn page(props: Vec<(u32, Vec<(u32, Value)>)>, atoms: &[&str], keyed: Option<u32>
         }
         if keyed == Some(id) {
             tree.handlers.push((EventKind::KeyDown, Handler::Server(key_atom)));
+            tree.handlers.push((EventKind::TextInput, Handler::Server(text_atom)));
         }
         let hlen = u32::try_from(tree.handlers.len()).unwrap() - hstart;
         tree.nodes.push(FlatNode {
@@ -49,6 +54,7 @@ fn page(props: Vec<(u32, Vec<(u32, Value)>)>, atoms: &[&str], keyed: Option<u32>
     let mut ops: Vec<Op> = atoms.iter().enumerate().map(|(i, a)| Op::DefAtom { id: u32::try_from(i).unwrap() + 1, value: (*a).to_owned() }).collect();
     ops.push(Op::DefAtom { id: click_atom, value: "pressed".into() });
     ops.push(Op::DefAtom { id: key_atom, value: "keyed".into() });
+    ops.push(Op::DefAtom { id: text_atom, value: "said".into() });
     ops.push(Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [4; 4], ..Default::default() } });
     ops.push(Op::Mount(tree));
     Batch { seq: 1, ops }
@@ -377,6 +383,25 @@ fn a_typing_node_is_sent_both_tabs_and_keeps_the_focus() {
     let out = d.input(Input::Key { key: "Tab".into(), modifiers: 1, down: true });
     assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "Shift+Tab too");
     assert_eq!(d.focused(), held, "still where it was");
+}
+
+/// 03 §3.1's paste clause. Typing does not reach a `typing` node as text —
+/// it is the `key_down` the node already hears — but a **paste** does: it is
+/// the person handing text over, and the client has no buffer of that node's
+/// to put it in. A terminal is exactly the node this exists for.
+#[test]
+fn a_paste_reaches_a_typing_node_though_its_typing_does_not() {
+    let mut d = driver(typing_page(true));
+    tab(&mut d);
+    let held = d.focused();
+
+    let out = d.input(Input::Text("typed".into()));
+    assert!(events(&out).is_empty(), "typing is not reported as text");
+
+    let out = d.input(Input::Paste("two\nlines".into()));
+    assert_eq!(events(&out), vec![(EventKind::TextInput, 2)], "the paste is");
+    assert_eq!(d.focused(), held, "and nothing moved");
+    assert_eq!(d.session().text_of(d.session().lookup(2).expect("node")), None, "the client inserted nothing");
 }
 
 #[test]

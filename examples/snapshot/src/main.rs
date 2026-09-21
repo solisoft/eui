@@ -5,6 +5,8 @@
 //! running Soli, mount `<name>`'s component, fetch its assets, and render it
 //! in light and dark. `EUI_ALLOW_INSECURE_LOOPBACK=1` for a `ws://` URL.
 //! `SNAPSHOT_CLICK`, `SNAPSHOT_SCROLL`, `SNAPSHOT_HOVER`, `SNAPSHOT_KEYS`,
+//! `SNAPSHOT_THEN` (keys after the text), `SNAPSHOT_DRIVE` (keys and text
+//! interleaved),
 //! `SNAPSHOT_TEXT` and `SNAPSHOT_COVERED` drive it first, so a pane two
 //! clicks in, a card below the fold, a state that only exists under the
 //! pointer, a field that has been typed into, or a page with a phone's
@@ -711,6 +713,229 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 }
             }
         }
+        // SNAPSHOT_THEN="Enter;^s" — keys pressed *after* the text, which
+        // `SNAPSHOT_KEYS` cannot be: it runs before it. A form is filled and
+        // then submitted, in that order, and a page that only exists on the
+        // other side of a submit could not be photographed at all.
+        if let Ok(after) = std::env::var("SNAPSHOT_THEN") {
+            for entry in after.split(';').filter(|e| !e.is_empty()) {
+                let mut modifiers: u32 = 0;
+                let mut key = entry;
+                loop {
+                    let bit = match key.as_bytes().first() {
+                        Some(b'$') => 1,
+                        Some(b'^') => 2,
+                        Some(b'~') => 4,
+                        Some(b'#') => 8,
+                        _ => break,
+                    };
+                    modifiers |= bit;
+                    key = &key[1..];
+                }
+                let key = key.to_owned();
+                let _ = driver.paint(dw, dh);
+                for f in driver.input(Input::Key { key: key.clone(), modifiers, down: true }) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                for f in driver.input(Input::Key { key, modifiers, down: false }) {
+                    conn.tx.send(f.encode()).unwrap();
+                }
+                // The answer to a submit is a whole new tree; wait for it the
+                // way the text runs above wait for theirs.
+                let until = Instant::now() + Duration::from_millis(1200);
+                while Instant::now() < until {
+                    let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        if let Incoming::Message(b) = msg {
+                            if let Ok(frame) = Frame::decode(&b) {
+                                for out in driver.handle_frame(frame) {
+                                    conn.tx.send(out.encode()).unwrap();
+                                }
+                            }
+                        }
+                    }
+                    driver.tick(Instant::now());
+                    let _ = driver.paint(dw, dh);
+                }
+            }
+        }
+        // SNAPSHOT_DRIVE="key:^b;key:n;text:A title;key:Enter;click:Save;wait:200;key:$Tab;key:Enter"
+        // — keys and text *interleaved*, which none of the three above can
+        // be: `SNAPSHOT_KEYS` always runs before `SNAPSHOT_TEXT` and
+        // `SNAPSHOT_THEN` always after it, so a form whose second field is
+        // only reachable by a key pressed in the first one could not be
+        // filled in at all. A step is `key:<k>` (the `$^~#` modifier
+        // prefixes work as everywhere else, and the `key:` is optional),
+        // `text:<what>`, `paste:<what>`, `click:<label>` / `click:<x>,<y>`,
+        // `drag:<x1>,<y1>><x2>,<y2>`, or `wait:<ms>`.
+        // Each waits for the server's answer,
+        // the way a click does.
+        if let Ok(script) = std::env::var("SNAPSHOT_DRIVE") {
+            for step in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(ms) = step.strip_prefix("wait:").and_then(|v| v.trim().parse::<u64>().ok()) {
+                    let until = Instant::now() + Duration::from_millis(ms);
+                    while Instant::now() < until {
+                        let _ = wake_rx.recv_timeout(Duration::from_millis(16));
+                        while let Ok(msg) = conn.rx.try_recv() {
+                            if let Incoming::Message(b) = msg {
+                                if let Ok(frame) = Frame::decode(&b) {
+                                    for out in driver.handle_frame(frame) {
+                                        conn.tx.send(out.encode()).unwrap();
+                                    }
+                                }
+                            }
+                        }
+                        driver.tick(Instant::now());
+                        let _ = driver.paint(dw, dh);
+                        for f in driver.take_pending() {
+                            conn.tx.send(f.encode()).unwrap();
+                        }
+                    }
+                    continue;
+                }
+                // `drag:<x1>,<y1>><x2>,<y2>` — a press, a few moves and a
+                // lift, which is the only way to photograph anything that
+                // reads a gesture rather than a press: a selection, a
+                // marquee, a handle being dragged.
+                if let Some(path) = step.strip_prefix("drag:") {
+                    let mut ends = path.split('>');
+                    let point = |t: Option<&str>| -> Option<(f32, f32)> {
+                        let (a, b) = t?.split_once(',')?;
+                        Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+                    };
+                    let (Some(from), Some(to)) = (point(ends.next()), point(ends.next())) else {
+                        eprintln!("snapshot: drag wants x1,y1>x2,y2");
+                        continue;
+                    };
+                    let mut inputs = vec![Input::PointerMove(from.0, from.1), Input::PointerDown(0)];
+                    for i in 1..=4 {
+                        let t = i as f32 / 4.0;
+                        inputs.push(Input::PointerMove(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t));
+                    }
+                    inputs.push(Input::PointerUp(0));
+                    for i in inputs {
+                        for f in driver.input(i) {
+                            conn.tx.send(f.encode()).unwrap();
+                        }
+                        let _ = driver.paint(dw, dh);
+                        let deadline = Instant::now() + Duration::from_millis(400);
+                        while Instant::now() < deadline {
+                            let _ = wake_rx.recv_timeout(Duration::from_millis(20));
+                            let mut answered = false;
+                            while let Ok(msg) = conn.rx.try_recv() {
+                                if let Incoming::Message(b) = msg {
+                                    answered = true;
+                                    if let Ok(frame) = Frame::decode(&b) {
+                                        for f in driver.handle_frame(frame) {
+                                            conn.tx.send(f.encode()).unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                            driver.tick(Instant::now());
+                            let _ = driver.paint(dw, dh);
+                            for f in driver.take_pending() {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                            if answered {
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // `click:<label>` or `click:<x>,<y>` — a press where the
+                // three above cannot put one: after the keys, on a thing the
+                // keys brought into being.
+                let inputs = match step.strip_prefix("click:").map(str::trim) {
+                    Some(what) => {
+                        let point = what.split_once(',').and_then(|(a, b)| Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)));
+                        let at = match point {
+                            Some(at) => Some(at),
+                            None => {
+                                let found = driver.session().root().and_then(|root| driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(what)));
+                                match found {
+                                    Some(mut ix) => {
+                                        while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
+                                            let Some(up) = driver.session().node(ix).map(|n| n.parent) else { break };
+                                            if up == ix {
+                                                break;
+                                            }
+                                            ix = up;
+                                        }
+                                        driver.layout().rect(ix).map(|r| (r.x + r.w / 2.0, r.y + r.h / 2.0))
+                                    }
+                                    None => {
+                                        eprintln!("snapshot: nothing reads {what:?}");
+                                        None
+                                    }
+                                }
+                            }
+                        };
+                        let Some((px, py)) = at else { continue };
+                        vec![Input::PointerMove(px, py), Input::PointerDown(0), Input::PointerUp(0)]
+                    }
+                    None => match step.strip_prefix("paste:") {
+                        // What the window sends when somebody presses the
+                        // platform's paste. It is not typing, and 03 §3.1
+                        // treats it as its own thing, so a tool that can
+                        // only type cannot photograph what a paste does.
+                        Some(t) => vec![Input::Paste(t.to_owned())],
+                        None => match step.strip_prefix("text:") {
+                            Some(t) => vec![Input::Text(t.to_owned())],
+                            None => {
+                                let mut modifiers: u32 = 0;
+                                let mut key = step.strip_prefix("key:").unwrap_or(step);
+                                loop {
+                                    let bit = match key.as_bytes().first() {
+                                        Some(b'$') => 1,
+                                        Some(b'^') => 2,
+                                        Some(b'~') => 4,
+                                        Some(b'#') => 8,
+                                        _ => break,
+                                    };
+                                    modifiers |= bit;
+                                    key = &key[1..];
+                                }
+                                let key = key.to_owned();
+                                vec![Input::Key { key: key.clone(), modifiers, down: true }, Input::Key { key, modifiers, down: false }]
+                            }
+                        },
+                    },
+                };
+                let _ = driver.paint(dw, dh);
+                for input in inputs {
+                    for f in driver.input(input) {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
+                }
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if Instant::now() > deadline {
+                        break;
+                    }
+                    let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+                    let mut answered = false;
+                    while let Ok(msg) = conn.rx.try_recv() {
+                        if let Incoming::Message(b) = msg {
+                            answered = true;
+                            let frame = Frame::decode(&b).expect("frame");
+                            for f in driver.handle_frame(frame) {
+                                conn.tx.send(f.encode()).unwrap();
+                            }
+                        }
+                    }
+                    driver.tick(Instant::now());
+                    let _ = driver.paint(dw, dh);
+                    for f in driver.take_pending() {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
+                    if answered {
+                        break;
+                    }
+                }
+            }
+        }
         // SNAPSHOT_HOVER="x,y" — logical px, where the pointer is left
         // standing before the last paint, so a state that only exists under
         // it (a chart's band, a button) can be looked at. Hover settles at
@@ -738,9 +963,13 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 let mut was = None;
                 let mut frames = 0u32;
                 let mut changes = 0u32;
+                let mut batches = 0u32;
+                let mut bytes = 0usize;
                 while Instant::now() < until {
                     while let Ok(msg) = conn.rx.try_recv() {
                         if let Incoming::Message(b) = msg {
+                            batches += 1;
+                            bytes += b.len();
                             if let Ok(frame) = Frame::decode(&b) {
                                 for out in driver.handle_frame(frame) {
                                     conn.tx.send(out.encode()).unwrap();
@@ -750,16 +979,25 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     }
                     driver.tick(Instant::now());
                     let _ = driver.paint(dw, dh);
+                    // The `wake` a live page runs on leaves through here. A
+                    // loop that only ticked and painted never sent one, so
+                    // the server rebuilt nothing and the measurement said
+                    // "the page is quiet" about a page that is not.
+                    for f in driver.take_pending() {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
                     let now = driver.cursor();
                     frames += 1;
                     if Some(now) != was {
                         changes += 1;
                         println!("cursor {:?} at frame {frames}", now);
+                        let _ = (batches, bytes);
                         was = Some(now);
                     }
                     std::thread::sleep(Duration::from_millis(16));
                 }
                 println!("cursor: {changes} change(s) over {frames} frames with the pointer still");
+                println!("server: {batches} batch(es), {bytes} bytes, while nothing was touched");
             }
         }
         let list = driver.paint(dw, dh);

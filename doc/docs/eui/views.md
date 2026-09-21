@@ -426,6 +426,40 @@ anyone being stranded in it. A node that wants the *old* behaviour simply
 does not carry `typing`, and a node that carries it for the soft keyboard
 alone now also owns two keys it may not have wanted: check before adding it.
 
+**A dimension is an unsigned integer, and the arithmetic is yours.**
+`width`, `height`, `min_*` and `max_*` reach the server as `Dim::Px`
+through `as_u64`: a float is refused, a negative is refused, and the whole
+view fails to mount with *px must be 0–65535* rather than drawing wrong.
+Any width computed from the viewport wants rounding once, where it is
+computed, and a floor besides — a window dragged smaller than a layout's
+own fixed chrome subtracts its way below zero. The viewport is never the
+culprit: it is `u32` on the wire.
+
+**Indexing past the end of a list raises, and `??` does not save you.** It
+answers a null; there is no null to answer, because the index is not there
+at all. Every list a view reads from somewhere else — rows from a server, a
+path split on `/`, a selection whose cursor outlived the thing it pointed
+at — wants a bounds check rather than a coalesce, and the failure is a view
+that does not mount at all.
+
+**`scroll_to` is an ask, not a setting.** It is an op rather than a prop,
+so a view that carries it every frame re-asserts a position the client may
+have left half a second ago: a wheel glides, the next frame pulls it back,
+and the scroll jumps under the hand. Send it when the server means to move
+the view — a key asked for a place, or new content arrived while the view
+was pinned to the end — and let the client own the offset the rest of the
+time.
+
+**A `scroll` event is a wheel, and a `window` range is not what is
+visible.** Two things about a windowed list that read the other way round.
+`scroll` reports what the *person* did: a `scroll_to` is the server's own
+and 08 §8 does not report it back, so an offset kept only from that report
+is behind by however far the server last moved the view. And the `window`
+range carries two viewports of margin on each side (04 §7.1) — it is what
+to *fetch*, never what is on screen, so "is the last row in the window"
+answers yes long before the view reaches the bottom. A list that pins
+itself to the bottom on that answer can never be scrolled away from.
+
 **A `click` handler makes every pixel under it a hand.** The pointer's shape
 is the nearest ancestor that names a `cursor`, else a beam over an editable
 node, else a hand over anything with a `click` handler (03 §3,

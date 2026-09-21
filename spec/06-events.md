@@ -120,9 +120,10 @@ that asks for a hundred gets two.
 ### 1.3 Going back
 
 `back` is the one event with nothing under it. A system back button, a
-mouse's fourth button, `Alt+Left` and a swipe from the leading edge of the
-screen are all the same request, and a conforming client MUST report them
-identically: a server cannot tell a finger from a mouse (§5) and has no more
+mouse's fourth button, the platform's back chord — `Alt+Left`, or `⌘+Left`
+where the platform's own modifier is Command — and a swipe from the leading
+edge of the screen are all the same request, and a conforming client MUST
+report them identically: a server cannot tell a finger from a mouse (§5) and has no more
 business telling these four apart, and a field that said which would be the
 fingerprinting surface [`00-rationale.md`](00-rationale.md) refuses.
 

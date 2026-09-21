@@ -557,13 +557,23 @@ does not own them. §3.2 to §3.4 are the rest of that family.
   raises it.
 
   Nothing else about the node changes. The client owns no caret here, no
-  selection, and no buffer; it inserts nothing and reports no `text_input`.
-  What the person types arrives as the `key_down` the node already asked for,
+  selection, and no buffer; it inserts nothing and reports no `text_input`
+  **for typing**. What the person types arrives as the `key_down` the node
+  already asked for,
   which is the whole point: an editor, a pattern grid or a game wants the
   gutter, the highlighting and the selection to be one thing, and that thing
   is the application's (§3). Such a view is built from a box and a handler,
   and on a desktop it works because a keyboard is already there to be typed
   on.
+
+  A **paste is the exception, and MUST be reported**: a node carrying
+  `typing` and holding focus is sent the pasted text as a `text_input`, and
+  the client inserts nothing on its own. A paste is the person's act on
+  their own clipboard (§3.1 above), the client has no buffer of this node's
+  to put it in, and dropping it would leave a terminal — the thing `typing`
+  most exists for — unable to receive text a person deliberately handed it.
+  Nothing else about the node changes: no caret appears, and the text is
+  reported exactly as it was pasted, newlines included.
 
   It is **opt-in and MUST NOT be inferred** from a node merely holding a
   `key_down` handler. A page that listens for one shortcut at its root would

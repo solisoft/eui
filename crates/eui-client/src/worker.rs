@@ -735,6 +735,14 @@ pub struct Status {
     /// gesture is the page's or the platform's, and a question asked that
     /// often must not be a round trip.
     pub takes_back: bool,
+    /// The page has **claimed** `ArrowLeft` (03 §3.1), so the window's own
+    /// `Alt+←` is not the window's on this page.
+    ///
+    /// Beside `takes_back` and for the same reason: the decision is taken
+    /// on every press of that chord, and a terminal drawn in a page walks
+    /// its tabs with it. A page that claims nothing leaves the chord to the
+    /// shell around it, which is what a browser's back has always been.
+    pub claims_left: bool,
 }
 
 /// What a reply carries besides its [`Status`], by request.
@@ -828,6 +836,7 @@ impl Reply {
         w.bool(s.video);
         w.bool(s.wants_location);
         w.bool(s.takes_back);
+        w.bool(s.claims_left);
         match s.consent {
             Some(mask) => {
                 w.bool(true);
@@ -995,6 +1004,7 @@ impl Reply {
         let video = r.bool()?;
         let wants_location = r.bool()?;
         let takes_back = r.bool()?;
+        let claims_left = r.bool()?;
         let consent = if r.bool()? { Some(r.u32()?) } else { None };
         let n = r.u32()? as usize;
         let mut files = Vec::with_capacity(n.min(64));
@@ -1039,6 +1049,7 @@ impl Reply {
             video,
             wants_location,
             takes_back,
+            claims_left,
             consent,
             files,
             nfc,
@@ -1720,6 +1731,7 @@ fn status_of(d: &mut Driver) -> Status {
         video: d.video_playing(),
         wants_location: d.wants_location(),
         takes_back: d.takes_back(),
+        claims_left: d.claims("ArrowLeft"),
         consent: d.take_consent(),
         files: d.take_file_asks(),
         nfc: d.take_nfc_asks(),
@@ -2867,6 +2879,12 @@ impl Backend {
         self.with_local(|d| d.takes_back()).or_else(|| self.with_worker(|w| w.status.takes_back)).unwrap_or(false)
     }
 
+    /// Whether the page has claimed `ArrowLeft`, and so whether `Alt+←` is
+    /// the page's rather than the window's.
+    pub fn claims_left(&self) -> bool {
+        self.with_local(|d| d.claims("ArrowLeft")).or_else(|| self.with_worker(|w| w.status.claims_left)).unwrap_or(false)
+    }
+
     /// True while the platform's positioning should be running (06 §1.2).
     ///
     /// Asked on every pass of the loop, and it is a comparison either way:
@@ -3064,6 +3082,7 @@ mod tests {
             video: false,
             wants_location: true,
             takes_back: true,
+            claims_left: true,
             consent: Some(eui_proto::caps::FS_PICK | eui_proto::caps::CLIPBOARD_READ),
             files: vec![
                 FileAsk { token: 3, node: 9, want: FileWant::Open { accept: "csv".into(), multiple: true, max: 1 << 20, source: crate::driver::PickSource::Held } },
