@@ -4330,3 +4330,69 @@ fn a_paired_node_at_another_origin_starts_on_its_partners_centre() {
     // The corner delta is what this used to be, and it is not this.
     assert_ne!(x.from[0], was.rect[0] - quad.rect[0], "a corner delta would miss by half the size difference");
 }
+
+/// The beam over text must not blink to the arrow on every update.
+///
+/// The shape comes from the node's style (`cursor: text`), and a local hover
+/// handler is what puts that style there. Every batch calls
+/// `restore_local_styles` first — it has to, so the batch diffs against the
+/// tree the server believes it sent — which wipes the preview. The hover is
+/// re-run at the *next paint*, so between the batch and that paint the node
+/// wears the server's style and `cursor()` answers `Default`.
+///
+/// On a page that updates on a clock, that is the arrow flickering under a
+/// pointer that never moved. The repair is the one focus already had on the
+/// same path: the pointer has not moved, so the shape has not changed —
+/// while a hover is owed, the answer is the last one worked out.
+#[test]
+fn a_beam_from_a_hover_style_does_not_blink_on_every_update() {
+    use eui_vm::Asm;
+    const HOVER: u32 = 1;
+    const ROW_KEY: u32 = 2;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+
+    // A chunk that, on enter, previews style 3 on the row: the one with the
+    // beam in it. This is how a catalogue widget lights on hover without a
+    // round trip.
+    let chunk = Asm::new(2).set_style(ROW_KEY, 3).ret();
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 2, key: ROW_KEY, text: None, props: (0, 0), handlers: (0, 1), child_count: 1 });
+    tree.handlers.push((EventKind::PointerEnter, Handler::Local(1)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 3, style: 0, key: 0, text: Some(TextRef::Inline("a line of prose".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let sized = |c: Cursor| StyleRecord { width: Dim::Px(200), height: Dim::Px(30), cursor: c, ..Default::default() };
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: HOVER, value: "hover".into() },
+            Op::DefAtom { id: ROW_KEY, value: "row".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+            // What the server sent: no beam.
+            Op::DefStyle { id: 2, record: sized(Cursor::Default) },
+            // What the hover previews: the beam.
+            Op::DefStyle { id: 3, record: sized(Cursor::Text) },
+            Op::DefChunkBytes { id: 1, bytes: chunk },
+            Op::Mount(tree),
+        ],
+    };
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+
+    let (x, y) = centre(&mut d, 3);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Text, "the hover previewed the beam");
+
+    // An ordinary update — a clock, a count, anything. It restores the
+    // server's style on the row, wiping the preview.
+    let out = d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 3, text: TextRef::Inline("a line of prose, again".into()) }] }));
+    assert_eq!(out, vec![Frame::Ack { seq: 2 }]);
+
+    // The window asks what to draw here, before the paint that re-runs the
+    // hover. This is the frame that used to show the arrow.
+    assert_eq!(d.cursor(), Cursor::Text, "the pointer did not move; the shape did not change");
+
+    // And after the paint, the preview is back and it is worked out afresh.
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Text);
+}

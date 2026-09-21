@@ -1302,6 +1302,11 @@ pub struct Driver {
     /// its `enter` again at the next hover settle, even though the pointer
     /// has not moved.
     hover_relight: bool,
+    /// The shape last worked out for the pointer, held while a hover is
+    /// owed. Not a cache — it is the answer to "what is it now?" during the
+    /// one frame in which the honest answer is "the same as before, nothing
+    /// about the pointer changed".
+    last_cursor: Cursor,
     redraw: bool,
     closed: Option<Close>,
     /// Spec 04 §7.1: the row range last reported by each windowed list,
@@ -1549,6 +1554,7 @@ impl Driver {
             writes: Vec::new(),
             resyncing: false,
             hover_relight: false,
+            last_cursor: Cursor::Default,
             layout_valid: false,
             redraw: true,
             closed: None,
@@ -4174,6 +4180,10 @@ impl Driver {
                 out.extend(self.emit(ix, EventKind::PointerMove, p));
             }
         }
+        // Settled, so the shape is known again. `hover_pending` is already
+        // false, so `cursor()` works it out rather than handing back what it
+        // is about to be told.
+        self.last_cursor = self.cursor();
         out
     }
 
@@ -5581,6 +5591,16 @@ impl Driver {
     /// node, else a hand over anything with a `click` handler, else the
     /// arrow — and always the arrow on a scrollbar.
     pub fn cursor(&self) -> Cursor {
+        // A hover that has not been settled yet knows nothing about what the
+        // pointer is over: its index may name a node the last batch
+        // released. `Default` would be an answer, and the wrong one — the
+        // window would draw the arrow for exactly the frame between a batch
+        // and the paint after it, so a beam over a field flickered on every
+        // update of a page that updates. The honest answer is the last one
+        // worked out, because the pointer has not moved since.
+        if self.pointer.hover_pending {
+            return self.last_cursor;
+        }
         if self.pointer.dragging_thumb.is_some() || self.pointer.over_scrollbar.is_some() {
             return Cursor::Default;
         }

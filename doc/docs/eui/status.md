@@ -99,6 +99,16 @@ text that must not be reinvented.
   The key holds the *role*, so rebinding one drops what was shaped under it.
 - Glyph rasterisation at a device scale behind an opaque key, for the
   renderer's atlas.
+- The pointer's shape is held while a hover is owed. It comes from the node's
+  style, and a `local` hover handler is what puts a beam there — so every
+  batch, which restores the style the server last sent before diffing against
+  it, wiped the preview. The hover re-runs at the next paint, so between the
+  two the node wore the server's style and the window drew the arrow: a beam
+  flickering under a pointer that never moved, on every update of a page that
+  updates. The pointer has not moved, so the shape has not changed; while the
+  hover is unsettled the answer is the last one worked out. Focus already had
+  this repair on the same path (`hover_relight` beside it), and the cursor did
+  not.
 - Line clamping appends the face's own `…`, shaped at the text's size, and
   drops trailing glyphs of the last line so the mark fits inside the width it
   was given — otherwise the one line that says "there is more" would be the
