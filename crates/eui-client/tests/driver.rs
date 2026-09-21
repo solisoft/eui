@@ -4396,3 +4396,111 @@ fn a_beam_from_a_hover_style_does_not_blink_on_every_update() {
     let _ = d.paint(400, 300);
     assert_eq!(d.cursor(), Cursor::Text);
 }
+
+/// The row for the two vectors below: a column of three plain boxes, one of
+/// which — the middle — carries a `click` handler and so is the only node on
+/// the page that asks for a hand.
+///
+/// Three children, because the bug is a *rotation*. `Arena::release` frees a
+/// subtree root-first and its children after it, `graft` allocates pre-order
+/// and `alloc` pops the free list LIFO, so replacing this row hands the new
+/// row the first child's old slot and moves every id along one. With one
+/// child the slot happens to come back to the same node and nothing shows.
+fn hover_row() -> Driver {
+    const ROW_CLICK: u32 = 9;
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    assert!(d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh })).is_empty());
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 3 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Click, Handler::Server(ROW_CLICK)));
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let row = StyleRecord { display: Display::Column, ..Default::default() };
+    let cell = StyleRecord { width: Dim::Px(200), height: Dim::Px(30), ..Default::default() };
+    let batch = Batch { seq: 1, ops: vec![Op::DefAtom { id: ROW_CLICK, value: "pick".into() }, Op::DefStyle { id: 1, record: row }, Op::DefStyle { id: 2, record: cell }, Op::Mount(tree)] };
+    assert_eq!(d.handle_frame(Frame::Batch(batch)), vec![Frame::Ack { seq: 1 }]);
+    d
+}
+
+/// The same three cells again, as a `Replace` of the row, optionally with the
+/// hovered id left out of it.
+fn replaced_row(seq: u64, keep_the_hovered_one: bool) -> Frame {
+    const ROW_CLICK: u32 = 9;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 3 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    // Id 4 is the one with the handler; id 6 is a stranger that claims nothing.
+    let (middle, handlers) = if keep_the_hovered_one { (4, (0, 1)) } else { (6, (0, 0)) };
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: middle, style: 2, key: 0, text: None, props: (0, 0), handlers, child_count: 0 });
+    if keep_the_hovered_one {
+        tree.handlers.push((EventKind::Click, Handler::Server(ROW_CLICK)));
+    }
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 5, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    Frame::Batch(Batch { seq, ops: vec![Op::Replace { node: 2, subtree: tree }] })
+}
+
+/// The hand does not blink to the arrow because the row under it was rebuilt.
+///
+/// The shape is the **server's** here — a `click` handler, no local hover
+/// handler and no previewed style — so `take_restored_local()` is false and
+/// none of the repair the last commit added runs. All that changes is the
+/// tree, and the pointer is not in the tree: it is over a node.
+///
+/// Before the anchor was the node's name, it was an arena index, and the
+/// replace above rotates those: the new row takes id 3's old slot, id 3 takes
+/// id 4's, and the index the pointer was resting on names a box that claims
+/// no shape at all. `cursor()` walked up from it to a plain row and a plain
+/// root and answered `Default` — the arrow, for the one frame between the
+/// batch and the paint after it, on every update of a page that updates.
+#[test]
+fn a_hand_survives_the_row_under_it_being_rebuilt() {
+    let mut d = hover_row();
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Pointer, "the box under the pointer carries a click handler");
+
+    assert_eq!(d.handle_frame(replaced_row(2, true)), vec![Frame::Ack { seq: 2 }]);
+
+    // The window asks here, before the paint. In the sandboxed configuration
+    // it is not even asking: `status_of` has already snapshotted the byte on
+    // its way out of the reply to this batch.
+    assert_eq!(d.cursor(), Cursor::Pointer, "the pointer did not move; the shape did not change");
+    assert_eq!(d.hovered(), d.session().lookup(4), "and it is still over the node, not over the slot");
+
+    // Re-pointing is not an event: the same node under a pointer that never
+    // moved owes no `leave`, no `enter` and no `move`. A `pointer_move` per
+    // batch is what a page with a `wake` would otherwise put on the wire.
+    assert!(d.take_pending().is_empty(), "nothing goes out for a pointer that did not move");
+
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Pointer);
+    assert_eq!(d.hovered(), d.session().lookup(4));
+}
+
+/// And when the node really does leave, the shape is held rather than guessed
+/// at, and the hover settles at the next paint — with its `enter`.
+///
+/// This is the half that proves the repair is not a cache: the answer between
+/// the batch and the paint is the last one worked out, and the answer after
+/// the paint is the new one, which here is the arrow because what the pointer
+/// is on now is a box that asks for nothing.
+#[test]
+fn a_hover_whose_node_left_in_a_batch_waits_for_the_paint() {
+    let mut d = hover_row();
+    let (x, y) = centre(&mut d, 4);
+    d.input(Input::PointerMove(x, y));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.cursor(), Cursor::Pointer);
+
+    assert_eq!(d.handle_frame(replaced_row(2, false)), vec![Frame::Ack { seq: 2 }]);
+
+    assert_eq!(d.cursor(), Cursor::Pointer, "the last shape stands until the hover is settled");
+    assert!(d.hovered().is_none(), "and it is over nothing rather than over whatever took the slot");
+
+    let _ = d.paint(400, 300);
+    assert_eq!(d.hovered(), d.session().lookup(6), "the paint settled it on what is actually there");
+    assert_eq!(d.cursor(), Cursor::Default, "which claims no shape");
+}

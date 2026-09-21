@@ -358,6 +358,16 @@ struct Pointer {
     x: f32,
     y: f32,
     over: Option<NodeIx>,
+    /// Which node `over` is an index *to*, by the identity that outlives a
+    /// batch: 01 §2.7's owner and the server's id.
+    ///
+    /// A `NodeIx` is an address in an arena that recycles. `Session::replace`
+    /// releases the old subtree before it grafts the new one, and the free
+    /// list is popped in whatever order the graft asks, so after a batch the
+    /// index the last hover settled on names a released slot — or, worse, a
+    /// live node the pointer was never on. Held by identity, the hover can be
+    /// pointed at wherever the node went instead of being guessed at.
+    over_id: Option<(u16, u32)>,
     pressed_on: Option<NodeIx>,
     /// A scrollbar thumb being dragged: the scroller and where in the thumb
     /// the pointer took hold.
@@ -1715,6 +1725,12 @@ impl Driver {
         self.layout = Layout::new();
         self.focused = None;
         self.focus_visible = false;
+        // The arena those named is gone, and an index into it is now just a
+        // number — one the tree that follows may well give to something else.
+        // The hand has not moved, so the next paint settles where it is.
+        self.pointer.over = None;
+        self.pointer.over_id = None;
+        self.pointer.hover_pending = self.pointer.inside;
         self.edits.clear();
         self.track = None;
         self.preedit.clear();
@@ -1930,6 +1946,9 @@ impl Driver {
                     self.focused = None;
                 }
                 self.edits.retain(|id, _| self.session.lookup(*id).is_some());
+                // And so does the hover, which is on a node rather than on an
+                // arena slot.
+                self.reanchor_hover();
                 // 03 §3.4 and 07 §6: a batch does not move a track under the
                 // hand. The client draws its own value until the gesture ends
                 // and adopts the server's after it, so a server that clamps is
@@ -2126,6 +2145,9 @@ impl Driver {
             self.invalidate();
             self.island_watch_stale = true;
             self.resize_watch_stale = true;
+            // An island's batch releases nodes exactly as the page's does,
+            // and the pointer may well be standing on one of them.
+            self.reanchor_hover();
         }
         out
     }
@@ -4112,6 +4134,71 @@ impl Driver {
         self.hover(x, y)
     }
 
+    /// What the pointer is over, by index **and** by name.
+    ///
+    /// The one place either is written. Two fields that have to agree, and two
+    /// places that write them, is how they stop agreeing.
+    fn set_over(&mut self, ix: Option<NodeIx>) {
+        self.pointer.over = ix;
+        self.pointer.over_id = ix.and_then(|i| self.session.node(i)).map(|n| (n.owner, n.id));
+    }
+
+    /// A batch landed: find what the pointer is over again, by name.
+    ///
+    /// The pointer did not move, so it is over the same *node* — but not
+    /// necessarily the same index. `Session::replace` releases the subtree it
+    /// replaces and grafts the new one over the slots it freed, LIFO against a
+    /// pre-order walk, so a row rebuilt in place hands its first child's slot
+    /// to the new row and rotates the rest. The index the last move settled on
+    /// then names a freed slot or a sibling, and nothing re-settled it until
+    /// the hand moved: `cursor()` walked up from that slot, found nothing that
+    /// claimed a shape and answered the arrow — for exactly the frame between
+    /// a batch and the paint after it, over a row that says `hand`. On a page
+    /// that rebuilds on a `wake`, that is the pointer blinking to the default
+    /// shape for as long as you look at it.
+    ///
+    /// **Found again**: re-point the index and emit nothing. It is the same
+    /// node and the pointer never went anywhere, so there is no `leave` and no
+    /// `enter` owed, and the shape is right on the very next call. The silence
+    /// is the point: settling the hover here instead would put a
+    /// `pointer_move` on the wire for every batch of every page that handles
+    /// one, and a server that answers that move with a batch is a loop with no
+    /// bottom.
+    ///
+    /// **Gone**: what the pointer is over genuinely changed, which is the one
+    /// case that owes events. Drop the anchor and leave the hover owed —
+    /// `cursor()` holds the last shape until the paint settles it, with the
+    /// `leave` and the `enter` that settle belongs to.
+    ///
+    /// What it deliberately does not do is chase a node that survived and
+    /// *moved*: a reordered list slid a different row under a hand that never
+    /// moved. Hover follows the pointer, not the content — 06 §6.2 says the
+    /// same of a drag's slot, so that a row moved under the hand does not
+    /// oscillate — and it settles when the hand next moves.
+    fn reanchor_hover(&mut self) {
+        if self.pointer.over.is_none() {
+            return;
+        }
+        match self.pointer.over_id.and_then(|(owner, id)| self.session.lookup_in(owner, id)) {
+            Some(ix) => {
+                self.pointer.over = Some(ix);
+                // The node kept its name and may have changed its style, so
+                // the shape held while a hover is owed is worked out again
+                // rather than kept from before the batch.
+                if !self.pointer.hover_pending {
+                    self.last_cursor = self.cursor();
+                }
+            }
+            None => {
+                self.set_over(None);
+                // Never cleared here: the relight above may have set it.
+                if self.pointer.inside {
+                    self.pointer.hover_pending = true;
+                }
+            }
+        }
+    }
+
     /// The pointer is over nothing: whatever it was over hears
     /// `pointer_leave`, once, and the scrollbar it may have been on stops
     /// being hot. Same path as a move that hits nothing, without needing
@@ -4123,7 +4210,9 @@ impl Driver {
             self.pointer.over_scrollbar = None;
             self.redraw = true;
         }
-        let Some(old) = self.pointer.over.take() else {
+        let old = self.pointer.over;
+        self.set_over(None);
+        let Some(old) = old else {
             return Vec::new();
         };
         if self.session.node(old).is_none() {
@@ -4183,6 +4272,12 @@ impl Driver {
         // Settled, so the shape is known again. `hover_pending` is already
         // false, so `cursor()` works it out rather than handing back what it
         // is about to be told.
+        //
+        // The identity is taken here rather than inside the branch above,
+        // because `now` can be the same *index* as before and a different
+        // node: the arena recycles, and a batch that landed between two
+        // moves may have put something else in that slot.
+        self.set_over(now);
         self.last_cursor = self.cursor();
         out
     }
@@ -5617,6 +5712,12 @@ impl Driver {
         let mut first = true;
         while let Some(ix) = cur {
             let Some(node) = self.session.node(ix) else {
+                // Unreachable: the hover is re-anchored by name on every
+                // batch, so what it holds is a live index or nothing at all.
+                // If this ever prints, something releases nodes without going
+                // through `apply`, `apply_region` or `start_over` — and the
+                // arrow it answers below is the flicker this is here to name.
+                trace(|| format!("cursor: node {ix:?} under the pointer is a freed slot"));
                 break;
             };
             let styled = self.session.style_of(ix).cursor;

@@ -438,6 +438,22 @@ bug. Put the handler on the scrim that wants it, and give each large region
 its own `cursor` so nothing has to walk to the root to find out what it is
 over.
 
+**What the pointer is over is a node, not a place.** A rebuilt subtree keeps
+the hover on whichever node came back under the same id, so a row that
+redraws on a clock keeps its hand and a field keeps its beam, and nothing is
+reported for the rebuild — it is not a gesture, and a `pointer_move` per
+batch is a conversation with no end. A row that genuinely goes takes the
+hover with it: the shape it had stands for one frame and the next settles on
+whatever is actually there, with the `pointer_leave` and `pointer_enter` that
+belong to it. What does *not* happen is a **reordered** list re-lighting under
+a hand that never moved — hover follows the pointer, not the content, the way
+a drag's slot does (06 §6.2), so a list that shuffles under a resting hand
+does not oscillate. An author who wants the highlight to follow should move
+the row rather than rebuild it under the pointer. So the flicker described
+above is the one kind left, and it is the view's to fix: if a shape changes
+under a pointer that is standing still, something in *this* tree is claiming
+it, not the client losing track.
+
 **A tree rebuilt at the `wake` floor is work nobody asked for.** Ten frames
 a second of a large tree is ten conversions and ten diffs of everything,
 most of it unchanged. Return the **identical object** for a subtree that has

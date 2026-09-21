@@ -166,6 +166,19 @@ nothing, a node pushed sideways by an inserted sibling says nothing, a node
 whose style changes its width reports the new box once, and painting it
 again reports nothing.
 
+**03 §3's pointer shape, across a rebuild.** Three, because the shape is
+worked out from the node under the pointer and the pointer is the one thing a
+batch does not move. A beam previewed by a local hover handler survives the
+batch that puts the server's style back, because the hover it is owed has not
+been settled yet and the pointer has not moved. A hand survives the row under
+it being **replaced**, where no local style is involved at all and the only
+thing that changed is which arena slot the node lives in — and `hovered()`
+still names the node rather than whichever sibling was rotated into its
+place. And a node that genuinely left in a batch holds the last shape until
+the paint that settles the hover, which is where that settle's `leave` and
+`enter` belong; between the two, nothing at all goes on the wire, which is
+06 §3's clause about a rebuild not being a gesture.
+
 **03 §5.3, pairing**, which had no entry at all while `motion_kind` 6 was a
 byte no client acted on: a node arriving under the key one that just left
 was wearing starts at its partner's box and its partner's width — the scale

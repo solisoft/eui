@@ -483,6 +483,18 @@ draw list redrawn with a later clock.
   node, else `grab` over a node resolving `drag` (§3.4), else a hand over
   anything with a `click` handler, else the arrow — and the arrow on a
   scrollbar. While a drag is live the shape is `grabbing`, over everything.
+
+  What it is over is a **node**, and a batch does not move the pointer. A
+  client re-finds that node by its id after every batch, including an
+  island's, and the shape does not change because the tree was rebuilt under
+  a hand that never moved. Re-finding it is not a gesture: no
+  `pointer_enter`, no `pointer_leave` and no `pointer_move` is reported for
+  it. When the node has genuinely left the tree the last shape **stands**
+  until the next frame settles the hover, which is where that frame's
+  `pointer_leave` and `pointer_enter` belong. A client that instead re-reads
+  whatever now occupies the node's former place answers for a node the
+  pointer was never on — the arrow over a button, once per update, on every
+  page that updates.
 - An `input` taller than its line — stretched by a row, or given a
   control height — centres its line vertically, caret and selection with
   it; a `textarea` starts at the top. `text_align` (`start`, `center`,

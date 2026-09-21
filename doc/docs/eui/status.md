@@ -109,6 +109,25 @@ text that must not be reinvented.
   hover is unsettled the answer is the last one worked out. Focus already had
   this repair on the same path (`hover_relight` beside it), and the cursor did
   not.
+- And the hover is anchored on the node's **name** rather than on its slot,
+  which is the other half of the same symptom. Holding the shape while a
+  hover is owed repaired the frame the client knew was unsettled; it left the
+  one it did not know about. `pointer.over` was an arena index, and `replace`
+  frees the subtree it replaces before grafting the new one back over the
+  slots it freed — LIFO against a pre-order walk, so a row rebuilt in place
+  hands its first child's old slot to the new row and moves every id along
+  one. The pointer was then resting on a freed slot, where the walk up the
+  tree found nothing and answered the arrow, or on a **sibling**, where it
+  answered for a node the pointer was never on. Nothing re-settled either
+  until the hand moved. The anchor is now 01 §2.7's owner and the server's
+  id, re-found once per batch on the page's path and on an island's: found,
+  the index is re-pointed and **nothing is emitted**, because the same node
+  under a pointer that did not move owes no events — a `hover()` here would
+  put a `pointer_move` on the wire per batch for any page that handles one,
+  and a server that answers it with a batch is a loop with no bottom; gone,
+  the hover is left owed and the last shape stands until the paint settles
+  it. It took a wire-visible bug with it: the hover settled at the next paint
+  used to send `pointer_leave` naming whichever node had taken the slot.
 - Line clamping appends the face's own `…`, shaped at the text's size, and
   drops trailing glyphs of the last line so the mark fits inside the width it
   was given — otherwise the one line that says "there is more" would be the
@@ -152,7 +171,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 103 tests.
+  trip. 113 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`

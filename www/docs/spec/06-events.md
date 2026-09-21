@@ -239,6 +239,12 @@ for anything provisional — it has to be able to put it back.
 - That a scan found nothing. A tag that was read is an event; a person who
   held their phone up and changed their mind is not, for the reason a
   dismissed dialog is not.
+- That the tree under a resting pointer was rebuilt. A batch is not a
+  gesture: a node re-found by its id after one is the node the pointer was
+  already on, so no `pointer_enter`, `pointer_leave` or `pointer_move`
+  follows from the rebuild (spec 03 §3). Reporting one would put a move on
+  the wire per batch for every page that handles one — and on a page woken by
+  a timer, an answer to that move is another batch.
 - Anything else about the machine beyond the `Viewport` frame.
 
 - that a back gesture (§5) was begun and abandoned. A stroke from the edge
