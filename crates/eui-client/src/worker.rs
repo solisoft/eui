@@ -1886,10 +1886,30 @@ impl Repeat {
         }
         let until = (list.repeat_until_ms != u32::MAX).then(|| received + Duration::from_millis(u64::from(list.repeat_until_ms)));
         let reply = Reply {
-            // The palette is carried, unlike the rest: the window's chrome
-            // now follows it, and a default here would put the strip into
-            // the light for as long as a spinner kept repeating this list.
-            status: Status { needs_redraw: reply.status.needs_redraw, next_due_ms: reply.status.next_due_ms, mode: reply.status.mode, ..Status::default() },
+            // What is *state* is carried; only what happens once is taken
+            // out. The palette was the first to be carried — a default put
+            // the strip into the light for as long as a spinner repeated
+            // this list — and the cursor was the same bug seen from the
+            // pointer: `..Status::default()` is `cursor: 0`, the arrow, so
+            // every repeated frame set the arrow and every real reply set
+            // the beam back, and a pointer resting on a field flickered for
+            // as long as anything on the page kept animating. `claims_left`
+            // and `takes_back` went the same way — a repeat said the page
+            // claimed nothing, and the window took `Alt+←` for itself while
+            // a spinner turned. Audio, video and the location want are
+            // states too, and a repeat must not say they stopped.
+            status: Status {
+                needs_redraw: reply.status.needs_redraw,
+                next_due_ms: reply.status.next_due_ms,
+                mode: reply.status.mode,
+                cursor: reply.status.cursor,
+                claims_left: reply.status.claims_left,
+                takes_back: reply.status.takes_back,
+                audio: reply.status.audio,
+                video: reply.status.video,
+                wants_location: reply.status.wants_location,
+                ..Status::default()
+            },
             // No atlas rows and no scene assets: both were delivered on the
             // frame that produced them and marked clean there. Replaying a
             // mesh would re-upload it sixty times a second for as long as
@@ -2983,7 +3003,20 @@ mod tests {
             backdrop: None,
             scenes: Vec::new(),
         };
-        let status = Status { outbound: vec![vec![1, 2]], needs_redraw: true, clipboard: Some("copied".into()), ime: Some([1.0; 4]), next_due_ms: Some(16), ..Status::default() };
+        let status = Status {
+            outbound: vec![vec![1, 2]],
+            needs_redraw: true,
+            clipboard: Some("copied".into()),
+            ime: Some([1.0; 4]),
+            next_due_ms: Some(16),
+            // States, not events: a repeat must say the same thing about
+            // them as the frame it repeats.
+            cursor: eui_proto::Cursor::Text.to_u8(),
+            claims_left: true,
+            takes_back: true,
+            audio: true,
+            ..Status::default()
+        };
         let paint = |l: DrawList, st: Status| Reply {
             status: st,
             payload: Payload::Paint {
@@ -2998,6 +3031,11 @@ mod tests {
         let repeat = Repeat::of(&paint(list(true), status.clone()), t0).expect("a list the driver said may be drawn again");
         let again = repeat.answer(t0 + Duration::from_millis(5)).expect("and it is, for as long as nothing reaches the driver");
         let Payload::Paint { list: kept, glyphs, images, scenes } = &again.payload else { panic!("still a paint") };
+        // The beam stays a beam: a pointer resting on a field must not see
+        // the arrow for every frame a spinner elsewhere repeats.
+        assert_eq!(again.status.cursor, eui_proto::Cursor::Text.to_u8(), "a repeated frame keeps the pointer's shape");
+        assert!(again.status.claims_left && again.status.takes_back, "and what the page claimed");
+        assert!(again.status.audio, "and that a sound is still loaded");
         assert_eq!(**kept, list(true), "the list itself is what gets drawn again");
         assert!(glyphs.is_empty() && images.is_none(), "the atlas rows already landed");
         // The easiest line in this file to leave out, and the most
