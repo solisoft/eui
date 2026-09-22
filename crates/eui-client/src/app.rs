@@ -500,6 +500,14 @@ struct Shell {
     /// as well, because `close` does not use the drop glue.
     #[cfg(target_os = "linux")]
     dnd: Option<crate::wayland::Drops>,
+    /// The compositor's keymap and a keyboard state this window moves from
+    /// the keys it sees — what a key is *named* from, on Wayland, rather
+    /// than winit's `text`. `None` everywhere else, and on a compositor
+    /// whose keymap could not be read; then `text` is what it was.
+    /// Declared before `window` for the same reason `dnd` is: it holds
+    /// objects on the window's connection.
+    #[cfg(target_os = "linux")]
+    keys: Option<eui_wayland::Keys>,
     window: Arc<Window>,
     /// `None` between a suspend and the resume that follows it. Android
     /// destroys the native window when the application goes to the
@@ -1893,6 +1901,8 @@ impl Shell {
         let mut shell = Self {
             #[cfg(target_os = "linux")]
             dnd: None,
+            #[cfg(target_os = "linux")]
+            keys: None,
             window,
             surface: Some(surface),
             config,
@@ -1967,6 +1977,7 @@ impl Shell {
         #[cfg(target_os = "linux")]
         {
             shell.dnd = crate::wayland::watch(&shell.window, &shell.proxy);
+            shell.keys = crate::wayland::keys(&shell.window);
         }
 
         // Everything the first frame needs is in place, and any assistive
@@ -3735,6 +3746,26 @@ impl Shell {
                         }
                     }
                 }
+                // What the key types, from the keyboard state this window
+                // keeps itself (`eui-wayland`'s `Keys`, on Wayland; `None`
+                // anywhere else). Every key goes through it, modifiers
+                // included, because the state is *moved by the keys*: a
+                // Shift it never saw pressed is a Shift it never applies.
+                // That is the point of it. winit's `text` below is filled
+                // from a state winit moves only on `ModifiersChanged`, and
+                // under Hyprland that arrives after the key it applies to
+                // — `held` repaired the bitset, but a fast `Shift`+`1` still
+                // went out *named* `1`, and a terminal writes the name.
+                #[cfg(target_os = "linux")]
+                let typed: Option<String> = self.keys.as_mut().and_then(|k| crate::scancode::scancode_of(event.physical_key).and_then(|s| k.typed(s, down, event.repeat)));
+                #[cfg(not(target_os = "linux"))]
+                let typed: Option<String> = None;
+                // Only when no control, alt or super is held: with those,
+                // the character is the control byte or nothing, and the
+                // letter is what a chord is named by. Empty is a modifier,
+                // a dead key mid-sequence, or a key that types nothing —
+                // all of which winit's own answer is left to.
+                let typed = typed.filter(|t| !t.is_empty() && self.modifiers & 0b1110 == 0);
                 // 06 §1's `key` is the W3C key value, and for a printable
                 // that value is **what was typed** — `A` for Shift+a, `é`
                 // for a dead key and an e. winit's `logical_key` is not
@@ -3750,8 +3781,9 @@ impl Shell {
                 // and the letter is what a chord is named by.
                 let name = match &event.logical_key {
                     Key::Named(n) => named(*n),
-                    Key::Character(c) => match &event.text {
-                        Some(typed) if self.modifiers & 0b1110 == 0 && !typed.is_empty() => typed.to_string(),
+                    Key::Character(c) => match (&typed, &event.text) {
+                        (Some(typed), _) => typed.clone(),
+                        (None, Some(typed)) if self.modifiers & 0b1110 == 0 && !typed.is_empty() => typed.to_string(),
                         // No text with the event — a repeat, or a backend
                         // that only fills it on the first press — so the
                         // shift has to be applied here or a held key types
@@ -3778,7 +3810,7 @@ impl Shell {
                 // or a repeat the backend never stopped, and from the
                 // server's log the two are the same line; this one says
                 // which, and whether the release ever arrived.
-                crate::driver::trace(|| format!("key {name} · down {down} · repeat {} · mods {}", event.repeat, self.modifiers));
+                crate::driver::trace(|| format!("key {name} · down {down} · repeat {} · mods {} · xkb {}", event.repeat, self.modifiers, typed.as_deref().unwrap_or("-")));
                 // Going back (06 §1.3). The window takes it before the
                 // application hears a keystroke, because 08 §7 says an
                 // application never sees one it did not ask for, and
@@ -3853,9 +3885,13 @@ impl Shell {
                 // are the chrome's.
                 let to_chrome = self.chrome_has_keys();
                 if down && self.modifiers & 0b1110 == 0 {
-                    if let Some(text) = &event.text {
+                    // The window's own reading first, for the reason above:
+                    // a field is as wrong about a fast `Shift`+`1` as a
+                    // terminal is.
+                    let text = typed.clone().or_else(|| event.text.as_ref().map(ToString::to_string));
+                    if let Some(text) = text {
                         if types_text(&event.logical_key) {
-                            let i = Input::Text(text.to_string());
+                            let i = Input::Text(text);
                             if to_chrome {
                                 self.chrome_input(i, renderer);
                             } else {

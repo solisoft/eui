@@ -1,5 +1,6 @@
-//! Wayland: the one thing a compositor will tell the client that winit
-//! will not — that a file is over the window, and which files were let go.
+//! Wayland: two things a compositor will tell the client that winit will
+//! not — that a file is over the window, and which files were let go; and
+//! the keymap, against which the window resolves its own keys ([`keys`]).
 //!
 //! winit answers spec 03 §3.2's drop half on X11, on Windows and on macOS.
 //! Its Wayland backend has no data device in it at all, so
@@ -53,6 +54,31 @@ pub fn watch(window: &winit::window::Window, proxy: &Arc<winit::event_loop::Even
     let (dnd, rx) = eui_wayland::Dnd::start(display.display.as_ptr(), surface.surface.as_ptr(), wake)?;
     eprintln!("eui: watching the Wayland data device for dropped files");
     Some(Drops { dnd, rx })
+}
+
+/// The compositor's keymap, and a keyboard state this window moves from
+/// the keys it sees, so that what a key is named is what it types even
+/// when the compositor's own modifier state arrives late (the `xkb.rs`
+/// note in `eui-wayland`).
+///
+/// `None` on X11, on a compositor with no keyboard, when `libxkbcommon`
+/// cannot be loaded, and when `EUI_WAYLAND_KEYS=0` — the same switch as
+/// `EUI_WAYLAND_DND=0`, for the same reason. Without it the window names
+/// keys from what winit says was typed, as it did before.
+pub fn keys(window: &winit::window::Window) -> Option<eui_wayland::Keys> {
+    use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+
+    if std::env::var_os("EUI_WAYLAND_KEYS").is_some_and(|v| v == "0") {
+        eprintln!("eui: EUI_WAYLAND_KEYS=0; keys are named from what winit says was typed");
+        return None;
+    }
+    let RawDisplayHandle::Wayland(display) = window.display_handle().ok()?.as_raw() else { return None };
+    // SAFETY: the pointer comes from this window's own handle and names the
+    // one connection winit is running; the `Keys` lives in the shell that
+    // owns the window and is dropped with it, before the window.
+    let keys = eui_wayland::Keys::start(display.display.as_ptr())?;
+    eprintln!("eui: keys are resolved against the compositor's keymap by this window");
+    Some(keys)
 }
 
 /// The watching thread, and the queue it puts what it saw on.

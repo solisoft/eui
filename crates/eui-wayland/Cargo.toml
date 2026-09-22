@@ -23,6 +23,9 @@ wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 # The stop pipe, the transfer pipe, and the poll over both. Already under
 # wayland-client, so this crate adds nothing to the supply chain.
 rustix = { version = "1", features = ["event", "pipe", "std"] }
+# xkbcommon, dlopen'd — winit's own binding to it, so the library is the one
+# already loaded and nothing is linked that was not before.
+xkbcommon-dl = "0.4"
 
 [lints]
 workspace = true

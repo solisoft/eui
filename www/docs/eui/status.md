@@ -1111,6 +1111,32 @@ editor — anything `typing` exists for, and 03 §3.1 tells it in the same
 breath that it will never receive `text_input`) saw every capital arrive
 lowercase and every composed character not arrive at all.
 
+On Wayland the character is no longer winit's word either, because winit's
+word can be late. It fills `text` from an xkb state it moves only on
+`wl_keyboard.modifiers`, and under Hyprland that event arrives *after* the
+key it applies to often enough to matter: a fast `Shift`+`1` went out with
+the shift bit set (the window keeps its own `held` bits since that was
+found) and the name `1` — right bit, wrong name, and a terminal writes the
+name. So the window now drives a keyboard state of its own. `eui-wayland`
+asks the seat for a second `wl_keyboard` on winit's connection, the way it
+asks for the data device, and takes from it only the **keymap**, the locks
+and the layout group; every key winit reports is then fed to an
+`xkb_state` this window owns (`xkbcommon-dl`, winit's own dlopen'd binding
+— nothing new is linked), and what that state says the key types is the
+name. A modifier key is a key to xkbcommon, so Shift is in force from the
+moment the Shift press was seen, whatever the compositor says about its
+modifiers afterwards. Dead keys go through the locale's compose table on the
+same path. Seven tests in `crates/eui-wayland/src/xkb.rs` run this against a
+five-key, two-layout keymap compiled from a string, so they need no
+compositor and no `xkeyboard-config`: Shift in force the moment its key went
+down, a repeat moving nothing, Caps Lock as a key and Shift undoing it, a
+French row the other way round with AltGr as a third level, a `modifiers`
+event that lies about what is pressed being disbelieved, and losing the
+keyboard releasing what was held while keeping the locks. `EUI_TRACE=1`
+prints the answer beside winit's on every key (`xkb !`), and
+`EUI_WAYLAND_KEYS=0` turns it off, which is how a fault elsewhere is told
+apart from this.
+
 Which chords the window keeps is now the platform's answer, not one answer
 everywhere: **`⌘T` / `⌘W` / `⌘V` on macOS, `Ctrl+Shift+T` / `Ctrl+Shift+W` /
 `Ctrl+Shift+V` elsewhere** — the terminal emulator's convention, and the

@@ -1,5 +1,13 @@
-//! That a file is over the window, and which files were let go — asked of
-//! Wayland, because winit will not say.
+//! Two things a Wayland compositor will tell the client that winit will
+//! not: that a file is over the window, and which files were let go; and
+//! the keymap, so the window can say what a key types from a keyboard
+//! state it drives itself.
+//!
+//! The second is `keys.rs` and `xkb.rs`, and exists because winit fills a
+//! key event's `text` from a state it moves only on `wl_keyboard.modifiers`
+//! — which under Hyprland arrives after the key it applies to, so a fast
+//! `Shift`+`1` was named `1`. Everything below this paragraph is about the
+//! first, and the two share only the attachment to winit's connection.
 //!
 //! winit reports a dropped file on X11, on Windows and on macOS. Its
 //! Wayland backend has no data device in it at all: `HoveredFile`,
@@ -75,9 +83,15 @@ pub enum Drag {
 
 #[cfg(target_os = "linux")]
 mod dnd;
+#[cfg(target_os = "linux")]
+mod keys;
+#[cfg(target_os = "linux")]
+mod xkb;
 
 #[cfg(target_os = "linux")]
 pub use dnd::Dnd;
+#[cfg(target_os = "linux")]
+pub use keys::Keys;
 
 /// Where there is no Wayland to ask.
 #[cfg(not(target_os = "linux"))]
@@ -95,6 +109,38 @@ impl Dnd {
     /// Linux one so the caller has no `cfg` of its own.
     #[must_use]
     pub fn start(_display: *mut core::ffi::c_void, _surface: *mut core::ffi::c_void, _wake: Box<dyn Fn() + Send>) -> Option<(Self, std::sync::mpsc::Receiver<Drag>)> {
+        None
+    }
+}
+
+/// Where there is no Wayland to ask for a keymap.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub struct Keys(());
+
+#[cfg(not(target_os = "linux"))]
+impl Keys {
+    /// Nothing to ask: this platform has no Wayland, and winit's own
+    /// reading of what a key types is the only one.
+    ///
+    /// # Safety
+    ///
+    /// Nothing is read, so nothing is required. The signature matches the
+    /// Linux one so the caller has no `cfg` of its own.
+    #[must_use]
+    pub fn start(_display: *mut core::ffi::c_void) -> Option<Self> {
+        None
+    }
+
+    /// Never called: `start` never answers.
+    #[must_use]
+    pub fn typed(&mut self, _scancode: u32, _down: bool, _repeat: bool) -> Option<String> {
+        None
+    }
+
+    /// Never called: `start` never answers.
+    #[must_use]
+    pub fn mods(&mut self) -> Option<u32> {
         None
     }
 }

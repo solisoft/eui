@@ -121,6 +121,9 @@ pub mod mesh;
 pub mod nfc;
 pub mod place;
 pub mod sandbox;
+/// The evdev scancode behind a winit physical key: what the window's own
+/// keyboard state is asked about.
+pub mod scancode;
 #[cfg(has_native_net)]
 pub mod transport;
 /// The same socket over the one the host already opened. Selected here
@@ -129,8 +132,9 @@ pub mod transport;
 #[cfg(not(has_native_net))]
 #[path = "transport_web.rs"]
 pub mod transport;
-/// The drop half of spec 03 §3.2 on Wayland, which winit does not report.
-/// The safe half of it; the `unsafe` is in `eui-wayland`, one crate over.
+/// The drop half of spec 03 §3.2 on Wayland, which winit does not report,
+/// and the keymap, which it does not share. The safe half of both; the
+/// `unsafe` is in `eui-wayland`, one crate over.
 #[cfg(target_os = "linux")]
 pub mod wayland;
 pub mod worker;
