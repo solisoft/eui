@@ -3694,6 +3694,32 @@ impl Shell {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
+                // The modifier keys are read off the key events too, not
+                // only off `ModifiersChanged`. On Wayland under Hyprland
+                // the change arrives *after* the key it applies to often
+                // enough to matter: `EUI_TRACE=1` showed `Alt` pressed, then
+                // `ArrowDown · mods 0`, then the same chord a moment later
+                // with `mods 4` — the same Option+↓ walked the workspaces
+                // one time and scrolled the terminal's history the next.
+                // A press sets the bit before the next key is read and a
+                // release clears it; `ModifiersChanged`, when it comes, says
+                // the same thing.
+                if let Key::Named(m) = &event.logical_key {
+                    let bit = match m {
+                        NamedKey::Shift => 0b0001,
+                        NamedKey::Control => 0b0010,
+                        NamedKey::Alt | NamedKey::AltGraph => 0b0100,
+                        NamedKey::Super | NamedKey::Meta => 0b1000,
+                        _ => 0,
+                    };
+                    if bit != 0 {
+                        if down {
+                            self.modifiers |= bit;
+                        } else {
+                            self.modifiers &= !bit;
+                        }
+                    }
+                }
                 // 06 §1's `key` is the W3C key value, and for a printable
                 // that value is **what was typed** — `A` for Shift+a, `é`
                 // for a dead key and an e. winit's `logical_key` is not
