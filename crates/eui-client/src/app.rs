@@ -534,6 +534,16 @@ struct Shell {
     /// Which of them is shown and takes the input.
     active: usize,
     modifiers: u32,
+    /// The modifier keys seen pressed and not yet released, as the same
+    /// bits. Kept apart from `modifiers` because the two disagree: on
+    /// Wayland under Hyprland, `ModifiersChanged` came in *between* the
+    /// arrows of a held `Alt` saying 0, 4, 0, 4 — the trace showed one
+    /// `Alt` press, twenty arrows, one `Alt` release, and half the arrows
+    /// without the bit. A key that was pressed and not released is held,
+    /// whatever the compositor says in the meantime, and these bits are
+    /// OR-ed into every reading. Cleared when the window loses focus,
+    /// since the release then goes to somebody else.
+    held: u32,
     /// A size the compositor asked for and this window has not drawn yet.
     /// Only the last one matters: see the `Resized` arm.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -1891,6 +1901,7 @@ impl Shell {
             tabs: Vec::new(),
             active: 0,
             modifiers: 0,
+            held: 0,
             pending_resize: None,
             pointer_at: None,
             hovering: false,
@@ -3690,7 +3701,9 @@ impl Shell {
             // the keys a terminal is used with.
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
-                self.modifiers = u32::from(s.shift_key()) | (u32::from(s.control_key()) << 1) | (u32::from(s.alt_key()) << 2) | (u32::from(s.super_key()) << 3);
+                // OR-ed with the keys held, not replaced by what the
+                // compositor reports: see `held`.
+                self.modifiers = u32::from(s.shift_key()) | (u32::from(s.control_key()) << 1) | (u32::from(s.alt_key()) << 2) | (u32::from(s.super_key()) << 3) | self.held;
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
@@ -3714,8 +3727,10 @@ impl Shell {
                     };
                     if bit != 0 {
                         if down {
+                            self.held |= bit;
                             self.modifiers |= bit;
                         } else {
+                            self.held &= !bit;
                             self.modifiers &= !bit;
                         }
                     }
@@ -3894,7 +3909,11 @@ impl Shell {
                 self.send_to_tab(Input::PointerOut);
                 self.chrome_input(Input::PointerOut, renderer);
             }
-            WindowEvent::Focused(false) => self.send_to_tab(Input::Unfocused),
+            WindowEvent::Focused(false) => {
+                // Whatever was held, its release goes to somebody else now.
+                self.held = 0;
+                self.send_to_tab(Input::Unfocused)
+            }
             // Its twin was ignored until `location` arrived: nothing the
             // client did cared that the window had come back, and now
             // something does (06 §3).
