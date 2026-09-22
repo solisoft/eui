@@ -777,18 +777,36 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     while Instant::now() < until {
                         let _ = wake_rx.recv_timeout(Duration::from_millis(16));
                         while let Ok(msg) = conn.rx.try_recv() {
-                            if let Incoming::Message(b) = msg {
-                                if let Ok(frame) = Frame::decode(&b) {
-                                    for out in driver.handle_frame(frame) {
-                                        conn.tx.send(out.encode()).unwrap();
+                            match msg {
+                                Incoming::Message(b) => {
+                                    if let Ok(frame) = Frame::decode(&b) {
+                                        for out in driver.handle_frame(frame) {
+                                            conn.tx.send(out.encode()).unwrap();
+                                        }
                                     }
                                 }
+                                Incoming::Asset(hash, Ok(bytes)) => {
+                                    GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    driver.asset_ready(hash, bytes);
+                                }
+                                Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
+                                Incoming::Closed(e) => panic!("closed: {e}"),
                             }
                         }
                         driver.tick(Instant::now());
                         let _ = driver.paint(dw, dh);
                         for f in driver.take_pending() {
                             conn.tx.send(f.encode()).unwrap();
+                        }
+                        // What the frames just applied name — a picture a
+                        // page-change brought in, a face — fetched the way
+                        // a window fetches it. A drive that never asked
+                        // photographed every picture as an empty box and
+                        // reported `assets=0/0`, which reads like a client
+                        // that fetches nothing.
+                        for hash in driver.pending_assets() {
+                            conn.request_asset(hash);
+                            ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                     continue;
@@ -917,18 +935,30 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                     let _ = wake_rx.recv_timeout(Duration::from_millis(50));
                     let mut answered = false;
                     while let Ok(msg) = conn.rx.try_recv() {
-                        if let Incoming::Message(b) = msg {
-                            answered = true;
-                            let frame = Frame::decode(&b).expect("frame");
-                            for f in driver.handle_frame(frame) {
-                                conn.tx.send(f.encode()).unwrap();
+                        match msg {
+                            Incoming::Message(b) => {
+                                answered = true;
+                                let frame = Frame::decode(&b).expect("frame");
+                                for f in driver.handle_frame(frame) {
+                                    conn.tx.send(f.encode()).unwrap();
+                                }
                             }
+                            Incoming::Asset(hash, Ok(bytes)) => {
+                                GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                driver.asset_ready(hash, bytes);
+                            }
+                            Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
+                            Incoming::Closed(e) => panic!("closed: {e}"),
                         }
                     }
                     driver.tick(Instant::now());
                     let _ = driver.paint(dw, dh);
                     for f in driver.take_pending() {
                         conn.tx.send(f.encode()).unwrap();
+                    }
+                    for hash in driver.pending_assets() {
+                        conn.request_asset(hash);
+                        ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     if answered {
                         break;
@@ -1118,7 +1148,24 @@ fn dump(driver: &Driver, ix: eui_tree::NodeIx, depth: usize) {
         })
         .collect();
     let on = if on.is_empty() { String::new() } else { format!(" on[{}]", on.join(",")) };
-    println!("{:indent$}{:?}#{} s{}{on} {rect}{text}", "", node.kind, node.id, node.style, indent = depth * 2);
+    // What a picture names: the one prop that decides whether anything is
+    // fetched for it. An image drawn as an empty box is either a `src`
+    // that is not an asset or an asset that never arrived, and the two
+    // look the same on the screen.
+    let props = if matches!(node.kind, eui_proto::NodeKind::Image | eui_proto::NodeKind::Audio | eui_proto::NodeKind::Video) {
+        let said: Vec<String> = node
+            .props
+            .iter()
+            .map(|(a, v)| match v {
+                eui_proto::Value::Asset(h) => format!("{a}=asset:{}", h.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+                other => format!("{a}={other:?}").chars().take(60).collect(),
+            })
+            .collect();
+        format!(" p[{}]", said.join(" "))
+    } else {
+        String::new()
+    };
+    println!("{:indent$}{:?}#{} s{}{on} {rect}{text}{props}", "", node.kind, node.id, node.style, indent = depth * 2);
     for c in s.children(ix) {
         dump(driver, *c, depth + 1);
     }

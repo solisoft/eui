@@ -334,6 +334,23 @@ a live server: 4 799 B fetched over HTTPS, the socket answers
 the six language SDKs need no change, because they negotiate `min(client,
 ours)` and can only receive the offer if they serve §2.4, which none do.
 
+**And the socket session got its pictures back.** The tab's `fetch` — the
+half of a connection that goes and gets bytes, kept apart from the socket
+because it outlives it — was made for the no-socket page above and for
+nothing else: a session that dialled was left with `fetch: None`, so
+`pump` found nothing to hand the hashes to and every picture on every live
+page arrived as an empty box, from 2026-09-19 to 2026-09-22. It went
+unnoticed for three days because the headless tool fetches for itself and
+drew them all — and because the tool, driven through a scenario, did not
+fetch either, so a mail opened by `SNAPSHOT_DRIVE` reported `assets=0/0`
+and looked like the bug it was being used to find. Both are fixed: the
+fetcher is the connection's from the moment the socket opens, and the
+snapshot's drive loop asks for assets after every frame the way a window
+does. Measured on the gallery, whose first paint names two pictures: the
+window before, `EUI_TRACE=1`, zero `asset … fetched` lines; after, two.
+`SNAPSHOT_DUMP` now prints a picture's `src` beside it, so an empty box can
+be told from an asset that never came.
+
 **And the shell now says when there is no session.** A typed `https://host`
 is normalised to `wss://host` at one door, because somebody copying their
 browser's address bar writes the first and it names the same origin; the

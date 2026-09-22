@@ -1308,6 +1308,16 @@ impl Tab {
             let _ = p.send_event(Wake::Transport);
         }) {
             Ok(c) => {
+                // The half of the connection that goes and gets bytes, kept
+                // apart from the socket because it outlives it — and because
+                // `pump` asks *it* for every picture the tree names. A page
+                // read over HTTPS makes its own (`Fetcher::alone`); a socket
+                // session's is the connection's, and for three days it was
+                // nobody's: the socket path was left with `fetch: None` when
+                // the no-socket path was written, and every picture on every
+                // live page arrived as an empty box while the headless tool,
+                // which fetches for itself, drew them all.
+                self.fetch = Some(c.fetcher());
                 self.conn = Some(c);
                 // Open is not talking. Until a frame arrives this is still
                 // an attempt, and one that stalls is one to make again.
