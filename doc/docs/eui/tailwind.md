@@ -20,7 +20,9 @@ row({"tw": "items-center gap-4 w-full px-4 py-4 border-b border-gray-200 hover:b
 The gallery's Catalogue section opens with a card written in nothing else,
 and the demo application's `helpdesk` component is a whole Tailwind UI app
 shell written the same way — sidebar, top bar, tables, a thread, forms —
-in `examples/demo-app/app/controllers/helpdesk_controller.sl`.
+in `examples/demo-app/app/controllers/helpdesk_controller.sl`, with
+breakpoints, `divide-y`, `space-y-*`, `mx-auto` and the half steps where
+Tailwind UI writes them.
 
 ## What it answers
 

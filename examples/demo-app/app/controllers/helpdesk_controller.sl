@@ -85,7 +85,7 @@ def hdv_prio(pi_prio)
   pi_dot = "danger.base" if pi_prio == "Urgent"
   pi_dot = "warning.base" if pi_prio == "High"
   pi_ink = pi_prio == "Urgent" ? "text.default" : "text.muted"
-  row({"tw": "items-center gap-2 shrink-0"}, [
+  row({"tw": "items-center gap-x-1.5 shrink-0"}, [
     {"k": "box", "s": {"width": 8, "height": 8, "radius": 4, "bg": pi_dot, "shrink": 0}},
     text(pi_prio, {"size": 1, "fg": pi_ink, "weight": pi_prio == "Urgent" ? "medium" : "regular"})
   ])
@@ -158,15 +158,15 @@ def hdv_nav_item(nv_item, nv_here, nv_where)
     text(nv_item["label"], {"size": 1, "weight": "semibold", "grow": 1})
   ]
   if nv_item["count"] > 0
-    nv_kids = nv_kids.concat([row({"tw": "items-center px-2 py-0.5 rounded-full bg-white ring-1 ring-gray-200 shrink-0"}, [
+    nv_kids = nv_kids.concat([row({"tw": "items-center px-2.5 py-0.5 rounded-full bg-white ring-1 ring-gray-200 shrink-0"}, [
       text(str(nv_item["count"]), tw_style("text-xs font-medium text-gray-600"))
     ])])
   end
   control({
-    "key": "hdnav:" + nv_where + ":" + nv_item["id"] + (nv_here == true ? ":on" : ":off"),
+    "key": "hdnav:" + nv_where + ":" + nv_item["id"],
     "tone": "quiet",
     "selected": nv_here,
-    "shape": {"justify": "start", "gap": 4, "pad": [3, 3, 3, 3], "border": 0, "min_width": 0, "width": "100%", "fg": nv_here == true ? "accent.base" : "text.default"},
+    "shape": {"justify": "start", "gap": 4, "pad": [3, 3, 3, 3], "border": 0, "min_width": 0, "min_height": 40, "width": "100%", "fg": nv_here == true ? "accent.base" : "text.default"},
     "on": {"click": "nav"},
     "props": {"path": nv_item["id"], "label": nv_item["label"], "current": nv_here},
     "a11y": {"role": "link", "label": nv_item["label"], "selected": nv_here},
@@ -190,52 +190,34 @@ def hdv_nav(nn_state, nn_where)
   nn_section = nn_state["section"]
   nn_rows = hdv_nav_items(nn_state).map(fn(it) { hdv_nav_item(it, it["id"] == nn_section, nn_where) })
   nn_settings = hdv_nav_item({"id": "settings", "label": "Settings", "icon": "settings", "count": 0}, nn_section == "settings", nn_where)
-  column({"tw": "flex-col gap-1 w-full grow"}, nn_rows.concat([spacer(), nn_settings]))
+  column({"tw": "flex-col space-y-1 w-full grow"}, nn_rows.concat([spacer(), nn_settings]))
 end
 
 def hdv_sidebar(sb_state)
   column({"tw": "flex-col gap-2 w-64 h-full bg-white border-r border-gray-200 px-4 pb-4 shrink-0"}, [hdv_logo(), hdv_nav(sb_state, "rail")])
 end
 
-# EUI has no placeholder, so one is drawn: a muted line under a transparent
-# field, in a stack. Focus puts it out locally (and lights the frame the
-# field sits in, Tailwind's focus ring); the next render drops it for good
-# once something was typed. `ph_frame` is the box whose border lights up.
-def hdv_hint(ph_key, ph_words, ph_pad)
-  ph_style = {"size": 1, "fg": "text.disabled", "pad": ph_pad}
-  ph_node = text(ph_words, ph_style)
-  ph_node["key"] = ph_key
-  ph_node
-end
-
-def hdv_hint_on(hn_hint_key, hn_frame_key, hn_frame_style, hn_shown)
-  hn_ring = hn_frame_style.merge({"border_color": "accent.base"})
-  hn_focus = hn_frame_key + ".style = @ring"
-  hn_focus = hn_hint_key + ".style = @gone; " + hn_focus if hn_shown
-  {
-    "focus": {"local": hn_focus, "styles": {"ring": hn_ring, "gone": {"size": 1, "fg": "text.disabled", "opacity": 0}}},
-    "blur": {"local": hn_frame_key + ".style = @rest", "styles": {"rest": hn_frame_style}}
-  }
-end
-
+# Tailwind UI's input with a leading icon: the field is the white box with
+# the hairline, `pl-10` leaves room for a magnifier drawn on the ground
+# under it, and the hint is the field's own `placeholder` (03 §3). The field
+# is transparent so the icon shows through, and the stack carries the white
+# and the shadow; the edge, and its accent on focus, are the field's own.
 def hdv_search_box(sx_value, sx_event, sx_px, sx_label)
-  sx_frame = "hd_frame_" + sx_event
-  sx_hint = "hd_hint_" + sx_event
-  sx_empty = (sx_value ?? "") == ""
-  sx_box = row({"tw": "items-center gap-2 px-3 bg-white border border-gray-300 rounded-md shadow-sm transition"}, [])
   sx_field = input(sx_value, sx_event, {
     "key": "hdq:" + sx_event,
-    "style": {"border": 0, "bg": "none", "shadow": 0, "pad": [2, 0, 2, 0], "width": sx_px - 46},
-    "props": {"label": sx_label},
-    "on": hdv_hint_on(sx_hint, sx_frame, sx_box["s"].merge({"width": sx_px}), sx_empty)
+    "placeholder": sx_label,
+    "style": {"bg": "none", "pad": [3, 4, 3, 9], "width": sx_px},
+    "props": {"label": sx_label}
   })
-  sx_well = sx_empty ? stack({"width": sx_px - 46, "align": "center"}, [hdv_hint(sx_hint, sx_label, [2, 0, 2, 0]), sx_field]) : sx_field
-  sx_box["c"] = [icon("search", {"width": 16, "height": 16, "fg": "text.disabled", "shrink": 0}), sx_well]
-  sx_box["s"]["width"] = sx_px
-  sx_box["key"] = sx_frame
-  sx_box
+  sx_glass = icon("search", {"width": 16, "height": 16, "fg": "text.disabled", "position": "absolute", "self": "center", "margin": [0, 0, 0, 4]})
+  stack({"tw": "bg-white rounded-lg shadow-sm", "width": sx_px, "justify": "start"}, [sx_glass, sx_field])
 end
 
+# The account button, and its menu hung under it by the right edge, as
+# Tailwind UI's `right-0` puts it. A popover starts at its anchor's left edge
+# and is clamped into the window (04 §5), so the panel is a transparent box
+# as wide as the menu plus the top bar's own right padding, with the menu at
+# its end: the clamp lands it exactly on the button's right edge.
 def hdv_user(us_state, us_lay)
   us_kids = [hdv_avatar("MC", true, 32)]
   us_kids = us_kids.concat([text(hd_me(), tw_style("text-sm font-semibold text-gray-900"))]) if us_lay["roomy"]
@@ -244,32 +226,32 @@ def hdv_user(us_state, us_lay)
   us_anchor = control({
     "key": "hd_user",
     "tone": "quiet",
-    "shape": {"gap": 3, "pad": [1, 2, 1, 1], "border": 0, "min_width": 0},
+    "shape": {"gap": 3, "pad": 13, "border": 0, "min_width": 0},
     "on": {"click": "menu"},
     "props": {"which": "user"},
     "a11y": {"role": "button", "label": "Account", "expanded": us_open},
     "c": us_kids
   })
-  # The menu is its own panel; the popover's frame around it would be a
-  # second one, so the popover keeps only its position.
   us_list = menu(["Your profile", "Settings"], "user_pick")
-  us_list["s"] = us_list["s"].merge({"border": 0, "shadow": 0, "bg": "none", "pad": 0})
+  us_list["s"]["width"] = 176
   us_pop = popover(us_anchor, [us_list], us_open)
-  us_pop["c"][1]["s"]["pad"] = [1, 0, 1, 0] if us_open
+  if us_open
+    us_pop["c"][1]["s"] = tw_style("flex justify-end absolute mt-2.5 pr-4 sm:pr-6 lg:pr-8", false, us_lay["w"]).merge({"width": 176 + us_lay["pad"], "z": 5})
+  end
   us_pop
 end
 
 def hdv_topbar(tb_state, tb_lay)
-  # What is left once the menu button, the account button and the gaps
-  # between them are taken out; the account button is 190 with a name, 76
-  # without.
-  tb_search_px = tb_lay["main"] - 2 * tb_lay["pad"] - (tb_lay["roomy"] == true ? 190 : 76) - 16
-  tb_search_px = tb_search_px - 52 unless tb_lay["rail"]
+  # What is left once the account button (152 with a name, 68 without), the
+  # two `gap-4` either side of the spacer and, without the sidebar, the
+  # 28 px menu button and its gap are taken out.
+  tb_search_px = tb_lay["main"] - 2 * tb_lay["pad"] - (tb_lay["roomy"] == true ? 152 : 68) - 32
+  tb_search_px = tb_search_px - 44 unless tb_lay["rail"]
   tb_search_px = 440 if tb_search_px > 440
   tb_kids = []
   tb_kids = [icon_button("≡", "nav_toggle", {}, {"icon": "menu", "name": "Open navigation", "key": "hd_nav_btn"})] unless tb_lay["rail"]
   tb_kids = tb_kids.concat([hdv_search_box(tb_state["q"], "search", tb_search_px, "Search tickets"), spacer(), hdv_user(tb_state, tb_lay)])
-  row({"tw": "items-center gap-4 h-16 w-full bg-white border-b border-gray-200 shrink-0", "pad": [0, tb_lay["pad"] == 32 ? 8 : (tb_lay["pad"] == 24 ? 7 : 5), 0, tb_lay["pad"] == 32 ? 8 : (tb_lay["pad"] == 24 ? 7 : 5)]}, tb_kids)
+  row({"tw": "items-center gap-4 h-16 w-full bg-white border-b border-gray-200 shrink-0 px-4 sm:px-6 lg:px-8", "vw": tb_lay["w"]}, tb_kids)
 end
 
 # ---- Inbox ---------------------------------------------------------------------
@@ -277,15 +259,15 @@ end
 # Underlined tabs with a count pill, Tailwind UI's "tabs with badges".
 def hdv_tab(tb_name, tb_count, tb_on)
   control({
-    "key": "hdtab:" + tb_name + (tb_on == true ? ":on" : ":off"),
+    "key": "hdtab:" + tb_name,
     "tone": tb_on == true ? "tab_on" : "tab",
-    "shape": {"pad": [3, 1, 3, 1], "gap": 3, "min_width": 0, "radius": 0, "border": [0, 0, 2, 0]},
+    "shape": {"pad": [5, 2, 5, 2], "gap": 4, "min_width": 0, "radius": 0, "border": [0, 0, 2, 0]},
     "on": {"click": "filter"},
     "props": {"tab": tb_name},
     "a11y": {"role": "tab", "selected": tb_on, "label": tb_name},
     "c": [
       text(tb_name, {"size": 1, "weight": "medium"}),
-      row({"pad": [0, 3, 0, 3], "radius": 4, "bg": tb_on == true ? "info.subtle" : "surface.sunken", "shrink": 0}, [
+      row({"tw": "items-center px-2.5 py-0.5 rounded-full shrink-0", "bg": tb_on == true ? "info.subtle" : "surface.sunken"}, [
         text(str(tb_count), {"size": 0, "weight": "medium", "fg": tb_on == true ? "accent.base" : "text.muted"})
       ])
     ]
@@ -322,7 +304,7 @@ end
 
 def hdv_ticket_row(tr_t, tr_cols)
   tr_c = hd_customer(tr_t["cust"])
-  tr_line = row({"tw": "items-center gap-4 w-full px-4 py-3 border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
+  tr_line = row({"tw": "items-center gap-4 w-full px-4 py-3 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
     column({"tw": "flex-col gap-0.5 shrink-0"}, [
       hdv_text_w(tr_t["subject"], "text-sm font-medium text-gray-900 truncate", tr_cols[0]),
       hdv_text_w("#" + str(tr_t["id"]) + " in " + tr_t["topic"], "text-xs text-gray-500 truncate", tr_cols[0])
@@ -341,7 +323,7 @@ end
 
 def hdv_table_head(th_cols)
   th_names = ["Subject", "Customer", "Priority", "Status", "Assignee", "Updated"]
-  row({"tw": "items-center gap-4 w-full px-4 py-3 border-b border-gray-300 bg-white"}, range(0, 6).map(fn(i) {
+  row({"tw": "items-center gap-4 w-full px-4 py-3.5 border-b border-gray-300 bg-white"}, range(0, 6).map(fn(i) {
     hdv_text_w(th_names[i], i == 5 ? "text-sm font-semibold text-gray-900 text-right" : "text-sm font-semibold text-gray-900", th_cols[i])
   }))
 end
@@ -349,7 +331,7 @@ end
 # Narrow: one ticket is three short lines instead of six columns.
 def hdv_ticket_item(ti_t, ti_w)
   ti_c = hd_customer(ti_t["cust"])
-  ti_line = column({"tw": "flex-col gap-2 w-full px-4 py-4 border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
+  ti_line = column({"tw": "flex-col gap-2 w-full px-4 py-4 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
     row({"tw": "items-center gap-3 w-full"}, [
       hdv_text_w(ti_t["subject"], "text-sm font-semibold text-gray-900 truncate", ti_w - 32 - 56 - 12),
       spacer(),
@@ -386,7 +368,7 @@ def hdv_pager(pg_info)
       hdv_button("Next", "page", {"page": pg_info["page"] + 1}, "neutral", pg_info["page"] >= pg_info["pages"])
     ])
   end
-  row({"tw": "items-center gap-3 w-full px-4 py-3 bg-white"}, pg_kids)
+  row({"tw": "items-center gap-3 w-full px-4 py-3 bg-white border-t border-gray-200"}, pg_kids)
 end
 
 def hdv_inbox(ib_state, ib_lay)
@@ -402,12 +384,14 @@ def hdv_inbox(ib_state, ib_lay)
   ib_actions = []
   ib_actions = [hdv_button("Clear search", "clear_search", {}, "neutral")] unless ib_q == ""
   ib_info = hd_page_of(ib_state)
+  # Tailwind's `divide-y` between the rows; the head keeps its darker rule
+  # and the pager its own, as a `<thead>` and a footer do.
   ib_rows = []
   if ib_lay["table"]
     ib_cols = hdv_cols(ib_lay["inner"])
-    ib_rows = [hdv_table_head(ib_cols)].concat(ib_info["rows"].map(fn(t) { hdv_ticket_row(t, ib_cols) }))
+    ib_rows = [hdv_table_head(ib_cols), column({"tw": "flex-col w-full divide-y divide-gray-200"}, ib_info["rows"].map(fn(t) { hdv_ticket_row(t, ib_cols) }))]
   else
-    ib_rows = ib_info["rows"].map(fn(t) { hdv_ticket_item(t, ib_lay["inner"]) })
+    ib_rows = [column({"tw": "flex-col w-full divide-y divide-gray-200"}, ib_info["rows"].map(fn(t) { hdv_ticket_item(t, ib_lay["inner"]) }))]
   end
   ib_rows = [hdv_empty(ib_state)] if ib_info["total"] == 0
   ib_rows = ib_rows.concat([hdv_pager(ib_info)]) if ib_info["total"] > 0
@@ -449,28 +433,36 @@ def hdv_message(ms_m, ms_w, ms_cust)
   row({"tw": "items-start gap-3 w-full"}, [hdv_avatar(hd_initials(ms_m["by"]), ms_kind != "customer", 32), ms_card])
 end
 
+# Tailwind UI's comment form: one outlined box holding the textarea and,
+# on the same white, the row that sends it. The outline lights with the
+# accent while the textarea has focus -- Tailwind's `focus-within:`, which a
+# local handler can only do by naming the box, so the textarea's `focus` and
+# `blur` repoint it by key.
 def hdv_composer(cm_state, cm_w, cm_cust, cm_lay)
   cm_card_w = cm_w - 32 - 12
   cm_foot = []
   cm_foot = [text("Replying to " + cm_cust["contact"], tw_style("text-xs text-gray-500"))] if cm_card_w >= 460
   cm_foot = cm_foot.concat([spacer(), hdv_button("Add internal note", "note", {}, "neutral"), hdv_button("Send reply", "reply", {}, "accent")])
-  cm_empty = (cm_state["draft"] ?? "") == ""
-  cm_card = column({"tw": "flex-col rounded-lg border border-gray-300 bg-white shadow-sm overflow-hidden transition", "width": cm_card_w}, [])
+  cm_card = column({"tw": "flex-col rounded-lg border border-gray-300 bg-white shadow-sm transition", "width": cm_card_w}, [])
+  cm_lit = cm_card["s"].merge({"border_color": "accent.base"})
   cm_field = textarea(cm_state["draft"], "draft", {
     "key": "hd_draft",
-    "rows": 4,
-    "style": {"border": 0, "bg": "none", "shadow": 0, "radius": 0, "pad": [4, 5, 4, 5], "width": cm_card_w - 2},
+    "rows": 3,
+    "placeholder": "Write a reply to " + hd_first_name(cm_cust["contact"]) + ", or a note only your team will see",
+    "style": {"border": 0, "bg": "none", "shadow": 0, "radius": 0, "pad": [4, 5, 2, 5], "width": cm_card_w - 2},
     "props": {"label": "Reply to " + cm_cust["contact"]},
-    "on": hdv_hint_on("hd_hint_draft", "hd_frame_draft", cm_card["s"], cm_empty)
+    "on": {
+      "focus": {"local": "hd_frame_draft.style = @lit", "styles": {"lit": cm_lit}},
+      "blur": {"local": "hd_frame_draft.style = @rest", "styles": {"rest": cm_card["s"]}}
+    }
   })
-  cm_well = cm_empty ? stack({"width": cm_card_w - 2}, [hdv_hint("hd_hint_draft", "Write a reply to " + hd_first_name(cm_cust["contact"]) + ", or a note only your team will see", [4, 5, 4, 5]), cm_field]) : cm_field
-  cm_card["c"] = [cm_well, row({"tw": "items-center gap-3 w-full px-3 py-3 border-t border-gray-200 bg-gray-50"}, cm_foot)]
+  cm_card["c"] = [cm_field, row({"tw": "items-center gap-3 w-full px-3 pb-3"}, cm_foot)]
   cm_card["key"] = "hd_frame_draft"
   row({"tw": "items-start gap-3 w-full"}, [hdv_avatar("MC", true, 32), cm_card])
 end
 
 def hdv_dl(dl_label, dl_value)
-  row({"tw": "items-center gap-3 w-full py-2"}, [
+  row({"tw": "items-center gap-3 w-full py-2.5"}, [
     text(dl_label, tw_style("text-sm text-gray-500 grow")),
     dl_value
   ])
@@ -482,9 +474,13 @@ def hdv_customer_card(cc_state, cc_t, cc_w)
   cc_recent = hd_sorted(cc_state["tickets"].filter(fn(t) { t["cust"] == cc_c["id"] && t["id"] != cc_t["id"] }))
   cc_recent = cc_recent.slice(0, cc_recent.length() > 3 ? 3 : cc_recent.length())
   cc_list = cc_recent.map(fn(t) {
-    cc_line = column({"tw": "flex-col gap-1 w-full px-2 py-2 rounded-md hover:bg-gray-50 cursor-pointer transition"}, [
-      hdv_text_w(t["subject"], "text-sm font-medium text-gray-900 truncate", cc_in - 16),
-      row({"tw": "items-center gap-2"}, [text("#" + str(t["id"]), tw_style("text-xs text-gray-500")), hdv_status(t["status"])])
+    # Flush with the heading above, as Tailwind UI's stacked lists are: a
+    # hover wash would need the row to reach past the card's padding, and
+    # `-mx-2` is a negative margin EUI does not have. The subject answers
+    # the pointer instead.
+    cc_line = column({"tw": "flex-col gap-1.5 w-full py-3 cursor-pointer text-gray-900 hover:text-indigo-600 transition"}, [
+      hdv_text_w(t["subject"], "text-sm font-medium truncate", cc_in),
+      row({"tw": "items-center gap-x-2"}, [text("#" + str(t["id"]), tw_style("text-xs text-gray-500")), hdv_status(t["status"])])
     ])
     keyed("rt:" + str(t["id"]), hdv_clickable(cc_line, "open", {"id": t["id"], "label": t["subject"]}))
   })
@@ -498,13 +494,16 @@ def hdv_customer_card(cc_state, cc_t, cc_w)
       ])
     ]),
     hdv_text_w(cc_c["email"], "text-sm text-indigo-600 truncate", cc_in),
-    column({"tw": "flex-col w-full border-t border-gray-200 pt-2"}, [
+    column({"tw": "flex-col w-full border-t border-gray-200 divide-y divide-gray-100"}, [
       hdv_dl("Plan", hdv_plan(cc_c["plan"])),
       hdv_dl("Monthly revenue", text(hd_money(cc_c["mrr"]), tw_style("text-sm font-medium text-gray-900"))),
       hdv_dl("Customer since", text(cc_c["since"], tw_style("text-sm text-gray-900"))),
       hdv_dl("Open tickets", text(str(hd_open_for(cc_state, cc_c["id"])), tw_style("text-sm text-gray-900")))
     ]),
-    column({"tw": "flex-col gap-1 w-full border-t border-gray-200 pt-4"}, [text("Recent tickets", tw_style("text-sm font-semibold text-gray-900"))].concat(cc_list))
+    column({"tw": "flex-col w-full border-t border-gray-200 pt-4"}, [
+      text("Recent tickets", tw_style("text-sm font-semibold text-gray-900")),
+      column({"tw": "flex-col w-full divide-y divide-gray-100"}, cc_list)
+    ])
   ])
 end
 
@@ -548,7 +547,7 @@ def hdv_detail(dt_state, dt_lay)
   dt_thread_w = dt_lay["split"] == true ? dt_lay["inner"] - HDV_PANEL_PX - 32 : dt_lay["inner"]
   dt_panel_w = dt_lay["split"] == true ? HDV_PANEL_PX : dt_lay["inner"]
   dt_msgs = hd_thread(dt_state, dt_t["id"]).map(fn(m) { hdv_message(m, dt_thread_w, dt_c) })
-  dt_thread = column({"tw": "flex-col gap-6", "width": dt_thread_w}, dt_msgs.concat([hdv_composer(dt_state, dt_thread_w, dt_c, dt_lay)]))
+  dt_thread = column({"tw": "flex-col space-y-6", "width": dt_thread_w}, dt_msgs.concat([hdv_composer(dt_state, dt_thread_w, dt_c, dt_lay)]))
   dt_panel = column({"tw": "flex-col gap-6", "width": dt_panel_w}, [hdv_properties(dt_state, dt_t, dt_panel_w), hdv_customer_card(dt_state, dt_t, dt_panel_w)])
   # Side by side, the properties sit beside the thread; stacked, the
   # conversation comes first, because it is what the ticket is.
@@ -561,7 +560,7 @@ end
 def hdv_customer_row(cw_c, cw_state, cw_inner)
   cw_fixed = 96 + 128 + 104 + 120 + 16
   cw_name_w = cw_inner - 2 - 32 - cw_fixed - 5 * 16 - 32 - 12
-  cw_line = row({"tw": "items-center gap-4 w-full px-4 py-4 border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
+  cw_line = row({"tw": "items-center gap-4 w-full px-4 py-4 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
     row({"tw": "items-center gap-3 shrink-0"}, [
       hdv_avatar(hd_initials(cw_c["name"]), false, 32),
       column({"tw": "flex-col gap-0.5"}, [
@@ -580,7 +579,7 @@ end
 
 def hdv_customer_head(ch_inner)
   ch_name_w = ch_inner - 2 - 32 - (96 + 128 + 104 + 120 + 16) - 5 * 16
-  row({"tw": "items-center gap-4 w-full px-4 py-3 border-b border-gray-300 bg-white"}, [
+  row({"tw": "items-center gap-4 w-full px-4 py-3.5 border-b border-gray-300 bg-white"}, [
     hdv_text_w("Company", "text-sm font-semibold text-gray-900", ch_name_w),
     hdv_text_w("Plan", "text-sm font-semibold text-gray-900", 96),
     hdv_text_w("Monthly revenue", "text-sm font-semibold text-gray-900 text-right", 128),
@@ -591,7 +590,7 @@ def hdv_customer_head(ch_inner)
 end
 
 def hdv_customer_item(ci_c, ci_w)
-  ci_line = row({"tw": "items-center gap-3 w-full px-4 py-4 border-b border-gray-200 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
+  ci_line = row({"tw": "items-center gap-3 w-full px-4 py-4 bg-white hover:bg-gray-50 cursor-pointer transition"}, [
     hdv_avatar(hd_initials(ci_c["name"]), false, 32),
     column({"tw": "flex-col gap-0.5"}, [
       hdv_text_w(ci_c["name"], "text-sm font-medium text-gray-900 truncate", ci_w - 2 - 32 - 44 - 80 - 12),
@@ -612,7 +611,8 @@ def hdv_customers(cs_state, cs_lay)
   cs_found = hd_customer_rows(cs_state)
   cs_search_px = cs_lay["roomy"] == true ? 280 : cs_lay["inner"]
   cs_head = hdv_header(cs_lay, "Customers", str(cs_all.length()) + " accounts, " + hd_money(cs_mrr) + " in monthly revenue", [hdv_search_box(cs_state["cq"], "cust_search", cs_search_px, "Search customers")])
-  cs_rows = cs_lay["table"] == true ? [hdv_customer_head(cs_lay["inner"])].concat(cs_found.map(fn(c) { hdv_customer_row(c, cs_state, cs_lay["inner"]) })) : cs_found.map(fn(c) { hdv_customer_item(c, cs_lay["inner"]) })
+  cs_list = column({"tw": "flex-col w-full divide-y divide-gray-200"}, cs_found.map(fn(c) { cs_lay["table"] == true ? hdv_customer_row(c, cs_state, cs_lay["inner"]) : hdv_customer_item(c, cs_lay["inner"]) }))
+  cs_rows = cs_lay["table"] == true ? [hdv_customer_head(cs_lay["inner"]), cs_list] : [cs_list]
   if cs_found.length() == 0
     cs_rows = [column({"tw": "flex-col items-center gap-3 w-full py-12 px-6 bg-white"}, [
       text("No customers match “" + cs_state["cq"] + "”", tw_style("text-sm font-semibold text-gray-900")),
@@ -728,7 +728,7 @@ def hdv_notify_row(nr_state, nr_id, nr_label, nr_desc, nr_w)
       hdv_text_w(nr_desc, "text-sm text-gray-500", nr_w - 80)
     ]),
     spacer(),
-    switch("", nr_on == true, "notify", {"id": nr_id}, {"name": nr_label, "key": "hdsw:" + nr_id + (nr_on == true ? ":on" : ":off")})
+    switch("", nr_on == true, "notify", {"id": nr_id}, {"name": nr_label, "key": "hdsw:" + nr_id})
   ])
 end
 
@@ -801,9 +801,9 @@ def helpdesk_view(raw_state)
   hv_state = hd_state(raw_state ?? {})
   hv_lay = hdv_lay(hv_state)
   hv_page_key = hv_state["section"] + ":" + str(hv_state["sel"])
-  hv_body = keyed("hdpage:" + hv_page_key, column({"width": hv_lay["inner"], "gap": 0}, [hdv_page(hv_state, hv_lay)]))
+  hv_body = keyed("hdpage:" + hv_page_key, column({"tw": "flex-col mx-auto", "width": hv_lay["inner"]}, [hdv_page(hv_state, hv_lay)]))
   hv_scroll = scroll({"grow": 1, "min_height": 0, "width": "100%"}, [
-    column({"tw": "w-full items-center pt-5 pb-12 sm:pt-8", "vw": hv_lay["w"]}, [hv_body])
+    column({"tw": "w-full pt-5 pb-12 sm:pt-8", "vw": hv_lay["w"]}, [hv_body])
   ])
   hv_main = column({"grow": 1, "min_height": 0, "gap": 0, "bg": "surface.base"}, [hdv_topbar(hv_state, hv_lay), hv_scroll])
   hv_shell = hv_lay["rail"] == true ? row({"gap": 0, "width": "100%", "height": "100%"}, [hdv_sidebar(hv_state), hv_main]) : column({"gap": 0, "width": "100%", "height": "100%"}, [hv_main])

@@ -1910,29 +1910,52 @@ answers with a toast. Every style is a `tw()` string, a catalogue builder or
 a role — no colour is written down — and below 1024 px the sidebar becomes
 a drawer. Its queue is seeded into the session's state, so it needs no table.
 The reducer is `app/services/helpdesk_desk.sl` and `tests/helpdesk_spec.sl`
-holds it to 23 tests and 66 assertions; the view is 824 lines. Measured with
-`snapshot` at 1280×800, the inbox is 237 nodes, a ticket with three
-messages 159, customers 204, reports 185, settings 131.
+holds it to 23 tests and 66 assertions; the view is 823 lines. Measured with
+`snapshot` at 1280×800, the inbox is 236 nodes, a ticket with three
+messages 156, customers 201, reports 183, settings 129.
 
-Two things it worked around, and neither is needed any more (2026-09-24);
-the view has not been rewritten, so both are still in it. The sidebar's
-current row, the current tab and a switch carry their state in their key and
-are replaced rather than restyled, because "a node whose only change is its
-style keeps the style it was mounted with" — which was never true. The
-server sends the `SetStyle` and the client applies it; what was wrong was the
-picture. Those nodes carry a `transition`, a restyled node is a quad that
-eases between two colours on the vertex stage's clock, and `snapshot` drew
-the list at age 0, so every photograph taken straight after a key or a click
-showed the colour being *left*. `SNAPSHOT_SETTLE` could not help while it ran
-before the keys. The tool now runs transitions to their end before it
-draws, unless `SNAPSHOT_AGE` asks for a frame in flight
+It was first written round two things that are not so, and both are gone
+from it (2026-09-24). The sidebar's current row, the current tab and a
+switch used to carry their state in their key, so that they were replaced
+rather than restyled, because "a node whose only change is its style keeps
+the style it was mounted with" — which was never true. The server sends the
+`SetStyle` and the client applies it; what was wrong was the picture. Those
+nodes carry a `transition`, a restyled node is a quad that eases between two
+colours on the vertex stage's clock, and `snapshot` drew the list at age 0,
+so every photograph taken straight after a key or a click showed the colour
+being *left*. `SNAPSHOT_SETTLE` could not help while it ran before the keys.
+The tool now runs transitions to their end before it draws, unless
+`SNAPSHOT_AGE` asks for a frame in flight
 (`the_picture_is_taken_after_the_transition_lands`), and the server is pinned
 to one `SetStyle` per restyled row, keyed or not, in lang's
-`a_style_only_change_is_one_set_style_per_row_keyed_or_not`. And the search
-fields and the composer draw a placeholder as a muted line under a
-transparent field, put out by a local `focus` chunk; a field now has a real
-one (`placeholder`, 03 §3), drawn by the client in `text.muted` while it is
-empty, never part of the value, and announced as the field's placeholder.
+`a_style_only_change_is_one_set_style_per_row_keyed_or_not`. Their keys are
+their identity now (`hdnav:rail:inbox`, `hdtab:Open`, `hdsw:digest`), and a
+click restyles them in place. And the two searches and the composer drew a
+placeholder as a muted line stacked under a transparent field, put out by a
+local `focus` chunk; they carry a real `placeholder` (03 §3), drawn by the
+client in `text.muted` while the field is empty, never part of the value.
+The search is Tailwind UI's input with a leading icon — the field is the
+outlined box, so its own focus paints the accent edge — and the composer is
+its comment form, the buttons on the same white as the textarea, which also
+took away the grey footer that hid the box's bottom-right edge.
+
+The rest of that pass is what `tw()` has gained since: the table bodies,
+the narrow lists, the customer card's facts and its recent tickets are
+`divide-y` columns rather than a `border-b` on every row, the thread is
+`space-y-6`, the page body `mx-auto`, the top bar's padding
+`px-4 sm:px-6 lg:px-8`, and the half steps are where Tailwind UI writes them
+(`py-3.5` table heads, `px-2.5 py-0.5` count pills, `gap-x-1.5` for a
+priority's dot, `p-1.5` round the account button, `mt-2.5` under it). The
+recent tickets sit flush with their heading instead of 8 px in — a hover
+wash would need `-mx-2`, and EUI has no negative margin, so the subject
+turns to the accent under the pointer instead. The account menu hangs by its
+right edge under the button: a popover starts at its anchor's left edge and
+is clamped into the window (04 §5), so the panel is a transparent box as
+wide as the menu plus the top bar's right padding, with the menu at its
+end. The sidebar against the drawer, the tables against stacked lists, and
+the split ticket and settings layouts are still width branches, because
+each changes the tree or is decided by the content width, not by a
+breakpoint.
 
 ## Not started
 
