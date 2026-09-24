@@ -1011,7 +1011,9 @@ diff, filter builder), markdown (document, document rows for a windowed
 list, block editor and its model), feedback (toast,
 banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip),
 style (`tw`: Tailwind-style class strings, with `hover:`, `active:`, `focus:` and
-`disabled:` as local states).
+`disabled:` as local states, `sm:` … `2xl:` resolved on the server against the
+viewport width the view passes, and `space-*` and `divide-*` carried to the
+children by `node()`).
 
 Its look is Tailwind UI's, drawn from roles and scale indices alone: 14 px
 (`size` 1) for labels and body text, white fields and secondary buttons inside a

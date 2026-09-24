@@ -1,7 +1,7 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders*.sl` — 531 functions over
+> `examples/demo-app/app/controllers/eui_builders*.sl` — 550 functions over
 > six files, all of them plain Soli, none of them native, and what
 > `soli new <app> --eui` writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
@@ -300,7 +300,7 @@ A widget is not a protocol feature.
 | `column(style, children)` | A box with `display: column` |
 | `row(style, children)` | A box with `display: row` |
 | `stack(style, children)` | A box with `display: stack` — children superimposed |
-| `text(content, style)` | A text node |
+| `text(content, style)` | A text node. A style from `tw_style("uppercase …")` has its transform applied to `content` here, on the server |
 | `icon(name, style)` | A named vector icon, stroked by the client in `fg`. The name is a **prop**, not text — so it is never shaped, never falls back to a symbols face, and never reaches a screen reader as the character it resembles. A name the client does not know draws nothing and keeps its space |
 | `spacer()` | Empty space with `grow: 1` |
 | `divider()` | A hairline rule |
@@ -1238,10 +1238,12 @@ cell value.
 not changed and the server skips converting and diffing it entirely. That is
 what the feed's card cache does, and why ten thousand cards diff in 44 ms.
 
-**Responsive is a view branch.** There are no `sm:` style prefixes. Store
+**Responsive is a view branch.** The client never runs a media query. Store
 `params["viewport"]` on `connect` and `viewport`, then `bp_min(width, "md")`
-chooses a different tree — a column instead of a row, fewer grid columns.
-The client never runs a media query.
+chooses a different tree — a column instead of a row, fewer grid columns. A
+style that only changes with the width can say so in `tw()` classes instead —
+`sm:` … `2xl:`, given the width (`"vw": width` beside `"tw"`) — which is the
+same branch, taken on the server.
 
 ## Tailwind classes
 
@@ -1251,9 +1253,10 @@ table, the approximations and the refusals.
 
 | Signature | What it returns |
 |---|---|
-| `tw(classes)` | `{"s", "hover", "press", "focus", "disabled", "props"}`: the resting style, the four states as deltas over it, and `grid-cols-N` as a prop. `classes` is a string or a list of them. A class with no equivalent raises, naming it |
-| `tw_style(classes, disabled = false)` | Only the resting style — for a `text` node, whose style is a plain hash — with `disabled:` laid over it when asked |
-| `tw_node(n)` | What `node()` does with a `"tw"` key: the classes under the keys written beside them, the props, and local handlers for the states |
+| `tw(classes, width = nil)` | `{"s", "hover", "press", "focus", "disabled", "props", "gaps", "divide"}`: the resting style, the four states as deltas over it, and `grid-cols-N` as a prop. `classes` is a string or a list of them; `width`, the viewport's, is what `sm:` … `2xl:` are resolved against, and without it a breakpoint class raises. A class with no equivalent raises, naming it; so does `divide-*`, which only a node with children can place |
+| `tw_style(classes, disabled = false, width = nil)` | Only the resting style — for a `text` node, whose style is a plain hash — with `disabled:` laid over it when asked |
+| `tw_node(n)` | What `node()` does with a `"tw"` key (and `"vw"`, the viewport width): the classes under the keys written beside them, `space-*`/`gap-x-*` settled against the node's final direction, `divide-*` laid onto its children, the props, and local handlers for the states |
+| `tw_text(content, style)` | What `text()` does with a style carrying `uppercase`, `lowercase` or `capitalize`: the string transformed, and the marker removed |
 | `tw_wire(base, t, on)` | Those handlers alone: pointer states when `hover:` or `active:` is present, a focus and a blur when `focus:` is |
 | `tw_examples()` | One of every shape of class `tw()` accepts; the spec sends each through the encoder |
 
@@ -1262,6 +1265,9 @@ row({"tw": "items-center gap-4 px-4 py-4 border-b border-gray-200 hover:bg-gray-
   text(person["name"], tw_style("text-sm font-semibold text-gray-900")),
   text(person["mail"], tw_style("text-xs text-gray-500 truncate"))
 ])
+
+# Stacked on a phone, side by side from md, a rule between each.
+node("box", {"tw": "flex flex-col divide-y divide-gray-200 md:flex-row md:divide-y-0 md:divide-x", "vw": width}, panes)
 ```
 
 ## Writing your own

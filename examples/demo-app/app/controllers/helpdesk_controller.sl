@@ -127,15 +127,14 @@ def hdv_text_w(tx_content, tx_classes, tx_px)
 end
 
 # The heading every page opens with: a title, one line under it, and
-# whatever acts on the page on the right.
+# whatever acts on the page on the right -- under it on a phone, beside it
+# from `sm`, as Tailwind UI writes it.
 def hdv_header(hh_lay, hh_title, hh_sub, hh_actions)
   hh_words = column({"tw": "flex-col gap-1 grow min-w-0"}, [
     text(hh_title, tw_style("text-2xl font-semibold text-gray-900")),
     text(hh_sub, tw_style("text-sm text-gray-500"))
   ])
-  return column({"tw": "flex-col gap-4 w-full"}, [hh_words].concat(hh_actions)) unless hh_lay["roomy"]
-
-  row({"tw": "items-end gap-4 w-full"}, [hh_words].concat(hh_actions))
+  node("box", {"tw": "flex flex-col gap-4 w-full sm:flex-row sm:items-end", "vw": hh_lay["w"]}, [hh_words].concat(hh_actions))
 end
 
 # ---- The shell -----------------------------------------------------------------
@@ -804,7 +803,7 @@ def helpdesk_view(raw_state)
   hv_page_key = hv_state["section"] + ":" + str(hv_state["sel"])
   hv_body = keyed("hdpage:" + hv_page_key, column({"width": hv_lay["inner"], "gap": 0}, [hdv_page(hv_state, hv_lay)]))
   hv_scroll = scroll({"grow": 1, "min_height": 0, "width": "100%"}, [
-    column({"width": "100%", "align": "center", "pad": [hv_lay["roomy"] == true ? 8 : 6, 0, 10, 0]}, [hv_body])
+    column({"tw": "w-full items-center pt-5 pb-12 sm:pt-8", "vw": hv_lay["w"]}, [hv_body])
   ])
   hv_main = column({"grow": 1, "min_height": 0, "gap": 0, "bg": "surface.base"}, [hdv_topbar(hv_state, hv_lay), hv_scroll])
   hv_shell = hv_lay["rail"] == true ? row({"gap": 0, "width": "100%", "height": "100%"}, [hdv_sidebar(hv_state), hv_main]) : column({"gap": 0, "width": "100%", "height": "100%"}, [hv_main])

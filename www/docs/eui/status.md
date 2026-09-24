@@ -1849,15 +1849,28 @@ style hash and its `hover:`/`active:`/`focus:`/`disabled:` deltas, and
 `node()`, `control()` and `stateful()` take the string directly. Spacing is
 the space scale's indices, colours are roles — a gray is a surface, a border
 or an ink depending on what it paints — and a class with no equivalent
-(`tracking-*`, `leading-*`, gradients, per-corner radius, `divide-*`,
-transforms, breakpoints, `dark:`) raises with its name and the reason. Each
-distinct string is parsed once per process. [Tailwind classes](/docs/tailwind)
-has the table.
+(`tracking-*`, `leading-*`, gradients, per-corner radius, transforms,
+`dark:`) raises with its name and the reason. Each distinct string is parsed
+once per process. [Tailwind classes](/docs/tailwind) has the table.
 
-The catalogue is 531 definitions over six files. `tests/tw_spec.sl` is 8
-tests and 296 assertions, one of which sends every one of the 213 example
+Since 2026-09-24 it also takes what needs the view's hand, still with nothing
+on the wire: `sm:` … `2xl:` against the width the view passes
+(`tw(classes, width)`, `"vw"` on a node — without one a breakpoint class
+raises), mobile first and memoised per breakpoint; `space-x/y-*` and
+`gap-x/y-*` as the one gap where the two are the same thing;
+`divide-y/x` laid onto the children by `node()`, handlers and keys kept;
+`uppercase`/`lowercase`/`capitalize` applied to the string by `text()`;
+`mx-auto`/`my-auto` as `self-center`, `block` as a column, `relative`,
+`static`, `isolate`, `select-none`, and `focus-visible:` as `focus:` with its
+outline and ring classes left to the client's own ring. A half step
+(`py-1.5`) is still refused, and names its two nearest steps. The help desk's
+page heading and its page padding are `sm:` classes now, and draw the same
+pixels at 500 and 1 280 px as the width branches they replace.
+
+The catalogue is 550 definitions over six files. `tests/tw_spec.sl` is 14
+tests and 424 assertions, one of which sends every one of the 241 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 14 files, 70 tests, 707 assertions. The gallery's Catalogue section opens
+are 14 files, 76 tests, 835 assertions. The gallery's Catalogue section opens
 with a card written in nothing but class strings.
 
 **A whole application in those classes.** `helpdesk`, the demo application's
