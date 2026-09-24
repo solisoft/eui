@@ -152,6 +152,8 @@ fn an_image_node_is_fetched_then_sized_then_painted() {
     assert!(d.pending_assets().is_empty(), "asked once");
 
     d.asset_ready(h, AVATAR.to_vec());
+
+    d.finish_decoding();
     assert!(d.needs_redraw());
     let after = d.paint(300, 200);
     let r = d.layout().rect(img).unwrap();
@@ -352,6 +354,7 @@ struct VOut { @builtin(position) pos: vec4<f32> }
     // The tree asks for the module by hash, and by nothing else.
     assert_eq!(d.pending_assets(), vec![hash], "the module is wanted, by hash");
     d.asset_ready(hash, asset);
+    d.finish_decoding();
 
     // Verified on the way in; what comes out is what the GPU may have.
     let taken = d.take_scene_assets();
@@ -420,6 +423,8 @@ fn a_font_role_is_fetched_then_bound_then_reshaped() {
     assert!(fallback > 0.0, "an unbound role draws in sans rather than not at all");
 
     d.asset_ready(h, A_FACE.to_vec());
+
+    d.finish_decoding();
     assert!(d.needs_redraw());
     d.paint(300, 200);
     assert_ne!(d.layout().rect(node).unwrap().w, fallback, "the run was re-shaped in the face that arrived");
@@ -438,6 +443,8 @@ fn a_face_that_is_not_a_face_leaves_the_role_in_sans() {
     let fallback = d.layout().rect(node).unwrap().w;
 
     d.asset_ready(h, junk);
+
+    d.finish_decoding();
     d.paint(300, 200);
     assert_eq!(d.layout().rect(node).unwrap().w, fallback, "the text is still drawn, in sans");
     assert!(d.assets().failure(&h).is_some(), "and the reason was kept");
@@ -543,12 +550,14 @@ fn the_driver_lets_go_of_a_picture_the_page_stopped_showing() {
     }));
     assert_eq!(d.pending_assets(), vec![a]);
     d.asset_ready(a, AVATAR.to_vec());
+    d.finish_decoding();
     let _ = d.paint(300, 200);
     assert_eq!(d.asset_room(), 6_000 - 32 * 32 * 4, "what the page shows is what the room is less");
     // The page shows the other picture instead.
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetProp { node: 2, prop: 1, value: Value::Asset(b) }] }));
     assert_eq!(d.pending_assets(), vec![b]);
     d.asset_ready(b, AVATAR_JPEG.to_vec());
+    d.finish_decoding();
     let _ = d.paint(300, 200);
     assert!(d.assets().image(&a).is_none(), "the first picture went to make room for the second");
     assert!(d.assets().held() <= 6_000, "and the store is within its budget: {}", d.assets().held());
@@ -653,4 +662,51 @@ fn a_page_of_pictures_is_fetched_by_a_few_workers() {
     assert!(fetch.workers() <= eui_client::transport::FETCHES_PER_ORIGIN, "{} workers", fetch.workers());
     let most = most.load(Ordering::SeqCst);
     assert!((1..=eui_client::transport::FETCHES_PER_ORIGIN).contains(&most), "{most} connections open at once");
+}
+
+/// A picture is not decoded on the thread that hands it over — the one that
+/// paints, and on a desktop the one holding the lock the audio callback
+/// waits on. It lands at a later tick, which the driver asks to be woken for
+/// while it is in flight, and only the nodes that show it are measured again.
+#[test]
+fn a_picture_is_decoded_off_the_painting_thread() {
+    let h = hash_of(AVATAR);
+    let mut d = Driver::new(300.0, 200.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+    let mut tree = Subtree::default();
+    let words = 40;
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: words + 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Image, id: 2, style: 0, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Asset(h)));
+    for i in 0..words {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("word {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    d.handle_frame(Frame::Batch(Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "src".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    }));
+    let _ = d.paint(300, 200);
+    assert!(d.next_frame_at().is_none(), "at rest");
+    assert_eq!(d.pending_assets(), vec![h]);
+    d.asset_ready(h, AVATAR.to_vec());
+    assert!(d.assets().image(&h).is_none(), "handed over, not decoded here");
+    assert!(d.next_frame_at().is_some(), "a decode in flight asks to be woken to collect it");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !d.tick(std::time::Instant::now()) {
+        assert!(std::time::Instant::now() < deadline, "the picture never landed");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(d.assets().image(&h).is_some(), "landed on the tick");
+    let _ = d.paint(300, 200);
+    let r = d.layout().rect(d.session().lookup(2).unwrap()).unwrap();
+    assert_eq!((r.w, r.h), (32.0, 32.0));
+    // The picture and its ancestor chain were measured again; the forty
+    // words beside it were not.
+    let measures = d.layout().stats().measures;
+    assert!(measures < 10, "{measures} measures: a landing re-measured the page");
+    assert!(d.next_frame_at().is_none(), "and at rest again once it has landed");
 }

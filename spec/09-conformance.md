@@ -91,6 +91,14 @@ found to be two rules that contradicted each other.
    `a_page_of_pictures_is_fetched_by_a_few_workers`: sixteen fetches at
    once are all answered, with never more than `FETCHES_PER_ORIGIN`
    connections open to the origin.
+7. **A picture is decoded off the thread that paints.**
+   `a_picture_is_decoded_off_the_painting_thread`: handed over, it is not
+   held yet; the driver asks to be woken while it is in flight; it lands on
+   a tick; the words beside it are not measured again; and the driver is at
+   rest once it has landed. `crates/eui-client/tests/worker.rs`'s
+   `a_picture_is_decoded_in_the_confined_worker_and_lands_later` is the
+   same across the process boundary, where the decode threads run under
+   seccomp.
 
 ## 2. Wire format — `crates/eui-proto/tests`
 

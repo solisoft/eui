@@ -194,6 +194,9 @@ fn snapshot_view(out: &str, url: &str, component: &str, w: f32, h: f32, scale: f
                 match msg {
                     Incoming::Asset(hash, Ok(bytes)) => {
                         driver.asset_ready(hash, bytes);
+                        // No clock here to wake on a decode: wait for it, so the frame
+                        // this run paints is the one with the picture in it.
+                        driver.finish_decoding();
                         got += 1;
                         outstanding = outstanding.saturating_sub(1);
                     }
@@ -268,6 +271,9 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                         // fetched nothing.
                         GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         driver.asset_ready(hash, bytes);
+                        // No clock here to wake on a decode: wait for it, so the frame
+                        // this run paints is the one with the picture in it.
+                        driver.finish_decoding();
                         outstanding = outstanding.saturating_sub(1);
                     }
                     Incoming::Asset(hash, Err(e)) => {
@@ -414,6 +420,9 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                             }
                             Incoming::Asset(hash, Ok(bytes)) => {
                                 driver.asset_ready(hash, bytes);
+                                // No clock here to wake on a decode: wait for it, so the frame
+                                // this run paints is the one with the picture in it.
+                                driver.finish_decoding();
                                 outstanding = outstanding.saturating_sub(1);
                             }
                             Incoming::Asset(hash, Err(e)) => {
@@ -552,7 +561,10 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                         }
                         Incoming::Asset(hash, Ok(bytes)) => {
                             GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            driver.asset_ready(hash, bytes)
+                            driver.asset_ready(hash, bytes);
+                            // No clock here to wake on a decode: wait for it, so the frame
+                            // this run paints is the one with the picture in it.
+                            driver.finish_decoding();
                         }
                         Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
                         Incoming::Closed(e) => panic!("closed: {e}"),
@@ -645,7 +657,10 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                         }
                         Incoming::Asset(hash, Ok(bytes)) => {
                             GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            driver.asset_ready(hash, bytes)
+                            driver.asset_ready(hash, bytes);
+                            // No clock here to wake on a decode: wait for it, so the frame
+                            // this run paints is the one with the picture in it.
+                            driver.finish_decoding();
                         }
                         Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
                         Incoming::Closed(e) => panic!("closed: {e}"),
@@ -788,6 +803,9 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                                 Incoming::Asset(hash, Ok(bytes)) => {
                                     GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     driver.asset_ready(hash, bytes);
+                                    // No clock here to wake on a decode: wait for it, so the frame
+                                    // this run paints is the one with the picture in it.
+                                    driver.finish_decoding();
                                 }
                                 Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
                                 Incoming::Closed(e) => panic!("closed: {e}"),
@@ -946,6 +964,9 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                             Incoming::Asset(hash, Ok(bytes)) => {
                                 GOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 driver.asset_ready(hash, bytes);
+                                // No clock here to wake on a decode: wait for it, so the frame
+                                // this run paints is the one with the picture in it.
+                                driver.finish_decoding();
                             }
                             Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
                             Incoming::Closed(e) => panic!("closed: {e}"),

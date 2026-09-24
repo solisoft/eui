@@ -1767,6 +1767,10 @@ fn ignore_terminal_signals() {}
 /// Build and drop a driver so that everything that initialises itself
 /// lazily has done so before the sandbox closes — the text engine's font
 /// loader starts a thread pool, and asks the system for its core count.
+///
+/// The decode threads are among them (`decode.rs`): a driver starts the
+/// process's pool, and after the lock-down a thread cannot be created — the
+/// filter kills the worker on the `clone3` — so it must be started here.
 fn warm_up() {
     drop(Driver::new(1.0, 1.0, 1.0, 0));
 }
@@ -2524,8 +2528,16 @@ impl Backend {
     }
 
     /// Verified bytes for a hash.
+    ///
+    /// Moved, not copied: the closure `with_local` takes may not run, so
+    /// handing it the bytes meant cloning them first in case the worker
+    /// needed them instead — a second copy of every asset, up to 16 MiB,
+    /// on the window's thread.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
-        if self.with_local(|d| d.asset_ready(hash, bytes.clone())).is_some() {
+        if let Backend::Local(d) = self {
+            if let Ok(mut d) = d.lock() {
+                d.asset_ready(hash, bytes);
+            }
             return;
         }
         self.with_worker(|w| {

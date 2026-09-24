@@ -492,6 +492,12 @@ picture a tab had ever shown stayed resident twice, file and full-size
 pixels. Decoded sounds and moving pictures are held only while a node names
 them, under session totals of their own (256 MiB and 192 MiB).
 
+Decoding is off the thread that paints: two threads, started before the
+worker locks itself down, take pictures, sounds and moving pictures, and
+what they make lands at the next tick with only the nodes that show it
+measured again. Fetches go four at a time per origin, and a server that
+goes quiet for 15 seconds is given up on and asked again.
+
 **The catalogue, second half.** `eui_builders.sl` now composes 491 builders
 widgets from the primitives: buttons in four variants with local states,
 checkbox, switch, badge, chip, card, stat, tabs, segmented control,

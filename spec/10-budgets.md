@@ -424,7 +424,16 @@ a slow link take as long as they take — and a timeout is a failure like any
 other, tried twice more before it is final. A body that fits is read into a
 buffer reserved at its declared length.
 
+Pictures, sounds and moving pictures are decoded on two threads the
+process keeps for it, never on the one that paints: a large JPEG, a long
+MP3 or a GIF used to hold the window — and, on a desktop, the lock the
+audio callback takes — for as long as it took, and a sound already playing
+ran dry. What a decode makes lands at the next tick or paint, which a
+driver with a decode in flight asks to be woken for every 8 ms and at no
+other time, and only the nodes that name it are measured again.
+
 Pinned in `crates/eui-client/tests/assets.rs`:
+`a_picture_is_decoded_off_the_painting_thread`,
 `a_server_that_stops_talking_is_given_up_on`,
 `a_page_of_pictures_is_fetched_by_a_few_workers`,
 `the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`,

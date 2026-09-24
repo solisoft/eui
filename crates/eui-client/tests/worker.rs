@@ -376,3 +376,45 @@ fn how_long_an_audio_fill_waits_behind_a_painting_window() {
     let worst = painting.join().unwrap();
     eprintln!("MEASURED: {paints} paints in 3 s; worst audio fill waited {} ms (the ring holds 200)", worst.as_millis());
 }
+
+/// A picture is decoded inside the confined worker, off the request that
+/// delivered it, and lands on a later tick or paint.
+///
+/// This is the case that could not be tested in-process: the decode pool is
+/// threads, the worker's seccomp filter kills a process that creates one,
+/// so the pool has to be running before the door closes. If it were not,
+/// this worker would die on `SIGSYS` the moment the picture arrived. And
+/// it has to be collected: a still page's list is repeated by the window
+/// without asking the worker, so a list painted while a decode is in
+/// flight must not be repeatable past the next look for it.
+#[test]
+fn a_picture_is_decoded_in_the_confined_worker_and_lands_later() {
+    use eui_proto::*;
+    const AVATAR: &[u8] = include_bytes!("../../../examples/demo-app/public/images/avatar.png");
+    let h = *blake3::hash(AVATAR).as_bytes();
+    let (mut backend, how) = Backend::open_with(eui_binary(), 100.0, 100.0, 1.0, 0);
+    assert!(matches!(backend, Backend::Remote { .. }), "{how}");
+    let _ = backend.hello();
+    let _ = backend.frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }).encode());
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Image, id: 2, style: 0, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 0 });
+    tree.props.push((1, Value::Asset(h)));
+    let ops =
+        vec![Op::DefAtom { id: 1, value: "src".into() }, Op::DefStyle { id: 1, record: StyleRecord { display: Display::Row, align_items: AlignItems::Start, ..Default::default() } }, Op::Mount(tree)];
+    let _ = backend.frame(Frame::Batch(Batch { seq: 1, ops }).encode());
+    assert_eq!(backend.pending_assets().0, vec![h]);
+    backend.asset_ready(h, AVATAR.to_vec());
+    let textured = |b: &mut Backend| b.paint(100, 100).0.quads.iter().any(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(backend.closed().is_none(), "the worker died: {:?}", backend.closed());
+        if textured(&mut backend) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the picture never landed");
+        assert!(backend.next_frame_at().is_some() || textured(&mut backend), "a decode in flight asks to be woken to collect it");
+        std::thread::sleep(Duration::from_millis(5));
+        backend.tick(Instant::now());
+    }
+}
