@@ -144,7 +144,12 @@ scissor region.
   from the signed distance to the edge, so boxes, hairlines, borders and
   glyphs share one instanced pipeline over `wgpu`.
 - Glyphs are rasterised on demand into a single R8 atlas, shelf-packed, grown
-  once.
+  once to 2048², and emptied and packed again when that fills — before, the
+  next glyph was drawn as nothing until a rescale. The frame that empties it
+  is painted once more, so no quad names where a glyph used to be.
+- Pictures go into an RGBA atlas of their own, 2048², which tracks what
+  changed as rectangles: a video's frame is uploaded, and sent across a
+  worker's pipe, as its own texels rather than the 8 KiB rows it sits on.
 - Quads are snapped to device pixels at paint time; `scroll` and `list`
   become scissor rects; anything outside its clip is culled before it reaches
   the GPU; virtualised rows paint their box and shape no text.
@@ -928,8 +933,9 @@ window stands.
 355–500 µs through a worker: two round trips over the pipe, 80–100 µs
 each, and 47 KB of draw list coming back — 96 bytes a quad, in the shape
 the renderer uploads, against 27 bytes going out. Both are inside the
-2 ms budget. Only the rows of an atlas that changed cross, not the
-atlas. What the boundary
+2 ms budget. Only what changed in an atlas crosses, not the atlas: bands of
+rows for the glyph atlas, rectangles for the picture atlas — a 320×240
+video frame is 300 KB, where its full-width rows were 1.9 MB. What the boundary
 does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
 (AppContainer), where it is its own process but not a sandboxed one, and
 fold an input into the paint that follows it, which would make it one

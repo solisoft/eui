@@ -957,19 +957,25 @@ impl Renderer {
             atlas.mark_dirty_all();
             images.mark_dirty_all();
         }
-        // Only the rows that changed cross to the GPU: a few glyph rows
-        // per frame of new text, not a megabyte.
-        if let Some((y0, y1)) = images.dirty_rows() {
-            let rows = images.rows(y0, y1);
-            bytes += rows.len();
+        // Only what changed crosses to the GPU. For pictures that is a
+        // rectangle apiece, read straight out of the sheet at its offset: a
+        // `bytes_per_row` of the whole sheet's width with an extent of the
+        // rectangle's makes wgpu stage the rectangle's texels and not the
+        // rows they sit on, so a video's frame costs its own bytes.
+        let img_row = images.size() * 4;
+        for &[x, y, w, h] in images.dirty_regions() {
+            if images.pixels().is_empty() || w == 0 || h == 0 {
+                continue;
+            }
+            bytes += (w * h * 4) as usize;
             self.queue.write_texture(
-                wgpu::ImageCopyTexture { texture: &tex.img_tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
-                rows,
-                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(images.size() * 4), rows_per_image: Some(y1 - y0) },
-                wgpu::Extent3d { width: images.size(), height: y1 - y0, depth_or_array_layers: 1 },
+                wgpu::ImageCopyTexture { texture: &tex.img_tex, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+                images.pixels(),
+                wgpu::ImageDataLayout { offset: u64::from(y) * u64::from(img_row) + u64::from(x) * 4, bytes_per_row: Some(img_row), rows_per_image: Some(h) },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
-            images.mark_clean();
         }
+        images.mark_clean();
         // Band by band: two glyphs on shelves far apart cost their rows,
         // not the rows between.
         for &(y0, y1) in atlas.dirty_bands() {

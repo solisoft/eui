@@ -45,6 +45,9 @@ impl Atlas {
     /// The initial edge length; the atlas grows to twice this once.
     pub const INITIAL: u32 = 1024;
 
+    /// The largest edge length: grown to once, then emptied when full.
+    pub const MAX: u32 = Self::INITIAL * 2;
+
     /// An empty atlas.
     pub fn new() -> Self {
         Self::with_size(Self::INITIAL)
@@ -187,8 +190,18 @@ impl Atlas {
     }
 
     /// Find or rasterise-and-pack a glyph at a device scale. `None` for a
-    /// glyph with no image (a space) or one that does not fit even after
-    /// growing — the latter is drawn as nothing rather than crashing.
+    /// glyph with no image (a space) or one larger than an empty sheet of
+    /// the largest size — the latter is drawn as nothing rather than
+    /// crashing.
+    ///
+    /// A full sheet makes room. Once it has grown to its largest, a glyph
+    /// that did not fit used to be remembered as `None` and drawn as
+    /// nothing until the next rescale — a long CJK session simply stopped
+    /// showing new characters. It now empties the sheet and packs the
+    /// glyph into it, as [`ImageAtlas::insert`] does for pictures: the
+    /// generation goes up, so every quad built from the old arrangement is
+    /// known to be stale (the paint cache keys on it), and the glyphs still
+    /// on screen are packed again as the next paint asks for them.
     pub fn get(&mut self, text: &mut TextEngine, key: GlyphKey, scale: f32) -> Option<Region> {
         let k = (key, scale.to_bits());
         if let Some(r) = self.map.get(&k) {
@@ -203,9 +216,17 @@ impl Atlas {
                 (if drawable { self.pack(g) } else { None }, drawable)
             })
             .unwrap_or((None, false));
-        if region.is_none() && could_fit && self.size < Self::INITIAL * 2 {
-            self.grow();
-            return self.get(text, key, scale);
+        if region.is_none() && could_fit {
+            if self.size < Self::MAX {
+                self.grow();
+                return self.get(text, key, scale);
+            }
+            // Only from a sheet that holds something: an empty one that
+            // still refuses the glyph would refuse it again, for ever.
+            if !self.shelves.is_empty() {
+                self.clear();
+                return self.get(text, key, scale);
+            }
         }
         self.map.insert(k, region);
         region
@@ -294,8 +315,18 @@ pub struct ImageAtlas {
     shelves: Vec<(u32, u32, u32)>,
     next_y: u32,
     map: HashMap<[u8; 32], Option<Region>>,
-    /// Rows written since the last upload, `None` when clean.
-    dirty: Option<(u32, u32)>,
+    /// Rectangles `[x, y, w, h]` written since the last upload, empty when
+    /// clean.
+    ///
+    /// Rectangles and not rows. The sheet is 2048 texels across and four
+    /// bytes a texel, so a row is 8 KiB whatever wrote to it: a 320×240
+    /// video dirtied 240 of them, about 1.9 MB a frame for 300 KB of
+    /// picture, and two videos at opposite ends of the sheet merged into
+    /// one band that could be the whole 16 MiB -- copied into the pipe,
+    /// out of it, and into the GPU's staging buffer, every frame. A
+    /// rectangle costs what was drawn into it. Kept short: past
+    /// [`Self::MAX_REGIONS`] the two whose union wastes least are merged.
+    dirty: Vec<[u32; 4]>,
 }
 
 impl ImageAtlas {
@@ -310,8 +341,11 @@ impl ImageAtlas {
     /// budget in `spec/10-budgets.md` currently counts. The first write
     /// allocates; until then this atlas is a few dozen bytes.
     pub fn new() -> Self {
-        Self { size: Self::SIZE, pixels: Vec::new(), shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: None }
+        Self { size: Self::SIZE, pixels: Vec::new(), shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Vec::new() }
     }
+
+    /// How many dirty rectangles are kept apart before two are merged.
+    pub const MAX_REGIONS: usize = 8;
 
     /// True once the texels exist, i.e. once anything has been packed. The
     /// renderer asks so it can leave the texture unmade.
@@ -326,37 +360,90 @@ impl ImageAtlas {
         }
     }
 
-    /// Take rows `y0..y1` of RGBA texels; refused, and nothing changes,
-    /// unless `rows` is exactly those rows.
-    pub fn set_rows(&mut self, y0: u32, y1: u32, rows: &[u8]) -> bool {
-        if y1 > self.size || y0 >= y1 || rows.len() != ((y1 - y0) as usize).saturating_mul(self.size as usize).saturating_mul(4) {
+    /// Take the RGBA texels of the rectangle `[x, y, w, h]`, tightly
+    /// packed: a window process receiving what a worker packed. Refused,
+    /// and nothing changes, unless the rectangle lies inside the sheet and
+    /// `px` is exactly its bytes -- the worker is the untrusted side of
+    /// that pipe.
+    pub fn set_region(&mut self, r: [u32; 4], px: &[u8]) -> bool {
+        let [x, y, w, h] = r;
+        let fits = w > 0 && h > 0 && x.checked_add(w).is_some_and(|e| e <= self.size) && y.checked_add(h).is_some_and(|e| e <= self.size);
+        if !fits || px.len() != (w as usize).saturating_mul(h as usize).saturating_mul(4) {
             return false;
         }
         self.ensure();
-        let start = (y0 as usize).saturating_mul(self.size as usize).saturating_mul(4);
-        if let Some(dst) = self.pixels.get_mut(start..start.saturating_add(rows.len())) {
-            dst.copy_from_slice(rows);
+        let row = (w as usize) * 4;
+        for (i, src) in px.chunks_exact(row).enumerate() {
+            let at = ((y as usize + i) * self.size as usize + x as usize) * 4;
+            if let Some(dst) = self.pixels.get_mut(at..at + row) {
+                dst.copy_from_slice(src);
+            }
         }
-        self.touch(y0, y1);
+        self.touch(r);
         true
     }
 
-    /// Rows written since the last upload, `y0..y1`; `None` when clean.
-    pub fn dirty_rows(&self) -> Option<(u32, u32)> {
-        self.dirty
+    /// The rectangles `[x, y, w, h]` written since the last upload.
+    pub fn dirty_regions(&self) -> &[[u32; 4]] {
+        &self.dirty
     }
 
-    /// The bytes of rows `y0..y1`.
-    pub fn rows(&self, y0: u32, y1: u32) -> &[u8] {
-        let (a, b) = ((y0 as usize).saturating_mul(self.size as usize).saturating_mul(4), (y1 as usize).saturating_mul(self.size as usize).saturating_mul(4));
-        self.pixels.get(a..b).unwrap_or(&[])
+    /// The texels of a rectangle, tightly packed row by row: what crosses
+    /// the pipe for it. Empty for one that is not inside the sheet, or
+    /// before anything was packed.
+    pub fn region_bytes(&self, r: [u32; 4]) -> Vec<u8> {
+        let [x, y, w, h] = r;
+        let inside = x.checked_add(w).is_some_and(|e| e <= self.size) && y.checked_add(h).is_some_and(|e| e <= self.size);
+        if !inside || self.pixels.is_empty() {
+            return Vec::new();
+        }
+        let row = (w as usize) * 4;
+        let mut out = Vec::with_capacity(row * h as usize);
+        for i in 0..h as usize {
+            let at = ((y as usize + i) * self.size as usize + x as usize) * 4;
+            out.extend_from_slice(self.pixels.get(at..at + row).unwrap_or(&[]));
+        }
+        out
     }
 
-    fn touch(&mut self, y0: u32, y1: u32) {
-        self.dirty = Some(match self.dirty {
-            Some((a, b)) => (a.min(y0), b.max(y1)),
-            None => (y0, y1),
-        });
+    /// Bytes the dirty rectangles hold, which is what the next upload costs.
+    pub fn dirty_bytes(&self) -> usize {
+        self.dirty.iter().map(|r| (r[2] as usize) * (r[3] as usize) * 4).sum()
+    }
+
+    fn touch(&mut self, r: [u32; 4]) {
+        if r[2] == 0 || r[3] == 0 {
+            return;
+        }
+        let union = |a: [u32; 4], b: [u32; 4]| {
+            let (x0, y0) = (a[0].min(b[0]), a[1].min(b[1]));
+            let (x1, y1) = ((a[0] + a[2]).max(b[0] + b[2]), (a[1] + a[3]).max(b[1] + b[3]));
+            [x0, y0, x1 - x0, y1 - y0]
+        };
+        // Meeting or overlapping: one rectangle. A video's next frame lands
+        // exactly on the last one's and costs nothing extra.
+        let meets = |a: [u32; 4], b: [u32; 4]| a[0] <= b[0] + b[2] && b[0] <= a[0] + a[2] && a[1] <= b[1] + b[3] && b[1] <= a[1] + a[3];
+        let mut r = r;
+        while let Some(i) = self.dirty.iter().position(|d| meets(*d, r)) {
+            r = union(self.dirty.swap_remove(i), r);
+        }
+        self.dirty.push(r);
+        // Too many: the pair whose union adds the fewest texels becomes one.
+        let area = |a: [u32; 4]| u64::from(a[2]) * u64::from(a[3]);
+        while self.dirty.len() > Self::MAX_REGIONS {
+            let mut best = (u64::MAX, 0, 1);
+            for (i, &a) in self.dirty.iter().enumerate() {
+                for (j, &b) in self.dirty.iter().enumerate().skip(i + 1) {
+                    let waste = area(union(a, b)).saturating_sub(area(a) + area(b));
+                    if waste < best.0 {
+                        best = (waste, i, j);
+                    }
+                }
+            }
+            let b = self.dirty.swap_remove(best.2);
+            let a = self.dirty.swap_remove(best.1);
+            self.touch(union(a, b));
+        }
     }
 
     /// Edge length in texels.
@@ -371,17 +458,18 @@ impl ImageAtlas {
 
     /// True when the texture must be re-uploaded.
     pub fn is_dirty(&self) -> bool {
-        self.dirty.is_some()
+        !self.dirty.is_empty()
     }
 
     /// Acknowledge an upload.
     pub fn mark_clean(&mut self) {
-        self.dirty = None;
+        self.dirty.clear();
     }
 
     /// Force a re-upload (the texture was recreated).
     pub fn mark_dirty_all(&mut self) {
-        self.dirty = Some((0, self.size));
+        self.dirty.clear();
+        self.dirty.push([0, 0, self.size, self.size]);
     }
 
     /// Where an image lives, if it was packed.
@@ -389,23 +477,27 @@ impl ImageAtlas {
         self.map.get(hash).copied().flatten()
     }
 
-    /// Forget everything packed. The texels stay allocated and are marked
-    /// for re-upload; what is still on screen is packed again by whoever
-    /// notices it is missing.
+    /// Forget everything packed. The texels stay allocated, as they were;
+    /// what is still on screen is packed again by whoever notices it is
+    /// missing.
     ///
     /// This exists because the sheet is one 2048² texture and it fills: six
     /// photographs of 800×600 are enough. Without a way to start again, the
     /// seventh picture of a session was never drawn — not an error, not a
     /// failed fetch, simply absent, and a different set of absences on
     /// every load.
+    ///
+    /// Nothing is zeroed and nothing is owed. This used to blank all 16 MiB
+    /// and mark the whole sheet for upload -- across the pipe and into the
+    /// texture, for pixels no quad would ever sample again. The old texels
+    /// belong to nobody now; `pack` writes its whole padded rectangle,
+    /// border included, so a stale neighbour cannot bleed into a new
+    /// picture, and it dirties exactly that rectangle.
     pub fn clear(&mut self) {
         self.map.clear();
         self.shelves.clear();
         self.next_y = 0;
-        if !self.pixels.is_empty() {
-            self.pixels.iter_mut().for_each(|b| *b = 0);
-            self.mark_dirty_all();
-        }
+        self.dirty.clear();
     }
 
     /// Pack an image. `None` when it does not fit; the hash is remembered
@@ -446,7 +538,7 @@ impl ImageAtlas {
             };
             d.copy_from_slice(s);
         }
-        self.touch(region.y, region.y.saturating_add(region.h).min(self.size));
+        self.touch([region.x, region.y, region.w, region.h]);
         true
     }
 
@@ -481,6 +573,16 @@ impl ImageAtlas {
                 (0, y)
             }
         };
+        // The one-texel border is written too, as transparent: after a
+        // `clear` the sheet still holds whatever was there before, and a
+        // bilinear tap at the picture's edge would otherwise pick it up.
+        let padded = w as usize * 4;
+        for row in 0..h {
+            let at = (((y + row) * self.size + x) * 4) as usize;
+            if let Some(d) = self.pixels.get_mut(at..at + padded) {
+                d.fill(0);
+            }
+        }
         let row_bytes = width as usize * 4;
         for row in 0..height {
             let src = row as usize * row_bytes;
@@ -490,7 +592,7 @@ impl ImageAtlas {
             };
             d.copy_from_slice(s);
         }
-        self.touch(y, y.saturating_add(h).min(self.size));
+        self.touch([x, y, w, h]);
         Some(Region { x: x + 1, y: y + 1, w: width, h: height, left: 0, top: 0 })
     }
 }
@@ -505,6 +607,12 @@ impl Default for ImageAtlas {
 mod tests {
     use super::*;
 
+    /// A region that must be there, without a panic the lints forbid.
+    fn got(r: Option<Region>) -> Region {
+        assert!(r.is_some(), "expected a region");
+        r.unwrap_or(Region { x: 0, y: 0, w: 0, h: 0, left: 0, top: 0 })
+    }
+
     #[test]
     fn an_image_atlas_costs_nothing_until_it_holds_a_picture() {
         // The point of the laziness: 2048² RGBA is 16 MiB of buffer and a
@@ -513,7 +621,7 @@ mod tests {
         // for no upload.
         let mut atlas = ImageAtlas::new();
         assert!(atlas.is_empty(), "a fresh image atlas holds no texels");
-        assert_eq!(atlas.dirty_rows(), None, "and so has nothing to upload");
+        assert!(atlas.dirty_regions().is_empty(), "and so has nothing to upload");
         assert!(atlas.pixels().is_empty());
 
         // Packing one is what allocates, and it reports rows to upload.
@@ -521,7 +629,7 @@ mod tests {
         let region = atlas.insert([7; 32], 8, 8, &rgba);
         assert!(region.is_some(), "an 8x8 picture packs");
         assert!(!atlas.is_empty(), "packing allocates the texels");
-        assert!(atlas.dirty_rows().is_some(), "and marks rows for upload");
+        assert_eq!(atlas.dirty_regions(), &[[0, 0, 10, 10]], "and marks its padded rectangle for upload, not its rows");
         assert_eq!(atlas.pixels().len(), (ImageAtlas::SIZE as usize).pow(2) * 4);
 
         // The same hash again is the cached region, not a second pack.
@@ -576,11 +684,107 @@ mod tests {
     }
 
     #[test]
+    fn a_full_glyph_sheet_empties_itself_and_the_next_glyph_is_still_drawn() {
+        // A sheet at its largest with no room left: one full shelf. Before,
+        // the next glyph was remembered as `None` and never drawn until a
+        // rescale.
+        let mut text = TextEngine::new();
+        let font = eui_layout::FontSpec { family: eui_proto::FontFamily::Sans, weight: eui_proto::FontWeight::Regular, size: 15.0, line_height: 22.0 };
+        let first = |text: &mut TextEngine, font| text.shape("H", font, None, 0).glyphs.first().map(|g| g.key);
+        let key = first(&mut text, font);
+        assert!(key.is_some(), "an H is a glyph");
+        let Some(key) = key else { return };
+        let mut atlas = Atlas::with_size(Atlas::MAX);
+        atlas.shelves.push((0, Atlas::MAX, Atlas::MAX));
+        atlas.next_y = Atlas::MAX;
+        let before = atlas.generation();
+
+        let region = atlas.get(&mut text, key, 1.0);
+        assert!(region.is_some(), "the glyph is packed into the emptied sheet");
+        assert_ne!(atlas.generation(), before, "and every region taken before is known to be stale");
+        assert_eq!(atlas.size(), Atlas::MAX, "without growing past the largest size");
+        assert_eq!(atlas.get(&mut text, key, 1.0), region, "and it is found there next time");
+
+        // A glyph too big for even an empty sheet is refused once, without
+        // emptying the sheet over and over.
+        let Some(huge) = first(&mut text, eui_layout::FontSpec { size: 4000.0, line_height: 4000.0, ..font }) else { return };
+        let generation = atlas.generation();
+        assert_eq!(atlas.get(&mut text, huge, 1.0), None);
+        assert!(atlas.generation().wrapping_sub(generation) <= 1, "one clear at most, not a loop");
+    }
+
+    #[test]
     fn rows_of_an_unallocated_atlas_are_empty_rather_than_a_panic() {
         // `sync_atlas` asks for rows before anything is packed on the very
         // first frame; an empty slice is the right answer, not an index out
         // of a zero-length buffer.
         let atlas = ImageAtlas::new();
-        assert!(atlas.rows(0, 4).is_empty());
+        assert!(atlas.region_bytes([0, 0, 4, 4]).is_empty());
+    }
+
+    #[test]
+    fn two_pictures_at_opposite_ends_of_the_sheet_cost_their_own_texels() {
+        // Two 8×8 videos, one at each end of the same shelf. Tracked as
+        // rows, their next frames dirtied the whole 2048-texel width of
+        // those rows: 64 KiB for 512 bytes of picture. As rectangles they
+        // cost what they are.
+        let mut atlas = ImageAtlas::new();
+        let px = |v: u8, w: u32, h: u32| vec![v; (w * h * 4) as usize];
+        let a = got(atlas.insert([1; 32], 8, 8, &px(1, 8, 8)));
+        got(atlas.insert([2; 32], 2000, 8, &px(2, 2000, 8)));
+        let z = got(atlas.insert([3; 32], 8, 8, &px(3, 8, 8)));
+        assert_eq!((a.x, a.y), (1, 1));
+        assert!(z.x > 2000 && z.y == 1, "z is at the far end of the same rows: {z:?}");
+        atlas.mark_clean();
+
+        assert!(atlas.update(&[1; 32], &px(9, 8, 8)));
+        assert!(atlas.update(&[3; 32], &px(9, 8, 8)));
+        assert_eq!(atlas.dirty_regions().len(), 2, "two rectangles, not one band: {:?}", atlas.dirty_regions());
+        assert_eq!(atlas.dirty_bytes(), 2 * 8 * 8 * 4, "the bytes of two pictures, and nothing between them");
+
+        // And the same across the height: two rectangles, not every row
+        // between them.
+        atlas.mark_clean();
+        atlas.touch([0, 0, 4, 4]);
+        atlas.touch([2044, 2044, 4, 4]);
+        assert_eq!(atlas.dirty_regions().len(), 2);
+        assert_eq!(atlas.dirty_bytes(), 2 * 4 * 4 * 4);
+
+        // A frame written again over the last one's rectangle is free.
+        atlas.touch([0, 0, 4, 4]);
+        assert_eq!(atlas.dirty_bytes(), 2 * 4 * 4 * 4);
+
+        // What crosses the pipe is the rectangle's texels, tightly packed,
+        // and a second atlas that takes them holds the same picture.
+        atlas.mark_clean();
+        assert!(atlas.update(&[3; 32], &px(7, 8, 8)));
+        let mut window = ImageAtlas::new();
+        for &r in atlas.dirty_regions() {
+            let bytes = atlas.region_bytes(r);
+            assert_eq!(bytes.len(), (r[2] * r[3] * 4) as usize);
+            assert!(window.set_region(r, &bytes));
+        }
+        assert_eq!(window.region_bytes([z.x, z.y, 8, 8]), px(7, 8, 8));
+        assert!(!window.set_region([2047, 0, 2, 1], &[0; 8]), "a rectangle off the sheet is refused");
+        assert!(!window.set_region([0, 0, 2, 2], &[0; 15]), "and so are the wrong number of bytes");
+    }
+
+    #[test]
+    fn a_cleared_sheet_owes_no_upload_and_repacks_with_a_clean_border() {
+        // Clearing used to blank all 16 MiB and mark the whole sheet dirty:
+        // one full transfer for pixels nothing would sample again.
+        let mut atlas = ImageAtlas::new();
+        got(atlas.insert([1; 32], 30, 30, &vec![255; 30 * 30 * 4]));
+        atlas.mark_clean();
+        atlas.clear();
+        assert!(!atlas.is_dirty(), "a clear owes nothing");
+        // The next picture lands where the first was, smaller: its border
+        // must be transparent, not the old picture's white.
+        let r = got(atlas.insert([2; 32], 8, 8, &vec![10; 8 * 8 * 4]));
+        assert_eq!(atlas.dirty_regions(), &[[0, 0, 10, 10]]);
+        let border = atlas.region_bytes([r.x + r.w, r.y, 1, r.h]);
+        assert!(border.iter().all(|&b| b == 0), "the right border is clear: {border:?}");
+        let top = atlas.region_bytes([0, 0, 10, 1]);
+        assert!(top.iter().all(|&b| b == 0));
     }
 }

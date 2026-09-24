@@ -7547,29 +7547,45 @@ impl Driver {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
         trace(|| format!("paint: focused={:?} editing={editing:?}", self.focused.and_then(|f| self.session.node(f)).map(|n| n.id)));
-        let mut list = paint(&mut Scene {
-            session: &self.session,
-            layout: &self.layout,
-            theme: &self.resolved,
-            text: &mut self.text,
-            atlas: &mut self.atlas,
-            images: &self.images,
-            scale: self.scale,
-            size: (device_w, device_h),
-            focus: if self.focus_visible { self.focused } else { None },
-            anims: &anims,
-            movers: &movers,
-            glides: &glides,
-            cache: &mut self.paint_cache,
-            editing,
-            now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
-            // 08 §3: without the grant the painter never builds a scene, so
-            // there is no target, no fetch and nothing compiled -- not a
-            // check that fails, a path that is not taken.
-            scenes_allowed: self.granted & caps::SCENE != 0,
-            scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
-            scrollbars: &bars,
-        });
+        // A sheet that grew or emptied itself part way through the paint has
+        // moved every glyph packed before it, and the quads already built
+        // this frame name where those used to be. Painted once more, then:
+        // the generation is new, so nothing cached is reused, and what the
+        // frame needs is packed afresh. Once, because a frame that needs
+        // more glyphs than the largest sheet holds would only empty it
+        // again, and its last glyphs are the most it can show.
+        let mut tries = 0;
+        let mut list = loop {
+            let generation = self.atlas.generation();
+            let list = paint(&mut Scene {
+                session: &self.session,
+                layout: &self.layout,
+                theme: &self.resolved,
+                text: &mut self.text,
+                atlas: &mut self.atlas,
+                images: &self.images,
+                scale: self.scale,
+                size: (device_w, device_h),
+                focus: if self.focus_visible { self.focused } else { None },
+                anims: &anims,
+                movers: &movers,
+                glides: &glides,
+                cache: &mut self.paint_cache,
+                editing,
+                now: self.now.saturating_duration_since(self.epoch).as_secs_f32(),
+                // 08 §3: without the grant the painter never builds a scene, so
+                // there is no target, no fetch and nothing compiled -- not a
+                // check that fails, a path that is not taken.
+                scenes_allowed: self.granted & caps::SCENE != 0,
+                scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
+                scrollbars: &bars,
+            });
+            tries += 1;
+            if self.atlas.generation() == generation || tries > 1 {
+                break list;
+            }
+            self.paint_cache.clear();
+        };
         self.splice_departing(&mut list, now, (device_w, device_h));
         if list.wants_frame && self.next_due.is_none() {
             self.next_due = Some(now + SPIN_FRAME);

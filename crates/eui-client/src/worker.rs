@@ -761,16 +761,18 @@ pub enum Payload {
     /// `OpenIsland`: the owner its batches apply under, or `None` past the
     /// ceiling or for a path this client will not dial.
     Owner(Option<u16>),
-    /// `Paint`: the draw list, and the rows of each atlas that changed
-    /// since the last paint — bands of `(edge length, y0, y1, bytes)` for
-    /// the glyph atlas, which grows, `(y0, y1, bytes)` for the image atlas.
+    /// `Paint`: the draw list, and what changed in each atlas since the
+    /// last paint — bands of `(edge length, y0, y1, bytes)` for the glyph
+    /// atlas, which grows, and rectangles of `([x, y, w, h], bytes)` for
+    /// the image atlas, whose rows are 8 KiB each and whose pictures are
+    /// narrower than that.
     Paint {
         /// The frame. Shared, so a reply drawn again is not copied again.
         list: Arc<DrawList>,
         /// Coverage rows.
         glyphs: Vec<(u32, u32, u32, Vec<u8>)>,
-        /// RGBA rows.
-        images: Option<(u32, u32, Vec<u8>)>,
+        /// RGBA rectangles, tightly packed.
+        images: Vec<([u32; 4], Vec<u8>)>,
         /// Scene meshes and modules the worker checked since the last
         /// paint, for the window to upload and compile.
         ///
@@ -928,14 +930,12 @@ impl Reply {
                     w.u32(*y1);
                     w.bytes(px);
                 }
-                match images {
-                    Some((y0, y1, px)) => {
-                        w.bool(true);
-                        w.u32(*y0);
-                        w.u32(*y1);
-                        w.bytes(px);
+                w.u32(u32::try_from(images.len()).unwrap_or(u32::MAX));
+                for (rect, px) in images {
+                    for v in rect {
+                        w.u32(*v);
                     }
-                    None => w.bool(false),
+                    w.bytes(px);
                 }
                 w.u32(u32::try_from(scenes.len()).unwrap_or(u32::MAX));
                 for (h, asset) in scenes {
@@ -1091,7 +1091,11 @@ impl Reply {
                 for _ in 0..n {
                     glyphs.push((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec()));
                 }
-                let images = if r.bool()? { Some((r.u32()?, r.u32()?, r.bytes()?.to_vec())) } else { None };
+                let n = r.u32()? as usize;
+                let mut images = Vec::with_capacity(n.min(16));
+                for _ in 0..n {
+                    images.push(([r.u32()?, r.u32()?, r.u32()?, r.u32()?], r.bytes()?.to_vec()));
+                }
                 let n = r.u32()? as usize;
                 let mut scenes = Vec::with_capacity(n.min(16));
                 for _ in 0..n {
@@ -1636,11 +1640,11 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         let (atlas, images) = d.atlases_mut();
                         let glyphs: Vec<(u32, u32, u32, Vec<u8>)> = atlas.dirty_bands().iter().map(|&(y0, y1)| (atlas.size(), y0, y1, atlas.rows(y0, y1).to_vec())).collect();
                         atlas.mark_clean();
-                        let images = images.dirty_rows().map(|(y0, y1)| {
-                            images.mark_clean();
-                            (y0, y1, images.rows(y0, y1).to_vec())
-                        });
-                        Payload::Paint { list, glyphs, images, scenes: d.take_scene_assets() }
+                        // A rectangle apiece, not the rows it sits on: a
+                        // video's frame crosses as its own texels.
+                        let rects: Vec<([u32; 4], Vec<u8>)> = images.dirty_regions().iter().map(|&r| (r, images.region_bytes(r))).collect();
+                        images.mark_clean();
+                        Payload::Paint { list, glyphs, images: rects, scenes: d.take_scene_assets() }
                     }
                     Request::Tick => Payload::Tick(d.tick(Instant::now())),
                     Request::AccessTree => Payload::Access(d.access_snapshot()),
@@ -1915,7 +1919,7 @@ impl Repeat {
             // mesh would re-upload it sixty times a second for as long as
             // the scene turns, which is exactly the cost this whole path
             // exists to avoid.
-            payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: None, scenes: Vec::new() },
+            payload: Payload::Paint { list: Arc::clone(list), glyphs: Vec::new(), images: Vec::new(), scenes: Vec::new() },
         };
         Some(Self { reply, until })
     }
@@ -2563,8 +2567,8 @@ impl Backend {
             Err(_) => None,
         };
         match reply {
-            Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rows, scenes: scene_assets } }) => {
-                // Only the rows that changed cross the pipe.
+            Some(Reply { status, payload: Payload::Paint { list, glyphs, images: image_rects, scenes: scene_assets } }) => {
+                // Only what changed crosses the pipe.
                 if let Ok(mut a) = atlas.lock() {
                     for (size, y0, y1, px) in glyphs {
                         if !a.set_rows(size, y0, y1, &px) {
@@ -2572,9 +2576,13 @@ impl Backend {
                         }
                     }
                 }
-                if let (Some((y0, y1, px)), Ok(mut i)) = (image_rows, images.lock()) {
-                    if !i.set_rows(y0, y1, &px) {
-                        eprintln!("eui: the worker sent image atlas rows of the wrong size");
+                if !image_rects.is_empty() {
+                    if let Ok(mut i) = images.lock() {
+                        for (rect, px) in image_rects {
+                            if !i.set_region(rect, &px) {
+                                eprintln!("eui: the worker sent an image atlas rectangle off the sheet or of the wrong size");
+                            }
+                        }
                     }
                 }
                 if !scene_assets.is_empty() {
@@ -3022,7 +3030,7 @@ mod tests {
             payload: Payload::Paint {
                 list: Arc::new(l),
                 glyphs: vec![(2, 1, 2, vec![0, 1])],
-                images: Some((0, 1, vec![7; 8])),
+                images: vec![([0, 0, 1, 2], vec![7; 8])],
                 scenes: vec![([9; 32], crate::driver::SceneAsset::Shader("@fragment fn fs_main() {}".into()))],
             },
         };
@@ -3037,7 +3045,7 @@ mod tests {
         assert!(again.status.claims_left && again.status.takes_back, "and what the page claimed");
         assert!(again.status.audio, "and that a sound is still loaded");
         assert_eq!(**kept, list(true), "the list itself is what gets drawn again");
-        assert!(glyphs.is_empty() && images.is_none(), "the atlas rows already landed");
+        assert!(glyphs.is_empty() && images.is_empty(), "the atlas rows already landed");
         // The easiest line in this file to leave out, and the most
         // expensive: replaying a scene's mesh would re-upload it on every
         // frame for as long as the scene turns.
@@ -3206,7 +3214,7 @@ mod tests {
             Payload::Paint {
                 list: Arc::new(list),
                 glyphs: vec![(2, 1, 2, vec![0, 1]), (2, 0, 1, vec![3, 4])],
-                images: Some((0, 1, vec![7; 8192])),
+                images: vec![([0, 0, 1, 2], vec![7; 8]), ([2040, 2040, 8, 1], vec![1; 32])],
                 scenes: vec![(
                     [4; 32],
                     crate::driver::SceneAsset::Mesh(crate::mesh::Mesh {
