@@ -134,6 +134,18 @@ pub struct Renderer {
     /// it holds no texture and no buffer, so two sessions behind one cannot
     /// reach each other through it.
     scene_modules: HashMap<[u8; 32], wgpu::ShaderModule>,
+    /// The source of every module a server sent, and when each was last
+    /// drawn (a count of `render_scenes` calls, `scene_clock`).
+    ///
+    /// The compiled modules and their pipelines are capped at
+    /// [`MAX_SCENE_MODULES`]: they are per process and outlive the session
+    /// that sent them, and a compiled module is the naga IR plus whatever
+    /// the driver made of it -- many times its text. The least recently
+    /// drawn is dropped first. Its source is kept, because the worker sends
+    /// a module once per hash and never again; a scene that comes back
+    /// compiles it again from here, off the same text that was verified.
+    scene_sources: HashMap<[u8; 32], (String, u64)>,
+    scene_clock: u64,
     adapter_name: String,
     /// Whether this adapter can multisample a scene's target four ways. A
     /// count it cannot meet is a validation error, so it is asked once here
@@ -213,22 +225,74 @@ impl fmt::Debug for SessionTextures {
     }
 }
 
-/// The off-screen textures a blurred frame works in.
+/// The off-screen textures a blurred frame works in, and every view and
+/// bind group the passes over them need -- made with the textures, not per
+/// frame.
 struct Blur {
-    /// Format, region, and the *reduction* each chain works at — which is
-    /// everything the sizes below depend on, and deliberately not the
-    /// standard deviations themselves. An entrance animates a radius from
-    /// zero over some tenths of a second (03 §5); keying on the radius
-    /// would throw every texture away sixty times a second to redraw the
-    /// same sizes, where keying on the reduction reallocates about four
-    /// times over the whole animation.
-    key: (wgpu::TextureFormat, [u32; 4], Vec<u32>),
-    /// The frame as it stood before the first blurred quad, at the region's
-    /// own size.
-    snap: wgpu::Texture,
-    /// Per chain: the reduction factor, and the two textures the separable
-    /// Gaussian ping-pongs between. The result ends in the first.
-    chains: Vec<(u32, wgpu::Texture, wgpu::Texture)>,
+    /// Format, extent, and the *reduction* each chain works at — which is
+    /// everything the textures depend on, and deliberately not the standard
+    /// deviations themselves nor where the region is. An entrance animates a
+    /// radius from zero over some tenths of a second (03 §5); keying on the
+    /// radius would throw every texture away sixty times a second to redraw
+    /// the same sizes, where keying on the reduction reallocates about four
+    /// times over the whole animation. And a panel sliding in moves its
+    /// region every frame: keyed on the exact rectangle, that was every
+    /// texture, view and bind group made again for every frame of the
+    /// slide.
+    format: wgpu::TextureFormat,
+    /// The textures' extent in frame pixels: the region's size rounded up
+    /// by [`blur_extent`]. The region is drawn into the top-left corner of
+    /// the snapshot, and a region that grows or shrinks inside the same
+    /// bucket keeps every texture.
+    extent: (u32, u32),
+    /// The frame as it stood before the first blurred quad, `extent` big.
+    snap_view: wgpu::TextureView,
+    chains: Vec<BlurChain>,
+}
+
+/// One radius of a blurred frame: the two textures its separable Gaussian
+/// ping-pongs between, and the bind groups the three passes and the main
+/// pass read them through. The result ends in `a`.
+struct BlurChain {
+    /// The reduction factor.
+    d: u32,
+    /// Texels across and down, `extent / d`.
+    size: (u32, u32),
+    a_view: wgpu::TextureView,
+    b_view: wgpu::TextureView,
+    from_snap: wgpu::BindGroup,
+    from_a: wgpu::BindGroup,
+    from_b: wgpu::BindGroup,
+    /// Group 2 of the main pass, for a run that samples this chain.
+    out: wgpu::BindGroup,
+}
+
+/// How many compiled scene modules the renderer keeps, with their pipelines.
+/// A page shows a handful; this is room for several pages' worth before the
+/// least recently drawn is compiled again on its next appearance.
+pub const MAX_SCENE_MODULES: usize = 32;
+
+/// The least recently used of `held` (a hash and the clock it was last used
+/// at), never one used at `now`. Ties go to the smaller hash, so the choice
+/// does not depend on a map's order.
+fn lru_victim(held: impl Iterator<Item = ([u8; 32], u64)>, now: u64) -> Option<[u8; 32]> {
+    held.filter(|(_, used)| *used != now).min_by_key(|(h, used)| (*used, *h)).map(|(h, _)| h)
+}
+
+/// The granularity of a blur's textures, in frame pixels.
+const BLUR_BUCKET: u32 = 128;
+
+/// The extent a blur's textures are made at for a region of `w × h`: each
+/// side rounded up to [`BLUR_BUCKET`], and no larger than the device allows.
+///
+/// A multiple of 128 is a multiple of every reduction (at most 16), so a
+/// chain's texture is exactly `extent / d` and a frame pixel maps onto it
+/// with no rounding. And a region that changes size by less than a bucket --
+/// a sheet sliding in, a scrim fading, a radius animating -- keeps the
+/// textures it has.
+fn blur_extent(w: u32, h: u32, max: u32) -> (u32, u32) {
+    let up = |v: u32| v.max(1).div_ceil(BLUR_BUCKET).saturating_mul(BLUR_BUCKET).min(max.max(1));
+    (up(w), up(h))
 }
 
 /// How far to reduce the snapshot for a blur of this standard deviation, in
@@ -729,6 +793,8 @@ impl Renderer {
             scene_pipeline_layout,
             scene_pipelines: HashMap::new(),
             scene_modules: HashMap::new(),
+            scene_sources: HashMap::new(),
+            scene_clock: 0,
             adapter_name: adapter.get_info().name,
             scene_msaa: adapter.get_texture_format_features(FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4)
                 && adapter.get_texture_format_features(scene::DEPTH_FORMAT).flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4),
@@ -1023,37 +1089,62 @@ impl Renderer {
     }
 
     /// The textures the frame's blurs work in, made afresh only when the
-    /// region, the radii or the format have moved since the last frame.
+    /// extent's bucket, the reductions or the format have moved since the
+    /// last frame -- compared in place, so a frame that keeps them
+    /// allocates nothing to find that out.
     fn blur_targets(&self, tex: &mut SessionTextures, format: wgpu::TextureFormat, b: &Backdrop) {
-        let key = (format, b.rect, b.sigmas.iter().map(|s| reduce_factor(*s)).collect::<Vec<_>>());
-        if tex.blur.as_ref().is_some_and(|x| x.key == key) {
+        let extent = blur_extent(b.rect[2], b.rect[3], self.device.limits().max_texture_dimension_2d);
+        let same =
+            tex.blur.as_ref().is_some_and(|x| x.format == format && x.extent == extent && x.chains.len() == b.sigmas.len() && x.chains.iter().zip(&b.sigmas).all(|(c, s)| c.d == reduce_factor(*s)));
+        if same {
             return;
         }
-        let (rw, rh) = (b.rect[2].max(1), b.rect[3].max(1));
         let device = &self.device;
         let make = |label: &str, w: u32, h: u32| {
-            device.create_texture(&wgpu::TextureDescriptor {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let bind = |label: &str, layout: &wgpu::BindGroupLayout, view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
-                size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.blur_sampler) },
+                ],
             })
         };
-        let snap = make("backdrop", rw, rh);
+        let snap_view = make("backdrop", extent.0, extent.1);
         let chains = b
             .sigmas
             .iter()
             .map(|sigma| {
                 let d = reduce_factor(*sigma);
-                let (w, h) = (rw / d, rh / d);
-                (d, make("blur a", w, h), make("blur b", w, h))
+                let size = ((extent.0 / d).max(1), (extent.1 / d).max(1));
+                let (a_view, b_view) = (make("blur a", size.0, size.1), make("blur b", size.0, size.1));
+                BlurChain {
+                    d,
+                    size,
+                    from_snap: bind("blur src", &self.blur_src_layout, &snap_view),
+                    from_a: bind("blur src", &self.blur_src_layout, &a_view),
+                    from_b: bind("blur src", &self.blur_src_layout, &b_view),
+                    out: bind("blur out", &self.blur_out_layout, &a_view),
+                    a_view,
+                    b_view,
+                }
             })
             .collect();
-        tex.blur = Some(Blur { key, snap, chains });
+        tex.blur = Some(Blur { format, extent, snap_view, chains });
     }
 
     /// The pipeline for one module, built the first time it is drawn.
@@ -1075,9 +1166,27 @@ impl Renderer {
         let shader = if key.shader == [0u8; 32] {
             &self.scene_shader
         } else {
-            // Not cached as a refusal: the module may simply not have
-            // arrived yet, and a hash that is still being fetched must be
-            // able to compile on the frame it lands.
+            // Evicted, and wanted again: compiled once more from the source
+            // that was kept for it.
+            if !self.scene_modules.contains_key(&key.shader) {
+                let Some((src, _)) = self.scene_sources.get(&key.shader) else {
+                    // Not cached as a refusal: the module may simply not have
+                    // arrived yet, and a hash that is still being fetched must
+                    // be able to compile on the frame it lands.
+                    return;
+                };
+                let owned = src.clone();
+                match self.scoped("scene shader", move |device| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("scene"), source: wgpu::ShaderSource::Wgsl(owned.into()) })) {
+                    Ok(m) => {
+                        self.scene_modules.insert(key.shader, m);
+                    }
+                    Err(e) => {
+                        eprintln!("eui: {e}");
+                        self.scene_sources.remove(&key.shader);
+                        return;
+                    }
+                }
+            }
             let Some(m) = self.scene_modules.get(&key.shader) else { return };
             m
         };
@@ -1154,6 +1263,15 @@ impl Renderer {
     /// separately to order the writes — there is no ordering puzzle here at
     /// all. That is a reason to like the design, not an accident of it.
     fn render_scenes(&mut self, tex: &mut SessionTextures, list: &DrawList, now: f64, age: f32) -> usize {
+        // What this frame draws is marked first, so the cap never takes a
+        // module out from under the frame that wants it.
+        self.scene_clock = self.scene_clock.wrapping_add(1);
+        for s in &list.scenes {
+            if let Some((_, used)) = self.scene_sources.get_mut(&s.shader) {
+                *used = self.scene_clock;
+            }
+        }
+        self.evict_scene_modules();
         if list.scenes.is_empty() {
             // A session that stops having scenes stops paying for them.
             tex.scenes.targets.clear();
@@ -1312,7 +1430,27 @@ impl Renderer {
         let owned = source.to_owned();
         let module = self.scoped("scene shader", move |device| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("scene"), source: wgpu::ShaderSource::Wgsl(owned.into()) }))?;
         self.scene_modules.insert(hash, module);
+        // Stamped as drawn last frame: newer than anything not drawn since,
+        // and not yet protected as this frame's. The cap is applied at the
+        // next frame, which is when it can tell what is on screen.
+        self.scene_sources.insert(hash, (source.to_owned(), self.scene_clock));
         Ok(())
+    }
+
+    /// Past [`MAX_SCENE_MODULES`] compiled modules, drop the least recently
+    /// drawn, and every pipeline built from it. Never one drawn this frame.
+    fn evict_scene_modules(&mut self) {
+        while self.scene_modules.len() > MAX_SCENE_MODULES {
+            let held = self.scene_modules.keys().map(|h| (*h, self.scene_sources.get(h).map_or(0, |(_, used)| *used)));
+            let Some(victim) = lru_victim(held, self.scene_clock) else { break };
+            self.scene_modules.remove(&victim);
+            self.scene_pipelines.retain(|k, _| k.shader != victim);
+        }
+    }
+
+    /// Compiled scene modules held, for a test of the cap.
+    pub fn scene_modules_held(&self) -> usize {
+        self.scene_modules.len()
     }
 
     /// Upload a mesh a server sent, once per session per content hash.
@@ -1457,7 +1595,7 @@ impl Renderer {
         // one below. A frame with none — every frame of most applications —
         // reaches none of this and stays the single pass it always was.
         let backdrop = list.backdrop.as_ref().filter(|b| !b.sigmas.is_empty());
-        let outs = match backdrop {
+        let blurred = match backdrop {
             Some(b) => {
                 // One snapshot pass, then a reduce and two Gaussian passes
                 // per distinct radius, in a submit of their own.
@@ -1465,9 +1603,19 @@ impl Renderer {
                 stats.submits += 1;
                 self.render_backdrop(tex, format, clock, list, b)
             }
-            None => Vec::new(),
+            None => false,
         };
-        let region = backdrop.map_or([0.0; 4], |b| [b.rect[0] as f32, b.rect[1] as f32, b.rect[2].max(1) as f32, b.rect[3].max(1) as f32]);
+        // The region's corner, and the extent of the textures rather than
+        // the region's own size: the region sits in their top-left corner,
+        // so a fragment maps into them by the extent.
+        let region = match (backdrop, tex.blur.as_ref().filter(|_| blurred)) {
+            (Some(b), Some(blur)) => [b.rect[0] as f32, b.rect[1] as f32, blur.extent.0 as f32, blur.extent.1 as f32],
+            _ => [0.0; 4],
+        };
+        let outs: &[BlurChain] = match tex.blur.as_ref().filter(|_| blurred) {
+            Some(blur) => &blur.chains,
+            None => &[],
+        };
         self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([size.0 as f32, size.1 as f32, 0.0, 0.0, region[0], region[1], region[2], region[3]], clock, frame, list)));
         stats.gpu_ms = self.read_timing();
         let Some(pipeline) = self.pipelines.get(&format) else {
@@ -1540,7 +1688,7 @@ impl Renderer {
                         // there draws nothing rather than sampling whatever
                         // group 2 happens to hold.
                         None if run.scene != 0 => continue,
-                        None => outs.get(run.chain as usize).unwrap_or(&self.blur_none),
+                        None => outs.get(run.chain as usize).map_or(&self.blur_none, |c| &c.out),
                     };
                     pass.set_bind_group(2, group, &[]);
                     bound = (run.chain, run.scene);
@@ -1610,12 +1758,13 @@ impl Renderer {
     /// stood before the first blurred quad, snapshotted over the region that
     /// wants it, then reduced and convolved once per distinct radius.
     ///
-    /// Returns the bind groups the main pass hands to its runs, in chain
-    /// order. It writes the shared uniform buffer and submits on its own, so
+    /// Returns whether it ran; the bind groups the main pass hands to its
+    /// runs are the chains' own, kept in `tex.blur`. It writes the shared
+    /// uniform buffer and submits on its own, so
     /// the caller must write its own uniforms afterwards — a queue's writes
     /// and submits are ordered, and that ordering is what keeps the two
     /// passes reading different values out of one buffer.
-    fn render_backdrop(&mut self, tex: &mut SessionTextures, format: wgpu::TextureFormat, clock: [f32; 4], list: &DrawList, b: &Backdrop) -> Vec<wgpu::BindGroup> {
+    fn render_backdrop(&mut self, tex: &mut SessionTextures, format: wgpu::TextureFormat, clock: [f32; 4], list: &DrawList, b: &Backdrop) -> bool {
         self.blur_pipeline_for(format);
         self.blur_targets(tex, format, b);
         let need = BLUR_STRIDE * 3 * b.sigmas.len() as u64;
@@ -1636,18 +1785,26 @@ impl Renderer {
             });
         }
         let (Some(blur), Some((reduce, gauss))) = (tex.blur.as_ref(), self.blur_pipelines.get(&format)) else {
-            return Vec::new();
+            return false;
         };
         let (rx, ry) = (b.rect[0], b.rect[1]);
-        let (rw, rh) = (b.rect[2].max(1), b.rect[3].max(1));
+        let (rw, rh) = (b.rect[2].max(1).min(blur.extent.0), b.rect[3].max(1).min(blur.extent.1));
 
         // One `Params` per pass, laid out at the offsets the draws will name.
         let mut params = vec![0.0f32; (need / 4) as usize];
         let stride = (BLUR_STRIDE / 4) as usize;
-        for (i, (sigma, (d, a, _))) in b.sigmas.iter().zip(&blur.chains).enumerate() {
-            let (w, h) = (a.width() as f32, a.height() as f32);
-            let s = sigma / *d as f32;
-            let slots = [[1.0 / rw as f32, 1.0 / rh as f32, 0.0, 0.0, *d as f32, 0.0], [1.0 / w, 1.0 / h, 1.0, 0.0, 0.0, s], [1.0 / w, 1.0 / h, 0.0, 1.0, 0.0, s]];
+        // The reduce reads the snapshot only as far as the region reaches:
+        // past it, the texture holds whatever an earlier frame's region
+        // left, and a tap there would bleed it in. It clamps to the region
+        // instead, which is what the sampler's clamp-to-edge did when the
+        // texture was the region's own size -- and, run over the whole
+        // chain texture, it leaves the region's edge repeated out to the
+        // texture's, so the Gaussians after it need no clamp of their own.
+        let (ew, eh) = (blur.extent.0 as f32, blur.extent.1 as f32);
+        for (i, (sigma, c)) in b.sigmas.iter().zip(&blur.chains).enumerate() {
+            let (w, h) = (c.size.0 as f32, c.size.1 as f32);
+            let s = sigma / c.d as f32;
+            let slots = [[1.0 / ew, 1.0 / eh, 0.0, 0.0, c.d as f32, 0.0, rw as f32, rh as f32], [1.0 / w, 1.0 / h, 1.0, 0.0, 0.0, s, w, h], [1.0 / w, 1.0 / h, 0.0, 1.0, 0.0, s, w, h]];
             for (j, slot) in slots.iter().enumerate() {
                 let at = (i * 3 + j) * stride;
                 if let Some(dst) = params.get_mut(at..at + slot.len()) {
@@ -1660,23 +1817,13 @@ impl Renderer {
         // told where the target's own origin sits in it.
         self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&uniforms([rw as f32, rh as f32, rx as f32, ry as f32, 0.0, 0.0, 0.0, 0.0], clock, IDENTITY_LAYER, list)));
 
-        let src_bind = |t: &wgpu::Texture| {
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("blur src"),
-                layout: &self.blur_src_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.create_view(&Default::default())) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.blur_sampler) },
-                ],
-            })
-        };
         let c = list.clear;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("eui backdrop") });
         if let Some(pipeline) = self.pipelines.get(&format) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("backdrop"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &blur.snap.create_view(&Default::default()),
+                    view: &blur.snap_view,
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: f64::from(c[0]), g: f64::from(c[1]), b: f64::from(c[2]), a: f64::from(c[3]) }), store: wgpu::StoreOp::Store },
                 })],
@@ -1684,6 +1831,9 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // The region is drawn into the snapshot's top-left corner, at
+            // its own size: the uniforms above say the target is `rw × rh`.
+            pass.set_viewport(0.0, 0.0, rw as f32, rh as f32, 0.0, 1.0);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.uniform_bind, &[]);
             pass.set_bind_group(1, &tex.atlas_bind, &[]);
@@ -1724,13 +1874,9 @@ impl Renderer {
                 pass.draw(0..6, run.first..run.first.saturating_add(count));
             }
         }
-        let mut outs = Vec::with_capacity(blur.chains.len());
-        for (i, (_, a, bb)) in blur.chains.iter().enumerate() {
-            let (from_snap, from_a, from_b) = (src_bind(&blur.snap), src_bind(a), src_bind(bb));
-            let a_view = a.create_view(&Default::default());
-            let b_view = bb.create_view(&Default::default());
+        for (i, c) in blur.chains.iter().enumerate() {
             // Reduce into `a`, convolve across into `b`, down into `a`.
-            let steps = [(reduce, &from_snap, &a_view), (gauss, &from_a, &b_view), (gauss, &from_b, &a_view)];
+            let steps = [(reduce, &c.from_snap, &c.a_view), (gauss, &c.from_a, &c.b_view), (gauss, &c.from_b, &c.a_view)];
             for (j, (pipeline, src, target)) in steps.into_iter().enumerate() {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("blur"),
@@ -1744,17 +1890,9 @@ impl Renderer {
                 pass.set_bind_group(1, src, &[]);
                 pass.draw(0..3, 0..1);
             }
-            outs.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("blur out"),
-                layout: &self.blur_out_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&a.create_view(&Default::default())) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.blur_sampler) },
-                ],
-            }));
         }
         self.queue.submit([encoder.finish()]);
-        outs
+        true
     }
 
     /// An off-screen target.
@@ -1839,5 +1977,40 @@ impl Renderer {
         drop(data);
         buffer.unmap();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blur_region_that_moves_or_grows_a_little_keeps_its_textures() {
+        // Keyed on the exact rectangle, a panel sliding in reallocated
+        // every texture every frame. The extent is a bucket: the position
+        // is not in it at all, and a size inside the same bucket is the
+        // same extent.
+        assert_eq!(blur_extent(300, 200, 8192), (384, 256));
+        assert_eq!(blur_extent(301, 250, 8192), (384, 256), "a region a few pixels larger keeps the bucket");
+        assert_eq!(blur_extent(385, 257, 8192), (512, 384), "and one past it takes the next");
+        assert_eq!(blur_extent(0, 0, 8192), (128, 128), "never empty");
+        assert_eq!(blur_extent(8190, 10, 8192), (8192, 128), "never past what the device allows");
+        // Every reduction divides the extent, so a chain's texture is
+        // exactly `extent / d` and a frame pixel lands on it unrounded.
+        for d in [1, 2, 4, 8, 16] {
+            assert_eq!(blur_extent(333, 1, 8192).0 % d, 0);
+        }
+        assert_eq!(reduce_factor(40.0), 16);
+    }
+
+    #[test]
+    fn the_scene_module_dropped_first_is_the_one_drawn_longest_ago() {
+        let h = |b: u8| [b; 32];
+        let held = [(h(1), 5), (h(2), 3), (h(3), 9)];
+        assert_eq!(lru_victim(held.into_iter(), 9), Some(h(2)), "the oldest");
+        // One drawn this frame is never the victim, even if it is the only
+        // candidate: its pipeline is about to be used.
+        assert_eq!(lru_victim([(h(4), 7)].into_iter(), 7), None);
+        assert_eq!(lru_victim([(h(6), 1), (h(5), 1)].into_iter(), 9), Some(h(5)), "ties by hash, not by map order");
     }
 }

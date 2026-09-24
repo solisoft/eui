@@ -2041,6 +2041,24 @@ struct VOut { @builtin(position) pos: vec4<f32> }
     let i = (32 * 64 + 32) * 4;
     let middle = [px[i], px[i + 1], px[i + 2]];
     assert!(middle[1] > 200 && middle[0] < 60, "the server's shader drew, not the client's: {middle:?}");
+
+    // Compiled modules are capped per process: past the cap the one drawn
+    // longest ago goes, pipelines and all. Its source stays, because the
+    // worker sends a module once and never again, so the scene that names
+    // it next compiles it afresh and still draws.
+    for n in 0..=eui_render::gpu::MAX_SCENE_MODULES as u8 {
+        r.load_shader([n.wrapping_add(128); 32], src).expect("compiles");
+    }
+    let (_, empty) = spinning_bar();
+    r.render_offscreen(&mut st, &target, 0.0, &empty, &mut fx.atlas, &mut fx.images);
+    assert!(r.scene_modules_held() <= eui_render::gpu::MAX_SCENE_MODULES, "{} held", r.scene_modules_held());
+    // The frame without scenes dropped the target too, so this one is drawn
+    // afresh: black unless the module compiled again.
+    list.serial = 42;
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let again = [px[i], px[i + 1], px[i + 2]];
+    assert!(again[1] > 200 && again[0] < 60, "an evicted module compiles again from its source: {again:?}");
 }
 
 /// A module the driver's own front end refuses leaves the session standing.

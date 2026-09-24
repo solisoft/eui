@@ -150,6 +150,12 @@ scissor region.
 - Pictures go into an RGBA atlas of their own, 2048², which tracks what
   changed as rectangles: a video's frame is uploaded, and sent across a
   worker's pipe, as its own texels rather than the 8 KiB rows it sits on.
+- A blur's textures are made a multiple of 128 px a side and kept while
+  the blurred region moves or resizes within that, with their views and
+  bind groups; a sliding panel no longer makes all of them again each frame.
+- Compiled scene modules are capped at 32 per window process, least
+  recently drawn dropped first with its pipelines; the source is kept, so a
+  scene that names one again compiles it afresh.
 - Quads are snapped to device pixels at paint time; `scroll` and `list`
   become scissor rects; anything outside its clip is culled before it reaches
   the GPU; virtualised rows paint their box and shape no text.
@@ -164,7 +170,7 @@ scissor region.
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
   scroll clipping at the pixel, stack z order.
-- 68 tests. Shadows, images and canvas paths each have one now; what is
+- 76 tests (16 unit, 60 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.

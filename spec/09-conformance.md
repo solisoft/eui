@@ -520,7 +520,10 @@ What is pinned instead:
    whose only change is the clock uploads no instances; the target carries no
    `COPY_SRC`; a session that was not granted `scene` fetches no module and
    builds no scene for a node that names one — and **does** draw one that
-   names none, whose mesh it fetches either way.
+   names none, whose mesh it fetches either way; and past 10 §1's 32
+   compiled modules the one drawn longest ago is dropped and, named again,
+   compiled afresh from its kept source and drawn
+   (`a_module_the_server_sent_is_what_draws`).
 4. **Three tolerant pixel vectors, and three only**: a flat triangle from the
    client's own shader, checked to ±2/255; depth order, which is a boolean and
    so insensitive to precision; and the fallback a refused module draws. A

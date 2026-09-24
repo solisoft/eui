@@ -23,7 +23,11 @@ struct Params {
     reduce_by: f32,
     // The standard deviation for `gauss`, in source texels.
     sigma: f32,
-    _pad: vec2<f32>,
+    // How much of the source holds this frame's picture, in texels, from
+    // its top-left corner. The textures are made a bucket larger than the
+    // region, so they can be kept while it moves and resizes, and past
+    // this edge is whatever an earlier frame left.
+    extent: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(1) @binding(0) var src: texture_2d<f32>;
@@ -48,7 +52,10 @@ fn reduce(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     var sum = vec4<f32>(0.0);
     for (var y = 0; y < n; y = y + 1) {
         for (var x = 0; x < n; x = x + 1) {
-            let at = base + (vec2<f32>(f32(x), f32(y)) + 0.5) * step;
+            // Clamped to the picture, as the sampler's clamp-to-edge once
+            // did when the texture was exactly the region: a texel past
+            // `extent` repeats the edge rather than a stale frame.
+            let at = clamp(base + (vec2<f32>(f32(x), f32(y)) + 0.5) * step, vec2<f32>(0.5), p.extent - 0.5);
             sum = sum + textureSample(src, smp, at * p.inv_src);
         }
     }
@@ -74,7 +81,7 @@ fn gauss(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     for (var i = -hw; i <= hw; i = i + 1) {
         let f = f32(i);
         let w = exp(-f * f / denom);
-        sum = sum + textureSample(src, smp, (at + p.dir * f) * p.inv_src) * w;
+        sum = sum + textureSample(src, smp, clamp(at + p.dir * f, vec2<f32>(0.5), p.extent - 0.5) * p.inv_src) * w;
         total = total + w;
     }
     return sum / total;

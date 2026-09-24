@@ -101,6 +101,7 @@ the application's good manners.
 | Static steps per fragment invocation | 4 096 (= the VM's fuel) |
 | Mesh vertices / indices | 65 536 / 196 608 |
 | Render targets alive per session | 8 |
+| Compiled modules held per window process | 32 (`gpu::MAX_SCENE_MODULES`), least recently drawn dropped first with its pipelines; its source is kept and compiled again when a scene names it |
 | Target edge, before the device's own limit trims it | 4 096 device px (`scene::MAX_EDGE`), rounded up to a multiple of 64 |
 | Target memory, per scene | 4 B/px colour, **+4 B/px per sample** when `msaa` > 1, **+4 B/px per sample** for depth |
 | Author's uniforms | 8 floats |
@@ -268,9 +269,15 @@ application holds a few hundred entries, not sixteen thousand.
 A frame that *does* carry one adds, per distinct radius, three passes over
 a snapshot of the region that asked — the union of the blurred rects grown
 by three standard deviations, clipped to the window — and one pass to take
-that snapshot. The snapshot is a texture the size of that region, not of
-the framebuffer: a 360 px dialog is a few hundred kilobytes where a 4K
-window would be 33 MB. It is freed when a frame stops asking, so a closed
+that snapshot. The snapshot is a texture the size of that region, rounded up
+to a multiple of 128 px a side, not of the framebuffer: a 360 px dialog is a
+few hundred kilobytes where a 4K window would be 33 MB. The rounding is what
+lets a region that slides or grows keep its textures, and the views and bind
+groups made with them, rather than allocating all of them again every frame
+of the movement; the region is drawn into the texture's corner and the
+reduction reads no further than its edge
+(`gpu::tests::a_blur_region_that_moves_or_grows_a_little_keeps_its_textures`,
+and the frosted-pane pixel tests of 09 §8). It is freed when a frame stops asking, so a closed
 dialog costs nothing, which is what keeps the idle RSS line above honest.
 
 The reduction is chosen so the kernel is about fifteen taps whatever radius
