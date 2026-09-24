@@ -1315,8 +1315,11 @@ implements it and the vectors that pin it:
 - **Transport** (`01`) — the session, the one-shot render of §2.4, tree
   adoption (§2.6) and content-addressed assets are implemented, and so are
   the signed manifest and its pin store: `crates/eui-client/src/manifest.rs`
-  verifies the Ed25519 signature, pins under `app_id` and refuses a changed
-  key without a rotation, with vectors in `tests/manifest.rs` and
+  verifies the Ed25519 signature, pins under the origin and `app_id`
+  together (remembered grants likewise, so a manifest copied onto another
+  host inherits neither; pins and grants kept by `app_id` alone before that
+  are ignored, and each application is trusted and asked once more) and
+  refuses a changed key without a rotation, with vectors in `tests/manifest.rs` and
   `tests/install.rs`. This line said otherwise for some time after it
   stopped being true. Still specified and not built: the `pin` field of
   §2.1's manifest, which has no slot in the key table below it and no code

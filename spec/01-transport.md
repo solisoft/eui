@@ -159,17 +159,34 @@ finds out at the manifest rather than at the call.
 
 A client MUST verify the signature before acting on any other field, and
 MUST refuse a server whose protocol range excludes its own version. On first
-run it pins `publisher_key` for `app_id` (trust on first use). On later runs
-a different key MUST be rejected unless `rotation` names the pinned key and
-carries that key's Ed25519 signature over the new `publisher_key`; the pin
-then moves. A manifest that fails any of this ends the connection before a
+run it pins `publisher_key` for the pair of the **origin** the manifest was
+fetched from and its `app_id` (trust on first use). On later runs a
+different key for that pair MUST be rejected unless `rotation` names the
+pinned key and carries that key's Ed25519 signature over the new
+`publisher_key`; the pin then moves.
+
+The origin is part of the key because the record does not carry one. A
+manifest is public, and its signature says who *wrote* it, not who is
+*serving* it: the same bytes copied onto another host verify there exactly
+as well. Pinned by `app_id` alone, such a copy would match the real
+publisher's pin — and show as trusted under its name — and whichever origin
+reached an unpinned `app_id` first would lock the real publisher out of it.
+The origin is scheme, host and port, spelled one way (lower case, a default
+port dropped). A client that kept pins by `app_id` alone before this rule
+MUST NOT carry them over, since which origin each came from is what they
+did not record: every application is trusted on first use once more. A manifest that fails any of this ends the connection before a
 session is opened. The one exception is the debug loopback of 08 §1: over
 `ws://` on `127.0.0.1` a client MAY proceed without a manifest, and MUST say
 so on its diagnostics.
 
 The client grants the intersection of `capabilities` with what the person
 allowed it — on the reference client, `--allow` on the command line — and
-reports it in `Hello.granted`; nothing is granted by being asked for.
+reports it in `Hello.granted`; nothing is granted by being asked for. A
+client that remembers the person's answer MUST keep it under the same pair
+of origin and `app_id` as the pin, for the same reason: a grant given to an
+application at one origin is not a grant to another origin serving its
+manifest. Answers kept by `app_id` alone are not carried over either, so
+each application asks once more.
 
 ### 2.2 Assets
 

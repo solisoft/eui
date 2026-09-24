@@ -283,7 +283,15 @@ a tree declaring nothing is provably exposed as it was before §6.1 existed.
 ### 7.3 Manifest — `crates/eui-client/tests/manifest.rs`
 
 Signature, protocol range, trust on first use, refusal of a changed key,
-acceptance of a rotation the pinned key signed, and garbage.
+acceptance of a rotation the pinned key signed, and garbage. Pins and
+grants are per origin and `app_id` (01 §2.1, 08 §2):
+`the_same_manifest_at_another_origin_is_pinned_afresh` verifies one
+manifest's bytes at two origins and has the second pinned on first use of
+its own, a squatter at one origin not lock the publisher out at another,
+and a pin kept by `app_id` alone ignored;
+`grants::a_grant_given_at_one_origin_is_not_given_at_another` and
+`grants::an_answer_kept_by_app_id_alone_is_not_read` do the same for the
+remembered consent.
 
 ### 7.4 Files — `crates/eui-client/tests/files.rs`
 

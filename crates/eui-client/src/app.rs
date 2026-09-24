@@ -211,6 +211,9 @@ enum Link {
 #[cfg_attr(not(has_pins), allow(dead_code))]
 #[derive(Clone)]
 struct Asking {
+    /// Where the manifest came from: half of whose answer this is (01 §2.1,
+    /// a grant is kept per origin and `app_id`).
+    origin: String,
     /// Whose answer this is.
     app_id: String,
     /// Everything this manifest asked for that the person has now been
@@ -995,14 +998,18 @@ impl Tab {
         #[cfg(has_pins)]
         match crate::assets::origin_for(&tab.url).map_err(|e| e.to_string()).and_then(|origin| {
             let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
-            crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map_err(|e| e.to_string())
+            crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map(|m| (origin, m)).map_err(|e| e.to_string())
         }) {
-            Ok(m) => {
+            Ok((origin, m)) => {
                 // Spec 01 §2.1: what the person allowed, and nothing is
                 // granted by being asked for. `--allow` is one way they
                 // say so; the sheet below is the other, and it is the only
                 // one a person who did not start this from a terminal has.
-                let before = crate::manifest::remembered_grant(&m.app_id);
+                //
+                // Remembered by origin *and* id: the manifest is public and
+                // names no host, so the same bytes served from somewhere
+                // else are somebody else, and get asked (08 §2).
+                let before = crate::manifest::remembered_grant(&origin, &m.app_id);
                 tab.allowed |= before.map_or(0, |b| b.granted);
                 // What neither the command line nor a previous answer has
                 // ever put in front of them. A capability they refused is
@@ -1017,7 +1024,7 @@ impl Tab {
                 // again, which is the common case and the only one the
                 // sheet alone cannot serve.
                 if m.capabilities & eui_proto::caps::ALL != 0 {
-                    tab.perms = Some(Asking { app_id: m.app_id.clone(), asked: m.capabilities & eui_proto::caps::ALL });
+                    tab.perms = Some(Asking { origin: origin.clone(), app_id: m.app_id.clone(), asked: m.capabilities & eui_proto::caps::ALL });
                 }
                 let granted = m.capabilities & tab.allowed;
                 let refused = m.capabilities & !tab.allowed;
@@ -1027,7 +1034,7 @@ impl Tab {
                     // The sheet instead of the session: `Hello` carries
                     // the grant, so there is nothing to dial until the
                     // question has an answer.
-                    tab.asking = Some(Asking { app_id: m.app_id.clone(), asked: settled | unanswered });
+                    tab.asking = Some(Asking { origin: origin.clone(), app_id: m.app_id.clone(), asked: settled | unanswered });
                     tab.backend.ask_consent(unanswered, &m.name);
                     tab.link = Link::Asking;
                 }
@@ -1138,7 +1145,7 @@ impl Tab {
         // [`crate::manifest::Answered`] for why both. Nowhere to remember
         // it in a page, which is the other half of `has_pins`.
         #[cfg(has_pins)]
-        crate::manifest::remember_grant(&asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
+        crate::manifest::remember_grant(&asking.origin, &asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
         eprintln!("eui: the person allowed [{}]", eui_proto::caps::names(self.allowed).join(", "));
         // The driver's mask, before `dial` asks it for a `Hello` carrying
         // it.

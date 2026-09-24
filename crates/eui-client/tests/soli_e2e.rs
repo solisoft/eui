@@ -869,7 +869,7 @@ fn soli_serves_a_signed_manifest_the_client_pins() {
     assert_eq!(eui_proto::caps::names(m.capabilities), vec!["camera", "microphone", "clipboard.read", "location", "fs.pick", "nfc"], "what config/routes.sl asked for");
     // Pinned: the same server is accepted again; a stranger's key is not.
     assert!(eui_client::manifest::check(&origin, &pins, None).is_ok());
-    let pin = std::fs::read_dir(&pins).unwrap().next().unwrap().unwrap().path();
+    let pin = eui_client::manifest::store_path(&pins, &origin, &m.app_id);
     std::fs::write(&pin, [9u8; 32]).unwrap();
     assert_eq!(eui_client::manifest::check(&origin, &pins, None).unwrap_err(), eui_client::manifest::ManifestError::KeyChanged);
 }
