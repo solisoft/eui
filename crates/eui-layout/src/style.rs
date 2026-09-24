@@ -108,6 +108,10 @@ pub struct Style {
     pub z: u8,
     /// Scrolls on both axes when `true`, else vertically only.
     pub scroll_both: bool,
+    /// `overflow: clip` (03 §2): the box trims what it holds. The painter
+    /// scissors to it, and so hit-testing must refuse what the scissor cut
+    /// away — a point on content nobody can see is not on that content.
+    pub clip: bool,
     /// Text: face, weight, size, line height.
     pub font: FontSpec,
     /// Text: line clamp.
@@ -145,6 +149,7 @@ impl Style {
             border: Edges { t: f32::from(r.border_width[0]), r: f32::from(r.border_width[1]), b: f32::from(r.border_width[2]), l: f32::from(r.border_width[3]) },
             z: r.z,
             scroll_both: r.overflow == eui_proto::Overflow::Scroll,
+            clip: r.overflow == eui_proto::Overflow::Clip,
             font: FontSpec { family: r.font_family, weight: r.font_weight, size, line_height },
             line_clamp: r.line_clamp,
             text_align: r.text_align,

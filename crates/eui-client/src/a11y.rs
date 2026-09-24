@@ -611,6 +611,14 @@ impl AccessAtoms {
     }
 }
 
+/// An update that says nothing changed but where the focus is — what the
+/// adapter is handed on a frame that moved nothing it shows. AccessKit takes
+/// a tree update as the nodes that changed, so none is a valid one.
+#[cfg(has_a11y)]
+pub fn unchanged(focus: u64) -> accesskit::TreeUpdate {
+    accesskit::TreeUpdate { nodes: Vec::new(), tree: None, tree_id: accesskit::TreeId::ROOT, focus: accesskit::NodeId(focus) }
+}
+
 /// The snapshot in AccessKit's terms, for the platform adapter. The window
 /// wraps the root and carries the display scale, so bounds stay in logical
 /// px like everything else in the client.

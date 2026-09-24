@@ -377,6 +377,11 @@ struct IslandSocket {
 struct Tab {
     /// The session URL, whole.
     url: String,
+    /// Which tab this is, for as long as the process runs: an index shifts
+    /// when a tab before it closes, and this does not. What the
+    /// accessibility adapter was last handed is remembered against it.
+    #[cfg_attr(not(has_a11y), allow(dead_code))]
+    id: u64,
     /// Capabilities the person allows, if the manifest asks for them.
     allowed: u32,
     /// The driver: in a worker process when one could be started.
@@ -391,6 +396,16 @@ struct Tab {
     islands: Vec<IslandSocket>,
     /// Where answers land while there is no `Connection` to carry them.
     inbox: Option<std::sync::mpsc::Receiver<Incoming>>,
+    /// Something may have changed what the tree asks for — a frame or an
+    /// asset arrived, an input reached the driver, a paint laid out rows
+    /// that were not there before — so the next pump asks the driver which
+    /// assets and islands it wants. A transport wake does not say which tab
+    /// it was for, and asking every tab on every wake was two round trips
+    /// over the worker pipe and a walk of each tree, for each tab, each
+    /// time any socket spoke. A tab with nothing new is not asked.
+    owes_asking: bool,
+    /// The pump that just ran asked, so the islands are dialled after it.
+    dial_due: bool,
     /// Something needed the server, so a socket is wanted before the next
     /// frame is drawn. A flag rather than a dial on the spot: `send` is
     /// called from deep inside the input path and has no event loop proxy to
@@ -571,9 +586,22 @@ struct Shell {
     /// rather than recomputed so a button pressed in one and released in
     /// the other does not arrive as half a click in each.
     pointer_in_app: bool,
+    /// The latest pointer move over the page not yet handed to the tab, in
+    /// page coordinates. Moves arrive at the mouse's rate — 125 to 1000 a
+    /// second — and each one handed on was a synchronous round trip over
+    /// the worker pipe with the window thread blocked on it: 5 228 of them
+    /// in three seconds, measured. Only the last one before anything else
+    /// happens can matter, so the rest are dropped here and that one goes
+    /// when any other event does, or when the loop is about to wait.
+    pending_move: Option<(f32, f32)>,
     proxy: Proxy,
     #[cfg(has_a11y)]
     access: Option<accesskit_winit::Adapter>,
+    /// The tab (by [`Tab::id`]) whose tree the adapter was last handed, the
+    /// driver's accessibility serial it was built at, and its focus: a frame
+    /// that leaves all three as they were hands the adapter nothing new.
+    #[cfg(has_a11y)]
+    access_seen: Option<(u64, u64, u64)>,
     #[cfg(has_clipboard)]
     clip: Option<arboard::Clipboard>,
     /// The pointer shape last handed to the window.
@@ -926,7 +954,9 @@ impl Tab {
         // that dies takes its own process with it and nothing else.
         let (backend, how) = Backend::open(w, h, scale, 0);
         eprintln!("eui {}: {how}", crate::BUILD);
+        static TABS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut tab = Tab {
+            id: TABS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             trouble: None,
             title: name_from_url(&launch.url),
             url: launch.url,
@@ -960,6 +990,8 @@ impl Tab {
             fetch: None,
             islands: Vec::new(),
             inbox: None,
+            owes_asking: true,
+            dial_due: false,
             want_socket: false,
             queued: Vec::new(),
             tries: 0,
@@ -1210,13 +1242,17 @@ impl Tab {
     ///
     /// Called from `pump`, after the page's frames have been applied — the
     /// tree that names an island is the tree that just arrived.
-    fn pump_islands(&mut self) {
+    ///
+    /// `true` when any island said anything.
+    fn pump_islands(&mut self) -> bool {
         // What arrived on the ones already open. A batch changes only that
         // island's content; anything else it says is its own business.
         let mut ended: Vec<u16> = Vec::new();
         let mut frames: Vec<(u16, Vec<u8>)> = Vec::new();
+        let mut spoke = false;
         for island in &self.islands {
             while let Ok(msg) = island.conn.rx.try_recv() {
+                spoke = true;
                 match msg {
                     Incoming::Message(bytes) => frames.push((island.owner, bytes)),
                     // 01 §2.7: "leaves the page alone". The socket is
@@ -1256,6 +1292,7 @@ impl Tab {
                 self.islands.retain(|i| i.owner != owner);
             }
         }
+        spoke
     }
 
     /// Dial the islands this tree asks for that are not open yet.
@@ -1263,6 +1300,11 @@ impl Tab {
     /// Separate from `pump_islands` because it needs the event-loop proxy to
     /// build a waker, and `pump` has none.
     fn dial_islands(&mut self, proxy: &Proxy) {
+        // Only after a pump that asked (`owes_asking`): nothing new, nothing
+        // new to dial.
+        if !std::mem::take(&mut self.dial_due) {
+            return;
+        }
         let Ok(origin) = crate::assets::origin_for(&self.url) else { return };
         for (node, path) in self.backend.islands_wanted() {
             // One session per distinct path (01 §2.7). A second island
@@ -1449,8 +1491,10 @@ impl Tab {
         // Either the socket's channel or, with no socket, the tab's own —
         // a page fetched over HTTPS still asks for its pictures.
         let rx = self.conn.as_ref().map(|c| &c.rx).or(self.inbox.as_ref());
+        let mut arrived = false;
         if let Some(rx) = rx {
             while let Ok(msg) = rx.try_recv() {
+                arrived = true;
                 match msg {
                     // Decoded by the driver, wherever it runs: the window
                     // never reads a frame.
@@ -1475,11 +1519,19 @@ impl Tab {
             let out = self.backend.frame(f);
             self.send(out);
         }
-        for hash in self.backend.pending_assets() {
-            if let Some(fetch) = &self.fetch {
-                fetch.request_asset(hash);
+        // Before the assets are asked for: an island's tree names pictures
+        // exactly as the page's does, and its traffic is new too.
+        let islands_spoke = self.pump_islands();
+        // Only when there is something new to ask about (`owes_asking`).
+        let ask = arrived || islands_spoke || std::mem::take(&mut self.owes_asking);
+        if ask {
+            for hash in self.backend.pending_assets() {
+                if let Some(fetch) = &self.fetch {
+                    fetch.request_asset(hash);
+                }
             }
         }
+        self.dial_due = ask;
         // The socket has spoken, so what the page queued can go. It is sent
         // *after* the first frame rather than on connect, because until the
         // server has answered there is no telling whether it kept the tree
@@ -1494,7 +1546,6 @@ impl Tab {
             let held = std::mem::take(&mut self.queued);
             self.send(held);
         }
-        self.pump_islands();
         match closed {
             // An HTTP status is the server answering, not the network
             // failing: this address is not a session and will not become
@@ -1927,9 +1978,12 @@ impl Shell {
             hovering: false,
             hover_at: None,
             pointer_in_app: false,
+            pending_move: None,
             proxy,
             #[cfg(has_a11y)]
             access,
+            #[cfg(has_a11y)]
+            access_seen: None,
             #[cfg(has_clipboard)]
             clip: None,
             cursor: eui_proto::Cursor::Default,
@@ -3003,9 +3057,33 @@ impl Shell {
     }
 
     fn send_to_tab(&mut self, i: Input) {
-        // A click or a key is where a dialog comes from (03 §3.2).
+        // Kept for the flush rather than sent: see `pending_move`.
+        if let Input::PointerMove(x, y) = i {
+            self.pending_move = Some((x, y));
+            return;
+        }
+        // Anything else comes after the move that preceded it, as it did
+        // when every move was sent: a click lands where the pointer went.
+        self.flush_move();
+        // A click or a key is where a dialog comes from (03 §3.2). A move
+        // is not, and marking every one of them sent the next pass to look
+        // for dialogs a thousand times a second.
         self.files_dirty = true;
+        self.deliver(i);
+    }
+
+    /// Hand the tab the pointer move that has been waiting, if one has.
+    fn flush_move(&mut self) {
+        if let Some((x, y)) = self.pending_move.take() {
+            self.deliver(Input::PointerMove(x, y));
+        }
+    }
+
+    /// One input to the active tab, and what it asked the window to do.
+    fn deliver(&mut self, i: Input) {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
+        // A local handler may have changed what the tree asks for.
+        t.owes_asking = true;
         let out = t.backend.input(i);
         t.send(out);
         // 03 §3.5. The driver has already decided: the person activated a
@@ -3312,7 +3390,16 @@ impl Shell {
         // Painted before the surface texture is acquired, so a slow layout
         // does not hold a swapchain image while it runs.
         let chrome_list = self.chrome.as_mut().map(|(c, _)| c.paint(w, h));
-        let app = if self.showing_blank() { None } else { self.tabs.get_mut(self.active).map(|t| (t.backend.paint(app_w, app_h.max(1)), t)) };
+        let app = if self.showing_blank() {
+            None
+        } else {
+            self.tabs.get_mut(self.active).map(|t| {
+                // A paint lays out, and a layout may bring an island or a
+                // row with a picture into view: the next pump asks.
+                t.owes_asking = true;
+                (t.backend.paint(app_w, app_h.max(1)), t)
+            })
+        };
         let painted = t0.elapsed();
 
         // Suspended: the work above is thrown away rather than skipped,
@@ -3465,11 +3552,25 @@ impl Shell {
         // Hover settles at paint; so does what the pointer is over.
         self.sync_cursor();
         // A screen reader that is listening gets the tree as painted; one
-        // that is not costs nothing here.
+        // that is not costs nothing here. And one that has the tree already
+        // is handed nothing new: the driver says whether the tree, its boxes
+        // or the focus moved since the serial the adapter was given, and a
+        // frame that only turned a spinner or blinked a caret did not.
         #[cfg(has_a11y)]
         if let (Some(a), Some(t)) = (&mut self.access, self.tabs.get_mut(self.active)) {
             let backend = &mut t.backend;
-            a.update_if_active(|| crate::a11y::to_update(&backend.access_tree()));
+            let seen = &mut self.access_seen;
+            let tab = t.id;
+            a.update_if_active(|| {
+                let since = seen.filter(|(id, _, _)| *id == tab).map_or(0, |(_, serial, _)| serial);
+                match backend.access_tree_since(since) {
+                    Some((serial, snap)) => {
+                        *seen = Some((tab, serial, snap.focus));
+                        crate::a11y::to_update(&snap)
+                    }
+                    None => crate::a11y::unchanged(seen.map_or(0, |(_, _, focus)| focus)),
+                }
+            });
         }
     }
 
@@ -3483,7 +3584,15 @@ impl Shell {
             A::InitialTreeRequested => {
                 if let (Some(a), Some(t)) = (&mut self.access, self.tabs.get_mut(active)) {
                     let backend = &mut t.backend;
-                    a.update_if_active(|| crate::a11y::to_update(&backend.access_tree()));
+                    let seen = &mut self.access_seen;
+                    let tab = t.id;
+                    a.update_if_active(|| {
+                        // Whole, whatever was sent before: the adapter asking
+                        // for its first tree has none.
+                        let (serial, snap) = backend.access_tree_since(0).unwrap_or((0, crate::a11y::AccessSnapshot { nodes: Vec::new(), focus: 0, scale: 1.0 }));
+                        *seen = Some((tab, serial, snap.focus));
+                        crate::a11y::to_update(&snap)
+                    });
                 }
             }
             A::ActionRequested(req) => {
@@ -3539,6 +3648,12 @@ impl Shell {
         let scale = self.scale();
         let zoom = self.zoom();
         let top = self.chrome.as_ref().map_or(0.0, |(c, _)| c.content_top());
+        // A move waits for the next event that is not one (`pending_move`);
+        // a frame is such an event, so what it draws has seen the pointer
+        // where it is.
+        if !matches!(event, WindowEvent::CursorMoved { .. }) {
+            self.flush_move();
+        }
         match event {
             WindowEvent::CloseRequested => return false,
             WindowEvent::RedrawRequested => self.redraw(renderer),
@@ -4757,6 +4872,9 @@ impl ApplicationHandler<Wake> for App {
         }
         // Dialogs the last events asked for, and the bytes they moved.
         for s in self.shells.values_mut() {
+            // The last move of this pass over the events, now that there
+            // are no more of them behind it.
+            s.flush_move();
             s.serve_files();
             // Where a file being dragged has got to. Nothing at all
             // unless one is over that window right now.

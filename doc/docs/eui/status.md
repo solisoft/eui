@@ -69,10 +69,22 @@ now normative.
   and a `list` that **does not measure rows it cannot see** — a thousand-row
   list shapes about a dozen.
 - Two phases: `measure` is memoised per frame and pure, `arrange` runs once
-  per node. Hit-testing honours stacking order and scroll clipping.
+  per node. Hit-testing honours stacking order and every clip the painter
+  applies (`scroll`, `list`, `overflow: clip`), and skips what the painter
+  culls — a node whose box misses its clip, with everything under it — so a
+  hit visits what is on screen rather than the whole tree. A stack's paint
+  order is kept from the layout rather than sorted per hit.
+- A frame whose only change is a scroll offset moves the boxes under the
+  scroller instead of laying the tree out again (`Layout::scroll`, 04 §7);
+  a virtualised list, a popover under the scroller, or any other change
+  falls back to the full layout, and a test compares the two box for box.
+- The per-node maps (the measure memo, resolved styles, glides, placed
+  rows) hash with a multiply-rotate hasher of the crate's own rather than
+  SipHash; the painter's text cache uses it too. Still no dependency beyond
+  the other EUI crates.
 - Text shaping is behind a trait; tests use a fixed-pitch stand-in so the
   goldens pin exact pixels.
-- 36 golden tests.
+- 43 golden tests, and 2 unit tests for the hasher.
 
 **`eui-text` — shaping and rasterisation.** Over `cosmic-text`, the one
 third-party dependency on the CPU side of the client: shaping is the part of
@@ -654,7 +666,9 @@ given the chance to notify themselves.
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
 click handlers are buttons named by their text, editable nodes are text
 fields, text is a label, the rest are groups. The tree is built only when
-an assistive technology asks and refreshed after a paint while one listens;
+an assistive technology asks, and refreshed after a paint while one listens
+— only a paint that changed the tree, its layout or the focus, which the
+driver counts, so a spinner turning under a screen reader rebuilds nothing;
 its focus and click actions become the same inputs Tab and Enter produce.
 `--no-default-features` builds without it.
 
@@ -946,6 +960,16 @@ does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
 (AppContainer), where it is its own process but not a sandboxed one, and
 fold an input into the paint that follows it, which would make it one
 round trip a frame rather than two.
+
+Pointer moves no longer cost a round trip each. The window keeps the latest
+one and hands it on when any other event arrives or the loop is about to
+wait, so a mouse reporting at 1 000 Hz is one move per pass rather than one
+blocking call per report. The driver counts a move as a change only when
+something the list could show moved — what the pointer is over, a panel
+following it, a gesture in flight — so a move over a page with a spinner
+leaves the last list standing, and a paint answered with the list the worker
+sent last time crosses the pipe as a few bytes (`PaintAgain`) rather than
+the list again.
 
 That measurement is what found the real cost of a scrolled frame, and it
 was not the pipe. A virtualised list added its rows' heights up on every

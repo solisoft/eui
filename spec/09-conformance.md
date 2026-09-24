@@ -126,6 +126,18 @@ style lays out as a row, and a `slot` that is `display: none` is still gone —
 the kind decides the direction and must not put back a node the author took
 out of the flow.
 
+And **what is hit is what is painted** (03 §2 item 7):
+`overflow_clip_trims_the_hit_as_it_trims_the_paint` refuses a point on text
+an `overflow: clip` box cut away, and `what_is_culled_from_the_paint_is_not_hit`
+refuses a child that spills out of a box scrolled wholly out of view — the
+painter drops that box and everything under it, and so must a hit.
+
+A scroll is not a new layout (04 §7): `a_scroll_alone_translates_to_what_a_full_layout_places`
+moves the boxes under scrollers that scrolled — nested, clamped past the end,
+a stack out of z order among them — and compares every box and every hit with
+a full layout of the scrolled tree; `a_scroll_with_anything_else_is_left_to_a_full_layout`
+and `a_virtualised_list_scrolled_recomputes_its_window` pin when it must not.
+
 ## 5. Theme — `crates/eui-theme/tests`
 
 Every default pair in 05 §6 meets its contrast; a seed produces a ramp whose

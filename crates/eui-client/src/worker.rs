@@ -216,6 +216,10 @@ pub enum Request {
     Tick,
     /// The accessibility tree as painted.
     AccessTree,
+    /// The same, unless nothing it is built from has changed since the
+    /// driver's accessibility serial was this ([`Driver::access_serial`]):
+    /// answered with [`Payload::AccessSince`], or with nothing at all.
+    AccessTreeSince(u64),
     /// An assistive technology's action on a node: `true` click, `false`
     /// focus.
     /// An assistive technology acted on a node. The byte is the action:
@@ -369,6 +373,10 @@ impl Request {
             }
             Request::Tick => w.u8(9),
             Request::AccessTree => w.u8(10),
+            Request::AccessTreeSince(since) => {
+                w.u8(40);
+                w.u64(*since);
+            }
             Request::AccessAction(id, action) => {
                 w.u8(11);
                 w.u64(*id);
@@ -491,6 +499,7 @@ impl Request {
             8 => Request::Paint(r.u32()?, r.u32()?),
             9 => Request::Tick,
             10 => Request::AccessTree,
+            40 => Request::AccessTreeSince(r.u64()?),
             11 => Request::AccessAction(r.u64()?, r.u8()?),
             12 => {
                 let mode = match r.u8()? {
@@ -782,10 +791,30 @@ pub enum Payload {
         /// is what lets `gpu_only` repeat one without the pipe.
         scenes: Vec<(Hash, crate::driver::SceneAsset)>,
     },
+    /// `Paint`, when the driver answered with the very list it answered the
+    /// last `Paint` with: everything but the list, which the window already
+    /// holds. Only ever on the pipe — [`Worker::call`] puts the list back
+    /// and hands its caller a [`Payload::Paint`].
+    ///
+    /// A pointer moving over a page with a spinner on it was a paint request
+    /// per frame, each answered with the whole list — ten thousand quads of
+    /// it on a large page — only for the window to find it had the same
+    /// serial as the one it was already drawing.
+    PaintAgain {
+        /// Coverage rows, as in `Paint`.
+        glyphs: Vec<(u32, u32, u32, Vec<u8>)>,
+        /// RGBA rectangles, as in `Paint`.
+        images: Vec<([u32; 4], Vec<u8>)>,
+        /// Scene assets, as in `Paint`.
+        scenes: Vec<(Hash, crate::driver::SceneAsset)>,
+    },
     /// `Tick`: a transition frame is due.
     Tick(bool),
     /// `AccessTree`.
     Access(AccessSnapshot),
+    /// `AccessTreeSince`, when something changed: the tree, and the serial
+    /// it was built at.
+    AccessSince(u64, AccessSnapshot),
     /// `Audio`: interleaved `f32` frames, `channels` per frame.
     Pcm(Vec<f32>),
     /// `Picked`: the upload id for each file, in the order they came.
@@ -923,36 +952,11 @@ impl Reply {
             Payload::Paint { list, glyphs, images, scenes } => {
                 w.u8(4);
                 put_list(&mut w, list);
-                w.u32(u32::try_from(glyphs.len()).unwrap_or(u32::MAX));
-                for (size, y0, y1, px) in glyphs {
-                    w.u32(*size);
-                    w.u32(*y0);
-                    w.u32(*y1);
-                    w.bytes(px);
-                }
-                w.u32(u32::try_from(images.len()).unwrap_or(u32::MAX));
-                for (rect, px) in images {
-                    for v in rect {
-                        w.u32(*v);
-                    }
-                    w.bytes(px);
-                }
-                w.u32(u32::try_from(scenes.len()).unwrap_or(u32::MAX));
-                for (h, asset) in scenes {
-                    w.hash(h);
-                    match asset {
-                        crate::driver::SceneAsset::Mesh(m) => {
-                            w.u8(0);
-                            w.u32(u32::try_from(m.vertices.len()).unwrap_or(u32::MAX));
-                            w.bytes(bytemuck::cast_slice(&m.vertices));
-                            w.bytes(bytemuck::cast_slice(&m.indices));
-                        }
-                        crate::driver::SceneAsset::Shader(src) => {
-                            w.u8(1);
-                            w.str(src);
-                        }
-                    }
-                }
+                put_paint_rest(&mut w, glyphs, images, scenes);
+            }
+            Payload::PaintAgain { glyphs, images, scenes } => {
+                w.u8(12);
+                put_paint_rest(&mut w, glyphs, images, scenes);
             }
             Payload::Tick(due) => {
                 w.u8(5);
@@ -960,6 +964,11 @@ impl Reply {
             }
             Payload::Access(snap) => {
                 w.u8(6);
+                put_access(&mut w, snap);
+            }
+            Payload::AccessSince(serial, snap) => {
+                w.u8(20);
+                w.u64(*serial);
                 put_access(&mut w, snap);
             }
             Payload::Uploads(ids) => {
@@ -1086,63 +1095,16 @@ impl Reply {
             }
             4 => {
                 let list = get_list(&mut r)?;
-                let n = r.u32()? as usize;
-                let mut glyphs = Vec::with_capacity(n.min(16));
-                for _ in 0..n {
-                    glyphs.push((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec()));
-                }
-                let n = r.u32()? as usize;
-                let mut images = Vec::with_capacity(n.min(16));
-                for _ in 0..n {
-                    images.push(([r.u32()?, r.u32()?, r.u32()?, r.u32()?], r.bytes()?.to_vec()));
-                }
-                let n = r.u32()? as usize;
-                let mut scenes = Vec::with_capacity(n.min(16));
-                for _ in 0..n {
-                    let hash = r.hash()?;
-                    scenes.push(match r.u8()? {
-                        0 => {
-                            let count = r.u32()? as usize;
-                            let vertex_bytes: &[u8] = r.bytes()?;
-                            let index_bytes: &[u8] = r.bytes()?;
-                            // Read element by element rather than cast in
-                            // place: a slice out of the pipe's buffer is not
-                            // aligned to four bytes, and `cast_slice` is
-                            // entitled to refuse it. Copying is what this
-                            // path was going to do anyway.
-                            let stride = eui_render::scene::VERTEX_BYTES as usize;
-                            if vertex_bytes.len() % stride != 0 || index_bytes.len() % 4 != 0 {
-                                return Err("mesh");
-                            }
-                            let vertices: Vec<eui_render::scene::Vertex> = vertex_bytes
-                                .chunks_exact(stride)
-                                .map(|c| {
-                                    let mut v = [0f32; 8];
-                                    for (slot, b) in v.iter_mut().zip(c.chunks_exact(4)) {
-                                        *slot = b.try_into().map(f32::from_le_bytes).unwrap_or(0.0);
-                                    }
-                                    eui_render::scene::Vertex { pos: [v[0], v[1], v[2]], normal: [v[3], v[4], v[5]], uv: [v[6], v[7]] }
-                                })
-                                .collect();
-                            let indices: Vec<u32> = index_bytes.chunks_exact(4).map(|c| c.try_into().map(u32::from_le_bytes).unwrap_or(u32::MAX)).collect();
-                            // The worker is the untrusted side of this pipe.
-                            // Re-check what the window is about to hand a
-                            // GPU: the index bound is the one wgpu does not
-                            // make, and on a GLES backend does not make at
-                            // all.
-                            if vertices.len() != count || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
-                                return Err("mesh");
-                            }
-                            (hash, crate::driver::SceneAsset::Mesh(crate::mesh::Mesh { vertices, indices }))
-                        }
-                        1 => (hash, crate::driver::SceneAsset::Shader(r.str()?)),
-                        _ => return Err("scene asset"),
-                    });
-                }
+                let (glyphs, images, scenes) = get_paint_rest(&mut r)?;
                 Payload::Paint { list: Arc::new(list), glyphs, images, scenes }
+            }
+            12 => {
+                let (glyphs, images, scenes) = get_paint_rest(&mut r)?;
+                Payload::PaintAgain { glyphs, images, scenes }
             }
             5 => Payload::Tick(r.bool()?),
             6 => Payload::Access(get_access(&mut r)?),
+            20 => Payload::AccessSince(r.u64()?, get_access(&mut r)?),
             8 => {
                 let n = r.u32()? as usize;
                 let mut ids = Vec::with_capacity(n.min(64));
@@ -1221,6 +1183,41 @@ fn get_quad(r: &mut R<'_>) -> Wire<Quad> {
     Ok(Quad { rect, params, fill, stroke, uv, extra, spin, from })
 }
 
+/// What follows the list in a `Paint` reply, and is all of a `PaintAgain`:
+/// the atlas rows and the scene assets that changed since the last paint.
+fn put_paint_rest(w: &mut W, glyphs: &[(u32, u32, u32, Vec<u8>)], images: &[([u32; 4], Vec<u8>)], scenes: &[(Hash, crate::driver::SceneAsset)]) {
+    w.u32(u32::try_from(glyphs.len()).unwrap_or(u32::MAX));
+    for (size, y0, y1, px) in glyphs {
+        w.u32(*size);
+        w.u32(*y0);
+        w.u32(*y1);
+        w.bytes(px);
+    }
+    w.u32(u32::try_from(images.len()).unwrap_or(u32::MAX));
+    for (rect, px) in images {
+        for v in rect {
+            w.u32(*v);
+        }
+        w.bytes(px);
+    }
+    w.u32(u32::try_from(scenes.len()).unwrap_or(u32::MAX));
+    for (h, asset) in scenes {
+        w.hash(h);
+        match asset {
+            crate::driver::SceneAsset::Mesh(m) => {
+                w.u8(0);
+                w.u32(u32::try_from(m.vertices.len()).unwrap_or(u32::MAX));
+                w.bytes(bytemuck::cast_slice(&m.vertices));
+                w.bytes(bytemuck::cast_slice(&m.indices));
+            }
+            crate::driver::SceneAsset::Shader(src) => {
+                w.u8(1);
+                w.str(src);
+            }
+        }
+    }
+}
+
 fn put_list(w: &mut W, list: &DrawList) {
     w.u32(u32::try_from(list.quads.len()).unwrap_or(u32::MAX));
     for q in &list.quads {
@@ -1294,6 +1291,69 @@ fn put_list(w: &mut W, list: &DrawList) {
         w.u32(s.flags);
         w.u32(s.fps);
     }
+}
+
+/// What a paint reply carries after its list: glyph rows, image rectangles, scene
+/// assets.
+type PaintRest = (Vec<(u32, u32, u32, Vec<u8>)>, Vec<([u32; 4], Vec<u8>)>, Vec<(Hash, crate::driver::SceneAsset)>);
+
+/// The rows and scene assets of a `Paint` or `PaintAgain` reply, as
+/// [`put_paint_rest`] wrote them.
+fn get_paint_rest(r: &mut R<'_>) -> Wire<PaintRest> {
+    let n = r.u32()? as usize;
+    let mut glyphs = Vec::with_capacity(n.min(16));
+    for _ in 0..n {
+        glyphs.push((r.u32()?, r.u32()?, r.u32()?, r.bytes()?.to_vec()));
+    }
+    let n = r.u32()? as usize;
+    let mut images = Vec::with_capacity(n.min(16));
+    for _ in 0..n {
+        images.push(([r.u32()?, r.u32()?, r.u32()?, r.u32()?], r.bytes()?.to_vec()));
+    }
+    let n = r.u32()? as usize;
+    let mut scenes = Vec::with_capacity(n.min(16));
+    for _ in 0..n {
+        let hash = r.hash()?;
+        scenes.push(match r.u8()? {
+            0 => {
+                let count = r.u32()? as usize;
+                let vertex_bytes: &[u8] = r.bytes()?;
+                let index_bytes: &[u8] = r.bytes()?;
+                // Read element by element rather than cast in
+                // place: a slice out of the pipe's buffer is not
+                // aligned to four bytes, and `cast_slice` is
+                // entitled to refuse it. Copying is what this
+                // path was going to do anyway.
+                let stride = eui_render::scene::VERTEX_BYTES as usize;
+                if vertex_bytes.len() % stride != 0 || index_bytes.len() % 4 != 0 {
+                    return Err("mesh");
+                }
+                let vertices: Vec<eui_render::scene::Vertex> = vertex_bytes
+                    .chunks_exact(stride)
+                    .map(|c| {
+                        let mut v = [0f32; 8];
+                        for (slot, b) in v.iter_mut().zip(c.chunks_exact(4)) {
+                            *slot = b.try_into().map(f32::from_le_bytes).unwrap_or(0.0);
+                        }
+                        eui_render::scene::Vertex { pos: [v[0], v[1], v[2]], normal: [v[3], v[4], v[5]], uv: [v[6], v[7]] }
+                    })
+                    .collect();
+                let indices: Vec<u32> = index_bytes.chunks_exact(4).map(|c| c.try_into().map(u32::from_le_bytes).unwrap_or(u32::MAX)).collect();
+                // The worker is the untrusted side of this pipe.
+                // Re-check what the window is about to hand a
+                // GPU: the index bound is the one wgpu does not
+                // make, and on a GLES backend does not make at
+                // all.
+                if vertices.len() != count || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
+                    return Err("mesh");
+                }
+                (hash, crate::driver::SceneAsset::Mesh(crate::mesh::Mesh { vertices, indices }))
+            }
+            1 => (hash, crate::driver::SceneAsset::Shader(r.str()?)),
+            _ => return Err("scene asset"),
+        });
+    }
+    Ok((glyphs, images, scenes))
 }
 
 fn get_list(r: &mut R<'_>) -> Wire<DrawList> {
@@ -1530,6 +1590,10 @@ fn read_message(input: &mut impl Read, max: usize) -> std::io::Result<Vec<u8>> {
 pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<String, String>) -> std::io::Result<()> {
     let mut driver: Option<Driver> = None;
     let mut sandbox = Some(sandbox);
+    // The list the last `Paint` reply carried. Held, so a list the driver
+    // hands back again is recognised by address — and cannot share one with
+    // a list made since, because this keeps it alive.
+    let mut sent: Option<Arc<DrawList>> = None;
     loop {
         let bytes = match read_message(input, usize::MAX) {
             Ok(b) => b,
@@ -1644,10 +1708,21 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         // video's frame crosses as its own texels.
                         let rects: Vec<([u32; 4], Vec<u8>)> = images.dirty_regions().iter().map(|&r| (r, images.region_bytes(r))).collect();
                         images.mark_clean();
-                        Payload::Paint { list, glyphs, images: rects, scenes: d.take_scene_assets() }
+                        let images = rects;
+                        let scenes = d.take_scene_assets();
+                        if sent.as_ref().is_some_and(|s| Arc::ptr_eq(s, &list)) {
+                            Payload::PaintAgain { glyphs, images, scenes }
+                        } else {
+                            sent = Some(Arc::clone(&list));
+                            Payload::Paint { list, glyphs, images, scenes }
+                        }
                     }
                     Request::Tick => Payload::Tick(d.tick(Instant::now())),
                     Request::AccessTree => Payload::Access(d.access_snapshot()),
+                    Request::AccessTreeSince(since) => match d.access_serial() {
+                        now if now == since => Payload::None,
+                        now => Payload::AccessSince(now, d.access_snapshot()),
+                    },
                     Request::AccessAction(id, action) => {
                         if let Some(ix) = d.node_for_accessibility(id) {
                             let out = d.access_act(ix, action);
@@ -1862,6 +1937,9 @@ pub struct Worker {
     /// When a list with a new serial last arrived: its own clock starts
     /// there, and the window measures its age from it.
     received: Instant,
+    /// The list the last `Paint` reply carried, for a [`Payload::PaintAgain`]
+    /// to be answered with.
+    last_list: Option<Arc<DrawList>>,
 }
 
 /// A `Paint` reply the window may hand back for the next paint, with
@@ -1978,6 +2056,7 @@ impl Worker {
             traffic: (0, 0),
             repeat: None,
             received: Instant::now(),
+            last_list: None,
         };
         let reply = worker.call(&Request::Config { w, h, scale, granted });
         match reply.map(|r| r.payload) {
@@ -2040,10 +2119,31 @@ impl Worker {
                 self.island_out.extend(reply.status.island_outbound.iter().cloned());
                 self.keep(reply.status.clone());
                 self.due = Some(now);
-                if let Payload::Paint { .. } = reply.payload {
-                    self.received = now;
-                    self.repeat = Repeat::of(&reply, now);
-                }
+                let reply = match reply {
+                    Reply { status, payload: Payload::PaintAgain { glyphs, images, scenes } } => {
+                        // The list the window already holds. Its clock is the
+                        // one it started with — `received` stays where the
+                        // list arrived — so a repeat made from it runs out
+                        // when the driver said it would, not that long after
+                        // this answer.
+                        let Some(list) = self.last_list.clone() else {
+                            self.dead = Some("the worker repeated a list it never sent".into());
+                            self.status.closed = self.dead.clone();
+                            return None;
+                        };
+                        let reply = Reply { status, payload: Payload::Paint { list, glyphs, images, scenes } };
+                        self.repeat = Repeat::of(&reply, self.received);
+                        reply
+                    }
+                    reply => {
+                        if let Payload::Paint { list, .. } = &reply.payload {
+                            self.received = now;
+                            self.last_list = Some(Arc::clone(list));
+                            self.repeat = Repeat::of(&reply, now);
+                        }
+                        reply
+                    }
+                };
                 Some(reply)
             }
             Err(e) => {
@@ -2884,6 +2984,27 @@ impl Backend {
         }
     }
 
+    /// The accessibility tree, unless it is the one the driver built at
+    /// accessibility serial `since`: `None` then, and the snapshot with the
+    /// serial it was built at otherwise. `0` is never a serial, so it always
+    /// gets the tree.
+    ///
+    /// With a screen reader listening the window asked for the whole tree on
+    /// every frame — a walk, a string per label and value, and on Linux the
+    /// lot over the worker pipe — sixty times a second for a spinner. The
+    /// tree only changes when the tree, the layout or the focus did, and
+    /// the driver counts those.
+    pub fn access_tree_since(&mut self, since: u64) -> Option<(u64, AccessSnapshot)> {
+        if let Some(s) = self.with_local(|d| (d.access_serial() != since).then(|| (d.access_serial(), d.access_snapshot()))) {
+            return s;
+        }
+        match self.with_worker(|w| w.call(&Request::AccessTreeSince(since)).map(|r| r.payload)) {
+            Some(Some(Payload::AccessSince(serial, s))) => Some((serial, s)),
+            Some(Some(Payload::None)) => None,
+            _ => Some((0, AccessSnapshot { nodes: Vec::new(), focus: 0, scale: 1.0 })),
+        }
+    }
+
     /// An assistive technology's action on a node: focus, click, or one of
     /// the two moves of 03 §6. Returns encoded frames to send.
     pub fn access_action(&mut self, id: u64, action: u8) -> Vec<Vec<u8>> {
@@ -2980,6 +3101,7 @@ mod tests {
             Request::Paint(640, 480),
             Request::Tick,
             Request::AccessTree,
+            Request::AccessTreeSince(7),
             Request::AccessAction(42, 1),
             Request::DesktopTheme(Some(ThemeMode::Dark), vec![(1, 0x101a26ff), (9, 0xf7a96aff)]),
             Request::DesktopTheme(None, Vec::new()),
@@ -3223,8 +3345,10 @@ mod tests {
                     }),
                 )],
             },
+            Payload::PaintAgain { glyphs: vec![(2, 1, 2, vec![0, 1])], images: vec![([4, 4, 1, 1], vec![9; 4])], scenes: vec![([5; 32], crate::driver::SceneAsset::Shader("fn main() {}".into()))] },
             Payload::Tick(true),
-            Payload::Access(snap),
+            Payload::Access(snap.clone()),
+            Payload::AccessSince(9, snap),
             Payload::Pcm(vec![0.0, 0.25, -0.5, 1.0]),
         ];
         for payload in all {
@@ -3255,5 +3379,33 @@ mod tests {
         assert_eq!(replies[0].payload, Payload::Sandbox(Ok("test".into())));
         assert!(matches!(&replies[1].payload, Payload::Hello(b) if Frame::decode(b).is_ok()));
         assert!(matches!(&replies[2].payload, Payload::Paint { .. }));
+    }
+
+    /// The driver answering a paint with the list it answered the last one
+    /// with is said in a few bytes, not the list again: a pointer that moved
+    /// without changing anything no longer costs the pipe a whole list.
+    #[test]
+    fn the_same_list_again_is_not_sent_again() {
+        let mut script = Vec::new();
+        let welcome = Frame::Welcome(eui_proto::Welcome { version: 1, session: [0; 16], start: eui_proto::Start::Fresh }).encode();
+        for r in [Request::Config { w: 100.0, h: 50.0, scale: 1.0, granted: 0 }, Request::Frame(welcome), Request::Paint(100, 50), Request::Paint(100, 50)] {
+            let bytes = r.encode();
+            script.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            script.extend_from_slice(&bytes);
+        }
+        let mut input = std::io::Cursor::new(script);
+        let mut output = Vec::new();
+        serve(&mut input, &mut output, Ok("test".into())).unwrap();
+        let mut sizes = Vec::new();
+        let mut replies = Vec::new();
+        let mut cursor = std::io::Cursor::new(output);
+        while let Ok(b) = read_message(&mut cursor, MAX_REPLY) {
+            sizes.push(b.len());
+            replies.push(Reply::decode(&b).unwrap());
+        }
+        assert_eq!(replies.len(), 4);
+        assert!(matches!(&replies[2].payload, Payload::Paint { .. }), "the first paint carries its list");
+        assert!(matches!(&replies[3].payload, Payload::PaintAgain { .. }), "the second is the same list, said once: {:?}", replies[3].payload);
+        assert!(sizes[3] < sizes[2], "and it is smaller than the list: {sizes:?}");
     }
 }

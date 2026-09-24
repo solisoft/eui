@@ -218,6 +218,17 @@ available height (and indefinite width when `overflow` is `scroll` on that
 axis), then clips to its own border box. Its scroll offset is clamped to
 `[0, content − viewport]` per axis after every layout.
 
+An offset is not a size, so a scroll changes no measurement and no placement
+relative to the scroller: every box under a `scroll` that scrolled lands
+exactly where it was, less the change in offset. A client MAY therefore serve
+a frame whose only change is an offset by translating those boxes rather than
+laying the tree out again, and the result MUST equal a full layout box for box.
+Three things are not translations and are laid out as ever: a virtualised
+list (the rows it holds depend on the offset, below), a popover or a panel at
+the pointer under the scroller (§5 places those against the window), and a
+frame in which anything else changed as well. The reference client does this
+in `Layout::scroll`; 09 §4 compares it with a full layout.
+
 A scroll in flight — a wheel notch or a key press easing to its offset
 (03 §5's motion) — is laid out **once, at the offset it lands on**; the
 frames between draw that layout with the content slid, in the vertex

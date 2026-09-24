@@ -1027,3 +1027,169 @@ fn a_slot_that_is_display_none_is_still_gone() {
     let (l, _) = lay(&s, 400.0, 300.0);
     assert_eq!(r_(&l, &s, 4).y, 0.0, "the hidden slot took no room");
 }
+
+// ------------------------------------------------ hit pruning, scroll-only
+
+/// Every node's box, in tree order, for comparing two layouts whole.
+fn boxes(l: &Layout, s: &Session) -> Vec<(u32, Option<Rect>)> {
+    s.preorder(s.root().unwrap()).map(|ix| (s.node(ix).unwrap().id, l.rect(ix))).collect()
+}
+
+/// A page whose scroller holds a little of everything a flow places: a
+/// wrapped row, a stack out of z order, and a scroller of its own.
+fn scrolling_page() -> (Session, u32, u32) {
+    let mut b = B::default();
+    let page = b.style(col());
+    let sc = b.style(StyleRecord { height: px(120), gap: 1, padding: [1, 1, 1, 1], ..col() });
+    let wrap = b.style(StyleRecord { wrap: Wrap::Wrap, gap: 1, ..row() });
+    let stack = b.style(StyleRecord { display: Display::Stack, ..st() });
+    let hi = b.style(StyleRecord { width: px(60), height: px(30), z: 3, ..st() });
+    let lo = b.style(StyleRecord { width: px(80), height: px(40), ..st() });
+    let inner = b.style(StyleRecord { height: px(50), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, page, 2);
+    b.text(t, "header");
+    let outer = b.push(NodeKind::Scroll, sc, 5);
+    b.push(NodeKind::Box, wrap, 6);
+    for i in 0..6 {
+        b.text(t, &format!("word{i} more"));
+    }
+    b.push(NodeKind::Box, stack, 2);
+    b.push(NodeKind::Box, hi, 0);
+    b.push(NodeKind::Box, lo, 0);
+    let inner_sc = b.push(NodeKind::Scroll, inner, 8);
+    for i in 0..8 {
+        b.text(t, &format!("inner {i}"));
+    }
+    for i in 0..2 {
+        b.text(t, &format!("tail {i}"));
+    }
+    (b.session(), outer, inner_sc)
+}
+
+/// 04 §7: a frame whose only change is a scroll offset is served by moving
+/// the boxes under the scroller, and where they land is exactly where a
+/// full layout of the scrolled tree puts them — nested scrollers, a clamp
+/// past the end, and a stack's paint order included.
+#[test]
+fn a_scroll_alone_translates_to_what_a_full_layout_places() {
+    let (mut s, outer, inner) = scrolling_page();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let view = Size::new(300.0, 400.0);
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, view);
+    s.clear_all_dirty();
+    let (o, i) = (s.lookup(outer).unwrap(), s.lookup(inner).unwrap());
+    for (oy, iy) in [(37, 0), (37, 5), (0, 9), (9_999, 9_999), (12, 3)] {
+        s.set_scroll(o, 0, oy);
+        s.set_scroll(i, 0, iy);
+        assert!(l.scroll(&s, view), "a scroll and nothing else is carried, at {oy}/{iy}");
+        assert_eq!(l.stats().measures, 0);
+        let (full, _) = lay(&s, view.w, view.h);
+        assert_eq!(boxes(&l, &s), boxes(&full, &s), "at {oy}/{iy}");
+        for (x, y) in [(5.0, 30.0), (40.0, 60.0), (70.0, 90.0), (10.0, 125.0), (200.0, 300.0)] {
+            assert_eq!(l.hit(&s, x, y), full.hit(&s, x, y), "hit at {x},{y} scrolled {oy}/{iy}");
+        }
+        s.clear_all_dirty();
+    }
+}
+
+/// Anything more than a scroll — a word changed, the measures dropped, the
+/// window resized — is a full layout's to place, and `scroll` says so
+/// without touching what it has.
+#[test]
+fn a_scroll_with_anything_else_is_left_to_a_full_layout() {
+    let (mut s, outer, _) = scrolling_page();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let view = Size::new(300.0, 400.0);
+    assert!(!l.scroll(&s, view), "nothing laid out yet");
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, view);
+    s.clear_all_dirty();
+    let o = s.lookup(outer).unwrap();
+    s.set_scroll(o, 0, 20);
+    assert!(!l.scroll(&s, Size::new(301.0, 400.0)), "a resize is not a scroll");
+    let before = boxes(&l, &s);
+    let header = s.lookup(2).unwrap();
+    s.set_text_local(header, "a longer header than it was".into());
+    assert!(!l.scroll(&s, view), "a change of text is not a scroll");
+    assert_eq!(boxes(&l, &s), before, "declining changes nothing");
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, view);
+    s.clear_all_dirty();
+    l.invalidate_all();
+    s.set_scroll(o, 0, 30);
+    assert!(!l.scroll(&s, view), "the measures were thrown away");
+}
+
+/// §7: a virtualised list's window depends on its offset, so a scroll of
+/// one is laid out rather than carried.
+#[test]
+fn a_virtualised_list_scrolled_recomputes_its_window() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let ls = b.style(StyleRecord { height: px(100), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let list = b.push(NodeKind::List, ls, 200);
+    b.prop("item_height", Value::Int(20));
+    for i in 0..200 {
+        b.text(t, &format!("row {i}"));
+    }
+    let mut s = b.session();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut m = Monospace::default();
+    let mut l = Layout::new();
+    let view = Size::new(300.0, 400.0);
+    l.compute(&mut Env { session: &s, theme: &theme, text: &mut m }, view);
+    s.clear_all_dirty();
+    s.set_scroll(s.lookup(list).unwrap(), 0, 1_000);
+    assert!(!l.scroll(&s, view));
+}
+
+/// What the painter culls cannot be hit. A child spilling out of a box that
+/// has scrolled out of view is not painted — the painter drops a node whose
+/// box misses the clip along with everything under it — and a hit on the
+/// place it would have been is a hit on the scroller.
+#[test]
+fn what_is_culled_from_the_paint_is_not_hit() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let sc = b.style(StyleRecord { height: px(100), ..col() });
+    let short = b.style(StyleRecord { height: px(10), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let scroll = b.push(NodeKind::Scroll, sc, 7);
+    let holder = b.push(NodeKind::Box, short, 1);
+    let spill = b.text(t, "spills");
+    for i in 0..6 {
+        b.text(t, &format!("after {i}"));
+    }
+    let mut s = b.session();
+    s.set_scroll(s.lookup(scroll).unwrap(), 0, 11);
+    let (l, _) = lay(&s, 300.0, 400.0);
+    // The holder is 10 tall and scrolled 11 up: wholly above the viewport.
+    // Its text is 22 tall and would reach 11 px into it.
+    assert_rect(&l, &s, holder, 0.0, -11.0, 300.0, 10.0);
+    assert_rect(&l, &s, spill, 0.0, -11.0, 300.0, 22.0);
+    assert_ne!(l.hit(&s, 5.0, 5.0), s.lookup(spill), "a culled subtree is not under the pointer");
+}
+
+/// 03 §2: `overflow: clip` trims what the box holds, for the pointer as for
+/// the eye.
+#[test]
+fn overflow_clip_trims_the_hit_as_it_trims_the_paint() {
+    let mut b = B::default();
+    let c = b.style(col());
+    let frame = b.style(StyleRecord { height: px(10), overflow: Overflow::Clip, ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 1);
+    let fr = b.push(NodeKind::Box, frame, 1);
+    let inner = b.text(t, "tall");
+    let s = b.session();
+    let (l, _) = lay(&s, 300.0, 400.0);
+    assert_eq!(l.hit(&s, 5.0, 5.0), s.lookup(inner));
+    assert_eq!(l.hit(&s, 5.0, 15.0), s.lookup(1), "below the frame the text is cut away");
+    assert_eq!(r(&l, &s, fr).h, 10.0);
+}

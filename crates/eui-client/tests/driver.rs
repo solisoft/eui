@@ -319,6 +319,36 @@ fn wheel_over_a_list_scrolls_it_and_reports_the_offset() {
     assert!(last.y < 100.0 && last.y >= 0.0, "{last:?}");
 }
 
+/// 04 §7: a wheel over a scroller that is not virtualised moves the boxes
+/// under it and places nothing again — no measure, not even from the memo —
+/// and they land where the offset says.
+#[test]
+fn a_wheel_over_a_page_carries_its_boxes_rather_than_placing_them_again() {
+    let mut d = Driver::new(200.0, 100.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 30 });
+    for i in 0..30 {
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 10 + i, style: 0, key: 0, text: Some(TextRef::Inline(format!("row {i}"))), props: (0, 0), handlers: (0, 0), child_count: 0 });
+    }
+    d.handle_frame(Frame::Batch(Batch { seq: 1, ops: vec![Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, height: Dim::Px(100), ..Default::default() } }, Op::Mount(tree)] }));
+    let _ = d.paint(200, 100);
+    let row = d.session().lookup(15).unwrap();
+    let before = d.layout().rect(row).unwrap();
+    assert!(d.layout().stats().memo_hits + d.layout().stats().measures > 0, "the first frame lays the page out");
+    d.input(Input::PointerMove(50.0, 50.0));
+    d.input(Input::Wheel(0.0, 40.0));
+    let _ = d.paint(200, 100);
+    let st = d.layout().stats();
+    assert_eq!((st.measures, st.memo_hits), (0, 0), "a scroll is carried, not laid out: {st:?}");
+    let after = d.layout().rect(row).unwrap();
+    assert_eq!((after.x, after.y, after.w, after.h), (before.x, before.y - 40.0, before.w, before.h));
+    // And a change to the tree is laid out as ever.
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 12, text: TextRef::Inline("changed".into()) }] }));
+    let _ = d.paint(200, 100);
+    assert!(d.layout().stats().memo_hits + d.layout().stats().measures > 0);
+}
+
 #[test]
 fn wheel_over_a_fitted_list_scrolls_the_page() {
     // A list that fits its rows must not eat the wheel: the page underneath
@@ -568,6 +598,30 @@ fn tab(d: &mut Driver, shift: bool) -> Vec<Frame> {
     let mut out = d.input(Input::Key { key: "Tab".into(), modifiers: u32::from(shift), down: true });
     out.extend(d.input(Input::Key { key: "Tab".into(), modifiers: u32::from(shift), down: false }));
     out
+}
+
+/// A screen reader is handed the tree again only when what it is built from
+/// moved: the tree, its boxes, or the focus. A paint that changed none of
+/// them — a hover over a node with no hover style — leaves the serial the
+/// window compares against where it was.
+#[test]
+fn the_accessibility_serial_moves_only_when_its_tree_could_have() {
+    let mut d = welcomed();
+    let _ = d.paint(400, 300);
+    let first = d.access_serial();
+    assert_ne!(first, 0, "zero is kept for never");
+    let _ = d.paint(400, 300);
+    assert_eq!(d.access_serial(), first, "the same list again");
+    d.input(Input::PointerMove(390.0, 290.0));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.access_serial(), first, "a hover that lit nothing");
+    tab(&mut d, false);
+    let _ = d.paint(400, 300);
+    let focused = d.access_serial();
+    assert_ne!(focused, first, "the focus moved");
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetText { node: 2, text: TextRef::Inline("1".into()) }] }));
+    let _ = d.paint(400, 300);
+    assert_ne!(d.access_serial(), focused, "the tree changed");
 }
 
 #[test]
@@ -2259,6 +2313,42 @@ fn a_spinning_node_marks_its_quads_and_keeps_frames_coming() {
     d.tick(t0 + Duration::from_millis(980));
     let _ = d.paint(400, 300);
     assert_eq!(d.spin_repeats(), 2, "and the repeat resumes once nothing has happened");
+}
+
+/// A pointer crossing a node it is already over changes nothing the list
+/// shows, so it does not end the repeat: a spinner on a page with a mouse
+/// moving over it is still one list drawn again, not a layout and a paint
+/// per move. The move that lands on something else does end it.
+#[test]
+fn a_move_that_changes_nothing_keeps_the_last_list() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let spin = StyleRecord { width: Dim::Px(20), height: Dim::Px(20), bg: ColorRef::role(Role::AccentBase.id()), animation: 1, ..Default::default() };
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
+    let ops = vec![Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::DefStyle { id: 11, record: spin }, Op::Mount(tree)];
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
+    let t0 = Instant::now();
+    d.tick(t0);
+    d.input(Input::PointerMove(200.0, 200.0));
+    let list = d.paint(400, 300);
+    assert!(list.gpu_only);
+    let laid = d.relayouts();
+    for (i, x) in [201.0, 230.0, 260.0, 300.0].into_iter().enumerate() {
+        d.input(Input::PointerMove(x, 210.0));
+        d.tick(t0 + Duration::from_millis(40 * (i as u64 + 1)));
+        let again = d.paint(400, 300);
+        assert!(Arc::ptr_eq(&list, &again), "move {i} over the same node is the same list");
+    }
+    assert_eq!(d.spin_repeats(), 4);
+    assert_eq!(d.relayouts(), laid, "and nothing was laid out");
+    // Onto the spinner: what the pointer is over changed.
+    d.input(Input::PointerMove(10.0, 10.0));
+    d.tick(t0 + Duration::from_millis(400));
+    let after = d.paint(400, 300);
+    assert!(!Arc::ptr_eq(&list, &after), "a move onto another node is a real paint");
 }
 
 /// A list with nothing moving in it is the frame until something reaches
