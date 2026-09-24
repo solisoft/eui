@@ -875,3 +875,32 @@ fn a_small_mount_after_a_large_one_gives_the_slots_back() {
     assert_eq!(s.live_nodes(), 1);
     assert!(s.lookup(1).is_some() && s.lookup(2).is_none());
 }
+
+/// 03 §3's `placeholder`: an `input` or `textarea` declares it, a string,
+/// and it is *shown* only while the field is empty — a `SetText` hides it
+/// and emptying the field brings it back. A `text` node, and a value that is
+/// not a string, declare nothing.
+#[test]
+fn a_placeholder_is_declared_by_fields_and_shown_only_while_empty() {
+    let mut s = Session::new();
+    let field = |kind: NodeKind, id: u32, props: (u32, u32)| FlatNode { kind, id, style: 0, key: 0, text: Some(TextRef::Inline(String::new())), props, handlers: (0, 0), child_count: 0 };
+    let tree = Subtree {
+        nodes: vec![flat(NodeKind::Box, 1, 0, 4), field(NodeKind::Input, 2, (0, 1)), field(NodeKind::TextArea, 3, (1, 1)), field(NodeKind::Text, 4, (2, 1)), field(NodeKind::Input, 5, (3, 1))],
+        props: vec![(1, Value::Str("Search mail".into())), (1, Value::Str("Search mail".into())), (1, Value::Str("Search mail".into())), (1, Value::Int(3))],
+        ..Default::default()
+    };
+    s.apply(Batch { seq: 1, ops: vec![Op::DefAtom { id: 1, value: "placeholder".into() }, Op::Mount(tree)] }).unwrap();
+    let ix = |id: u32| s.lookup(id).unwrap();
+    assert_eq!(s.atoms().placeholder, Some(1));
+    assert_eq!(s.shown_placeholder(ix(2)), Some("Search mail"));
+    assert_eq!(s.shown_placeholder(ix(3)), Some("Search mail"), "a textarea too");
+    assert_eq!(s.placeholder(ix(4)), None, "a text node has none");
+    assert_eq!(s.placeholder(ix(5)), None, "and a number is not one");
+    one(&mut s, 2, Op::SetText { node: 2, text: TextRef::Inline("a".into()) }).unwrap();
+    let input = s.lookup(2).unwrap();
+    assert_eq!(s.shown_placeholder(input), None, "a value hides it");
+    assert_eq!(s.placeholder(input), Some("Search mail"), "but the field still declares it");
+    assert_eq!(s.text_of(input), Some("a"), "and it is never the value");
+    one(&mut s, 3, Op::SetText { node: 2, text: TextRef::Inline(String::new()) }).unwrap();
+    assert_eq!(s.shown_placeholder(s.lookup(2).unwrap()), Some("Search mail"), "emptied, it is back");
+}

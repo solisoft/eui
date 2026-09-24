@@ -57,7 +57,7 @@ with a free list, and `apply` for every op in the wire format.
   than SipHash — seeded because the ids are a server's to choose.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 47 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
+- 48 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -224,7 +224,7 @@ scissor region.
   then its blur, the corner radius following the spread; a negative spread
   tucks the layer under the box, and a pixel test reads back that the row
   above a `shadow.lg` card is the bare surface and the row below is not.
-- 78 tests (17 unit, 61 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
+- 80 tests (17 unit, 63 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -238,7 +238,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 118 tests.
+  trip. 119 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
@@ -1857,7 +1857,7 @@ has the table.
 The catalogue is 531 definitions over six files. `tests/tw_spec.sl` is 8
 tests and 296 assertions, one of which sends every one of the 213 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 14 files, 70 tests, 707 assertions. The gallery's Catalogue section opens
+are 14 files, 70 tests, 715 assertions. The gallery's Catalogue section opens
 with a card written in nothing but class strings.
 
 **A whole application in those classes.** `helpdesk`, the demo application's
@@ -1876,13 +1876,25 @@ holds it to 23 tests and 66 assertions; the view is 824 lines. Measured with
 `snapshot` at 1280×800, the inbox is 237 nodes, a ticket with three
 messages 159, customers 204, reports 185, settings 131.
 
-Two things it had to work around, both written down where they bite. A
-node whose only change is its style keeps the style it was mounted with, so
-the sidebar's current row, the current tab and a switch carry their state in
-their key and are replaced rather than restyled. And EUI has no placeholder:
-the search fields and the composer draw one as a muted line under a
-transparent field, put out by a local `focus` chunk that also lights the
-frame's border in the accent.
+Two things it worked around, and neither is needed any more (2026-09-24);
+the view has not been rewritten, so both are still in it. The sidebar's
+current row, the current tab and a switch carry their state in their key and
+are replaced rather than restyled, because "a node whose only change is its
+style keeps the style it was mounted with" — which was never true. The
+server sends the `SetStyle` and the client applies it; what was wrong was the
+picture. Those nodes carry a `transition`, a restyled node is a quad that
+eases between two colours on the vertex stage's clock, and `snapshot` drew
+the list at age 0, so every photograph taken straight after a key or a click
+showed the colour being *left*. `SNAPSHOT_SETTLE` could not help while it ran
+before the keys. The tool now runs transitions to their end before it
+draws, unless `SNAPSHOT_AGE` asks for a frame in flight
+(`the_picture_is_taken_after_the_transition_lands`), and the server is pinned
+to one `SetStyle` per restyled row, keyed or not, in lang's
+`a_style_only_change_is_one_set_style_per_row_keyed_or_not`. And the search
+fields and the composer draw a placeholder as a muted line under a
+transparent field, put out by a local `focus` chunk; a field now has a real
+one (`placeholder`, 03 §3), drawn by the client in `text.muted` while it is
+empty, never part of the value, and announced as the field's placeholder.
 
 ## Not started
 

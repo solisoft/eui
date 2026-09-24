@@ -538,6 +538,24 @@ draw list redrawn with a later clock.
   prop: a secret that wraps is not a password. An assistive technology is
   handed a password field whose value is empty, never the text.
 
+- An `input` or `textarea` carrying **`placeholder`**, a string, shows it
+  while the node's text is empty — and only then: the first character typed
+  takes it away and emptying the field brings it back, with no round trip.
+  It is drawn where the value would be, shaped, wrapped and aligned as the
+  value would be, in `text.muted` whatever the node's `fg`, and a focused
+  empty field draws its caret, in the node's own colour, exactly where it
+  would with no placeholder at all. It is **not the
+  value**: it is never in the node's text, never in a `change` or a
+  `text_input`, cannot be selected, copied or moved through by the caret,
+  and a `secret` field paints it as text rather than as marks, because it is
+  not what was typed. An empty field is measured as though it held its
+  placeholder, so a field sized by its content does not clip its own hint;
+  a field with a value is measured by the value alone. An assistive
+  technology is handed it as the field's placeholder, never as its value
+  (§6). A `placeholder` that is not a string, and one on any other kind, is
+  ignored. The client paints it; the server sends it as it sends any prop.
+  09 §8 names the vectors.
+
 ### 3.1 What a node may claim of the keyboard
 
 Four props, read by the client, for the things a server cannot do because it
@@ -1144,7 +1162,7 @@ one is listening:
 | Node | Exposed as |
 |---|---|
 | any node with a `click` handler | a button, named by every text inside it, a leaf |
-| `input` / `textarea` | a text field whose value is the node's text |
+| `input` / `textarea` | a text field whose value is the node's text, and whose placeholder is its `placeholder` (§3) |
 | `text` | a label |
 | `image` / `icon` | an image |
 | `scroll` / `list` | a scrolling container; virtualised rows are absent, as they are from layout |

@@ -1472,12 +1472,30 @@ impl Painter<'_, '_> {
         let Some(node) = self.scene.session.node(ix) else {
             return;
         };
-        let Some(text) = self.scene.session.text_of(ix) else {
+        // 03 §3: an empty field shows its placeholder where the value would
+        // be, in `text.muted` whatever its own `fg`. It is never the value:
+        // the caret and the selection below are offsets into the text,
+        // which is empty, so they sit at the hint's start and select nothing.
+        let hint = self.scene.session.shown_placeholder(ix);
+        let Some(text) = self.scene.session.text_of(ix).or(hint.map(|_| "")) else {
             return;
         };
         let secret = self.scene.session.is_secret(ix);
         let masked = secret.then(|| eui_tree::secret_display(text));
-        let shown = masked.as_deref().unwrap_or(text);
+        let shown = hint.or(masked.as_deref()).unwrap_or(text);
+        // The caret keeps the node's own colour: one in the muted grey of a
+        // hint reads as a field that is disabled.
+        let ink = fg;
+        let fg = match hint {
+            Some(_) => {
+                let mut muted = linear(self.scene.theme.color(Role::TextMuted));
+                muted[3] *= fg[3];
+                muted
+            }
+            None => fg,
+        };
+        // The hint's colour is not the node's, so it does not ease with it.
+        let fg_from = if hint.is_some() { None } else { self.own.and_then(|o| o.fg_from) };
         let scale = self.scene.scale;
         let editing = self.scene.editing.filter(|e| e.node == ix);
         // The quads of last frame, if this node did not change and paints
@@ -1548,11 +1566,15 @@ impl Painter<'_, '_> {
             // fact about the text, not a hint about where typing lands.
             if e.caret_on {
                 let (cx, cy) = shaped.caret(e.caret);
+                // Over a hint, where the caret of an empty field stands —
+                // the start of a left-aligned one, the middle of a centred
+                // one — and not wherever the hint's first glyph happens to.
+                let cx = if hint.is_some() { style.text_pad_x(max_w, 0.0) - style.text_pad_x(max_w, shaped.metrics.width) } else { cx };
                 let x = ((origin_x + cx) * scale).round();
                 let y0 = ((origin_y + cy - above) * scale).round();
                 let y1 = ((origin_y + cy + below) * scale).round();
-                let mut caret = Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
-                if let Some(from) = self.own.and_then(|o| o.fg_from) {
+                let mut caret = Quad { rect: [x, y0, scale.max(1.0).round(), y1 - y0], params: [0.0, 0.0, 0.0, opacity], fill: ink, ..Quad::default() };
+                if let Some(from) = fg_from {
                     self.animate(&mut caret, Some(from), None);
                 }
                 self.push(caret);
@@ -1565,6 +1587,7 @@ impl Painter<'_, '_> {
             .session
             .atoms()
             .spans
+            .filter(|_| hint.is_none())
             .and_then(|atom| self.scene.session.node(ix).and_then(|n| n.prop(atom)))
             .and_then(|prop| match prop {
                 Value::List(list) => Some(spans_of(list, |v| self.path_color(v))),
@@ -1594,7 +1617,7 @@ impl Painter<'_, '_> {
             };
             // A glyph in the node's own colour moves with it; one a span
             // coloured keeps its colour.
-            if let (Some(from), None) = (self.own.and_then(|o| o.fg_from), span) {
+            if let (Some(from), None) = (fg_from, span) {
                 self.animate(&mut q, Some(from), None);
             }
             built.push(q);
@@ -1610,7 +1633,7 @@ impl Painter<'_, '_> {
         // an underline position, and a rule a fifth of the size below the
         // baseline is where every face puts one to within a pixel at the
         // sizes this scale reaches.
-        if decoration != 0 && !shaped.glyphs.is_empty() {
+        if decoration != 0 && hint.is_none() && !shaped.glyphs.is_empty() {
             let mut runs: Vec<(f32, f32, f32)> = Vec::new(); // baseline, min x, max x
             for g in &shaped.glyphs {
                 match runs.iter_mut().find(|r| r.0 == g.y) {
@@ -1633,7 +1656,7 @@ impl Painter<'_, '_> {
                     }
                     let rect = [((origin_x + x0) * scale).round(), ((origin_y + y + drop) * scale).round(), ((x1 - x0) * scale).round().max(1.0), thick];
                     let mut rule = Quad { rect, params: [0.0, 0.0, 0.0, opacity], fill: fg, ..Quad::default() };
-                    if let Some(from) = self.own.and_then(|o| o.fg_from) {
+                    if let Some(from) = fg_from {
                         self.animate(&mut rule, Some(from), None);
                     }
                     built.push(rule);

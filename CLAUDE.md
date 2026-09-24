@@ -82,4 +82,7 @@ snapshot <out> --view <url> <component> <w> <h> <scale>      # over HTTPS, no se
 The two should agree pixel for pixel on the same component; that comparison is
 how "a page drawn without a socket is the same page" is checked rather than
 asserted. `SNAPSHOT_CLICK`, `SNAPSHOT_NAV` and `EUI_TRACE=1` drive and
-instrument it.
+instrument it. The picture is taken once every `transition` has landed;
+`SNAPSHOT_AGE=<ms>` is the way to see one in flight — without that rule a
+restyled node was photographed in the colour it was leaving, and read as a
+`SetStyle` that never arrived.

@@ -249,6 +249,9 @@ pub enum Checked {
 pub struct AccessState {
     /// A longer description, read after the name.
     pub description: String,
+    /// What an empty field is for, read where its value would be (03 §3's
+    /// `placeholder`). Only an `input` or a `textarea` has one.
+    pub placeholder: String,
     /// Ticked, unticked, or partly.
     pub checked: Option<Checked>,
     /// Open or shut, for a disclosure or a combo box's anchor.
@@ -440,6 +443,9 @@ impl Driver {
                 // 03 §3: a secret field's value never leaves the client as
                 // prose. The role already says what it is.
                 a.value = if session.is_secret(ix) { String::new() } else { session.text_of(ix).unwrap_or("").to_owned() };
+                // Handed over whether or not the field is empty: the platform
+                // decides when a hint is read, and it is never the value.
+                a.state.placeholder = session.placeholder(ix).unwrap_or("").to_owned();
                 a.focus = !a.state.disabled;
             } else if role.is_leaf() {
                 // A leaf is named by everything written inside it: the text
@@ -587,6 +593,8 @@ impl AccessAtoms {
         };
         AccessState {
             description: self.description.and_then(|a| node.prop(a)).and_then(str_of).unwrap_or_default().to_owned(),
+            // Filled by the walk, which has the session this does not.
+            placeholder: String::new(),
             checked,
             expanded: self.tri(node, self.expanded),
             selected: self.tri(node, self.selected),
@@ -710,6 +718,9 @@ pub fn to_update(snapshot: &AccessSnapshot) -> accesskit::TreeUpdate {
         let st = &n.state;
         if !st.description.is_empty() {
             a.set_description(st.description.as_str());
+        }
+        if !st.placeholder.is_empty() {
+            a.set_placeholder(st.placeholder.as_str());
         }
         match st.checked {
             Some(Checked::Yes) => a.set_toggled(Toggled::True),

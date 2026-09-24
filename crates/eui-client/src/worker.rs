@@ -1497,6 +1497,7 @@ fn put_state(w: &mut W, st: &AccessState) {
     set(st.value_max.is_some(), 15);
     w.u32(flags);
     w.str(&st.description);
+    w.str(&st.placeholder);
     for v in [st.value_now, st.value_min, st.value_max] {
         w.f32(v.unwrap_or(0.0) as f32);
     }
@@ -1511,10 +1512,12 @@ fn get_state(r: &mut R<'_>) -> Wire<AccessState> {
     let flags = r.u32()?;
     let on = |bit: u32| flags & (1 << bit) != 0;
     let description = r.str()?;
+    let placeholder = r.str()?;
     let nums = [r.f32()?, r.f32()?, r.f32()?];
     let some = |present: bool, v: f32| if present { Some(f64::from(v)) } else { None };
     Ok(AccessState {
         description,
+        placeholder,
         checked: on(6).then(|| {
             if on(8) {
                 Checked::Mixed
@@ -3369,7 +3372,9 @@ mod tests {
                     // case — a dropped field would survive a fixture that
                     // was 0 everywhere.
                     active_descendant: 7,
-                    state: AccessState::default(),
+                    // And a placeholder beside a description, the two strings
+                    // the state carries, so one read in the other's place shows.
+                    state: AccessState { description: "Where it goes".into(), placeholder: "Search mail".into(), ..AccessState::default() },
                 },
                 AccessNode {
                     id: 0,

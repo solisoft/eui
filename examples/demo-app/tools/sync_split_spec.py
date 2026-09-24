@@ -140,6 +140,11 @@ SPECS = {
         "slider",
         "range_slider",
         "diff_tally",
+        "editable",
+        "editable_key",
+        "editable_states",
+        "input",
+        "field_props",
     ],
     ROOT / "tests" / "stream_spec.sl": [
         "chart_stream_ceiling",
