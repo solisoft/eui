@@ -61,7 +61,51 @@ Indices are what a `StyleRecord` carries. Values are device-independent pixels
 at `cozy` density and font scale 1.0; §5 says how the viewer's settings change
 them.
 
-**`space`** (13 entries, index 0–12): `0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 96`
+**`space`** (18 entries, index 0–17): `0, 2, 4, 8, 12, 16, 20, 24, 32, 40,
+48, 64, 96`, then `6, 10, 14, 80, 128`.
+
+| index | px | Tailwind | | index | px | Tailwind |
+|---:|---:|---|---|---:|---:|---|
+| 0 | 0 | `0` | | 9 | 40 | `10` |
+| 1 | 2 | `0.5` | | 10 | 48 | `12` |
+| 2 | 4 | `1` | | 11 | 64 | `16` |
+| 3 | 8 | `2` | | 12 | 96 | `24` |
+| 4 | 12 | `3` | | 13 | 6 | `1.5` |
+| 5 | 16 | `4` | | 14 | 10 | `2.5` |
+| 6 | 20 | `5` | | 15 | 14 | `3.5` |
+| 7 | 24 | `6` | | 16 | 80 | `20` |
+| 8 | 32 | `8` | | 17 | 128 | `32` |
+
+Indices 13–17 are **version 6** and are appended rather than slotted into
+order, because an index is what a record carries and renumbering would move
+every existing step under every older client. They are the steps an
+application written from Tailwind reached for and the scale did not have —
+measured over ten first-draft screens, `1.5` 34 times, `2.5` 14, `32` 10,
+`3.5` 8 and `20` twice (`40`, once, was left out). A step is an
+index, not a formula, so the scale is not in order and a client MUST NOT
+assume it is.
+
+A server MUST NOT send an index above 12 to a session negotiated below
+version 6. It sends the step's **fallback** instead, the nearest older step
+with ties going down — a box that is 2 px tighter than its author meant
+rather than 2 px wider than the width it was given:
+
+| new | px | older session gets |
+|---:|---:|---|
+| 13 | 6 | 2 (4 px) |
+| 14 | 10 | 3 (8 px) |
+| 15 | 14 | 4 (12 px) |
+| 16 | 80 | 11 (64 px) |
+| 17 | 128 | 12 (96 px) |
+
+The mapping is applied where the record is encoded, to `gap`, `padding`,
+`margin` and every `Dim::Space`, so the view is written once and each
+session is sent what it can draw
+(`eui_proto::StyleRecord::for_protocol`, and in Soli the encoder's style
+table). Four of the five sit exactly half-way between two older steps,
+which is why "ties down" is a rule and not a footnote. Without it an older
+client would meet an index past the end of its scale, which is an error at
+style definition time (below), and the whole batch with it.
 
 **`radius`** (index 0–4): `none 0`, `sm md/2`, `md`, `lg 2·md`, `full 9999`,
 where `md` is the theme's `radius_md` (§3), `8` by default — so `4 8 16`,

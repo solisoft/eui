@@ -380,7 +380,7 @@ def tw_refused_exact(name)
 end
 
 def tw_space_steps()
-  {"0": 0, "0.5": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "8": 8, "10": 9, "12": 10, "16": 11, "24": 12}
+  {"0": 0, "0.5": 1, "1": 2, "1.5": 13, "2": 3, "2.5": 14, "3": 4, "3.5": 15, "4": 5, "5": 6, "6": 7, "8": 8, "10": 9, "12": 10, "16": 11, "20": 16, "24": 12, "32": 17}
 end
 
 def tw_text_sizes()
@@ -1143,6 +1143,7 @@ end
 def tw_examples()
   [
     "p-0", "p-0.5", "p-1", "p-2", "p-3", "p-4", "p-5", "p-6", "p-8", "p-10", "p-12", "p-16", "p-24",
+    "py-1.5", "px-2.5", "gap-3.5", "p-20", "py-32", "flex-col space-y-1.5",
     "px-4", "py-2", "pt-1", "pr-2", "pb-3", "pl-6", "m-2", "mx-4", "my-1", "mt-2", "mr-3", "mb-4", "ml-1", "gap-3",
     "w-64", "h-10", "w-1.5", "w-full", "w-auto", "w-px", "w-1/2", "w-2/3", "w-[320px]", "h-[50%]", "size-8",
     "basis-0", "basis-1/3", "min-w-0", "min-h-0", "min-w-full", "max-w-sm", "max-w-7xl", "max-w-full", "max-h-96",
@@ -1448,6 +1449,17 @@ describe("tw", fn() {
     check("focus-within", tw_refusal("focus-within:bg-gray-50").index_of("not an ancestor") >= 0, true)
   })
 
+  test("the half steps are version 6's space indices 13-17", fn() {
+    # 05 §2: appended after 12, so out of pixel order on purpose.
+    check("py-1.5 is 6 px", tw("py-1.5")["s"], {"pad": [13, 0, 13, 0]})
+    check("px-2.5 is 10 px", tw("px-2.5")["s"], {"pad": [0, 14, 0, 14]})
+    check("gap-3.5 is 14 px", tw("gap-3.5")["s"], {"gap": 15})
+    check("mt-20 is 80 px", tw("mt-20")["s"], {"margin": [16, 0, 0, 0]})
+    check("p-32 is 128 px", tw("p-32")["s"], {"pad": 17})
+    check("space-y-1.5 settles into a column's gap", column({"tw": "space-y-1.5"}, [])["s"], {"display": "column", "gap": 13})
+    check("the tree encodes", renders?(column({"tw": "py-1.5 px-2.5 gap-3.5"}, [text("a", {})])), true)
+  })
+
   test("a class with no equivalent is refused by name, with the reason", fn() {
     check("tracking", tw_refusal("tracking-tight").starts_with?("tw: 'tracking-tight' has no EUI equivalent"), true)
     check("leading", tw_refusal("leading-6").index_of("line-height") >= 0, true)
@@ -1455,10 +1467,10 @@ describe("tw", fn() {
     check("a corner", tw_refusal("rounded-tl-lg").index_of("four corners") >= 0, true)
     check("translate", tw_refusal("translate-x-1").index_of("transforms") >= 0, true)
     check("ring-offset", tw_refusal("ring-offset-2").index_of("offset") >= 0, true)
-    check("a step off the scale lists the steps", tw_refusal("p-1.5").index_of("0, 0.5, 1, 2") >= 0, true)
-    check("and the two nearest", tw_refusal("py-1.5").index_of("the nearest are 1 (4 px) and 2 (8 px)") >= 0, true)
-    check("a half step up", tw_refusal("px-3.5").index_of("the nearest are 3 (12 px) and 4 (16 px)") >= 0, true)
-    check("past the top", tw_refusal("p-32").index_of("the nearest is 24 (96 px)") >= 0, true)
+    check("a step off the scale lists the steps", tw_refusal("p-7").index_of("0, 0.5, 1, 1.5, 2, 2.5") >= 0, true)
+    check("and the two nearest", tw_refusal("py-7").index_of("the nearest are 6 (24 px) and 8 (32 px)") >= 0, true)
+    check("between two appended steps", tw_refusal("px-28").index_of("the nearest are 24 (96 px) and 32 (128 px)") >= 0, true)
+    check("past the top", tw_refusal("p-40").index_of("the nearest is 32 (128 px)") >= 0, true)
     check("a palette hue that is no role", tw_refusal("bg-purple-600").index_of("accent (indigo-600)") >= 0, true)
     check("the accent has no tint", tw_refusal("bg-indigo-50").index_of("info-subtle") >= 0, true)
     check("dark mode", tw_refusal("dark:bg-gray-900").index_of("roles") >= 0, true)

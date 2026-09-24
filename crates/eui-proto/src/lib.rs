@@ -92,8 +92,8 @@ pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
 pub use reader::Reader;
 pub use style::{
-    AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Justify, Motion, Overflow, Position, StyleRecord, TextAlign, Wrap, ANIMATION_ENTER, ANIMATION_EXIT, ANIMATION_MASK,
-    ANIMATION_SPIN,
+    space_steps, AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Justify, Motion, Overflow, Position, StyleRecord, TextAlign, Wrap, ANIMATION_ENTER, ANIMATION_EXIT,
+    ANIMATION_MASK, ANIMATION_SPIN, SPACE_FALLBACK,
 };
 pub use writer::Writer;
 
@@ -106,7 +106,13 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
+// 6 appends five steps to the `space` scale (05 §2): Tailwind's 1.5, 2.5,
+// 3.5, 20 and 32, at indices 13-17. An index past the end of a scale is an
+// error at style definition time, so a client at 5 would refuse the batch
+// carrying one. Paid for like an event rather than like a kind: the server
+// sends a session below 6 the older step each one falls back to
+// (`StyleRecord::for_protocol`), and nothing raises a manifest's floor.
 // 5 carries `Offer::Adopt` and `Start::Adopted` (01 §2.6): a client that
 // fetched a tree over `GET /_eui/view/<component>` can offer its hash, and a
 // server that renders to the same bytes keeps that tree rather than sending

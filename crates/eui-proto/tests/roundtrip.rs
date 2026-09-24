@@ -250,3 +250,29 @@ fn a_deep_but_legal_tree_is_accepted() {
     let tree = Subtree::decode(&mut Reader::new(w.as_slice())).unwrap();
     assert_eq!(tree.nodes.len(), 257);
 }
+
+#[test]
+fn a_space_step_an_older_session_lacks_falls_back() {
+    // 05 §2: indices 13-17 are version 6. A record carrying them is sent to
+    // a session at 5 with each replaced by its older step, and to one at 6
+    // unchanged — on every field that holds a `space` index.
+    let r = StyleRecord { gap: 13, padding: [13, 14, 15, 16], margin: [17, 12, 0, 5], width: Dim::Space(14), max_height: Dim::Space(17), basis: Dim::Px(13), font_size: 5, ..Default::default() };
+    assert_eq!(r.for_protocol(PROTOCOL_VERSION), r);
+    assert_eq!(r.for_protocol(6), r);
+    let old = r.for_protocol(5);
+    assert_eq!(old.gap, 2, "1.5 (6 px) is 1 (4 px) below 6");
+    assert_eq!(old.padding, [2, 3, 4, 11]);
+    assert_eq!(old.margin, [12, 12, 0, 5], "older steps are left as they are");
+    assert_eq!(old.width, Dim::Space(3));
+    assert_eq!(old.max_height, Dim::Space(12));
+    assert_eq!(old.basis, Dim::Px(13), "a pixel count is not an index");
+    assert_eq!(old.font_size, 5, "only space indices move");
+    assert_eq!(r.for_protocol(1), old);
+    // What comes out is always on the older scale.
+    for ix in 0..=u8::MAX {
+        let s = StyleRecord { gap: ix, ..Default::default() }.for_protocol(5);
+        assert!(ix >= 18 || usize::from(s.gap) < space_steps(5), "{ix} -> {}", s.gap);
+    }
+    assert_eq!(space_steps(5), 13);
+    assert_eq!(space_steps(6), 18);
+}

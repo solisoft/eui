@@ -1,7 +1,9 @@
 //! The fixed scales (`spec/05-theme.md` §2), at cozy density and font scale 1.
 
-/// `space` entries, index 0–12, px.
-pub const SPACE: [f32; 13] = [0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0, 96.0];
+/// `space` entries, index 0–17, px. Thirteen in order, then the five that
+/// version 6 appended — Tailwind's `1.5 2.5 3.5 20 32` — out of order,
+/// because an index is what a record carries and cannot move (05 §2).
+pub const SPACE: [f32; 18] = [0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0, 96.0, 6.0, 10.0, 14.0, 80.0, 128.0];
 
 /// `text` entries as `(size, line height)`, index 0–7, px — Tailwind's
 /// `text-xs` … `text-4xl`, size for size and line for line.

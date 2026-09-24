@@ -66,7 +66,7 @@ pub struct Resolved {
     /// `0xRRGGBBAA` by role id; index 0 is unused and black.
     pub colors: [u32; 34],
     /// Space scale after density, whole px.
-    pub space: [f32; 13],
+    pub space: [f32; scale::SPACE.len()],
     /// Radius scale, px.
     pub radius: [f32; scale::RADIUS_LEN],
     /// `(size, line height)` after font scale, whole px.

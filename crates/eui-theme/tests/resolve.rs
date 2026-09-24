@@ -253,6 +253,29 @@ fn the_scales_are_tailwinds() {
 }
 
 #[test]
+fn the_space_scale_appends_tailwinds_half_steps() {
+    // 05 §2: thirteen steps in order, then Tailwind's 1.5 2.5 3.5 20 32
+    // appended at 13-17 by version 6. An index cannot move, so the new ones
+    // are out of order on purpose.
+    assert_eq!(scale::SPACE, [0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0, 96.0, 6.0, 10.0, 14.0, 80.0, 128.0]);
+    assert_eq!(scale::SPACE.len(), eui_proto::space_steps(eui_proto::PROTOCOL_VERSION));
+    assert_eq!(eui_proto::space_steps(5), 13);
+    // Each fallback is the nearest older step, ties going down — computed
+    // here from the pixels, so the table in eui-proto cannot drift from them.
+    let old = &scale::SPACE[..13];
+    for (n, &fallback) in eui_proto::SPACE_FALLBACK.iter().enumerate() {
+        let want = scale::SPACE[13 + n];
+        let best = (0..13).min_by(|&a, &b| (old[a] - want).abs().total_cmp(&(old[b] - want).abs()).then(old[a].total_cmp(&old[b]))).unwrap();
+        assert_eq!(usize::from(fallback), best, "space {} ({want} px) falls back to {} px", 13 + n, old[best]);
+    }
+    // Density applies to them like any other step.
+    let compact = Theme::default().resolve(Viewer { density: Density::Compact, ..Default::default() });
+    assert_eq!(compact.space(13), Some(5.0)); // 6 × 0.8 = 4.8
+    assert_eq!(compact.space(17), Some(102.0)); // 128 × 0.8 = 102.4
+    assert_eq!(compact.space(18), None);
+}
+
+#[test]
 fn density_scales_space_and_controls_but_not_text() {
     let t = Theme::default();
     let cozy = t.resolve(Viewer::default());
@@ -298,9 +321,14 @@ fn check_style_rejects_indices_past_a_scale() {
         f(&mut r);
         check_style(&r).unwrap_err()
     };
-    assert_eq!(bad(|r| r.gap = 13), ThemeError::ScaleIndex("space", 13));
+    assert_eq!(bad(|r| r.gap = 18), ThemeError::ScaleIndex("space", 18));
     assert_eq!(bad(|r| r.padding[2] = 200), ThemeError::ScaleIndex("space", 200));
-    assert_eq!(bad(|r| r.width = Dim::Space(13)), ThemeError::ScaleIndex("space", 13));
+    assert_eq!(bad(|r| r.width = Dim::Space(18)), ThemeError::ScaleIndex("space", 18));
+    // Version 6's steps are on the scale (05 §2).
+    for ix in 13..18 {
+        let r = StyleRecord { gap: ix, padding: [ix; 4], margin: [ix; 4], width: Dim::Space(ix), ..Default::default() };
+        assert!(check_style(&r).is_ok(), "space {ix}");
+    }
     assert_eq!(bad(|r| r.radius = 5), ThemeError::ScaleIndex("radius", 5));
     assert_eq!(bad(|r| r.shadow = 4), ThemeError::ScaleIndex("shadow", 4));
     assert_eq!(bad(|r| r.font_size = 8), ThemeError::ScaleIndex("text", 8));

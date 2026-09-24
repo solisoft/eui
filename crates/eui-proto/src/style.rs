@@ -548,7 +548,51 @@ impl Default for StyleRecord {
     }
 }
 
+/// How many `space` steps a session at `version` has (05 §2): thirteen
+/// until version 6 appended `1.5 2.5 3.5 20 32`, in Tailwind's names.
+pub const fn space_steps(version: u32) -> usize {
+    if version >= 6 {
+        18
+    } else {
+        13
+    }
+}
+
+// Every appended step has a fallback, and nothing else does.
+const _: () = assert!(space_steps(6) - space_steps(5) == SPACE_FALLBACK.len());
+
+/// The step each `space` index from 13 up falls back to for a session
+/// below version 6 (05 §2): the nearest older step, ties going down. Every
+/// one but the last sits exactly half-way, so the rule is the table.
+pub const SPACE_FALLBACK: [u8; 5] = [2, 3, 4, 11, 12];
+
 impl StyleRecord {
+    /// This record as a session at `version` can take it: every `space`
+    /// index that version does not have is replaced by its
+    /// [`SPACE_FALLBACK`] (05 §2). A server calls it on the way to
+    /// `DefStyle`, so a view is written once and each session is sent what
+    /// its client can draw. At version 6 and above it is the identity.
+    #[must_use]
+    pub fn for_protocol(mut self, version: u32) -> Self {
+        if version >= 6 {
+            return self;
+        }
+        let down = |ix: u8| match ix.checked_sub(13) {
+            Some(n) => SPACE_FALLBACK.get(usize::from(n)).copied().unwrap_or(ix),
+            None => ix,
+        };
+        self.gap = down(self.gap);
+        for ix in self.padding.iter_mut().chain(self.margin.iter_mut()) {
+            *ix = down(*ix);
+        }
+        for d in [&mut self.basis, &mut self.width, &mut self.height, &mut self.min_width, &mut self.min_height, &mut self.max_width, &mut self.max_height] {
+            if let Dim::Space(ix) = d {
+                *ix = down(*ix);
+            }
+        }
+        self
+    }
+
     /// Decode exactly [`STYLE_RECORD_BYTES`] bytes.
     pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
         let raw = r.take(STYLE_RECORD_BYTES)?;

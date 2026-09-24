@@ -119,6 +119,13 @@ unknown transfer flag, an oversized chunk, an oversized abort reason, an
 unknown resume tag, an unknown `resumed` byte, and a `Hello` that ends
 before its resume flag.
 
+05 §2's version-6 `space` steps are a record a server rewrites per session:
+`a_space_step_an_older_session_lacks_falls_back` (`roundtrip.rs`) holds that
+`StyleRecord::for_protocol` leaves a record alone at 6, replaces 13–17 with
+2, 3, 4, 11, 12 below it on `gap`, `padding`, `margin` and every
+`Dim::Space`, touches no pixel count or other scale, and never answers an
+index a version-5 scale lacks.
+
 ### 2.1 Font roles — `crates/eui-text/tests/shape.rs`, `crates/eui-client/tests/assets.rs`, `crates/eui-tree/tests/apply.rs`
 
 02 §5.1. `font_family` is the one style byte with an open half, so `2` is a
@@ -203,6 +210,13 @@ role (1 for the surfaces, `border.subtle` and `accent.base`; 6 for the
 contrast-bound `border.strong`). The light hover, which lightens, is held to
 3:1 under `accent.on` for every seed `contrast_holds_for_hostile_seeds`
 draws.
+
+`the_space_scale_appends_tailwinds_half_steps` holds the eighteen `space`
+entries, their count against `space_steps(PROTOCOL_VERSION)`, density on the
+appended ones, and derives each fallback from the pixels — nearest older
+step, ties down — so the table in `eui-proto` cannot drift from the scale it
+stands in for. `check_style_rejects_indices_past_a_scale` accepts 13–17 and
+refuses 18.
 
 ## 6. Bytecode — `crates/eui-vm/tests`
 
@@ -593,6 +607,13 @@ thing this file did not do.
 Keyed rows move rather than rebuild; mixed keyed and unkeyed children match
 by position and key; a changed cell is one `SetText`.
 
+The same crate's encoder speaks the version a session negotiated (05 §2):
+`tree.rs`'s `a_space_step_an_older_client_lacks_falls_back` renders one
+style at 5, at 6 and with no handshake, and checks each `DefStyle`; and
+`snapshot.rs`'s `a_one_shot_render_is_sent_the_space_steps_its_version_has`
+does it through `render_once`, the path `eui_render` and `GET /_eui/view?v=`
+share, decoding the body it answers.
+
 ## 10. End to end — `crates/eui-client/tests/soli_e2e.rs`
 
 With `EUI_SOLI_BIN` set, the client drives a real Soli server: the counter's
@@ -657,3 +678,6 @@ radius, a transform, a breakpoint and an off-palette hue each raise with the
 class in the message rather than vanish, and the hue's message names the
 nearest role. The four state prefixes land as local styles on the node, so a
 `hover:` needs no round trip.
+`py-1.5`, `px-2.5`, `gap-3.5`, `mt-20`, `p-32` and `space-y-1.5` land on
+`space` 13–17 (05 §2), and a step the scale still lacks (`p-7`, `p-40`) is
+refused naming the two nearest.

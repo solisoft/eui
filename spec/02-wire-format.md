@@ -195,7 +195,10 @@ encode time, because a capability is declared before anything renders and a
 handler is a key in a view that has not run yet. A font role is both — an
 application that declares one at boot raises its floor, and one that
 declares a face mid-session falls back to `sans` for the sessions already
-open rather than ending them. Everything users would call a widget — button, dialog,
+open rather than ending them. A scale step is the fourth way: the `space`
+entries 13–17 (05 §2) took the protocol to **version 6**, and are paid for
+like an event — a session below 6 is sent the older step each one falls
+back to, so nothing is refused and nothing raises a floor. Everything users would call a widget — button, dialog,
 table, date picker — is composed from these on the server; see
 [`03-widgets.md`](03-widgets.md).
 

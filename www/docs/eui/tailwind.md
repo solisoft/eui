@@ -88,14 +88,23 @@ Copied, because builders write into the style they are given.
 value is an index into the space scale (05 §2), which the client multiplies by
 the viewer's density:
 
-| Tailwind step | 0 | 0.5 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 16 | 24 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| px | 0 | 2 | 4 | 8 | 12 | 16 | 20 | 24 | 32 | 40 | 48 | 64 | 96 |
-| index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+| Tailwind step | 0 | 0.5 | 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 5 | 6 | 8 | 10 | 12 | 16 | 20 | 24 | 32 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| px | 0 | 2 | 4 | 6 | 8 | 10 | 12 | 14 | 16 | 20 | 24 | 32 | 40 | 48 | 64 | 80 | 96 | 128 |
+| index | 0 | 1 | 2 | 13 | 3 | 14 | 4 | 15 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 16 | 12 | 17 |
 
-The pixels are the same on both sides. A step the space scale does not have —
-`1.5`, `7`, `20` — is an error naming the two nearest steps and listing the
-rest, not a guess: `py-1.5` says *the nearest are 1 (4 px) and 2 (8 px)*.
+The pixels are the same on both sides. `1.5`, `2.5`, `3.5`, `20` and `32`
+are the indices protocol version 6 appended, 13–17 — out of order because an
+index cannot move once a client has it (05 §2). They were chosen by
+measurement: over ten first-draft screens they were the refusals that came
+back, `1.5` 34 times, `2.5` 14, `32` 10, `3.5` 8 and `20` twice (`40`, once,
+was left out). A session whose client is older
+than 6 is sent the nearest older step, ties down, by the encoder rather than
+by `tw()` — `py-1.5` reaches it as `py-1` — so a view is written once.
+
+A step the scale still does not have — `7`, `40` — is an error naming the two
+nearest steps and listing the rest, not a guess: `py-7` says *the nearest are
+6 (24 px) and 8 (32 px)*.
 
 | Classes | EUI |
 |---|---|
@@ -334,6 +343,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | `space-*`, `gap-x-*`, `divide-*` where they are not the same thing | see [Between children](#between-children) |
 | `translate-*`, `rotate-*`, `scale-*` | no transforms |
 | `-m*` | margins are unsigned bytes |
+| `p-7`, `gap-40` and every step off the space scale | the message names the two nearest steps; see [Spacing](#spacing) |
 | `m-auto`, `ml-auto`, `mr-auto`, `mt-auto`, `mb-auto` | no auto margins along a line: `spacer()`, or `justify-between` on the parent |
 | `fixed`, `sticky`, `inset-*`, `top-*` … | `absolute` inside a `stack` is the one positioning |
 | `inline`, `inline-block`, `table`, `contents` | no inline flow; a box is `flex`, `flex-col`, `block`, `grid` or `hidden` |
@@ -355,7 +365,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | any other name | *unknown class*, with a pointer here |
 
 `examples/demo-app/tests/tw_spec.sl` pins the table and the refusals, and
-sends one of every accepted class — `tw_examples()`, 241 of them, at a width
+sends one of every accepted class — `tw_examples()`, 247 of them, at a width
 past every breakpoint — through the server's encoder (`eui_render`), which
 raises on a key or a value it does not know; a divided tree and a transformed
 text node go through it whole. That is what 03 §4 asks of a translation like

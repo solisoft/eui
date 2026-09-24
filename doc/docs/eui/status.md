@@ -398,7 +398,8 @@ the batches it holds as a third `Hello` resume tag; Soli renders `connect` as
 it would have anyway, compares, and either sends a `Welcome` and nothing else
 or sends the frames it just rendered. One render either way. Verified against
 a live server: 4 799 B fetched over HTTPS, the socket answers
-`Welcome.start = Adopted` and no `Mount` follows. `PROTOCOL_VERSION` is 5;
+`Welcome.start = Adopted` and no `Mount` follows. `PROTOCOL_VERSION` was 5
+(6 since the space scale's half steps, below);
 the six language SDKs need no change, because they negotiate `min(client,
 ours)` and can only receive the offer if they serve §2.4, which none do.
 
@@ -1862,15 +1863,39 @@ raises), mobile first and memoised per breakpoint; `space-x/y-*` and
 `uppercase`/`lowercase`/`capitalize` applied to the string by `text()`;
 `mx-auto`/`my-auto` as `self-center`, `block` as a column, `relative`,
 `static`, `isolate`, `select-none`, and `focus-visible:` as `focus:` with its
-outline and ring classes left to the client's own ring. A half step
-(`py-1.5`) is still refused, and names its two nearest steps. The help desk's
+outline and ring classes left to the client's own ring. A step off the
+space scale is refused, and names its two nearest steps. The help desk's
 page heading and its page padding are `sm:` classes now, and draw the same
 pixels at 500 and 1 280 px as the width branches they replace.
 
-The catalogue is 550 definitions over six files. `tests/tw_spec.sl` is 14
-tests and 424 assertions, one of which sends every one of the 241 example
+**The half steps, as protocol version 6.** `py-1.5`, `px-2.5`, `gap-3.5`,
+`p-20` and `py-32` were what `tw()` refused most over ten first-draft screens
+(`1.5` 34 times, `2.5` 14, `32` 10, `3.5` 8, `20` twice). The space scale
+gained them as indices 13–17 — 6, 10, 14, 80 and 128 px, appended so that no
+existing index moves (05 §2) — and `PROTOCOL_VERSION` went from 5 to 6.
+Nothing refuses an older client: Soli's encoder sends a session that settled
+below 6 the nearest older step, ties down (`StyleRecord::for_protocol`, one
+call in the style table every `DefStyle` passes), on the socket, on
+`GET /_eui/view?v=` and through `eui_render`. Pinned by
+`a_space_step_an_older_session_lacks_falls_back` (eui-proto),
+`the_space_scale_appends_tailwinds_half_steps` (eui-theme, which derives the
+fallbacks from the pixels), and in lang
+`a_space_step_an_older_client_lacks_falls_back` and
+`a_one_shot_render_is_sent_the_space_steps_its_version_has`. The reference
+client does not in fact refuse an index past its scale — `check_style` is
+tested but called nowhere on the `DefStyle` path, and layout reads such an
+index as 0 px or `auto` — so what the fallback saves a version-5 client from
+is a silently collapsed gap, not the refused batch 05 §2 says it owes.
+The six servers in `clients/` are unchanged: each is its own repository,
+still at protocol 4, with the thirteen-step table in its `theme` helper, so a
+session with them never reaches 6 and never carries 13–17 unless a view
+writes the index by hand. Raising one to 6 is that table's five entries and
+the same fallback in its style encoder.
+
+The catalogue is 550 definitions over six files. `tests/tw_spec.sl` is 15
+tests and 437 assertions, one of which sends every one of the 247 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 14 files, 76 tests, 835 assertions. The gallery's Catalogue section opens
+are 14 files, 77 tests, 848 assertions. The gallery's Catalogue section opens
 with a card written in nothing but class strings.
 
 **A whole application in those classes.** `helpdesk`, the demo application's
