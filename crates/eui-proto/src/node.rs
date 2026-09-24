@@ -419,9 +419,15 @@ impl Value {
             0x07 => Ok(Self::Color(ColorRef(r.u16()?))),
             0x08 => {
                 let count = r.varint32_max(MAX_VALUE_LIST, "value list length")?;
-                // Bounded above, so reserving up front is safe and saves the
-                // regrowth churn on the common small list.
-                let mut items = Vec::with_capacity(count as usize);
+                // Reserved up front to save the regrowth churn on the common
+                // small list -- but never more than the bytes left could
+                // hold. The count is the sender's word, and a four-byte
+                // header claiming a million items would otherwise reserve
+                // 40 MB before one of them was read. Every item costs at
+                // least its tag byte, so `remaining` is a ceiling the truth
+                // never exceeds; a list that lied grows as it is read, and
+                // then runs out of bytes.
+                let mut items = Vec::with_capacity((count as usize).min(r.remaining()));
                 for _ in 0..count {
                     items.push(Self::decode_at(r, depth.saturating_add(1))?);
                 }

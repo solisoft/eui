@@ -82,7 +82,9 @@ it.
 - `#![forbid(unsafe_code)]` on every crate but the GPU boundary.
 - The decode path cannot panic: bounds-checked reads, minimal varints,
   rejected unknown discriminants, rejected trailing bytes, every limit
-  checked before allocation, iterative tree decoding. *Enforced: `eui-proto`,
+  checked before allocation, no reservation larger than the bytes left in
+  the frame could back (a count under its ceiling can still be a lie),
+  iterative tree decoding. *Enforced: `eui-proto`,
   under `clippy::indexing_slicing`, `panic`, `unwrap_used`, `expect_used`,
   `arithmetic_side_effects` as errors; 64 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
