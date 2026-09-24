@@ -717,6 +717,61 @@ fn a_page_opens_at_most_eight_islands() {
     assert_eq!(s.open_island(at), None, "the ninth opens nothing");
 }
 
+/// The ceiling is on islands open at once, not islands ever opened: a closed
+/// island's slot is taken by the next. Slots used to be pushed and never
+/// handed back, so the ninth island of a long session opened nothing.
+#[test]
+fn a_closed_islands_slot_is_taken_by_the_next() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    for _ in 0..20 {
+        let owner = s.open_island(at).expect("a slot was handed back");
+        assert_eq!(owner, 1, "the lowest free slot");
+        s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
+        assert!(s.close_island(owner));
+        assert!(!s.island_is_open(owner));
+        assert!(s.lookup_in(owner, 1).is_none(), "its content went with it");
+        assert_eq!(s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::Mount(leaf(1))] }), Err(E::Internal), "and it takes no more frames");
+    }
+    assert!(!s.close_island(1), "closing twice is nothing");
+}
+
+/// Closing an island that never spoke leaves what the page rendered there:
+/// those children are the page's.
+#[test]
+fn closing_an_island_keeps_the_pages_own_children() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).unwrap();
+    assert!(s.close_island(owner));
+    assert_eq!(s.children(at).len(), 1);
+    assert_eq!(s.text_of(s.children(at)[0]), Some("the count, as it was rendered"));
+}
+
+/// A page `Mount` that frees the host prunes the island: its root, its
+/// tables and its slot. An arena index is a slot, not a name, and the next
+/// node may land on the host's; a frame that still found the host there
+/// would release a page node's children and graft under it.
+#[test]
+fn a_page_mount_that_frees_the_host_prunes_the_island() {
+    let mut s = Session::new();
+    s.apply(&page_with_a_slot()).unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).unwrap();
+    s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
+    let mut again = page_with_a_slot();
+    again.seq = 2;
+    again.ops.retain(|op| matches!(op, Op::Mount(_)));
+    s.apply(&again).unwrap();
+    assert!(!s.island_is_open(owner), "the root went with the host");
+    let page_text = s.lookup(3).unwrap();
+    assert_eq!(s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::Mount(leaf(1))] }), Err(E::Internal), "a late frame is refused");
+    assert_eq!(s.text_of(page_text), Some("the count, as it was rendered"), "and the page is untouched");
+    assert_eq!(s.open_island(s.lookup(2).unwrap()), Some(owner), "the slot is free for the new host");
+}
+
 /// An owner nobody handed out is refused rather than resolved against the
 /// page's tables, which is the failure that would be silent: the island's
 /// ops would land on the page.

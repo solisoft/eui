@@ -26,7 +26,7 @@ pub enum ManifestError {
     Decode(String),
     /// The signature does not verify under the manifest's own key.
     BadSignature,
-    /// The pinned key for this `app_id` differs and no valid rotation was offered.
+    /// The pinned key for this origin and `app_id` differs and no valid rotation was offered.
     KeyChanged,
     /// The server speaks no protocol version this client does.
     Protocol {
@@ -99,13 +99,26 @@ pub fn config_dir() -> Option<PathBuf> {
 /// Fetch `/.well-known/eui` from `origin` and run [`verify`] against `pins`.
 pub fn check(origin: &str, pins: &Path, cookie: Option<&str>) -> Result<Manifest, ManifestError> {
     let bytes = assets::get(origin, "/.well-known/eui", "application/vnd.eui.manifest", cookie).map_err(ManifestError::Fetch)?;
-    verify(&bytes, pins)
+    verify(&bytes, origin, pins)
 }
 
 /// Decode, verify the signature, check the protocol range, and pin or
 /// compare the publisher key (trust on first use; a different key needs a
 /// rotation signed by the pinned one). Pure but for the pin file.
-pub fn verify(bytes: &[u8], pins: &Path) -> Result<Manifest, ManifestError> {
+///
+/// `origin` is where the bytes were fetched from, and the pin is kept under
+/// it and the `app_id` together. The signed record names no origin — it
+/// cannot, without a wire change — so the signature proves who *wrote* a
+/// manifest and says nothing about who is *serving* it. A manifest is
+/// public: anybody can copy the bytes of a well-known application's
+/// `/.well-known/eui` onto their own host, and they verify there exactly
+/// as well. Pinned by `app_id` alone, that copy matched the real
+/// publisher's pin, wore its padlock and walked into its remembered
+/// grants; and an origin that got to an unpinned `app_id` first could claim
+/// it, so that the real publisher was the one refused with `KeyChanged`.
+/// Keyed by both, the copy is simply a new application at a new origin: it
+/// is trusted on first use like any other, and asks for everything.
+pub fn verify(bytes: &[u8], origin: &str, pins: &Path) -> Result<Manifest, ManifestError> {
     let (manifest, signature) = Manifest::decode(bytes).map_err(|e| ManifestError::Decode(e.to_string()))?;
     let key = UnparsedPublicKey::new(&ED25519, manifest.publisher_key);
     key.verify(&manifest.signed_bytes(), &signature).map_err(|_| ManifestError::BadSignature)?;
@@ -130,7 +143,7 @@ pub fn verify(bytes: &[u8], pins: &Path) -> Result<Manifest, ManifestError> {
     if manifest.protocol_min > PROTOCOL_VERSION || manifest.protocol_max < SPEAKS_FROM {
         return Err(ManifestError::Protocol { min: manifest.protocol_min, max: manifest.protocol_max });
     }
-    let pin = pins.join(pin_name(&manifest.app_id));
+    let pin = store_path(pins, origin, &manifest.app_id);
     match std::fs::read(&pin) {
         Ok(pinned) if pinned == manifest.publisher_key => {}
         Ok(pinned) => {
@@ -147,7 +160,7 @@ pub fn verify(bytes: &[u8], pins: &Path) -> Result<Manifest, ManifestError> {
     Ok(manifest)
 }
 
-/// Where the answers to the consent sheet are kept: one file per
+/// Where the answers to the consent sheet are kept: one file per origin and
 /// `app_id`, beside the pins.
 ///
 /// Asking again on every run would make the sheet a thing to click past
@@ -177,15 +190,19 @@ pub struct Answered {
     pub granted: u32,
 }
 
-/// What this person last said about `app_id`, or `None` if they have not
-/// been asked yet.
+/// What this person last said about `app_id` served from `origin`, or `None`
+/// if they have not been asked yet.
+///
+/// By origin as well as id for the reason [`verify`] gives: a grant given
+/// to one host is not a grant to another that happens to serve the same
+/// manifest.
 ///
 /// A file that cannot be read, or that says something this build does not
 /// understand, is a person who has not answered: the sheet goes up again,
 /// which costs a question, where guessing would cost a grant nobody gave.
 #[must_use]
-pub fn remembered_grant(app_id: &str) -> Option<Answered> {
-    let path = grants_dir()?.join(pin_name(app_id));
+pub fn remembered_grant(origin: &str, app_id: &str) -> Option<Answered> {
+    let path = store_path(&grants_dir()?, origin, app_id);
     let text = std::fs::read_to_string(path).ok()?;
     let mut parts = text.split_whitespace();
     let asked = parts.next()?.parse::<u32>().ok()?;
@@ -201,19 +218,53 @@ pub fn remembered_grant(app_id: &str) -> Option<Answered> {
 /// Best effort, and deliberately so: a client that could not write here
 /// would otherwise have to refuse a session over a file nobody knew about.
 /// The cost of failing is one more question next time.
-pub fn remember_grant(app_id: &str, answered: Answered) {
+pub fn remember_grant(origin: &str, app_id: &str, answered: Answered) {
     let Some(dir) = grants_dir() else { return };
-    if std::fs::create_dir_all(&dir).is_err() {
+    let path = store_path(&dir, origin, app_id);
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
         return;
     }
     let asked = answered.asked & eui_proto::caps::ALL;
     let granted = answered.granted & asked;
-    let _ = std::fs::write(dir.join(pin_name(app_id)), format!("{asked} {granted}\n"));
+    let _ = std::fs::write(path, format!("{asked} {granted}\n"));
 }
 
-/// A file name from an `app_id`: its bytes, hex, so no id can escape the dir.
-fn pin_name(app_id: &str) -> String {
-    app_id.bytes().map(|b| format!("{b:02x}")).collect()
+/// Where the pin or the grant for `app_id` at `origin` is kept under `root`:
+/// `root/by-origin/<hex origin>/<hex app_id>`.
+///
+/// Hex, so that neither string — both of which come from a server — can
+/// name a file anywhere else. Two components rather than one hex of the
+/// pair, so that no choice of `app_id` can spell somebody else's origin.
+/// And under `by-origin/`, which is not hex, so that nothing the store
+/// held before it was keyed by origin — one file per bare `app_id`, all
+/// hex — can be mistaken for an entry of the new one. Those old files are
+/// left where they are and never read: carrying one over would mean
+/// deciding which origin it belonged to, and that is the very thing it
+/// never recorded. The cost is one more trust-on-first-use and one more
+/// consent sheet per application, once.
+#[must_use]
+pub fn store_path(root: &Path, origin: &str, app_id: &str) -> PathBuf {
+    root.join("by-origin").join(hex(&normal_origin(origin))).join(hex(app_id))
+}
+
+/// `origin` as one spelling: scheme and host lowered, a trailing slash and
+/// the scheme's default port dropped. `https://App.example:443/` and
+/// `https://app.example` are one origin and must find one pin.
+fn normal_origin(origin: &str) -> String {
+    let o = origin.trim().trim_end_matches('/').to_ascii_lowercase();
+    for (scheme, port) in [("https://", ":443"), ("http://", ":80"), ("wss://", ":443"), ("ws://", ":80")] {
+        if o.starts_with(scheme) {
+            if let Some(bare) = o.strip_suffix(port) {
+                return bare.to_owned();
+            }
+        }
+    }
+    o
+}
+
+fn hex(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
 fn write_pin(path: &Path, key: &[u8; 32]) -> Result<(), ManifestError> {

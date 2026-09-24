@@ -693,6 +693,9 @@ pub struct Status {
     /// able to do is reach the page's socket by being forgotten about. A
     /// separate field cannot be forgotten — it has to be read to be sent.
     pub island_outbound: Vec<(u16, Vec<u8>)>,
+    /// 01 §2.7: islands the driver ended on its own account, whose sockets
+    /// the window must drop ([`crate::Driver::take_islands_ended`]).
+    pub islands_ended: Vec<u16>,
     /// A frame should be drawn.
     pub needs_redraw: bool,
     /// Why the session ended, if it did.
@@ -838,6 +841,10 @@ impl Reply {
         for (owner, f) in &s.island_outbound {
             w.u32(u32::from(*owner));
             w.bytes(f);
+        }
+        w.u32(u32::try_from(s.islands_ended.len()).unwrap_or(u32::MAX));
+        for owner in &s.islands_ended {
+            w.u32(u32::from(*owner));
         }
         w.u32(u32::try_from(s.outbound.len()).unwrap_or(u32::MAX));
         for f in &s.outbound {
@@ -997,6 +1004,11 @@ impl Reply {
             island_outbound.push((owner16(r.u32()?)?, r.bytes()?.to_vec()));
         }
         let n = r.u32()? as usize;
+        let mut islands_ended = Vec::with_capacity(n.min(eui_proto::limits::MAX_ISLANDS));
+        for _ in 0..n {
+            islands_ended.push(owner16(r.u32()?)?);
+        }
+        let n = r.u32()? as usize;
         let mut outbound = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             outbound.push(r.bytes()?.to_vec());
@@ -1046,6 +1058,7 @@ impl Reply {
         let status = Status {
             outbound,
             island_outbound,
+            islands_ended,
             needs_redraw,
             closed,
             ime,
@@ -1798,6 +1811,7 @@ fn status_of(d: &mut Driver) -> Status {
     Status {
         outbound: d.take_pending().iter().map(Frame::encode).collect(),
         island_outbound: d.take_island_pending().iter().map(|(o, f)| (*o, f.encode())).collect(),
+        islands_ended: d.take_islands_ended(),
         needs_redraw: d.needs_redraw(),
         closed: d.closed().map(|c| format!("{c:?}")),
         ime: d.ime_area().map(|r| [r.x, r.y, r.w, r.h]),
@@ -1921,6 +1935,9 @@ pub struct Worker {
     /// either may raise one — so they accumulate here and the window drains
     /// them once per pump, rather than each call having to remember to look.
     island_out: Vec<(u16, Vec<u8>)>,
+    /// 01 §2.7: islands the driver ended, gathered from every reply for the
+    /// same reason as `island_out`.
+    islands_ended: Vec<u16>,
     /// Bytes written to and read from the pipe since the worker started,
     /// framing included. What the process boundary costs is a number the
     /// budgets ask for (10 §1), and only this side can count it.
@@ -2053,6 +2070,7 @@ impl Worker {
             due: None,
             dead: None,
             island_out: Vec::new(),
+            islands_ended: Vec::new(),
             traffic: (0, 0),
             repeat: None,
             received: Instant::now(),
@@ -2117,6 +2135,7 @@ impl Worker {
             Ok(reply) => {
                 let now = Instant::now();
                 self.island_out.extend(reply.status.island_outbound.iter().cloned());
+                self.islands_ended.extend(reply.status.islands_ended.iter().copied());
                 self.keep(reply.status.clone());
                 self.due = Some(now);
                 let reply = match reply {
@@ -2563,6 +2582,20 @@ impl Backend {
             return v;
         }
         self.with_worker(|w| std::mem::take(&mut w.island_out)).unwrap_or_default()
+    }
+
+    /// Islands the driver ended on its own account since the last call —
+    /// their host went, the tree stopped asking, a frame would not apply,
+    /// the session started over. The window drops their sockets, and must
+    /// do so before it opens another island, which may be given the same
+    /// owner.
+    pub fn take_islands_ended(&mut self) -> Vec<u16> {
+        if let Some(v) = self.with_local(Driver::take_islands_ended) {
+            return v;
+        }
+        // Every reply carries them, computed after the request it answers,
+        // so a host pruned by a page frame is reported by that frame's reply.
+        self.with_worker(|w| std::mem::take(&mut w.islands_ended)).unwrap_or_default()
     }
 
     /// An island's session ended, or could not be opened. 01 §2.7: the page
@@ -3238,6 +3271,7 @@ mod tests {
             // 01 §2.7: tagged with the owner that owes them, and carried in
             // a field of their own so that they cannot become the page's.
             island_outbound: vec![(1, vec![4, 5]), (7, vec![6])],
+            islands_ended: vec![2, 8],
             needs_redraw: true,
             closed: Some("x".into()),
             ime: Some([1.0, 2.0, 3.0, 4.0]),

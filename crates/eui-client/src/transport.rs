@@ -75,6 +75,9 @@ pub struct Connection {
     pub rx: mpsc::Receiver<Incoming>,
     /// The HTTPS origin assets come from.
     pub origin: String,
+    /// Bytes handed to [`Connection::send`] that the socket has not written
+    /// yet. See [`Connection::backlog`].
+    backlog: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     in_tx: mpsc::Sender<Incoming>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// The cookie this session presents, `name=value`. Per connection, not
@@ -157,7 +160,34 @@ impl Connection {
     pub fn request_asset(&self, hash: [u8; 32]) {
         self.fetcher().request_asset(hash);
     }
+
+    /// Queue `bytes` for the socket, counted in [`Connection::backlog`] until
+    /// they are written. `false` when the socket is gone.
+    pub fn send(&self, bytes: Vec<u8>) -> bool {
+        let n = bytes.len();
+        self.backlog.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        if self.tx.send(bytes).is_err() {
+            self.backlog.fetch_sub(n, std::sync::atomic::Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    /// Bytes sent and not yet written to the socket.
+    ///
+    /// The outgoing channel is unbounded, because the input path must never
+    /// block on the network, so this is what lets a producer that *can*
+    /// wait — an upload, which has a disk it can stop reading — wait. Past
+    /// [`BACKLOG_LOW`] the writer wakes the window each time the backlog
+    /// falls back under it, so a producer that stopped is asked again.
+    pub fn backlog(&self) -> usize {
+        self.backlog.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
+
+/// The backlog under which a producer that stopped for the socket is woken
+/// again: four upload chunks.
+pub const BACKLOG_LOW: usize = 4 * eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
 
 /// The TLS the client speaks, built once: **TLS 1.3 only** (spec 01 §1),
 /// verified against three sets of roots.
@@ -371,6 +401,8 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
     let origin = crate::assets::origin_for(url).map_err(|e| TransportError::Connect(e.to_string()))?;
     let url = url.to_owned();
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let backlog = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let written = std::sync::Arc::clone(&backlog);
     let (in_tx, in_rx) = mpsc::channel::<Incoming>();
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(notify);
     let in_tx_for_assets = in_tx.clone();
@@ -451,10 +483,20 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
                 // idle client, 0.5 % of a core on Linux and far worse on a
                 // platform with coarser timers. An idle window should be
                 // asleep, not nearly asleep.
+                let wake_writer = notify.clone();
                 let sender = tokio::spawn(async move {
                     while let Some(bytes) = out_rx.recv().await {
+                        let n = bytes.len();
                         if sink.send(Message::Binary(bytes)).await.is_err() {
                             return;
+                        }
+                        // Written: out of the backlog, and a producer held
+                        // back for it asked again once it falls under the
+                        // low mark. Only on the crossing, so an ordinary
+                        // session's events wake nobody.
+                        let before = written.fetch_sub(n, std::sync::atomic::Ordering::Relaxed);
+                        if before >= BACKLOG_LOW && before.saturating_sub(n) < BACKLOG_LOW {
+                            wake_writer();
                         }
                     }
                     // Every sender is gone: the session is over, and the
@@ -482,5 +524,5 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
         })
         .map_err(|e| TransportError::Connect(e.to_string()))?;
 
-    Ok(Connection { tx: out_tx, rx: in_rx, origin, in_tx: in_tx_for_assets, notify, cookie })
+    Ok(Connection { tx: out_tx, rx: in_rx, origin, backlog, in_tx: in_tx_for_assets, notify, cookie })
 }

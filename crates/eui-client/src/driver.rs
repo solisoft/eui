@@ -859,6 +859,12 @@ struct Island {
     /// because the query is what tells the application which it is
     /// rendering — so the key is the path and not the component.
     path: String,
+    /// Its socket is still talking. `false` once it ended: 01 §2.7 has the
+    /// page keep what it last showed, so the entry — and the session's
+    /// slot and tables that content is drawn with — stays until the host
+    /// goes or stops asking, and the host is not offered for a redial
+    /// meanwhile.
+    live: bool,
 }
 
 /// One subtree on the move (03 §5), as the driver keeps it: where it starts,
@@ -1379,6 +1385,12 @@ pub struct Driver {
     /// it, so the page's path is exactly what it was and an island's event
     /// cannot reach the page's server by being forgotten about.
     island_out: Vec<(u16, Frame)>,
+    /// Islands the driver ended on its own account — its host went, it
+    /// stopped being asked for, its frame would not apply, the session
+    /// started over — whose sockets the window still holds. Drained by
+    /// [`Driver::take_islands_ended`]; a socket kept past this would feed
+    /// frames to an owner index the next island may be given.
+    islands_ended: Vec<u16>,
     /// Which nodes hold a `resize` handler, and whether that list is stale.
     ///
     /// Rebuilt when the tree changes rather than per frame. Walking the tree
@@ -1434,7 +1446,9 @@ pub struct Driver {
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
     /// How many times each asset's fetch has failed, and when to try the
-    /// ones that are owed another go (see [`Self::asset_failed`]).
+    /// ones that are owed another go (see [`Self::asset_failed`]). Only the
+    /// hashes still between tries: one that arrives or fails for good is
+    /// taken out.
     asset_tries: HashMap<Hash, u8>,
     asset_retry: Vec<(Hash, Instant)>,
     /// Something changed that may have left a picture out of the sheet.
@@ -1613,6 +1627,7 @@ impl Driver {
             island_watch_stale: true,
             islands: Vec::new(),
             island_out: Vec::new(),
+            islands_ended: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
             track_watch: Vec::new(),
@@ -1783,6 +1798,9 @@ impl Driver {
         self.paired_watch.clear();
         self.island_watch.clear();
         self.island_watch_stale = true;
+        // The session they hung in is gone, and owner `1` will be handed out
+        // again by the next page: every socket still open is told to go.
+        self.islands_ended.extend(self.islands.iter().filter(|i| i.live).map(|i| i.owner));
         self.islands.clear();
         self.island_out.clear();
         self.resize_watch.clear();
@@ -2096,8 +2114,18 @@ impl Driver {
     /// arbitrary rule that gives the same answer on every run beats one that
     /// depends on the order a hash map happens to iterate in.
     pub fn islands_wanted(&mut self) -> Vec<(NodeIx, String)> {
+        self.sync_islands();
         if self.island_watch_stale {
             self.rebuild_island_watch();
+        }
+        // An island the tree no longer asks for is closed: its host lost the
+        // prop, or names another path now. Its content goes with it — it is
+        // the old path's — and so does its slot.
+        let gone: Vec<u16> = self.islands.iter().filter(|i| !self.island_watch.iter().any(|(ix, p)| *ix == i.at && *p == i.path)).map(|i| i.owner).collect();
+        for owner in gone {
+            self.session.close_island(owner);
+            self.forget_island(owner);
+            self.invalidate();
         }
         if self.island_watch.is_empty() {
             return Vec::new();
@@ -2172,7 +2200,7 @@ impl Driver {
             return None;
         }
         let owner = self.session.open_island(ix)?;
-        self.islands.push(Island { at: ix, owner, path: path.to_owned() });
+        self.islands.push(Island { at: ix, owner, path: path.to_owned(), live: true });
         Some(owner)
     }
 
@@ -2183,7 +2211,7 @@ impl Driver {
     /// queries do not, because the query is what tells the application which
     /// island it is rendering — so the whole path is the key, query and all.
     pub fn island_for_path(&self, path: &str) -> Option<u16> {
-        self.islands.iter().find(|i| i.path == path).map(|i| i.owner)
+        self.islands.iter().find(|i| i.live && i.path == path).map(|i| i.owner)
     }
 
     /// How many islands are open, against `MAX_ISLANDS`.
@@ -2214,8 +2242,56 @@ impl Driver {
     /// never be able to take a still page with it, so this releases no node,
     /// poisons nothing and does not touch the root: it forgets the island,
     /// and the page carries on being a page.
+    ///
+    /// It is kept, not forgotten: the content it last showed is drawn with
+    /// its tables, so its slot stays until the host goes or stops asking,
+    /// and the host is not offered again meanwhile. Forgetting it here used
+    /// to have `islands_wanted` offer the host straight back, so a failing
+    /// island was redialled on every pump and each attempt took a slot that
+    /// never came back — the ninth, on a page open long enough, opened
+    /// nothing at all.
+    ///
+    /// Reported through [`Driver::take_islands_ended`] too, since this is
+    /// also how a frame that would not apply ends an island, and the window
+    /// holds the socket.
     pub fn island_ended(&mut self, owner: u16) {
+        let mut was_live = false;
+        for i in self.islands.iter_mut().filter(|i| i.owner == owner) {
+            was_live |= i.live;
+            i.live = false;
+        }
+        if was_live {
+            self.islands_ended.push(owner);
+            self.island_out.retain(|(o, _)| *o != owner);
+        }
+    }
+
+    /// Islands the driver has ended since the last call, whose sockets the
+    /// window must now drop — before it opens another, which may be given
+    /// the same owner.
+    pub fn take_islands_ended(&mut self) -> Vec<u16> {
+        self.sync_islands();
+        std::mem::take(&mut self.islands_ended)
+    }
+
+    /// Forget the islands the session no longer holds: their host went — a
+    /// page `Mount`, a `Replace`, a removal — and took their content and
+    /// their slot with it (`Session::prune_sets`).
+    fn sync_islands(&mut self) {
+        let gone: Vec<u16> = self.islands.iter().filter(|i| !self.session.island_is_open(i.owner)).map(|i| i.owner).collect();
+        for owner in gone {
+            self.forget_island(owner);
+        }
+    }
+
+    /// Drop the entry for `owner` and anything still queued for its socket,
+    /// and tell the window, if the socket was still open.
+    fn forget_island(&mut self, owner: u16) {
+        if self.islands.iter().any(|i| i.owner == owner && i.live) {
+            self.islands_ended.push(owner);
+        }
         self.islands.retain(|i| i.owner != owner);
+        self.island_out.retain(|(o, _)| *o != owner);
     }
 
     /// Which island a node belongs to, or `None` for one of the page's.
@@ -3230,6 +3306,10 @@ impl Driver {
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.touched = true;
+        // Its count of failures is spent: `asset_tries` holds only what is
+        // still owed another go, or it grows by every hash that ever lost a
+        // race.
+        self.asset_tries.remove(&hash);
         // A scene's two assets are checked here, in the worker, and only
         // what passes is handed on. This is the division 08 §10 asks for:
         // the parse that meets bytes a server chose happens under seccomp,
@@ -3359,6 +3439,8 @@ impl Driver {
             return;
         }
         eprintln!("eui: asset {}: {why}", crate::assets::hex(&hash));
+        // Final: the store remembers it now, and the count is not needed.
+        self.asset_tries.remove(&hash);
         self.assets.fail(hash, why);
     }
 
@@ -4063,7 +4145,7 @@ impl Driver {
         let wrote = host.texts;
         let mode = host.mode;
         if let Some(undo) = host.undo {
-            self.provisional.extend(undo);
+            self.keep_provisional(undo);
         }
         // 07 §1: a chunk may set a node's text, and if that node is the one
         // being typed in, the client's buffer has to agree. Without this the
@@ -4105,6 +4187,35 @@ impl Driver {
         }
         result.map_err(|e| e.to_string())?;
         Ok(emitted)
+    }
+
+    /// Record what a `LocalThenServer` chunk changed, so a batch can take it
+    /// back — once per node and field.
+    ///
+    /// Taking back only ever needs the *oldest* value of each: the one the
+    /// server's tree still has. Every entry used to be kept, so a slider
+    /// dragged, or a field typed into, against a server that sends no batch
+    /// — or no socket at all — grew the list by an entry per step, a copy of
+    /// the whole text each time for a field, until the next batch. The
+    /// running drag's mark is a boundary: a change before it is what the
+    /// drag must not take back, so the drag's own first change of a field
+    /// is kept even when an older one exists.
+    ///
+    /// And a ceiling, [`MAX_PROVISIONAL`], for a view that touches more
+    /// fields than that between two batches: past it a change is not
+    /// recorded, and stays until the server's next batch says otherwise.
+    fn keep_provisional(&mut self, undo: Vec<Undo>) {
+        let from = self.drag_provisional.unwrap_or(0);
+        for u in undo {
+            if self.provisional.get(from..).is_some_and(|held| held.iter().any(|h| h.same_field(&u))) {
+                continue;
+            }
+            if self.provisional.len() >= MAX_PROVISIONAL {
+                trace(|| "provisional list full; a local change will not be taken back".to_owned());
+                continue;
+            }
+            self.provisional.push(u);
+        }
     }
 
     /// Spec 07 §6: a server batch supersedes every provisional change made
@@ -8573,6 +8684,22 @@ enum Undo {
     Prop(NodeIx, u32, Option<Value>),
 }
 
+impl Undo {
+    /// The same node and the same field, whatever the value.
+    fn same_field(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Style(a, _), Self::Style(b, _)) | (Self::Text(a, _), Self::Text(b, _)) => a == b,
+            (Self::Prop(a, p, _), Self::Prop(b, q, _)) => a == b && p == q,
+            _ => false,
+        }
+    }
+}
+
+/// The most distinct node-and-field changes held for a batch to take back
+/// (07 §6). One per field, so only a view touching more fields than this
+/// between two batches ever meets it.
+const MAX_PROVISIONAL: usize = 4096;
+
 fn to_wire(v: eui_vm::Value) -> Value {
     match v {
         eui_vm::Value::Null => Value::Null,
@@ -8877,5 +9004,104 @@ mod open_tests {
         assert_eq!(https_host("https://exa\"mple.test/"), None);
         assert_eq!(https_host("https://"), None);
         assert_eq!(https_host("https:///path"), None);
+    }
+}
+
+#[cfg(test)]
+mod provisional_tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use eui_proto::{Dim, Display, FlatNode, Op, Start, StyleRecord, Subtree, Welcome};
+
+    /// The counter of `tests/driver.rs`: a `LocalThenServer` click that
+    /// bumps a root prop and writes it into a text node.
+    fn counter() -> Driver {
+        const COUNT: u32 = 1;
+        const INC: u32 = 2;
+        const VALUE_KEY: u32 = 3;
+        let chunk = eui_vm::Asm::new(2).load(COUNT).push_int(1).op(0x10).op(0x06).store(COUNT).op(0x1A).set_text(VALUE_KEY).ret();
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
+        tree.props.push((COUNT, Value::Int(41)));
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: VALUE_KEY, text: Some(TextRef::Inline("41".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+        tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: INC }));
+        let batch = Batch {
+            seq: 1,
+            ops: vec![
+                Op::DefAtom { id: COUNT, value: "count".into() },
+                Op::DefAtom { id: INC, value: "increment".into() },
+                Op::DefAtom { id: VALUE_KEY, value: "value".into() },
+                Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+                Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(40), height: Dim::Px(20), ..Default::default() } },
+                Op::DefChunkBytes { id: 1, bytes: chunk },
+                Op::Mount(tree),
+            ],
+        };
+        let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+        d.handle_frame(Frame::Batch(batch));
+        let _ = d.paint(400, 300);
+        d
+    }
+
+    /// 07 §6 against a server that never answers: a hundred clicks used to
+    /// leave two hundred undo entries, each with a copy of the text. One per
+    /// node and field is all a batch needs — the oldest — and it still puts
+    /// the server's value back.
+    #[test]
+    fn the_undo_list_holds_one_entry_per_field_and_still_takes_back_the_oldest() {
+        let mut d = counter();
+        let button = d.session().lookup(3).unwrap();
+        let r = d.layout.rect(button).unwrap();
+        d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        for _ in 0..100 {
+            d.input(Input::PointerDown(0));
+            d.input(Input::PointerUp(0));
+        }
+        let value = d.session().lookup(2).unwrap();
+        assert_eq!(d.session().text_of(value), Some("141"));
+        assert_eq!(d.provisional.len(), 2, "the text and the count, once each");
+        d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetStyle { node: 3, style: 2 }] }));
+        assert_eq!(d.session().text_of(value), Some("41"), "the value the server's tree has");
+        assert!(d.provisional.is_empty());
+    }
+
+    /// `asset_tries` holds only what is between tries: a hash that arrives,
+    /// or fails for good, is taken out — it used to keep every hash that
+    /// ever failed once. And the store forgets its failures wholesale past
+    /// its ceiling.
+    #[test]
+    fn failed_assets_are_not_counted_for_ever() {
+        let mut d = counter();
+        for n in 0..200u8 {
+            let h = [n; 32];
+            for _ in 0..=ASSET_TRIES {
+                d.asset_failed(h, "gone".into());
+            }
+        }
+        assert!(d.asset_tries.is_empty(), "{} still counted", d.asset_tries.len());
+        d.asset_failed([8; 32], "lost a race".into());
+        assert_eq!(d.asset_tries.len(), 1, "owed another go");
+        d.asset_ready([8; 32], vec![1, 2, 3]);
+        assert!(d.asset_tries.is_empty());
+        let mut store = crate::assets::AssetStore::default();
+        for n in 0..=crate::assets::MAX_FAILED {
+            let mut h = [0u8; 32];
+            h[..8].copy_from_slice(&(n as u64).to_le_bytes());
+            store.fail(h, "gone".into());
+        }
+        assert!(store.failure(&[0u8; 32]).is_none(), "forgotten past the ceiling");
+    }
+
+    /// A view that touches more fields than the ceiling between two batches
+    /// stops being recorded rather than growing without end.
+    #[test]
+    fn the_undo_list_has_a_ceiling() {
+        let mut d = counter();
+        let undo: Vec<Undo> = (0..(MAX_PROVISIONAL as u32 + 50)).map(|i| Undo::Prop(NodeIx::NONE, i, None)).collect();
+        d.keep_provisional(undo);
+        assert_eq!(d.provisional.len(), MAX_PROVISIONAL);
     }
 }

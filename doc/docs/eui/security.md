@@ -20,7 +20,9 @@ actually bounds the risk.
 
 The manifest and every asset are signed with Ed25519. The client pins the
 publisher key on first run and refuses a different key later unless a rotation
-record signed by the pinned key accompanies it.
+record signed by the pinned key accompanies it. The pin, and what the person
+granted, is kept per origin *and* application id: a copy of the manifest served
+from another host inherits neither.
 
 Assets are addressed by BLAKE3 hash and verified on arrival, so neither a CDN
 nor a proxy can substitute content. The name *is* the content.

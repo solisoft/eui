@@ -144,3 +144,54 @@ fn a_forged_event_ends_the_session() {
         }
     }
 }
+
+/// The outgoing channel is unbounded, so `backlog()` is what an upload waits
+/// on: bytes sent and not yet written. A server that stops reading leaves it
+/// high; once it reads again the backlog goes back to nothing, and the window
+/// is woken when it falls under the low mark, so an upload that stopped
+/// pulling chunks is asked again. Before, nothing counted, and a slow link
+/// had a whole file waiting in memory.
+#[test]
+fn the_backlog_counts_what_the_socket_has_not_written_and_wakes_when_it_drains() {
+    use futures_util::StreamExt;
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let (addr_tx, addr_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            // Read nothing until told to: the kernel's buffers fill, and the
+            // rest waits in the client.
+            let _ = tokio::task::spawn_blocking(move || go_rx.recv()).await;
+            while ws.next().await.is_some() {}
+        });
+    });
+    let url = format!("ws://{}", addr_rx.recv().unwrap());
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let conn = connect(&url, vec![0x01], None, false, move || {
+        let _ = wake_tx.send(());
+    })
+    .expect("connect");
+
+    let chunk = eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
+    for _ in 0..128 {
+        assert!(conn.send(vec![7u8; chunk]));
+    }
+    // 32 MB against a reader that is not reading: far more than loopback
+    // buffers hold, so most of it is still counted.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(conn.backlog() > 2 * eui_client::transport::BACKLOG_LOW, "backlog {} with nobody reading", conn.backlog());
+    while wake_rx.try_recv().is_ok() {}
+
+    go_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while conn.backlog() > 0 {
+        assert!(Instant::now() < deadline, "the backlog never drained: {}", conn.backlog());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(wake_rx.recv_timeout(Duration::from_secs(1)).is_ok(), "the window was woken as the backlog fell under the low mark");
+}

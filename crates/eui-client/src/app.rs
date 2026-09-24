@@ -211,12 +211,103 @@ enum Link {
 #[cfg_attr(not(has_pins), allow(dead_code))]
 #[derive(Clone)]
 struct Asking {
+    /// Where the manifest came from: half of whose answer this is (01 §2.1,
+    /// a grant is kept per origin and `app_id`).
+    origin: String,
     /// Whose answer this is.
     app_id: String,
     /// Everything this manifest asked for that the person has now been
     /// shown — the rows on the sheet, plus anything they had already
     /// settled on a previous run. What gets written down as asked.
     asked: u32,
+}
+
+/// The most addresses a tab's back-and-forward trail keeps; the oldest go
+/// first.
+const MAX_HISTORY: usize = 100;
+
+/// Step a tab's trail forward to `url` from where it stands at `at`, and
+/// say where it stands now.
+fn push_trail(history: &mut Vec<String>, at: usize, url: &str) -> usize {
+    // Opening from the middle drops what was ahead: the forward half of a
+    // trail is a guess about where somebody was going, and going somewhere
+    // else is the answer to it.
+    if !history.is_empty() {
+        history.truncate(at.saturating_add(1));
+    }
+    // The same address twice running is a reload, not a step.
+    if history.last().map(String::as_str) != Some(url) {
+        history.push(url.to_owned());
+    }
+    // Capped from the far end: a tab left open for a month of links kept
+    // every address it ever went to.
+    if history.len() > MAX_HISTORY {
+        history.drain(..history.len().saturating_sub(MAX_HISTORY));
+    }
+    history.len().saturating_sub(1)
+}
+
+/// The most frames [`hold_offline`] keeps while a tab has no socket.
+const MAX_QUEUED_FRAMES: usize = 256;
+/// The most bytes it keeps: four upload chunks' worth, which no run of
+/// clicks and keystrokes comes near.
+const MAX_QUEUED_BYTES: usize = 4 * eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
+
+/// Hold `frame` for the socket that is not there, or decide it is not worth
+/// holding.
+///
+/// Every frame used to be held, for however long the socket stayed down:
+/// a node asking to be woken every second is 86 000 `wake` events a day,
+/// a playing sound reports its position four times a second, and all of it
+/// went to the server in one stale burst on reconnect. So:
+///
+/// - What a **clock** raised — `wake`, `location`, a sound's `timeupdate`
+///   and `level` — is dropped. It says what was true at a moment that has
+///   passed, and the clock will say it again, truly, once there is somebody
+///   to tell.
+/// - What only reports a **state** — a value that `change`d, a scroll, a
+///   size, where the pointer or a dragged file is — replaces the one held
+///   for the same node and event, unless something else the person did
+///   came in between: the server wants where it ended up, not each step on
+///   the way. And one `Resync` is as good as ten.
+/// - Everything else — a click, a keystroke, a submit, typed text, a pick —
+///   is kept in order, up to [`MAX_QUEUED_FRAMES`] and [`MAX_QUEUED_BYTES`].
+///   Past that the new one is dropped rather than an old one: the frames
+///   already held may be the first half of something, and a half with its
+///   beginning missing is worse than one with its end.
+///
+/// Returns whether it was held.
+fn hold_offline(queued: &mut Vec<Vec<u8>>, frame: Vec<u8>) -> bool {
+    use eui_proto::{EventKind as K, Frame};
+    let state = |k: K| matches!(k, K::Change | K::Scroll | K::Resize | K::PointerMove | K::DragOver | K::FileDrag);
+    match Frame::decode(&frame) {
+        Ok(Frame::Event(e)) if matches!(e.event, K::Wake | K::Location | K::TimeUpdate | K::Level) => return false,
+        Ok(Frame::Event(e)) if state(e.event) => {
+            // Back to the last thing that was not a state report, and no
+            // further: a `change` before a click is what the click was made
+            // with, and folding a later one into it would have the server
+            // see the click with a value the person had not chosen yet.
+            for at in (0..queued.len()).rev() {
+                match queued.get(at).map(|f| Frame::decode(f)) {
+                    Some(Ok(Frame::Event(h))) if h.node == e.node && h.event == e.event => {
+                        queued.remove(at);
+                        break;
+                    }
+                    Some(Ok(Frame::Event(h))) if state(h.event) => {}
+                    _ => break,
+                }
+            }
+        }
+        Ok(Frame::Resync) if queued.iter().any(|f| matches!(Frame::decode(f), Ok(Frame::Resync))) => return false,
+        _ => {}
+    }
+    let bytes: usize = queued.iter().map(Vec::len).sum();
+    if queued.len() >= MAX_QUEUED_FRAMES || bytes.saturating_add(frame.len()) > MAX_QUEUED_BYTES {
+        eprintln!("eui: {} frames held for a socket that is not there; this one is dropped", queued.len());
+        return false;
+    }
+    queued.push(frame);
+    true
 }
 
 /// How long to wait before the `tries`-th attempt: 300 ms doubling to
@@ -415,6 +506,8 @@ struct Tab {
     /// is open and has answered. Not flushed on connect: they name node ids
     /// from the tree this tab is looking at, and a server that mounts a
     /// fresh one would place them somewhere else entirely.
+    ///
+    /// Bounded, and only what a person did: see [`hold_offline`].
     queued: Vec<Vec<u8>>,
     /// The cookie this tab presents, if a host set one. Per tab rather than
     /// per process: two applications must not present each other's.
@@ -842,9 +935,12 @@ fn add(_url: &str) -> Result<(), String> {
 
 /// Read a file for an upload on its own thread, a chunk at a time.
 ///
-/// The channel holds two chunks: the disk runs ahead of the socket by that
-/// much and no further, so a large attachment costs a fixed amount of
-/// memory however fast the disk is and however slow the network.
+/// The channel holds two chunks: the disk runs ahead of the window by that
+/// much and no further. The window, in turn, takes a chunk only while the
+/// socket's backlog has room (`pump_uploads`), so a large attachment costs a
+/// fixed amount of memory however fast the disk is and however slow the
+/// network — which this comment used to claim of the channel alone, while
+/// the window drained it into an unbounded queue as fast as it filled.
 fn start_reading(t: &mut Tab, id: u32, path: std::path::PathBuf, proxy: &Proxy) {
     let (tx, rx) = mpsc::sync_channel::<Result<(Vec<u8>, bool), String>>(2);
     let proxy = Arc::clone(proxy);
@@ -1027,14 +1123,18 @@ impl Tab {
         #[cfg(has_pins)]
         match crate::assets::origin_for(&tab.url).map_err(|e| e.to_string()).and_then(|origin| {
             let pins = crate::manifest::pins_dir().ok_or_else(|| "no home directory for the pin store".to_string())?;
-            crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map_err(|e| e.to_string())
+            crate::manifest::check(&origin, &pins, tab.cookie.as_deref()).map(|m| (origin, m)).map_err(|e| e.to_string())
         }) {
-            Ok(m) => {
+            Ok((origin, m)) => {
                 // Spec 01 §2.1: what the person allowed, and nothing is
                 // granted by being asked for. `--allow` is one way they
                 // say so; the sheet below is the other, and it is the only
                 // one a person who did not start this from a terminal has.
-                let before = crate::manifest::remembered_grant(&m.app_id);
+                //
+                // Remembered by origin *and* id: the manifest is public and
+                // names no host, so the same bytes served from somewhere
+                // else are somebody else, and get asked (08 §2).
+                let before = crate::manifest::remembered_grant(&origin, &m.app_id);
                 tab.allowed |= before.map_or(0, |b| b.granted);
                 // What neither the command line nor a previous answer has
                 // ever put in front of them. A capability they refused is
@@ -1049,7 +1149,7 @@ impl Tab {
                 // again, which is the common case and the only one the
                 // sheet alone cannot serve.
                 if m.capabilities & eui_proto::caps::ALL != 0 {
-                    tab.perms = Some(Asking { app_id: m.app_id.clone(), asked: m.capabilities & eui_proto::caps::ALL });
+                    tab.perms = Some(Asking { origin: origin.clone(), app_id: m.app_id.clone(), asked: m.capabilities & eui_proto::caps::ALL });
                 }
                 let granted = m.capabilities & tab.allowed;
                 let refused = m.capabilities & !tab.allowed;
@@ -1059,7 +1159,7 @@ impl Tab {
                     // The sheet instead of the session: `Hello` carries
                     // the grant, so there is nothing to dial until the
                     // question has an answer.
-                    tab.asking = Some(Asking { app_id: m.app_id.clone(), asked: settled | unanswered });
+                    tab.asking = Some(Asking { origin: origin.clone(), app_id: m.app_id.clone(), asked: settled | unanswered });
                     tab.backend.ask_consent(unanswered, &m.name);
                     tab.link = Link::Asking;
                 }
@@ -1170,7 +1270,7 @@ impl Tab {
         // [`crate::manifest::Answered`] for why both. Nowhere to remember
         // it in a page, which is the other half of `has_pins`.
         #[cfg(has_pins)]
-        crate::manifest::remember_grant(&asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
+        crate::manifest::remember_grant(&asking.origin, &asking.app_id, crate::manifest::Answered { asked: asking.asked, granted: self.allowed & asking.asked });
         eprintln!("eui: the person allowed [{}]", eui_proto::caps::names(self.allowed).join(", "));
         // The driver's mask, before `dial` asks it for a `Hello` carrying
         // it.
@@ -1245,6 +1345,11 @@ impl Tab {
     ///
     /// `true` when any island said anything.
     fn pump_islands(&mut self) -> bool {
+        // The ones the driver ended first: a page frame that released a
+        // host, or started the session over, has already taken their slot,
+        // and a frame still read from their socket would be applied under
+        // an owner the next island may be given.
+        self.drop_ended_islands();
         // What arrived on the ones already open. A batch changes only that
         // island's content; anything else it says is its own business.
         let mut ended: Vec<u16> = Vec::new();
@@ -1277,6 +1382,8 @@ impl Tab {
         for (owner, bytes) in frames {
             self.backend.island_frame(owner, bytes);
         }
+        // A frame that would not apply ends its island in the driver.
+        self.drop_ended_islands();
         for owner in ended {
             self.backend.island_ended(owner);
             self.islands.retain(|i| i.owner != owner);
@@ -1286,13 +1393,27 @@ impl Tab {
         // island's event names a node the page's server never created.
         for (owner, bytes) in self.backend.take_island_outbound() {
             let Some(island) = self.islands.iter().find(|i| i.owner == owner) else { continue };
-            if island.conn.tx.send(bytes).is_err() {
+            if !island.conn.send(bytes) {
                 eprintln!("eui: island {} went away", island.path);
                 self.backend.island_ended(owner);
                 self.islands.retain(|i| i.owner != owner);
             }
         }
         spoke
+    }
+
+    /// Drop the sockets of the islands the driver has ended.
+    ///
+    /// They used to outlive their island: a page `Mount` released the host,
+    /// the socket kept talking, and its next frame was grafted under
+    /// whatever node had since been given the host's index. And one kept
+    /// over a `start_over` kept its path marked open, so returning to the
+    /// page never redialled it.
+    fn drop_ended_islands(&mut self) {
+        let ended = self.backend.take_islands_ended();
+        if !ended.is_empty() {
+            self.islands.retain(|i| !ended.contains(&i.owner));
+        }
     }
 
     /// Dial the islands this tree asks for that are not open yet.
@@ -1306,7 +1427,12 @@ impl Tab {
             return;
         }
         let Ok(origin) = crate::assets::origin_for(&self.url) else { return };
-        for (node, path) in self.backend.islands_wanted() {
+        let wanted = self.backend.islands_wanted();
+        // `islands_wanted` closes the islands the tree stopped asking for,
+        // and their sockets must be gone before `open_island` hands one of
+        // their owners to somebody else.
+        self.drop_ended_islands();
+        for (node, path) in wanted {
             // One session per distinct path (01 §2.7). A second island
             // naming a path already open is the same island as far as the
             // server is concerned, and opening a second socket for it would
@@ -1469,13 +1595,15 @@ impl Tab {
                 // or the window was resized. Nothing to tell anybody.
                 return;
             }
-            self.queued.extend(wanted);
+            for f in wanted {
+                hold_offline(&mut self.queued, f);
+            }
             self.want_socket = true;
             return;
         }
         let Some(conn) = &self.conn else { return };
         for f in frames {
-            if conn.tx.send(f).is_err() {
+            if !conn.send(f) {
                 eprintln!("eui: connection gone");
                 self.conn = None;
                 return;
@@ -2248,19 +2376,7 @@ impl Shell {
         // the session in it has to be carried over by hand.
         let (mut history, mut at) = self.tabs.get(self.active).map_or_else(|| (Vec::new(), 0), |t| (t.history.clone(), t.at));
         match trail {
-            Trail::Push => {
-                // Opening from the middle drops what was ahead: the forward
-                // half of a trail is a guess about where somebody was going,
-                // and going somewhere else is the answer to it.
-                if !history.is_empty() {
-                    history.truncate(at.saturating_add(1));
-                }
-                // The same address twice running is a reload, not a step.
-                if history.last().map(String::as_str) != Some(url.as_str()) {
-                    history.push(url.clone());
-                }
-                at = history.len().saturating_sub(1);
-            }
+            Trail::Push => at = push_trail(&mut history, at, &url),
             Trail::Stay => {}
             Trail::At(n) => at = n,
         }
@@ -2863,14 +2979,29 @@ impl Shell {
     }
 
     /// Chunks a reader thread has ready, framed by the driver and sent.
+    ///
+    /// Only as many as the socket has room for. The reader's channel holds
+    /// two chunks, but draining it into a socket that is not keeping up
+    /// moved the whole file into the outgoing queue instead — up to 64 MB an
+    /// upload, in memory, on a slow link — and with no socket at all into
+    /// the offline queue. So a chunk is taken only while the connection's
+    /// [`backlog`](transport::Connection::backlog) is under twice
+    /// [`transport::BACKLOG_LOW`], and none while there is no socket: the
+    /// reader blocks on its full channel, and the writer wakes the window
+    /// when the backlog falls back under the low mark.
     fn pump_uploads(&mut self, i: usize) {
         let Some(t) = self.tabs.get_mut(i) else { return };
         let mut out = Vec::new();
         let mut done = Vec::new();
+        let mut room = t.conn.as_ref().map_or(0, |c| transport::BACKLOG_LOW.saturating_mul(2).saturating_sub(c.backlog()));
         for r in &t.files.reading {
             loop {
+                if room == 0 {
+                    break;
+                }
                 match r.rx.try_recv() {
                     Ok(Ok((bytes, last))) => {
+                        room = room.saturating_sub(bytes.len().max(1));
                         out.push((r.id, bytes, last));
                         if last {
                             done.push(r.id);
@@ -5240,21 +5371,6 @@ fn open_in_browser(url: &str) {
     }
 }
 
-/// Say one line to the person through the machine's own notifier
-/// (02 §5.2).
-///
-/// The second place this client starts another program, and the same
-/// shape as the first: one program, arguments that were checked before
-/// they got here, nothing waited on that the session can see. The driver
-/// decided — the capability is granted, the batch was within its four, the
-/// line carries no control character — and the platform is the window's.
-///
-/// The child outlives this call. `notify-send` given an action waits for
-/// the notification to be clicked or to expire, and that wait is the whole
-/// mechanism by which a click reaches the loop: it prints the action key
-/// and exits, and the thread turns that into a [`Wake::Raise`]. A machine
-/// whose notifier has no actions at all does the rest of this correctly
-/// and simply never prints one.
 /// Notification ids by tag, so a second notification carrying a tag still
 /// on screen replaces the first (02 §5.2).
 ///
@@ -5282,6 +5398,65 @@ fn tagged() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>>
 /// ones it has stopped showing are worth nothing.
 #[cfg(all(not(no_subprocess), target_os = "linux"))]
 const MAX_TAGS: usize = 64;
+
+/// A notifier child still waiting on its notification, and the tag it was
+/// shown under (empty for none).
+#[cfg(all(not(no_subprocess), any(target_os = "linux", target_os = "macos")))]
+type Waiter = (String, Arc<std::sync::Mutex<std::process::Child>>);
+
+/// The children still waiting, oldest first.
+///
+/// They used to be counted on to end by themselves, "bounded by how long a
+/// daemon keeps one up" — which, on a daemon that keeps a notification
+/// with an action until it is dismissed (GNOME; mako with no timeout), is
+/// for ever: a chat left a process and a thread behind per message. And one
+/// whose notification had been *replaced* by a newer one of its tag waited
+/// on a notification that no longer existed.
+#[cfg(all(not(no_subprocess), any(target_os = "linux", target_os = "macos")))]
+static WAITERS: std::sync::OnceLock<std::sync::Mutex<Vec<Waiter>>> = std::sync::OnceLock::new();
+
+/// The most children left waiting at once. Past it the oldest is stopped:
+/// its notification stays on screen, and a click on it no longer raises the
+/// window, which is the cheapest thing to lose.
+#[cfg(all(not(no_subprocess), any(target_os = "linux", target_os = "macos")))]
+const MAX_WAITERS: usize = 16;
+
+/// Keep `child` as the waiter for `tag`, stopping the one it replaces — the
+/// previous waiter of the same tag — and the oldest past [`MAX_WAITERS`].
+#[cfg(all(not(no_subprocess), any(target_os = "linux", target_os = "macos")))]
+fn keep_waiter(tag: &str, child: std::process::Child) -> Arc<std::sync::Mutex<std::process::Child>> {
+    let child = Arc::new(std::sync::Mutex::new(child));
+    let mut stale = Vec::new();
+    if let Ok(mut held) = WAITERS.get_or_init(|| std::sync::Mutex::new(Vec::new())).lock() {
+        if !tag.is_empty() {
+            held.retain(|(t, c)| {
+                if t == tag {
+                    stale.push(Arc::clone(c));
+                }
+                t != tag
+            });
+        }
+        while held.len() >= MAX_WAITERS {
+            stale.push(held.remove(0).1);
+        }
+        held.push((tag.to_owned(), Arc::clone(&child)));
+    }
+    // Outside the list's lock: a waiter's own thread takes it on the way out.
+    for c in stale {
+        if let Ok(mut c) = c.lock() {
+            let _ = c.kill();
+        }
+    }
+    child
+}
+
+/// Take `child` off the list: its notification ended, one way or another.
+#[cfg(all(not(no_subprocess), any(target_os = "linux", target_os = "macos")))]
+fn drop_waiter(child: &Arc<std::sync::Mutex<std::process::Child>>) {
+    if let Some(Ok(mut held)) = WAITERS.get().map(|w| w.lock()) {
+        held.retain(|(_, c)| !Arc::ptr_eq(c, child));
+    }
+}
 
 /// Say one line to the person through the machine's own notifier
 /// (02 §5.2).
@@ -5348,36 +5523,49 @@ fn show_note(note: &crate::driver::Note, window: WindowId, proxy: &Proxy) {
         let proxy = Arc::clone(proxy);
         #[cfg(target_os = "linux")]
         let tag = note.tag.clone();
-        // A thread each, because the wait *is* the click. They are as many
-        // as there are notifications on screen — bounded by the four an
-        // application may send in one batch and by how long a daemon keeps
-        // one up — and each ends when its notification does.
-        std::thread::Builder::new()
-            .name("eui-notify".into())
-            .spawn(move || {
-                use std::io::BufRead;
-                let Some(out) = child.stdout.take() else { return };
-                for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
-                    let line = line.trim();
-                    #[cfg(target_os = "linux")]
-                    if !tag.is_empty() {
-                        if let Ok(id) = line.parse::<u32>() {
-                            if let Ok(mut map) = tagged().lock() {
-                                if map.len() >= MAX_TAGS {
-                                    map.clear();
-                                }
-                                map.insert(tag.clone(), id);
+        let out = child.stdout.take();
+        // One child per tag, and at most `MAX_WAITERS` of them: a newer
+        // notification of a tag replaces the older on screen, so the older
+        // one's wait is stopped here rather than left on a notification that
+        // no longer exists.
+        #[cfg(target_os = "linux")]
+        let child = keep_waiter(&tag, child);
+        #[cfg(target_os = "macos")]
+        let child = keep_waiter("", child);
+        // A thread each, because the wait *is* the click; each ends when its
+        // notification does, or when `keep_waiter` stops it.
+        let spawned = std::thread::Builder::new().name("eui-notify".into()).spawn(move || {
+            use std::io::BufRead;
+            let Some(out) = out else {
+                drop_waiter(&child);
+                return;
+            };
+            for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                let line = line.trim();
+                #[cfg(target_os = "linux")]
+                if !tag.is_empty() {
+                    if let Ok(id) = line.parse::<u32>() {
+                        if let Ok(mut map) = tagged().lock() {
+                            if map.len() >= MAX_TAGS {
+                                map.clear();
                             }
-                            continue;
+                            map.insert(tag.clone(), id);
                         }
-                    }
-                    if line == "default" {
-                        let _ = proxy.send_event(Wake::Raise(window));
+                        continue;
                     }
                 }
-                let _ = child.wait();
-            })
-            .ok();
+                if line == "default" {
+                    let _ = proxy.send_event(Wake::Raise(window));
+                }
+            }
+            drop_waiter(&child);
+            if let Ok(mut c) = child.lock() {
+                let _ = c.wait();
+            }
+        });
+        if spawned.is_err() {
+            eprintln!("eui: no thread to wait on the notification; a click on it will not raise the window");
+        }
     }
 }
 
@@ -5402,6 +5590,121 @@ mod tests {
         // blank icon and no error anywhere.
         let icon = window_icon();
         assert!(icon.is_some(), "assets/icon/png/eui-64.png did not decode into an icon");
+    }
+
+    /// 02 §5.2: a notification that replaces another of its tag stops the
+    /// older one's waiter, and no more than `MAX_WAITERS` are ever left
+    /// waiting. `sleep` stands in for a `notify-send` whose notification
+    /// nobody dismisses.
+    #[cfg(all(not(no_subprocess), target_os = "linux"))]
+    #[test]
+    fn notification_waiters_are_one_per_tag_and_bounded() {
+        let sleeper = || std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let first = keep_waiter("waiters-test-thread-7", sleeper());
+        let second = keep_waiter("waiters-test-thread-7", sleeper());
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(first.lock().unwrap().try_wait().unwrap().is_some(), "the replaced notification's waiter was stopped");
+        assert!(second.lock().unwrap().try_wait().unwrap().is_none(), "the new one waits");
+        let many: Vec<_> = (0..MAX_WAITERS + 4).map(|_| keep_waiter("", sleeper())).collect();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let live = WAITERS.get().unwrap().lock().unwrap().len();
+        assert!(live <= MAX_WAITERS, "{live} waiting");
+        assert!(second.lock().unwrap().try_wait().unwrap().is_some(), "the oldest went first");
+        for c in many.iter().chain([&second]) {
+            let _ = c.lock().unwrap().kill();
+            let _ = c.lock().unwrap().wait();
+            drop_waiter(c);
+        }
+        let _ = first.lock().unwrap().wait();
+    }
+
+    /// A tab's trail keeps the last `MAX_HISTORY` addresses, and still
+    /// stands on the newest.
+    #[test]
+    fn a_tabs_trail_is_capped_from_the_far_end() {
+        let mut h = Vec::new();
+        let mut at = 0;
+        for n in 0..(MAX_HISTORY + 50) {
+            at = push_trail(&mut h, at, &format!("wss://a.example/{n}"));
+        }
+        assert_eq!(h.len(), MAX_HISTORY);
+        assert_eq!(at, MAX_HISTORY - 1);
+        assert_eq!(h[at], format!("wss://a.example/{}", MAX_HISTORY + 49));
+        assert_eq!(h[0], "wss://a.example/50", "the oldest went");
+        // A reload is not a step, and opening from the middle drops what was ahead.
+        let here = h[at].clone();
+        assert_eq!(push_trail(&mut h, at, &here), at);
+        let back = push_trail(&mut h, 10, "wss://a.example/elsewhere");
+        assert_eq!((back, h.len()), (11, 12));
+    }
+
+    fn event(node: u32, event: eui_proto::EventKind, payload: eui_proto::Value) -> Vec<u8> {
+        eui_proto::Frame::Event(eui_proto::EventFrame { node, event, name: 1, payload }).encode()
+    }
+
+    fn kinds(q: &[Vec<u8>]) -> Vec<(u32, eui_proto::EventKind)> {
+        q.iter()
+            .filter_map(|f| match eui_proto::Frame::decode(f) {
+                Ok(eui_proto::Frame::Event(e)) => Some((e.node, e.event)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// While the socket is down, what a clock raised is not held: a node
+    /// woken every second would otherwise be 86 000 events a day, flushed
+    /// as one stale burst on reconnect.
+    #[test]
+    fn a_clock_is_not_held_for_a_socket_that_is_down() {
+        use eui_proto::{EventKind as K, Value};
+        let mut q = Vec::new();
+        for k in [K::Wake, K::Location, K::TimeUpdate, K::Level] {
+            assert!(!hold_offline(&mut q, event(3, k, Value::Null)), "{k:?}");
+        }
+        assert!(q.is_empty());
+        assert!(hold_offline(&mut q, event(3, K::Click, Value::Null)), "what a person did is");
+    }
+
+    /// A state report replaces the one held for the same node and event —
+    /// but not across a click, which was made with the earlier value.
+    #[test]
+    fn a_state_report_is_folded_into_the_last_one_and_not_past_a_click() {
+        use eui_proto::{EventKind as K, Value};
+        let mut q = Vec::new();
+        for v in 0..50 {
+            hold_offline(&mut q, event(4, K::Change, Value::Int(v)));
+            hold_offline(&mut q, event(5, K::Scroll, Value::Int(v)));
+        }
+        assert_eq!(kinds(&q), vec![(4, K::Change), (5, K::Scroll)], "one of each, the latest");
+        assert!(matches!(eui_proto::Frame::decode(&q[0]), Ok(eui_proto::Frame::Event(e)) if e.payload == Value::Int(49)));
+        hold_offline(&mut q, event(6, K::Click, Value::Null));
+        hold_offline(&mut q, event(4, K::Change, Value::Int(99)));
+        assert_eq!(kinds(&q), vec![(4, K::Change), (5, K::Scroll), (6, K::Click), (4, K::Change)], "the click keeps the value it was made with");
+        // Clicks are never folded: two are two.
+        hold_offline(&mut q, event(6, K::Click, Value::Null));
+        assert_eq!(kinds(&q).iter().filter(|(_, k)| *k == K::Click).count(), 2);
+        // And one `Resync` is as good as ten.
+        assert!(hold_offline(&mut q, eui_proto::Frame::Resync.encode()));
+        assert!(!hold_offline(&mut q, eui_proto::Frame::Resync.encode()));
+    }
+
+    /// Bounded by count and by bytes; past either the new frame is dropped.
+    #[test]
+    fn the_offline_queue_is_bounded() {
+        use eui_proto::{EventKind as K, Value};
+        let mut q = Vec::new();
+        for _ in 0..(MAX_QUEUED_FRAMES + 100) {
+            hold_offline(&mut q, event(6, K::Click, Value::Null));
+        }
+        assert_eq!(q.len(), MAX_QUEUED_FRAMES);
+        let mut q = Vec::new();
+        let big = "x".repeat(64 * 1024);
+        for _ in 0..200 {
+            hold_offline(&mut q, event(7, K::TextInput, Value::Str(big.clone())));
+        }
+        let bytes: usize = q.iter().map(Vec::len).sum();
+        assert!(bytes <= MAX_QUEUED_BYTES, "{bytes} held");
+        assert!(q.len() < 200);
     }
 
     /// 01 §4.1: short enough that a wifi hop is over before anyone looks

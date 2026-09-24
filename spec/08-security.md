@@ -28,12 +28,15 @@ it.
 
 - The manifest is signed with Ed25519; the client pins the publisher key on
   first use and refuses a different key unless a rotation record signed by
-  the pinned key accompanies it.
+  the pinned key accompanies it. The pin, and any remembered grant, is kept
+  per **origin and `app_id`** (01 §2.1): the signed record names no origin,
+  so a copy of a manifest served from another host is another application,
+  with no inherited trust and nothing granted.
 - Every asset is named by BLAKE3 and verified on arrival; a mismatch is
   discarded. A CDN or proxy cannot substitute content.
 
 
-*Enforced: `eui-client::manifest` — the signature is checked with the manifest's own key, the key pinned under the `app_id` in the pin store, a changed key refused without a rotation the pinned key signed; `lang/src/serve/eui/manifest.rs` signs with a key generated on first use and kept in `config/eui_publisher.pkcs8`.*
+*Enforced: `eui-client::manifest` — the signature is checked with the manifest's own key, the key pinned under the origin and `app_id` in the pin store (`manifest::store_path`), the grants remembered under the same pair, a changed key refused without a rotation the pinned key signed; `lang/src/serve/eui/manifest.rs` signs with a key generated on first use and kept in `config/eui_publisher.pkcs8`.*
 
 ## 3. Capabilities
 

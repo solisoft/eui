@@ -445,7 +445,7 @@ the page's server never created. `island_ended` releases nothing: 01 §2.7's
 part that could take a still page with it would make every island a liability.
 
 `crates/eui-client/tests/islands.rs` exists now — it was the one file `spec/09`
-named that did not — with eight vectors, five more in
+named that did not — with fifteen vectors now, eight more in
 `eui-tree/tests/apply.rs`. The refusal worth naming is `//host/path`: a
 protocol-relative URL is a different origin *and* starts with a slash, which
 is exactly how the obvious spelling of that check lets it through.
@@ -471,7 +471,7 @@ decide where a socket connects.
 
 It reaches the worker, so the protocol grew four requests — `IslandsWanted`,
 `OpenIsland`, `IslandFrame`, `IslandEnded` — two payloads and one status
-field. `island_outbound` is a field of its own rather than a tag inside
+field — two since islands learned to close, below. `island_outbound` is a field of its own rather than a tag inside
 `outbound`, for the same reason the driver keeps two queues: a separate field
 has to be read to be sent, and so cannot become the page's by being
 forgotten. `Backend::take_island_outbound()` is one drain rather than a
@@ -486,6 +486,24 @@ laid out is not the same as not there — a node the layout has not reached has
 no rect at all, and opening a session for it would be guessing — so both wait,
 and both are asked again on the next pump, because a scroll that brings one
 into view is a frame and a frame is a pump.
+
+**Islands close, and their slots come back.** An audit found that nothing
+ever removed an island: `open_island` pushed a set of tables and a root and
+nothing took either back, so the ninth island a long session ever opened was
+refused however few were open, and each dead slot held a whole set of tables.
+Worse, the window's socket outlived its host: after a page `Mount` the next
+island frame was grafted under whatever node had been given the host's arena
+index. Now `Session::close_island` releases what the island grafted (the
+page's own children under the node stay), drops its tables and frees its
+slot for the next; `prune_sets` does the same for an island whose host was
+released, before anything can be grafted onto the host's index, and a frame
+for it afterwards is refused. The driver closes an island the tree stops
+asking for, and reports every island it ended on its own account through
+`take_islands_ended()` — the second status field — so the window drops the
+socket before it opens another that may be given the same owner. An island
+whose socket ended keeps its slot while its node stands, since that is what
+draws the content it left; it used to be offered straight back and redialled
+on every pump.
 
 What is left is an end-to-end run against a Soli server serving one, which
 `soli_e2e` is the place for and which no CI has a server to do.
@@ -527,7 +545,10 @@ the instant it is pressed — and the effects of a local-then-server handler
 are **provisional** now (spec 07 §6): the client puts the old values back
 the moment the server's answer arrives, before applying it, so a server that
 confirms sends the change and one that does not sends nothing, and the
-client agrees either way. The scrollbar's thumb fills its strip under the
+client agrees either way. What it keeps to put back is one entry per node
+and field — the oldest value, which is the server's — and at most 4 096 of
+them: it kept every step, a copy of the whole text per keystroke, until a
+batch came, which against a server that sends none is never. The scrollbar's thumb fills its strip under the
 pointer and while dragged.
 
 **Memory, measured on the feed** (release client, the machine's 1.5×
@@ -658,7 +679,11 @@ the only one that names no node, and the `notifications` capability is the
 whole of the gate: nothing in the tree asks for a notification, so there is
 nothing else to refuse. Four to a batch, refused past that. Nothing comes
 back — not shown, not clicked, not dismissed — and clicking one brings the
-window forward and tells the server nothing. A notification goes to the
+window forward and tells the server nothing. The `notify-send` that waits
+for that click is one per tag — a notification that replaces another stops
+the older one's wait — and at most sixteen at once, the oldest stopped
+first; they used to pile up, a process and a thread per message, on daemons
+that keep a notification with an action until it is dismissed. A notification goes to the
 session whose handler called it; `eui_wake` is how the other windows are
 given the chance to notify themselves.
 
@@ -1248,8 +1273,20 @@ rather than GTK — on their own thread, so a modal panel never stops the
 window drawing. The window does the filesystem, as it does the socket and
 the GPU: the worker cannot open a file and must not be able to, so what
 crosses the pipe is a name, a size, and opaque bytes. A file is read two
-chunks ahead of the socket and no further, so a large attachment costs the
-same memory whatever it weighs.
+chunks ahead of the window, and the window takes a chunk only while the
+socket's unwritten backlog is under eight — none while there is no socket —
+so a large attachment costs at most twelve chunks, 3 MiB, whatever it
+weighs. This paragraph said "two chunks ahead of the socket" for a while
+after the window had started draining the reader into an unbounded channel;
+an audit found the whole file could wait there on a slow link. The
+connection counts its unwritten bytes now (`Connection::backlog`), and the
+writer wakes the window when they fall back under four chunks.
+
+While there is no socket at all, what the person does is held for the next
+one — but no longer everything: what a clock raised (`wake`, `location`, a
+sound's `timeupdate` and `level`) is dropped, a report of state replaces the
+one held for the same node and event unless something else happened in
+between, and the queue stops at 256 frames and 1 MiB (01 §4.1).
 
 The sharp edge is on the way in: a `Blob` for a node with no open save ends
 the session, because that is a server trying to write a file nobody offered
@@ -1353,8 +1390,11 @@ implements it and the vectors that pin it:
 - **Transport** (`01`) — the session, the one-shot render of §2.4, tree
   adoption (§2.6) and content-addressed assets are implemented, and so are
   the signed manifest and its pin store: `crates/eui-client/src/manifest.rs`
-  verifies the Ed25519 signature, pins under `app_id` and refuses a changed
-  key without a rotation, with vectors in `tests/manifest.rs` and
+  verifies the Ed25519 signature, pins under the origin and `app_id`
+  together (remembered grants likewise, so a manifest copied onto another
+  host inherits neither; pins and grants kept by `app_id` alone before that
+  are ignored, and each application is trusted and asked once more) and
+  refuses a changed key without a rotation, with vectors in `tests/manifest.rs` and
   `tests/install.rs`. This line said otherwise for some time after it
   stopped being true. Still specified and not built: the `pin` field of
   §2.1's manifest, which has no slot in the key table below it and no code

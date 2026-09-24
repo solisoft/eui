@@ -358,7 +358,8 @@ text, of which about 9 are structure and the rest the data itself. Budget:
 | One upload, default | 16 MiB, when `pick` names no ceiling |
 | One save | 256 MiB, whatever the server sends |
 | Abort reason | 256 B |
-| Memory held while a file uploads | two chunks, whatever the file weighs |
+| Memory held while a file uploads | at most twelve chunks (3 MiB), whatever the file weighs |
+| Frames held while the socket is down | 256, and 1 MiB |
 | Dialogs open per node | 1 |
 
 The upload ceiling is the client's; the tree's is whatever `max` says, and
@@ -367,7 +368,13 @@ a file goes and not how much of their disk it may take.
 
 Nothing here is a stream: a transfer belongs to its session and does not
 survive it, and the memory it costs is fixed by the chunk size rather than
-by the file — the disk runs two chunks ahead of the socket and no further.
+by the file. The disk runs two chunks ahead of the window, and the window
+takes a chunk only while the socket's unwritten backlog is under eight
+chunks — none at all while there is no socket — so the twelve are two read
+ahead, one being read, and at most nine written to the socket and not yet
+on the wire. It used to say two, counting only the first of those: the
+window drained the reader straight into an unbounded channel, and on a slow
+link the whole file waited there.
 
 ## Where the machine is, and what it is held against
 
