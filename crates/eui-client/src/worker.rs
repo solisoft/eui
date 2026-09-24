@@ -1883,12 +1883,35 @@ fn warm_up() {
     drop(Driver::new(1.0, 1.0, 1.0, 0));
 }
 
+/// A worker must run under [`crate::sandbox::ARENA_TUNABLE`], and glibc
+/// reads it only when the process starts. The window sets it; a worker
+/// launched some other way — a self-test, a host that spawns its own —
+/// runs itself again with it set. Nothing is confined yet at this point.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn arena_limit_or_exec(args: &[String]) {
+    use std::os::unix::process::CommandExt;
+    let tunable = crate::sandbox::ARENA_TUNABLE;
+    if std::env::var("GLIBC_TUNABLES").is_ok_and(|v| v == tunable) {
+        return;
+    }
+    if let Ok(me) = std::env::current_exe() {
+        let err = Command::new(me).args(args).env("GLIBC_TUNABLES", tunable).exec();
+        eprintln!("eui worker: could not restart under {tunable}: {err}");
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn arena_limit_or_exec(_args: &[String]) {}
+
 /// The worker binary's entry: `Some(exit code)` when `args` name a worker
 /// role, `None` when this is an ordinary launch. A host binary that embeds
 /// the client calls this first thing in `main`, so the process it spawns
 /// for the worker — itself — takes the role.
 pub fn entry(args: &[String]) -> Option<i32> {
     let first = args.first().map(String::as_str)?;
+    if first == WORKER_ARG || first == SELFTEST_ARG {
+        arena_limit_or_exec(args);
+    }
     match first {
         WORKER_ARG => {
             // A terminal's Ctrl+C reaches the whole process group; the
@@ -2083,6 +2106,10 @@ impl Worker {
     pub fn spawn(program: PathBuf, w: f32, h: f32, scale: f32, granted: u32) -> Result<(Self, Result<String, String>), String> {
         let mut cmd = Command::new(&program);
         cmd.arg(WORKER_ARG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).env_clear();
+        // Set on an environment just cleared: nothing the window inherited
+        // can take it away (see `sandbox::ARENA_TUNABLE`).
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        cmd.env("GLIBC_TUNABLES", crate::sandbox::ARENA_TUNABLE);
         for var in ["EUI_TRACE", "EUI_SECCOMP_LOG", "RUST_BACKTRACE"] {
             if let Ok(v) = std::env::var(var) {
                 cmd.env(var, v);

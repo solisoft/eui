@@ -1029,12 +1029,16 @@ it changed. On Linux the worker locks itself down before its first byte:
 Landlock deny-all on files and sockets, a seccomp allowlist of 37 system
 calls (and `prctl` only to name a mapping) that kills on anything else, and
 not dumpable, so a kill leaves no core of the session on disk. The door
-closes only once every thread the worker started is running: a thread
-still on its way in named itself or had glibc count the processors behind
-the filter, and was killed for it — 18 workers in 600 on the build server
-under parallel load, and desktop sessions at start-up (the audit log named
-the `openat` of glibc's `get_nprocs`), until it waited (0 in 1 000 since;
-128 at once in the test). The
+closes only once every thread the worker started is running and has
+allocated, and the worker runs under `glibc.malloc.arena_max=4`, so glibc
+never opens `/sys/devices/system/cpu/online` to count the processors.
+Before, a thread still on its way in named itself or had glibc count the
+processors behind the filter, and was killed for it: 18 workers in 600 on
+the build server under parallel load, 1 gallery session in 300 on a loaded
+desktop, and desktop sessions at start-up (the audit log named `openat`
+from glibc's `get_nprocs`). Since: 0 in 1 000 on the build server, 0
+gallery sessions in 300 on the loaded desktop, and 128 at once in the
+test. The
 self-tests show a file read, a TCP
 connect and an exec each end the worker with `SIGSYS`; the counter runs
 end to end through a confined worker and paints the same quads as an

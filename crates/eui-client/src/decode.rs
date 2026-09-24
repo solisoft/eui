@@ -53,7 +53,9 @@ fn pool() -> Option<&'static mpsc::Sender<Task>> {
                 // Everything the runtime does to start a thread — naming it
                 // (`prctl(PR_SET_NAME)`), its signal stack — is done by the
                 // time this line runs. `spawn` returning says only that the
-                // thread exists.
+                // thread exists. One allocation, so glibc has given this
+                // thread its arena too before it says so.
+                drop(std::hint::black_box(Box::new(0u8)));
                 let _ = ready_tx.send(());
                 drop(ready_tx);
                 loop {

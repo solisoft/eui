@@ -39,17 +39,19 @@
 pub fn lock_down() -> Result<String, String> {
     let mut report = Vec::new();
     // Every thread that exists when the filter lands has to have finished
-    // starting. `spawn` returns once a thread exists, not once it runs, and
-    // a thread's first steps are not the worker loop's: the runtime names
-    // it (`prctl(PR_SET_NAME)`), and its first allocation may make glibc
-    // count the processors by opening `/sys/devices/system/cpu/online`.
-    // Either one, landing after the filter, kills the worker. The decode
-    // threads wait for their own start (`decode.rs`); the text engine's
-    // rayon pool is built by a `par_iter` that finishes as soon as the
-    // threads already running have done the work, so a thread may still be
-    // on its way in — the broadcast returns only once every one of them
-    // has run it.
-    rayon_core::broadcast(|_| ());
+    // starting, allocation included. `spawn` returns once a thread exists,
+    // not once it runs, and a thread's first steps are not the worker
+    // loop's: the runtime names it (`prctl(PR_SET_NAME)`), and its first
+    // `malloc` is where glibc gives it an arena. Without [`ARENA_TUNABLE`]
+    // that can mean counting the processors, by opening
+    // `/sys/devices/system/cpu/online`. Behind the filter either one kills
+    // the worker. The decode threads check in from their own code
+    // (`decode.rs`); the text engine's rayon pool is built by a `par_iter`
+    // that finishes as soon as the threads already running have done the
+    // work, so a thread may still be on its way in — the broadcast returns
+    // only once every one of them has run it, and what it runs allocates,
+    // so each has its arena before the door closes.
+    rayon_core::broadcast(|_| drop(std::hint::black_box(Box::new(0u8))));
     // A worker that seccomp kills must not leave a core dump behind: the
     // dump would be the session — every text on screen — written to disk
     // and handed to a crash reporter, for a death that is policy, not a
@@ -61,6 +63,27 @@ pub fn lock_down() -> Result<String, String> {
     report.push(seccomp()?);
     Ok(report.join("; "))
 }
+
+/// The glibc tunable the worker runs under: at most four malloc arenas.
+///
+/// glibc gives each thread an arena at its first allocation, and while the
+/// process has no limit set it works one out from the processor count —
+/// `__get_nprocs`, which opens `/sys/devices/system/cpu/online`. A worker
+/// thread that reaches that point after the lock-down is killed for an
+/// `openat` it never asked for. With `arena_max` set, glibc takes the limit
+/// from it and never counts, whatever the thread or the moment.
+///
+/// Four: the worker allocates on its own loop and on the two decode threads
+/// (`decode.rs`), so each keeps an arena of its own and there is one over;
+/// the text engine's rayon pool allocates only while fonts are cached,
+/// before the door closes, and shares. Fewer arenas is also less memory held
+/// per session, which is a worker's to spend (08 §10).
+///
+/// The window sets it on the worker it spawns, into an environment it has
+/// cleared, so nothing inherited can unset it; [`crate::worker::entry`] also
+/// re-executes a worker started without it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub const ARENA_TUNABLE: &str = "glibc.malloc.arena_max=4";
 
 /// Confine the calling process. Nothing to do yet off Linux; the error
 /// says so.

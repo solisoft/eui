@@ -367,17 +367,29 @@ them, confined like the rest
 
 Warmed means **running**, not created. A thread that has been created but
 has not yet started does its own first steps whenever the scheduler gets to
-it: the runtime names it (`prctl(PR_SET_NAME)`), and its first allocation may
-have the C library open `/sys/devices/system/cpu/online` to size its memory
-arenas. Behind the filter either one is a kill, of a worker that did nothing
-wrong, and a loaded machine makes it likely: a parallel test run, or a window
-starting its GPU in the same instant. So the worker MUST NOT close the door
-until every thread it started has run code of its own — the decode pool
-returns only once each of its threads has checked in, and the lock-down
-first has every thread of the text engine's pool run an empty task. The
-allowlist is not widened for either call: the fault was the timing, not a
-call the worker needs (`every_thread_has_started_before_the_sandbox_closes`
-in `crates/eui-client/tests/worker.rs`: 128 workers locking down at once,
+it: the runtime names it (`prctl(PR_SET_NAME)`), and its first allocation is
+where the C library gives it a memory arena. Behind the filter either one is
+a kill, of a worker that did nothing wrong, and a loaded machine makes it
+likely: a parallel test run, or a window starting its GPU in the same
+instant. So the worker MUST NOT close the door until every thread it started
+has run code of its own and allocated: the decode pool returns only once
+each of its threads has checked in, and the lock-down first has every thread
+of the text engine's pool run a task that allocates.
+
+An arena is not only a timing question. glibc, while no arena limit is set,
+works one out the first time the process holds eight arenas, by counting the
+processors: `__get_nprocs`, an `openat` of `/sys/devices/system/cpu/online`,
+in whichever thread's allocation got there, whenever that is. A thread
+that allocated nothing during the warm-up and does so later is killed for
+it. The worker therefore runs under `GLIBC_TUNABLES=glibc.malloc.arena_max=4`:
+with a limit set, glibc takes it and never counts. The window sets it on the
+worker's environment after clearing it, so nothing inherited can remove it,
+and a worker started without it runs itself again with it before doing
+anything else. Four is an arena for the worker's loop and one for each
+decode thread, and one over. The allowlist is not widened for either call:
+neither is something the worker needs
+(`every_thread_has_started_before_the_sandbox_closes` in
+`crates/eui-client/tests/worker.rs`: 128 workers locking down at once,
 none killed).
 
 **The `scene` capability moves one thing across this line, and it is the
