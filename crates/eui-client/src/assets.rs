@@ -506,6 +506,9 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, AssetError> {
     Ok(Image { width, height, rgba })
 }
 
+/// The most failed hashes [`AssetStore`] remembers before it forgets them all.
+pub const MAX_FAILED: usize = 1024;
+
 /// What the client holds: raw bytes by hash, decoded images by hash, and
 /// the set of hashes it has asked for and not yet received.
 #[derive(Debug, Default)]
@@ -565,8 +568,15 @@ impl AssetStore {
     }
 
     /// Record a fetch failure so the hash is not asked for again.
+    ///
+    /// Forgotten wholesale past [`MAX_FAILED`]: a session that has named that
+    /// many hashes that do not exist is not served by remembering each one,
+    /// and forgetting costs at most a few more tries of the ones still named.
     pub fn fail(&mut self, hash: Hash, why: String) {
         self.wanted.remove(&hash);
+        if self.failed.len() >= MAX_FAILED {
+            self.failed.clear();
+        }
         self.failed.insert(hash, why);
     }
 

@@ -520,7 +520,10 @@ the instant it is pressed — and the effects of a local-then-server handler
 are **provisional** now (spec 07 §6): the client puts the old values back
 the moment the server's answer arrives, before applying it, so a server that
 confirms sends the change and one that does not sends nothing, and the
-client agrees either way. The scrollbar's thumb fills its strip under the
+client agrees either way. What it keeps to put back is one entry per node
+and field — the oldest value, which is the server's — and at most 4 096 of
+them: it kept every step, a copy of the whole text per keystroke, until a
+batch came, which against a server that sends none is never. The scrollbar's thumb fills its strip under the
 pointer and while dragged.
 
 **Memory, measured on the feed** (release client, the machine's 1.5×
@@ -651,7 +654,11 @@ the only one that names no node, and the `notifications` capability is the
 whole of the gate: nothing in the tree asks for a notification, so there is
 nothing else to refuse. Four to a batch, refused past that. Nothing comes
 back — not shown, not clicked, not dismissed — and clicking one brings the
-window forward and tells the server nothing. A notification goes to the
+window forward and tells the server nothing. The `notify-send` that waits
+for that click is one per tag — a notification that replaces another stops
+the older one's wait — and at most sixteen at once, the oldest stopped
+first; they used to pile up, a process and a thread per message, on daemons
+that keep a notification with an action until it is dismissed. A notification goes to the
 session whose handler called it; `eui_wake` is how the other windows are
 given the chance to notify themselves.
 
@@ -1228,8 +1235,20 @@ rather than GTK — on their own thread, so a modal panel never stops the
 window drawing. The window does the filesystem, as it does the socket and
 the GPU: the worker cannot open a file and must not be able to, so what
 crosses the pipe is a name, a size, and opaque bytes. A file is read two
-chunks ahead of the socket and no further, so a large attachment costs the
-same memory whatever it weighs.
+chunks ahead of the window, and the window takes a chunk only while the
+socket's unwritten backlog is under eight — none while there is no socket —
+so a large attachment costs at most twelve chunks, 3 MiB, whatever it
+weighs. This paragraph said "two chunks ahead of the socket" for a while
+after the window had started draining the reader into an unbounded channel;
+an audit found the whole file could wait there on a slow link. The
+connection counts its unwritten bytes now (`Connection::backlog`), and the
+writer wakes the window when they fall back under four chunks.
+
+While there is no socket at all, what the person does is held for the next
+one — but no longer everything: what a clock raised (`wake`, `location`, a
+sound's `timeupdate` and `level`) is dropped, a report of state replaces the
+one held for the same node and event unless something else happened in
+between, and the queue stops at 256 frames and 1 MiB (01 §4.1).
 
 The sharp edge is on the way in: a `Blob` for a node with no open save ends
 the session, because that is a server trying to write a file nobody offered

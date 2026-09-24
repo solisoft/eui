@@ -1415,7 +1415,9 @@ pub struct Driver {
     /// once the view has been still for a moment, not per frame of a drag.
     scroll_touched: Option<Instant>,
     /// How many times each asset's fetch has failed, and when to try the
-    /// ones that are owed another go (see [`Self::asset_failed`]).
+    /// ones that are owed another go (see [`Self::asset_failed`]). Only the
+    /// hashes still between tries: one that arrives or fails for good is
+    /// taken out.
     asset_tries: HashMap<Hash, u8>,
     asset_retry: Vec<(Hash, Instant)>,
     /// Something changed that may have left a picture out of the sheet.
@@ -3189,6 +3191,10 @@ impl Driver {
     /// the renderer; the tree is relaid out because an image now has a size.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
         self.touched = true;
+        // Its count of failures is spent: `asset_tries` holds only what is
+        // still owed another go, or it grows by every hash that ever lost a
+        // race.
+        self.asset_tries.remove(&hash);
         // A scene's two assets are checked here, in the worker, and only
         // what passes is handed on. This is the division 08 §10 asks for:
         // the parse that meets bytes a server chose happens under seccomp,
@@ -3318,6 +3324,8 @@ impl Driver {
             return;
         }
         eprintln!("eui: asset {}: {why}", crate::assets::hex(&hash));
+        // Final: the store remembers it now, and the count is not needed.
+        self.asset_tries.remove(&hash);
         self.assets.fail(hash, why);
     }
 
@@ -4021,7 +4029,7 @@ impl Driver {
         let wrote = host.texts;
         let mode = host.mode;
         if let Some(undo) = host.undo {
-            self.provisional.extend(undo);
+            self.keep_provisional(undo);
         }
         // 07 §1: a chunk may set a node's text, and if that node is the one
         // being typed in, the client's buffer has to agree. Without this the
@@ -4063,6 +4071,35 @@ impl Driver {
         }
         result.map_err(|e| e.to_string())?;
         Ok(emitted)
+    }
+
+    /// Record what a `LocalThenServer` chunk changed, so a batch can take it
+    /// back — once per node and field.
+    ///
+    /// Taking back only ever needs the *oldest* value of each: the one the
+    /// server's tree still has. Every entry used to be kept, so a slider
+    /// dragged, or a field typed into, against a server that sends no batch
+    /// — or no socket at all — grew the list by an entry per step, a copy of
+    /// the whole text each time for a field, until the next batch. The
+    /// running drag's mark is a boundary: a change before it is what the
+    /// drag must not take back, so the drag's own first change of a field
+    /// is kept even when an older one exists.
+    ///
+    /// And a ceiling, [`MAX_PROVISIONAL`], for a view that touches more
+    /// fields than that between two batches: past it a change is not
+    /// recorded, and stays until the server's next batch says otherwise.
+    fn keep_provisional(&mut self, undo: Vec<Undo>) {
+        let from = self.drag_provisional.unwrap_or(0);
+        for u in undo {
+            if self.provisional.get(from..).is_some_and(|held| held.iter().any(|h| h.same_field(&u))) {
+                continue;
+            }
+            if self.provisional.len() >= MAX_PROVISIONAL {
+                trace(|| "provisional list full; a local change will not be taken back".to_owned());
+                continue;
+            }
+            self.provisional.push(u);
+        }
     }
 
     /// Spec 07 §6: a server batch supersedes every provisional change made
@@ -8493,6 +8530,22 @@ enum Undo {
     Prop(NodeIx, u32, Option<Value>),
 }
 
+impl Undo {
+    /// The same node and the same field, whatever the value.
+    fn same_field(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Style(a, _), Self::Style(b, _)) | (Self::Text(a, _), Self::Text(b, _)) => a == b,
+            (Self::Prop(a, p, _), Self::Prop(b, q, _)) => a == b && p == q,
+            _ => false,
+        }
+    }
+}
+
+/// The most distinct node-and-field changes held for a batch to take back
+/// (07 §6). One per field, so only a view touching more fields than this
+/// between two batches ever meets it.
+const MAX_PROVISIONAL: usize = 4096;
+
 fn to_wire(v: eui_vm::Value) -> Value {
     match v {
         eui_vm::Value::Null => Value::Null,
@@ -8797,5 +8850,104 @@ mod open_tests {
         assert_eq!(https_host("https://exa\"mple.test/"), None);
         assert_eq!(https_host("https://"), None);
         assert_eq!(https_host("https:///path"), None);
+    }
+}
+
+#[cfg(test)]
+mod provisional_tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use eui_proto::{Dim, Display, FlatNode, Op, Start, StyleRecord, Subtree, Welcome};
+
+    /// The counter of `tests/driver.rs`: a `LocalThenServer` click that
+    /// bumps a root prop and writes it into a text node.
+    fn counter() -> Driver {
+        const COUNT: u32 = 1;
+        const INC: u32 = 2;
+        const VALUE_KEY: u32 = 3;
+        let chunk = eui_vm::Asm::new(2).load(COUNT).push_int(1).op(0x10).op(0x06).store(COUNT).op(0x1A).set_text(VALUE_KEY).ret();
+        let mut tree = Subtree::default();
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 1), handlers: (0, 0), child_count: 2 });
+        tree.props.push((COUNT, Value::Int(41)));
+        tree.nodes.push(FlatNode { kind: NodeKind::Text, id: 2, style: 0, key: VALUE_KEY, text: Some(TextRef::Inline("41".into())), props: (0, 0), handlers: (0, 0), child_count: 0 });
+        tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+        tree.handlers.push((EventKind::Click, Handler::LocalThenServer { chunk: 1, name: INC }));
+        let batch = Batch {
+            seq: 1,
+            ops: vec![
+                Op::DefAtom { id: COUNT, value: "count".into() },
+                Op::DefAtom { id: INC, value: "increment".into() },
+                Op::DefAtom { id: VALUE_KEY, value: "value".into() },
+                Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, ..Default::default() } },
+                Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(40), height: Dim::Px(20), ..Default::default() } },
+                Op::DefChunkBytes { id: 1, bytes: chunk },
+                Op::Mount(tree),
+            ],
+        };
+        let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+        d.handle_frame(Frame::Batch(batch));
+        let _ = d.paint(400, 300);
+        d
+    }
+
+    /// 07 §6 against a server that never answers: a hundred clicks used to
+    /// leave two hundred undo entries, each with a copy of the text. One per
+    /// node and field is all a batch needs — the oldest — and it still puts
+    /// the server's value back.
+    #[test]
+    fn the_undo_list_holds_one_entry_per_field_and_still_takes_back_the_oldest() {
+        let mut d = counter();
+        let button = d.session().lookup(3).unwrap();
+        let r = d.layout.rect(button).unwrap();
+        d.input(Input::PointerMove(r.x + r.w / 2.0, r.y + r.h / 2.0));
+        for _ in 0..100 {
+            d.input(Input::PointerDown(0));
+            d.input(Input::PointerUp(0));
+        }
+        let value = d.session().lookup(2).unwrap();
+        assert_eq!(d.session().text_of(value), Some("141"));
+        assert_eq!(d.provisional.len(), 2, "the text and the count, once each");
+        d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetStyle { node: 3, style: 2 }] }));
+        assert_eq!(d.session().text_of(value), Some("41"), "the value the server's tree has");
+        assert!(d.provisional.is_empty());
+    }
+
+    /// `asset_tries` holds only what is between tries: a hash that arrives,
+    /// or fails for good, is taken out — it used to keep every hash that
+    /// ever failed once. And the store forgets its failures wholesale past
+    /// its ceiling.
+    #[test]
+    fn failed_assets_are_not_counted_for_ever() {
+        let mut d = counter();
+        for n in 0..200u8 {
+            let h = [n; 32];
+            for _ in 0..=ASSET_TRIES {
+                d.asset_failed(h, "gone".into());
+            }
+        }
+        assert!(d.asset_tries.is_empty(), "{} still counted", d.asset_tries.len());
+        d.asset_failed([8; 32], "lost a race".into());
+        assert_eq!(d.asset_tries.len(), 1, "owed another go");
+        d.asset_ready([8; 32], vec![1, 2, 3]);
+        assert!(d.asset_tries.is_empty());
+        let mut store = crate::assets::AssetStore::default();
+        for n in 0..=crate::assets::MAX_FAILED {
+            let mut h = [0u8; 32];
+            h[..8].copy_from_slice(&(n as u64).to_le_bytes());
+            store.fail(h, "gone".into());
+        }
+        assert!(store.failure(&[0u8; 32]).is_none(), "forgotten past the ceiling");
+    }
+
+    /// A view that touches more fields than the ceiling between two batches
+    /// stops being recorded rather than growing without end.
+    #[test]
+    fn the_undo_list_has_a_ceiling() {
+        let mut d = counter();
+        let undo: Vec<Undo> = (0..(MAX_PROVISIONAL as u32 + 50)).map(|i| Undo::Prop(NodeIx::NONE, i, None)).collect();
+        d.keep_provisional(undo);
+        assert_eq!(d.provisional.len(), MAX_PROVISIONAL);
     }
 }

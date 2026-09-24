@@ -217,7 +217,20 @@ impl Connection {
     pub fn request_asset(&self, hash: [u8; 32]) {
         self.fetcher().request_asset(hash);
     }
+
+    /// Queue `bytes` for the socket. `false` when it is gone.
+    pub fn send(&self, bytes: Vec<u8>) -> bool {
+        self.tx.send(bytes).is_ok()
+    }
+
+    /// Bytes sent and not yet written: the browser's own count.
+    pub fn backlog(&self) -> usize {
+        self.ws.buffered_amount() as usize
+    }
 }
+
+/// The backlog under which a producer held back for the socket may go on.
+pub const BACKLOG_LOW: usize = 4 * eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
 
 /// One `GET` of `url`, bounded by the same ceiling a desktop applies.
 ///

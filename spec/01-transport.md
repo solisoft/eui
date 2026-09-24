@@ -519,6 +519,17 @@ batch whose sequence it has already applied, and ack it again. Ops are not
 all idempotent — a `SetText` is, an `InsertChild` is not — so this is the
 receiver's job, not the sender's.
 
+What the person does while there is no socket MAY be held and sent once the
+server has answered, and what a client holds it MUST bound. A client SHOULD
+NOT hold what a clock raised — `wake`, `location`, `timeupdate`, `level` —
+which says what was true at a moment that has passed and will be said again
+once there is somebody to tell, and SHOULD fold a report of state (`change`,
+`scroll`, `resize`, a pointer or file-drag position) into the one it holds
+for the same node and event, but not across anything else the person did in
+between. An upload SHOULD NOT be read while there is no socket to take it.
+The reference client holds at most 256 frames and 1 MiB, and drops a frame
+past either rather than an older one ([`10-budgets.md`](10-budgets.md) §5).
+
 ## 5. Idle behaviour
 
 `Ping` is sent by whichever side has been silent for 30 s. A client MUST NOT

@@ -308,6 +308,16 @@ a `Blob` out of order losing the save without ending it. The last vector
 runs the two gestures against the reference server over a real socket: the
 bytes of a picked file reach it, and the bytes it owes a save come back.
 
+The memory bound of 10 §5 is two halves. The window takes an upload chunk
+only while the connection's unwritten backlog is under eight chunks, and
+`e2e.rs`'s `the_backlog_counts_what_the_socket_has_not_written_and_wakes_when_it_drains`
+has a server stop reading, the backlog hold what the kernel would not, and —
+once it reads again — the backlog drain to nothing and the window be woken
+as it falls under the low mark. What is held while there is no socket at all
+(01 §4.1) is `app.rs`'s: `a_clock_is_not_held_for_a_socket_that_is_down`,
+`a_state_report_is_folded_into_the_last_one_and_not_past_a_click` and
+`the_offline_queue_is_bounded`.
+
 ### 7.5 Resuming — `crates/eui-client/tests/resume.rs`
 
 Spec 01 §4.1, six vectors. A first `Hello` offering nothing and a later one
