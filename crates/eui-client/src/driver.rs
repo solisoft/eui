@@ -1245,8 +1245,12 @@ pub struct Driver {
     /// The platform draws its own caret at this origin; passing the whole
     /// field put it on the left of a centred run.
     ime_spot: Option<eui_layout::Rect>,
-    /// Verified chunks by id; verification happens once per chunk.
-    chunks: HashMap<u32, Option<eui_vm::Chunk>>,
+    /// Verified chunks by id; verification happens once per chunk. Shared,
+    /// because a run borrows its chunk while it mutates the driver, and a
+    /// handler runs on every hover: cloning the chunk out of the map for
+    /// each run copied its code and constants every time the pointer
+    /// crossed a node.
+    chunks: HashMap<u32, Option<Arc<eui_vm::Chunk>>>,
     /// Effects of local-then-server handlers awaiting the server's answer.
     provisional: Vec<Undo>,
     /// Where in `provisional` the running drag's own `drag_start` began, so
@@ -1308,6 +1312,18 @@ pub struct Driver {
     /// refused too, the session ends rather than looping.
     resyncing: bool,
     layout_valid: bool,
+    /// The layout went stale because a scroller scrolled, and for no other
+    /// reason: the next [`Self::ensure_layout`] may carry the boxes under it
+    /// rather than place the tree again ([`Layout::scroll`], which checks
+    /// the tree agrees before it does).
+    scroll_only: bool,
+    /// Counts the paints after which the accessibility tree may read
+    /// differently — the tree changed, it was laid out again, or the focus
+    /// moved — and `access_focus` is the focus the last count saw. A window
+    /// with a screen reader listening asks for the tree only when this has
+    /// moved ([`Self::access_serial`]). Starts at one: zero is "never seen".
+    access_serial: u64,
+    access_focus: Option<NodeIx>,
     /// A batch undid a previewed style: the node under the pointer runs
     /// its `enter` again at the next hover settle, even though the pointer
     /// has not moved.
@@ -1373,6 +1389,21 @@ pub struct Driver {
     /// orders of magnitude, so the walk goes there.
     resize_watch: Vec<NodeIx>,
     resize_watch_stale: bool,
+    /// Which nodes carry a `track` prop (03 §3.4), in tree order. Found in
+    /// the `resize` walk, and stale with it: [`Self::place_tracks`] runs on
+    /// every real paint, and walked the whole tree to find them each time
+    /// the session had defined the atom at all — which one slider anywhere
+    /// is enough for.
+    track_watch: Vec<NodeIx>,
+    /// The nodes that can name an asset — images, sounds, videos, scenes —
+    /// in tree order, and whether that list is stale. [`Self::pending_assets`]
+    /// runs on every transport wake and [`Self::repack_images`] after every
+    /// batch, and each walked the whole tree to find a handful of pictures.
+    /// A node only becomes one by arriving in a batch — a local handler
+    /// cannot write an asset (`to_wire`) — so the list is rebuilt when one
+    /// lands, like the `resize` watch, and read the rest of the time.
+    media_watch: Vec<NodeIx>,
+    media_watch_stale: bool,
     /// When a moving scroll last asked for rows it had outrun.
     outrun_at: Option<Instant>,
     /// The last list painted, while it may be drawn again: everything
@@ -1566,6 +1597,9 @@ impl Driver {
             hover_relight: false,
             last_cursor: Cursor::Default,
             layout_valid: false,
+            scroll_only: false,
+            access_serial: 1,
+            access_focus: None,
             redraw: true,
             closed: None,
             desktop_colors: Vec::new(),
@@ -1581,6 +1615,9 @@ impl Driver {
             island_out: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
+            track_watch: Vec::new(),
+            media_watch: Vec::new(),
+            media_watch_stale: true,
             outrun_at: None,
             cached: None,
             touched: true,
@@ -1750,6 +1787,9 @@ impl Driver {
         self.island_out.clear();
         self.resize_watch.clear();
         self.resize_watch_stale = true;
+        self.track_watch.clear();
+        self.media_watch.clear();
+        self.media_watch_stale = true;
         self.cached = None;
         self.uploads.clear();
         self.saves.clear();
@@ -1914,6 +1954,7 @@ impl Driver {
                 // island.
                 self.resize_watch_stale = true;
                 self.island_watch_stale = true;
+                self.media_watch_stale = true;
                 self.invalidate();
                 self.note_style_changes();
                 // 03 §5.3: before the entrances, because a pair is one
@@ -2030,6 +2071,18 @@ impl Driver {
 
     fn invalidate(&mut self) {
         self.layout_valid = false;
+        self.scroll_only = false;
+        self.redraw = true;
+    }
+
+    /// [`Self::invalidate`], for a scroll offset that moved and nothing else.
+    /// Only a layout that was current can be carried to the new offset; one
+    /// already owed for another reason stays owed for it.
+    fn invalidate_scroll(&mut self) {
+        if self.layout_valid {
+            self.scroll_only = true;
+        }
+        self.layout_valid = false;
         self.redraw = true;
     }
 
@@ -2145,6 +2198,7 @@ impl Driver {
             self.invalidate();
             self.island_watch_stale = true;
             self.resize_watch_stale = true;
+            self.media_watch_stale = true;
             // An island's batch releases nodes exactly as the page's does,
             // and the pointer may well be standing on one of them.
             self.reanchor_hover();
@@ -2715,6 +2769,9 @@ impl Driver {
         if !a.gpu {
             let (x, y) = a.at(self.now);
             self.session.set_scroll(a.node, x.round() as i64, y.round() as i64);
+            if self.layout_valid {
+                self.scroll_only = true;
+            }
             self.layout_valid = false;
             self.scroll_touched = Some(self.now);
             self.scrolled = Some((a.node, self.now));
@@ -2736,6 +2793,7 @@ impl Driver {
             self.session.set_scroll(a.node, bx as i64, by as i64);
             self.layout.set_glide(a.node, a.from.1.min(a.to.1), a.from.1.max(a.to.1), delta);
             self.layout_valid = false;
+            self.scroll_only = false;
             self.scroll_touched = Some(self.now);
             self.scrolled = Some((a.node, self.now));
             a.armed = true;
@@ -2749,6 +2807,12 @@ impl Driver {
             return self.emit(a.node, EventKind::Scroll, Value::List(vec![Value::Int(bx as i64), Value::Int(by as i64)]));
         }
         Vec::new()
+    }
+
+    /// Which accessibility tree the last paint left: equal serials, equal
+    /// trees. Never zero.
+    pub fn access_serial(&self) -> u64 {
+        self.access_serial
     }
 
     /// Device px per logical px: the display's density, times the window's
@@ -2830,8 +2894,22 @@ impl Driver {
     /// Nothing in the client calls this; `input` is what a window uses, and
     /// it reads the wall clock as it always did.
     pub fn input_at(&mut self, input: Input, now: Instant) -> Vec<Frame> {
-        self.touched = true;
         self.now = now;
+        // A move is the one input that usually changes nothing: the pointer
+        // crosses a node it is already over, a thousand times a second on a
+        // gaming mouse. Marking the driver touched for each one made every
+        // frame of a page with a spinner a full layout and paint, pushed
+        // across the worker pipe whole, for as long as the mouse moved. So a
+        // move counts only when it did something the list could show.
+        if let Input::PointerMove(x, y) = input {
+            let before = (self.pointer.over, self.pointer.over_scrollbar);
+            let out = self.pointer_move(x, y);
+            if self.moved_anything(before, &out) {
+                self.touched = true;
+            }
+            return out;
+        }
+        self.touched = true;
         match input {
             Input::Back => self.go_back(),
             Input::Resized(w, h, scale) => {
@@ -2870,6 +2948,7 @@ impl Driver {
             }
             Input::Covered(px) => self.set_covered(px),
             Input::Mode(mode) => self.set_mode(mode),
+            // Handled above, where it can decide whether it touched anything.
             Input::PointerMove(x, y) => self.pointer_move(x, y),
             Input::PointerDown(button) => self.pointer_down(button),
             Input::PointerUp(button) => self.pointer_up(button),
@@ -2951,6 +3030,26 @@ impl Driver {
         }
     }
 
+    /// Whether a pointer move just handled could make the next paint differ
+    /// from the last: it emitted something (a local handler may have run),
+    /// the tree or the layout changed, a repaint was asked for (a panel
+    /// following the hand, a thumb), what the pointer is over changed, or a
+    /// gesture is in flight — a press, a drag, a thumb — whose frames are
+    /// the paint's to make. Anything else is the pointer crossing a node it
+    /// was already over, and the last list is still the frame.
+    fn moved_anything(&self, before: (Option<NodeIx>, Option<NodeIx>), out: &[Frame]) -> bool {
+        !out.is_empty()
+            || self.redraw
+            || !self.layout_valid
+            || self.session.is_dirty()
+            || self.pointer.hover_pending
+            || (self.pointer.over, self.pointer.over_scrollbar) != before
+            || self.pointer.pressed_on.is_some()
+            || self.pointer.drag.is_some()
+            || self.pointer.dragging_thumb.is_some()
+            || self.pointer.coalesced_move.is_some()
+    }
+
     fn ensure_layout(&mut self) {
         if !self.layout_valid {
             let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes };
@@ -2960,7 +3059,13 @@ impl Driver {
             // the origin for one frame.
             self.layout.set_pointer(self.pointer.inside.then_some((self.pointer.x, self.pointer.y)));
             self.layout.set_carrying(self.pointer.drag.is_some_and(|d| d.grabbed));
-            self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
+            // 04 §7: a scroll moves boxes and measures nothing, so when it is
+            // all that happened the boxes are moved and the tree is not
+            // placed again — unless the layout finds more than a scroll.
+            let carried = std::mem::take(&mut self.scroll_only) && self.layout.scroll(&self.session, self.size);
+            if !carried {
+                self.layout.compute(&mut Env { session: &self.session, theme: &self.resolved, text: &mut measurer }, self.size);
+            }
             self.layout_valid = true;
             self.relayouts = self.relayouts.saturating_add(1);
         }
@@ -3027,26 +3132,36 @@ impl Driver {
         // than a check that fails, which is what 08 §3 asks for.
         let shader_atom = self.session.atoms().shader;
         let modules = self.granted & caps::SCENE != 0;
-        if let Some(root) = self.session.root() {
-            let wanted: Vec<Hash> = self
-                .session
-                .preorder(root)
-                .filter_map(|ix| self.session.node(ix))
-                .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video | NodeKind::Scene))
-                .flat_map(|n| {
-                    let scene = n.kind == NodeKind::Scene;
-                    n.props.iter().filter_map(move |(a, v)| {
-                        let Value::Asset(h) = v else { return None };
-                        let module = scene && Some(*a) == shader_atom;
-                        (!module || modules).then_some(*h)
-                    })
-                })
-                .collect();
-            for h in wanted {
-                self.assets.want(h);
+        if self.media_watch_stale {
+            self.rebuild_media_watch();
+        }
+        let (session, assets) = (&self.session, &mut self.assets);
+        for n in self.media_watch.iter().filter_map(|ix| session.node(*ix)) {
+            // Checked again: an index in the list may have been released and
+            // given to something else since the walk.
+            if !matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video | NodeKind::Scene) {
+                continue;
+            }
+            let scene = n.kind == NodeKind::Scene;
+            for (a, v) in &n.props {
+                let Value::Asset(h) = v else { continue };
+                let module = scene && Some(*a) == shader_atom;
+                if !module || modules {
+                    assets.want(*h);
+                }
             }
         }
         self.assets.take_pending()
+    }
+
+    /// Walk the tree for the nodes that can name an asset. Called when a
+    /// batch has changed the tree, never per wake or per frame.
+    fn rebuild_media_watch(&mut self) {
+        self.media_watch.clear();
+        self.media_watch_stale = false;
+        let Some(root) = self.session.root() else { return };
+        let session = &self.session;
+        self.media_watch.extend(session.preorder(root).filter(|ix| session.node(*ix).is_some_and(|n| matches!(n.kind, NodeKind::Image | NodeKind::Audio | NodeKind::Video | NodeKind::Scene))));
     }
 
     /// Pack the pictures this tree needs that the sheet does not hold.
@@ -3071,13 +3186,13 @@ impl Driver {
             return;
         }
         self.repack = false;
-        let Some(root) = self.session.root() else {
-            return;
-        };
+        if self.media_watch_stale {
+            self.rebuild_media_watch();
+        }
         let hashes: Vec<Hash> = self
-            .session
-            .preorder(root)
-            .filter_map(|ix| self.session.node(ix))
+            .media_watch
+            .iter()
+            .filter_map(|ix| self.session.node(*ix))
             .filter(|n| matches!(n.kind, NodeKind::Image | NodeKind::Video))
             .flat_map(|n| {
                 n.props
@@ -3694,7 +3809,7 @@ impl Driver {
             return Vec::new();
         }
         self.session.set_scroll(scroller, sx, ny);
-        self.invalidate();
+        self.invalidate_scroll();
         self.scroll_touched = Some(now);
         self.scrolled = Some((scroller, now));
         // The rows moved under a pointer that did not: the slot is resolved
@@ -3898,7 +4013,7 @@ impl Driver {
     /// the chunk asked to emit, in order.
     fn run_local(&mut self, chunk_id: u32, provisional: bool, here: NodeIx) -> Result<Vec<u32>, String> {
         let verified = match self.chunks.get(&chunk_id) {
-            Some(Some(c)) => c.clone(),
+            Some(Some(c)) => Arc::clone(c),
             Some(None) => return Err("chunk failed verification earlier".into()),
             None => {
                 let result = match self.session.chunk(chunk_id) {
@@ -3916,7 +4031,8 @@ impl Driver {
                 };
                 match result {
                     Ok(c) => {
-                        self.chunks.insert(chunk_id, Some(c.clone()));
+                        let c = Arc::new(c);
+                        self.chunks.insert(chunk_id, Some(Arc::clone(&c)));
                         c
                     }
                     Err(e) => {
@@ -4487,10 +4603,17 @@ impl Driver {
     /// placing exactly as much as one a finger is on. The pass is
     /// idempotent and tracks are few.
     fn place_tracks(&mut self) {
-        let Some(track_atom) = self.session.atoms().track else { return };
-        let Some(root) = self.session.root() else { return };
-        let tracks: Vec<NodeIx> = self.session.preorder(root).filter(|ix| self.session.node(*ix).is_some_and(|n| n.prop(track_atom).is_some())).collect();
-        for ix in tracks {
+        if self.session.atoms().track.is_none() {
+            return;
+        }
+        if self.resize_watch_stale {
+            self.rebuild_resize_watch();
+        }
+        // Taken and put back rather than copied: `track_of` answers `None`
+        // for an index that no longer holds a track, so the list can only be
+        // too long between rebuilds, never wrong.
+        let tracks = std::mem::take(&mut self.track_watch);
+        for &ix in &tracks {
             let Some(t) = self.track_of(ix) else { continue };
             let parts = self.track_parts(&t);
             let Some(g) = self.track_geom(&t, &parts) else { continue };
@@ -4518,6 +4641,7 @@ impl Driver {
                 self.place_part(*thumb, &t, &g, c - g.thick / 2.0, c + g.thick / 2.0);
             }
         }
+        self.track_watch = tracks;
     }
 
     /// One part's box, from `a` to `b` along the axis, keeping the cross
@@ -5517,7 +5641,7 @@ impl Driver {
             return Vec::new();
         }
         self.session.set_scroll(scroller, nx, ny);
-        self.invalidate();
+        self.invalidate_scroll();
         self.scroll_touched = Some(Instant::now());
         self.scrolled = Some((scroller, Instant::now()));
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
@@ -5877,7 +6001,7 @@ impl Driver {
         self.session.set_scroll(scroller, nx, ny);
         self.scroll_touched = Some(Instant::now());
         self.scrolled = Some((scroller, Instant::now()));
-        self.invalidate();
+        self.invalidate_scroll();
         self.emit(scroller, EventKind::Scroll, Value::List(vec![Value::Int(nx), Value::Int(ny)]))
     }
 
@@ -7574,6 +7698,13 @@ impl Driver {
         if list.wants_frame && self.next_due.is_none() {
             self.next_due = Some(now + SPIN_FRAME);
         }
+        // What the accessibility tree is built from: the tree, its boxes, and
+        // the focus. A frame that moved none of them — a transition drawn on
+        // the CPU, a caret blinking — leaves the tree a screen reader has.
+        if relaid || self.session.is_dirty() || self.focused != self.access_focus {
+            self.access_serial = self.access_serial.wrapping_add(1).max(1);
+            self.access_focus = self.focused;
+        }
         self.session.clear_all_dirty();
         let text_stats = self.text.stats();
         trace(|| {
@@ -8283,9 +8414,16 @@ impl Driver {
     fn rebuild_resize_watch(&mut self) {
         self.resize_watch.clear();
         self.paired_watch.clear();
+        self.track_watch.clear();
         self.resize_watch_stale = false;
         let Some(root) = self.session.root() else { return };
+        let track = self.session.atoms().track;
         for ix in self.session.preorder(root) {
+            // 03 §3.4, in the same walk again: the tracks `place_tracks`
+            // lays out on every real paint.
+            if track.is_some_and(|a| self.session.node(ix).is_some_and(|n| n.prop(a).is_some())) {
+                self.track_watch.push(ix);
+            }
             if self.session.handler(ix, EventKind::Resize).is_some() {
                 self.resize_watch.push(ix);
             }

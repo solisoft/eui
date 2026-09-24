@@ -653,7 +653,9 @@ given the chance to notify themselves.
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
 click handlers are buttons named by their text, editable nodes are text
 fields, text is a label, the rest are groups. The tree is built only when
-an assistive technology asks and refreshed after a paint while one listens;
+an assistive technology asks, and refreshed after a paint while one listens
+— only a paint that changed the tree, its layout or the focus, which the
+driver counts, so a spinner turning under a screen reader rebuilds nothing;
 its focus and click actions become the same inputs Tab and Enter produce.
 `--no-default-features` builds without it.
 
@@ -944,6 +946,16 @@ does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
 (AppContainer), where it is its own process but not a sandboxed one, and
 fold an input into the paint that follows it, which would make it one
 round trip a frame rather than two.
+
+Pointer moves no longer cost a round trip each. The window keeps the latest
+one and hands it on when any other event arrives or the loop is about to
+wait, so a mouse reporting at 1 000 Hz is one move per pass rather than one
+blocking call per report. The driver counts a move as a change only when
+something the list could show moved — what the pointer is over, a panel
+following it, a gesture in flight — so a move over a page with a spinner
+leaves the last list standing, and a paint answered with the list the worker
+sent last time crosses the pipe as a few bytes (`PaintAgain`) rather than
+the list again.
 
 That measurement is what found the real cost of a scrolled frame, and it
 was not the pipe. A virtualised list added its rows' heights up on every
