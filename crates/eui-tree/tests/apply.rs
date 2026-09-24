@@ -723,7 +723,7 @@ fn a_page_opens_at_most_eight_islands() {
 #[test]
 fn a_closed_islands_slot_is_taken_by_the_next() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     for _ in 0..20 {
         let owner = s.open_island(at).expect("a slot was handed back");
@@ -742,7 +742,7 @@ fn a_closed_islands_slot_is_taken_by_the_next() {
 #[test]
 fn closing_an_island_keeps_the_pages_own_children() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     let owner = s.open_island(at).unwrap();
     assert!(s.close_island(owner));
@@ -757,14 +757,14 @@ fn closing_an_island_keeps_the_pages_own_children() {
 #[test]
 fn a_page_mount_that_frees_the_host_prunes_the_island() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     let owner = s.open_island(at).unwrap();
     s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
     let mut again = page_with_a_slot();
     again.seq = 2;
     again.ops.retain(|op| matches!(op, Op::Mount(_)));
-    s.apply(&again).unwrap();
+    s.apply(again).unwrap();
     assert!(!s.island_is_open(owner), "the root went with the host");
     let page_text = s.lookup(3).unwrap();
     assert_eq!(s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::Mount(leaf(1))] }), Err(E::Internal), "a late frame is refused");

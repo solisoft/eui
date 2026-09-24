@@ -537,7 +537,7 @@ impl Session {
     /// Bytes of inline chunks defined so far, by the page and every island
     /// together — the figure `Limits::max_chunk_total_bytes` bounds.
     pub fn chunk_bytes(&self) -> usize {
-        self.islands.iter().fold(self.tables.chunk_bytes, |sum, t| sum.saturating_add(t.chunk_bytes))
+        self.islands.iter().flatten().fold(self.tables.chunk_bytes, |sum, t| sum.saturating_add(t.chunk_bytes))
     }
 
     /// Number of atoms, styles, colours and chunks defined.
