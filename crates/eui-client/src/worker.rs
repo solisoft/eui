@@ -767,7 +767,11 @@ pub enum Payload {
     /// `Hello`: the frame, encoded.
     Hello(Vec<u8>),
     /// `PendingAssets`.
-    Assets(Vec<Hash>),
+    /// The hashes, and how large the fetch of one may be before it is
+    /// abandoned (01 §2.2) — the asset store's room, measured in the worker
+    /// because the worker holds the store, and carried back because the
+    /// window is what fetches.
+    Assets(Vec<Hash>, u64),
     /// `IslandsWanted`: the node id and path of each island not yet open.
     Islands(Vec<(u32, String)>),
     /// `OpenIsland`: the owner its batches apply under, or `None` past the
@@ -937,12 +941,13 @@ impl Reply {
                 w.u8(2);
                 w.bytes(b);
             }
-            Payload::Assets(hs) => {
+            Payload::Assets(hs, room) => {
                 w.u8(3);
                 w.u32(u32::try_from(hs.len()).unwrap_or(u32::MAX));
                 for h in hs {
                     w.hash(h);
                 }
+                w.u64(*room);
             }
             Payload::Islands(v) => {
                 w.u8(10);
@@ -1088,7 +1093,7 @@ impl Reply {
                 for _ in 0..n {
                     hs.push(r.hash()?);
                 }
-                Payload::Assets(hs)
+                Payload::Assets(hs, r.u64()?)
             }
             10 => {
                 let n = r.u32()? as usize;
@@ -1679,7 +1684,12 @@ pub fn serve(input: &mut impl Read, output: &mut impl Write, sandbox: Result<Str
                         d.asset_failed(h, why);
                         Payload::None
                     }
-                    Request::PendingAssets => Payload::Assets(d.pending_assets()),
+                    Request::PendingAssets => {
+                        let hs = d.pending_assets();
+                        // The walk is paid for only when something is owed.
+                        let room = if hs.is_empty() { 0 } else { d.asset_room() };
+                        Payload::Assets(hs, room as u64)
+                    }
                     Request::IslandsWanted => Payload::Islands(d.islands_wanted().into_iter().filter_map(|(ix, path)| Some((d.session().node(ix)?.id, path))).collect()),
                     Request::OpenIsland(node, path) => Payload::Owner(d.session().lookup(node).and_then(|ix| d.open_island(ix, &path))),
                     Request::IslandFrame(owner, bytes) => {
@@ -1850,6 +1860,10 @@ fn ignore_terminal_signals() {}
 /// Build and drop a driver so that everything that initialises itself
 /// lazily has done so before the sandbox closes — the text engine's font
 /// loader starts a thread pool, and asks the system for its core count.
+///
+/// The decode threads are among them (`decode.rs`): a driver starts the
+/// process's pool, and after the lock-down a thread cannot be created — the
+/// filter kills the worker on the `clone3` — so it must be started here.
 fn warm_up() {
     drop(Driver::new(1.0, 1.0, 1.0, 0));
 }
@@ -2651,8 +2665,16 @@ impl Backend {
     }
 
     /// Verified bytes for a hash.
+    ///
+    /// Moved, not copied: the closure `with_local` takes may not run, so
+    /// handing it the bytes meant cloning them first in case the worker
+    /// needed them instead — a second copy of every asset, up to 16 MiB,
+    /// on the window's thread.
     pub fn asset_ready(&mut self, hash: Hash, bytes: Vec<u8>) {
-        if self.with_local(|d| d.asset_ready(hash, bytes.clone())).is_some() {
+        if let Backend::Local(d) = self {
+            if let Ok(mut d) = d.lock() {
+                d.asset_ready(hash, bytes);
+            }
             return;
         }
         self.with_worker(|w| {
@@ -2670,14 +2692,20 @@ impl Backend {
         });
     }
 
-    /// Hashes the tree needs and nobody fetched yet.
-    pub fn pending_assets(&mut self) -> Vec<Hash> {
-        if let Some(h) = self.with_local(|d| d.pending_assets()) {
+    /// Hashes the tree needs and nobody fetched yet, and the largest any of
+    /// them may be before its fetch is abandoned (01 §2.2): what is left of
+    /// the session's asset budget once what the tree names is counted.
+    pub fn pending_assets(&mut self) -> (Vec<Hash>, usize) {
+        if let Some(h) = self.with_local(|d| {
+            let hs = d.pending_assets();
+            let room = if hs.is_empty() { 0 } else { d.asset_room() };
+            (hs, room)
+        }) {
             return h;
         }
         match self.with_worker(|w| w.call(&Request::PendingAssets).map(|r| r.payload)) {
-            Some(Some(Payload::Assets(hs))) => hs,
-            _ => Vec::new(),
+            Some(Some(Payload::Assets(hs, room))) => (hs, usize::try_from(room).unwrap_or(usize::MAX)),
+            _ => (Vec::new(), 0),
         }
     }
 
@@ -3366,7 +3394,7 @@ mod tests {
             Payload::Sandbox(Ok("ok".into())),
             Payload::Sandbox(Err("no".into())),
             Payload::Hello(vec![1, 2]),
-            Payload::Assets(vec![[1; 32], [2; 32]]),
+            Payload::Assets(vec![[1; 32], [2; 32]], 12_345),
             Payload::Paint {
                 list: Arc::new(list),
                 glyphs: vec![(2, 1, 2, vec![0, 1]), (2, 0, 1, vec![3, 4])],

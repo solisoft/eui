@@ -190,11 +190,19 @@ impl Fetcher {
     /// notifier is called — the same contract as a desktop's, with the
     /// thread replaced by the task the browser was going to run anyway.
     pub fn request_asset(&self, hash: [u8; 32]) {
+        self.request_asset_within(hash, crate::assets::MAX_ASSET_BYTES);
+    }
+
+    /// [`Self::request_asset`], refused when the body is larger than `cap`:
+    /// what is left of the session's asset budget (01 §2.2). The length
+    /// the response declares is read before its body is, so a body that
+    /// says it will not fit is never read.
+    pub fn request_asset_within(&self, hash: [u8; 32], cap: usize) {
         let url = format!("{}/_eui/asset/{}", self.origin, crate::assets::hex(&hash));
         let tx = self.in_tx.clone();
         let notify = Rc::clone(&self.notify);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match fetch_bytes(&url).await {
+            let result = match fetch_bytes(&url, cap.min(crate::assets::MAX_ASSET_BYTES)).await {
                 // Before anything is decoded, exactly as on a desktop: a
                 // substituted body is discarded, not displayed.
                 Ok(bytes) if *blake3::hash(&bytes).as_bytes() == hash => Ok(bytes),
@@ -238,7 +246,7 @@ pub const BACKLOG_LOW: usize = 4 * eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES;
 /// loopback cookie a desktop carries has no analogue here. A redirect is
 /// refused rather than followed — the browser will not say where it went,
 /// and 01 §1 has a client refuse one that changes origin.
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+async fn fetch_bytes(url: &str, cap: usize) -> Result<Vec<u8>, String> {
     let opts = web_sys::RequestInit::new();
     opts.set_method("GET");
     opts.set_mode(web_sys::RequestMode::SameOrigin);
@@ -251,9 +259,13 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if response.status() != 200 {
         return Err(format!("status {}", response.status()));
     }
+    let declared = response.headers().get("content-length").ok().flatten().and_then(|v| v.trim().parse::<usize>().ok());
+    if declared.is_some_and(|n| n > cap) {
+        return Err(crate::assets::AssetError::TooLarge.to_string());
+    }
     let buffer = wasm_bindgen_futures::JsFuture::from(response.array_buffer().map_err(js_msg)?).await.map_err(js_msg)?;
     let array = js_sys::Uint8Array::new(&buffer);
-    if array.length() as usize > crate::assets::MAX_ASSET_BYTES {
+    if array.length() as usize > cap {
         return Err(crate::assets::AssetError::TooLarge.to_string());
     }
     Ok(array.to_vec())

@@ -196,7 +196,12 @@ response. Because the name *is* the content, `Cache-Control: public, max-age=315
 immutable` is always correct and a hostile CDN cannot substitute content.
 
 An asset response larger than the session's remaining asset budget
-([`10-budgets.md`](10-budgets.md)) MUST be abandoned mid-stream.
+([`10-budgets.md`](10-budgets.md), *Assets*) MUST be abandoned mid-stream.
+"Remaining" is the budget less what the assets the live tree names already
+hold, since everything else may be let go to make room; a response whose
+`Content-Length` exceeds it is abandoned before its body is read. Enforced
+in `assets::fetch_within`, with the room measured by the driver
+(`Driver::asset_room`).
 
 The client's request carries no cookie and no session: an asset is
 addressed by content, so the response is the same for everyone and a proxy

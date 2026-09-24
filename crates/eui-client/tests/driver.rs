@@ -2756,6 +2756,7 @@ fn a_playing_sound_schedules_its_own_report() {
     assert!(d.next_frame_at().is_none(), "an idle window asks for nothing");
 
     d.asset_ready(hash, wav_bytes(&[8_000i16; 8_000], 8_000));
+    d.finish_decoding();
     let _ = d.paint(400, 300);
     assert!(d.audio_playing(), "the sound is loaded and playing");
 
@@ -2802,6 +2803,7 @@ fn a_playing_sound_reports_how_loud_it_is() {
 
     // A second of a loud tone, so there is a peak to report.
     d.asset_ready(hash, wav_bytes(&[16_000i16; 8_000], 8_000));
+    d.finish_decoding();
     let _ = d.paint(400, 300);
     let mut out = [0.0f32; 800];
     d.fill_audio(&mut out, 1, 8_000);
@@ -2867,6 +2869,7 @@ fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
     assert!(out.iter().all(|s| *s == 0.0), "silence, and the buffer is overwritten");
     // A tone of a hundredth of a second at 8 kHz: eighty frames.
     d.asset_ready(hash, wav_bytes(&[8_000i16; 80], 8_000));
+    d.finish_decoding();
     let _ = d.paint(400, 300);
     assert!(d.audio_playing(), "the sound is loaded");
     // Still not playing: the node says so.
@@ -2904,6 +2907,7 @@ fn an_audio_node_asks_for_its_sound_plays_it_and_reports_its_end() {
     // Twice the length, a quarter of the level: nothing of the first tone
     // could pass for it.
     d.asset_ready(second, wav_bytes(&[2_000i16; 160], 8_000));
+    d.finish_decoding();
     let _ = d.paint(400, 300);
     d.handle_frame(Frame::Batch(Batch { seq: 7, ops: vec![Op::SetProp { node: 2, prop: A_VOLUME, value: Value::Int(100) }] }));
     let _ = d.paint(400, 300);
@@ -3090,6 +3094,7 @@ fn time_update_is_rate_limited_and_only_for_nodes_that_ask() {
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
     // Two seconds of sound, so it is still playing throughout.
     d.asset_ready(hash, wav_bytes(&[4_000i16; 16_000], 8_000));
+    d.finish_decoding();
     let t0 = Instant::now();
     d.tick(t0);
     let _ = d.paint(400, 300);
@@ -3156,6 +3161,7 @@ fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
     assert!(!d.video_playing());
     // Two frames of 8 × 6, a tenth of a second each.
     d.asset_ready(hash, gif_bytes(8, 6, &[[200, 30, 30, 255], [30, 30, 200, 255]], 10));
+    d.finish_decoding();
     let t0 = Instant::now();
     d.tick(t0);
     let list = d.paint(400, 300);
@@ -3194,6 +3200,78 @@ fn a_video_node_decodes_sizes_itself_and_advances_frame_by_frame() {
     let _ = d.paint(400, 300);
     assert!(!d.video_playing());
     assert_eq!(d.video_position_ms(2), None);
+}
+
+/// A tree of one box holding an `audio` node per sound and a `video` node
+/// per picture, ids from 2 in that order, `playing` on all of them.
+fn media_tree(d: &mut Driver, sounds: &[[u8; 32]], pictures: &[[u8; 32]]) {
+    const A_SRC: u32 = 50;
+    const A_PLAYING: u32 = 51;
+    let mut tree = Subtree::default();
+    let count = (sounds.len() + pictures.len()) as u32;
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: count });
+    let kinds = sounds.iter().map(|h| (NodeKind::Audio, h)).chain(pictures.iter().map(|h| (NodeKind::Video, h)));
+    for (i, (kind, hash)) in kinds.enumerate() {
+        let at = tree.props.len() as u32;
+        tree.props.push((A_SRC, Value::Asset(*hash)));
+        tree.props.push((A_PLAYING, Value::Bool(true)));
+        tree.nodes.push(FlatNode { kind, id: 2 + i as u32, style: 0, key: 0, text: None, props: (at, 2), handlers: (0, 0), child_count: 0 });
+    }
+    let ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_PLAYING, value: "playing".into() },
+        Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } },
+        Op::Mount(tree),
+    ];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+}
+
+/// Spec 10, *Sound* and *Moving pictures*: a decoded sound and a decoded
+/// picture are held while a node names them, and not a frame longer.
+///
+/// The mixer and the players let go when their nodes went; the maps behind
+/// them did not, so a playlist kept every track it had played and a feed
+/// every GIF it had shown, decoded, for as long as the tab was open.
+#[test]
+fn decoded_media_goes_when_no_node_names_it() {
+    let mut d = welcomed();
+    let (sound, picture) = ([21u8; 32], [22u8; 32]);
+    media_tree(&mut d, &[sound], &[picture]);
+    d.asset_ready(sound, wav_bytes(&[4_000i16; 800], 8_000));
+    d.finish_decoding();
+    d.asset_ready(picture, gif_bytes(8, 6, &[[200, 30, 30, 255], [30, 30, 200, 255]], 10));
+    d.finish_decoding();
+    let _ = d.paint(400, 300);
+    assert!(d.audio_playing() && d.video_playing(), "both loaded");
+    assert_eq!(d.media_bytes(), (800 * 4, 2 * 8 * 6 * 4), "eight hundred mono samples, two frames of 8 × 6");
+    // The server takes both nodes away.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::RemoveChild { parent: 1, index: 0, count: 2 }] }));
+    let _ = d.paint(400, 300);
+    assert_eq!(d.media_bytes(), (0, 0), "nothing names them, so nothing holds them");
+}
+
+/// Spec 10: the session's room for decoded media is shared, and a sound or
+/// a picture that would take the total past it is refused rather than
+/// decoded — each one fitting its own ceiling is not enough.
+#[test]
+fn decoded_media_past_the_sessions_room_is_refused() {
+    let mut d = welcomed();
+    // Room for one of each and no more: 800 samples is 3 200 bytes, two
+    // frames of 8 × 6 are 384.
+    d.set_media_budgets(4_000, 500);
+    let sounds = [[31u8; 32], [32u8; 32]];
+    let pictures = [[33u8; 32], [34u8; 32]];
+    media_tree(&mut d, &sounds, &pictures);
+    for h in sounds {
+        d.asset_ready(h, wav_bytes(&[4_000i16; 800], 8_000));
+        d.finish_decoding();
+    }
+    d.asset_ready(pictures[0], gif_bytes(8, 6, &[[200, 30, 30, 255], [30, 30, 200, 255]], 10));
+    d.finish_decoding();
+    d.asset_ready(pictures[1], gif_bytes(8, 6, &[[30, 200, 30, 255], [30, 30, 200, 255]], 10));
+    d.finish_decoding();
+    let _ = d.paint(400, 300);
+    assert_eq!(d.media_bytes(), (3_200, 384), "the second of each did not fit beside the first");
 }
 
 /// A resize holds the `Viewport` frame back for 50 ms so that dragging a
@@ -3879,6 +3957,7 @@ fn level_only_for_nodes_that_ask_and_it_falls_when_the_sound_stops() {
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
     // Half of full scale, two seconds of it.
     d.asset_ready(hash, wav_bytes(&[16_384i16; 16_000], 8_000));
+    d.finish_decoding();
     let t0 = Instant::now();
 
     // Nothing has been mixed yet, so the first reading is honestly zero.
@@ -3959,6 +4038,7 @@ fn level_and_time_update_share_one_clock() {
     ];
     d.handle_frame(Frame::Batch(Batch { seq: 2, ops }));
     d.asset_ready(hash, wav_bytes(&[16_384i16; 16_000], 8_000));
+    d.finish_decoding();
     let t0 = Instant::now();
     let mut buf = vec![0.0f32; 2 * 1024];
     d.fill_audio(&mut buf, 2, 48_000);

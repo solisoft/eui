@@ -1065,8 +1065,9 @@ Three events go back, and only to a node that holds a handler for them:
   written down here instead.
 
 A client MUST bound what a session may play: the reference client holds at
-most eight sources at once and refuses a ninth, and counts decoded audio
-against the session's asset quota. Playing a sound needs **no capability**:
+most eight sources at once and refuses a ninth, holds a decoded sound only
+while a node names it, and counts decoded audio against the session's room
+for sounds ([`10-budgets.md`](10-budgets.md), *Sound*). Playing a sound needs **no capability**:
 it is output, like drawing. The microphone is another matter and is a
 capability already ([`01-transport.md`](01-transport.md) §2.1).
 

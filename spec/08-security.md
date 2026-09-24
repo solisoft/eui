@@ -349,7 +349,13 @@ would be the session, every text on screen, written to disk — and no other
 process of the user can attach a debugger to it. What initialises itself
 lazily (the text engine's font loader starts a thread pool and asks for the
 core count) is warmed before the door closes, and the confinement is
-applied to every thread.
+applied to every thread. The two decode threads that take pictures, sounds
+and moving pictures off the paint (10, *Assets*) are among what is warmed:
+after the door closes a thread cannot be created, so they are started by
+the throwaway driver the worker builds first, and every decode runs on
+them, confined like the rest
+(`a_picture_is_decoded_in_the_confined_worker_and_lands_later` in
+`crates/eui-client/tests/worker.rs`).
 
 **The `scene` capability moves one thing across this line, and it is the
 largest thing on either side of it.** A shader is verified in the worker —

@@ -22,6 +22,24 @@ pub const MAX_ASSET_BYTES: usize = 16 * 1024 * 1024;
 /// Largest image edge decoded, in pixels.
 pub const MAX_IMAGE_EDGE: u32 = 4096;
 
+/// How long a fetch may take to connect, shake hands and send its request.
+///
+/// There was no limit at all: a server that accepted and then said nothing
+/// held a thread for ever, and the hash it held stayed "wanted", so it was
+/// never asked for again either. A timeout is a failure like any other, and
+/// a failure is tried again (`Driver::asset_failed`).
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long a fetch may go without a byte arriving. Idle rather than total:
+/// sixteen megabytes over a slow link take as long as they take, and what
+/// is being guarded against is a server that has stopped, not one that is
+/// slow.
+pub const READ_IDLE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The longest a response's head may be before the body starts.
+#[cfg(has_native_net)]
+const MAX_HEAD_BYTES: usize = 64 * 1024;
+
 /// Why a fetch or decode failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
@@ -42,6 +60,10 @@ pub enum AssetError {
     HashMismatch,
     /// The bytes are not a decodable image.
     Decode(String),
+    /// The server took longer than [`CONNECT_TIMEOUT`] to accept and shake
+    /// hands, or sent nothing for [`READ_IDLE`]. Separate from
+    /// [`Self::Connect`] only so the log says which; both are tried again.
+    Timeout(&'static str),
 }
 
 impl fmt::Display for AssetError {
@@ -54,6 +76,7 @@ impl fmt::Display for AssetError {
             Self::TooLarge => f.write_str("asset too large"),
             Self::HashMismatch => f.write_str("asset bytes do not match their hash"),
             Self::Decode(e) => write!(f, "decode: {e}"),
+            Self::Timeout(what) => write!(f, "timed out {what}"),
         }
     }
 }
@@ -142,7 +165,33 @@ pub struct Fetched {
 /// it from a worker thread.
 #[cfg(has_native_net)]
 pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
-    let bytes = get(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie)?;
+    fetch_within(origin, hash, cookie, MAX_ASSET_BYTES)
+}
+
+/// [`fetch`], abandoned the moment the body is known to be larger than
+/// `cap` — from its `Content-Length`, before a byte of it is read, or from
+/// the bytes, whichever says so first. 01 §2.2: `cap` is what is left of
+/// the session's asset budget, and a response larger than that MUST be
+/// abandoned mid-stream rather than read and then thrown away.
+#[cfg(has_native_net)]
+pub fn fetch_within(origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize) -> Result<Vec<u8>, AssetError> {
+    fetch_with(origin, hash, cookie, cap, READ_IDLE)
+}
+
+/// [`fetch_within`], giving up after `idle` without a byte rather than
+/// [`READ_IDLE`] — so a test of the timeout need not wait fifteen seconds.
+#[cfg(has_native_net)]
+pub fn fetch_with(origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Vec<u8>, AssetError> {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
+    fetch_on(&rt, origin, hash, cookie, cap, idle)
+}
+
+/// One asset fetch on a runtime the caller keeps: a fetch worker builds
+/// one and runs every fetch it takes on it, rather than a runtime each.
+#[cfg(has_native_net)]
+pub(crate) fn fetch_on(rt: &tokio::runtime::Runtime, origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Vec<u8>, AssetError> {
+    let cap = cap.min(MAX_ASSET_BYTES);
+    let bytes = rt.block_on(get_async(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie, cap, idle))?.body;
     if *blake3::hash(&bytes).as_bytes() != *hash {
         return Err(AssetError::HashMismatch);
     }
@@ -161,11 +210,11 @@ pub fn get(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Resu
 #[cfg(has_native_net)]
 pub fn get_full(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
-    rt.block_on(get_async(origin, path, accept, cookie))
+    rt.block_on(get_async(origin, path, accept, cookie, MAX_ASSET_BYTES, READ_IDLE))
 }
 
 #[cfg(has_native_net)]
-async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
+async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Fetched, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
@@ -176,43 +225,82 @@ async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>)
     let cookie = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
     let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\n{cookie}\r\n");
 
-    let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-    let mut raw = Vec::new();
+    let tcp =
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect((host, port))).await.map_err(|_| AssetError::Timeout("connecting"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
     if scheme == "https" {
         // The same roots and the same TLS 1.3 as the session socket: the
         // manifest, the assets and the session are one origin's, and they
         // cannot be trusted differently.
         let connector = tokio_rustls::TlsConnector::from(crate::transport::tls_config());
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| AssetError::Origin("bad host name".into()))?;
-        let mut tls = connector.connect(name, tcp).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        tls.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tls, &mut raw).await?;
+        let mut tls =
+            tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(name, tcp)).await.map_err(|_| AssetError::Timeout("in the TLS handshake"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
+        exchange(&mut tls, request.as_bytes(), cap, idle).await
     } else {
         let mut tcp = tcp;
-        tcp.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tcp, &mut raw).await?;
+        exchange(&mut tcp, request.as_bytes(), cap, idle).await
     }
-    parse_response(&raw)
 }
 
+/// Send the request and read the response: the head until its blank line,
+/// then exactly the body its `Content-Length` declares.
+///
+/// The head is read first so the length is known before a byte of the body
+/// is: a body longer than `cap` is abandoned there, unread (01 §2.2), and
+/// one that fits is read into a buffer reserved at its size once, rather
+/// than grown by doubling from nothing — which, for a sixteen-megabyte
+/// asset, was eleven copies and twice the memory at the last one.
 #[cfg(has_native_net)]
-async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> Result<(), AssetError> {
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        let n = s.read(&mut buf).await.map_err(|e| AssetError::Connect(e.to_string()))?;
+async fn exchange<S: AsyncReadExt + AsyncWriteExt + Unpin>(s: &mut S, request: &[u8], cap: usize, idle: std::time::Duration) -> Result<Fetched, AssetError> {
+    tokio::time::timeout(CONNECT_TIMEOUT, s.write_all(request)).await.map_err(|_| AssetError::Timeout("sending the request"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut head: Vec<u8> = Vec::with_capacity(4096);
+    let split = loop {
+        let n = read_some(s, &mut buf, idle).await?;
         if n == 0 {
-            return Ok(());
+            return Err(AssetError::Http("no header terminator".into()));
         }
-        if out.len().saturating_add(n) > MAX_ASSET_BYTES.saturating_add(4096) {
-            return Err(AssetError::TooLarge);
+        let from = head.len().saturating_sub(3);
+        head.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        if let Some(at) = head.get(from..).and_then(|tail| tail.windows(4).position(|w| w == b"\r\n\r\n")) {
+            break from + at;
         }
-        out.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        if head.len() > MAX_HEAD_BYTES {
+            return Err(AssetError::Http("the response head is too long".into()));
+        }
+    };
+    let (length, etag, content_type) = parse_head(head.get(..split).unwrap_or(&[]), cap)?;
+    let early = head.get(split.saturating_add(4)..).unwrap_or(&[]);
+    if early.len() > length {
+        return Err(AssetError::Http(format!("body is more than {length} bytes, header says {length}")));
     }
+    let mut body = Vec::with_capacity(length);
+    body.extend_from_slice(early);
+    while body.len() < length {
+        let n = read_some(s, &mut buf, idle).await?;
+        if n == 0 {
+            break;
+        }
+        if body.len().saturating_add(n) > length {
+            return Err(AssetError::Http(format!("body is more than {length} bytes, header says {length}")));
+        }
+        body.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+    }
+    if body.len() != length {
+        return Err(AssetError::Http(format!("body is {} bytes, header says {length}", body.len())));
+    }
+    Ok(Fetched { body, etag, content_type })
 }
 
-/// The smallest HTTP/1.1 response reader that is still strict: status 200,
-/// a `Content-Length`, exactly that many body bytes — and now the two
-/// headers a view fetch reads.
+/// One read, given up on after `idle` with nothing.
+#[cfg(has_native_net)]
+async fn read_some<S: AsyncReadExt + Unpin>(s: &mut S, buf: &mut [u8], idle: std::time::Duration) -> Result<usize, AssetError> {
+    tokio::time::timeout(idle, s.read(buf)).await.map_err(|_| AssetError::Timeout("waiting for the server"))?.map_err(|e| AssetError::Connect(e.to_string()))
+}
+
+/// The smallest HTTP/1.1 response-head reader that is still strict: status
+/// 200 and a `Content-Length` no larger than `cap` — and the two headers a
+/// view fetch reads. Returns the length, the `ETag` and the `Content-Type`.
 ///
 /// Chunked is still refused, and the endpoint is specified to send a length
 /// (01 §2.4) precisely so it never has to be: a server that computed the
@@ -220,9 +308,8 @@ async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> R
 /// this reader will not do is guess, because every guess here is a guess
 /// about where somebody else's bytes end.
 #[cfg(has_native_net)]
-fn parse_response(raw: &[u8]) -> Result<Fetched, AssetError> {
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| AssetError::Http("no header terminator".into()))?;
-    let head = std::str::from_utf8(raw.get(..split).unwrap_or(&[])).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
+fn parse_head(head: &[u8], cap: usize) -> Result<(usize, Option<String>, Option<String>), AssetError> {
+    let head = std::str::from_utf8(head).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
     let mut lines = head.split("\r\n");
     let status = lines.next().unwrap_or("");
     if !status.starts_with("HTTP/1.1 200") && !status.starts_with("HTTP/1.0 200") {
@@ -254,14 +341,10 @@ fn parse_response(raw: &[u8]) -> Result<Fetched, AssetError> {
         }
     }
     let length = length.ok_or_else(|| AssetError::Http("no content-length".into()))?;
-    if length > MAX_ASSET_BYTES {
+    if length > cap {
         return Err(AssetError::TooLarge);
     }
-    let body = raw.get(split.saturating_add(4)..).unwrap_or(&[]);
-    if body.len() != length {
-        return Err(AssetError::Http(format!("body is {} bytes, header says {length}", body.len())));
-    }
-    Ok(Fetched { body: body.to_vec(), etag, content_type })
+    Ok((length, etag, content_type))
 }
 
 // ------------------------------------------- everything below is portable
@@ -509,26 +592,110 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, AssetError> {
 /// The most failed hashes [`AssetStore`] remembers before it forgets them all.
 pub const MAX_FAILED: usize = 1024;
 
-/// What the client holds: raw bytes by hash, decoded images by hash, and
-/// the set of hashes it has asked for and not yet received.
-#[derive(Debug, Default)]
+/// Spec 10, *Assets*: bytes one session's asset store may hold — the
+/// fetched files it keeps and the pictures it has decoded, together.
+///
+/// Past it the store lets go of what the live tree no longer names, least
+/// recently used first. What the tree does name is never let go, so a page
+/// that shows more than this at once holds more than this; what it cannot
+/// do is *fetch* more, because a fetch is capped at what is left once the
+/// named assets are counted (01 §2.2), and the one that does not fit is
+/// abandoned mid-stream.
+pub const MAX_STORE_BYTES: usize = 128 * 1024 * 1024;
+
+/// A picture as the store keeps it: the size it was drawn at, which the
+/// layout measures an unsized `image` by (03 §1), and the pixels as the
+/// sheet will hold them — no larger than [`ATLAS_EDGE`] on a side.
+///
+/// The natural pixels are not kept. Nothing but the atlas ever read them,
+/// and the atlas only ever read the shrunk copy; a 4096 × 4096 photograph
+/// held whole beside it was 64 MiB kept for a 4 MiB upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// Natural width, in pixels.
+    pub width: u32,
+    /// Natural height, in pixels.
+    pub height: u32,
+    /// What goes into the sheet.
+    pub pixels: Image,
+}
+
+/// Everything a picture costs before it can be packed: the decode and the
+/// shrink. Run off the window's thread (see `decode.rs`), because on a
+/// photograph both are tens of milliseconds.
+pub fn prepare_image(bytes: &[u8]) -> Result<Decoded, AssetError> {
+    let img = decode_image(bytes)?;
+    let (width, height) = (img.width, img.height);
+    let pixels = fit_to_atlas(&img).unwrap_or(img);
+    Ok(Decoded { width, height, pixels })
+}
+
+/// Whether the file of a picture is worth keeping once it is decoded.
+///
+/// A PNG or a JPEG is only ever a still, so once its pixels are held its
+/// file is dead weight. A WebP may be a moving picture as well (03 §8),
+/// and a `video` node decodes it from the file — so that one is kept.
+fn keeps_file(bytes: &[u8]) -> bool {
+    !(bytes.starts_with(b"\x89PNG") || bytes.starts_with(&[0xff, 0xd8, 0xff]))
+}
+
+/// What the client holds: raw bytes by hash, decoded pictures by hash, and
+/// the set of hashes it has asked for and not yet received — all of it
+/// counted against a budget ([`MAX_STORE_BYTES`]).
+#[derive(Debug)]
 pub struct AssetStore {
     raw: HashMap<Hash, Arc<Vec<u8>>>,
     images: HashMap<Hash, Arc<Image>>,
+    /// Natural sizes of every picture ever decoded, kept after the pixels
+    /// are let go: a picture evicted and fetched again measures the same in
+    /// the meantime, so the page does not jump while it comes back.
+    sizes: HashMap<Hash, (u32, u32)>,
     failed: HashMap<Hash, String>,
     wanted: HashSet<Hash>,
     pending: Vec<Hash>,
+    /// Bytes held: every raw file plus every decoded picture's pixels.
+    held: usize,
+    budget: usize,
+    /// When each hash was last delivered or last found named by the tree,
+    /// on a counter rather than a clock: least recently used goes first.
+    used: HashMap<Hash, u64>,
+    clock: u64,
+}
+
+impl Default for AssetStore {
+    fn default() -> Self {
+        Self {
+            raw: HashMap::new(),
+            images: HashMap::new(),
+            sizes: HashMap::new(),
+            failed: HashMap::new(),
+            wanted: HashSet::new(),
+            pending: Vec::new(),
+            held: 0,
+            budget: MAX_STORE_BYTES,
+            used: HashMap::new(),
+            clock: 0,
+        }
+    }
 }
 
 impl AssetStore {
-    /// Raw bytes, if fetched.
+    /// Raw bytes, if fetched and still held. A PNG or a JPEG lets go of its
+    /// file once it is decoded; see [`Self::decoded`].
     pub fn raw(&self, hash: &Hash) -> Option<Arc<Vec<u8>>> {
         self.raw.get(hash).cloned()
     }
 
-    /// A decoded image, if fetched and decodable.
+    /// A decoded picture, as the sheet holds it — no larger than
+    /// [`ATLAS_EDGE`] on a side. Its natural size is [`Self::size`].
     pub fn image(&self, hash: &Hash) -> Option<Arc<Image>> {
         self.images.get(hash).cloned()
+    }
+
+    /// A picture's natural size, once it has been decoded — and still after
+    /// its pixels were let go.
+    pub fn size(&self, hash: &Hash) -> Option<(u32, u32)> {
+        self.sizes.get(hash).copied()
     }
 
     /// Why a hash could not be used, if it failed.
@@ -536,9 +703,10 @@ impl AssetStore {
         self.failed.get(hash).map(String::as_str)
     }
 
-    /// Note that `hash` is needed; queues a fetch the first time.
+    /// Note that `hash` is needed; queues a fetch the first time. A hash
+    /// whose bytes were let go is fetched again.
     pub fn want(&mut self, hash: Hash) {
-        if self.raw.contains_key(&hash) || self.failed.contains_key(&hash) {
+        if self.raw.contains_key(&hash) || self.images.contains_key(&hash) || self.failed.contains_key(&hash) {
             return;
         }
         if self.wanted.insert(hash) {
@@ -551,20 +719,60 @@ impl AssetStore {
         std::mem::take(&mut self.pending)
     }
 
-    /// Deliver fetched, already-verified bytes. Images are decoded now.
-    pub fn deliver(&mut self, hash: Hash, bytes: Vec<u8>) {
+    /// Forget that `hash` was asked for, so the next [`Self::want`] asks
+    /// again: a fetch that failed and is owed another try.
+    pub fn unwant(&mut self, hash: &Hash) {
+        self.wanted.remove(hash);
+    }
+
+    /// Hold fetched, already-verified bytes, undecoded. Returns them shared,
+    /// for whatever decodes them next.
+    pub fn hold(&mut self, hash: Hash, bytes: Vec<u8>) -> Arc<Vec<u8>> {
         self.wanted.remove(&hash);
-        if looks_like_image(&bytes) {
-            match decode_image(&bytes) {
-                Ok(img) => {
-                    self.images.insert(hash, Arc::new(img));
+        let bytes = Arc::new(bytes);
+        self.held = self.held.saturating_add(bytes.len());
+        if let Some(old) = self.raw.insert(hash, Arc::clone(&bytes)) {
+            self.held = self.held.saturating_sub(old.len());
+        }
+        self.stamp(hash);
+        bytes
+    }
+
+    /// A picture's decode, finished. The pixels are held; the file is let
+    /// go when nothing else could want it ([`keeps_file`]), and a picture
+    /// that would not decode is remembered as failed, file and all gone.
+    pub fn decoded(&mut self, hash: Hash, result: Result<Decoded, AssetError>) {
+        let drop_file = match result {
+            Ok(d) => {
+                self.sizes.insert(hash, (d.width, d.height));
+                self.held = self.held.saturating_add(d.pixels.rgba.len());
+                if let Some(old) = self.images.insert(hash, Arc::new(d.pixels)) {
+                    self.held = self.held.saturating_sub(old.rgba.len());
                 }
-                Err(e) => {
-                    self.failed.insert(hash, e.to_string());
-                }
+                self.stamp(hash);
+                self.raw.get(&hash).is_some_and(|b| !keeps_file(b))
+            }
+            Err(e) => {
+                self.failed.insert(hash, e.to_string());
+                true
+            }
+        };
+        if drop_file {
+            if let Some(old) = self.raw.remove(&hash) {
+                self.held = self.held.saturating_sub(old.len());
             }
         }
-        self.raw.insert(hash, Arc::new(bytes));
+    }
+
+    /// Deliver fetched, already-verified bytes and decode a picture now, on
+    /// this thread. The driver decodes off it ([`Self::hold`], then
+    /// [`Self::decoded`]); this is the whole of that for everyone else.
+    pub fn deliver(&mut self, hash: Hash, bytes: Vec<u8>) {
+        let bytes = self.hold(hash, bytes);
+        if looks_like_image(&bytes) {
+            let result = prepare_image(&bytes);
+            self.decoded(hash, result);
+        }
     }
 
     /// Record a fetch failure so the hash is not asked for again.
@@ -580,13 +788,86 @@ impl AssetStore {
         self.failed.insert(hash, why);
     }
 
+    /// Bytes held: files and decoded pictures.
+    pub fn held(&self) -> usize {
+        self.held
+    }
+
+    /// What the store may hold, [`MAX_STORE_BYTES`] unless a test lowered it.
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
+    /// Lower the budget, so a test can reach it with a few small pictures.
+    /// Never raises it past [`MAX_STORE_BYTES`].
+    #[doc(hidden)]
+    pub fn set_budget(&mut self, bytes: usize) {
+        self.budget = bytes.min(MAX_STORE_BYTES);
+    }
+
+    /// True when the store holds more than its budget.
+    pub fn over_budget(&self) -> bool {
+        self.held > self.budget
+    }
+
+    /// Bytes held for `hash`: its file, if kept, and its pixels, if decoded.
+    fn weight(&self, hash: &Hash) -> usize {
+        self.raw.get(hash).map_or(0, |b| b.len()).saturating_add(self.images.get(hash).map_or(0, |i| i.rgba.len()))
+    }
+
+    /// How large an asset may still be fetched, given what the tree names:
+    /// the budget less what `live` holds, since everything else can be let
+    /// go to make room. 01 §2.2's "remaining asset budget".
+    pub fn room(&self, live: &HashSet<Hash>) -> usize {
+        let pinned: usize = live.iter().map(|h| self.weight(h)).fold(0, usize::saturating_add);
+        self.budget.saturating_sub(pinned)
+    }
+
+    /// Let go of what `live` does not name, least recently used first,
+    /// until the store is within its budget. Returns how many assets went.
+    ///
+    /// What `live` names is marked used now, so a picture that was on the
+    /// page at the last pass outlives one that has not been since. The
+    /// size of a picture let go is kept ([`Self::size`]); a hash let go is
+    /// neither held nor failed, so the next [`Self::want`] fetches it again.
+    pub fn evict(&mut self, live: &HashSet<Hash>) -> usize {
+        for h in live {
+            if self.raw.contains_key(h) || self.images.contains_key(h) {
+                self.stamp(*h);
+            }
+        }
+        if !self.over_budget() {
+            return 0;
+        }
+        let mut idle: Vec<(u64, Hash)> = self.raw.keys().chain(self.images.keys()).filter(|h| !live.contains(*h)).map(|h| (self.used.get(h).copied().unwrap_or(0), *h)).collect();
+        idle.sort_unstable();
+        idle.dedup();
+        let mut gone = 0;
+        for (_, h) in idle {
+            if !self.over_budget() {
+                break;
+            }
+            self.held = self.held.saturating_sub(self.weight(&h));
+            self.raw.remove(&h);
+            self.images.remove(&h);
+            self.used.remove(&h);
+            gone += 1;
+        }
+        gone
+    }
+
+    fn stamp(&mut self, hash: Hash) {
+        self.clock = self.clock.saturating_add(1);
+        self.used.insert(hash, self.clock);
+    }
+
     /// Number of assets held.
     pub fn len(&self) -> usize {
-        self.raw.len()
+        self.raw.len() + self.images.keys().filter(|h| !self.raw.contains_key(*h)).count()
     }
 
     /// True when nothing is held.
     pub fn is_empty(&self) -> bool {
-        self.raw.is_empty()
+        self.raw.is_empty() && self.images.is_empty()
     }
 }

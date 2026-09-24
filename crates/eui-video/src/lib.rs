@@ -154,20 +154,28 @@ fn unreachable(frames: &[Frame]) -> &Frame {
 /// Decode a moving picture. `hint` is a file extension or MIME type when
 /// the caller has one; the bytes are sniffed either way.
 pub fn decode(bytes: &[u8], hint: Option<&str>) -> Result<Movie, VideoError> {
+    decode_within(bytes, hint, MAX_BYTES)
+}
+
+/// [`decode`], under a budget smaller than [`MAX_BYTES`]: what is left of
+/// the session's room for moving pictures once the ones already playing
+/// are counted. `max_bytes` above [`MAX_BYTES`] is [`MAX_BYTES`].
+pub fn decode_within(bytes: &[u8], hint: Option<&str>, max_bytes: usize) -> Result<Movie, VideoError> {
+    let max = max_bytes.min(MAX_BYTES);
     let hint = hint.map(|h| h.rsplit('/').next().unwrap_or(h).trim_start_matches('.').to_ascii_lowercase());
     let looks_webp = bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP");
     let looks_gif = bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a");
     match (looks_gif, looks_webp, hint.as_deref()) {
-        (true, _, _) | (_, _, Some("gif")) => decode_gif(bytes),
-        (_, true, _) | (_, _, Some("webp")) => decode_webp(bytes),
+        (true, _, _) | (_, _, Some("gif")) => decode_gif(bytes, max),
+        (_, true, _) | (_, _, Some("webp")) => decode_webp(bytes, max),
         _ => Err(VideoError::Unsupported("not a GIF or a WebP".into())),
     }
 }
 
 /// Add `n` bytes to the budget, or refuse.
-fn budget(used: &mut usize, n: usize) -> Result<(), VideoError> {
+fn budget(used: &mut usize, n: usize, max: usize) -> Result<(), VideoError> {
     *used = used.checked_add(n).ok_or(VideoError::TooLarge)?;
-    if *used > MAX_BYTES {
+    if *used > max {
         return Err(VideoError::TooLarge);
     }
     Ok(())
@@ -185,7 +193,7 @@ fn check_size(width: u32, height: u32) -> Result<usize, VideoError> {
 /// disposal method saying what to do with the last one before drawing the
 /// next. A decoder that ignores that shows garbage on half the GIFs in
 /// the world, so this one does not.
-fn decode_gif(bytes: &[u8]) -> Result<Movie, VideoError> {
+fn decode_gif(bytes: &[u8], max: usize) -> Result<Movie, VideoError> {
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     options.check_frame_consistency(true);
@@ -235,7 +243,7 @@ fn decode_gif(bytes: &[u8]) -> Result<Movie, VideoError> {
                 slot.copy_from_slice(px);
             }
         }
-        budget(&mut used, stride)?;
+        budget(&mut used, stride, max)?;
         // `delay` is in hundredths of a second, and zero means "as fast as
         // you can", which is not a thing this client does.
         let delay_ms = u32::from(frame.delay).saturating_mul(10).max(MIN_DELAY_MS);
@@ -267,7 +275,7 @@ fn decode_gif(bytes: &[u8]) -> Result<Movie, VideoError> {
 
 /// Animated WebP. The decoder composes the frames; a still WebP is a
 /// picture of one frame, which plays as a picture should.
-fn decode_webp(bytes: &[u8]) -> Result<Movie, VideoError> {
+fn decode_webp(bytes: &[u8], max: usize) -> Result<Movie, VideoError> {
     let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes)).map_err(|e| VideoError::Unsupported(e.to_string()))?;
     let (width, height) = decoder.dimensions();
     let stride = check_size(width, height)?;
@@ -279,7 +287,7 @@ fn decode_webp(bytes: &[u8]) -> Result<Movie, VideoError> {
     let mut used = 0usize;
     if decoder.is_animated() {
         for _ in 0..count {
-            budget(&mut used, stride)?;
+            budget(&mut used, stride, max)?;
             let mut rgba = vec![0u8; stride];
             match decoder.read_frame(&mut rgba) {
                 Ok(delay) => frames.push(Frame { rgba, delay_ms: delay.max(MIN_DELAY_MS) }),
@@ -292,7 +300,7 @@ fn decode_webp(bytes: &[u8]) -> Result<Movie, VideoError> {
             }
         }
     } else {
-        budget(&mut used, stride)?;
+        budget(&mut used, stride, max)?;
         let mut rgba = vec![0u8; stride];
         // A still picture may be RGB; the buffer size the decoder asks for
         // says which, and a still frame lasts as long as anyone waits.

@@ -3,7 +3,7 @@
 //! asked. Pure enough to be tested without a display or a network.
 
 use crate::time::{Duration, Instant};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use eui_audio::Control;
@@ -1010,6 +1010,20 @@ pub(crate) const MAX_PENDING_NOTES: usize = 16;
 /// a connection that lost a race against sixteen siblings gets another go.
 const ASSET_TRIES: u8 = 2;
 
+/// Spec 10, *Sound*: decoded samples one session holds at once, every
+/// sound together — two of the longest sounds there may be.
+///
+/// A sound is held only while a node names it (03 §7), so this is the
+/// ceiling on what the nodes of one tree can ask for at once, not on what
+/// a session asks for over its life. A sound that would take the total
+/// past it is refused the way a sound past its own ceiling is.
+pub const MAX_SOUND_BYTES: usize = 256 * 1024 * 1024;
+
+/// Spec 10, *Moving pictures*: decoded frames one session holds at once,
+/// every picture together — two of the largest pictures there may be.
+/// Held only while a `video` node names the picture, like a sound.
+pub const MAX_MOVIE_BYTES: usize = 192 * 1024 * 1024;
+
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
 /// How often a `spin` alone asks for a frame: 30 a second. A transition
@@ -1172,6 +1186,9 @@ pub struct Driver {
     atlas: Atlas,
     images: ImageAtlas,
     assets: AssetStore,
+    /// Pictures, sounds and moving pictures being decoded off this thread
+    /// (see `decode.rs`), collected at the next tick or paint.
+    decoder: crate::decode::Decoder,
     /// Scene assets checked and waiting for the window, which owns the GPU.
     scene_assets: Vec<(Hash, SceneAsset)>,
     size: Size,
@@ -1459,6 +1476,12 @@ pub struct Driver {
     /// is in its own. Decoding runs here, in the worker; the frame the
     /// clock makes due is written into the image atlas, so the painter
     /// draws a video exactly as it draws a picture.
+    ///
+    /// Every map keyed by hash here is held against the tree: a picture no
+    /// `video` node names any more is dropped with its frames, its size
+    /// and its upload mark (spec 10, *Moving pictures*). Only `players`
+    /// used to be; a feed of animated avatars kept every GIF it had ever
+    /// shown, whole and uncompressed, for as long as the tab was open.
     movies: HashMap<Hash, Option<Arc<eui_video::Movie>>>,
     players: HashMap<u32, (Hash, eui_video::Player)>,
     /// A frame is in the atlas for these hashes, so the next one is an
@@ -1509,7 +1532,15 @@ pub struct Driver {
     /// bytes behind them. The mixer lives here — in the worker — because
     /// decoding runs on bytes a server chose; the window owns the device.
     mixer: eui_audio::Mixer,
+    ///
+    /// Held only while an `audio` node names the hash. The mixer let go of
+    /// a source when its node went, and this map did not: a playlist kept
+    /// every track it had played, decoded, for the life of the tab.
     sounds: HashMap<Hash, Option<Arc<eui_audio::Sound>>>,
+    /// What all the sounds and all the pictures held may weigh together:
+    /// [`MAX_SOUND_BYTES`] and [`MAX_MOVIE_BYTES`], lowered only by tests.
+    sound_budget: usize,
+    movie_budget: usize,
     /// The `position` prop each video node last carried, for the same
     /// reason as the audio one.
     video_at: HashMap<u32, i64>,
@@ -1560,6 +1591,7 @@ impl Driver {
             atlas: Atlas::new(),
             images: ImageAtlas::new(),
             assets: AssetStore::default(),
+            decoder: crate::decode::Decoder::default(),
             scene_assets: Vec::new(),
             size: Size::new(w, h),
             scale,
@@ -1665,6 +1697,8 @@ impl Driver {
             viewport_due: None,
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
+            sound_budget: MAX_SOUND_BYTES,
+            movie_budget: MAX_MOVIE_BYTES,
             audio_at: HashMap::new(),
             audio_src: HashMap::new(),
             video_at: HashMap::new(),
@@ -2731,6 +2765,12 @@ impl Driver {
     /// other line in this file already expects it to come from.
     pub fn tick(&mut self, now: Instant) -> bool {
         self.now = now;
+        // A decode that landed is a frame owed, whatever the clocks say:
+        // the wake `next_frame_at` asked for on its account comes here.
+        if self.take_decoded() {
+            self.redraw = true;
+            return true;
+        }
         // The same set `next_frame_at` names, and it has to be: that one
         // decides when the loop wakes, this one decides whether the wake
         // becomes a frame. Adding the audio report to the first and not the
@@ -2764,7 +2804,14 @@ impl Driver {
         // It costs four wake-ups a second, and only while something plays:
         // `audio_due` is `None` the moment the mixer and the players are
         // empty, which is every window that is not playing anything.
-        self.due_at(self.now)
+        //
+        // A decode in flight asks to be woken to collect it, at
+        // [`crate::decode::DECODE_POLL`], and only while one is: `tick` makes
+        // that wake a frame when something landed and nothing when it did
+        // not, so this is not one of `due_at`'s — a poll that finds nothing
+        // must not ask for a paint.
+        let poll = self.decoder.busy().then(|| Instant::now() + crate::decode::DECODE_POLL);
+        [self.due_at(self.now), poll].into_iter().flatten().min()
     }
 
     /// Everything that owes this window a frame, soonest first.
@@ -3187,6 +3234,14 @@ impl Driver {
             let due: Vec<Hash> = self.asset_retry.iter().filter(|(_, at)| *at <= now).map(|(h, _)| *h).collect();
             self.asset_retry.retain(|(_, at)| *at > now);
             for h in due {
+                // Still marked wanted from the fetch that failed, which is
+                // what spaces the retries: the tree walk below cannot ask
+                // for it early. It has to be unmarked now, or `want` takes
+                // it for a fetch still in flight — which it did, so every
+                // retry scheduled was a no-op and a hash that lost one race
+                // sat in limbo for the rest of the session, neither held
+                // nor failed nor asked for.
+                self.assets.unwant(&h);
                 self.assets.want(h);
             }
         }
@@ -3288,13 +3343,12 @@ impl Driver {
                 if self.images.get(h).is_some() {
                     continue;
                 }
+                // Already the size the sheet takes: the store keeps a
+                // picture shrunk (`assets::Decoded`).
                 let Some(img) = self.assets.image(h) else {
                     continue;
                 };
-                match crate::assets::fit_to_atlas(&img) {
-                    Some(small) => self.images.insert(*h, small.width, small.height, &small.rgba),
-                    None => self.images.insert(*h, img.width, img.height, &img.rgba),
-                };
+                self.images.insert(*h, img.width, img.height, &img.rgba);
             }
             if hashes.iter().all(|h| self.images.get(h).is_some()) {
                 break;
@@ -3333,36 +3387,146 @@ impl Driver {
                 Err(e) => self.assets.fail(hash, e.to_string()),
             }
         }
-        let t0 = crate::time::Instant::now();
-        let n = bytes.len();
-        self.assets.deliver(hash, bytes);
-        let decoded = t0.elapsed();
+        let bytes = self.assets.hold(hash, bytes);
+        // A picture is decoded off this thread and lands at the next tick
+        // or paint ([`Self::take_decoded`]); a sound or a moving picture is
+        // handed over the first time a node asks for it, from the sync.
+        if crate::assets::looks_like_image(&bytes) {
+            self.decoder.submit(hash, Arc::clone(&bytes), crate::decode::Work::Image);
+        }
         self.load_font(hash);
         // It may be a sound or a picture a node is waiting for.
         self.audio_dirty = true;
         self.video_dirty = true;
-        if let Some(img) = self.assets.image(&hash) {
-            // Shrunk first when it is bigger than the sheet: the atlas
-            // refuses what will not fit and remembers the refusal, so a
-            // picture handed over whole would be drawn as nothing, for
-            // ever, in silence.
-            let t1 = crate::time::Instant::now();
-            let (w, h) = (img.width, img.height);
-            match crate::assets::fit_to_atlas(&img) {
-                Some(small) => self.images.insert(hash, small.width, small.height, &small.rgba),
-                None => self.images.insert(hash, img.width, img.height, &img.rgba),
-            };
-            // Where the time goes on a picture, in the three pieces it is
-            // made of. Silent unless `EUI_TRACE=1`.
-            let packed = t1.elapsed();
-            trace(|| format!("asset {} {n} bytes -> {w}x{h}: decoded in {} ms, shrunk and packed in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), decoded.as_millis(), packed.as_millis()));
-        }
-        self.repack = true;
-        // An image's intrinsic size just changed under nodes nothing marked
-        // dirty: the memoised measures cannot be trusted.
-        self.layout.invalidate_all();
-        self.paint_cache.clear();
+        self.fit_store();
         self.invalidate();
+    }
+
+    /// Collect what the decode threads finished and put it where it goes:
+    /// a picture into the store and the sheet, a sound beside the mixer, a
+    /// moving picture beside its players. The nodes that name what landed
+    /// are marked for layout — only those: a picture that arrives changes
+    /// the size of the nodes that show it, and nothing else measures
+    /// differently for it. Returns whether anything landed.
+    ///
+    /// It used to be `invalidate_all` and a cleared paint cache, for every
+    /// asset and every moving picture: a page of thumbnails re-measured
+    /// every node on the page once per thumbnail.
+    fn take_decoded(&mut self) -> bool {
+        let done = self.decoder.take();
+        self.land(done)
+    }
+
+    /// Wait for every decode in flight and put what it made where it goes.
+    ///
+    /// For what has no clock to wait on: a test that hands a picture over and
+    /// looks at the next frame, and the off-screen snapshot, which paints
+    /// once and must paint what it was given. A window never calls this —
+    /// it is woken when a decode lands ([`Self::next_frame_at`]).
+    ///
+    /// The sounds and moving pictures the tree names are handed over first,
+    /// as the next paint's sync would, so what this waits for is everything
+    /// the tree is waiting for.
+    pub fn finish_decoding(&mut self) {
+        self.sync_audio();
+        self.sync_video();
+        let done = self.decoder.wait(Duration::from_secs(30));
+        self.land(done);
+    }
+
+    fn land(&mut self, done: Vec<(Hash, crate::decode::Done)>) -> bool {
+        use crate::decode::Done;
+        if done.is_empty() {
+            return false;
+        }
+        for (hash, what) in done {
+            let short = crate::assets::hex(&hash);
+            let short = short.get(..8).unwrap_or("");
+            match what {
+                Done::Image(result) => {
+                    self.assets.decoded(hash, result);
+                    if let Some(img) = self.assets.image(&hash) {
+                        // Shrunk already when it was bigger than the sheet:
+                        // the atlas refuses what will not fit and remembers
+                        // the refusal, so a picture handed over whole would
+                        // be drawn as nothing, for ever, in silence.
+                        self.images.insert(hash, img.width, img.height, &img.rgba);
+                        trace(|| format!("asset {short} decoded, {}x{}", img.width, img.height));
+                    }
+                    self.repack = true;
+                    self.fit_store();
+                    // It has a size now, and the nodes showing it change shape.
+                    self.dirty_naming(&hash);
+                }
+                Done::Sound(result) => {
+                    // Checked again on arrival: another sound may have
+                    // landed while this one was decoding.
+                    let held: usize = self.sounds.values().flatten().map(|s| s.bytes()).sum();
+                    let sound = match result {
+                        Ok(s) if held.saturating_add(s.bytes()) <= self.sound_budget => {
+                            trace(|| format!("audio: {short} decoded, {} ms, {} kB", s.duration_ms(), s.bytes() / 1024));
+                            Some(Arc::new(s))
+                        }
+                        Ok(_) => {
+                            eprintln!("eui: audio {short}: past the session's room for sounds");
+                            None
+                        }
+                        Err(e) => {
+                            eprintln!("eui: audio {short}: {e}");
+                            None
+                        }
+                    };
+                    self.sounds.insert(hash, sound);
+                    self.audio_dirty = true;
+                }
+                Done::Movie(result) => {
+                    let held: usize = self.movies.values().flatten().map(|m| m.bytes()).sum();
+                    let movie = match result {
+                        Ok(m) if held.saturating_add(m.bytes()) <= self.movie_budget => {
+                            trace(|| format!("video: {short} decoded, {}×{}, {} frames, {} ms, {} kB", m.width(), m.height(), m.frames().len(), m.duration_ms(), m.bytes() / 1024));
+                            self.video_sizes.insert(hash, (m.width() as f32, m.height() as f32));
+                            Some(Arc::new(m))
+                        }
+                        Ok(_) => {
+                            eprintln!("eui: video {short}: past the session's room for moving pictures");
+                            None
+                        }
+                        Err(e) => {
+                            eprintln!("eui: video {short}: {e}");
+                            None
+                        }
+                    };
+                    self.movies.insert(hash, movie);
+                    self.video_dirty = true;
+                    self.dirty_naming(&hash);
+                }
+            }
+        }
+        self.touched = true;
+        self.invalidate();
+        true
+    }
+
+    /// Mark every node that names `hash` as changed, so the layout measures
+    /// it again — and, through the marks on its ancestors, whatever it
+    /// pushes around — while every other node keeps its memoised measure.
+    ///
+    /// Rewriting the prop with the value it already holds is the tree's one
+    /// public way to say "this node changed": nothing the node carries is
+    /// different, but what its value *means* — a picture's size — is.
+    fn dirty_naming(&mut self, hash: &Hash) {
+        let Some(root) = self.session.root() else { return };
+        let naming: Vec<(NodeIx, u32)> = self
+            .session
+            .preorder(root)
+            .filter_map(|ix| {
+                let n = self.session.node(ix)?;
+                n.props.iter().find(|(_, v)| matches!(v, Value::Asset(h) if h == hash)).map(|(a, _)| (ix, *a))
+            })
+            .collect();
+        for (ix, atom) in naming {
+            let _ = self.session.set_prop_local(ix, atom, Value::Asset(*hash));
+        }
     }
 
     /// If this hash is a face some role is waiting on, read it and bind the
@@ -3392,18 +3556,71 @@ impl Driver {
         }
         match self.text.add_font(bytes as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>) {
             // `bind_role` drops what the engine shaped under the old
-            // binding; `asset_ready` relays out and clears the paint cache
-            // for every asset, this one included, so the page is measured
-            // and painted again in the face that just arrived. The glyph
+            // binding; below, the layout and the paint cache are dropped,
+            // so the page is measured and painted again in the face that
+            // just arrived. The glyph
             // atlas needs no flush: a `GlyphKey` carries the face's own id,
             // and a face just loaded has one nothing else holds.
             Some(family) => {
                 for role in roles {
                     self.text.bind_role(role, &family);
                 }
+                // Every text in the role measures differently now, and
+                // nothing marked it: the one case where every memoised
+                // measure is suspect.
+                self.layout.invalidate_all();
+                self.paint_cache.clear();
             }
             None => self.assets.fail(hash, "font face could not be read".to_owned()),
         }
+    }
+
+    /// Every hash the session names right now: each node's asset props —
+    /// pictures, sounds, moving pictures, scene meshes and modules — and
+    /// the faces of every font role. What the store must not let go of.
+    ///
+    /// A chunk defined by hash is not in it: a chunk is verified once and
+    /// kept verified, so its file is dead weight afterwards, and one let go
+    /// before it was ever run is asked for again by the handler that runs it.
+    fn live_assets(&self) -> HashSet<Hash> {
+        let mut live: HashSet<Hash> = self.session.fonts().flat_map(|(_, faces)| faces.iter().copied()).collect();
+        if let Some(root) = self.session.root() {
+            for n in self.session.preorder(root).filter_map(|ix| self.session.node(ix)) {
+                live.extend(n.props.iter().filter_map(|(_, v)| match v {
+                    Value::Asset(h) => Some(*h),
+                    _ => None,
+                }));
+            }
+        }
+        live
+    }
+
+    /// Spec 10, *Assets*: bring the store back within its budget, if it is
+    /// past it, by letting go of what the tree does not name. The walk only
+    /// happens when it is over, which is never on a page that fits.
+    fn fit_store(&mut self) {
+        if !self.assets.over_budget() {
+            return;
+        }
+        let live = self.live_assets();
+        let gone = self.assets.evict(&live);
+        trace(|| format!("assets: {gone} let go, {} kB held of {} kB", self.assets.held() / 1024, self.assets.budget() / 1024));
+    }
+
+    /// 01 §2.2's "remaining asset budget": how large an asset the next
+    /// fetch may bring back before it is abandoned mid-stream. Everything
+    /// the tree does not name can be let go to make room, so it is the
+    /// budget less what the tree names. A walk of the tree — asked for only
+    /// when there is something to fetch.
+    pub fn asset_room(&self) -> usize {
+        self.assets.room(&self.live_assets()).min(crate::assets::MAX_ASSET_BYTES)
+    }
+
+    /// Lower the asset store's budget (spec 10, *Assets*), so a test can
+    /// reach it with a few small pictures.
+    #[doc(hidden)]
+    pub fn set_asset_budget(&mut self, bytes: usize) {
+        self.assets.set_budget(bytes);
     }
 
     /// The scene assets checked since the last call, for the window to
@@ -3417,11 +3634,13 @@ impl Driver {
     ///
     /// A failure used to be final: `want` skips anything in the failed map,
     /// so one bad fetch meant that picture was gone for the rest of the
-    /// session. Every asset is its own thread and its own request (see
-    /// `transport::request_asset`), so a page that mounts seventeen
-    /// pictures opens seventeen connections at once — against a server
-    /// with one worker, some of them lose, and the holes they leave are
-    /// permanent and different on every load.
+    /// session. Every asset used to be its own thread and its own request,
+    /// so a page that mounts seventeen pictures opened seventeen
+    /// connections at once — against a server with one worker, some of them
+    /// lost, and the holes they left were permanent and different on every
+    /// load. The fetches go through a pool of four now
+    /// (`transport::FETCHES_PER_ORIGIN`), and a server that stops talking
+    /// times out (`assets::READ_IDLE`) — a failure like the others.
     ///
     /// Two more tries, spaced, before it is final. A genuinely broken
     /// asset — the wrong hash, too large, not an image — fails the same
@@ -7545,6 +7764,10 @@ impl Driver {
         self.mixer = eui_audio::Mixer::new(48_000);
         self.audio_level.clear();
         self.players.clear();
+        // What they were playing goes with them: nothing names it now.
+        self.sounds.clear();
+        self.movies.clear();
+        self.framed.clear();
         self.wakes.clear();
         self.locators.clear();
         self.fix = None;
@@ -7638,6 +7861,9 @@ impl Driver {
         // tree — the hand is not the tree — so without this the view would sit
         // still for exactly as long as the pointer did.
         let dragging = self.pointer.drag.is_some_and(|d| d.grabbed) || self.touch.hold.is_some();
+        // What finished decoding goes in first: it touches the tree, so the
+        // list below is a new one.
+        self.take_decoded();
         if !self.touched && !dragging {
             if let Some(c) = &self.cached {
                 if c.until.map_or(true, |u| self.now < u) {
@@ -7924,7 +8150,14 @@ impl Driver {
         // for on its account -- that would be a wake-up a playing tab did
         // not have before.
         let report_due = (!self.mixer.is_empty() || !self.players.is_empty()).then(|| self.audio_reported.map_or(now, |t| t + Duration::from_millis(250)));
-        let until = others.into_iter().flatten().chain(report_due).chain(motion_end).min();
+        // A decode in flight reaches the driver on its own, not through a
+        // request, so nothing would end the repeat when it lands: the list
+        // holds only until the next time the driver looks for it. Without
+        // this a worker's picture, handed over while the page was still,
+        // was never collected — every paint after it was the last list
+        // again, answered by the window without asking.
+        let decode_due = self.decoder.busy().then(|| now + crate::decode::DECODE_POLL);
+        let until = others.into_iter().flatten().chain(report_due).chain(motion_end).chain(decode_due).min();
         let cadence = if !self.anims.is_empty() || moving || self.scroll_anim.is_some() { Some(Duration::from_millis(16)) } else { list.wants_frame.then_some(SPIN_FRAME) };
         list.gpu_only = !cpu_owed;
         list.repeat_until_ms = until.map_or(u32::MAX, |u| u32::try_from(u.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX));
@@ -7945,6 +8178,9 @@ impl Driver {
         self.video_dirty = false;
         if self.session.root().is_none() {
             self.players.clear();
+            self.movies.clear();
+            self.framed.clear();
+            self.video_sizes.clear();
             return;
         }
         let known = *self.session.atoms();
@@ -7975,6 +8211,14 @@ impl Driver {
             ));
         }
         self.players.retain(|id, _| live.contains(id));
+        // What no node names any more goes: the frames, the size the layout
+        // measured it by, and the note that a frame of it is in the sheet.
+        // A picture a node still names stays, decoded or refused, so a tree
+        // that keeps naming it does not decode it every time it changes.
+        let named: HashSet<Hash> = work.iter().map(|w| w.1).collect();
+        self.movies.retain(|h, _| named.contains(h));
+        self.video_sizes.retain(|h, _| named.contains(h));
+        self.framed.retain(|h, _| named.contains(h));
         for (id, hash, playing, looping, position) in work {
             let Some(movie) = self.movie(&hash) else {
                 continue;
@@ -7997,41 +8241,27 @@ impl Driver {
         self.video_at.retain(|id, _| self.players.contains_key(id));
     }
 
-    /// The decoded picture for a hash, decoding it the first time and
-    /// remembering a failure so a tree that keeps naming it does not
-    /// re-decode it every frame.
+    /// The decoded picture for a hash, if it has been: the first call hands
+    /// it to be decoded and returns `None`. A failure is remembered so a tree
+    /// that keeps naming it does not re-decode it every frame.
     fn movie(&mut self, hash: &Hash) -> Option<Arc<eui_video::Movie>> {
         if let Some(known) = self.movies.get(hash) {
             return known.clone();
         }
-        let bytes = self.assets.raw(hash)?;
-        let decoded = match eui_video::decode(&bytes, None) {
-            Ok(movie) => {
-                trace(|| {
-                    format!(
-                        "video: {} decoded, {}×{}, {} frames, {} ms, {} kB",
-                        crate::assets::hex(hash),
-                        movie.width(),
-                        movie.height(),
-                        movie.frames().len(),
-                        movie.duration_ms(),
-                        movie.bytes() / 1024
-                    )
-                });
-                self.video_sizes.insert(*hash, (movie.width() as f32, movie.height() as f32));
-                Some(Arc::new(movie))
-            }
-            Err(e) => {
-                eprintln!("eui: video {}: {e}", crate::assets::hex(hash));
-                None
-            }
-        };
-        self.movies.insert(*hash, decoded.clone());
-        // A picture that just arrived changes what the layout measures.
-        self.layout.invalidate_all();
-        self.paint_cache.clear();
-        self.invalidate();
-        decoded
+        // What the pictures already held leave of the session's room. A
+        // picture refused for want of it is remembered as refused while a
+        // node names it, like one that will not decode; the next tree that
+        // names it after it was let go tries again.
+        let held: usize = self.movies.values().flatten().map(|m| m.bytes()).sum();
+        let work = crate::decode::Work::Movie { max: self.movie_budget.saturating_sub(held) };
+        if !self.decoder.decoding(hash, work) {
+            let bytes = self.assets.raw(hash)?;
+            // Off this thread: a GIF is every frame composed, and this is
+            // called from the paint. It lands in `take_decoded`, which marks
+            // the node that names it and syncs the players again.
+            self.decoder.submit(*hash, bytes, work);
+        }
+        None
     }
 
     /// Spec 03 §8: move every player to `now`, put the frame each one
@@ -8122,6 +8352,7 @@ impl Driver {
             self.mixer.retain(&[]);
             self.audio_at.clear();
             self.audio_src.clear();
+            self.sounds.clear();
             return;
         }
         let known = *self.session.atoms();
@@ -8159,6 +8390,11 @@ impl Driver {
         self.audio_at.retain(|id, _| live.contains(id));
         self.audio_src.retain(|id, _| live.contains(id));
         self.audio_level.retain(|id, _| live.contains(id));
+        // A decoded sound lives as long as a node names it. The mixer has
+        // already let go of the sources whose nodes went; this lets go of
+        // the samples behind them, which were most of the memory.
+        let named: HashSet<Hash> = work.iter().map(|w| w.1).collect();
+        self.sounds.retain(|h, _| named.contains(h));
         for (id, hash, control, position) in work {
             // Load when the node is new to the mixer, and again when it is
             // pointed at a different asset: same node, another sound.
@@ -8189,28 +8425,24 @@ impl Driver {
         }
     }
 
-    /// The decoded sound for a hash, decoding it the first time. A sound
-    /// that will not decode is remembered as such, so a tree that keeps
-    /// naming it does not re-decode it every frame.
+    /// The decoded sound for a hash, if it has been: the first call hands it
+    /// to be decoded and returns `None`. A sound that will not decode is
+    /// remembered as such, so a tree that keeps naming it does not re-decode
+    /// it every frame.
     fn sound(&mut self, hash: &Hash) -> Option<Arc<eui_audio::Sound>> {
         if let Some(known) = self.sounds.get(hash) {
             return known.clone();
         }
-        let bytes = self.assets.raw(hash)?;
-        let decoded = match eui_audio::decode(&bytes, None) {
-            Ok(sound) => {
-                trace(|| format!("audio: {} decoded, {} ms, {} kB", crate::assets::hex(hash), sound.duration_ms(), sound.bytes() / 1024));
-                Some(Arc::new(sound))
-            }
-            Err(e) => {
-                eprintln!("eui: audio {}: {e}", crate::assets::hex(hash));
-                None
-            }
-        };
-        self.sounds.insert(*hash, decoded.clone());
-        // Bytes the decoder produced count against the session, like an
-        // image's: a sound that will not decode costs nothing but its file.
-        decoded
+        let held: usize = self.sounds.values().flatten().map(|s| s.bytes()).sum();
+        let work = crate::decode::Work::Sound { max: self.sound_budget.saturating_sub(held) };
+        if !self.decoder.decoding(hash, work) {
+            let bytes = self.assets.raw(hash)?;
+            // Off this thread, and out from under the lock the audio
+            // callback takes: a sound playing while another decodes keeps
+            // playing. It lands in `take_decoded`, which syncs the mixer.
+            self.decoder.submit(*hash, bytes, work);
+        }
+        None
     }
 
     /// Mix the sounds that are playing into `out`, `channels` samples a
@@ -8230,6 +8462,21 @@ impl Driver {
             frames.extend(self.emit(ix, EventKind::Ended, Value::Null));
         }
         frames
+    }
+
+    /// Bytes of decoded sound and of decoded moving pictures this session
+    /// holds, in that order: what spec 10's two session ceilings are
+    /// measured against.
+    pub fn media_bytes(&self) -> (usize, usize) {
+        (self.sounds.values().flatten().map(|s| s.bytes()).sum(), self.movies.values().flatten().map(|m| m.bytes()).sum())
+    }
+
+    /// Lower the two session ceilings on decoded media, so a test can reach
+    /// them with a sound of a few hundred bytes rather than 256 MiB of one.
+    #[doc(hidden)]
+    pub fn set_media_budgets(&mut self, sound: usize, movie: usize) {
+        self.sound_budget = sound.min(MAX_SOUND_BYTES);
+        self.movie_budget = movie.min(MAX_MOVIE_BYTES);
     }
 
     /// True while any sound is playing: the window keeps its device open
@@ -8836,8 +9083,8 @@ impl TextMeasurer for Measurer<'_> {
     }
     fn asset_size(&mut self, hash: &[u8; 32]) -> Option<(f32, f32)> {
         self.assets
-            .image(hash)
-            .map(|i| (i.width as f32, i.height as f32))
+            .size(hash)
+            .map(|(w, h)| (w as f32, h as f32))
             // A video is measured by its frame, which no image store holds.
             .or_else(|| self.videos.get(hash).copied())
     }

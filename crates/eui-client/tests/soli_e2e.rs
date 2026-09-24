@@ -181,7 +181,10 @@ fn pump(driver: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receive
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    driver.asset_ready(hash, bytes);
+                    driver.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => driver.asset_failed(hash, why),
             }
         }
@@ -325,7 +328,10 @@ fn settle(d: &mut Driver, conn: &eui_client::Connection, wake: &mpsc::Receiver<(
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
             }
         }
@@ -376,6 +382,7 @@ fn todo_toggles_by_prop_and_keeps_keyed_rows() {
     assert!(bytes.starts_with(b"\x89PNG"));
     assert_eq!(bytes.len(), 164, "the avatar file, byte for byte");
     d.asset_ready(hash, bytes);
+    d.finish_decoding();
     let list = d.paint(800, 600);
     assert_eq!(list.quads.iter().filter(|q| q.params[2] as u32 == eui_render::TEXTURED_RGBA).count(), 1);
     let header = d.session().children(root(&d))[0];
@@ -1196,6 +1203,7 @@ fn the_tracker_types_a_note_and_plays_what_it_typed() {
                     // kept playing it would look exactly like a working one.
                     assert!(bytes.len() > 200_000, "the mix, not the chime: {} bytes", bytes.len());
                     d.asset_ready(hash, bytes);
+                    d.finish_decoding();
                 }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
             }
@@ -1303,7 +1311,10 @@ fn the_player_plays_a_file_from_the_machine_and_the_bar_follows_it() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
             }
         }
@@ -1896,7 +1907,10 @@ fn the_gallerys_chime_is_fetched_played_and_reports_its_end() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
             }
         }
@@ -1970,7 +1984,10 @@ fn the_gallerys_animation_is_decoded_sized_and_advances_on_the_clock() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(_, Err(why)) => panic!("asset: {why}"),
             }
         }
@@ -2106,7 +2123,10 @@ fn a_feed_video_waits_to_be_asked_and_then_reports_where_it_is() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(_, Err(why)) => panic!("asset: {why}"),
             }
         }
@@ -2199,7 +2219,10 @@ fn a_view_that_cannot_be_encoded_ends_the_session_and_says_why() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
             }
         }
@@ -2243,7 +2266,10 @@ fn a_node_that_asks_to_be_woken_is_woken_without_anyone_doing_anything() {
                     }
                 }
                 Incoming::Closed(e) => panic!("{e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => panic!("asset {hash:?}: {why}"),
             }
         }
@@ -2709,7 +2735,10 @@ fn writing_a_line_does_not_redraw_the_room() {
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
             }
         }
@@ -2788,7 +2817,10 @@ fn a_line_reaches_the_other_window_without_it_asking() {
                     let _ = reader.handle_frame(frame);
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => reader.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    reader.asset_ready(hash, bytes);
+                    reader.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => reader.asset_failed(hash, why),
             }
         }
@@ -2953,7 +2985,10 @@ fn a_tag_and_a_fix_reach_the_room_they_were_asked_for() {
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => d.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    d.asset_ready(hash, bytes);
+                    d.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => d.asset_failed(hash, why),
             }
         }

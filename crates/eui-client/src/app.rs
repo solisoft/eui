@@ -1653,9 +1653,12 @@ impl Tab {
         // Only when there is something new to ask about (`owes_asking`).
         let ask = arrived || islands_spoke || std::mem::take(&mut self.owes_asking);
         if ask {
-            for hash in self.backend.pending_assets() {
+            // Each fetch is capped at what is left of the session's asset
+            // budget (01 §2.2), and abandoned mid-stream past it.
+            let (hashes, room) = self.backend.pending_assets();
+            for hash in hashes {
                 if let Some(fetch) = &self.fetch {
-                    fetch.request_asset(hash);
+                    fetch.request_asset_within(hash, room);
                 }
             }
         }

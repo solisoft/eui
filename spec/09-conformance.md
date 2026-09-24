@@ -67,6 +67,39 @@ found to be two rules that contradicted each other.
    kind wrongly dialling opens a session when a window is dragged, and one
    wrongly not dialling drops a click into nothing.
 
+### 1.2 Assets — `crates/eui-client/tests/assets.rs`
+
+01 §2.2's budget, and 10's number for it.
+
+1. **A response past the room left is abandoned on its declared length.**
+   `a_fetch_past_the_room_left_is_abandoned`: one byte over the room is
+   `TooLarge`, exactly the room is the body.
+2. **A still is held once, and everything held is counted.**
+   `the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`: a PNG's
+   file goes when its pixels are held, a WebP's stays, and `held` is the sum.
+3. **Past the budget, what nothing names goes, oldest first; what is named
+   stays.** `the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
+   including that the natural size outlives the pixels and that a hash let
+   go is fetched again when it is named again;
+   `the_driver_lets_go_of_a_picture_the_page_stopped_showing` is the same
+   through the driver, with the room measured against the named picture.
+4. **A failed fetch is tried again.** `a_failed_fetch_is_asked_for_again`:
+   the retry is not due at once, is due after its wait, and asks.
+5. **A silent server is given up on.** `a_server_that_stops_talking_is_given_up_on`:
+   a server that accepts and says nothing is a `Timeout` on the idle limit.
+6. **A page of pictures is a few connections.**
+   `a_page_of_pictures_is_fetched_by_a_few_workers`: sixteen fetches at
+   once are all answered, with never more than `FETCHES_PER_ORIGIN`
+   connections open to the origin.
+7. **A picture is decoded off the thread that paints.**
+   `a_picture_is_decoded_off_the_painting_thread`: handed over, it is not
+   held yet; the driver asks to be woken while it is in flight; it lands on
+   a tick; the words beside it are not measured again; and the driver is at
+   rest once it has landed. `crates/eui-client/tests/worker.rs`'s
+   `a_picture_is_decoded_in_the_confined_worker_and_lands_later` is the
+   same across the process boundary, where the decode threads run under
+   seccomp.
+
 ## 2. Wire format — `crates/eui-proto/tests`
 
 | File | Pins |
@@ -224,7 +257,16 @@ Sound reports on one clock and says nothing about the machine: `level` and
 not moved sends nothing and a sound that stopped sends one last zero. The
 property that carries 08 §8 is pinned a layer down, in
 `crates/eui-audio/tests/audio.rs` — the reported peak does not change when
-the viewer's master gain does, including when it is zero.
+the viewer's master gain does, including when it is zero. So is 10's
+ceiling on one decoded sound: a sound one sample past the budget it was
+decoded under is refused, and a caller cannot raise the budget past
+`MAX_BYTES` (`a_sound_past_its_decoded_budget_is_refused`); the same
+for a moving picture in `crates/eui-video/tests/video.rs`
+(`a_picture_is_refused_past_the_room_it_was_given`). In `driver.rs`, the
+session's side of both: a decoded sound and a decoded picture are gone the
+frame no node names them (`decoded_media_goes_when_no_node_names_it`), and
+the second of each is refused when only one fits the room the session has
+left (`decoded_media_past_the_sessions_room_is_refused`).
 
 03 §3.5's address is pinned in the same file, and the three conditions are
 pinned apart: a tree that merely arrives opens nothing; an activation with

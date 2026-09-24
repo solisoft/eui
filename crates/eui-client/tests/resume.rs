@@ -109,7 +109,10 @@ fn pump(driver: &mut Driver, conn: &Connection, wake: &mpsc::Receiver<()>, until
                     }
                 }
                 Incoming::Closed(e) => panic!("connection closed: {e}"),
-                Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                Incoming::Asset(hash, Ok(bytes)) => {
+                    driver.asset_ready(hash, bytes);
+                    driver.finish_decoding();
+                }
                 Incoming::Asset(hash, Err(why)) => driver.asset_failed(hash, why),
             }
         }
