@@ -1775,8 +1775,13 @@ fn a_hit_during_a_glide_finds_the_moved_row() {
     let shown = 100.0 - dy; // the offset on screen
     assert!(shown > 11.0 && shown < 100.0, "part way, and past the first row: {shown}");
     // Which is neither where it started (row 0 under the pointer) nor
-    // where it lands (row 5): the hit follows what is drawn.
-    let expected = 10 + ((11.0 + shown) / 22.0).floor() as u32;
+    // where it lands (row 4): the hit follows what is drawn. A row is one
+    // line of body text, so its height is the scale's, not a number written
+    // here: this said 22 until the text scale became Tailwind's 16/24, and
+    // went on passing wherever the glide happened to stop on a row the two
+    // heights agree about.
+    let row = eui_theme::scale::TEXT[2].1;
+    let expected = 10 + ((11.0 + shown) / row).floor() as u32;
     assert_eq!(d.hovered().map(|ix| d.session().node(ix).unwrap().id), Some(expected), "the row drawn under the pointer, {shown} px in");
 }
 
