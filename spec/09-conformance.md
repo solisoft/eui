@@ -99,6 +99,11 @@ found to be two rules that contradicted each other.
    `a_picture_is_decoded_in_the_confined_worker_and_lands_later` is the
    same across the process boundary, where the decode threads run under
    seccomp.
+8. **The worker closes its door on threads that are running.**
+   `crates/eui-client/tests/worker.rs`'s
+   `every_thread_has_started_before_the_sandbox_closes`: 128 confined
+   workers lock down at once, and none is killed for a call one of its own
+   threads made on the way in (08 §10).
 
 ## 2. Wire format — `crates/eui-proto/tests`
 

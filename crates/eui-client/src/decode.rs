@@ -44,24 +44,45 @@ fn pool() -> Option<&'static mpsc::Sender<Task>> {
     POOL.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Task>();
         let rx = Arc::new(std::sync::Mutex::new(rx));
+        let (ready_tx, ready) = mpsc::channel::<()>();
         let mut started = 0;
         for i in 0..DECODE_THREADS {
             let rx = Arc::clone(&rx);
-            let spawned = std::thread::Builder::new().name(format!("eui-decode-{i}")).spawn(move || loop {
-                // The lock is held while waiting, so one idle thread waits
-                // on the queue and the other on the lock; a task goes to
-                // whichever holds it.
-                let task = match rx.lock() {
-                    Ok(q) => q.recv(),
-                    Err(_) => return,
-                };
-                match task {
-                    Ok(task) => task(),
-                    Err(_) => return,
+            let ready_tx = ready_tx.clone();
+            let spawned = std::thread::Builder::new().name(format!("eui-decode-{i}")).spawn(move || {
+                // Everything the runtime does to start a thread — naming it
+                // (`prctl(PR_SET_NAME)`), its signal stack — is done by the
+                // time this line runs. `spawn` returning says only that the
+                // thread exists.
+                let _ = ready_tx.send(());
+                drop(ready_tx);
+                loop {
+                    // The lock is held while waiting, so one idle thread
+                    // waits on the queue and the other on the lock; a task
+                    // goes to whichever holds it.
+                    let task = match rx.lock() {
+                        Ok(q) => q.recv(),
+                        Err(_) => return,
+                    };
+                    match task {
+                        Ok(task) => task(),
+                        Err(_) => return,
+                    }
                 }
             });
             if spawned.is_ok() {
                 started += 1;
+            }
+        }
+        // Wait for every thread that was started to have started. In the
+        // worker the lock-down follows: a thread still naming itself when
+        // the filter lands is killed on that `prctl`, and the worker with
+        // it — a race lost a few times in a hundred under load, and the
+        // reason the worker tests failed in CI (08 §10).
+        drop(ready_tx);
+        for _ in 0..started {
+            if ready.recv().is_err() {
+                break;
             }
         }
         (started > 0).then_some(tx)
@@ -69,8 +90,9 @@ fn pool() -> Option<&'static mpsc::Sender<Task>> {
     .as_ref()
 }
 
-/// Start the process's decode threads, if they are not running yet. The
-/// worker calls this — through `Driver::new` — before it confines itself.
+/// Start the process's decode threads, if they are not running yet, and
+/// return once each is running its own loop. The worker calls this —
+/// through `Driver::new` — before it confines itself.
 pub(crate) fn start() {
     let _ = pool();
 }

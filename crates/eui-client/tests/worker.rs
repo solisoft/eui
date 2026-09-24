@@ -273,6 +273,27 @@ fn the_sandbox_refuses_files_sockets_and_processes() {
     }
 }
 
+/// Every thread the worker started before the door closed has finished
+/// starting when it closes.
+///
+/// `spawn` returns once a thread exists, not once it runs. A thread still
+/// starting when the filter lands names itself (`prctl(PR_SET_NAME)`) or
+/// makes its first allocation (glibc opening `/sys/devices/system/cpu/online`
+/// to size its arenas) behind it, and the worker is killed for a call it
+/// never meant to make. That was a race, lost a few times in a hundred on a
+/// loaded machine: CI's parallel test run, a window starting its GPU. So
+/// load is what this makes — a crowd of workers locking down at once — and
+/// every one of them has to live.
+#[cfg(target_os = "linux")]
+#[test]
+fn every_thread_has_started_before_the_sandbox_closes() {
+    use std::process::{Command, Stdio};
+    const WORKERS: usize = 128;
+    let children: Vec<_> = (0..WORKERS).map(|_| Command::new(eui_binary()).arg(eui_client::worker::SELFTEST_ARG).arg("none").stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()).collect();
+    let killed: Vec<_> = children.into_iter().map(|mut c| c.wait().unwrap()).filter(|s| !s.success()).collect();
+    assert!(killed.is_empty(), "{} of {WORKERS} workers died locking down: {killed:?}", killed.len());
+}
+
 /// One application dying takes its own worker with it and nothing else.
 ///
 /// This is the property the shell rests on: several tabs in one window,

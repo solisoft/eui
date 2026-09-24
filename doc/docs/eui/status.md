@@ -1026,9 +1026,16 @@ request/reply wire: raw frames and inputs go in, outbound frames come back
 with the driver's state (redraw owed, IME area, clipboard, next frame
 due), and a paint reply carries the draw list plus each atlas bitmap when
 it changed. On Linux the worker locks itself down before its first byte:
-Landlock deny-all on files and sockets, a seccomp allowlist of 35 system
-calls that kills on anything else, and not dumpable, so a kill leaves no
-core of the session on disk. The self-tests show a file read, a TCP
+Landlock deny-all on files and sockets, a seccomp allowlist of 37 system
+calls (and `prctl` only to name a mapping) that kills on anything else, and
+not dumpable, so a kill leaves no core of the session on disk. The door
+closes only once every thread the worker started is running: a thread
+still on its way in named itself or had glibc count the processors behind
+the filter, and was killed for it — 18 workers in 600 on the build server
+under parallel load, and desktop sessions at start-up (the audit log named
+the `openat` of glibc's `get_nprocs`), until it waited (0 in 1 000 since;
+128 at once in the test). The
+self-tests show a file read, a TCP
 connect and an exec each end the worker with `SIGSYS`; the counter runs
 end to end through a confined worker and paints the same quads as an
 in-process driver. A dead worker ends the session with a reason and the

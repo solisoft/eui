@@ -1118,6 +1118,7 @@ dependencies = [
  "notify",
  "png",
  "pollster",
+ "rayon-core",
  "rfd",
  "ring",
  "rustix 1.1.4",

@@ -15,11 +15,15 @@
 //!   `openat` is not a worker having a bad day, it is a worker running
 //!   something that was not in the binary.
 //!
-//! One thing happens before the door closes: a throwaway driver is built,
+//! Two things happen before the door closes. A throwaway driver is built,
 //! so that whatever initialises itself lazily — the text engine's font
-//! loader starts a thread pool and asks the system how many cores it has —
-//! has done so. After that, a thread being created or a file being opened
-//! is exactly what the filter is there to stop.
+//! loader starts a thread pool and asks the system how many cores it has,
+//! the decoder starts its own two threads — has done so. Then every one of
+//! those threads is waited for until it is running its own code: a thread
+//! that exists but has not yet named itself or made its first allocation
+//! would do so behind the filter, and be killed for it. After that, a
+//! thread being created or a file being opened is exactly what the filter
+//! is there to stop.
 //!
 //! The window process is not confined by this module: it owns the display,
 //! the GPU driver, TLS and the pin store, and its policy is the platform's.
@@ -34,6 +38,18 @@
 #[cfg(target_os = "linux")]
 pub fn lock_down() -> Result<String, String> {
     let mut report = Vec::new();
+    // Every thread that exists when the filter lands has to have finished
+    // starting. `spawn` returns once a thread exists, not once it runs, and
+    // a thread's first steps are not the worker loop's: the runtime names
+    // it (`prctl(PR_SET_NAME)`), and its first allocation may make glibc
+    // count the processors by opening `/sys/devices/system/cpu/online`.
+    // Either one, landing after the filter, kills the worker. The decode
+    // threads wait for their own start (`decode.rs`); the text engine's
+    // rayon pool is built by a `par_iter` that finishes as soon as the
+    // threads already running have done the work, so a thread may still be
+    // on its way in — the broadcast returns only once every one of them
+    // has run it.
+    rayon_core::broadcast(|_| ());
     // A worker that seccomp kills must not leave a core dump behind: the
     // dump would be the session — every text on screen — written to disk
     // and handed to a crash reporter, for a death that is policy, not a

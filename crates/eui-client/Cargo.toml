@@ -167,6 +167,10 @@ eui-wayland = { path = "../eui-wayland", version = "0.1.0" }
 zbus = "5"
 landlock = "0.4.7"
 libc = "0.2.189"
+# The text engine's thread pool (cosmic-text reaches it through `rayon`):
+# the sandbox waits for each of its threads to be running before the filter
+# lands. Already in the lock file; this names it.
+rayon-core = "1.13"
 rustix = { version = "1", features = ["process"] }
 seccompiler = "0.5.0"
 
