@@ -3305,11 +3305,13 @@ impl Driver {
     ///
     /// A failure used to be final: `want` skips anything in the failed map,
     /// so one bad fetch meant that picture was gone for the rest of the
-    /// session. Every asset is its own thread and its own request (see
-    /// `transport::request_asset`), so a page that mounts seventeen
-    /// pictures opens seventeen connections at once — against a server
-    /// with one worker, some of them lose, and the holes they leave are
-    /// permanent and different on every load.
+    /// session. Every asset used to be its own thread and its own request,
+    /// so a page that mounts seventeen pictures opened seventeen
+    /// connections at once — against a server with one worker, some of them
+    /// lost, and the holes they left were permanent and different on every
+    /// load. The fetches go through a pool of four now
+    /// (`transport::FETCHES_PER_ORIGIN`), and a server that stops talking
+    /// times out (`assets::READ_IDLE`) — a failure like the others.
     ///
     /// Two more tries, spaced, before it is final. A genuinely broken
     /// asset — the wrong hash, too large, not an image — fails the same

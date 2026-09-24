@@ -584,3 +584,73 @@ fn a_failed_fetch_is_asked_for_again() {
     assert_eq!(d.pending_assets(), vec![h], "asked for again");
     assert!(d.assets().failure(&h).is_none(), "and not failed yet");
 }
+
+/// A server that accepts and then says nothing is given up on, and the
+/// failure is one that is tried again rather than a hang.
+///
+/// There was no timeout: the fetch's thread waited for ever, and the hash
+/// it was fetching stayed "wanted", so it was never asked for again either.
+#[test]
+fn a_server_that_stops_talking_is_given_up_on() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut req = [0u8; 2048];
+        let _ = s.read(&mut req);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    });
+    let t0 = std::time::Instant::now();
+    let got = assets::fetch_with(&format!("http://{addr}"), &hash_of(b"never"), None, 1_000, std::time::Duration::from_millis(200));
+    assert!(matches!(got, Err(AssetError::Timeout(_))), "{got:?}");
+    assert!(t0.elapsed() < std::time::Duration::from_secs(2), "gave up on the idle limit, not on the server: {:?}", t0.elapsed());
+}
+
+/// A page of pictures is fetched by a few workers, not a thread and a
+/// connection each: however many are asked for at once, no more than
+/// `FETCHES_PER_ORIGIN` connections are open to the origin, and every one
+/// of them is answered.
+#[test]
+fn a_page_of_pictures_is_fetched_by_a_few_workers() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let body = b"one of many thumbnails".to_vec();
+    let h = hash_of(&body);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (open, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    {
+        let (open, most) = (Arc::clone(&open), Arc::clone(&most));
+        std::thread::spawn(move || {
+            for s in listener.incoming() {
+                let Ok(mut s) = s else { return };
+                let (open, most, body) = (Arc::clone(&open), Arc::clone(&most), body.clone());
+                std::thread::spawn(move || {
+                    let now = open.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    let mut req = [0u8; 2048];
+                    let _ = s.read(&mut req);
+                    // Slow enough that a burst would overlap if it could.
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = s.write_all(head.as_bytes());
+                    let _ = s.write_all(&body);
+                    open.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        });
+    }
+    let (fetch, rx) = eui_client::transport::Fetcher::alone(format!("http://{addr}"), None, || {});
+    for _ in 0..16 {
+        fetch.request_asset(h);
+    }
+    for _ in 0..16 {
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).expect("every fetch answered") {
+            eui_client::Incoming::Asset(got, Ok(_)) => assert_eq!(got, h),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(fetch.workers() <= eui_client::transport::FETCHES_PER_ORIGIN, "{} workers", fetch.workers());
+    let most = most.load(Ordering::SeqCst);
+    assert!((1..=eui_client::transport::FETCHES_PER_ORIGIN).contains(&most), "{most} connections open at once");
+}

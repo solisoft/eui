@@ -22,6 +22,24 @@ pub const MAX_ASSET_BYTES: usize = 16 * 1024 * 1024;
 /// Largest image edge decoded, in pixels.
 pub const MAX_IMAGE_EDGE: u32 = 4096;
 
+/// How long a fetch may take to connect, shake hands and send its request.
+///
+/// There was no limit at all: a server that accepted and then said nothing
+/// held a thread for ever, and the hash it held stayed "wanted", so it was
+/// never asked for again either. A timeout is a failure like any other, and
+/// a failure is tried again (`Driver::asset_failed`).
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long a fetch may go without a byte arriving. Idle rather than total:
+/// sixteen megabytes over a slow link take as long as they take, and what
+/// is being guarded against is a server that has stopped, not one that is
+/// slow.
+pub const READ_IDLE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The longest a response's head may be before the body starts.
+#[cfg(has_native_net)]
+const MAX_HEAD_BYTES: usize = 64 * 1024;
+
 /// Why a fetch or decode failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
@@ -42,6 +60,10 @@ pub enum AssetError {
     HashMismatch,
     /// The bytes are not a decodable image.
     Decode(String),
+    /// The server took longer than [`CONNECT_TIMEOUT`] to accept and shake
+    /// hands, or sent nothing for [`READ_IDLE`]. Separate from
+    /// [`Self::Connect`] only so the log says which; both are tried again.
+    Timeout(&'static str),
 }
 
 impl fmt::Display for AssetError {
@@ -54,6 +76,7 @@ impl fmt::Display for AssetError {
             Self::TooLarge => f.write_str("asset too large"),
             Self::HashMismatch => f.write_str("asset bytes do not match their hash"),
             Self::Decode(e) => write!(f, "decode: {e}"),
+            Self::Timeout(what) => write!(f, "timed out {what}"),
         }
     }
 }
@@ -152,9 +175,23 @@ pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>,
 /// abandoned mid-stream rather than read and then thrown away.
 #[cfg(has_native_net)]
 pub fn fetch_within(origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize) -> Result<Vec<u8>, AssetError> {
-    let cap = cap.min(MAX_ASSET_BYTES);
+    fetch_with(origin, hash, cookie, cap, READ_IDLE)
+}
+
+/// [`fetch_within`], giving up after `idle` without a byte rather than
+/// [`READ_IDLE`] — so a test of the timeout need not wait fifteen seconds.
+#[cfg(has_native_net)]
+pub fn fetch_with(origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Vec<u8>, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
-    let bytes = rt.block_on(get_async(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie, cap))?.body;
+    fetch_on(&rt, origin, hash, cookie, cap, idle)
+}
+
+/// One asset fetch on a runtime the caller keeps: a fetch worker builds
+/// one and runs every fetch it takes on it, rather than a runtime each.
+#[cfg(has_native_net)]
+pub(crate) fn fetch_on(rt: &tokio::runtime::Runtime, origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Vec<u8>, AssetError> {
+    let cap = cap.min(MAX_ASSET_BYTES);
+    let bytes = rt.block_on(get_async(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie, cap, idle))?.body;
     if *blake3::hash(&bytes).as_bytes() != *hash {
         return Err(AssetError::HashMismatch);
     }
@@ -173,11 +210,11 @@ pub fn get(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Resu
 #[cfg(has_native_net)]
 pub fn get_full(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
-    rt.block_on(get_async(origin, path, accept, cookie, MAX_ASSET_BYTES))
+    rt.block_on(get_async(origin, path, accept, cookie, MAX_ASSET_BYTES, READ_IDLE))
 }
 
 #[cfg(has_native_net)]
-async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>, cap: usize) -> Result<Fetched, AssetError> {
+async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>, cap: usize, idle: std::time::Duration) -> Result<Fetched, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
@@ -188,43 +225,82 @@ async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>,
     let cookie = cookie.map_or(String::new(), |c| format!("Cookie: {c}\r\n"));
     let request = format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\n{cookie}\r\n");
 
-    let tcp = tokio::net::TcpStream::connect((host, port)).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-    let mut raw = Vec::new();
+    let tcp =
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect((host, port))).await.map_err(|_| AssetError::Timeout("connecting"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
     if scheme == "https" {
         // The same roots and the same TLS 1.3 as the session socket: the
         // manifest, the assets and the session are one origin's, and they
         // cannot be trusted differently.
         let connector = tokio_rustls::TlsConnector::from(crate::transport::tls_config());
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| AssetError::Origin("bad host name".into()))?;
-        let mut tls = connector.connect(name, tcp).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        tls.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tls, &mut raw, cap).await?;
+        let mut tls =
+            tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(name, tcp)).await.map_err(|_| AssetError::Timeout("in the TLS handshake"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
+        exchange(&mut tls, request.as_bytes(), cap, idle).await
     } else {
         let mut tcp = tcp;
-        tcp.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tcp, &mut raw, cap).await?;
+        exchange(&mut tcp, request.as_bytes(), cap, idle).await
     }
-    parse_response(&raw, cap)
 }
 
+/// Send the request and read the response: the head until its blank line,
+/// then exactly the body its `Content-Length` declares.
+///
+/// The head is read first so the length is known before a byte of the body
+/// is: a body longer than `cap` is abandoned there, unread (01 §2.2), and
+/// one that fits is read into a buffer reserved at its size once, rather
+/// than grown by doubling from nothing — which, for a sixteen-megabyte
+/// asset, was eleven copies and twice the memory at the last one.
 #[cfg(has_native_net)]
-async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>, cap: usize) -> Result<(), AssetError> {
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        let n = s.read(&mut buf).await.map_err(|e| AssetError::Connect(e.to_string()))?;
+async fn exchange<S: AsyncReadExt + AsyncWriteExt + Unpin>(s: &mut S, request: &[u8], cap: usize, idle: std::time::Duration) -> Result<Fetched, AssetError> {
+    tokio::time::timeout(CONNECT_TIMEOUT, s.write_all(request)).await.map_err(|_| AssetError::Timeout("sending the request"))?.map_err(|e| AssetError::Connect(e.to_string()))?;
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut head: Vec<u8> = Vec::with_capacity(4096);
+    let split = loop {
+        let n = read_some(s, &mut buf, idle).await?;
         if n == 0 {
-            return Ok(());
+            return Err(AssetError::Http("no header terminator".into()));
         }
-        if out.len().saturating_add(n) > cap.saturating_add(4096) {
-            return Err(AssetError::TooLarge);
+        let from = head.len().saturating_sub(3);
+        head.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        if let Some(at) = head.get(from..).and_then(|tail| tail.windows(4).position(|w| w == b"\r\n\r\n")) {
+            break from + at;
         }
-        out.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        if head.len() > MAX_HEAD_BYTES {
+            return Err(AssetError::Http("the response head is too long".into()));
+        }
+    };
+    let (length, etag, content_type) = parse_head(head.get(..split).unwrap_or(&[]), cap)?;
+    let early = head.get(split.saturating_add(4)..).unwrap_or(&[]);
+    if early.len() > length {
+        return Err(AssetError::Http(format!("body is more than {length} bytes, header says {length}")));
     }
+    let mut body = Vec::with_capacity(length);
+    body.extend_from_slice(early);
+    while body.len() < length {
+        let n = read_some(s, &mut buf, idle).await?;
+        if n == 0 {
+            break;
+        }
+        if body.len().saturating_add(n) > length {
+            return Err(AssetError::Http(format!("body is more than {length} bytes, header says {length}")));
+        }
+        body.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+    }
+    if body.len() != length {
+        return Err(AssetError::Http(format!("body is {} bytes, header says {length}", body.len())));
+    }
+    Ok(Fetched { body, etag, content_type })
 }
 
-/// The smallest HTTP/1.1 response reader that is still strict: status 200,
-/// a `Content-Length`, exactly that many body bytes — and now the two
-/// headers a view fetch reads.
+/// One read, given up on after `idle` with nothing.
+#[cfg(has_native_net)]
+async fn read_some<S: AsyncReadExt + Unpin>(s: &mut S, buf: &mut [u8], idle: std::time::Duration) -> Result<usize, AssetError> {
+    tokio::time::timeout(idle, s.read(buf)).await.map_err(|_| AssetError::Timeout("waiting for the server"))?.map_err(|e| AssetError::Connect(e.to_string()))
+}
+
+/// The smallest HTTP/1.1 response-head reader that is still strict: status
+/// 200 and a `Content-Length` no larger than `cap` — and the two headers a
+/// view fetch reads. Returns the length, the `ETag` and the `Content-Type`.
 ///
 /// Chunked is still refused, and the endpoint is specified to send a length
 /// (01 §2.4) precisely so it never has to be: a server that computed the
@@ -232,9 +308,8 @@ async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>, cap:
 /// this reader will not do is guess, because every guess here is a guess
 /// about where somebody else's bytes end.
 #[cfg(has_native_net)]
-fn parse_response(raw: &[u8], cap: usize) -> Result<Fetched, AssetError> {
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| AssetError::Http("no header terminator".into()))?;
-    let head = std::str::from_utf8(raw.get(..split).unwrap_or(&[])).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
+fn parse_head(head: &[u8], cap: usize) -> Result<(usize, Option<String>, Option<String>), AssetError> {
+    let head = std::str::from_utf8(head).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
     let mut lines = head.split("\r\n");
     let status = lines.next().unwrap_or("");
     if !status.starts_with("HTTP/1.1 200") && !status.starts_with("HTTP/1.0 200") {
@@ -269,11 +344,7 @@ fn parse_response(raw: &[u8], cap: usize) -> Result<Fetched, AssetError> {
     if length > cap {
         return Err(AssetError::TooLarge);
     }
-    let body = raw.get(split.saturating_add(4)..).unwrap_or(&[]);
-    if body.len() != length {
-        return Err(AssetError::Http(format!("body is {} bytes, header says {length}", body.len())));
-    }
-    Ok(Fetched { body: body.to_vec(), etag, content_type })
+    Ok((length, etag, content_type))
 }
 
 // ------------------------------------------- everything below is portable

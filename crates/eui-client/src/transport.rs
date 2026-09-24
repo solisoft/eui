@@ -75,12 +75,12 @@ pub struct Connection {
     pub rx: mpsc::Receiver<Incoming>,
     /// The HTTPS origin assets come from.
     pub origin: String,
-    in_tx: mpsc::Sender<Incoming>,
-    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
-    /// The cookie this session presents, `name=value`. Per connection, not
-    /// per process: with two sessions in one process a global would send
-    /// one application's loopback cookie to the other's origin.
-    cookie: Option<String>,
+    /// This session's asset fetching: one pool, however many times it is
+    /// asked for. It carries the cookie this session presents, which is
+    /// per connection and not per process — with two sessions in one
+    /// process a global would send one application's loopback cookie to
+    /// the other's origin.
+    fetch: Fetcher,
 }
 
 impl std::fmt::Debug for Connection {
@@ -98,9 +98,74 @@ impl std::fmt::Debug for Connection {
 #[derive(Clone)]
 pub struct Fetcher {
     origin: String,
+    /// Where a fetch is queued. The workers that drain it belong to every
+    /// clone of this fetcher at once, and end when the last clone goes.
+    jobs: mpsc::Sender<([u8; 32], usize)>,
+    pool: std::sync::Arc<Pool>,
+}
+
+/// How many fetches one origin has in flight at once.
+///
+/// It was one thread, one runtime and one TLS handshake per asset, all at
+/// once: a page of two hundred thumbnails opened two hundred connections to
+/// one server, which is a denial of service with a picture on it, and
+/// against a server with a single worker most of them lost. Four is what a
+/// browser's six per origin comes to for a client that has nothing else to
+/// fetch in parallel — the socket is already open — and it is enough to keep
+/// a link busy while one slow asset takes its time.
+pub const FETCHES_PER_ORIGIN: usize = 4;
+
+/// The workers of one [`Fetcher`], and what each of them needs to deliver.
+struct Pool {
+    origin: String,
+    cookie: Option<String>,
     in_tx: mpsc::Sender<Incoming>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
-    cookie: Option<String>,
+    /// The queue's far end, shared: an idle worker holds the lock while it
+    /// waits, the others wait for the lock, and a job goes to whichever is
+    /// holding it.
+    queue: std::sync::Mutex<mpsc::Receiver<([u8; 32], usize)>>,
+    /// Workers started, up to [`FETCHES_PER_ORIGIN`]. They are started as
+    /// work arrives rather than up front, so a page with one picture costs
+    /// one thread.
+    workers: std::sync::atomic::AtomicUsize,
+    /// Jobs queued and not yet taken, which is what says another worker
+    /// would help.
+    waiting: std::sync::atomic::AtomicUsize,
+}
+
+impl Pool {
+    /// One worker: a runtime of its own, built once, and fetches one after
+    /// another until the queue's last sender is dropped.
+    fn work(self: std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().ok();
+        loop {
+            let job = match self.queue.lock() {
+                Ok(q) => q.recv(),
+                Err(_) => return,
+            };
+            let Ok((hash, cap)) = job else { return };
+            self.waiting.fetch_sub(1, Ordering::Relaxed);
+            // `EUI_TRACE=1` times this. There was no trace on the asset path
+            // at all, and it is the one part of opening a picture that is
+            // neither the server's nor the frame's -- a viewer that took six
+            // seconds to show a photograph could be measured everywhere
+            // except where the time was going.
+            let t0 = crate::time::Instant::now();
+            let result = match &rt {
+                Some(rt) => crate::assets::fetch_on(rt, &self.origin, &hash, self.cookie.as_deref(), cap, crate::assets::READ_IDLE),
+                None => Err(crate::assets::AssetError::Connect("no runtime".into())),
+            }
+            .map_err(|e| e.to_string());
+            crate::driver::trace(|| match &result {
+                Ok(bytes) => format!("asset {} fetched {} bytes in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), bytes.len(), t0.elapsed().as_millis()),
+                Err(e) => format!("asset {} failed in {} ms: {e}", crate::assets::hex(&hash).get(..8).unwrap_or(""), t0.elapsed().as_millis()),
+            });
+            let _ = self.in_tx.send(Incoming::Asset(hash, result));
+            (self.notify)();
+        }
+    }
 }
 
 impl std::fmt::Debug for Fetcher {
@@ -114,7 +179,21 @@ impl Fetcher {
     /// arrive on.
     pub fn alone(origin: String, cookie: Option<String>, notify: impl Fn() + Send + Sync + 'static) -> (Self, mpsc::Receiver<Incoming>) {
         let (in_tx, rx) = mpsc::channel::<Incoming>();
-        (Self { origin, in_tx, notify: std::sync::Arc::new(notify), cookie }, rx)
+        (Self::new(origin, cookie, in_tx, std::sync::Arc::new(notify)), rx)
+    }
+
+    fn new(origin: String, cookie: Option<String>, in_tx: mpsc::Sender<Incoming>, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
+        let (jobs, queue) = mpsc::channel();
+        let pool = Pool {
+            origin: origin.clone(),
+            cookie,
+            in_tx,
+            notify,
+            queue: std::sync::Mutex::new(queue),
+            workers: std::sync::atomic::AtomicUsize::new(0),
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+        };
+        Self { origin, jobs, pool: std::sync::Arc::new(pool) }
     }
 
     /// The HTTPS origin this fetches from.
@@ -122,46 +201,54 @@ impl Fetcher {
         &self.origin
     }
 
-    /// Fetch an asset on a worker thread; the result arrives as
-    /// [`Incoming::Asset`] and the notifier is called.
+    /// Fetch an asset on one of this origin's workers; the result arrives
+    /// as [`Incoming::Asset`] and the notifier is called.
     pub fn request_asset(&self, hash: [u8; 32]) {
         self.request_asset_within(hash, crate::assets::MAX_ASSET_BYTES);
     }
 
     /// [`Self::request_asset`], abandoned mid-stream past `cap` bytes: what
     /// is left of the session's asset budget (01 §2.2).
+    ///
+    /// Queued, and taken by one of at most [`FETCHES_PER_ORIGIN`] workers.
+    /// Another worker is started only while there is a job no idle one has
+    /// taken, so the pool grows with the page and not with the call count.
     pub fn request_asset_within(&self, hash: [u8; 32], cap: usize) {
-        let origin = self.origin.clone();
-        let tx = self.in_tx.clone();
-        let notify = std::sync::Arc::clone(&self.notify);
-        let cookie = self.cookie.clone();
-        let _ = thread::Builder::new().name("eui-asset".into()).spawn(move || {
-            // `EUI_TRACE=1` times this. There was no trace on the asset path
-            // at all, and it is the one part of opening a picture that is
-            // neither the server's nor the frame's -- a viewer that took six
-            // seconds to show a photograph could be measured everywhere
-            // except where the time was going.
-            let t0 = crate::time::Instant::now();
-            let result = crate::assets::fetch_within(&origin, &hash, cookie.as_deref(), cap).map_err(|e| e.to_string());
-            crate::driver::trace(|| match &result {
-                Ok(bytes) => format!("asset {} fetched {} bytes in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), bytes.len(), t0.elapsed().as_millis()),
-                Err(e) => format!("asset {} failed in {} ms: {e}", crate::assets::hex(&hash).get(..8).unwrap_or(""), t0.elapsed().as_millis()),
-            });
-            let _ = tx.send(Incoming::Asset(hash, result));
-            notify();
-        });
+        use std::sync::atomic::Ordering;
+        self.pool.waiting.fetch_add(1, Ordering::Relaxed);
+        if self.jobs.send((hash, cap)).is_err() {
+            self.pool.waiting.fetch_sub(1, Ordering::Relaxed);
+            return;
+        }
+        let started = self.pool.workers.load(Ordering::Relaxed);
+        if started < FETCHES_PER_ORIGIN && self.pool.waiting.load(Ordering::Relaxed) > 0 && self.pool.workers.compare_exchange(started, started + 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            let pool = std::sync::Arc::clone(&self.pool);
+            if thread::Builder::new().name("eui-asset".into()).spawn(move || pool.work()).is_err() {
+                self.pool.workers.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Workers this fetcher has started so far: never more than
+    /// [`FETCHES_PER_ORIGIN`], however many assets were asked for.
+    pub fn workers(&self) -> usize {
+        self.pool.workers.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl Connection {
     /// This session's asset fetching, as a handle that outlives the socket.
+    ///
+    /// The same pool every time: it used to be a new fetcher per call, which
+    /// cost nothing when every fetch was its own thread and would now cost a
+    /// pool per asset.
     pub fn fetcher(&self) -> Fetcher {
-        Fetcher { origin: self.origin.clone(), in_tx: self.in_tx.clone(), notify: std::sync::Arc::clone(&self.notify), cookie: self.cookie.clone() }
+        self.fetch.clone()
     }
 
-    /// Fetch an asset on a worker thread. Unchanged for every caller.
+    /// Fetch an asset on this session's pool. Unchanged for every caller.
     pub fn request_asset(&self, hash: [u8; 32]) {
-        self.fetcher().request_asset(hash);
+        self.fetch.request_asset(hash);
     }
 }
 
@@ -488,5 +575,6 @@ pub fn connect(url: &str, first: Vec<u8>, cookie: Option<String>, host_loopback:
         })
         .map_err(|e| TransportError::Connect(e.to_string()))?;
 
-    Ok(Connection { tx: out_tx, rx: in_rx, origin, in_tx: in_tx_for_assets, notify, cookie })
+    let fetch = Fetcher::new(origin.clone(), cookie, in_tx_for_assets, notify);
+    Ok(Connection { tx: out_tx, rx: in_rx, origin, fetch })
 }

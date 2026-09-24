@@ -394,6 +394,9 @@ What 01 §2.2 calls the session's asset budget.
 | One asset | 16 MiB (`MAX_ASSET_BYTES`) |
 | Asset store, per session: files kept and pictures decoded, together | 128 MiB (`MAX_STORE_BYTES`) |
 | A picture's pixels, as held | no more than 1024 on a side (`ATLAS_EDGE`), 4 MiB |
+| Fetches in flight, per origin | 4 (`FETCHES_PER_ORIGIN`) |
+| Connecting, TLS handshake, sending the request | 10 s each (`CONNECT_TIMEOUT`) |
+| Waiting for a byte of the response | 15 s without one (`READ_IDLE`) |
 
 A picture is held once: its pixels, shrunk to what the sheet takes, and its
 natural size, which is what the layout measures it by. The file of a PNG
@@ -412,7 +415,18 @@ before its body is read. Until 2026-09-24 the store had no budget at all,
 held every picture twice — file and full-size pixels — and a feed of
 1024 × 768 photographs grew by 3.2 MB a picture for as long as it was open.
 
+A fetch is queued, not started: four workers per origin take them in
+turn, each on one runtime it keeps, so a page of two hundred thumbnails is
+four connections at a time rather than two hundred threads and two hundred
+TLS handshakes at once. A server that stops talking is given up on — the
+limit is on silence, not on the whole transfer, since sixteen megabytes over
+a slow link take as long as they take — and a timeout is a failure like any
+other, tried twice more before it is final. A body that fits is read into a
+buffer reserved at its declared length.
+
 Pinned in `crates/eui-client/tests/assets.rs`:
+`a_server_that_stops_talking_is_given_up_on`,
+`a_page_of_pictures_is_fetched_by_a_few_workers`,
 `the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`,
 `the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
 `the_driver_lets_go_of_a_picture_the_page_stopped_showing` and

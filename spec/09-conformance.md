@@ -85,6 +85,12 @@ found to be two rules that contradicted each other.
    through the driver, with the room measured against the named picture.
 4. **A failed fetch is tried again.** `a_failed_fetch_is_asked_for_again`:
    the retry is not due at once, is due after its wait, and asks.
+5. **A silent server is given up on.** `a_server_that_stops_talking_is_given_up_on`:
+   a server that accepts and says nothing is a `Timeout` on the idle limit.
+6. **A page of pictures is a few connections.**
+   `a_page_of_pictures_is_fetched_by_a_few_workers`: sixteen fetches at
+   once are all answered, with never more than `FETCHES_PER_ORIGIN`
+   connections open to the origin.
 
 ## 2. Wire format — `crates/eui-proto/tests`
 
