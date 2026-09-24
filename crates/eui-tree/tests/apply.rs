@@ -44,7 +44,7 @@ fn mounted_with(limits: Limits) -> Session {
     let mut s = Session::with_limits(limits);
     let mut ops = defs();
     ops.push(Op::Mount(sample()));
-    s.apply(&Batch { seq: 1, ops }).unwrap();
+    s.apply(Batch { seq: 1, ops }).unwrap();
     s
 }
 
@@ -54,7 +54,7 @@ fn ids_under(s: &Session, id: u32) -> Vec<u32> {
 }
 
 fn one(s: &mut Session, seq: u64, op: Op) -> core::result::Result<(), E> {
-    s.apply(&Batch { seq, ops: vec![op] })
+    s.apply(Batch { seq, ops: vec![op] })
 }
 
 // ------------------------------------------------------------------ mount
@@ -104,10 +104,10 @@ fn preorder_walks_the_whole_tree_in_order() {
 #[test]
 fn tables_define_once() {
     let mut s = Session::new();
-    s.apply(&Batch { seq: 1, ops: defs() }).unwrap();
+    s.apply(Batch { seq: 1, ops: defs() }).unwrap();
     assert_eq!(one(&mut s, 2, Op::DefAtom { id: 1, value: "x".into() }), Err(E::Redefined(Table::Atom, 1)));
     let mut s = Session::new();
-    s.apply(&Batch { seq: 1, ops: defs() }).unwrap();
+    s.apply(Batch { seq: 1, ops: defs() }).unwrap();
     assert_eq!(one(&mut s, 2, Op::DefStyle { id: 1, record: StyleRecord::default() }), Err(E::Redefined(Table::Style, 1)));
 }
 
@@ -149,7 +149,7 @@ fn forward_references_are_rejected() {
 #[test]
 fn nothing_is_placed_when_a_deep_node_is_invalid() {
     let mut s = Session::new();
-    s.apply(&Batch { seq: 1, ops: defs() }).unwrap();
+    s.apply(Batch { seq: 1, ops: defs() }).unwrap();
     let mut tree = sample();
     tree.nodes[3].style = 77; // last node references an undefined style
     assert_eq!(one(&mut s, 2, Op::Mount(tree)), Err(E::Undefined(Table::Style, 77)));
@@ -240,7 +240,7 @@ fn reversing_fifty_keyed_rows_is_moves() {
     one(&mut s, 1, Op::Mount(Subtree { nodes, ..Default::default() })).unwrap();
     // Always take the last row and put it at position i.
     let ops = (0..49u32).map(|i| Op::MoveChild { parent: 1, from: 49, to: i }).collect();
-    s.apply(&Batch { seq: 2, ops }).unwrap();
+    s.apply(Batch { seq: 2, ops }).unwrap();
     let keys: Vec<u32> = ids_under(&s, 1).iter().map(|id| s.node(s.lookup(*id).unwrap()).unwrap().key).collect();
     assert_eq!(keys, (1..=50).rev().collect::<Vec<_>>());
 }
@@ -341,9 +341,9 @@ fn per_node_prop_and_handler_caps() {
     let mut s = Session::new();
     let mut ops: Vec<Op> = (1..=65u32).map(|i| Op::DefAtom { id: i, value: format!("p{i}") }).collect();
     ops.push(Op::Mount(leaf(1)));
-    s.apply(&Batch { seq: 1, ops }).unwrap();
+    s.apply(Batch { seq: 1, ops }).unwrap();
     let ops = (1..=64u32).map(|i| Op::SetProp { node: 1, prop: i, value: Value::Null }).collect();
-    s.apply(&Batch { seq: 2, ops }).unwrap();
+    s.apply(Batch { seq: 2, ops }).unwrap();
     assert_eq!(one(&mut s, 3, Op::SetProp { node: 1, prop: 65, value: Value::Null }), Err(E::TooManyProps(1)));
 }
 
@@ -375,7 +375,7 @@ fn batches_must_arrive_in_increasing_order() {
 fn a_failing_op_leaves_seq_unadvanced() {
     let mut s = mounted();
     let ops = vec![Op::Focus { node: 1 }, Op::Focus { node: 404 }];
-    assert!(s.apply(&Batch { seq: 2, ops }).is_err());
+    assert!(s.apply(Batch { seq: 2, ops }).is_err());
     assert_eq!(s.last_seq(), Some(1));
 }
 
@@ -412,7 +412,7 @@ fn a_decoded_frame_applies() {
     let bytes = frame.encode();
     let Frame::Batch(batch) = Frame::decode(&bytes).unwrap() else { panic!("not a batch") };
     let mut s = Session::new();
-    s.apply(&batch).unwrap();
+    s.apply(batch).unwrap();
     let root = s.root().unwrap();
     assert_eq!(s.style_of(root).display, Display::Column);
     assert_eq!(s.text_of(s.children(root)[0]), Some("Hi"));
@@ -433,7 +433,7 @@ fn random_op_streams_keep_the_arena_consistent() {
         let mut s = Session::with_limits(Limits { max_nodes: 64, max_depth: 8, ..Default::default() });
         let mut ops = defs();
         ops.push(Op::Mount(sample()));
-        s.apply(&Batch { seq: 1, ops }).unwrap();
+        s.apply(Batch { seq: 1, ops }).unwrap();
         let mut next_id = 100u32;
         for seq in 2..60u64 {
             let target = [1u32, 2, 3, 4, next_id.saturating_sub(1), 500][(next() % 6) as usize];
@@ -454,7 +454,7 @@ fn random_op_streams_keep_the_arena_consistent() {
                 7 => Op::SetHandler { node: target, event: EventKind::Click, handler: Handler::Server(2) },
                 _ => Op::ScrollTo { node: target, x: 1, y: 1 },
             };
-            let _ = s.apply(&Batch { seq, ops: vec![op] });
+            let _ = s.apply(Batch { seq, ops: vec![op] });
             if s.is_poisoned() {
                 break;
             }
@@ -547,7 +547,7 @@ fn a_key_survives_a_move_between_parents_in_either_order() {
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 0, key: 9, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
         tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 4, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 0 });
-        s.apply(&Batch { seq: 1, ops: vec![Op::DefAtom { id: 9, value: "x".into() }, Op::Mount(tree)] }).unwrap();
+        s.apply(Batch { seq: 1, ops: vec![Op::DefAtom { id: 9, value: "x".into() }, Op::Mount(tree)] }).unwrap();
         assert!(s.lookup_key(9).is_some(), "it starts with an entry");
 
         let mut moved = Subtree::default();
@@ -555,7 +555,7 @@ fn a_key_survives_a_move_between_parents_in_either_order() {
         let take = Op::RemoveChild { parent: 2, index: 0, count: 1 };
         let put = Op::InsertChild { parent: 4, index: 0, subtree: moved };
         let ops = if insert_first { vec![put, take] } else { vec![take, put] };
-        s.apply(&Batch { seq: 2, ops }).unwrap();
+        s.apply(Batch { seq: 2, ops }).unwrap();
 
         let found = s.lookup_key(9).unwrap_or_else(|| panic!("the key survived, insert_first={insert_first}"));
         assert_eq!(s.node(found).map(|n| n.id), Some(5), "and names the node that is still there");
@@ -626,7 +626,7 @@ fn page_with_a_slot() -> Batch {
 #[test]
 fn an_island_has_its_own_ids_and_its_own_tables() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     let owner = s.open_island(at).expect("the first island of eight");
     assert_eq!(owner, 1);
@@ -661,7 +661,7 @@ fn an_island_has_its_own_ids_and_its_own_tables() {
 #[test]
 fn an_island_cannot_reach_a_node_on_the_page() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     let owner = s.open_island(at).unwrap();
     s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }).unwrap();
@@ -677,7 +677,7 @@ fn an_island_cannot_reach_a_node_on_the_page() {
 #[test]
 fn an_islands_mount_replaces_its_own_content_and_nothing_else() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let root = s.root().unwrap();
     let at = s.lookup(2).unwrap();
     let owner = s.open_island(at).unwrap();
@@ -709,7 +709,7 @@ fn an_islands_mount_replaces_its_own_content_and_nothing_else() {
 #[test]
 fn a_page_opens_at_most_eight_islands() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     let at = s.lookup(2).unwrap();
     for n in 1..=8u16 {
         assert_eq!(s.open_island(at), Some(n));
@@ -723,7 +723,100 @@ fn a_page_opens_at_most_eight_islands() {
 #[test]
 fn a_batch_for_an_island_that_was_never_opened_is_refused() {
     let mut s = Session::new();
-    s.apply(&page_with_a_slot()).unwrap();
+    s.apply(page_with_a_slot()).unwrap();
     assert_eq!(s.apply_region(3, &Batch { seq: 1, ops: vec![Op::Mount(leaf(1))] }), Err(E::Internal));
     assert_eq!(s.root().map(|_| ()), Some(()), "and the page stands");
+}
+
+// ------------------------------------------------- budgets and leftovers
+
+/// Chunk bytes have a total, as atom bytes do, and it is one total for the
+/// page and every island it opens: 64 KiB times 4 095 ids is 256 MiB a
+/// namespace, and a page has up to nine.
+#[test]
+fn chunk_bytes_have_one_budget_across_the_page_and_its_islands() {
+    let mut s = Session::with_limits(Limits { max_chunk_total_bytes: 10, ..Default::default() });
+    one(&mut s, 1, Op::DefChunkBytes { id: 1, bytes: vec![1; 6] }).unwrap();
+    assert_eq!(one(&mut s, 2, Op::DefChunkBytes { id: 2, bytes: vec![1; 5] }), Err(E::ChunkBudget));
+    assert!(s.chunk(2).is_none(), "refused before it was stored");
+    assert_eq!(s.chunk_bytes(), 6);
+
+    let mut s = Session::with_limits(Limits { max_chunk_total_bytes: 10, ..Default::default() });
+    s.apply(page_with_a_slot()).unwrap();
+    one(&mut s, 2, Op::DefChunkBytes { id: 1, bytes: vec![1; 6] }).unwrap();
+    let owner = s.open_island(s.lookup(2).unwrap()).unwrap();
+    // The island's chunk 1 is its own id, but its bytes are the page's budget.
+    s.apply_region(owner, &Batch { seq: 1, ops: vec![Op::DefChunkBytes { id: 1, bytes: vec![2; 4] }] }).unwrap();
+    assert_eq!(s.chunk_bytes(), 10);
+    assert_eq!(s.apply_region(owner, &Batch { seq: 2, ops: vec![Op::DefChunkBytes { id: 2, bytes: vec![2; 1] }] }), Err(E::ChunkBudget));
+    // A chunk by hash carries no bytes and costs none.
+    one(&mut s, 3, Op::DefChunk { id: 2, hash: [7; 32] }).unwrap();
+
+    assert_eq!(Limits::default().max_chunk_total_bytes, eui_proto::limits::MAX_CHUNK_TOTAL_BYTES);
+}
+
+/// A graft refused partway used to leave the nodes it had placed live and
+/// parentless. The session was poisoned, correctly, and then the resync's
+/// `Mount` — the same ids again — was refused as a duplicate of those
+/// orphans, and the session closed with "resync refused".
+#[test]
+fn a_refused_graft_leaves_nothing_behind_and_the_resync_lands() {
+    // An id used twice within one subtree.
+    let mut s = Session::new();
+    s.apply(Batch { seq: 1, ops: defs() }).unwrap();
+    let twice = Subtree { nodes: vec![flat(NodeKind::Box, 1, 0, 2), flat(NodeKind::Box, 2, 0, 0), flat(NodeKind::Box, 2, 0, 0)], ..Default::default() };
+    assert_eq!(one(&mut s, 2, Op::Mount(twice)), Err(E::DuplicateNode(2)));
+    assert_eq!(s.live_nodes(), 0, "no orphan survives the refusal");
+    one(&mut s, 3, Op::Mount(sample())).expect("the resync reuses ids 1 and 2");
+    assert_eq!(s.live_nodes(), 4);
+
+    // A subtree deeper than the limit, found before the first node is placed.
+    let mut s = Session::with_limits(Limits { max_depth: 2, ..Default::default() });
+    let deep = Subtree { nodes: vec![flat(NodeKind::Box, 1, 0, 1), flat(NodeKind::Box, 2, 0, 1), flat(NodeKind::Box, 3, 0, 0)], ..Default::default() };
+    assert_eq!(one(&mut s, 1, Op::Mount(deep)), Err(E::TooDeep));
+    assert_eq!(s.live_nodes(), 0);
+    one(&mut s, 2, Op::Mount(Subtree { nodes: vec![flat(NodeKind::Box, 1, 0, 1), flat(NodeKind::Box, 2, 0, 0)], ..Default::default() })).unwrap();
+
+    // And an `InsertChild` into a live tree: the tree keeps exactly what it had.
+    let mut s = mounted();
+    let twice = Subtree { nodes: vec![flat(NodeKind::Box, 10, 0, 2), flat(NodeKind::Box, 11, 0, 0), flat(NodeKind::Box, 11, 0, 0)], ..Default::default() };
+    assert_eq!(one(&mut s, 2, Op::InsertChild { parent: 1, index: 0, subtree: twice }), Err(E::DuplicateNode(11)));
+    assert_eq!(s.live_nodes(), 4);
+    assert!(s.lookup(10).is_none());
+    one(&mut s, 3, Op::Mount(sample())).unwrap();
+    assert_eq!(s.live_nodes(), 4);
+}
+
+/// A wake handler set twice on one node lists the node once: membership is
+/// read off the node's own handlers, not searched for in the list.
+#[test]
+fn a_waker_is_listed_once_however_often_its_handler_is_set() {
+    let mut s = mounted();
+    for seq in 2..5 {
+        one(&mut s, seq, Op::SetHandler { node: 2, event: EventKind::Wake, handler: Handler::Server(1) }).unwrap();
+    }
+    assert_eq!(s.wakers(), &[s.lookup(2).unwrap()]);
+    one(&mut s, 5, Op::ClearHandler { node: 3, event: EventKind::Wake }).unwrap();
+    assert_eq!(s.wakers().len(), 1, "clearing a handler a node never had takes nothing");
+    one(&mut s, 6, Op::ClearHandler { node: 2, event: EventKind::Wake }).unwrap();
+    assert!(s.wakers().is_empty());
+}
+
+/// The arena keeps its high-water mark while anything is live — an index is
+/// a node's identity to every side table — but a `Mount` passes through a
+/// moment with nothing live, and gives the slots back there.
+#[test]
+fn a_small_mount_after_a_large_one_gives_the_slots_back() {
+    let mut s = Session::new();
+    let mut big = Subtree::default();
+    big.nodes.push(flat(NodeKind::Box, 1, 0, 9_999));
+    for id in 2..=10_000 {
+        big.nodes.push(flat(NodeKind::Box, id, 0, 0));
+    }
+    one(&mut s, 1, Op::Mount(big)).unwrap();
+    assert_eq!(s.arena_len(), 10_000);
+    one(&mut s, 2, Op::Mount(leaf(1))).unwrap();
+    assert_eq!(s.arena_len(), 1, "ten thousand freed slots were kept for a one-node page");
+    assert_eq!(s.live_nodes(), 1);
+    assert!(s.lookup(1).is_some() && s.lookup(2).is_none());
 }

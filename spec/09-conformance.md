@@ -114,6 +114,16 @@ removal. Font roles are the one table that is not define-once: a role holds
 the faces bound to it, may be bound again, and one past the last is refused
 in the session as well as in the decoder.
 
+`apply.rs` also pins the quotas that are session state (02 §6):
+`chunk_bytes_have_one_budget_across_the_page_and_its_islands` refuses the
+inline chunk that would pass `MAX_CHUNK_TOTAL_BYTES`, counting an island's
+bytes against the page's; `atom_budget_is_enforced_before_storing` does the
+same for atoms. And that a refused graft is refused **whole**:
+`a_refused_graft_leaves_nothing_behind_and_the_resync_lands` sends a subtree
+with an id used twice, one past the depth limit, and a bad `InsertChild`,
+and requires that none leaves a node live — so the resync's `Mount`, which
+carries the same ids, lands rather than being refused as a duplicate.
+
 ## 4. Layout — `crates/eui-layout/tests/layout.rs`
 
 Goldens against the fixed-pitch measurer (9 px per character, 22 px lines):

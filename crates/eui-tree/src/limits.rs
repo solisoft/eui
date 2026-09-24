@@ -23,6 +23,9 @@ pub struct Limits {
     pub max_colors: u32,
     /// Highest chunk id.
     pub max_chunks: u32,
+    /// Sum of all inline chunk bytes, in bytes, across the page and every
+    /// island it has open.
+    pub max_chunk_total_bytes: usize,
 }
 
 impl Default for Limits {
@@ -35,6 +38,7 @@ impl Default for Limits {
             max_styles: proto::MAX_STYLES,
             max_colors: proto::MAX_COLORS,
             max_chunks: proto::MAX_CHUNKS,
+            max_chunk_total_bytes: proto::MAX_CHUNK_TOTAL_BYTES,
         }
     }
 }

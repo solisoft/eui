@@ -1,11 +1,10 @@
 //! The node arena: one contiguous `Vec<Node>`, indices instead of pointers,
 //! and a free list so a long session does not grow without bound.
 
-use std::collections::HashMap;
-
 use eui_proto::{EventKind, Handler, NodeKind, TextRef, Value};
 
 use crate::error::{ApplyError, Result};
+use crate::hash::FastMap;
 
 /// An index into the arena. Stable for the life of the node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -133,7 +132,10 @@ pub(crate) struct Arena {
     /// every island its own id space, so `1` names one node on the page and
     /// another in each island; a map on the id alone would have the second
     /// `Mount` refuse the first's ids as duplicates.
-    by_id: HashMap<(u16, u32), NodeIx>,
+    ///
+    /// On the seeded integer hasher of [`crate::hash`] rather than SipHash:
+    /// this map is read on every op that names a node.
+    by_id: FastMap<(u16, u32), NodeIx>,
     /// Key atom -> the node carrying it, most recently placed. Keys are unique
     /// among siblings by contract and usually unique per component, so the two
     /// are almost always the same node.
@@ -145,7 +147,7 @@ pub(crate) struct Arena {
     /// node about to die, and the release then took the key away — so a live
     /// node carrying a key had no entry, and every drag between containers
     /// died in whichever direction put the insert first.
-    by_key: HashMap<u32, NodeIx>,
+    by_key: FastMap<u32, NodeIx>,
     live: u32,
 }
 
@@ -276,6 +278,52 @@ impl Arena {
             cur = node.parent;
         }
         Ok(())
+    }
+
+    /// Clear every dirty bit on the dirty paths below and including `root`.
+    ///
+    /// Here rather than in the session so the walk can read a node's child
+    /// list in place: the session, holding the arena only through its
+    /// methods, had to clone each list to push its children while it held
+    /// the node it had just cleared.
+    pub(crate) fn clear_dirty_from(&mut self, root: NodeIx) {
+        let mut stack = vec![root];
+        while let Some(ix) = stack.pop() {
+            match self.nodes.get_mut(ix.usize()) {
+                Some(n) if n.id != 0 && n.dirty != 0 => n.dirty = 0,
+                _ => continue,
+            }
+            let nodes = &self.nodes;
+            if let Some(n) = nodes.get(ix.usize()) {
+                stack.extend(n.children.iter().copied().filter(|c| nodes.get(c.usize()).is_some_and(|c| c.id != 0 && c.dirty != 0)));
+            }
+        }
+    }
+
+    /// Give back the high-water mark once nothing is live.
+    ///
+    /// The arena's `Vec` keeps every slot it ever had — freed ones go on the
+    /// free list, not back to the allocator — so a session that once showed
+    /// a million-node page went on holding more than 100 MB of slots for
+    /// every small page after it. Slots can only be let go when none is live,
+    /// because a live node's index is its identity to every side table the
+    /// client keeps; that is exactly the state a `Mount` leaves between
+    /// releasing the old tree and grafting the new one, which is where this
+    /// is called. `incoming` is the size of what is about to be placed: the
+    /// storage is kept at that, so a page mounted again at the same size
+    /// costs no reallocation.
+    pub(crate) fn shrink_if_empty(&mut self, incoming: usize) {
+        if self.live != 0 {
+            return;
+        }
+        self.nodes.clear();
+        self.free.clear();
+        self.by_id.clear();
+        self.by_key.clear();
+        self.nodes.shrink_to(incoming);
+        self.free.shrink_to(0);
+        self.by_id.shrink_to(incoming);
+        self.by_key.shrink_to(0);
     }
 
     /// Distance from the root, root at 1.

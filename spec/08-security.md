@@ -91,13 +91,17 @@ it.
   wherever there is no worker process; 64 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
 - A batch that is well-formed but incoherent — undefined atom, duplicate
-  node, index past the end — is refused before anything is placed, and the
-  session is poisoned until the next `Mount`. *Enforced: `eui-tree::Session::apply`.*
+  node (including an id used twice within one subtree), a node past the
+  depth limit, index past the end — is refused before anything is placed,
+  and the session is poisoned until the next `Mount`. A refused subtree
+  leaves no node behind, so the resync's `Mount` is never refused for ids
+  the failed one left live. *Enforced: `eui-tree::Session::apply`.*
 
 ## 6. Quotas
 
 Enforced by the client, before the memory they bound is allocated: nodes,
-atoms and atom bytes, styles, colours, chunks, children per node, props and
+atoms and atom bytes, styles, colours, chunks and inline chunk bytes (one
+total for a page and its islands), children per node, props and
 handlers per node, ops per batch, chunk size, string length in a chunk,
 fuel per run. A hostile server can be annoying; it cannot make the client
 exhaust itself. *Enforced: `eui-proto::limits`, `eui-tree::Limits`, `eui-vm`.*

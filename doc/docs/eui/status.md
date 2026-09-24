@@ -22,8 +22,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 93 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
-  4 frame-walking,
+- 97 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
+  5 frame-walking, 1 that watches the allocator,
   **64 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
@@ -41,12 +41,23 @@ with a free list, and `apply` for every op in the wire format.
 
 - Every reference — style, atom, colour, chunk, node id — is checked against
   the tables *before* anything is placed, so an invalid node deep in a subtree
-  leaves nothing behind.
-- Node, depth and atom-byte quotas are checked before the memory they bound is
-  allocated. Subtree removal is an iterative walk, never a recursive drop.
+  leaves nothing behind. So are an id used twice within one subtree and a
+  node past the depth limit, which used to be found halfway through placing
+  and left the placed half live with no parent — enough to have the resync's
+  `Mount` refused as a duplicate and the session closed.
+- Node, depth, atom-byte and chunk-byte quotas are checked before the memory
+  they bound is allocated; inline chunks have one 8 MiB total for a page and
+  all its islands. Subtree removal is an iterative walk, never a recursive
+  drop, and a `Mount` that finds nothing live gives the arena's high-water
+  slots back.
+- A batch is applied by value: atom strings, prop values, inline chunks and
+  subtrees are moved from the decoded frame into the tree, not copied. Atoms
+  are held once, shared with the reverse index that used to keep a second
+  copy of each. The node-id index hashes with a seeded folded multiply rather
+  than SipHash — seeded because the ids are a server's to choose.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 35 tests, including a random op stream that must keep the arena's live
+- 44 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete

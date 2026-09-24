@@ -27,7 +27,7 @@ fn fixture(styles: Vec<StyleRecord>, nodes: Vec<FlatNode>, props: Vec<(u32, Valu
     ops.extend(styles.into_iter().enumerate().map(|(i, r)| Op::DefStyle { id: i as u32 + 1, record: r }));
     ops.push(Op::Mount(Subtree { nodes, props, handlers: Vec::new() }));
     let mut session = Session::new();
-    session.apply(&Batch { seq: 1, ops }).unwrap();
+    session.apply(Batch { seq: 1, ops }).unwrap();
     let theme = Theme::default().resolve(Viewer::default());
     let mut text = TextEngine::new();
     let mut layout = Layout::new();

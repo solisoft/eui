@@ -386,6 +386,7 @@ truncate, when one is exceeded.
 | `MAX_STYLES` | 65 535 |
 | `MAX_COLORS` | 4 095 |
 | `MAX_CHUNKS` | 4 095 |
+| `MAX_CHUNK_TOTAL_BYTES` | 8 MiB per session, of inline chunks (`DefChunkBytes`), the page and its islands (01 §2.7) together |
 | `MAX_FONT_ROLE` | 9 (roles `0`–`9`) |
 | `MAX_FACES_PER_ROLE` | 8 |
 | `MAX_CHILDREN` | 65 535 per node |
@@ -400,8 +401,14 @@ truncate, when one is exceeded.
 | `MAX_NOTIFY_TAG` | 64 bytes |
 | `MAX_NOTIFY_PER_BATCH` | 4 (§5.2) |
 
-`MAX_ATOM_TOTAL_BYTES`, and the rule that an id is defined once and referenced
-only after, are session state and belong to the tree layer, not the decoder.
+`MAX_ATOM_TOTAL_BYTES`, `MAX_CHUNK_TOTAL_BYTES`, and the rule that an id is
+defined once and referenced only after, are session state and belong to the
+tree layer, not the decoder. *Enforced: `eui-tree::Session::apply`.*
+
+The chunk total is one figure for the page and every island open on it, where
+the atom total is per namespace: an island's `DefChunkBytes` is budgeted
+against what the page already holds. Without it the ceiling was 64 KiB times
+4 095 ids — 256 MiB a namespace, and a page with its islands has nine.
 Every other limit is enforced by `eui-proto` alone.
 
 `MAX_TREE_DEPTH` is enforced during decoding, before any recursion, so that a

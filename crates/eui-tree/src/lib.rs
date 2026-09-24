@@ -29,6 +29,7 @@
 
 pub mod arena;
 pub mod error;
+mod hash;
 pub mod limits;
 pub mod session;
 mod tables;

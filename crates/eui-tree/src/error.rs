@@ -48,6 +48,8 @@ pub enum ApplyError {
     Undefined(Table, u32),
     /// The sum of atom values exceeded the session budget.
     AtomBudget,
+    /// The sum of inline chunk bytes exceeded the session budget.
+    ChunkBudget,
     /// A node id that is not in the tree.
     UnknownNode(u32),
     /// A subtree introduced an id that is already live.
@@ -99,6 +101,7 @@ impl fmt::Display for ApplyError {
             Self::IdOutOfRange(t, id) => write!(f, "{t} id {id} exceeds the table limit"),
             Self::Undefined(t, id) => write!(f, "{t} {id} is not defined"),
             Self::AtomBudget => f.write_str("atom byte budget exceeded"),
+            Self::ChunkBudget => f.write_str("chunk byte budget exceeded"),
             Self::UnknownNode(id) => write!(f, "node {id} is not in the tree"),
             Self::DuplicateNode(id) => write!(f, "node {id} is already in the tree"),
             Self::ChildIndexOutOfRange { parent, index, len } => {
