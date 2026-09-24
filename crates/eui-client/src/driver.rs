@@ -1969,7 +1969,7 @@ impl Driver {
                 Vec::new()
             }
             Frame::Blob(t) => self.blob(t),
-            Frame::Batch(batch) => self.apply(&batch),
+            Frame::Batch(batch) => self.apply(batch),
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
             Frame::Error { code, message } => {
@@ -1983,7 +1983,7 @@ impl Driver {
         }
     }
 
-    fn apply(&mut self, batch: &Batch) -> Vec<Frame> {
+    fn apply(&mut self, batch: Batch) -> Vec<Frame> {
         // A resumed session replays what the socket dropped, and the last
         // batch before it broke may well have landed. Applying it twice is
         // not always harmless — a `SetText` is, an `Insert` is not — so a
@@ -1992,6 +1992,14 @@ impl Driver {
             return vec![Frame::Ack { seq: self.acked }];
         }
         self.revert_provisional();
+        // The session takes the batch by value and moves what it carries
+        // into the tree, so the few ops read again below — a `SetText` the
+        // edit buffer must agree with, a `ScrollTo`, a `Notify`, a `Focus` —
+        // are copied out first. They are small; the subtrees, atoms and
+        // chunks are what is no longer copied.
+        let seq = batch.seq;
+        let after: Vec<eui_proto::Op> =
+            batch.ops.iter().filter(|o| matches!(o, eui_proto::Op::SetText { .. } | eui_proto::Op::ScrollTo { .. } | eui_proto::Op::Notify { .. } | eui_proto::Op::Focus { .. })).cloned().collect();
         match self.session.apply(batch) {
             Ok(()) => {
                 self.resyncing = false;
@@ -2066,7 +2074,7 @@ impl Driver {
                 // There is no race to lose here: the server only emits
                 // `SetText` when its own value changed, and it never learns
                 // a keystroke it was not told about.
-                for op in &batch.ops {
+                for op in &after {
                     if let eui_proto::Op::SetText { node, text } = op {
                         let value = match text {
                             eui_proto::TextRef::Inline(t) => t.clone(),
@@ -2077,21 +2085,21 @@ impl Driver {
                         }
                     }
                 }
-                self.acked = batch.seq;
-                for op in &batch.ops {
+                self.acked = seq;
+                for op in &after {
                     if let eui_proto::Op::ScrollTo { node, x, y } = op {
                         trace(|| format!("batch asked {node} to {x},{y}"));
                         self.scroll_asked.push(*node);
                     }
                 }
-                for op in &batch.ops {
+                for op in &after {
                     if let eui_proto::Op::Notify { title, body, tag } = op {
                         self.note(title, body, tag);
                     }
                 }
-                let mut out = vec![Frame::Ack { seq: batch.seq }];
+                let mut out = vec![Frame::Ack { seq }];
                 // A `Focus` op focuses the way the keyboard does, ring included.
-                if batch.ops.iter().any(|o| matches!(o, eui_proto::Op::Focus { .. })) {
+                if after.iter().any(|o| matches!(o, eui_proto::Op::Focus { .. })) {
                     if let Some(ix) = self.session.focused() {
                         out.extend(self.set_focus(Some(ix), true));
                     }
@@ -2113,7 +2121,7 @@ impl Driver {
                 // Recoverable by design: discard, ask for a fresh tree, rebuild.
                 // Not an `Error` frame — that would end the session on both
                 // sides, which is the opposite of what a resync is for.
-                eprintln!("eui: batch {} rejected ({e}); resyncing", batch.seq);
+                eprintln!("eui: batch {seq} rejected ({e}); resyncing");
                 self.resyncing = true;
                 self.invalidate();
                 vec![Frame::Resync]
@@ -7734,7 +7742,7 @@ impl Driver {
         self.text.clear_roles();
         self.focused = None;
         self.pointer = Pointer::default();
-        if self.session.apply(&Batch { seq: 1, ops }).is_err() {
+        if self.session.apply(Batch { seq: 1, ops }).is_err() {
             // The sheet is this client's own tree, so this cannot happen
             // from anything a server sent — but a question nobody can see
             // is worse than none, and refusing is the safe answer.
@@ -7831,7 +7839,7 @@ impl Driver {
             seq: 1,
             ops: vec![Op::DefStyle { id: 1, record: page }, Op::DefStyle { id: 2, record: heading }, Op::DefStyle { id: 3, record: reason }, Op::DefStyle { id: 4, record: hint }, Op::Mount(tree)],
         };
-        if self.session.apply(&batch).is_err() {
+        if self.session.apply(batch).is_err() {
             return;
         }
         // Focused here rather than with an `Op::Focus`: this batch never

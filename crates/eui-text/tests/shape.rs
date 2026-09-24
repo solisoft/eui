@@ -132,7 +132,7 @@ fn layout_runs_on_real_glyphs() {
     }
     ops.push(Op::Mount(Subtree { nodes, ..Default::default() }));
     let mut s = Session::new();
-    s.apply(&Batch { seq: 1, ops }).unwrap();
+    s.apply(Batch { seq: 1, ops }).unwrap();
 
     let theme = Theme::default().resolve(Viewer::default());
     let mut engine = TextEngine::new();

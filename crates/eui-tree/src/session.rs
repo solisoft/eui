@@ -6,11 +6,14 @@
 //! resync, rebuild — so there is no need to snapshot the tree before every
 //! batch to be able to roll back.
 
+use std::sync::Arc;
+
 use eui_proto::limits::MAX_ISLANDS;
 use eui_proto::{limits as proto, Batch, ColorRef, EventKind, Handler, NodeKind, Op, StyleRecord, Subtree, TextRef, Value};
 
 use crate::arena::{dirty, Arena, Node, NodeIx};
 use crate::error::{ApplyError, Result, Table};
+use crate::hash::{FastMap, FastSet};
 use crate::limits::Limits;
 use crate::tables::DefineOnce;
 
@@ -34,9 +37,18 @@ pub enum Chunk {
 /// whoever sent that node.
 #[derive(Debug)]
 pub(crate) struct Tables {
-    pub(crate) atoms: DefineOnce<String>,
-    pub(crate) atom_ids: std::collections::HashMap<String, u32>,
+    /// Each value once, shared with `atom_ids`: the reverse index used to
+    /// hold a `String` copy of every atom, which made the 8 MiB atom quota
+    /// 16 MiB of memory.
+    pub(crate) atoms: DefineOnce<Arc<str>>,
+    /// Value -> first id. Keyed on the server's strings, so it keeps std's
+    /// seeded SipHash rather than the integer hasher of [`crate::hash`].
+    pub(crate) atom_ids: std::collections::HashMap<Arc<str>, u32>,
     pub(crate) atom_bytes: usize,
+    /// Inline chunk bytes defined in this namespace. Budgeted across all of
+    /// them together (`Limits::max_chunk_total_bytes`), and counted per
+    /// namespace so that the total is always the sum of the sets that exist.
+    pub(crate) chunk_bytes: usize,
     pub(crate) styles: DefineOnce<StyleRecord>,
     pub(crate) colors: DefineOnce<u32>,
     pub(crate) chunks: DefineOnce<Chunk>,
@@ -56,6 +68,7 @@ impl Tables {
             atoms: DefineOnce::new(Table::Atom, limits.max_atoms),
             atom_ids: std::collections::HashMap::new(),
             atom_bytes: 0,
+            chunk_bytes: 0,
             styles: DefineOnce::new(Table::Style, limits.max_styles),
             colors: DefineOnce::new(Table::Color, limits.max_colors),
             chunks: DefineOnce::new(Table::Chunk, limits.max_chunks),
@@ -157,7 +170,7 @@ pub struct Session {
     /// cannot undo it: a hover that lit a card and a frame that arrived
     /// before the pointer left would have left the card lit for good.
     /// Applying a batch puts these back first.
-    local_styles: std::collections::HashMap<NodeIx, u32>,
+    local_styles: FastMap<NodeIx, u32>,
     /// Whether the last batch put any of those back, so the client knows
     /// to run the pointer's `enter` again over the fresh tree.
     restored_local: bool,
@@ -195,7 +208,7 @@ impl Session {
             locators: Vec::new(),
             known: WellKnown::default(),
             style_changes: Vec::new(),
-            local_styles: std::collections::HashMap::new(),
+            local_styles: FastMap::default(),
             restored_local: false,
             poisoned: false,
             last_seq: None,
@@ -275,7 +288,7 @@ impl Session {
     /// The node's text, atom resolved.
     pub fn text_of(&self, ix: NodeIx) -> Option<&str> {
         match self.arena.get(ix)?.text.as_ref()? {
-            TextRef::Atom(id) => self.tables_at(ix).atoms.get(*id).map(String::as_str),
+            TextRef::Atom(id) => self.tables_at(ix).atoms.get(*id).map(|a| &**a),
             TextRef::Inline(s) => Some(s.as_str()),
         }
     }
@@ -292,7 +305,7 @@ impl Session {
 
     /// An atom's value.
     pub fn atom(&self, id: u32) -> Option<&str> {
-        self.tables.atoms.get(id).map(String::as_str)
+        self.tables.atoms.get(id).map(|a| &**a)
     }
 
     /// The first atom defined with this exact value, if any. Used to find
@@ -521,6 +534,12 @@ impl Session {
         self.tables.atom_bytes
     }
 
+    /// Bytes of inline chunks defined so far, by the page and every island
+    /// together — the figure `Limits::max_chunk_total_bytes` bounds.
+    pub fn chunk_bytes(&self) -> usize {
+        self.islands.iter().fold(self.tables.chunk_bytes, |sum, t| sum.saturating_add(t.chunk_bytes))
+    }
+
     /// Number of atoms, styles, colours and chunks defined.
     pub fn table_sizes(&self) -> [usize; 4] {
         [self.tables.atoms.len(), self.tables.styles.len(), self.tables.colors.len(), self.tables.chunks.len()]
@@ -636,23 +655,20 @@ impl Session {
     /// so a scroll step over ten thousand rows clears a handful of nodes.
     pub fn clear_all_dirty(&mut self) {
         let Some(root) = self.root() else { return };
-        let mut stack = vec![root];
-        while let Some(ix) = stack.pop() {
-            let Some(n) = self.arena.get_mut(ix) else { continue };
-            if n.dirty == 0 {
-                continue;
-            }
-            n.dirty = 0;
-            let children = n.children.clone();
-            stack.extend(children.into_iter().filter(|c| self.arena.get(*c).is_some_and(|n| n.dirty != 0)));
-        }
+        self.arena.clear_dirty_from(root);
     }
 
     // -------------------------------------------------------------- apply
 
     /// Apply a batch. On error the session is poisoned and the caller must
     /// resync.
-    pub fn apply(&mut self, batch: &Batch) -> Result<()> {
+    ///
+    /// By value, so what the decoder just allocated — atom strings, prop
+    /// values, inline chunks of up to 64 KiB, whole subtrees — is moved into
+    /// the session rather than copied out of a batch that is then dropped.
+    /// A caller that still wants something from the batch afterwards takes
+    /// it out first.
+    pub fn apply(&mut self, batch: Batch) -> Result<()> {
         if let Some(last) = self.last_seq {
             if batch.seq <= last {
                 self.poisoned = true;
@@ -660,8 +676,8 @@ impl Session {
             }
         }
         self.restore_local_styles();
-        for op in &batch.ops {
-            if let Err(e) = self.apply_op(op) {
+        for op in batch.ops {
+            if let Err(e) = self.apply_owned(op) {
                 self.poisoned = true;
                 return Err(e);
             }
@@ -791,7 +807,7 @@ impl Session {
                     }
                     self.prune_sets();
                     let depth = self.depth_of(at).saturating_add(1);
-                    let root = self.graft(subtree, at, depth)?;
+                    let root = self.graft(subtree.clone(), at, depth)?;
                     if let Some(n) = self.arena.get_mut(at) {
                         n.children.push(root);
                     }
@@ -844,35 +860,56 @@ impl Session {
 
     /// Apply one op. Definitions and `Mount` are accepted while poisoned;
     /// everything else needs a healthy tree.
+    ///
+    /// Borrowed, so the op is copied; [`Session::apply`] moves its ops in.
     pub fn apply_op(&mut self, op: &Op) -> Result<()> {
+        self.apply_owned(op.clone())
+    }
+
+    fn apply_owned(&mut self, op: Op) -> Result<()> {
         match op {
             Op::DefAtom { id, value } => {
                 let total = self.cur().atom_bytes.saturating_add(value.len());
                 if total > self.limits.max_atom_total_bytes {
                     return Err(ApplyError::AtomBudget);
                 }
-                self.cur_mut().atoms.define(*id, value.clone())?;
-                self.cur_mut().atom_ids.entry(value.clone()).or_insert(*id);
+                let value: Arc<str> = Arc::from(value);
+                self.cur_mut().atoms.define(id, Arc::clone(&value))?;
                 // The well-known names stay the page's: they are how *this*
                 // client recognises a prop, and an island that interns
                 // `item_height` under an id of its own means the same by it.
-                self.known.note(*id, value);
-                self.cur_mut().atom_bytes = total;
+                self.known.note(id, &value);
+                let tables = self.cur_mut();
+                tables.atom_ids.entry(value).or_insert(id);
+                tables.atom_bytes = total;
                 Ok(())
             }
             Op::DefStyle { id, record } => {
-                self.check_style_record(record)?;
-                self.cur_mut().styles.define(*id, *record)
+                self.check_style_record(&record)?;
+                self.cur_mut().styles.define(id, record)
             }
-            Op::DefColor { id, rgba } => self.cur_mut().colors.define(*id, *rgba),
-            Op::DefChunk { id, hash } => self.cur_mut().chunks.define(*id, Chunk::Hash(*hash)),
-            Op::DefChunkBytes { id, bytes } => self.cur_mut().chunks.define(*id, Chunk::Bytes(bytes.clone())),
+            Op::DefColor { id, rgba } => self.cur_mut().colors.define(id, rgba),
+            Op::DefChunk { id, hash } => self.cur_mut().chunks.define(id, Chunk::Hash(hash)),
+            Op::DefChunkBytes { id, bytes } => {
+                // Budgeted like atoms, and across every namespace at once:
+                // 64 KiB times 4 095 ids is 256 MiB a namespace, and a page
+                // with its eight islands has nine, which a hostile server
+                // could fill over as many batches as it liked.
+                let len = bytes.len();
+                if self.chunk_bytes().saturating_add(len) > self.limits.max_chunk_total_bytes {
+                    return Err(ApplyError::ChunkBudget);
+                }
+                self.cur_mut().chunks.define(id, Chunk::Bytes(bytes))?;
+                let tables = self.cur_mut();
+                tables.chunk_bytes = tables.chunk_bytes.saturating_add(len);
+                Ok(())
+            }
             Op::DefFont { role, faces } => {
                 // The decoder already bounded the role and the face count;
                 // this is the slot's own check, so a session built by hand
                 // in a test cannot write past the array either.
-                let slot = self.cur_mut().fonts.get_mut(usize::from(*role)).ok_or(ApplyError::UnknownFontRole(*role))?;
-                *slot = Some(faces.clone());
+                let slot = self.cur_mut().fonts.get_mut(usize::from(role)).ok_or(ApplyError::UnknownFontRole(role))?;
+                *slot = Some(faces);
                 Ok(())
             }
             Op::Mount(subtree) => self.mount(subtree),
@@ -898,145 +935,157 @@ impl Session {
         }
     }
 
-    fn apply_tree_op(&mut self, op: &Op) -> Result<()> {
+    fn apply_tree_op(&mut self, op: Op) -> Result<()> {
         match op {
-            Op::Replace { node, subtree } => self.replace(*node, subtree),
+            Op::Replace { node, subtree } => self.replace(node, subtree),
             Op::SetStyle { node, style } => {
-                if *style != 0 {
-                    self.cur().styles.require(*style)?;
+                if style != 0 {
+                    self.cur().styles.require(style)?;
                 }
-                let ix = self.find(*node)?;
+                let ix = self.find(node)?;
                 let n = self.arena.require_mut(ix)?;
                 let old = n.style;
-                n.style = *style;
+                n.style = style;
                 self.local_styles.remove(&ix);
                 self.style_changes.push((ix, old));
                 self.arena.mark_dirty(ix)
             }
             Op::SetText { node, text } => {
-                let ix = self.find(*node)?;
-                self.check_text(text)?;
+                let ix = self.find(node)?;
+                self.check_text(&text)?;
                 let n = self.arena.require_mut(ix)?;
                 if n.kind.is_inert() {
-                    return Err(ApplyError::InertNode(*node));
+                    return Err(ApplyError::InertNode(node));
                 }
-                n.text = Some(text.clone());
+                n.text = Some(text);
                 self.arena.mark_dirty(ix)
             }
             Op::SetProp { node, prop, value } => {
-                let ix = self.find(*node)?;
-                self.cur().atoms.require(*prop)?;
-                self.check_value(value)?;
+                let ix = self.find(node)?;
+                self.cur().atoms.require(prop)?;
+                self.check_value(&value)?;
                 let n = self.arena.require_mut(ix)?;
                 if n.kind.is_inert() {
-                    return Err(ApplyError::InertNode(*node));
+                    return Err(ApplyError::InertNode(node));
                 }
-                match n.props.iter_mut().find(|(a, _)| a == prop) {
-                    Some(slot) => slot.1 = value.clone(),
+                match n.props.iter_mut().find(|(a, _)| *a == prop) {
+                    Some(slot) => slot.1 = value,
                     None => {
                         if n.props.len() >= proto::MAX_PROPS as usize {
-                            return Err(ApplyError::TooManyProps(*node));
+                            return Err(ApplyError::TooManyProps(node));
                         }
-                        n.props.push((*prop, value.clone()));
+                        n.props.push((prop, value));
                     }
                 }
                 self.arena.mark_dirty(ix)
             }
             Op::InsertChild { parent, index, subtree } => {
-                let pix = self.find(*parent)?;
+                let pix = self.find(parent)?;
                 let p = self.arena.require(pix)?;
                 if p.kind.is_leaf() {
-                    return Err(ApplyError::NotAContainer(*parent));
+                    return Err(ApplyError::NotAContainer(parent));
                 }
                 let len = p.children.len() as u32;
-                if *index > len {
-                    return Err(ApplyError::ChildIndexOutOfRange { parent: *parent, index: *index, len });
+                if index > len {
+                    return Err(ApplyError::ChildIndexOutOfRange { parent, index, len });
                 }
                 let depth = self.arena.depth(pix)?;
                 let child = self.graft(subtree, pix, depth.saturating_add(1))?;
-                self.arena.require_mut(pix)?.children.insert(*index as usize, child);
+                self.arena.require_mut(pix)?.children.insert(index as usize, child);
                 self.arena.mark_dirty(pix)
             }
             Op::RemoveChild { parent, index, count } => {
-                let pix = self.find(*parent)?;
+                let pix = self.find(parent)?;
                 let len = self.arena.require(pix)?.children.len() as u32;
-                let end = index.checked_add(*count).ok_or(ApplyError::ChildIndexOutOfRange { parent: *parent, index: *index, len })?;
+                let end = index.checked_add(count).ok_or(ApplyError::ChildIndexOutOfRange { parent, index, len })?;
                 if end > len {
-                    return Err(ApplyError::ChildIndexOutOfRange { parent: *parent, index: end, len });
+                    return Err(ApplyError::ChildIndexOutOfRange { parent, index: end, len });
                 }
-                let removed: Vec<NodeIx> = self.arena.require_mut(pix)?.children.drain(*index as usize..end as usize).collect();
+                let removed: Vec<NodeIx> = self.arena.require_mut(pix)?.children.drain(index as usize..end as usize).collect();
                 for ix in removed {
                     if self.focused_within(ix) {
                         self.focused = NodeIx::NONE;
                     }
                     self.note_exit(ix);
                     self.arena.release(ix)?;
-                    self.prune_sets();
                 }
+                // Once for the whole range, not once per child: each call
+                // walks the media, wake and location lists, and a list
+                // emptied row by row made that rows times their length.
+                self.prune_sets();
                 self.arena.mark_dirty(pix)
             }
             Op::MoveChild { parent, from, to } => {
-                let pix = self.find(*parent)?;
+                let pix = self.find(parent)?;
                 let children = &mut self.arena.require_mut(pix)?.children;
                 let len = children.len() as u32;
-                if *from >= len {
-                    return Err(ApplyError::ChildIndexOutOfRange { parent: *parent, index: *from, len });
+                if from >= len {
+                    return Err(ApplyError::ChildIndexOutOfRange { parent, index: from, len });
                 }
-                if *to >= len {
-                    return Err(ApplyError::ChildIndexOutOfRange { parent: *parent, index: *to, len });
+                if to >= len {
+                    return Err(ApplyError::ChildIndexOutOfRange { parent, index: to, len });
                 }
                 if from != to {
-                    let child = children.remove(*from as usize);
-                    children.insert(*to as usize, child);
+                    let child = children.remove(from as usize);
+                    children.insert(to as usize, child);
                 }
                 self.arena.mark_dirty(pix)
             }
             Op::SetHandler { node, event, handler } => {
-                let ix = self.find(*node)?;
-                self.check_handler(handler)?;
+                let ix = self.find(node)?;
+                self.check_handler(&handler)?;
                 let n = self.arena.require_mut(ix)?;
                 if n.kind.is_inert() {
-                    return Err(ApplyError::InertNode(*node));
+                    return Err(ApplyError::InertNode(node));
                 }
-                match n.handlers.iter_mut().find(|(e, _)| e == event) {
-                    Some(slot) => slot.1 = *handler,
+                // A node is in `wakers` exactly when it carries a `wake`
+                // handler, and `locators` likewise: `graft` adds it with the
+                // handler, `ClearHandler` and `prune_sets` take it away. So
+                // whether it is already listed is whether it already had
+                // one — a look at at most sixteen handlers on the node, not
+                // a search of every waker on the page.
+                let had = n.handler(event).is_some();
+                match n.handlers.iter_mut().find(|(e, _)| *e == event) {
+                    Some(slot) => slot.1 = handler,
                     None => {
                         if n.handlers.len() >= proto::MAX_HANDLERS as usize {
-                            return Err(ApplyError::TooManyHandlers(*node));
+                            return Err(ApplyError::TooManyHandlers(node));
                         }
-                        n.handlers.push((*event, *handler));
+                        n.handlers.push((event, handler));
                     }
                 }
-                if *event == EventKind::Wake && !self.wakers.contains(&ix) {
+                if !had && event == EventKind::Wake {
                     self.wakers.push(ix);
                 }
-                if *event == EventKind::Location && !self.locators.contains(&ix) {
+                if !had && event == EventKind::Location {
                     self.locators.push(ix);
                 }
                 Ok(())
             }
             Op::ClearHandler { node, event } => {
-                let ix = self.find(*node)?;
-                self.arena.require_mut(ix)?.handlers.retain(|(e, _)| e != event);
-                if *event == EventKind::Wake {
+                let ix = self.find(node)?;
+                let n = self.arena.require_mut(ix)?;
+                let had = n.handler(event).is_some();
+                n.handlers.retain(|(e, _)| *e != event);
+                if had && event == EventKind::Wake {
                     self.wakers.retain(|w| *w != ix);
                 }
-                if *event == EventKind::Location {
+                if had && event == EventKind::Location {
                     self.locators.retain(|w| *w != ix);
                 }
                 Ok(())
             }
             Op::Focus { node } => {
-                self.focused = self.find(*node)?;
+                self.focused = self.find(node)?;
                 Ok(())
             }
             Op::ScrollTo { node, x, y } => {
-                let ix = self.find(*node)?;
+                let ix = self.find(node)?;
                 let n = self.arena.require_mut(ix)?;
                 if !matches!(n.kind, NodeKind::Scroll | NodeKind::List) {
-                    return Err(ApplyError::NotScrollable(*node));
+                    return Err(ApplyError::NotScrollable(node));
                 }
-                n.scroll = (*x, *y);
+                n.scroll = (x, y);
                 self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
@@ -1046,13 +1095,17 @@ impl Session {
         }
     }
 
-    fn mount(&mut self, subtree: &Subtree) -> Result<()> {
+    fn mount(&mut self, subtree: Subtree) -> Result<()> {
         if self.root.is_some() {
             self.note_exit(self.root);
             self.arena.release(self.root)?;
             self.prune_sets();
             self.root = NodeIx::NONE;
         }
+        // Between the old tree and the new, nothing is live: the one moment
+        // the arena can hand back what the largest page it ever held left
+        // behind.
+        self.arena.shrink_if_empty(subtree.nodes.len());
         self.focused = NodeIx::NONE;
         let root = self.graft(subtree, NodeIx::NONE, 1)?;
         self.root = root;
@@ -1060,7 +1113,7 @@ impl Session {
         self.arena.mark_dirty(root)
     }
 
-    fn replace(&mut self, id: u32, subtree: &Subtree) -> Result<()> {
+    fn replace(&mut self, id: u32, subtree: Subtree) -> Result<()> {
         let old = self.find(id)?;
         let parent = self.arena.require(old)?.parent;
         if self.focused_within(old) {
@@ -1091,7 +1144,18 @@ impl Session {
 
     /// Validate a subtree against the tables and quotas, then place it under
     /// `parent` with its root at `depth`. Returns the new root's index.
-    fn graft(&mut self, subtree: &Subtree, parent: NodeIx, depth: u32) -> Result<NodeIx> {
+    ///
+    /// **All or nothing.** Every refusal a subtree can earn — a bad
+    /// reference, an id already live, an id used twice *within* the subtree,
+    /// a node past the depth limit, a shape that does not close — is found
+    /// before the first node is allocated. It used to be that the last three
+    /// were found during placement, which left the nodes placed so far live
+    /// in the arena with no parent: the session was poisoned as it should
+    /// be, and then the resync's `Mount`, carrying the same ids, was refused
+    /// as a duplicate of those orphans, and the session closed. Placement can
+    /// now fail only on a broken arena invariant, and even then what was
+    /// placed is released before the error is returned.
+    fn graft(&mut self, mut subtree: Subtree, parent: NodeIx, depth: u32) -> Result<NodeIx> {
         let incoming = u32::try_from(subtree.nodes.len()).map_err(|_| ApplyError::TooManyNodes)?;
         if incoming == 0 {
             return Err(ApplyError::CannotRemoveRoot);
@@ -1102,6 +1166,7 @@ impl Session {
 
         // Validate every reference first, so a bad node deep in the subtree
         // does not leave half a graft in the arena before poisoning.
+        let mut ids: FastSet<u32> = FastSet::with_capacity_and_hasher(subtree.nodes.len(), Default::default());
         for flat in &subtree.nodes {
             if flat.style != 0 {
                 self.cur().styles.require(flat.style)?;
@@ -1116,31 +1181,96 @@ impl Session {
             for (_, handler) in subtree.handlers_of(flat) {
                 self.check_handler(handler)?;
             }
-            if self.arena.lookup(self.applying, flat.id).is_some() {
+            if !ids.insert(flat.id) || self.arena.lookup(self.applying, flat.id).is_some() {
                 return Err(ApplyError::DuplicateNode(flat.id));
             }
         }
+        drop(ids);
 
-        // Pre-order placement. `open` holds (parent index, children still to
-        // come, depth of those children).
-        let mut open: Vec<(NodeIx, u32, u32)> = Vec::new();
-        let mut root = NodeIx::NONE;
-        for flat in &subtree.nodes {
-            let (p, d) = match open.last() {
-                Some(&(p, _, d)) => (p, d),
-                None => (parent, depth),
+        // Then the shape, walked exactly as placement will walk it but
+        // allocating nothing: every node's depth against the limit, and a
+        // subtree that is one tree and closes.
+        let mut open: Vec<(u32, u32)> = Vec::new();
+        for (i, flat) in subtree.nodes.iter().enumerate() {
+            let d = match open.last() {
+                Some(&(_, d)) => d,
+                // Past the first node, an empty stack is a second root: a
+                // node placement would hang from nothing. The decoder refuses
+                // this, so reaching here is a caller bug.
+                None if i > 0 => return Err(ApplyError::Internal),
+                None => depth,
             };
             if d > self.limits.max_depth {
                 return Err(ApplyError::TooDeep);
             }
+            if let Some(top) = open.last_mut() {
+                top.0 = top.0.saturating_sub(1);
+            }
+            if flat.child_count > 0 {
+                open.push((flat.child_count, d.saturating_add(1)));
+            } else {
+                while matches!(open.last(), Some(&(0, _))) {
+                    open.pop();
+                }
+            }
+        }
+        if !open.is_empty() {
+            // A subtree that promised more children than it carried. The
+            // decoder rejects this, so reaching here is a caller bug.
+            return Err(ApplyError::Internal);
+        }
+
+        let entrances = self.entrances.len();
+        let mut root = NodeIx::NONE;
+        match self.place(&mut subtree, parent, depth, &mut root) {
+            Ok(()) => Ok(root),
+            Err(e) => {
+                if root.is_some() {
+                    // Every node placed hangs below the root by now, so this
+                    // takes all of them; the lists that noted any are pruned.
+                    let _ = self.arena.release(root);
+                }
+                self.entrances.truncate(entrances);
+                self.prune_sets();
+                Err(e)
+            }
+        }
+    }
+
+    /// The placement half of [`Session::graft`], on a subtree it has already
+    /// checked. Writes the root to `root` as soon as it exists, so a failure
+    /// after it can be undone.
+    ///
+    /// Takes the subtree's text and prop values rather than copying them —
+    /// the batch they came in is being consumed.
+    fn place(&mut self, subtree: &mut Subtree, parent: NodeIx, depth: u32, root: &mut NodeIx) -> Result<()> {
+        let mut props = std::mem::take(&mut subtree.props);
+        let all_handlers = std::mem::take(&mut subtree.handlers);
+        // Pre-order placement. `open` holds (parent index, children still to
+        // come, depth of those children).
+        let mut open: Vec<(NodeIx, u32, u32)> = Vec::new();
+        for flat in &mut subtree.nodes {
+            let (p, d) = match open.last() {
+                Some(&(p, _, d)) => (p, d),
+                None => (parent, depth),
+            };
+            let (start, len) = flat.props;
+            let own: Vec<(u32, Value)> = props
+                .get_mut(start as usize..(start as usize).saturating_add(len as usize))
+                .map(|slice| slice.iter_mut().map(|(a, v)| (*a, std::mem::replace(v, Value::Null))).collect())
+                .unwrap_or_default();
+            let (start, len) = flat.handlers;
+            let handlers = all_handlers.get(start as usize..(start as usize).saturating_add(len as usize)).unwrap_or(&[]).to_vec();
+            let wakes = handlers.iter().any(|(e, _)| *e == EventKind::Wake);
+            let locates = handlers.iter().any(|(e, _)| *e == EventKind::Location);
             let ix = self.arena.alloc(Node {
                 id: flat.id,
                 kind: flat.kind,
                 style: flat.style,
                 key: flat.key,
-                text: flat.text.clone(),
-                props: subtree.props_of(flat).to_vec(),
-                handlers: subtree.handlers_of(flat).to_vec(),
+                text: flat.text.take(),
+                props: own,
+                handlers,
                 parent: p,
                 children: Vec::with_capacity(flat.child_count as usize),
                 scroll: (0, 0),
@@ -1148,7 +1278,7 @@ impl Session {
                 owner: self.applying,
             })?;
             if root.is_none() {
-                root = ix;
+                *root = ix;
             }
             // Every new node in the session passes through here — `Mount`,
             // `Replace` and `InsertChild` all graft — so this is the one
@@ -1159,10 +1289,10 @@ impl Session {
             if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {
                 self.media.push(ix);
             }
-            if subtree.handlers_of(flat).iter().any(|(e, _)| *e == EventKind::Wake) {
+            if wakes {
                 self.wakers.push(ix);
             }
-            if subtree.handlers_of(flat).iter().any(|(e, _)| *e == EventKind::Location) {
+            if locates {
                 self.locators.push(ix);
             }
             if let Some(top) = open.last_mut() {
@@ -1177,12 +1307,7 @@ impl Session {
                 }
             }
         }
-        if !open.is_empty() {
-            // A subtree that promised more children than it carried. The
-            // decoder rejects this, so reaching here is a caller bug.
-            return Err(ApplyError::Internal);
-        }
-        Ok(root)
+        Ok(())
     }
 
     // ---------------------------------------------------------- checking

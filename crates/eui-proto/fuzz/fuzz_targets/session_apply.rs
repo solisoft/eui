@@ -12,7 +12,7 @@ fuzz_target!(|data: &[u8]| {
     while !r.is_empty() {
         let Ok(op) = Op::decode(&mut r) else { break };
         seq += 1;
-        let _ = session.apply(&Batch { seq, ops: vec![op] });
+        let _ = session.apply(Batch { seq, ops: vec![op] });
         if let Some(root) = session.root() {
             assert_eq!(session.preorder(root).count() as u32, session.live_nodes());
         }

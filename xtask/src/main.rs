@@ -126,7 +126,7 @@ fn bench() -> Vec<Row> {
     let before = rss_kb();
     let mut session = Session::new();
     let s = Instant::now();
-    session.apply(&batch).unwrap();
+    session.apply(batch).unwrap();
     let applied = s.elapsed();
     rows.push(Row { what: "apply table-10k (50 002 nodes)", value: format!("{applied:?}"), budget: "< 30 ms", ok: applied < Duration::from_millis(30) });
 

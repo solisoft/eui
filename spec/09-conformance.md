@@ -108,6 +108,7 @@ found to be two rules that contradicted each other.
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
 | `reject.rs` | 64 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
+| `alloc.rs` | 08 §5's reservation rule, watched at the allocator: a value list whose header claims `MAX_VALUE_LIST` items and carries none is refused as truncated having reserved under 4 KiB, not the 40 MB its count asked for |
 | `reject.rs`, again | **06 §4's payload shapes**, which are not decode failures: every payload there is a well-formed `Value` in a valid frame, and the question is whether it means what its kind says. A `click` carrying a string, a null, one coordinate, three, or a thousand; a fractional button, slot or scroll offset; a payload on a kind that declares `Null`; an NFC tag whose records are not pairs. Plus the two properties the rest rests on: an integer stands in for a float and never the reverse, and **no kind accepts a payload of nonsense** — the vector that stops a catch-all arm turning the whole check into a no-op |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused, and an `icon` makes it a version 2 record while a manifest without one stays byte-for-byte version 1 |
 
@@ -145,6 +146,16 @@ node, key) validated before anything is placed; `MoveChild` indexes after
 removal. Font roles are the one table that is not define-once: a role holds
 the faces bound to it, may be bound again, and one past the last is refused
 in the session as well as in the decoder.
+
+`apply.rs` also pins the quotas that are session state (02 §6):
+`chunk_bytes_have_one_budget_across_the_page_and_its_islands` refuses the
+inline chunk that would pass `MAX_CHUNK_TOTAL_BYTES`, counting an island's
+bytes against the page's; `atom_budget_is_enforced_before_storing` does the
+same for atoms. And that a refused graft is refused **whole**:
+`a_refused_graft_leaves_nothing_behind_and_the_resync_lands` sends a subtree
+with an id used twice, one past the depth limit, and a bad `InsertChild`,
+and requires that none leaves a node live — so the resync's `Mount`, which
+carries the same ids, lands rather than being refused as a duplicate.
 
 ## 4. Layout — `crates/eui-layout/tests/layout.rs`
 

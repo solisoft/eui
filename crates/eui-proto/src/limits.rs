@@ -41,6 +41,13 @@ pub const MAX_VALUE_LIST: u32 = 1_000_000;
 
 /// Largest inline bytecode chunk, in bytes.
 pub const MAX_CHUNK_BYTES: usize = 64 * 1024;
+/// Largest total of all inline chunk bytes a session holds, in bytes —
+/// the page's and every island's together.
+///
+/// The mirror of [`MAX_ATOM_TOTAL_BYTES`], which chunks lacked: 64 KiB times
+/// [`MAX_CHUNKS`] ids is 256 MiB a namespace, and a page and its islands
+/// have nine namespaces. Session state, so enforced by the tree layer.
+pub const MAX_CHUNK_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 
 /// Largest `bytes` field of one `Upload` or `Blob` frame (01 §6). Small
 /// enough that a file moves as a stream the window can interleave with

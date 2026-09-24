@@ -16,7 +16,7 @@ fuzz_target!(|data: &[u8]| {
     while !r.is_empty() {
         let Ok(op) = Op::decode(&mut r) else { break };
         seq += 1;
-        let _ = session.apply(&Batch { seq, ops: vec![op] });
+        let _ = session.apply(Batch { seq, ops: vec![op] });
     }
     let Some(root) = session.root() else { return };
     let theme = Theme::default().resolve(Viewer::default());

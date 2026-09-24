@@ -57,7 +57,7 @@ impl B {
         ops.extend(self.styles.iter().enumerate().map(|(i, r)| Op::DefStyle { id: i as u32 + 1, record: *r }));
         ops.push(Op::Mount(Subtree { nodes: self.nodes, props: self.props, handlers: Vec::new() }));
         let mut s = Session::new();
-        s.apply(&Batch { seq: 1, ops }).unwrap();
+        s.apply(Batch { seq: 1, ops }).unwrap();
         s
     }
 }
@@ -481,7 +481,7 @@ fn scroll_clips_offsets_and_reports_content_size() {
     let scroll = b.push(NodeKind::Scroll, sc, 10);
     let rows: Vec<u32> = (0..10).map(|i| b.text(t, &format!("row {i}"))).collect();
     let mut s = b.session();
-    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 50 }] }).unwrap();
+    s.apply(Batch { seq: 2, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 50 }] }).unwrap();
     let (l, _) = lay(&s, 800.0, 600.0);
     let six = s.lookup(scroll).unwrap();
     assert_rect(&l, &s, scroll, 0.0, 0.0, 800.0, 100.0);
@@ -493,7 +493,7 @@ fn scroll_clips_offsets_and_reports_content_size() {
     // … but a row scrolled out of the box is not hittable through the clip.
     assert_eq!(l.hit(&s, 10.0, 150.0), s.lookup(1));
     // An offset past the end is clamped: content 220 − viewport 100 = 120.
-    s.apply(&Batch { seq: 3, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 9_999 }] }).unwrap();
+    s.apply(Batch { seq: 3, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 9_999 }] }).unwrap();
     let (l, _) = lay(&s, 800.0, 600.0);
     assert_rect(&l, &s, rows[9], 0.0, 78.0, 800.0, 22.0);
 }
@@ -555,14 +555,14 @@ fn a_scroll_keeps_the_row_tops_it_already_added_up() {
     assert_eq!(l.row_tops(list).map(<[f32]>::len), Some(1001));
 
     // A scroll: the window moves, the tops do not.
-    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    s.apply(Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
     s.clear_all_dirty();
     frame(&mut l, &s);
     assert_eq!(l.stats().rows_added_up, 0, "a scrolled frame adds nothing up");
     assert_rect(&l, &s, rows[200], 0.0, 0.0, 800.0, 22.0);
 
     // A row that grows is a change: the tops below it move.
-    s.apply(&Batch { seq: 3, ops: vec![Op::SetProp { node: rows[100], prop: 1, value: Value::Int(60) }] }).unwrap();
+    s.apply(Batch { seq: 3, ops: vec![Op::SetProp { node: rows[100], prop: 1, value: Value::Int(60) }] }).unwrap();
     frame(&mut l, &s);
     assert_eq!(l.stats().rows_added_up, 1, "a taller row is added up again");
     assert_rect(&l, &s, rows[200], 0.0, 40.0, 800.0, 22.0);
@@ -590,7 +590,7 @@ fn a_glide_widens_the_virtual_window_and_moves_the_hit() {
     let list = s.lookup(list_id).unwrap();
 
     // Landing at 4 000, gliding from 3 800: rows around both are placed.
-    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    s.apply(Batch { seq: 2, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
     l.set_glide(list, 3_800.0, 4_000.0, (0.0, 200.0));
     frame(&mut l, &s);
     assert!(l.rect(s.lookup(rows[186]).unwrap()).is_some(), "a row a viewport above the start of the travel");
@@ -606,7 +606,7 @@ fn a_glide_widens_the_virtual_window_and_moves_the_hit() {
     assert_eq!(l.hit(&s, 10.0, 10.0), s.lookup(rows[200]), "landed: what the layout put there");
     // Without the glide the same layout holds only the rows around 4 000.
     s.clear_all_dirty();
-    s.apply(&Batch { seq: 3, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
+    s.apply(Batch { seq: 3, ops: vec![Op::ScrollTo { node: list_id, x: 0, y: 4_000 }] }).unwrap();
     frame(&mut l, &s);
     assert!(l.rect(s.lookup(rows[186]).unwrap()).is_none(), "a viewport above the start of the travel is out of the window at rest");
 }
@@ -633,7 +633,7 @@ fn a_scroll_keeps_the_measures_of_what_did_not_move() {
     frame(&mut l, &s);
     assert!(l.stats().measures > 30, "the first frame measures everything: {}", l.stats().measures);
     s.clear_all_dirty();
-    s.apply(&Batch { seq: 2, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 40 }] }).unwrap();
+    s.apply(Batch { seq: 2, ops: vec![Op::ScrollTo { node: scroll, x: 0, y: 40 }] }).unwrap();
     let root = s.lookup(1).unwrap();
     assert_eq!(s.node(root).unwrap().dirty, eui_tree::dirty::BELOW_UNMEASURED, "the root is told something below scrolled, and no more");
     frame(&mut l, &s);
