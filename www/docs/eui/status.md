@@ -22,25 +22,42 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 93 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
-  4 frame-walking,
+- 97 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
+  5 frame-walking, 1 that watches the allocator,
   **64 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
-  cannot panic by construction, not merely by inspection.
+  cannot panic by construction, not merely by inspection. The deny is written
+  at the crate root of `eui-proto`, `eui-tree` and `eui-vm` (outside their
+  tests), not left to the workspace's `warn` and a CI flag, because the
+  platforms differ in what a panic costs: on the desktop the decoder, the tree
+  and the VM run in the worker process, and a panic kills the worker; on iOS,
+  Android, the web and under `EUI_SANDBOX=0` they run inside the application,
+  under `panic = "abort"`, and a panic a server can reach closes the app.
 
 **`eui-tree` — session state.** The four define-once tables, the node arena
 with a free list, and `apply` for every op in the wire format.
 
 - Every reference — style, atom, colour, chunk, node id — is checked against
   the tables *before* anything is placed, so an invalid node deep in a subtree
-  leaves nothing behind.
-- Node, depth and atom-byte quotas are checked before the memory they bound is
-  allocated. Subtree removal is an iterative walk, never a recursive drop.
+  leaves nothing behind. So are an id used twice within one subtree and a
+  node past the depth limit, which used to be found halfway through placing
+  and left the placed half live with no parent — enough to have the resync's
+  `Mount` refused as a duplicate and the session closed.
+- Node, depth, atom-byte and chunk-byte quotas are checked before the memory
+  they bound is allocated; inline chunks have one 8 MiB total for a page and
+  all its islands. Subtree removal is an iterative walk, never a recursive
+  drop, and a `Mount` that finds nothing live gives the arena's high-water
+  slots back.
+- A batch is applied by value: atom strings, prop values, inline chunks and
+  subtrees are moved from the decoded frame into the tree, not copied. Atoms
+  are held once, shared with the reverse index that used to keep a second
+  copy of each. The node-id index hashes with a seeded folded multiply rather
+  than SipHash — seeded because the ids are a server's to choose.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 35 tests, including a random op stream that must keep the arena's live
+- 47 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -69,10 +86,22 @@ now normative.
   and a `list` that **does not measure rows it cannot see** — a thousand-row
   list shapes about a dozen.
 - Two phases: `measure` is memoised per frame and pure, `arrange` runs once
-  per node. Hit-testing honours stacking order and scroll clipping.
+  per node. Hit-testing honours stacking order and every clip the painter
+  applies (`scroll`, `list`, `overflow: clip`), and skips what the painter
+  culls — a node whose box misses its clip, with everything under it — so a
+  hit visits what is on screen rather than the whole tree. A stack's paint
+  order is kept from the layout rather than sorted per hit.
+- A frame whose only change is a scroll offset moves the boxes under the
+  scroller instead of laying the tree out again (`Layout::scroll`, 04 §7);
+  a virtualised list, a popover under the scroller, or any other change
+  falls back to the full layout, and a test compares the two box for box.
+- The per-node maps (the measure memo, resolved styles, glides, placed
+  rows) hash with a multiply-rotate hasher of the crate's own rather than
+  SipHash; the painter's text cache uses it too. Still no dependency beyond
+  the other EUI crates.
 - Text shaping is behind a trait; tests use a fixed-pitch stand-in so the
   goldens pin exact pixels.
-- 36 golden tests.
+- 43 golden tests, and 2 unit tests for the hasher.
 
 **`eui-text` — shaping and rasterisation.** Over `cosmic-text`, the one
 third-party dependency on the CPU side of the client: shaping is the part of
@@ -98,7 +127,9 @@ text that must not be reinvented.
   measures a run under several constraints per frame and shapes it once.
   The key holds the *role*, so rebinding one drops what was shaped under it.
 - Glyph rasterisation at a device scale behind an opaque key, for the
-  renderer's atlas.
+  renderer's atlas. The atlas is the cache: the bitmap is made, lent to the
+  packer and dropped, where `cosmic-text`'s own cache kept a second copy of
+  every glyph at every scale the session had seen, and never let go of it.
 - The pointer's shape is held while a hover is owed. It comes from the node's
   style, and a `local` hover handler is what puts a beam there — so every
   batch, which restores the style the server last sent before diffing against
@@ -132,7 +163,7 @@ text that must not be reinvented.
   drops trailing glyphs of the last line so the mark fits inside the width it
   was given — otherwise the one line that says "there is more" would be the
   one line that overflows (04 §3).
-- 24 tests, one of which lays out real glyphs through `eui-layout`.
+- 26 tests, one of which lays out real glyphs through `eui-layout`.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per
 scissor region.
@@ -142,7 +173,18 @@ scissor region.
   from the signed distance to the edge, so boxes, hairlines, borders and
   glyphs share one instanced pipeline over `wgpu`.
 - Glyphs are rasterised on demand into a single R8 atlas, shelf-packed, grown
-  once.
+  once to 2048², and emptied and packed again when that fills — before, the
+  next glyph was drawn as nothing until a rescale. The frame that empties it
+  is painted once more, so no quad names where a glyph used to be.
+- Pictures go into an RGBA atlas of their own, 2048², which tracks what
+  changed as rectangles: a video's frame is uploaded, and sent across a
+  worker's pipe, as its own texels rather than the 8 KiB rows it sits on.
+- A blur's textures are made a multiple of 128 px a side and kept while
+  the blurred region moves or resizes within that, with their views and
+  bind groups; a sliding panel no longer makes all of them again each frame.
+- Compiled scene modules are capped at 32 per window process, least
+  recently drawn dropped first with its pipelines; the source is kept, so a
+  scene that names one again compiles it afresh.
 - Quads are snapped to device pixels at paint time; `scroll` and `list`
   become scissor rects; anything outside its clip is culled before it reaches
   the GPU; virtualised rows paint their box and shape no text.
@@ -157,7 +199,7 @@ scissor region.
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
   scroll clipping at the pixel, stack z order.
-- 68 tests. Shadows, images and canvas paths each have one now; what is
+- 77 tests (17 unit, 60 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -171,7 +213,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 113 tests.
+  trip. 118 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
@@ -189,7 +231,8 @@ without the third.
 - **End to end**, over a real socket against the example counter server:
   Welcome, Mount, a click leaving as an event of under 40 bytes, the new
   value coming back, a resync that restores the server's state, and a forged
-  event that the server refuses. 2 tests.
+  event that the server refuses; and an upload's backlog, counted against a
+  server that stops reading until the socket drains. 3 tests.
 
 The end-to-end run found a protocol mistake on both sides: a re-mount after
 `Resync` was repeating definitions, and the client was answering a rejected
@@ -420,7 +463,7 @@ the page's server never created. `island_ended` releases nothing: 01 §2.7's
 part that could take a still page with it would make every island a liability.
 
 `crates/eui-client/tests/islands.rs` exists now — it was the one file `spec/09`
-named that did not — with eight vectors, five more in
+named that did not — with fifteen vectors now, eight more in
 `eui-tree/tests/apply.rs`. The refusal worth naming is `//host/path`: a
 protocol-relative URL is a different origin *and* starts with a slash, which
 is exactly how the obvious spelling of that check lets it through.
@@ -446,7 +489,7 @@ decide where a socket connects.
 
 It reaches the worker, so the protocol grew four requests — `IslandsWanted`,
 `OpenIsland`, `IslandFrame`, `IslandEnded` — two payloads and one status
-field. `island_outbound` is a field of its own rather than a tag inside
+field — two since islands learned to close, below. `island_outbound` is a field of its own rather than a tag inside
 `outbound`, for the same reason the driver keeps two queues: a separate field
 has to be read to be sent, and so cannot become the page's by being
 forgotten. `Backend::take_island_outbound()` is one drain rather than a
@@ -461,6 +504,24 @@ laid out is not the same as not there — a node the layout has not reached has
 no rect at all, and opening a session for it would be guessing — so both wait,
 and both are asked again on the next pump, because a scroll that brings one
 into view is a frame and a frame is a pump.
+
+**Islands close, and their slots come back.** An audit found that nothing
+ever removed an island: `open_island` pushed a set of tables and a root and
+nothing took either back, so the ninth island a long session ever opened was
+refused however few were open, and each dead slot held a whole set of tables.
+Worse, the window's socket outlived its host: after a page `Mount` the next
+island frame was grafted under whatever node had been given the host's arena
+index. Now `Session::close_island` releases what the island grafted (the
+page's own children under the node stay), drops its tables and frees its
+slot for the next; `prune_sets` does the same for an island whose host was
+released, before anything can be grafted onto the host's index, and a frame
+for it afterwards is refused. The driver closes an island the tree stops
+asking for, and reports every island it ended on its own account through
+`take_islands_ended()` — the second status field — so the window drops the
+socket before it opens another that may be given the same owner. An island
+whose socket ended keeps its slot while its node stands, since that is what
+draws the content it left; it used to be offered straight back and redialled
+on every pump.
 
 What is left is an end-to-end run against a Soli server serving one, which
 `soli_e2e` is the place for and which no CI has a server to do.
@@ -482,6 +543,22 @@ explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
 the end-to-end test fetches from the real server.
 
+The store has a budget now, 128 MiB a session (spec 10, *Assets*): a
+picture is held once, as the pixels the sheet takes — no more than 1024 on
+a side — with its PNG or JPEG file let go once they are decoded, and past
+the budget what the page no longer names goes, least recently used first. A
+fetch is capped at what is left once the named assets are counted, and
+abandoned on its `Content-Length` when it will not fit. Before, every
+picture a tab had ever shown stayed resident twice, file and full-size
+pixels. Decoded sounds and moving pictures are held only while a node names
+them, under session totals of their own (256 MiB and 192 MiB).
+
+Decoding is off the thread that paints: two threads, started before the
+worker locks itself down, take pictures, sounds and moving pictures, and
+what they make lands at the next tick with only the nodes that show it
+measured again. Fetches go four at a time per origin, and a server that
+goes quiet for 15 seconds is given up on and asked again.
+
 **The catalogue, second half.** `eui_builders.sl` now composes 491 builders
 widgets from the primitives: buttons in four variants with local states,
 checkbox, switch, badge, chip, card, stat, tabs, segmented control,
@@ -502,7 +579,10 @@ the instant it is pressed — and the effects of a local-then-server handler
 are **provisional** now (spec 07 §6): the client puts the old values back
 the moment the server's answer arrives, before applying it, so a server that
 confirms sends the change and one that does not sends nothing, and the
-client agrees either way. The scrollbar's thumb fills its strip under the
+client agrees either way. What it keeps to put back is one entry per node
+and field — the oldest value, which is the server's — and at most 4 096 of
+them: it kept every step, a copy of the whole text per keystroke, until a
+batch came, which against a server that sends none is never. The scrollbar's thumb fills its strip under the
 pointer and while dragged.
 
 **Memory, measured on the feed** (release client, the machine's 1.5×
@@ -633,7 +713,11 @@ the only one that names no node, and the `notifications` capability is the
 whole of the gate: nothing in the tree asks for a notification, so there is
 nothing else to refuse. Four to a batch, refused past that. Nothing comes
 back — not shown, not clicked, not dismissed — and clicking one brings the
-window forward and tells the server nothing. A notification goes to the
+window forward and tells the server nothing. The `notify-send` that waits
+for that click is one per tag — a notification that replaces another stops
+the older one's wait — and at most sixteen at once, the oldest stopped
+first; they used to pile up, a process and a thread per message, on daemons
+that keep a notification with an action until it is dismissed. A notification goes to the
 session whose handler called it; `eui_wake` is how the other windows are
 given the chance to notify themselves.
 
@@ -641,7 +725,9 @@ given the chance to notify themselves.
 on Linux, UIA on Windows, AX on macOS — with the mapping of spec 03 §6:
 click handlers are buttons named by their text, editable nodes are text
 fields, text is a label, the rest are groups. The tree is built only when
-an assistive technology asks and refreshed after a paint while one listens;
+an assistive technology asks, and refreshed after a paint while one listens
+— only a paint that changed the tree, its layout or the focus, which the
+driver counts, so a spinner turning under a screen reader rebuilds nothing;
 its focus and click actions become the same inputs Tab and Enter produce.
 `--no-default-features` builds without it.
 
@@ -926,12 +1012,23 @@ window stands.
 355–500 µs through a worker: two round trips over the pipe, 80–100 µs
 each, and 47 KB of draw list coming back — 96 bytes a quad, in the shape
 the renderer uploads, against 27 bytes going out. Both are inside the
-2 ms budget. Only the rows of an atlas that changed cross, not the
-atlas. What the boundary
+2 ms budget. Only what changed in an atlas crosses, not the atlas: bands of
+rows for the glyph atlas, rectangles for the picture atlas — a 320×240
+video frame is 300 KB, where its full-width rows were 1.9 MB. What the boundary
 does not do yet: confine the worker on macOS (`sandbox_init`) or Windows
 (AppContainer), where it is its own process but not a sandboxed one, and
 fold an input into the paint that follows it, which would make it one
 round trip a frame rather than two.
+
+Pointer moves no longer cost a round trip each. The window keeps the latest
+one and hands it on when any other event arrives or the loop is about to
+wait, so a mouse reporting at 1 000 Hz is one move per pass rather than one
+blocking call per report. The driver counts a move as a change only when
+something the list could show moved — what the pointer is over, a panel
+following it, a gesture in flight — so a move over a page with a spinner
+leaves the last list standing, and a paint answered with the list the worker
+sent last time crosses the pipe as a few bytes (`PaintAgain`) rather than
+the list again.
 
 That measurement is what found the real cost of a scrolled frame, and it
 was not the pipe. A virtualised list added its rows' heights up on every
@@ -1210,8 +1307,20 @@ rather than GTK — on their own thread, so a modal panel never stops the
 window drawing. The window does the filesystem, as it does the socket and
 the GPU: the worker cannot open a file and must not be able to, so what
 crosses the pipe is a name, a size, and opaque bytes. A file is read two
-chunks ahead of the socket and no further, so a large attachment costs the
-same memory whatever it weighs.
+chunks ahead of the window, and the window takes a chunk only while the
+socket's unwritten backlog is under eight — none while there is no socket —
+so a large attachment costs at most twelve chunks, 3 MiB, whatever it
+weighs. This paragraph said "two chunks ahead of the socket" for a while
+after the window had started draining the reader into an unbounded channel;
+an audit found the whole file could wait there on a slow link. The
+connection counts its unwritten bytes now (`Connection::backlog`), and the
+writer wakes the window when they fall back under four chunks.
+
+While there is no socket at all, what the person does is held for the next
+one — but no longer everything: what a clock raised (`wake`, `location`, a
+sound's `timeupdate` and `level`) is dropped, a report of state replaces the
+one held for the same node and event unless something else happened in
+between, and the queue stops at 256 frames and 1 MiB (01 §4.1).
 
 The sharp edge is on the way in: a `Blob` for a node with no open save ends
 the session, because that is a server trying to write a file nobody offered
@@ -1315,8 +1424,11 @@ implements it and the vectors that pin it:
 - **Transport** (`01`) — the session, the one-shot render of §2.4, tree
   adoption (§2.6) and content-addressed assets are implemented, and so are
   the signed manifest and its pin store: `crates/eui-client/src/manifest.rs`
-  verifies the Ed25519 signature, pins under `app_id` and refuses a changed
-  key without a rotation, with vectors in `tests/manifest.rs` and
+  verifies the Ed25519 signature, pins under the origin and `app_id`
+  together (remembered grants likewise, so a manifest copied onto another
+  host inherits neither; pins and grants kept by `app_id` alone before that
+  are ignored, and each application is trusted and asked once more) and
+  refuses a changed key without a rotation, with vectors in `tests/manifest.rs` and
   `tests/install.rs`. This line said otherwise for some time after it
   stopped being true. Still specified and not built: the `pin` field of
   §2.1's manifest, which has no slot in the key table below it and no code

@@ -67,6 +67,39 @@ found to be two rules that contradicted each other.
    kind wrongly dialling opens a session when a window is dragged, and one
    wrongly not dialling drops a click into nothing.
 
+### 1.2 Assets — `crates/eui-client/tests/assets.rs`
+
+01 §2.2's budget, and 10's number for it.
+
+1. **A response past the room left is abandoned on its declared length.**
+   `a_fetch_past_the_room_left_is_abandoned`: one byte over the room is
+   `TooLarge`, exactly the room is the body.
+2. **A still is held once, and everything held is counted.**
+   `the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`: a PNG's
+   file goes when its pixels are held, a WebP's stays, and `held` is the sum.
+3. **Past the budget, what nothing names goes, oldest first; what is named
+   stays.** `the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
+   including that the natural size outlives the pixels and that a hash let
+   go is fetched again when it is named again;
+   `the_driver_lets_go_of_a_picture_the_page_stopped_showing` is the same
+   through the driver, with the room measured against the named picture.
+4. **A failed fetch is tried again.** `a_failed_fetch_is_asked_for_again`:
+   the retry is not due at once, is due after its wait, and asks.
+5. **A silent server is given up on.** `a_server_that_stops_talking_is_given_up_on`:
+   a server that accepts and says nothing is a `Timeout` on the idle limit.
+6. **A page of pictures is a few connections.**
+   `a_page_of_pictures_is_fetched_by_a_few_workers`: sixteen fetches at
+   once are all answered, with never more than `FETCHES_PER_ORIGIN`
+   connections open to the origin.
+7. **A picture is decoded off the thread that paints.**
+   `a_picture_is_decoded_off_the_painting_thread`: handed over, it is not
+   held yet; the driver asks to be woken while it is in flight; it lands on
+   a tick; the words beside it are not measured again; and the driver is at
+   rest once it has landed. `crates/eui-client/tests/worker.rs`'s
+   `a_picture_is_decoded_in_the_confined_worker_and_lands_later` is the
+   same across the process boundary, where the decode threads run under
+   seccomp.
+
 ## 2. Wire format — `crates/eui-proto/tests`
 
 | File | Pins |
@@ -75,6 +108,7 @@ found to be two rules that contradicted each other.
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
 | `reject.rs` | 64 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
+| `alloc.rs` | 08 §5's reservation rule, watched at the allocator: a value list whose header claims `MAX_VALUE_LIST` items and carries none is refused as truncated having reserved under 4 KiB, not the 40 MB its count asked for |
 | `reject.rs`, again | **06 §4's payload shapes**, which are not decode failures: every payload there is a well-formed `Value` in a valid frame, and the question is whether it means what its kind says. A `click` carrying a string, a null, one coordinate, three, or a thousand; a fractional button, slot or scroll offset; a payload on a kind that declares `Null`; an NFC tag whose records are not pairs. Plus the two properties the rest rests on: an integer stands in for a float and never the reverse, and **no kind accepts a payload of nonsense** — the vector that stops a catch-all arm turning the whole check into a no-op |
 | `manifest.rs` | The manifest record round-trips, its signed bytes are rebuilt exactly, malformed records are refused, and an `icon` makes it a version 2 record while a manifest without one stays byte-for-byte version 1 |
 
@@ -113,6 +147,16 @@ removal. Font roles are the one table that is not define-once: a role holds
 the faces bound to it, may be bound again, and one past the last is refused
 in the session as well as in the decoder.
 
+`apply.rs` also pins the quotas that are session state (02 §6):
+`chunk_bytes_have_one_budget_across_the_page_and_its_islands` refuses the
+inline chunk that would pass `MAX_CHUNK_TOTAL_BYTES`, counting an island's
+bytes against the page's; `atom_budget_is_enforced_before_storing` does the
+same for atoms. And that a refused graft is refused **whole**:
+`a_refused_graft_leaves_nothing_behind_and_the_resync_lands` sends a subtree
+with an id used twice, one past the depth limit, and a bad `InsertChild`,
+and requires that none leaves a node live — so the resync's `Mount`, which
+carries the same ids, lands rather than being refused as a duplicate.
+
 ## 4. Layout — `crates/eui-layout/tests/layout.rs`
 
 Goldens against the fixed-pitch measurer (9 px per character, 22 px lines):
@@ -125,6 +169,18 @@ and nothing checked: a `slot` lays out as a column where a `box` with the same
 style lays out as a row, and a `slot` that is `display: none` is still gone —
 the kind decides the direction and must not put back a node the author took
 out of the flow.
+
+And **what is hit is what is painted** (03 §2 item 7):
+`overflow_clip_trims_the_hit_as_it_trims_the_paint` refuses a point on text
+an `overflow: clip` box cut away, and `what_is_culled_from_the_paint_is_not_hit`
+refuses a child that spills out of a box scrolled wholly out of view — the
+painter drops that box and everything under it, and so must a hit.
+
+A scroll is not a new layout (04 §7): `a_scroll_alone_translates_to_what_a_full_layout_places`
+moves the boxes under scrollers that scrolled — nested, clamped past the end,
+a stack out of z order among them — and compares every box and every hit with
+a full layout of the scrolled tree; `a_scroll_with_anything_else_is_left_to_a_full_layout`
+and `a_virtualised_list_scrolled_recomputes_its_window` pin when it must not.
 
 ## 5. Theme — `crates/eui-theme/tests`
 
@@ -212,7 +268,16 @@ Sound reports on one clock and says nothing about the machine: `level` and
 not moved sends nothing and a sound that stopped sends one last zero. The
 property that carries 08 §8 is pinned a layer down, in
 `crates/eui-audio/tests/audio.rs` — the reported peak does not change when
-the viewer's master gain does, including when it is zero.
+the viewer's master gain does, including when it is zero. So is 10's
+ceiling on one decoded sound: a sound one sample past the budget it was
+decoded under is refused, and a caller cannot raise the budget past
+`MAX_BYTES` (`a_sound_past_its_decoded_budget_is_refused`); the same
+for a moving picture in `crates/eui-video/tests/video.rs`
+(`a_picture_is_refused_past_the_room_it_was_given`). In `driver.rs`, the
+session's side of both: a decoded sound and a decoded picture are gone the
+frame no node names them (`decoded_media_goes_when_no_node_names_it`), and
+the second of each is refused when only one fits the room the session has
+left (`decoded_media_past_the_sessions_room_is_refused`).
 
 03 §3.5's address is pinned in the same file, and the three conditions are
 pinned apart: a tree that merely arrives opens nothing; an activation with
@@ -283,7 +348,15 @@ a tree declaring nothing is provably exposed as it was before §6.1 existed.
 ### 7.3 Manifest — `crates/eui-client/tests/manifest.rs`
 
 Signature, protocol range, trust on first use, refusal of a changed key,
-acceptance of a rotation the pinned key signed, and garbage.
+acceptance of a rotation the pinned key signed, and garbage. Pins and
+grants are per origin and `app_id` (01 §2.1, 08 §2):
+`the_same_manifest_at_another_origin_is_pinned_afresh` verifies one
+manifest's bytes at two origins and has the second pinned on first use of
+its own, a squatter at one origin not lock the publisher out at another,
+and a pin kept by `app_id` alone ignored;
+`grants::a_grant_given_at_one_origin_is_not_given_at_another` and
+`grants::an_answer_kept_by_app_id_alone_is_not_read` do the same for the
+remembered consent.
 
 ### 7.4 Files — `crates/eui-client/tests/files.rs`
 
@@ -299,6 +372,16 @@ the window; a `Blob` for a save nobody asked for **ending the session**; and
 a `Blob` out of order losing the save without ending it. The last vector
 runs the two gestures against the reference server over a real socket: the
 bytes of a picked file reach it, and the bytes it owes a save come back.
+
+The memory bound of 10 §5 is two halves. The window takes an upload chunk
+only while the connection's unwritten backlog is under eight chunks, and
+`e2e.rs`'s `the_backlog_counts_what_the_socket_has_not_written_and_wakes_when_it_drains`
+has a server stop reading, the backlog hold what the kernel would not, and —
+once it reads again — the backlog drain to nothing and the window be woken
+as it falls under the low mark. What is held while there is no socket at all
+(01 §4.1) is `app.rs`'s: `a_clock_is_not_held_for_a_socket_that_is_down`,
+`a_state_report_is_folded_into_the_last_one_and_not_past_a_click` and
+`the_offline_queue_is_bounded`.
 
 ### 7.5 Resuming — `crates/eui-client/tests/resume.rs`
 
@@ -404,7 +487,14 @@ page's root, the page's nodes and every other island alone; the node's own
 children show until it speaks. A ninth island opens nothing, and a batch for
 an owner nobody handed out is refused rather than resolved against the page's
 tables — which is the failure that would otherwise be silent, since the
-island's ops would land on the page.
+island's ops would land on the page. The ceiling is on islands open at
+once: `a_closed_islands_slot_is_taken_by_the_next` opens and closes twenty in
+one session, `closing_an_island_keeps_the_pages_own_children` keeps the
+cached render a silent island never replaced, and
+`a_page_mount_that_frees_the_host_prunes_the_island` has a page `Mount` that
+releases the host take the island's slot with it, and refuse the frame that
+arrives for it afterwards rather than graft it under whatever took the
+host's index.
 
 **The client's half is written too**, in `eui-client/tests/islands.rs`, and
 the ones that matter are the refusals. An `island` naming another origin is
@@ -419,7 +509,15 @@ node as it was rendered (10 §1). An island whose session cannot be opened, or
 which ends, leaves the page standing and its own children showing — the vector
 that says a live part can never take a still page with it. Two islands naming
 one path share one session; two naming one component with different queries do
-not. And an event raised inside an island carries that island's node ids and
+not. An island that ended is not redialled while its node stands; one whose
+node a page `Mount` released is reported to the window, whose socket goes,
+and the new page's node is asked for afresh
+(`a_page_mount_that_frees_the_host_ends_the_island`); twenty islands opened
+one after another over one session all open
+(`a_long_session_opens_islands_past_the_ceiling_one_at_a_time`); a node that
+stops naming a path closes that island, content and socket
+(`an_island_the_tree_stops_asking_for_is_closed`); and a session that starts
+over ends them all (`a_session_that_starts_over_ends_its_islands`). And an event raised inside an island carries that island's node ids and
 goes to that island's socket, never the page's — the boundary being the node
 carrying the prop, which belongs to the page while everything below it does
 not. And a page with an island still draws, lays out and answers a pointer as
@@ -520,7 +618,10 @@ What is pinned instead:
    whose only change is the clock uploads no instances; the target carries no
    `COPY_SRC`; a session that was not granted `scene` fetches no module and
    builds no scene for a node that names one — and **does** draw one that
-   names none, whose mesh it fetches either way.
+   names none, whose mesh it fetches either way; and past 10 §1's 32
+   compiled modules the one drawn longest ago is dropped and, named again,
+   compiled afresh from its kept source and drawn
+   (`a_module_the_server_sent_is_what_draws`).
 4. **Three tolerant pixel vectors, and three only**: a flat triangle from the
    client's own shader, checked to ±2/255; depth order, which is a boolean and
    so insensitive to precision; and the fallback a refused module draws. A

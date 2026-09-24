@@ -57,7 +57,7 @@ with a free list, and `apply` for every op in the wire format.
   than SipHash — seeded because the ids are a server's to choose.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 44 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
+- 47 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -199,7 +199,7 @@ scissor region.
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
   scroll clipping at the pixel, stack z order.
-- 76 tests (16 unit, 60 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
+- 77 tests (17 unit, 60 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -213,7 +213,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 115 tests.
+  trip. 118 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
@@ -231,7 +231,8 @@ without the third.
 - **End to end**, over a real socket against the example counter server:
   Welcome, Mount, a click leaving as an event of under 40 bytes, the new
   value coming back, a resync that restores the server's state, and a forged
-  event that the server refuses. 2 tests.
+  event that the server refuses; and an upload's backlog, counted against a
+  server that stops reading until the socket drains. 3 tests.
 
 The end-to-end run found a protocol mistake on both sides: a re-mount after
 `Resync` was repeating definitions, and the client was answering a rejected

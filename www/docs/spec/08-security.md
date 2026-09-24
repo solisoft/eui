@@ -28,12 +28,15 @@ it.
 
 - The manifest is signed with Ed25519; the client pins the publisher key on
   first use and refuses a different key unless a rotation record signed by
-  the pinned key accompanies it.
+  the pinned key accompanies it. The pin, and any remembered grant, is kept
+  per **origin and `app_id`** (01 §2.1): the signed record names no origin,
+  so a copy of a manifest served from another host is another application,
+  with no inherited trust and nothing granted.
 - Every asset is named by BLAKE3 and verified on arrival; a mismatch is
   discarded. A CDN or proxy cannot substitute content.
 
 
-*Enforced: `eui-client::manifest` — the signature is checked with the manifest's own key, the key pinned under the `app_id` in the pin store, a changed key refused without a rotation the pinned key signed; `lang/src/serve/eui/manifest.rs` signs with a key generated on first use and kept in `config/eui_publisher.pkcs8`.*
+*Enforced: `eui-client::manifest` — the signature is checked with the manifest's own key, the key pinned under the origin and `app_id` in the pin store (`manifest::store_path`), the grants remembered under the same pair, a changed key refused without a rotation the pinned key signed; `lang/src/serve/eui/manifest.rs` signs with a key generated on first use and kept in `config/eui_publisher.pkcs8`.*
 
 ## 3. Capabilities
 
@@ -82,18 +85,26 @@ it.
 - `#![forbid(unsafe_code)]` on every crate but the GPU boundary.
 - The decode path cannot panic: bounds-checked reads, minimal varints,
   rejected unknown discriminants, rejected trailing bytes, every limit
-  checked before allocation, iterative tree decoding. *Enforced: `eui-proto`,
+  checked before allocation, no reservation larger than the bytes left in
+  the frame could back (a count under its ceiling can still be a lie),
+  iterative tree decoding. *Enforced: `eui-proto`,
   under `clippy::indexing_slicing`, `panic`, `unwrap_used`, `expect_used`,
-  `arithmetic_side_effects` as errors; 64 rejection tests; 40 000 hostile
+  `arithmetic_side_effects` as errors — denied at the crate root of
+  `eui-proto`, `eui-tree` and `eui-vm`, which run inside the application
+  wherever there is no worker process; 64 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
 - A batch that is well-formed but incoherent — undefined atom, duplicate
-  node, index past the end — is refused before anything is placed, and the
-  session is poisoned until the next `Mount`. *Enforced: `eui-tree::Session::apply`.*
+  node (including an id used twice within one subtree), a node past the
+  depth limit, index past the end — is refused before anything is placed,
+  and the session is poisoned until the next `Mount`. A refused subtree
+  leaves no node behind, so the resync's `Mount` is never refused for ids
+  the failed one left live. *Enforced: `eui-tree::Session::apply`.*
 
 ## 6. Quotas
 
 Enforced by the client, before the memory they bound is allocated: nodes,
-atoms and atom bytes, styles, colours, chunks, children per node, props and
+atoms and atom bytes, styles, colours, chunks and inline chunk bytes (one
+total for a page and its islands), children per node, props and
 handlers per node, ops per batch, chunk size, string length in a chunk,
 fuel per run. A hostile server can be annoying; it cannot make the client
 exhaust itself. *Enforced: `eui-proto::limits`, `eui-tree::Limits`, `eui-vm`.*
@@ -346,7 +357,13 @@ would be the session, every text on screen, written to disk — and no other
 process of the user can attach a debugger to it. What initialises itself
 lazily (the text engine's font loader starts a thread pool and asks for the
 core count) is warmed before the door closes, and the confinement is
-applied to every thread.
+applied to every thread. The two decode threads that take pictures, sounds
+and moving pictures off the paint (10, *Assets*) are among what is warmed:
+after the door closes a thread cannot be created, so they are started by
+the throwaway driver the worker builds first, and every decode runs on
+them, confined like the rest
+(`a_picture_is_decoded_in_the_confined_worker_and_lands_later` in
+`crates/eui-client/tests/worker.rs`).
 
 **The `scene` capability moves one thing across this line, and it is the
 largest thing on either side of it.** A shader is verified in the worker —

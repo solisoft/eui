@@ -159,17 +159,34 @@ finds out at the manifest rather than at the call.
 
 A client MUST verify the signature before acting on any other field, and
 MUST refuse a server whose protocol range excludes its own version. On first
-run it pins `publisher_key` for `app_id` (trust on first use). On later runs
-a different key MUST be rejected unless `rotation` names the pinned key and
-carries that key's Ed25519 signature over the new `publisher_key`; the pin
-then moves. A manifest that fails any of this ends the connection before a
+run it pins `publisher_key` for the pair of the **origin** the manifest was
+fetched from and its `app_id` (trust on first use). On later runs a
+different key for that pair MUST be rejected unless `rotation` names the
+pinned key and carries that key's Ed25519 signature over the new
+`publisher_key`; the pin then moves.
+
+The origin is part of the key because the record does not carry one. A
+manifest is public, and its signature says who *wrote* it, not who is
+*serving* it: the same bytes copied onto another host verify there exactly
+as well. Pinned by `app_id` alone, such a copy would match the real
+publisher's pin — and show as trusted under its name — and whichever origin
+reached an unpinned `app_id` first would lock the real publisher out of it.
+The origin is scheme, host and port, spelled one way (lower case, a default
+port dropped). A client that kept pins by `app_id` alone before this rule
+MUST NOT carry them over, since which origin each came from is what they
+did not record: every application is trusted on first use once more. A manifest that fails any of this ends the connection before a
 session is opened. The one exception is the debug loopback of 08 §1: over
 `ws://` on `127.0.0.1` a client MAY proceed without a manifest, and MUST say
 so on its diagnostics.
 
 The client grants the intersection of `capabilities` with what the person
 allowed it — on the reference client, `--allow` on the command line — and
-reports it in `Hello.granted`; nothing is granted by being asked for.
+reports it in `Hello.granted`; nothing is granted by being asked for. A
+client that remembers the person's answer MUST keep it under the same pair
+of origin and `app_id` as the pin, for the same reason: a grant given to an
+application at one origin is not a grant to another origin serving its
+manifest. Answers kept by `app_id` alone are not carried over either, so
+each application asks once more.
 
 ### 2.2 Assets
 
@@ -179,7 +196,12 @@ response. Because the name *is* the content, `Cache-Control: public, max-age=315
 immutable` is always correct and a hostile CDN cannot substitute content.
 
 An asset response larger than the session's remaining asset budget
-([`10-budgets.md`](10-budgets.md)) MUST be abandoned mid-stream.
+([`10-budgets.md`](10-budgets.md), *Assets*) MUST be abandoned mid-stream.
+"Remaining" is the budget less what the assets the live tree names already
+hold, since everything else may be let go to make room; a response whose
+`Content-Length` exceeds it is abandoned before its body is read. Enforced
+in `assets::fetch_within`, with the room measured by the driver
+(`Driver::asset_room`).
 
 The client's request carries no cookie and no session: an asset is
 addressed by content, so the response is the same for everyone and a proxy
@@ -365,9 +387,20 @@ everything below it belongs to the island.
 - An island whose session cannot be opened, or which ends, **leaves the page
   alone**: the node keeps the children it had, the reason is the client's to
   report, and nothing else on the page is torn down. A live part failing must
-  never be able to take a still page with it.
-- At most `MAX_ISLANDS` sessions may be open for one page
-  ([`10-budgets.md`](10-budgets.md) §1). Past it a client opens no more and
+  never be able to take a still page with it. A client SHOULD NOT redial it
+  while that node stands: what it shows is the island's last content, and a
+  session that fails on every attempt would otherwise be dialled forever.
+- An island **closes** when its node is released — a page `Mount`, a
+  `Replace` or a removal that takes the node — or when the node stops naming
+  that path. The client MUST then drop its session, and MUST refuse a frame
+  that still arrives for it rather than apply it: the node it hung under is
+  gone, and whatever now stands in its place belongs to the page. An island
+  that closed because its path changed takes its content with it; the page's
+  own children under the node stay. A node that asks again — the page
+  navigated back to — is a new island and is opened afresh.
+- At most `MAX_ISLANDS` sessions may be open for one page **at once**
+  ([`10-budgets.md`](10-budgets.md) §1); one that ended but still shows its
+  content counts until it closes, and one that closed counts no more. Past it a client opens no more and
   leaves those islands as they were rendered. The ceiling exists because a
   tree is data: a view that derives an island per row would otherwise open a
   socket per row.
@@ -490,6 +523,17 @@ Because a batch already applied may be replayed, a client MUST ignore a
 batch whose sequence it has already applied, and ack it again. Ops are not
 all idempotent — a `SetText` is, an `InsertChild` is not — so this is the
 receiver's job, not the sender's.
+
+What the person does while there is no socket MAY be held and sent once the
+server has answered, and what a client holds it MUST bound. A client SHOULD
+NOT hold what a clock raised — `wake`, `location`, `timeupdate`, `level` —
+which says what was true at a moment that has passed and will be said again
+once there is somebody to tell, and SHOULD fold a report of state (`change`,
+`scroll`, `resize`, a pointer or file-drag position) into the one it holds
+for the same node and event, but not across anything else the person did in
+between. An upload SHOULD NOT be read while there is no socket to take it.
+The reference client holds at most 256 frames and 1 MiB, and drops a frame
+past either rather than an older one ([`10-budgets.md`](10-budgets.md) §5).
 
 ## 5. Idle behaviour
 

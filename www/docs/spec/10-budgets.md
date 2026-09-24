@@ -101,6 +101,7 @@ the application's good manners.
 | Static steps per fragment invocation | 4 096 (= the VM's fuel) |
 | Mesh vertices / indices | 65 536 / 196 608 |
 | Render targets alive per session | 8 |
+| Compiled modules held per window process | 32 (`gpu::MAX_SCENE_MODULES`), least recently drawn dropped first with its pipelines; its source is kept and compiled again when a scene names it |
 | Target edge, before the device's own limit trims it | 4 096 device px (`scene::MAX_EDGE`), rounded up to a multiple of 64 |
 | Target memory, per scene | 4 B/px colour, **+4 B/px per sample** when `msaa` > 1, **+4 B/px per sample** for depth |
 | Author's uniforms | 8 floats |
@@ -268,9 +269,15 @@ application holds a few hundred entries, not sixteen thousand.
 A frame that *does* carry one adds, per distinct radius, three passes over
 a snapshot of the region that asked — the union of the blurred rects grown
 by three standard deviations, clipped to the window — and one pass to take
-that snapshot. The snapshot is a texture the size of that region, not of
-the framebuffer: a 360 px dialog is a few hundred kilobytes where a 4K
-window would be 33 MB. It is freed when a frame stops asking, so a closed
+that snapshot. The snapshot is a texture the size of that region, rounded up
+to a multiple of 128 px a side, not of the framebuffer: a 360 px dialog is a
+few hundred kilobytes where a 4K window would be 33 MB. The rounding is what
+lets a region that slides or grows keep its textures, and the views and bind
+groups made with them, rather than allocating all of them again every frame
+of the movement; the region is drawn into the texture's corner and the
+reduction reads no further than its edge
+(`gpu::tests::a_blur_region_that_moves_or_grows_a_little_keeps_its_textures`,
+and the frosted-pane pixel tests of 09 §8). It is freed when a frame stops asking, so a closed
 dialog costs nothing, which is what keeps the idle RSS line above honest.
 
 The reduction is chosen so the kernel is about fifteen taps whatever radius
@@ -351,7 +358,8 @@ text, of which about 9 are structure and the rest the data itself. Budget:
 | One upload, default | 16 MiB, when `pick` names no ceiling |
 | One save | 256 MiB, whatever the server sends |
 | Abort reason | 256 B |
-| Memory held while a file uploads | two chunks, whatever the file weighs |
+| Memory held while a file uploads | at most twelve chunks (3 MiB), whatever the file weighs |
+| Frames held while the socket is down | 256, and 1 MiB |
 | Dialogs open per node | 1 |
 
 The upload ceiling is the client's; the tree's is whatever `max` says, and
@@ -360,7 +368,13 @@ a file goes and not how much of their disk it may take.
 
 Nothing here is a stream: a transfer belongs to its session and does not
 survive it, and the memory it costs is fixed by the chunk size rather than
-by the file — the disk runs two chunks ahead of the socket and no further.
+by the file. The disk runs two chunks ahead of the window, and the window
+takes a chunk only while the socket's unwritten backlog is under eight
+chunks — none at all while there is no socket — so the twelve are two read
+ahead, one being read, and at most nine written to the socket and not yet
+on the wire. It used to say two, counting only the first of those: the
+window drained the reader straight into an unbounded channel, and on a slow
+link the whole file waited there.
 
 ## Where the machine is, and what it is held against
 
@@ -385,6 +399,62 @@ client's judgement for the same reason every other number here is: a
 budget a reader cannot check is a promise, and this one is a privacy
 promise.
 
+## Assets
+
+What 01 §2.2 calls the session's asset budget.
+
+| Measure | Budget |
+|---|---|
+| One asset | 16 MiB (`MAX_ASSET_BYTES`) |
+| Asset store, per session: files kept and pictures decoded, together | 128 MiB (`MAX_STORE_BYTES`) |
+| A picture's pixels, as held | no more than 1024 on a side (`ATLAS_EDGE`), 4 MiB |
+| Fetches in flight, per origin | 4 (`FETCHES_PER_ORIGIN`) |
+| Connecting, TLS handshake, sending the request | 10 s each (`CONNECT_TIMEOUT`) |
+| Waiting for a byte of the response | 15 s without one (`READ_IDLE`) |
+
+A picture is held once: its pixels, shrunk to what the sheet takes, and its
+natural size, which is what the layout measures it by. The file of a PNG
+or a JPEG goes as soon as its pixels are held; a WebP's is kept, because a
+`video` node may ask for the same bytes as a moving picture. Fonts, chunks,
+meshes, modules, sounds and moving pictures are held as files.
+
+Past the budget the store lets go of what the live tree does not name,
+least recently used first, and keeps the natural size of each picture it
+lets go of, so a page that names it again does not change shape while it is
+fetched again. What the tree does name is never let go — a page that shows
+more than the budget at once holds more than it — and it is what "remaining"
+is measured against: a fetch may bring back the budget less what the named
+assets already hold, and one whose `Content-Length` says more is abandoned
+before its body is read. Until 2026-09-24 the store had no budget at all,
+held every picture twice — file and full-size pixels — and a feed of
+1024 × 768 photographs grew by 3.2 MB a picture for as long as it was open.
+
+A fetch is queued, not started: four workers per origin take them in
+turn, each on one runtime it keeps, so a page of two hundred thumbnails is
+four connections at a time rather than two hundred threads and two hundred
+TLS handshakes at once. A server that stops talking is given up on — the
+limit is on silence, not on the whole transfer, since sixteen megabytes over
+a slow link take as long as they take — and a timeout is a failure like any
+other, tried twice more before it is final. A body that fits is read into a
+buffer reserved at its declared length.
+
+Pictures, sounds and moving pictures are decoded on two threads the
+process keeps for it, never on the one that paints: a large JPEG, a long
+MP3 or a GIF used to hold the window — and, on a desktop, the lock the
+audio callback takes — for as long as it took, and a sound already playing
+ran dry. What a decode makes lands at the next tick or paint, which a
+driver with a decode in flight asks to be woken for every 8 ms and at no
+other time, and only the nodes that name it are measured again.
+
+Pinned in `crates/eui-client/tests/assets.rs`:
+`a_picture_is_decoded_off_the_painting_thread`,
+`a_server_that_stops_talking_is_given_up_on`,
+`a_page_of_pictures_is_fetched_by_a_few_workers`,
+`the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`,
+`the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
+`the_driver_lets_go_of_a_picture_the_page_stopped_showing` and
+`a_fetch_past_the_room_left_is_abandoned`.
+
 ## Sound
 
 | Measure | Budget |
@@ -392,10 +462,30 @@ promise.
 | Sources playing at once | 8, a ninth refused |
 | Frames buffered ahead of the device | 200 ms |
 | CPU with nothing loaded | 0 — the device is closed |
+| Decoded samples a sound | 128 MiB — 5 min 50 s of stereo at 48 kHz |
+| Decoded samples held, every sound together, per session | 256 MiB |
 
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once
 per sound.
+
+A sound is held decoded — `f32`, interleaved — because that is what makes
+mixing it cost nothing, and so the bound is on what the samples weigh
+rather than on how long the sound says it is. Frames alone were the bound
+until 2026-09-24: an hour of stereo, which let the largest asset there is
+(16 MB) expand to 1.38 GB before it was refused. A sound past 128 MiB is
+refused, not truncated (`eui_audio::MAX_BYTES`; pinned by
+`a_sound_past_its_decoded_budget_is_refused` in
+`crates/eui-audio/tests/audio.rs`).
+
+A decoded sound is held while an `audio` node names it and not after: the
+mixer let go of a source when its node went, and the samples behind it
+stayed, so a playlist kept every track it had played. What the nodes of
+one tree name at once may weigh 256 MiB together; the sound that would take
+them past it is refused like one past its own ceiling
+(`decoded_media_goes_when_no_node_names_it`,
+`decoded_media_past_the_sessions_room_is_refused`, both in
+`crates/eui-client/tests/driver.rs`).
 
 ## Moving pictures
 
@@ -404,5 +494,13 @@ per sound.
 | Pixels a frame | 1920 × 1080 |
 | Frames a picture | 3 600 |
 | Decoded frames a picture | 96 MB |
+| Decoded frames held, every picture together, per session | 192 MiB |
 | Uploads per frame shown | 1, and none while the frame does not change |
 | CPU while paused | 0 — nothing is scheduled |
+
+A picture is held, frames and size both, while a `video` node names it,
+and the pictures the nodes of one tree name may weigh 192 MiB together: a
+feed of fifty animated avatars used to keep every one it had shown,
+uncompressed, for as long as the tab was open. The picture that would take
+the total past it is refused, as one past its own 96 MB is (pinned by the
+same two tests as sound's).
