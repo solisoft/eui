@@ -64,25 +64,44 @@ them.
 **`space`** (13 entries, index 0–12): `0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 96`
 
 **`radius`** (index 0–4): `none 0`, `sm md/2`, `md`, `lg 2·md`, `full 9999`,
-where `md` is the theme's `radius_md` (§3), `6` by default.
+where `md` is the theme's `radius_md` (§3), `8` by default — so `4 8 16`,
+Tailwind's `rounded`, `rounded-lg` and `rounded-2xl`.
 
-**`text`** (index 0–7), as `size / line-height`:
+**`text`** (index 0–7), as `size / line-height` — Tailwind's `text-xs` …
+`text-4xl`, size for size and line for line:
 
 | index | name | size | line |
 |---:|---|---:|---:|
-| 0 | `xs` | 11 | 16 |
-| 1 | `sm` | 13 | 18 |
-| 2 | `base` | 15 | 22 |
-| 3 | `lg` | 17 | 24 |
+| 0 | `xs` | 12 | 16 |
+| 1 | `sm` | 14 | 20 |
+| 2 | `base` | 16 | 24 |
+| 3 | `lg` | 18 | 28 |
 | 4 | `xl` | 20 | 28 |
 | 5 | `2xl` | 24 | 32 |
-| 6 | `3xl` | 30 | 38 |
-| 7 | `4xl` | 38 | 46 |
+| 6 | `3xl` | 30 | 36 |
+| 7 | `4xl` | 36 | 40 |
 
 The default `StyleRecord` carries `font_size = 2`, `base`.
 
-**`shadow`** (index 0–3), as `y offset, blur, opacity` of black:
-`none`, `sm 1 2 0.12`, `md 4 12 0.16`, `lg 12 32 0.24`
+**`shadow`** (index 0–3), each up to two **layers** of black, painted in
+order, as `y offset, blur, spread / opacity` — Tailwind's `shadow-sm`,
+`shadow-md` and `shadow-lg`, written the way CSS writes a `box-shadow`:
+
+| index | name | layer 1 | layer 2 |
+|---:|---|---|---|
+| 0 | `none` | — | — |
+| 1 | `sm` | `0 1 2 0 / 0.05` | — |
+| 2 | `md` | `0 4 6 -1 / 0.10` | `0 2 4 -2 / 0.10` |
+| 3 | `lg` | `0 10 15 -3 / 0.10` | `0 4 6 -4 / 0.10` |
+
+The **spread** grows the border box on every side before it is blurred, and
+a negative one shrinks it; the corner radius moves by the same amount, and
+never below zero. A negative spread is what keeps a layer *under* its box: the
+shadow shows below, where the offset carries it, and not above. 03 §2 says how
+a layer is painted. Enforced by `the_scales_are_tailwinds`
+(`crates/eui-theme/tests/resolve.rs`) and, for the painting,
+`a_negative_spread_keeps_the_shadow_under_the_box`
+(`crates/eui-render/tests/render.rs`).
 
 **`motion`** (index 0–4), milliseconds: `fast 100`, `base 180`, `slow 320`,
 `slower 560`, `slowest 1000`, all with the easing curve
@@ -128,9 +147,9 @@ carrying **seeds**, not palettes. Every colour in §1 is derived from them by
 
 | key | Field | Value | Default |
 |---:|---|---|---|
-| 1 | `accent` | OKLCH seed `(L, C, h)` | `(0.55, 0.18, 264)` |
-| 2 | `surface` | OKLCH seed; only `C` and `h` are used | `(0.98, 0.006, 250)` |
-| 3 | `radius_md` | px | `6` |
+| 1 | `accent` | OKLCH seed `(L, C, h)` | `(0.511, 0.262, 277)` — Tailwind's indigo-600 |
+| 2 | `surface` | OKLCH seed; only `C` and `h` are used | `(0.98, 0.01, 264)` — Tailwind's gray |
+| 3 | `radius_md` | px | `8` |
 | 4 | `density` | 0 compact, 1 cozy, 2 comfortable | `1` — a *preference*, the viewer's own setting wins |
 | 5 | `font_sans` | asset hash, or absent for the client's built-in face | absent |
 | 6 | `font_mono` | asset hash, or absent | absent |
@@ -143,6 +162,19 @@ names neither leaves both on the embedded faces. An application that wants
 more than two faces names them per style with a font role instead, and a
 `DefFont` binds each; the two mechanisms bind the same table, so the last to
 arrive wins.
+
+The defaults are Tailwind UI's palette. The accent is indigo-600's own OKLCH,
+which lies outside sRGB; §4.4 clips its chroma to `#4f39f6`, the same colour a
+browser falls back to. Resolved in light mode, the default theme lands within
+a few ΔE (OKLab ×100) of the Tailwind colour each role stands in for —
+`surface.base` gray-50, `surface.raised` white, `surface.sunken` gray-100,
+`border.subtle` gray-200, `border.default` gray-300, `text.muted` gray-500,
+`text.default` gray-900, `accent.base` indigo-600, `accent.hover` indigo-500,
+`accent.active` indigo-700. `border.strong` stands furthest off, at ΔE 5.2 from
+gray-400, because §4.3 wants 3:1 of it and gray-400 is 2.5:1 on gray-50.
+Enforced, role by role with its tolerance, by
+`the_default_palette_is_tailwinds_gray_and_indigo`
+(`crates/eui-theme/tests/resolve.rs`), which prints both palettes.
 
 `L` and `C` are clamped to `[0, 1]` and `[0, 0.4]`; `h` is taken modulo 360.
 Status hues are fixed by the protocol, not the theme: `success 145`,
@@ -163,26 +195,37 @@ every role. Hue comes from the relevant seed, or from the fixed status hues.
 |---|---:|---:|---:|---|---|
 | `surface.base` | 0.985 | 0.19 | 0.00 | min(sC, 0.02) | sh |
 | `surface.raised` | 1.000 | 0.24 | 0.05 | min(sC, 0.02) | sh |
-| `surface.sunken` | 0.955 | 0.15 | 0.00 | min(sC, 0.02) | sh |
+| `surface.sunken` | 0.967 | 0.15 | 0.00 | min(sC, 0.02) | sh |
 | `surface.overlay` | 1.000 | 0.27 | 0.08 | min(sC, 0.02) | sh |
-| `text.default` | 0.18 | 0.93 | 1.00 | min(sC, 0.015) | sh |
-| `text.muted` | 0.45 | 0.72 | 0.90 | min(sC, 0.015) | sh |
+| `text.default` | 0.21 | 0.93 | 1.00 | min(sC, 0.015) | sh |
+| `text.muted` | 0.551 | 0.72 | 0.90 | min(sC, 0.015) | sh |
 | `text.inverted` | 0.98 | 0.15 | 0.00 | min(sC, 0.015) | sh |
 | `text.disabled` | 0.65 | 0.50 | 0.70 | min(sC, 0.015) | sh |
 | `accent.base` | clamp(aL, 0.40, 0.60) | clamp(aL, 0.60, 0.80) | 0.80 | aC | ah |
-| `accent.hover` | base − 0.06 | base + 0.06 | base + 0.06 | aC | ah |
-| `accent.active` | base − 0.12 | base + 0.12 | base + 0.12 | aC | ah |
+| `accent.hover` | base + 0.06 † | base + 0.06 | base + 0.06 | aC | ah |
+| `accent.active` | base − 0.06 | base + 0.12 | base + 0.12 | aC | ah |
 | `*.base` (status) | 0.52 | 0.72 | 0.80 | 0.14 (`warning` 0.12) | fixed |
 | `*.subtle` (status) | 0.95 | 0.25 | 0.15 | 0.04 / 0.06 / 0.06 | fixed |
-| `border.subtle` | 0.92 | 0.26 | 0.50 | min(sC, 0.02) | sh |
-| `border.default` | 0.86 | 0.32 | 0.70 | min(sC, 0.02) | sh |
-| `border.strong` | 0.70 | 0.45 | 0.90 | min(sC, 0.02) | sh |
+| `border.subtle` | 0.928 | 0.26 | 0.50 | min(sC, 0.02) | sh |
+| `border.default` | 0.872 | 0.32 | 0.70 | min(sC, 0.02) | sh |
+| `border.strong` | 0.707 | 0.45 | 0.90 | min(sC, 0.02) | sh |
 | `focus.ring` | 0.55 | 0.75 | 0.85 | max(aC, 0.18) | ah |
 | `series.1` | 0.50 | 0.52 | 0.72 | 0.12 | 264 |
 | `series.2` | 0.50 | 0.52 | 0.80 | 0.12 | 70 |
 | `series.3` | 0.74 | 0.66 | 0.88 | 0.12 | 170 |
 | `series.4` | 0.48 | 0.50 | 0.70 | 0.12 | 330 |
 | `series.5` | 0.70 | 0.66 | 0.84 | 0.12 | 195 |
+
+The light targets of the surfaces, borders and text are the lightnesses of
+Tailwind's gray-50 … gray-900, so a surface seed with gray's hue resolves to
+gray itself (§3).
+
+† In light mode hover **lightens**, as a Tailwind button does (indigo-600 to
+indigo-500), and active presses darker. A lighter hover can wash out the label
+on it, so it then steps back towards the base, `0.01` at a time, until
+`accent.on` keeps 3:1 against it — or until it is the base again. Enforced by
+`accent_hover_and_active_step_away_from_base` and, for 300 random seeds, by
+`contrast_holds_for_hostile_seeds` (`crates/eui-theme/tests/resolve.rs`).
 
 The series hues are fixed, not derived from the theme's accent: a theme that
 retunes its accent MUST NOT retune them, because their separation is a property
@@ -232,7 +275,8 @@ Moving away means towards `1.0` when the mean `L` of the backgrounds is below
 adjusted until it meets the ratio against all of them.
 
 The `accent.hover` and `accent.active` offsets are re-derived from the
-adjusted `accent.base`.
+adjusted `accent.base`, after the `on` roles are chosen (§4.2), because the
+light hover is held to 3:1 against `accent.on` (§4.1 †).
 
 ### 4.4 Gamut clipping
 

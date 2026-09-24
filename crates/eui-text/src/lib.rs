@@ -6,11 +6,13 @@
 //! of text that must not be reinvented, and everything around it here is
 //! ours.
 //!
-//! - Four faces are embedded — Inter (regular, bold), JetBrains Mono, and
-//!   Noto Sans Symbols behind them — so a session that asks for nothing
-//!   still draws. An application MAY name others: a `DefFont` op binds a
-//!   font role to faces named by asset hash, and the client loads them here
-//!   through [`TextEngine::add_font`] and [`TextEngine::bind_role`].
+//! - Six faces are embedded — Inter (regular, medium, semibold, bold),
+//!   JetBrains Mono, and Noto Sans Symbols behind them — so a session that
+//!   asks for nothing still draws, and draws each of the four weights of
+//!   the wire in a face of its own. An application MAY name others: a
+//!   `DefFont` op binds a font role to faces named by asset hash, and the
+//!   client loads them here through [`TextEngine::add_font`] and
+//!   [`TextEngine::bind_role`].
 //! - [`TextEngine`] implements [`eui_layout::TextMeasurer`], with a bounded
 //!   cache keyed by `(text, font, width, clamp)`: layout measures the same
 //!   run under several constraints per frame, and shaping it once is the
@@ -32,6 +34,11 @@ use eui_layout::{FontSpec, TextMeasurer, TextMetrics};
 use eui_proto::FontWeight;
 
 const INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
+/// Medium and semibold are faces of their own, not a synthesis: without
+/// them `font_weight` 1 and 2 matched the nearest of regular and bold, and
+/// the four weights of the wire drew as two.
+const INTER_MEDIUM: &[u8] = include_bytes!("../fonts/Inter-Medium.ttf");
+const INTER_SEMIBOLD: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
 const INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../fonts/JetBrainsMono-Regular.ttf");
 /// Hearts, arrows, stars: what an interface reaches for that a text face
@@ -259,7 +266,7 @@ impl TextEngine {
     /// fallback, and fallback must not depend on where the client runs.
     pub fn new() -> Self {
         let mut db = fontdb::Database::new();
-        for bytes in [INTER_REGULAR, INTER_BOLD, JETBRAINS_MONO, NOTO_SYMBOLS] {
+        for bytes in [INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD, JETBRAINS_MONO, NOTO_SYMBOLS] {
             db.load_font_source(fontdb::Source::Binary(Arc::new(bytes)));
         }
         let fonts = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);

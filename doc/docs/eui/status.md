@@ -73,7 +73,17 @@ values, per `spec/05-theme.md`, which is now normative.
   about.
 - `check_style` rejects a style record whose indices run off a scale, so a
   bad index is a rejected batch rather than a surprise at paint time.
-- 23 tests.
+- **The defaults are Tailwind UI's** (2026-09-24): the text scale is
+  `text-xs` … `text-4xl` exactly (16 on 24 at `base`, where it was 15 on 22),
+  `radius_md` is 8, each shadow is the two layers of `shadow-sm/md/lg` with
+  their spread, and the seeds are indigo-600 and Tailwind's gray. Resolved,
+  the light palette lands within ΔE 2.4 (OKLab ×100) of gray-50, white,
+  gray-100, gray-200, gray-300, gray-500, gray-900 and indigo-600/500/700 —
+  `border.strong` alone sits at 5.2 from gray-400, which fails the 3:1 the
+  contract wants of it. A test holds each role to its tolerance and prints
+  both palettes. The light `accent.hover` now lightens, and backs off until
+  `accent.on` keeps 3:1 on it.
+- 25 tests (24 in `tests/resolve.rs`, 1 unit).
 
 **`eui-layout` — the layout engine.** One algorithm, `spec/04-layout.md`,
 now normative.
@@ -107,9 +117,18 @@ now normative.
 third-party dependency on the CPU side of the client: shaping is the part of
 text that must not be reinvented.
 
-- Four faces embedded — Inter regular and bold, JetBrains Mono, Noto Sans Symbols for the hearts and arrows a text face lacks — all OFL. The font
-  database is built by hand from those four files and **never touches the
-  system's fonts** — a test asserts the count is exactly four. The first
+- Six faces embedded — Inter regular, medium, semibold and bold, JetBrains
+  Mono, Noto Sans Symbols for the hearts and arrows a text face lacks — all
+  OFL, the Inter faces all from the rsms/inter 4.1 release (4.001). Medium and
+  semibold arrived on 2026-09-24; until then `font_weight` 1 and 2 matched the
+  nearest of regular and bold, and the wire's four weights drew as two. They
+  cost **837 044 bytes** embedded (417 300 + 419 744, `include_bytes!`, so
+  the binary grows by exactly that), and **140 KB** more over the wire where
+  the faces are brotli-compressed together (four faces 438 008 bytes, six 578 320,
+  `brotli -q 11` on the concatenated files: most of a second Inter weight is
+  the first one again). The embedded faces are now 2.17 MB of the binary. The
+  font database is built by hand from those six files and **never touches
+  the system's fonts** — a test asserts the count is exactly six. The first
   version of this code used the convenience constructor and loaded 779
   faces; the same text would have shaped differently on every machine, and
   the installed font list would have been visible to a server.
@@ -163,7 +182,9 @@ text that must not be reinvented.
   drops trailing glyphs of the last line so the mark fits inside the width it
   was given — otherwise the one line that says "there is more" would be the
   one line that overflows (04 §3).
-- 26 tests, one of which lays out real glyphs through `eui-layout`.
+- 27 tests (26 in `tests/shape.rs`, 1 unit), one of which lays out real
+  glyphs through `eui-layout` and one of which shapes a word at each of the
+  four weights and finds four faces.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per
 scissor region.
@@ -199,7 +220,11 @@ scissor region.
   pixels** on a machine with no display: clear colour, box placement, corner
   radius and border, text ink confined to its rect in the text role's colour,
   scroll clipping at the pixel, stack z order.
-- 77 tests (17 unit, 60 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
+- A shadow is one quad per layer of the scale, each grown by its spread and
+  then its blur, the corner radius following the spread; a negative spread
+  tucks the layer under the box, and a pixel test reads back that the row
+  above a `shadow.lg` card is the bare surface and the row below is not.
+- 78 tests (17 unit, 61 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -751,7 +776,7 @@ clippy with warnings denied, and the Soli end-to-end suite when
 `EUI_SOLI_BIN` is set.
 
 **Shadows and transitions.** A record's `shadow` paints a grown, offset,
-black quad under the box, faded across the blur in the fragment stage;
+black quad under the box per layer of the scale, faded across the blur in the fragment stage;
 `transition` (the last reserved byte of the 64, now spent) names a `motion`
 index — five of them now, `fast 100` to `slowest 1000`, the top two for a
 thing arriving over a distance rather than a control changing state — and a

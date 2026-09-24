@@ -15,7 +15,25 @@ fn base() -> FontSpec {
 #[test]
 fn embedded_faces_are_loaded_and_nothing_else() {
     let e = TextEngine::new();
-    assert_eq!(e.face_count(), 4, "Inter regular, Inter bold, JetBrains Mono, Noto Sans Symbols");
+    assert_eq!(e.face_count(), 6, "Inter regular, medium, semibold and bold, JetBrains Mono, Noto Sans Symbols");
+}
+
+/// The wire has four weights and the client has a face for each: medium and
+/// semibold are not regular and bold under other names. Each shapes from a
+/// face of its own — no glyph key is shared between them — and each is
+/// wider than the one below it.
+#[test]
+fn each_weight_draws_in_a_face_of_its_own() {
+    let mut e = TextEngine::new();
+    let weights = [FontWeight::Regular, FontWeight::Medium, FontWeight::Semibold, FontWeight::Bold];
+    let runs: Vec<_> = weights.iter().map(|w| e.shape("Measure", FontSpec { weight: *w, ..base() }, None, 0)).collect();
+    for (i, a) in runs.iter().enumerate() {
+        for (j, b) in runs.iter().enumerate().skip(i + 1) {
+            assert_ne!(a.glyphs[0].key, b.glyphs[0].key, "{:?} and {:?} share a face", weights[i], weights[j]);
+        }
+    }
+    let widths: Vec<f32> = runs.iter().map(|r| r.metrics.width).collect();
+    assert!(widths.windows(2).all(|w| w[1] > w[0]), "each weight is wider than the last: {widths:?}");
 }
 
 #[test]
@@ -142,8 +160,8 @@ fn layout_runs_on_real_glyphs() {
     let short = layout.rect(s.lookup(2).unwrap()).unwrap();
     let long = layout.rect(s.lookup(3).unwrap()).unwrap();
     let end = layout.rect(s.lookup(4).unwrap()).unwrap();
-    assert_eq!(short.h, 22.0);
-    assert!(long.h >= 44.0, "long line wrapped: {long:?}");
+    assert_eq!(short.h, 24.0, "text.base is 16 on 24");
+    assert!(long.h >= 48.0, "long line wrapped: {long:?}");
     assert_eq!(end.y, short.h + long.h);
     assert_eq!(long.w, 200.0);
     // Layout measured the long line under a few constraints; shaping ran
@@ -321,14 +339,14 @@ fn a_face() -> std::sync::Arc<dyn AsRef<[u8]> + Send + Sync> {
 fn a_loaded_face_says_what_family_it_is() {
     let mut t = TextEngine::new();
     assert_eq!(t.add_font(a_face()).as_deref(), Some("Noto Sans Symbols"));
-    assert_eq!(t.face_count(), 5, "the four embedded, and the one just read");
+    assert_eq!(t.face_count(), 7, "the six embedded, and the one just read");
 }
 
 #[test]
 fn bytes_that_are_not_a_face_are_refused() {
     let mut t = TextEngine::new();
     assert_eq!(t.add_font(std::sync::Arc::new(b"not a font, not even close".to_vec())), None);
-    assert_eq!(t.face_count(), 4, "nothing was loaded");
+    assert_eq!(t.face_count(), 6, "nothing was loaded");
 }
 
 #[test]

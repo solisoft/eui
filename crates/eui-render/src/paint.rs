@@ -1059,21 +1059,29 @@ impl Painter<'_, '_> {
         // nothing inside it is.
         let invisible = node.kind == NodeKind::Sizer;
 
-        // Spec 03 §2: the shadow first — black, offset, grown by the blur,
-        // fading across it (`extra[1]` is the blur for the fragment stage).
-        if let Some(&(dy, blur, alpha)) = self.scene.theme.shadow.get(usize::from(record.shadow)).filter(|_| record.shadow != 0 && !invisible) {
-            let (dy, blur) = (dy * scale, blur * scale);
+        // Spec 03 §2: the shadow first — one quad per layer, in order, each
+        // black, offset, grown (or shrunk) by its spread and then by its
+        // blur, and fading across the blur (`extra[1]` is the blur for the
+        // fragment stage). The spread moves the corner radius with the edge,
+        // as CSS does, so a negative one tucks the layer under the box.
+        if let Some(layers) = self.scene.theme.shadow.get(usize::from(record.shadow)).filter(|_| record.shadow != 0 && !invisible) {
             let [x, y, w, h] = dev;
-            self.push(Quad {
-                rect: [x - blur, y + dy - blur, w + 2.0 * blur, h + 2.0 * blur],
-                params: [radius + blur, 0.0, 0.0, opacity],
-                fill: [0.0, 0.0, 0.0, alpha],
-                stroke: [0.0; 4],
-                uv: [0.0; 4],
-                extra: [0.0, blur, 0.0, 0.0],
-                spin: [0.0; 4],
-                ..Quad::default()
-            });
+            for &(dy, blur, spread, alpha) in layers.iter().filter(|l| l.3 > 0.0) {
+                let (dy, blur, spread) = (dy * scale, blur * scale, spread * scale);
+                // A spread cannot take the box below nothing.
+                let spread = spread.max(-0.5 * w.min(h));
+                let grow = spread + blur;
+                self.push(Quad {
+                    rect: [x - grow, y + dy - grow, w + 2.0 * grow, h + 2.0 * grow],
+                    params: [(radius + spread).max(0.0) + blur, 0.0, 0.0, opacity],
+                    fill: [0.0, 0.0, 0.0, alpha],
+                    stroke: [0.0; 4],
+                    uv: [0.0; 4],
+                    extra: [0.0, blur, 0.0, 0.0],
+                    spin: [0.0; 4],
+                    ..Quad::default()
+                });
+            }
         }
 
         // Background and border. A uniform border is one stroked quad; a

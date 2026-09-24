@@ -37,6 +37,10 @@ fn assert_contract(r: &Resolved, label: &str) {
     for (base, on) in [(AccentBase, AccentOn), (SuccessBase, SuccessOn), (WarningBase, WarningOn), (DangerBase, DangerOn), (InfoBase, InfoOn)] {
         assert!(ratio(r, on, base) >= 3.0, "{label}: {} on {} = {:.2}", on.name(), base.name(), ratio(r, on, base));
     }
+    // Light hover lightens, and steps back until its label still reads (§4.1).
+    if r.mode == ThemeMode::Light {
+        assert!(ratio(r, AccentOn, AccentHover) >= 3.0, "{label}: accent.on on accent.hover = {:.2}", ratio(r, AccentOn, AccentHover));
+    }
     for id in 1..=Role::MAX_ID {
         assert_eq!(r.color_by_id(id).unwrap() & 0xFF, 0xFF, "{label}: alpha is opaque");
     }
@@ -160,8 +164,10 @@ fn accent_hover_and_active_step_away_from_base() {
     let t = Theme::default();
     let light = t.resolve(Viewer::default());
     let l = |c: u32| lin(c).luminance();
-    assert!(l(light.color(Role::AccentHover)) < l(light.color(Role::AccentBase)));
-    assert!(l(light.color(Role::AccentActive)) < l(light.color(Role::AccentHover)));
+    // Light: hover lightens, as a Tailwind button does (indigo-600 to
+    // indigo-500), and active presses darker (indigo-700).
+    assert!(l(light.color(Role::AccentHover)) > l(light.color(Role::AccentBase)));
+    assert!(l(light.color(Role::AccentActive)) < l(light.color(Role::AccentBase)));
     let dark = t.resolve(Viewer { mode: ThemeMode::Dark, ..Default::default() });
     assert!(l(dark.color(Role::AccentHover)) > l(dark.color(Role::AccentBase)));
     assert!(l(dark.color(Role::AccentActive)) > l(dark.color(Role::AccentHover)));
@@ -178,7 +184,73 @@ fn status_hues_are_fixed_by_the_protocol() {
     assert!((success.h - 145.0).abs() < 4.0, "success hue {}", success.h);
 }
 
+/// The default theme is Tailwind UI's: gray surfaces, indigo-600. Each
+/// role is compared, in OKLab ΔE ×100, with the Tailwind v4 colour it
+/// stands in for. Two sit further off than the rest, and both for the same
+/// reason — §4.3 moved them: Tailwind's gray-300 border is 1.4:1 on gray-50
+/// and its gray-400 is 2.5:1, and the contract wants 1.5 and 3. Run with
+/// `--nocapture` for the table, light and dark.
+#[test]
+fn the_default_palette_is_tailwinds_gray_and_indigo() {
+    use Role::*;
+    let oklab = |rgba: u32| {
+        let c = lin(rgba).to_oklch();
+        let h = c.h.to_radians();
+        (c.l, c.c * h.cos(), c.c * h.sin())
+    };
+    let delta_e = |a: u32, b: u32| {
+        let (p, q) = (oklab(a), oklab(b));
+        100.0 * ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2) + (p.2 - q.2).powi(2)).sqrt()
+    };
+    let targets: [(Role, &str, u32, f64); 11] = [
+        (SurfaceBase, "gray-50", 0xf9fafbff, 1.0),
+        (SurfaceRaised, "white", 0xffffffff, 1.0),
+        (SurfaceSunken, "gray-100", 0xf3f4f6ff, 1.0),
+        (BorderSubtle, "gray-200", 0xe5e7ebff, 1.0),
+        (BorderDefault, "gray-300", 0xd1d5dcff, 3.0),
+        (BorderStrong, "gray-400", 0x99a1afff, 6.0),
+        (TextMuted, "gray-500", 0x6a7282ff, 3.0),
+        (TextDefault, "gray-900", 0x101828ff, 3.0),
+        (AccentBase, "indigo-600", 0x4f39f6ff, 1.0),
+        (AccentHover, "indigo-500", 0x615fffff, 2.0),
+        (AccentActive, "indigo-700", 0x432dd7ff, 3.0),
+    ];
+    let light = Theme::default().resolve(Viewer::default());
+    let dark = Theme::default().resolve(Viewer { mode: ThemeMode::Dark, ..Default::default() });
+    println!("{:<16} {:>8} {:>8}   {:<11} {:>8} {:>5}", "role", "light", "dark", "tailwind", "", "ΔE");
+    for role in Role::ALL.iter().take(28) {
+        let target = targets.iter().find(|t| t.0 == *role);
+        let (lc, dc) = (light.color(*role) >> 8, dark.color(*role) >> 8);
+        match target {
+            Some(&(_, name, rgba, _)) => println!("{:<16} #{lc:06x}  #{dc:06x}   {name:<11} #{:06x} {:>5.2}", role.name(), rgba >> 8, delta_e(light.color(*role), rgba)),
+            None => println!("{:<16} #{lc:06x}  #{dc:06x}", role.name()),
+        }
+    }
+    for (role, name, rgba, tolerance) in targets {
+        let d = delta_e(light.color(role), rgba);
+        assert!(d <= tolerance, "{} is #{:06x}, {name} is #{:06x}: ΔE {d:.2} > {tolerance}", role.name(), light.color(role) >> 8, rgba >> 8);
+    }
+}
+
 // ---------------------------------------------------------------- scales
+
+/// 05 §2: the text scale is Tailwind's, and every shadow is the two layers
+/// of the Tailwind class it stands for.
+#[test]
+fn the_scales_are_tailwinds() {
+    assert_eq!(scale::TEXT, [(12.0, 16.0), (14.0, 20.0), (16.0, 24.0), (18.0, 28.0), (20.0, 28.0), (24.0, 32.0), (30.0, 36.0), (36.0, 40.0)]);
+    let r = Theme::default().resolve(Viewer::default());
+    assert_eq!(r.text, scale::TEXT);
+    assert_eq!(r.shadow[0].iter().filter(|l| l.3 > 0.0).count(), 0, "shadow.none paints nothing");
+    assert_eq!(r.shadow[1], [(1.0, 2.0, 0.0, 0.05), (0.0, 0.0, 0.0, 0.0)], "shadow-sm");
+    assert_eq!(r.shadow[2], [(4.0, 6.0, -1.0, 0.10), (2.0, 4.0, -2.0, 0.10)], "shadow-md");
+    assert_eq!(r.shadow[3], [(10.0, 15.0, -3.0, 0.10), (4.0, 6.0, -4.0, 0.10)], "shadow-lg");
+    // A negative spread never outgrows the blur it sits in: every layer
+    // still reaches past the box, just less far than it is offset.
+    for layer in r.shadow.iter().flatten().filter(|l| l.3 > 0.0) {
+        assert!(layer.1 + layer.2 > 0.0, "{layer:?}");
+    }
+}
 
 #[test]
 fn density_scales_space_and_controls_but_not_text() {
@@ -198,7 +270,8 @@ fn density_scales_space_and_controls_but_not_text() {
 fn font_scale_scales_text_and_nothing_else() {
     let t = Theme::default();
     let big = t.resolve(Viewer { font_scale: 1.5, ..Default::default() });
-    assert_eq!(big.text(2), Some((23.0, 33.0))); // 15 × 1.5 = 22.5 → 23, 22 × 1.5 = 33
+    assert_eq!(big.text(1), Some((21.0, 30.0))); // 14 × 1.5 = 21, 20 × 1.5 = 30
+    assert_eq!(big.text(0), Some((18.0, 24.0))); // 12 × 1.5, 16 × 1.5
     assert_eq!(big.space, scale::SPACE);
     // Nonsense scales fall back to 1.0 rather than producing NaN layouts.
     let nan = t.resolve(Viewer { font_scale: f32::NAN, ..Default::default() });
@@ -211,7 +284,7 @@ fn font_scale_scales_text_and_nothing_else() {
 fn radius_scale_derives_from_radius_md() {
     let r = Theme { radius_md: 10.0, ..Default::default() }.resolve(Viewer::default());
     assert_eq!(r.radius, [0.0, 5.0, 10.0, 20.0, scale::RADIUS_FULL]);
-    assert_eq!(Theme::default().resolve(Viewer::default()).radius(2), Some(6.0));
+    assert_eq!(Theme::default().resolve(Viewer::default()).radius, [0.0, 4.0, 8.0, 16.0, scale::RADIUS_FULL], "rounded / rounded-lg / rounded-2xl");
     assert_eq!(r.radius(5), None);
 }
 

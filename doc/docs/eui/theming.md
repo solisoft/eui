@@ -27,9 +27,22 @@ sees; and the server learns nothing about the person using it.
 each pairing a size with a line height · `weight.regular/medium/semibold/bold` ·
 `shadow.sm/md/lg` · `motion.fast/base/slow/slower/slowest` with their curves
 
-A style's `shadow` index paints a soft black rectangle under the box — offset,
-blurred and weighted by the scale, drawn by the same quad pipeline as the box
-with a fade across the blur. A style's `transition` names a `motion` index:
+The scales are Tailwind's, so a design written in Tailwind classes carries
+over index for index:
+
+| Scale | Values | Tailwind |
+|---|---|---|
+| `text` | `12/16 14/20 16/24 18/28 20/28 24/32 30/36 36/40` (size / line) | `text-xs` … `text-4xl` |
+| `radius` | `0 4 8 16 full` with the default `radius_md` of 8 | `rounded-none`, `rounded`, `rounded-lg`, `rounded-2xl`, `rounded-full` |
+| `shadow` | `sm` one layer, `md` and `lg` two | `shadow-sm`, `shadow-md`, `shadow-lg` |
+
+A style's `shadow` index paints soft black rectangles under the box, one per
+layer of the scale — `md` is `0 4 6 -1 / 10%` then `0 2 4 -2 / 10%`, written
+as CSS writes a `box-shadow` — each offset, grown by its *spread*, blurred,
+and drawn by the same quad pipeline as the box with a fade across the blur.
+The spreads of `md` and `lg` are negative: they pull each layer in before it
+is blurred, which is what keeps the shadow under the card, below it, rather
+than a grey halo round it. A style's `transition` names a `motion` index:
 when a node's style changes to it, the client eases the background, foreground,
 border colour and opacity from the old values over that duration, along
 `cubic-bezier(0.2, 0, 0, 1)`. The two slowest steps — 560 ms and a second —
@@ -50,6 +63,29 @@ Changing any of them re-resolves the style table and re-runs layout. Nothing
 crosses the network.
 
 ## Authoring
+
+With no theme at all, the client resolves **Tailwind UI's palette**: a
+gray-50 page, white cards, gray-200 and gray-300 borders, gray-900 and
+gray-500 text, and an indigo-600 accent whose hover lightens to about
+indigo-500, as a Tailwind button does. The seeds are Tailwind's own OKLCH
+values, and a test holds each resolved role to within a few ΔE of the
+Tailwind colour it stands in for:
+
+| Role | Light | Dark | Tailwind |
+|---|---|---|---|
+| `surface.base` | `#f8faff` | `#111418` | gray-50 `#f9fafb` |
+| `surface.raised` | `#ffffff` | `#1d1f24` | white |
+| `surface.sunken` | `#f1f4fb` | `#090b0f` | gray-100 `#f3f4f6` |
+| `border.subtle` | `#e4e7ee` | `#222429` | gray-200 `#e5e7eb` |
+| `border.default` | `#cbced5` | `#33353b` | gray-300 `#d1d5dc` |
+| `border.strong` | `#8e9198` | `#606369` | gray-400 `#99a1af`, darkened to meet 3:1 |
+| `text.default` | `#16181d` | `#e4e8ef` | gray-900 `#101828` |
+| `text.muted` | `#6c6f75` | `#a1a5ab` | gray-500 `#6a7282` |
+| `accent.base` | `#4f39f6` | `#6667ff` | indigo-600 `#4f39f6` |
+| `accent.hover` | `#5d59ff` | `#7982ff` | indigo-500 `#615fff` |
+| `accent.active` | `#431be1` | `#8e9aff` | indigo-700 `#432dd7` |
+
+Dark mode is the same algorithm's other column, not a Tailwind palette.
 
 A theme is generated from a seed colour in OKLCH, so the full ramp is
 perceptually even rather than hand-tuned:
@@ -72,7 +108,9 @@ cannot fail contrast, because the algorithm does not have a failing path.
 ## Typefaces
 
 A client ships two faces, `sans` and `mono`, and shapes with those and
-nothing else: it never asks the machine what fonts it has, and it never
+nothing else. `sans` is Inter in all four weights the wire names — regular,
+medium, semibold and bold are each a face of their own, so a `semibold`
+heading is not a bold one. The client never asks the machine what fonts it has, and it never
 fetches one from a font service. An application that wants its own typeface
 *serves* it, like any other asset:
 

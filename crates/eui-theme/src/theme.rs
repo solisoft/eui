@@ -35,7 +35,10 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self { accent: Oklch::new(0.55, 0.18, 264.0), surface: Oklch::new(0.98, 0.006, 250.0), radius_md: 6.0, density: Density::Cozy, font_sans: None, font_mono: None }
+        // Tailwind's indigo-600 on its gray: the accent is `oklch(0.511
+        // 0.262 277)` exactly, and sRGB clips its chroma (05 §4.4) to the
+        // same `#4f39f6` a browser falls back to.
+        Self { accent: Oklch::new(0.511, 0.262, 277.0), surface: Oklch::new(0.98, 0.01, 264.0), radius_md: 8.0, density: Density::Cozy, font_sans: None, font_mono: None }
     }
 }
 
@@ -68,8 +71,8 @@ pub struct Resolved {
     pub radius: [f32; scale::RADIUS_LEN],
     /// `(size, line height)` after font scale, whole px.
     pub text: [(f32, f32); 8],
-    /// Shadow scale, unchanged.
-    pub shadow: [(f32, f32, f32); 4],
+    /// Shadow scale, unchanged: two layers per index.
+    pub shadow: [[scale::ShadowLayer; 2]; 4],
     /// Motion durations, ms.
     pub motion: [u16; 5],
     /// Control heights after density, whole px.
@@ -167,7 +170,7 @@ impl Theme {
             *size = (*size * fs).round();
             *line = (*line * fs).round();
         }
-        let md = if self.radius_md.is_finite() { self.radius_md.max(0.0) } else { 6.0 };
+        let md = if self.radius_md.is_finite() { self.radius_md.max(0.0) } else { 8.0 };
         let radius = [0.0, (md / 2.0).round(), md.round(), (md * 2.0).round(), scale::RADIUS_FULL];
 
         Resolved { colors, space, radius, text, shadow: scale::SHADOW, motion: scale::MOTION, control, mode: viewer.mode }
@@ -195,10 +198,10 @@ impl Theme {
 
         set(SurfaceBase, surf(col(0.985, 0.19, 0.0)));
         set(SurfaceRaised, surf(col(1.0, 0.24, 0.05)));
-        set(SurfaceSunken, surf(col(0.955, 0.15, 0.0)));
+        set(SurfaceSunken, surf(col(0.967, 0.15, 0.0)));
         set(SurfaceOverlay, surf(col(1.0, 0.27, 0.08)));
-        set(TextDefault, txt(col(0.18, 0.93, 1.0)));
-        set(TextMuted, txt(col(0.45, 0.72, 0.90)));
+        set(TextDefault, txt(col(0.21, 0.93, 1.0)));
+        set(TextMuted, txt(col(0.551, 0.72, 0.90)));
         set(TextInverted, txt(col(0.98, 0.15, 0.0)));
         set(TextDisabled, txt(col(0.65, 0.50, 0.70)));
 
@@ -227,9 +230,9 @@ impl Theme {
         set(InfoBase, b);
         set(InfoSubtle, s);
 
-        set(BorderSubtle, surf(col(0.92, 0.26, 0.50)));
-        set(BorderDefault, surf(col(0.86, 0.32, 0.70)));
-        set(BorderStrong, surf(col(0.70, 0.45, 0.90)));
+        set(BorderSubtle, surf(col(0.928, 0.26, 0.50)));
+        set(BorderDefault, surf(col(0.872, 0.32, 0.70)));
+        set(BorderStrong, surf(col(0.707, 0.45, 0.90)));
         set(FocusRing, Oklch::new(col(0.55, 0.75, 0.85), a_c.max(0.18), a_h));
 
         // §1.1 — the categorical series of a chart.
@@ -276,17 +279,32 @@ impl Theme {
         }
         enforce(&mut p, BorderDefault, &[SurfaceBase], 1.5);
 
-        // Hover and active follow the adjusted base.
-        let base = get(&p, AccentBase);
-        let dir = if mode == ThemeMode::Light { -1.0 } else { 1.0 };
-        put(&mut p, AccentHover, base.with_l(base.l + dir * 0.06));
-        put(&mut p, AccentActive, base.with_l(base.l + dir * 0.12));
-
         // §4.2 — the `on` roles.
         for (base, on) in [(AccentBase, AccentOn), (SuccessBase, SuccessOn), (WarningBase, WarningOn), (DangerBase, DangerOn), (InfoBase, InfoOn)] {
             let chosen = on_color(get(&p, base));
             put(&mut p, on, chosen);
         }
+
+        // Hover and active follow the adjusted base. In light, hover
+        // *lightens* — indigo-600 to indigo-500, the way a Tailwind button
+        // answers the pointer — and active presses darker; but a hover that
+        // washed `accent.on` out would be a label that fades as the pointer
+        // arrives, so it steps back towards the base until the label keeps
+        // 3:1 (§4.3). In dark and high contrast both step up, as before.
+        let base = get(&p, AccentBase);
+        let (hover, active) = match mode {
+            ThemeMode::Light => {
+                let on = get(&p, AccentOn);
+                let mut hover = base.with_l(base.l + 0.06);
+                while hover.l > base.l && contrast_oklch(on, hover) < 3.0 {
+                    hover = hover.with_l(hover.l - 0.01);
+                }
+                (hover, base.with_l(base.l - 0.06))
+            }
+            _ => (base.with_l(base.l + 0.06), base.with_l(base.l + 0.12)),
+        };
+        put(&mut p, AccentHover, hover);
+        put(&mut p, AccentActive, active);
 
         let mut out = [0x0000_00FFu32; 34];
         for (slot, c) in out.iter_mut().zip(p.iter()).skip(1) {

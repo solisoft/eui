@@ -75,8 +75,20 @@ fn px(n: u16) -> Dim {
     Dim::Px(n)
 }
 
+/// The default theme with the text scale these goldens were worked out on:
+/// `base` 15 on 22, so a `Monospace` cell is 9 px and every number below is
+/// whole arithmetic a reader can redo. These tests are about where layout
+/// puts boxes, not about what the theme's scale is — that is pinned in
+/// `eui-theme`'s `the_scales_are_tailwinds` — and the default's own 16 on 24
+/// would turn every width into a multiple of 9.6.
+fn theme() -> eui_theme::Resolved {
+    let mut theme = Theme::default().resolve(Viewer::default());
+    theme.text = [(11.0, 16.0), (13.0, 18.0), (15.0, 22.0), (17.0, 24.0), (20.0, 28.0), (24.0, 32.0), (30.0, 38.0), (38.0, 46.0)];
+    theme
+}
+
 fn lay(s: &Session, w: f32, h: f32) -> (Layout, Monospace) {
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(w, h));
@@ -543,7 +555,7 @@ fn a_scroll_keeps_the_row_tops_it_already_added_up() {
     b.prop("item_height", Value::Int(20));
     let rows: Vec<u32> = (0..1000).map(|i| b.text(t, &format!("row {i}"))).collect();
     let mut s = b.session();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
@@ -583,7 +595,7 @@ fn a_glide_widens_the_virtual_window_and_moves_the_hit() {
     b.prop("item_height", Value::Int(20));
     let rows: Vec<u32> = (0..1000).map(|i| b.text(t, &format!("row {i}"))).collect();
     let mut s = b.session();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
@@ -626,7 +638,7 @@ fn a_scroll_keeps_the_measures_of_what_did_not_move() {
         b.text(t, &format!("row {i}"));
     }
     let mut s = b.session();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let mut frame = |l: &mut Layout, s: &Session| l.compute(&mut Env { session: s, theme: &theme, text: &mut m }, Size::new(800.0, 600.0));
@@ -882,7 +894,7 @@ fn a_panel_that_follows_the_pointer_sits_above_it_and_keeps_up() {
     b.text(t, "nine");
     let s = b.session();
 
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     l.set_pointer(Some((180.0, 120.0)));
@@ -929,7 +941,7 @@ fn a_panel_at_the_pointer_is_painted_but_never_pointed_at() {
     b.text(t, "nine");
     let s = b.session();
 
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     l.set_pointer(Some((120.0, 140.0)));
@@ -1074,7 +1086,7 @@ fn scrolling_page() -> (Session, u32, u32) {
 #[test]
 fn a_scroll_alone_translates_to_what_a_full_layout_places() {
     let (mut s, outer, inner) = scrolling_page();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let view = Size::new(300.0, 400.0);
@@ -1101,7 +1113,7 @@ fn a_scroll_alone_translates_to_what_a_full_layout_places() {
 #[test]
 fn a_scroll_with_anything_else_is_left_to_a_full_layout() {
     let (mut s, outer, _) = scrolling_page();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let view = Size::new(300.0, 400.0);
@@ -1138,7 +1150,7 @@ fn a_virtualised_list_scrolled_recomputes_its_window() {
         b.text(t, &format!("row {i}"));
     }
     let mut s = b.session();
-    let theme = Theme::default().resolve(Viewer::default());
+    let theme = theme();
     let mut m = Monospace::default();
     let mut l = Layout::new();
     let view = Size::new(300.0, 400.0);

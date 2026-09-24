@@ -1535,7 +1535,7 @@ fn a_click_lands_the_caret_on_the_glyph_under_the_pointer() {
 fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     use std::time::{Duration, Instant};
     let mut d = welcomed();
-    // A scroll box of 100 px holding ten 22 px rows, with a scroll handler.
+    // A scroll box of 100 px holding ten 24 px rows, with a scroll handler.
     let mut tree = Subtree::default();
     tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
     tree.nodes.push(FlatNode { kind: NodeKind::Scroll, id: 2, style: 11, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 10 });
@@ -1576,16 +1576,16 @@ fn a_wheel_notch_scrolls_smoothly_and_reports_once_it_lands() {
     // Zero-valued pixel events between notches (a Magic Mouse) change nothing.
     assert!(d.input(Input::Wheel(0.0, 0.0)).is_empty());
     assert!(d.animating(), "a zero delta does not cancel the motion");
-    // A second notch mid-flight retargets to 120 (the end) from where the view is.
+    // A second notch mid-flight retargets to 140 (the end) from where the view is.
     let second = Instant::now();
     d.input(Input::WheelStep(0.0, 1.0));
     d.tick(second + Duration::from_millis(400));
     let _ = d.paint(400, 300);
-    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 120));
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 140));
     assert!(!d.animating());
     let landed = d.take_pending();
     assert_eq!(landed.len(), 1, "one scroll event when it lands: {landed:?}");
-    assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(120)])));
+    assert!(matches!(&landed[0], Frame::Event(e) if e.event == EventKind::Scroll && e.payload == Value::List(vec![Value::Int(0), Value::Int(140)])));
     assert_eq!(d.next_frame_at(), None);
 }
 
@@ -2137,7 +2137,7 @@ fn the_scrollbar_thumb_drags_and_its_track_pages() {
     let list = d.paint(400, 300);
     let scroll = d.session().lookup(2).unwrap();
     let r = d.layout().rect(scroll).unwrap();
-    // The thumb is painted at the right edge, 100/440 of the track, min 24 px.
+    // The thumb is painted at the right edge, 100/480 of the track, min 24 px.
     let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).expect("content overflows");
     assert!(thumb.x >= r.x + r.w - eui_render::SCROLLBAR_WIDTH);
     assert_eq!(thumb.h, 24.0);
@@ -2162,7 +2162,7 @@ fn the_scrollbar_thumb_drags_and_its_track_pages() {
     d.input(Input::PointerDown(0));
     d.input(Input::PointerMove(thumb.x + 2.0, r.y + r.h + 50.0));
     d.input(Input::PointerUp(0));
-    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 340), "content 440 − view 100");
+    assert_eq!(d.session().node(scroll).unwrap().scroll, (0, 380), "content 480 − view 100");
     // Dragging back to the top.
     let _ = d.paint(400, 300);
     let thumb = eui_render::scrollbar_thumb(d.session(), d.layout(), scroll, r).unwrap();

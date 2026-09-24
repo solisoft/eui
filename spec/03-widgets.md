@@ -134,11 +134,14 @@ snapped horizontally to whole device pixels and vertically to the line's
 baseline. Anti-aliasing is by signed distance to the edge, so the same
 pipeline draws boxes, hairlines and glyphs.
 
-A non-zero `s.shadow` paints, before the background, a black rounded
-rectangle offset by the scale's `y`, grown by its `blur` on every side, with
-coverage falling from opaque at the border box's edge to nothing at the
-grown edge, at the scale's opacity. `canvas` paths (§1.1) are part of
-version 1.
+A non-zero `s.shadow` paints, before the background, each of the scale's
+layers (05 §2) in order, and each layer is a black rounded rectangle: the
+border box grown by the layer's `spread` on every side — shrunk, when the
+spread is negative — with its corner radius moved by the same amount and
+never below zero, offset by the layer's `y`, and grown again by its `blur`,
+with coverage falling from opaque one blur inside the spread edge to nothing
+at the grown edge, at the layer's opacity. A layer of opacity zero paints
+nothing. `canvas` paths (§1.1) are part of version 1.
 
 ### 2.1 The backdrop
 

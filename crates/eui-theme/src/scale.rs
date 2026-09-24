@@ -3,11 +3,23 @@
 /// `space` entries, index 0–12, px.
 pub const SPACE: [f32; 13] = [0.0, 2.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0, 96.0];
 
-/// `text` entries as `(size, line height)`, index 0–7, px.
-pub const TEXT: [(f32, f32); 8] = [(11.0, 16.0), (13.0, 18.0), (15.0, 22.0), (17.0, 24.0), (20.0, 28.0), (24.0, 32.0), (30.0, 38.0), (38.0, 46.0)];
+/// `text` entries as `(size, line height)`, index 0–7, px — Tailwind's
+/// `text-xs` … `text-4xl`, size for size and line for line.
+pub const TEXT: [(f32, f32); 8] = [(12.0, 16.0), (14.0, 20.0), (16.0, 24.0), (18.0, 28.0), (20.0, 28.0), (24.0, 32.0), (30.0, 36.0), (36.0, 40.0)];
 
-/// `shadow` entries as `(y offset, blur, opacity)`, index 0–3.
-pub const SHADOW: [(f32, f32, f32); 4] = [(0.0, 0.0, 0.0), (1.0, 2.0, 0.12), (4.0, 12.0, 0.16), (12.0, 32.0, 0.24)];
+/// One layer of a shadow: `(y offset, blur, spread, opacity)` of black, px.
+/// The spread grows the box before it is blurred, or shrinks it when
+/// negative — which is how a layer is kept *under* its box rather than
+/// round it (05 §2).
+pub type ShadowLayer = (f32, f32, f32, f32);
+
+/// No layer: an opacity of zero is skipped by the painter.
+const NO_LAYER: ShadowLayer = (0.0, 0.0, 0.0, 0.0);
+
+/// `shadow` entries, index 0–3, each two layers painted in order —
+/// Tailwind's `shadow-sm`, `shadow-md` and `shadow-lg`.
+pub const SHADOW: [[ShadowLayer; 2]; 4] =
+    [[NO_LAYER, NO_LAYER], [(1.0, 2.0, 0.0, 0.05), NO_LAYER], [(4.0, 6.0, -1.0, 0.10), (2.0, 4.0, -2.0, 0.10)], [(10.0, 15.0, -3.0, 0.10), (4.0, 6.0, -4.0, 0.10)]];
 
 /// `motion` durations in ms, index 0–4. The top two are for a thing
 /// arriving over a distance rather than a control changing state (05 §2).

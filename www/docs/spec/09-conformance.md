@@ -138,6 +138,12 @@ rest is the behaviour the section promises and the client owes:
 5. **The faces are asked for from the session**, not from the tree: a role's
    hashes are wanted because a `DefFont` bound them, and asked for once.
 
+And the embedded side of it: the client carries a face for each of the four
+`font_weight` values, so `each_weight_draws_in_a_face_of_its_own` shapes one
+word at each weight and finds four faces and four widths, each wider than the
+last — `medium` and `semibold` are not `regular` and `bold` under other
+names.
+
 ## 3. Tree — `crates/eui-tree/tests`
 
 Tables never cleared — including by a `Mount`; a batch that fails leaves the
@@ -184,9 +190,19 @@ and `a_virtualised_list_scrolled_recomputes_its_window` pin when it must not.
 
 ## 5. Theme — `crates/eui-theme/tests`
 
-Every default pair in 05 §6 meets its contrast; a seed produces a ramp whose
+Every default pair in 05 §4.3 meets its contrast; a seed produces a ramp whose
 `on` colour passes against `base`; scale indices out of range are refused;
 the easing curve is monotone and pinned at both ends.
+
+05 §2 and §3's Tailwind values are pinned rather than described:
+`the_scales_are_tailwinds` holds the text scale and every shadow layer,
+`radius_scale_derives_from_radius_md` the default `4 8 16`, and
+`the_default_palette_is_tailwinds_gray_and_indigo` compares each light role
+with the Tailwind colour it stands in for, in OKLab ΔE with a tolerance per
+role (1 for the surfaces, `border.subtle` and `accent.base`; 6 for the
+contrast-bound `border.strong`). The light hover, which lightens, is held to
+3:1 under `accent.on` for every seed `contrast_holds_for_hostile_seeds`
+draws.
 
 ## 6. Bytecode — `crates/eui-vm/tests`
 
@@ -554,11 +570,14 @@ this client never writes to is left alone by an uninstall.
 ## 8. Painting — `crates/eui-render/tests/render.rs`
 
 One quad per box and per glyph; scissor runs for scroll containers; device
-snapping at 2×; shadows; canvas paths; the backdrop a `blur` asks for — that
+snapping at 2×; shadows, one quad per layer grown by its spread and its blur,
+with the empty second layer of `shadow.sm` drawing nothing; canvas paths; the backdrop a `blur` asks for — that
 a frame without one asks for none, that the region is the blurred rects
 grown by three standard deviations and no more, and that two radii are two
 chains; and, where a GPU adapter exists, pixels read back from an off-screen
 target for the clear colour, a filled box, a clipped scroll, a canvas line,
+a `shadow.lg` whose negative spreads leave the row above its box the bare
+surface and darken the row below (`a_negative_spread_keeps_the_shadow_under_the_box`),
 and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.

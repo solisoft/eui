@@ -29,5 +29,5 @@ pub use color::{contrast, contrast_oklch, Linear, Oklch};
 pub use error::ThemeError;
 pub use eui_proto::{Density, ThemeMode};
 pub use role::Role;
-pub use scale::Curve;
+pub use scale::{Curve, ShadowLayer};
 pub use theme::{check_style, Resolved, Theme, Viewer};

@@ -528,20 +528,60 @@ fn a_canvas_line_lands_on_its_pixels() {
 }
 
 #[test]
-fn a_shadow_is_a_grown_black_quad_painted_before_its_box() {
+fn a_shadow_is_a_grown_black_quad_per_layer_painted_before_its_box() {
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [6; 4], ..Default::default() };
     let card = StyleRecord { bg: ColorRef::role(Role::SurfaceRaised.id()), width: Dim::Px(40), height: Dim::Px(20), shadow: 2, radius: 2, ..Default::default() };
     let mut fx = fixture(vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
     let r = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
     let list = draw(&mut fx, 200, 100, 1.0);
-    assert_eq!(list.quads.len(), 2, "{list:#?}");
-    let (dy, blur, alpha) = fx.theme.shadow[2];
-    let shadow = &list.quads[0];
-    assert_eq!(shadow.rect, [r.x - blur, r.y + dy - blur, r.w + 2.0 * blur, r.h + 2.0 * blur]);
-    assert_eq!(shadow.fill, [0.0, 0.0, 0.0, alpha]);
-    assert_eq!(shadow.extra[1], blur, "the fragment stage fades across the blur");
-    assert_eq!(shadow.params[0], fx.theme.radius(2).unwrap() + blur);
-    assert_eq!(list.quads[1].rect, [r.x, r.y, r.w, r.h]);
+    // shadow-md is two layers, then the box.
+    assert_eq!(list.quads.len(), 3, "{list:#?}");
+    let radius = fx.theme.radius(2).unwrap();
+    for (i, &(dy, blur, spread, alpha)) in fx.theme.shadow[2].iter().enumerate() {
+        let q = &list.quads[i];
+        let grow = spread + blur;
+        assert_eq!(q.rect, [r.x - grow, r.y + dy - grow, r.w + 2.0 * grow, r.h + 2.0 * grow], "layer {i}");
+        assert_eq!(q.fill, [0.0, 0.0, 0.0, alpha]);
+        assert_eq!(q.extra[1], blur, "the fragment stage fades across the blur");
+        assert_eq!(q.params[0], radius + spread + blur, "the corner moves with the spread");
+    }
+    assert_eq!(list.quads[2].rect, [r.x, r.y, r.w, r.h]);
+
+    // shadow-sm has one layer: the empty second one is not a quad.
+    let card = StyleRecord { shadow: 1, ..card };
+    let mut fx = fixture(vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 100.0);
+    assert_eq!(draw(&mut fx, 200, 100, 1.0).quads.len(), 2);
+}
+
+/// 05 §2: shadow-lg's layers are pulled in by their negative spread, so the
+/// shadow falls *under* the box — the row of pixels just above it is the
+/// bare surface, and the row just below it is darker.
+#[test]
+fn a_negative_spread_keeps_the_shadow_under_the_box() {
+    let Some(mut gr) = gpu() else { return };
+    let mut st = gr.session();
+    let col = StyleRecord {
+        display: Display::Column,
+        align_items: AlignItems::Start,
+        padding: [10; 4],
+        bg: ColorRef::role(Role::SurfaceBase.id()),
+        width: Dim::Px(100),
+        height: Dim::Px(100),
+        ..Default::default()
+    };
+    let card = StyleRecord { bg: ColorRef::role(Role::SurfaceRaised.id()), width: Dim::Px(60), height: Dim::Px(30), shadow: 3, radius: 2, ..Default::default() };
+    let mut fx = fixture(vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
+    let r = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap();
+    let list = draw(&mut fx, 100, 100, 1.0);
+    let target = gr.offscreen(100, 100);
+    gr.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = gr.read_back(&target).unwrap();
+    let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
+    let cx = (r.x + r.w / 2.0) as u32;
+    let above = pixel(&px, 100, cx, r.y as u32 - 2);
+    let below = pixel(&px, 100, cx, (r.y + r.h) as u32 + 2);
+    assert!(close(above, ground, 1), "above the box: {above:?} vs the surface {ground:?}");
+    assert!(below[0] + 8 < ground[0] && below[1] + 8 < ground[1], "below the box: {below:?} vs the surface {ground:?}");
 }
 
 // ------------------------------------------------------------------ blur
@@ -1427,11 +1467,11 @@ fn a_tall_field_centres_its_text_and_caret() {
         let glyph = list.quads.iter().find(|q| q.params[2] as u32 == TEXTURED).expect("glyph");
         (caret.rect[1], glyph.rect[1])
     };
-    // The default text line is 22 px: a 22 px field has nothing to centre.
-    let (c22, g22) = caret_y(22);
-    let (c44, g44) = caret_y(44);
-    assert_eq!(c44 - c22, 11.0, "the caret moved down by half the spare height");
-    assert_eq!(g44 - g22, 11.0, "and so did the text");
+    // The default text line is 24 px: a 24 px field has nothing to centre.
+    let (c24, g24) = caret_y(24);
+    let (c48, g48) = caret_y(48);
+    assert_eq!(c48 - c24, 12.0, "the caret moved down by half the spare height");
+    assert_eq!(g48 - g24, 12.0, "and so did the text");
 }
 
 // A window's surface format is whatever the platform offers, and on Metal
