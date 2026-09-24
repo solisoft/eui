@@ -28,7 +28,13 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
-  cannot panic by construction, not merely by inspection.
+  cannot panic by construction, not merely by inspection. The deny is written
+  at the crate root of `eui-proto`, `eui-tree` and `eui-vm` (outside their
+  tests), not left to the workspace's `warn` and a CI flag, because the
+  platforms differ in what a panic costs: on the desktop the decoder, the tree
+  and the VM run in the worker process, and a panic kills the worker; on iOS,
+  Android, the web and under `EUI_SANDBOX=0` they run inside the application,
+  under `panic = "abort"`, and a panic a server can reach closes the app.
 
 **`eui-tree` — session state.** The four define-once tables, the node arena
 with a free list, and `apply` for every op in the wire format.

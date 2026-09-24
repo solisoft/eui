@@ -67,6 +67,13 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+// The panic lints are `warn` for the workspace and `deny` here, outside
+// tests: this crate is on the path from the socket to the tree, and on iOS,
+// Android, the web and `EUI_SANDBOX=0` there is no worker process around it —
+// it runs inside the application, under `panic = "abort"`, so a panic a
+// server can reach closes the whole app rather than one worker. Denied at the
+// crate so the promise does not depend on which flags a build was run with.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects))]
 
 pub mod error;
 pub mod frame;

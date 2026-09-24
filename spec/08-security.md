@@ -86,7 +86,9 @@ it.
   the frame could back (a count under its ceiling can still be a lie),
   iterative tree decoding. *Enforced: `eui-proto`,
   under `clippy::indexing_slicing`, `panic`, `unwrap_used`, `expect_used`,
-  `arithmetic_side_effects` as errors; 64 rejection tests; 40 000 hostile
+  `arithmetic_side_effects` as errors — denied at the crate root of
+  `eui-proto`, `eui-tree` and `eui-vm`, which run inside the application
+  wherever there is no worker process; 64 rejection tests; 40 000 hostile
   buffers per `cargo test`; four `cargo fuzz` targets.*
 - A batch that is well-formed but incoherent — undefined atom, duplicate
   node, index past the end — is refused before anything is placed, and the
