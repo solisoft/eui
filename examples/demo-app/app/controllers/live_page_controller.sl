@@ -87,6 +87,11 @@ class LivePageController < Controller
         "title": "Feed",
         "lead": "A timeline built from the same seventeen primitives as everything else.",
         "source": "app/controllers/eui_builders_feed.sl"
+      },
+      "helpdesk": {
+        "title": "Help desk",
+        "lead": "A support inbox drawn the way Tailwind UI draws an application: filters, a thread with internal notes, properties that change, charts. Class strings and theme roles, no colour written down.",
+        "source": "app/controllers/helpdesk_controller.sl"
       }
     }
   end

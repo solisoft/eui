@@ -6,7 +6,7 @@ comment lancer les tests. Le reste des conventions Soli est documenté dans les
 
 ## Tests run on the build server, not here
 
-This app has 10 specs under `tests/`. Run them through `rbuild`, which executes
+This app has 14 specs under `tests/`. Run them through `rbuild`, which executes
 the suite on the dedicated build machine and hands back the console output and
 the exit code:
 

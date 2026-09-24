@@ -1857,8 +1857,32 @@ has the table.
 The catalogue is 531 definitions over six files. `tests/tw_spec.sl` is 8
 tests and 296 assertions, one of which sends every one of the 213 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 13 files, 47 tests, 641 assertions. The gallery's Catalogue section opens
+are 14 files, 70 tests, 707 assertions. The gallery's Catalogue section opens
 with a card written in nothing but class strings.
+
+**A whole application in those classes.** `helpdesk`, the demo application's
+twelfth component, is a support desk for an invented scheduling product:
+a white sidebar with counts, a top bar with the search and an account menu,
+an inbox with Open / Pending / Solved tabs and eight rows a page, a ticket
+with its thread (the customer's messages, the team's replies, internal notes
+on the yellow wash, and a line for every property changed), a composer, and
+status, priority and assignee selects that move the ticket; customers with
+search, four stat cards and two charts, and a settings page whose Save
+answers with a toast. Every style is a `tw()` string, a catalogue builder or
+a role — no colour is written down — and below 1024 px the sidebar becomes
+a drawer. Its queue is seeded into the session's state, so it needs no table.
+The reducer is `app/services/helpdesk_desk.sl` and `tests/helpdesk_spec.sl`
+holds it to 23 tests and 66 assertions; the view is 824 lines. Measured with
+`snapshot` at 1280×800, the inbox is 237 nodes, a ticket with three
+messages 159, customers 204, reports 185, settings 131.
+
+Two things it had to work around, both written down where they bite. A
+node whose only change is its style keeps the style it was mounted with, so
+the sidebar's current row, the current tab and a switch carry their state in
+their key and are replaced rather than restyled. And EUI has no placeholder:
+the search fields and the composer draw one as a muted line under a
+transparent field, put out by a local `focus` chunk that also lights the
+frame's border in the accent.
 
 ## Not started
 

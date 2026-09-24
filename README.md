@@ -45,9 +45,10 @@ crates/
   eui-web     where a page's client starts, on wasm32                 [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
-  demo-app        counter, todo, a 10 000-row table, a gallery and Atrium —
-                  a team messenger — as a Soli app; the catalogue (buttons to
-                  date pickers to charts) is app/controllers/eui_builders*.sl
+  demo-app        counter, todo, a 10 000-row table, a gallery, Atrium —
+                  a team messenger — and a Tailwind UI-style help desk, as a
+                  Soli app; the catalogue (buttons to date pickers to charts)
+                  is app/controllers/eui_builders*.sl
   snapshot        render the counter, or any live Soli component, off-screen
 clients/     the protocol's server half in six more languages, each its own
              repository and each with no runtime dependencies: eui-ruby,
