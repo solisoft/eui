@@ -645,3 +645,15 @@ What is pinned instead:
    client's own shader, checked to ±2/255; depth order, which is a boolean and
    so insensitive to precision; and the fallback a refused module draws. A
    fourth would be a promise this protocol does not make.
+
+## 12. Catalogue styles — `examples/demo-app/tests/tw_spec.sl` (`soli test`)
+
+03 §4's translation rule, for the reference catalogue's `tw()`. Every class it
+accepts — one of each of `tw_examples()` — is sent through `eui_render`, the
+encoder's own path, and must come back a frame rather than a refusal; so
+nothing `tw()` emits is a key or value the wire does not have. The refusals
+are pinned by name: a letter-spacing, a line-height, a gradient, a per-corner
+radius, a transform, a breakpoint and an off-palette hue each raise with the
+class in the message rather than vanish, and the hue's message names the
+nearest role. The four state prefixes land as local styles on the node, so a
+`hover:` needs no round trip.
