@@ -3,7 +3,7 @@
 //! asked. Pure enough to be tested without a display or a network.
 
 use crate::time::{Duration, Instant};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use eui_audio::Control;
@@ -1004,6 +1004,20 @@ pub(crate) const MAX_PENDING_NOTES: usize = 16;
 /// a connection that lost a race against sixteen siblings gets another go.
 const ASSET_TRIES: u8 = 2;
 
+/// Spec 10, *Sound*: decoded samples one session holds at once, every
+/// sound together — two of the longest sounds there may be.
+///
+/// A sound is held only while a node names it (03 §7), so this is the
+/// ceiling on what the nodes of one tree can ask for at once, not on what
+/// a session asks for over its life. A sound that would take the total
+/// past it is refused the way a sound past its own ceiling is.
+pub const MAX_SOUND_BYTES: usize = 256 * 1024 * 1024;
+
+/// Spec 10, *Moving pictures*: decoded frames one session holds at once,
+/// every picture together — two of the largest pictures there may be.
+/// Held only while a `video` node names the picture, like a sound.
+pub const MAX_MOVIE_BYTES: usize = 192 * 1024 * 1024;
+
 /// How long a scroll must have been still before a windowed list asks
 /// for the rows now in view (04 §7.1).
 /// How often a `spin` alone asks for a frame: 30 a second. A transition
@@ -1414,6 +1428,12 @@ pub struct Driver {
     /// is in its own. Decoding runs here, in the worker; the frame the
     /// clock makes due is written into the image atlas, so the painter
     /// draws a video exactly as it draws a picture.
+    ///
+    /// Every map keyed by hash here is held against the tree: a picture no
+    /// `video` node names any more is dropped with its frames, its size
+    /// and its upload mark (spec 10, *Moving pictures*). Only `players`
+    /// used to be; a feed of animated avatars kept every GIF it had ever
+    /// shown, whole and uncompressed, for as long as the tab was open.
     movies: HashMap<Hash, Option<Arc<eui_video::Movie>>>,
     players: HashMap<u32, (Hash, eui_video::Player)>,
     /// A frame is in the atlas for these hashes, so the next one is an
@@ -1464,7 +1484,15 @@ pub struct Driver {
     /// bytes behind them. The mixer lives here — in the worker — because
     /// decoding runs on bytes a server chose; the window owns the device.
     mixer: eui_audio::Mixer,
+    ///
+    /// Held only while an `audio` node names the hash. The mixer let go of
+    /// a source when its node went, and this map did not: a playlist kept
+    /// every track it had played, decoded, for the life of the tab.
     sounds: HashMap<Hash, Option<Arc<eui_audio::Sound>>>,
+    /// What all the sounds and all the pictures held may weigh together:
+    /// [`MAX_SOUND_BYTES`] and [`MAX_MOVIE_BYTES`], lowered only by tests.
+    sound_budget: usize,
+    movie_budget: usize,
     /// The `position` prop each video node last carried, for the same
     /// reason as the audio one.
     video_at: HashMap<u32, i64>,
@@ -1613,6 +1641,8 @@ impl Driver {
             viewport_due: None,
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
+            sound_budget: MAX_SOUND_BYTES,
+            movie_budget: MAX_MOVIE_BYTES,
             audio_at: HashMap::new(),
             audio_src: HashMap::new(),
             video_at: HashMap::new(),
@@ -7310,6 +7340,10 @@ impl Driver {
         self.mixer = eui_audio::Mixer::new(48_000);
         self.audio_level.clear();
         self.players.clear();
+        // What they were playing goes with them: nothing names it now.
+        self.sounds.clear();
+        self.movies.clear();
+        self.framed.clear();
         self.wakes.clear();
         self.locators.clear();
         self.fix = None;
@@ -7687,6 +7721,9 @@ impl Driver {
         self.video_dirty = false;
         if self.session.root().is_none() {
             self.players.clear();
+            self.movies.clear();
+            self.framed.clear();
+            self.video_sizes.clear();
             return;
         }
         let known = *self.session.atoms();
@@ -7717,6 +7754,14 @@ impl Driver {
             ));
         }
         self.players.retain(|id, _| live.contains(id));
+        // What no node names any more goes: the frames, the size the layout
+        // measured it by, and the note that a frame of it is in the sheet.
+        // A picture a node still names stays, decoded or refused, so a tree
+        // that keeps naming it does not decode it every time it changes.
+        let named: HashSet<Hash> = work.iter().map(|w| w.1).collect();
+        self.movies.retain(|h, _| named.contains(h));
+        self.video_sizes.retain(|h, _| named.contains(h));
+        self.framed.retain(|h, _| named.contains(h));
         for (id, hash, playing, looping, position) in work {
             let Some(movie) = self.movie(&hash) else {
                 continue;
@@ -7747,7 +7792,12 @@ impl Driver {
             return known.clone();
         }
         let bytes = self.assets.raw(hash)?;
-        let decoded = match eui_video::decode(&bytes, None) {
+        // What the pictures already held leave of the session's room. A
+        // picture refused for want of it is remembered as refused while a
+        // node names it, like one that will not decode; the next tree that
+        // names it after it was let go tries again.
+        let held: usize = self.movies.values().flatten().map(|m| m.bytes()).sum();
+        let decoded = match eui_video::decode_within(&bytes, None, self.movie_budget.saturating_sub(held)) {
             Ok(movie) => {
                 trace(|| {
                     format!(
@@ -7864,6 +7914,7 @@ impl Driver {
             self.mixer.retain(&[]);
             self.audio_at.clear();
             self.audio_src.clear();
+            self.sounds.clear();
             return;
         }
         let known = *self.session.atoms();
@@ -7901,6 +7952,11 @@ impl Driver {
         self.audio_at.retain(|id, _| live.contains(id));
         self.audio_src.retain(|id, _| live.contains(id));
         self.audio_level.retain(|id, _| live.contains(id));
+        // A decoded sound lives as long as a node names it. The mixer has
+        // already let go of the sources whose nodes went; this lets go of
+        // the samples behind them, which were most of the memory.
+        let named: HashSet<Hash> = work.iter().map(|w| w.1).collect();
+        self.sounds.retain(|h, _| named.contains(h));
         for (id, hash, control, position) in work {
             // Load when the node is new to the mixer, and again when it is
             // pointed at a different asset: same node, another sound.
@@ -7939,7 +7995,8 @@ impl Driver {
             return known.clone();
         }
         let bytes = self.assets.raw(hash)?;
-        let decoded = match eui_audio::decode(&bytes, None) {
+        let held: usize = self.sounds.values().flatten().map(|s| s.bytes()).sum();
+        let decoded = match eui_audio::decode_within(&bytes, None, self.sound_budget.saturating_sub(held)) {
             Ok(sound) => {
                 trace(|| format!("audio: {} decoded, {} ms, {} kB", crate::assets::hex(hash), sound.duration_ms(), sound.bytes() / 1024));
                 Some(Arc::new(sound))
@@ -7972,6 +8029,21 @@ impl Driver {
             frames.extend(self.emit(ix, EventKind::Ended, Value::Null));
         }
         frames
+    }
+
+    /// Bytes of decoded sound and of decoded moving pictures this session
+    /// holds, in that order: what spec 10's two session ceilings are
+    /// measured against.
+    pub fn media_bytes(&self) -> (usize, usize) {
+        (self.sounds.values().flatten().map(|s| s.bytes()).sum(), self.movies.values().flatten().map(|m| m.bytes()).sum())
+    }
+
+    /// Lower the two session ceilings on decoded media, so a test can reach
+    /// them with a sound of a few hundred bytes rather than 256 MiB of one.
+    #[doc(hidden)]
+    pub fn set_media_budgets(&mut self, sound: usize, movie: usize) {
+        self.sound_budget = sound.min(MAX_SOUND_BYTES);
+        self.movie_budget = movie.min(MAX_MOVIE_BYTES);
     }
 
     /// True while any sound is playing: the window keeps its device open

@@ -215,7 +215,13 @@ property that carries 08 §8 is pinned a layer down, in
 the viewer's master gain does, including when it is zero. So is 10's
 ceiling on one decoded sound: a sound one sample past the budget it was
 decoded under is refused, and a caller cannot raise the budget past
-`MAX_BYTES` (`a_sound_past_its_decoded_budget_is_refused`).
+`MAX_BYTES` (`a_sound_past_its_decoded_budget_is_refused`); the same
+for a moving picture in `crates/eui-video/tests/video.rs`
+(`a_picture_is_refused_past_the_room_it_was_given`). In `driver.rs`, the
+session's side of both: a decoded sound and a decoded picture are gone the
+frame no node names them (`decoded_media_goes_when_no_node_names_it`), and
+the second of each is refused when only one fits the room the session has
+left (`decoded_media_past_the_sessions_room_is_refused`).
 
 03 §3.5's address is pinned in the same file, and the three conditions are
 pinned apart: a tree that merely arrives opens nothing; an activation with

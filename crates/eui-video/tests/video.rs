@@ -1,7 +1,7 @@
 //! Decoding and timing, on pictures the test writes itself.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::arithmetic_side_effects)]
 
-use eui_video::{decode, Frame, Movie, Player, VideoError, MIN_DELAY_MS};
+use eui_video::{decode, decode_within, Frame, Movie, Player, VideoError, MIN_DELAY_MS};
 
 /// A GIF of `frames`, each `(rgba, delay in hundredths, disposal)`,
 /// written with the same crate that reads it back.
@@ -174,4 +174,14 @@ fn a_picture_that_is_too_big_is_refused_before_it_is_decoded() {
     assert!(Movie::new(2, 2, vec![Frame { rgba: vec![0; 3], delay_ms: 20 }]).is_none(), "a short frame is refused");
     let ok = Movie::new(1, 1, vec![Frame { rgba: vec![0; 4], delay_ms: 20 }]);
     assert!(ok.is_some());
+}
+
+#[test]
+fn a_picture_is_refused_past_the_room_it_was_given() {
+    // Two 4×4 frames are 128 bytes. The client passes what is left of the
+    // session's room for moving pictures, not the per-picture ceiling.
+    let bytes = gif(4, 4, vec![(solid(4, 4, [255, 0, 0, 255]), 5, gif::DisposalMethod::Any), (solid(4, 4, [0, 0, 255, 255]), 5, gif::DisposalMethod::Any)]);
+    assert_eq!(decode_within(&bytes, None, 128).unwrap().bytes(), 128);
+    assert_eq!(decode_within(&bytes, None, 127).unwrap_err(), VideoError::TooLarge);
+    assert!(decode_within(&bytes, None, usize::MAX).is_ok(), "above the crate's own ceiling is that ceiling");
 }

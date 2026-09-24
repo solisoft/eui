@@ -393,6 +393,7 @@ promise.
 | Frames buffered ahead of the device | 200 ms |
 | CPU with nothing loaded | 0 — the device is closed |
 | Decoded samples a sound | 128 MiB — 5 min 50 s of stereo at 48 kHz |
+| Decoded samples held, every sound together, per session | 256 MiB |
 
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once
@@ -407,6 +408,15 @@ refused, not truncated (`eui_audio::MAX_BYTES`; pinned by
 `a_sound_past_its_decoded_budget_is_refused` in
 `crates/eui-audio/tests/audio.rs`).
 
+A decoded sound is held while an `audio` node names it and not after: the
+mixer let go of a source when its node went, and the samples behind it
+stayed, so a playlist kept every track it had played. What the nodes of
+one tree name at once may weigh 256 MiB together; the sound that would take
+them past it is refused like one past its own ceiling
+(`decoded_media_goes_when_no_node_names_it`,
+`decoded_media_past_the_sessions_room_is_refused`, both in
+`crates/eui-client/tests/driver.rs`).
+
 ## Moving pictures
 
 | Measure | Budget |
@@ -414,5 +424,13 @@ refused, not truncated (`eui_audio::MAX_BYTES`; pinned by
 | Pixels a frame | 1920 × 1080 |
 | Frames a picture | 3 600 |
 | Decoded frames a picture | 96 MB |
+| Decoded frames held, every picture together, per session | 192 MiB |
 | Uploads per frame shown | 1, and none while the frame does not change |
 | CPU while paused | 0 — nothing is scheduled |
+
+A picture is held, frames and size both, while a `video` node names it,
+and the pictures the nodes of one tree name may weigh 192 MiB together: a
+feed of fifty animated avatars used to keep every one it had shown,
+uncompressed, for as long as the tab was open. The picture that would take
+the total past it is refused, as one past its own 96 MB is (pinned by the
+same two tests as sound's).
