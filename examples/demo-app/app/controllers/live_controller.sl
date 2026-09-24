@@ -2172,6 +2172,21 @@ ERP_TW_PEOPLE = [
   {"name": "Dries Vincent", "mail": "dries@meridian.test", "role": "Warehouse", "state": "Invited", "tone": "success.base"}
 ]
 
+# Whether the Soli this process runs on encodes protocol 6's gradients and
+# pulse/bounce. Asked once, through `eui_render` — the same `style_record` a
+# session's frames go through — so the answer is the encoder's and not a
+# version number read somewhere else. The deploy pins one Soli and the server
+# may run another; this is what keeps the card from stopping a session there.
+TW_V6_PROBE = {}
+
+def tw_encoder_speaks_v6(classes)
+  return TW_V6_PROBE["ok"] unless TW_V6_PROBE["ok"].nil?
+  v6_style = tw_style(classes + " animate-pulse animate-bounce")
+  v6_frame = eui_render({"k": "box", "s": v6_style, "c": []}) rescue nil
+  TW_V6_PROBE["ok"] = !v6_frame.nil?
+  TW_V6_PROBE["ok"]
+end
+
 def erp_tailwind_card(state, lay)
   tw_row_classes = "items-center gap-4 w-full px-4 py-4 border-b border-gray-200 hover:bg-gray-50 transition"
   tw_badge_on = "rounded-md bg-green-50 px-2 py-1 ring-1 ring-green-600/20"
@@ -2207,17 +2222,24 @@ def erp_tailwind_card(state, lay)
   # A gradient (eui 02 §5.3) and the two animations that are only the
   # client's clock (03 §5): a skeleton that pulses and an arrow that bounces,
   # neither of which the server hears about again once they are sent.
+  #
+  # All three are protocol 6, and a Soli older than the one that encodes them
+  # refuses the style outright — which stopped the whole session the first
+  # time this card met a server running a released Soli. So the card asks the
+  # encoder it is actually running on, and says so when the answer is no.
   tw_banner_classes = "bg-gradient-to-r from-indigo-600 via-info to-[#ff80b5]"
-  tw_banner = column({"tw": "flex-col gap-1 w-full rounded-lg px-6 py-5 shadow-sm " + tw_banner_classes}, [
+  tw_v6 = tw_encoder_speaks_v6(tw_banner_classes)
+  tw_banner_look = tw_v6 ? tw_banner_classes : "bg-indigo-600"
+  tw_banner = column({"tw": "flex-col gap-1 w-full rounded-lg px-6 py-5 shadow-sm " + tw_banner_look}, [
     text("Gradients, pulse and bounce", tw_style("text-lg font-semibold text-white")),
-    text(tw_banner_classes, tw_style("font-mono text-xs text-white"))
+    text(tw_v6 ? tw_banner_classes : "This server's Soli predates gradients, pulse and bounce: drawn plain.", tw_style("font-mono text-xs text-white"))
   ])
   tw_waiting = row({"tw": "items-center gap-4 w-full px-4 py-3 rounded-lg bg-white ring-1 ring-gray-900/5"}, [
-    column({"tw": "flex-col gap-2 grow animate-pulse"}, [
+    column({"tw": "flex-col gap-2 grow" + (tw_v6 ? " animate-pulse" : "")}, [
       row({"tw": "h-3 w-2/3 rounded bg-gray-200"}, []),
       row({"tw": "h-3 w-1/2 rounded bg-gray-200"}, [])
     ]),
-    row({"tw": "items-center justify-center size-8 rounded-full bg-indigo-600 shadow-sm animate-bounce"}, [icon("arrow_down", tw_style("size-4 text-white"))])
+    row({"tw": "items-center justify-center size-8 rounded-full bg-indigo-600 shadow-sm" + (tw_v6 ? " animate-bounce" : "")}, [icon("arrow_down", tw_style("size-4 text-white"))])
   ])
   erp_card("Tailwind classes", [badge("tw()", "info")], [
     muted("The same look, written the way a Tailwind page writes it. tw(\"...\") turns the classes into a style hash and the hover: and active: ones into local states."),
