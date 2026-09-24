@@ -382,9 +382,20 @@ everything below it belongs to the island.
 - An island whose session cannot be opened, or which ends, **leaves the page
   alone**: the node keeps the children it had, the reason is the client's to
   report, and nothing else on the page is torn down. A live part failing must
-  never be able to take a still page with it.
-- At most `MAX_ISLANDS` sessions may be open for one page
-  ([`10-budgets.md`](10-budgets.md) §1). Past it a client opens no more and
+  never be able to take a still page with it. A client SHOULD NOT redial it
+  while that node stands: what it shows is the island's last content, and a
+  session that fails on every attempt would otherwise be dialled forever.
+- An island **closes** when its node is released — a page `Mount`, a
+  `Replace` or a removal that takes the node — or when the node stops naming
+  that path. The client MUST then drop its session, and MUST refuse a frame
+  that still arrives for it rather than apply it: the node it hung under is
+  gone, and whatever now stands in its place belongs to the page. An island
+  that closed because its path changed takes its content with it; the page's
+  own children under the node stay. A node that asks again — the page
+  navigated back to — is a new island and is opened afresh.
+- At most `MAX_ISLANDS` sessions may be open for one page **at once**
+  ([`10-budgets.md`](10-budgets.md) §1); one that ended but still shows its
+  content counts until it closes, and one that closed counts no more. Past it a client opens no more and
   leaves those islands as they were rendered. The ceiling exists because a
   tree is data: a view that derives an island per row would otherwise open a
   socket per row.

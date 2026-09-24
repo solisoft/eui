@@ -1218,6 +1218,11 @@ impl Tab {
     /// Called from `pump`, after the page's frames have been applied — the
     /// tree that names an island is the tree that just arrived.
     fn pump_islands(&mut self) {
+        // The ones the driver ended first: a page frame that released a
+        // host, or started the session over, has already taken their slot,
+        // and a frame still read from their socket would be applied under
+        // an owner the next island may be given.
+        self.drop_ended_islands();
         // What arrived on the ones already open. A batch changes only that
         // island's content; anything else it says is its own business.
         let mut ended: Vec<u16> = Vec::new();
@@ -1248,6 +1253,8 @@ impl Tab {
         for (owner, bytes) in frames {
             self.backend.island_frame(owner, bytes);
         }
+        // A frame that would not apply ends its island in the driver.
+        self.drop_ended_islands();
         for owner in ended {
             self.backend.island_ended(owner);
             self.islands.retain(|i| i.owner != owner);
@@ -1265,13 +1272,32 @@ impl Tab {
         }
     }
 
+    /// Drop the sockets of the islands the driver has ended.
+    ///
+    /// They used to outlive their island: a page `Mount` released the host,
+    /// the socket kept talking, and its next frame was grafted under
+    /// whatever node had since been given the host's index. And one kept
+    /// over a `start_over` kept its path marked open, so returning to the
+    /// page never redialled it.
+    fn drop_ended_islands(&mut self) {
+        let ended = self.backend.take_islands_ended();
+        if !ended.is_empty() {
+            self.islands.retain(|i| !ended.contains(&i.owner));
+        }
+    }
+
     /// Dial the islands this tree asks for that are not open yet.
     ///
     /// Separate from `pump_islands` because it needs the event-loop proxy to
     /// build a waker, and `pump` has none.
     fn dial_islands(&mut self, proxy: &Proxy) {
         let Ok(origin) = crate::assets::origin_for(&self.url) else { return };
-        for (node, path) in self.backend.islands_wanted() {
+        let wanted = self.backend.islands_wanted();
+        // `islands_wanted` closes the islands the tree stopped asking for,
+        // and their sockets must be gone before `open_island` hands one of
+        // their owners to somebody else.
+        self.drop_ended_islands();
+        for (node, path) in wanted {
             // One session per distinct path (01 §2.7). A second island
             // naming a path already open is the same island as far as the
             // server is concerned, and opening a second socket for it would

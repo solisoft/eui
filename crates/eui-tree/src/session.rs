@@ -97,10 +97,21 @@ pub struct Session {
     /// which set of tables its ids mean.
     ///
     /// Empty for every page that has no island, which is almost all of them.
-    islands: Vec<Tables>,
+    ///
+    /// A slot is `None` once its island is closed ([`Session::close_island`])
+    /// or its host is released (`prune_sets`), and the next island opened
+    /// takes the lowest free one. They used to be pushed and never taken
+    /// back: the ninth island a long session ever opened was refused however
+    /// few were open, and each dead slot kept a whole set of tables alive.
+    islands: Vec<Option<Tables>>,
     /// Where each island's content hangs: its owner index and the page node
     /// carrying the `island` prop. The boundary 01 §2.7 draws — that node
     /// belongs to the page, everything below it to the island.
+    ///
+    /// Pruned with the host. An arena index is a slot and not a name: once
+    /// the host is released the next node allocated may land on the same
+    /// index, and an island frame that still found it here would release a
+    /// page node's children and graft under it.
     island_roots: Vec<(u16, NodeIx)>,
     arena: Arena,
     root: NodeIx,
@@ -215,7 +226,7 @@ impl Session {
     /// not hand out — and is the harmless answer for a node left over from
     /// an island that has since been closed.
     fn tables_of(&self, owner: u16) -> &Tables {
-        usize::from(owner).checked_sub(1).and_then(|i| self.islands.get(i)).unwrap_or(&self.tables)
+        usize::from(owner).checked_sub(1).and_then(|i| self.islands.get(i)).and_then(Option::as_ref).unwrap_or(&self.tables)
     }
 
     /// The tables of whichever session's batch is being applied.
@@ -224,7 +235,7 @@ impl Session {
     }
 
     fn cur_mut(&mut self) -> &mut Tables {
-        match usize::from(self.applying).checked_sub(1).and_then(|i| self.islands.get_mut(i)) {
+        match usize::from(self.applying).checked_sub(1).and_then(|i| self.islands.get_mut(i)).and_then(Option::as_mut) {
             Some(t) => t,
             None => &mut self.tables,
         }
@@ -333,6 +344,20 @@ impl Session {
         self.media.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.wakers.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.locators.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+        // An island whose host went — a page `Mount`, a `Replace`, a
+        // `RemoveChild` — went with it: its content was below the host and
+        // was released in the same walk. Its tables and its slot go now,
+        // before anything is grafted that could take the host's index.
+        let islands = &mut self.islands;
+        self.island_roots.retain(|(owner, at)| {
+            let alive = arena.get(*at).is_some_and(|n| n.id != 0);
+            if !alive {
+                if let Some(slot) = usize::from(*owner).checked_sub(1).and_then(|i| islands.get_mut(i)) {
+                    *slot = None;
+                }
+            }
+            alive
+        });
     }
 
     /// A style record.
@@ -654,14 +679,68 @@ impl Session {
     /// rendered, which §2.7 asks for in as many words and 10 §1 counts.
     /// The ceiling exists because a tree is data: a view that derived an
     /// island per row would otherwise open a socket per row.
+    ///
+    /// The ceiling counts islands **open**, not islands ever opened: a slot
+    /// freed by [`Session::close_island`] or by its host going is taken
+    /// again, lowest first.
     pub fn open_island(&mut self, at: NodeIx) -> Option<u16> {
-        if self.islands.len() >= MAX_ISLANDS || self.arena.get(at).is_none() {
+        if !self.arena.get(at).is_some_and(|n| n.id != 0) {
             return None;
         }
-        self.islands.push(Tables::new(self.limits));
-        let owner = u16::try_from(self.islands.len()).ok()?;
+        let i = match self.islands.iter().position(Option::is_none) {
+            Some(i) => i,
+            None if self.islands.len() < MAX_ISLANDS => {
+                self.islands.push(None);
+                self.islands.len().saturating_sub(1)
+            }
+            None => return None,
+        };
+        let owner = u16::try_from(i.saturating_add(1)).ok()?;
+        *self.islands.get_mut(i)? = Some(Tables::new(self.limits));
         self.island_roots.push((owner, at));
         Some(owner)
+    }
+
+    /// Whether `owner` names an island that is open now — opened, and
+    /// neither closed nor gone with its host.
+    pub fn island_is_open(&self, owner: u16) -> bool {
+        self.island_roots.iter().any(|(o, _)| *o == owner)
+    }
+
+    /// Close an island for good: its content, its tables and its slot.
+    ///
+    /// Not what an island whose socket *ended* gets — 01 §2.7 has that one
+    /// leave the page alone, content and all, and the client keeps it open
+    /// here for as long as its host stands. This is for an island the page
+    /// no longer asks for: its host lost the prop, or names another path.
+    /// The host's own children that the island never replaced — the cached
+    /// render, still showing because the island never mounted — belong to
+    /// the page and stay; the ones the island grafted are released, since
+    /// once its tables are gone nothing could say what they look like.
+    ///
+    /// Returns `false` for an owner that is not open.
+    pub fn close_island(&mut self, owner: u16) -> bool {
+        let Some(pos) = self.island_roots.iter().position(|(o, _)| *o == owner) else { return false };
+        let (_, at) = self.island_roots.remove(pos);
+        let theirs: Vec<NodeIx> = self.children(at).iter().copied().filter(|c| self.arena.get(*c).is_some_and(|n| n.owner == owner)).collect();
+        for child in &theirs {
+            if self.focused_within(*child) {
+                self.focused = NodeIx::NONE;
+            }
+            self.note_exit(*child);
+            let _ = self.arena.release(*child);
+        }
+        if let Some(n) = self.arena.get_mut(at) {
+            n.children.retain(|c| !theirs.contains(c));
+        }
+        if !theirs.is_empty() {
+            let _ = self.arena.mark_dirty(at);
+        }
+        if let Some(slot) = usize::from(owner).checked_sub(1).and_then(|i| self.islands.get_mut(i)) {
+            *slot = None;
+        }
+        self.prune_sets();
+        true
     }
 
     /// Apply a batch that came from an island's socket.
@@ -677,6 +756,9 @@ impl Session {
     /// An island's `Mount` replaces **that island's content and nothing
     /// else**: the node carrying the prop belongs to the page, everything
     /// below it to the island.
+    ///
+    /// An owner that is not open — never opened, closed, or gone with its
+    /// host — is refused and nothing is applied.
     pub fn apply_region(&mut self, owner: u16, batch: &Batch) -> Result<()> {
         let at = self.island_roots.iter().find(|(o, _)| *o == owner).map(|(_, ix)| *ix).ok_or(ApplyError::Internal)?;
         let prev = std::mem::replace(&mut self.applying, owner);

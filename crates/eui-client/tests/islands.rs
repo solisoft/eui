@@ -158,8 +158,92 @@ fn an_island_that_ends_leaves_the_page_standing() {
     assert_eq!(d.session().text_of(d.session().lookup(4).unwrap()), Some("the page"));
     assert_eq!(d.session().children(at).len(), 1, "the island's last content is still showing");
     assert!(d.closed().is_none(), "the page's session did not end with it");
-    // The node is offered again, so a client may retry.
+    // Not offered again while its host stands: the content it left is drawn
+    // with its tables, which keep its slot. Offering it straight back is what
+    // had a failing island redialled on every pump, each attempt taking a
+    // slot that never came back.
+    assert_eq!(d.islands_wanted().len(), 0);
+    assert_eq!(d.islands_open(), 1, "the slot is still held by what is showing");
+    assert_eq!(d.take_islands_ended(), vec![owner], "and the window is told to drop the socket");
+}
+
+/// A page with its island host at node 2, sent as batch `seq` — a new page
+/// arriving on the same session, as navigating does.
+fn page_again(path: &str, seq: u64) -> Batch {
+    let mut b = page(path);
+    b.seq = seq;
+    b.ops.retain(|op| matches!(op, Op::Mount(_)));
+    b
+}
+
+/// A page `Mount` releases the host, and the island goes with it: its slot,
+/// its tables, and — through `take_islands_ended` — its socket. The next
+/// page's island is then asked for, and dialled, afresh. Before, the socket
+/// outlived its host, and the next island frame was grafted under whatever
+/// node had been given the host's index.
+#[test]
+fn a_page_mount_that_frees_the_host_ends_the_island() {
+    let mut d = welcomed("/_eui/session/comments");
+    let at = d.session().lookup(2).unwrap();
+    let owner = d.open_island(at, "/_eui/session/comments").unwrap();
+    d.apply_region(owner, &island_content("151 comments")).unwrap();
+
+    assert_eq!(d.handle_frame(Frame::Batch(page_again("/_eui/session/comments", 2))), vec![Frame::Ack { seq: 2 }]);
+    assert_eq!(d.take_islands_ended(), vec![owner], "the window drops the old socket");
+    assert!(d.apply_region(owner, &island_content("late")).is_err(), "a late frame for the released host is refused, not grafted");
+    assert_eq!(d.session().text_of(d.session().children(d.session().lookup(2).unwrap())[0]), Some("142 comments, as rendered"));
+
+    // Returning to the page: the new host is asked for and opens again.
     assert_eq!(d.islands_wanted().len(), 1);
+    let at = d.session().lookup(2).unwrap();
+    assert_eq!(d.open_island(at, "/_eui/session/comments"), Some(owner), "in the slot the old one gave back");
+}
+
+/// Nine and more islands over one session's life, never more than one at a
+/// time. The ceiling is on islands open, not islands ever opened: the ninth
+/// used to be refused because no slot was ever handed back.
+#[test]
+fn a_long_session_opens_islands_past_the_ceiling_one_at_a_time() {
+    let mut d = welcomed("/_eui/session/comments");
+    for n in 0..20u64 {
+        let at = d.session().lookup(2).unwrap();
+        let owner = d.open_island(at, "/_eui/session/comments").unwrap_or_else(|| panic!("island {n} did not open"));
+        d.apply_region(owner, &island_content("151 comments")).unwrap();
+        d.handle_frame(Frame::Batch(page_again("/_eui/session/comments", n + 2)));
+        assert_eq!(d.take_islands_ended(), vec![owner]);
+    }
+    assert_eq!(d.islands_open(), 0);
+}
+
+/// The host stops asking for the island, or names another path: the island
+/// is closed — its content, its slot, its socket — and the new path is
+/// asked for.
+#[test]
+fn an_island_the_tree_stops_asking_for_is_closed() {
+    let mut d = welcomed("/_eui/session/comments");
+    let at = d.session().lookup(2).unwrap();
+    let owner = d.open_island(at, "/_eui/session/comments").unwrap();
+    d.apply_region(owner, &island_content("151 comments")).unwrap();
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetProp { node: 2, prop: A_ISLAND, value: Value::Str("/_eui/session/other".into()) }] }));
+
+    let wanted = d.islands_wanted();
+    assert_eq!(wanted, vec![(at, "/_eui/session/other".to_owned())], "the new path is asked for");
+    assert_eq!(d.take_islands_ended(), vec![owner], "the old socket is dropped");
+    assert_eq!(d.island_for_path("/_eui/session/comments"), None);
+    assert!(d.session().children(at).is_empty(), "the old path's content went with it");
+    assert_eq!(d.open_island(at, "/_eui/session/other"), Some(owner), "and its slot is free again");
+}
+
+/// A session that starts over — a fresh `Welcome` — has no islands, and the
+/// window is told so: a socket kept past it kept its path marked open, and
+/// the page's island was never redialled.
+#[test]
+fn a_session_that_starts_over_ends_its_islands() {
+    let mut d = welcomed("/_eui/session/comments");
+    let at = d.session().lookup(2).unwrap();
+    let owner = d.open_island(at, "/_eui/session/comments").unwrap();
+    d.handle_frame(Frame::Welcome(Welcome { version: PROTOCOL_VERSION, session: [0u8; 16], start: Start::Fresh }));
+    assert_eq!(d.take_islands_ended(), vec![owner]);
 }
 
 /// §2.7: an event raised inside an island carries that island's ids and goes

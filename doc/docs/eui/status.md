@@ -420,7 +420,7 @@ the page's server never created. `island_ended` releases nothing: 01 §2.7's
 part that could take a still page with it would make every island a liability.
 
 `crates/eui-client/tests/islands.rs` exists now — it was the one file `spec/09`
-named that did not — with eight vectors, five more in
+named that did not — with fifteen vectors now, eight more in
 `eui-tree/tests/apply.rs`. The refusal worth naming is `//host/path`: a
 protocol-relative URL is a different origin *and* starts with a slash, which
 is exactly how the obvious spelling of that check lets it through.
@@ -446,7 +446,7 @@ decide where a socket connects.
 
 It reaches the worker, so the protocol grew four requests — `IslandsWanted`,
 `OpenIsland`, `IslandFrame`, `IslandEnded` — two payloads and one status
-field. `island_outbound` is a field of its own rather than a tag inside
+field — two since islands learned to close, below. `island_outbound` is a field of its own rather than a tag inside
 `outbound`, for the same reason the driver keeps two queues: a separate field
 has to be read to be sent, and so cannot become the page's by being
 forgotten. `Backend::take_island_outbound()` is one drain rather than a
@@ -461,6 +461,24 @@ laid out is not the same as not there — a node the layout has not reached has
 no rect at all, and opening a session for it would be guessing — so both wait,
 and both are asked again on the next pump, because a scroll that brings one
 into view is a frame and a frame is a pump.
+
+**Islands close, and their slots come back.** An audit found that nothing
+ever removed an island: `open_island` pushed a set of tables and a root and
+nothing took either back, so the ninth island a long session ever opened was
+refused however few were open, and each dead slot held a whole set of tables.
+Worse, the window's socket outlived its host: after a page `Mount` the next
+island frame was grafted under whatever node had been given the host's arena
+index. Now `Session::close_island` releases what the island grafted (the
+page's own children under the node stay), drops its tables and frees its
+slot for the next; `prune_sets` does the same for an island whose host was
+released, before anything can be grafted onto the host's index, and a frame
+for it afterwards is refused. The driver closes an island the tree stops
+asking for, and reports every island it ended on its own account through
+`take_islands_ended()` — the second status field — so the window drops the
+socket before it opens another that may be given the same owner. An island
+whose socket ended keeps its slot while its node stands, since that is what
+draws the content it left; it used to be offered straight back and redialled
+on every pump.
 
 What is left is an end-to-end run against a Soli server serving one, which
 `soli_e2e` is the place for and which no CI has a server to do.

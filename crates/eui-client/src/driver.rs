@@ -859,6 +859,12 @@ struct Island {
     /// because the query is what tells the application which it is
     /// rendering — so the key is the path and not the component.
     path: String,
+    /// Its socket is still talking. `false` once it ended: 01 §2.7 has the
+    /// page keep what it last showed, so the entry — and the session's
+    /// slot and tables that content is drawn with — stays until the host
+    /// goes or stops asking, and the host is not offered for a redial
+    /// meanwhile.
+    live: bool,
 }
 
 /// One subtree on the move (03 §5), as the driver keeps it: where it starts,
@@ -1363,6 +1369,12 @@ pub struct Driver {
     /// it, so the page's path is exactly what it was and an island's event
     /// cannot reach the page's server by being forgotten about.
     island_out: Vec<(u16, Frame)>,
+    /// Islands the driver ended on its own account — its host went, it
+    /// stopped being asked for, its frame would not apply, the session
+    /// started over — whose sockets the window still holds. Drained by
+    /// [`Driver::take_islands_ended`]; a socket kept past this would feed
+    /// frames to an owner index the next island may be given.
+    islands_ended: Vec<u16>,
     /// Which nodes hold a `resize` handler, and whether that list is stale.
     ///
     /// Rebuilt when the tree changes rather than per frame. Walking the tree
@@ -1579,6 +1591,7 @@ impl Driver {
             island_watch_stale: true,
             islands: Vec::new(),
             island_out: Vec::new(),
+            islands_ended: Vec::new(),
             resize_watch: Vec::new(),
             resize_watch_stale: true,
             outrun_at: None,
@@ -1746,6 +1759,9 @@ impl Driver {
         self.paired_watch.clear();
         self.island_watch.clear();
         self.island_watch_stale = true;
+        // The session they hung in is gone, and owner `1` will be handed out
+        // again by the next page: every socket still open is told to go.
+        self.islands_ended.extend(self.islands.iter().filter(|i| i.live).map(|i| i.owner));
         self.islands.clear();
         self.island_out.clear();
         self.resize_watch.clear();
@@ -2043,8 +2059,18 @@ impl Driver {
     /// arbitrary rule that gives the same answer on every run beats one that
     /// depends on the order a hash map happens to iterate in.
     pub fn islands_wanted(&mut self) -> Vec<(NodeIx, String)> {
+        self.sync_islands();
         if self.island_watch_stale {
             self.rebuild_island_watch();
+        }
+        // An island the tree no longer asks for is closed: its host lost the
+        // prop, or names another path now. Its content goes with it — it is
+        // the old path's — and so does its slot.
+        let gone: Vec<u16> = self.islands.iter().filter(|i| !self.island_watch.iter().any(|(ix, p)| *ix == i.at && *p == i.path)).map(|i| i.owner).collect();
+        for owner in gone {
+            self.session.close_island(owner);
+            self.forget_island(owner);
+            self.invalidate();
         }
         if self.island_watch.is_empty() {
             return Vec::new();
@@ -2119,7 +2145,7 @@ impl Driver {
             return None;
         }
         let owner = self.session.open_island(ix)?;
-        self.islands.push(Island { at: ix, owner, path: path.to_owned() });
+        self.islands.push(Island { at: ix, owner, path: path.to_owned(), live: true });
         Some(owner)
     }
 
@@ -2130,7 +2156,7 @@ impl Driver {
     /// queries do not, because the query is what tells the application which
     /// island it is rendering — so the whole path is the key, query and all.
     pub fn island_for_path(&self, path: &str) -> Option<u16> {
-        self.islands.iter().find(|i| i.path == path).map(|i| i.owner)
+        self.islands.iter().find(|i| i.live && i.path == path).map(|i| i.owner)
     }
 
     /// How many islands are open, against `MAX_ISLANDS`.
@@ -2160,8 +2186,56 @@ impl Driver {
     /// never be able to take a still page with it, so this releases no node,
     /// poisons nothing and does not touch the root: it forgets the island,
     /// and the page carries on being a page.
+    ///
+    /// It is kept, not forgotten: the content it last showed is drawn with
+    /// its tables, so its slot stays until the host goes or stops asking,
+    /// and the host is not offered again meanwhile. Forgetting it here used
+    /// to have `islands_wanted` offer the host straight back, so a failing
+    /// island was redialled on every pump and each attempt took a slot that
+    /// never came back — the ninth, on a page open long enough, opened
+    /// nothing at all.
+    ///
+    /// Reported through [`Driver::take_islands_ended`] too, since this is
+    /// also how a frame that would not apply ends an island, and the window
+    /// holds the socket.
     pub fn island_ended(&mut self, owner: u16) {
+        let mut was_live = false;
+        for i in self.islands.iter_mut().filter(|i| i.owner == owner) {
+            was_live |= i.live;
+            i.live = false;
+        }
+        if was_live {
+            self.islands_ended.push(owner);
+            self.island_out.retain(|(o, _)| *o != owner);
+        }
+    }
+
+    /// Islands the driver has ended since the last call, whose sockets the
+    /// window must now drop — before it opens another, which may be given
+    /// the same owner.
+    pub fn take_islands_ended(&mut self) -> Vec<u16> {
+        self.sync_islands();
+        std::mem::take(&mut self.islands_ended)
+    }
+
+    /// Forget the islands the session no longer holds: their host went — a
+    /// page `Mount`, a `Replace`, a removal — and took their content and
+    /// their slot with it (`Session::prune_sets`).
+    fn sync_islands(&mut self) {
+        let gone: Vec<u16> = self.islands.iter().filter(|i| !self.session.island_is_open(i.owner)).map(|i| i.owner).collect();
+        for owner in gone {
+            self.forget_island(owner);
+        }
+    }
+
+    /// Drop the entry for `owner` and anything still queued for its socket,
+    /// and tell the window, if the socket was still open.
+    fn forget_island(&mut self, owner: u16) {
+        if self.islands.iter().any(|i| i.owner == owner && i.live) {
+            self.islands_ended.push(owner);
+        }
         self.islands.retain(|i| i.owner != owner);
+        self.island_out.retain(|(o, _)| *o != owner);
     }
 
     /// Which island a node belongs to, or `None` for one of the page's.

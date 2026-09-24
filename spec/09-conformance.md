@@ -412,7 +412,14 @@ page's root, the page's nodes and every other island alone; the node's own
 children show until it speaks. A ninth island opens nothing, and a batch for
 an owner nobody handed out is refused rather than resolved against the page's
 tables — which is the failure that would otherwise be silent, since the
-island's ops would land on the page.
+island's ops would land on the page. The ceiling is on islands open at
+once: `a_closed_islands_slot_is_taken_by_the_next` opens and closes twenty in
+one session, `closing_an_island_keeps_the_pages_own_children` keeps the
+cached render a silent island never replaced, and
+`a_page_mount_that_frees_the_host_prunes_the_island` has a page `Mount` that
+releases the host take the island's slot with it, and refuse the frame that
+arrives for it afterwards rather than graft it under whatever took the
+host's index.
 
 **The client's half is written too**, in `eui-client/tests/islands.rs`, and
 the ones that matter are the refusals. An `island` naming another origin is
@@ -427,7 +434,15 @@ node as it was rendered (10 §1). An island whose session cannot be opened, or
 which ends, leaves the page standing and its own children showing — the vector
 that says a live part can never take a still page with it. Two islands naming
 one path share one session; two naming one component with different queries do
-not. And an event raised inside an island carries that island's node ids and
+not. An island that ended is not redialled while its node stands; one whose
+node a page `Mount` released is reported to the window, whose socket goes,
+and the new page's node is asked for afresh
+(`a_page_mount_that_frees_the_host_ends_the_island`); twenty islands opened
+one after another over one session all open
+(`a_long_session_opens_islands_past_the_ceiling_one_at_a_time`); a node that
+stops naming a path closes that island, content and socket
+(`an_island_the_tree_stops_asking_for_is_closed`); and a session that starts
+over ends them all (`a_session_that_starts_over_ends_its_islands`). And an event raised inside an island carries that island's node ids and
 goes to that island's socket, never the page's — the boundary being the node
 carrying the prop, which belongs to the page while everything below it does
 not. And a page with an island still draws, lays out and answers a pointer as
