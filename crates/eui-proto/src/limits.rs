@@ -83,6 +83,16 @@ pub const MAX_NOTIFY_TAG: usize = 64;
 /// past which a batch is not notifying somebody, it is shouting.
 pub const MAX_NOTIFY_PER_BATCH: u32 = 4;
 
+/// Highest gradient id (02 §5.3). A quarter of [`MAX_COLORS`]: a page has a
+/// handful of gradients, and the ceiling is for the view that derives one
+/// from data and would otherwise mint a permanent entry per reading.
+pub const MAX_GRADIENTS: u32 = 1_023;
+/// Most stops one gradient may carry: Tailwind's `from`, `via` and `to`.
+pub const MAX_GRADIENT_STOPS: usize = 3;
+/// Highest `angle` a `DefGradient` may carry: `0..=359` are degrees, and
+/// `360..=363` CSS's four corner keywords (02 §5.3).
+pub const MAX_GRADIENT_ANGLE: u16 = 363;
+
 /// Size of a `StyleRecord` on the wire, in bytes.
 pub const STYLE_RECORD_BYTES: usize = 64;
 /// Size of a BLAKE3 asset hash, in bytes.

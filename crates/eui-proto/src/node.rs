@@ -416,7 +416,15 @@ impl Value {
             0x04 => Ok(Self::Atom(r.varint32()?)),
             0x05 => Ok(Self::Str(r.str(MAX_INLINE_STR, "inline string")?.to_owned())),
             0x06 => Ok(Self::Asset(r.array::<HASH_BYTES>()?)),
-            0x07 => Ok(Self::Color(ColorRef(r.u16()?))),
+            0x07 => {
+                // 02 §3.2: a value is one colour. A gradient is a
+                // background, and only a record's `bg` may name one.
+                let c = ColorRef(r.u16()?);
+                if c.is_gradient() {
+                    return Err(DecodeError::IllegalValue("a value colour cannot be a gradient"));
+                }
+                Ok(Self::Color(c))
+            }
             0x08 => {
                 let count = r.varint32_max(MAX_VALUE_LIST, "value list length")?;
                 // Reserved up front to save the regrowth churn on the common

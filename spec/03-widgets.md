@@ -64,7 +64,9 @@ A client MUST refuse an `island` naming another origin, and opens at most
 Everything paints as a rounded rectangle. For a node with style `s`:
 
 1. If `s.bg` is not none, fill the border box with it, corners rounded by
-   `s.radius`, at `s.opacity`. If `s.blur` is non-zero, the fill goes over
+   `s.radius`, at `s.opacity`. A `bg` naming a gradient (02 §5.3, version 6)
+   fills the same box with the gradient, and everything below — the border,
+   the shadow, the blur, the clip — is unchanged by it. If `s.blur` is non-zero, the fill goes over
    the node's blurred **backdrop** (§2.1) rather than over what the target
    holds — so one node is both the frost and the tint — and the border box
    is filled even when `s.bg` *is* none: clear glass is still glass.
@@ -178,7 +180,15 @@ transitioning node paints carry both ends and the clock, and the vertex
 stage eases between them from the list's own age, so a frame owed to a
 transition alone is the previous draw list drawn again, as a spin's is.
 Only a transition of the blur is painted frame by frame, because the
-backdrop is sized from it. A node that is mounted or replaced appears at once
+backdrop is sized from it. A change of `bg` to or from a **gradient** (02 §5.3) does not ease: a
+node whose `bg` is a gradient at either end of the change takes the new
+record's colours at once — background, border and foreground — and eases
+only its `opacity` and its `blur`. A gradient is three colours and a direction, and the half-way
+point between one and a flat colour — or between two with their stops in
+different places — is not a gradient either end describes; a client that
+invented one would be drawing a picture neither record names. An entrance
+fades a gradient up by its opacity alone, which is the same thing seen from
+nothing. A node that is mounted or replaced appears at once
 unless it asks otherwise, which is `enter` below. The server is never
 told; a transition is the client's rendering of a state change it already
 knows about, and a client MAY skip it (reduced motion) without any
@@ -358,6 +368,39 @@ laid out, nothing is painted, nothing is uploaded — at thirty a second,
 which is 12° a frame. The same holds of a list with nothing moving in it
 at all: it is the frame until something reaches the client, however often
 a window asks to draw it. A client MAY hold a spin still (reduced motion).
+
+Bits `8` and `16` are **pulse** and **bounce**, and are version 6 (a server
+strips them from a record it sends a session negotiated below 6). They are
+Tailwind's `animate-pulse` and `animate-bounce`, stated as numbers rather
+than as a stylesheet:
+
+- **pulse**: everything painted for the node is drawn at its opacity times
+  a factor that falls from 1 to 0.5 over the first second of every two and
+  rises back over the second, each half along `cubic-bezier(0.4, 0, 0.6, 1)`.
+  At phase `p` of the 2 s period, with `B` that curve, the factor is
+  `1 − 0.5·B(2p)` while `p < ½` and `0.5 + 0.5·B(2p − 1)` after.
+- **bounce**: everything painted for the node is drawn raised by a quarter
+  of the node's border-box height `h` and let fall back, once a second. At
+  phase `p` of the 1 s period the painting stands `h/4 · (1 − B₁(2p))` above
+  where it was laid out while `p < ½`, with `B₁ = cubic-bezier(0.8, 0, 1, 1)`,
+  and `h/4 · B₂(2p − 1)` after, with `B₂ = cubic-bezier(0, 0, 0.2, 1)` — so
+  it falls accelerating, touches down at the half, and rises decelerating.
+
+Both are painting and nothing else. The node is laid out, hit-tested and
+announced where it stands, so a bouncing arrow is pressed where it rests and
+not where it happens to be drawn — the same bargain `spin` strikes. Both run
+from the same clock as `spin`, so every pulsing node pulses in step and every
+bouncing node bounces in step, and a frame owed to them alone is the previous
+draw list drawn again: the factor and the lift are the vertex stage's, from
+the clock the window hands it. The client wakes for frames only while such a
+node is painted.
+
+The bits combine with each other and with the rest: a spinner that pulses,
+an arrow that bounces as it arrives. A pulse inside a pulse is drawn at the
+one factor, not its square; a bounce inside a bounce adds the two lifts,
+which is what CSS does with two translations in step. A client MAY hold
+either still (reduced motion): a still pulse is drawn at full opacity and a
+still bounce where it was laid out.
 
 ### 1.1 `canvas` paths
 

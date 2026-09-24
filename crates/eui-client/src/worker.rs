@@ -1146,26 +1146,37 @@ impl Reply {
     }
 }
 
-/// A quad on the pipe: a byte naming which of its eight parts are not
-/// all zero, then those parts. A glyph is a rect, its params, a fill and
-/// its uvs -- 65 bytes rather than 128; a plain box, 49. The zero parts
-/// are exactly the ones the renderer ignores for that quad.
+/// A quad on the pipe: a byte naming which of its parts are not all zero,
+/// then those parts. A glyph is a rect, its params, a fill and its uvs --
+/// 65 bytes rather than 132; a plain box, 49. The zero parts are exactly
+/// the ones the renderer ignores for that quad.
+///
+/// The rect is always sent: a quad with no area is never pushed, so its bit
+/// said nothing, and it is the bit a bounce's height (03 §5) rides on --
+/// the byte had no ninth.
 fn put_quad(w: &mut W, q: &Quad) {
     let parts = [q.rect, q.params, q.fill, q.stroke, q.uv, q.extra, q.spin];
     let mut mask = 0u8;
-    for (i, part) in parts.iter().enumerate() {
+    for (i, part) in parts.iter().enumerate().skip(1) {
         if *part != [0.0; 4] {
             mask |= 1 << i;
         }
+    }
+    if q.bounce != 0.0 {
+        mask |= 1;
     }
     if q.from != [0; 8] {
         mask |= 1 << 7;
     }
     w.u8(mask);
-    for (i, part) in parts.iter().enumerate() {
+    w.f4(q.rect);
+    for (i, part) in parts.iter().enumerate().skip(1) {
         if mask & (1 << i) != 0 {
             w.f4(*part);
         }
+    }
+    if mask & 1 != 0 {
+        w.f32(q.bounce);
     }
     if mask & (1 << 7) != 0 {
         for pair in q.from.chunks_exact(2) {
@@ -1180,10 +1191,11 @@ fn get_quad(r: &mut R<'_>) -> Wire<Quad> {
     let mask = r.u8()?;
     let mut parts = [[0.0f32; 4]; 7];
     for (i, part) in parts.iter_mut().enumerate() {
-        if mask & (1 << i) != 0 {
+        if i == 0 || mask & (1 << i) != 0 {
             *part = r.f4()?;
         }
     }
+    let bounce = if mask & 1 != 0 { r.f32()? } else { 0.0 };
     let mut from = [0u16; 8];
     if mask & (1 << 7) != 0 {
         for pair in from.chunks_exact_mut(2) {
@@ -1198,7 +1210,7 @@ fn get_quad(r: &mut R<'_>) -> Wire<Quad> {
         }
     }
     let [rect, params, fill, stroke, uv, extra, spin] = parts;
-    Ok(Quad { rect, params, fill, stroke, uv, extra, spin, from })
+    Ok(Quad { rect, params, fill, stroke, uv, extra, spin, from, bounce })
 }
 
 /// What follows the list in a `Paint` reply, and is all of a `PaintAgain`:
@@ -3182,7 +3194,7 @@ mod tests {
     #[test]
     fn a_repeated_frame_carries_the_list_and_nothing_that_happens_once() {
         let list = |gpu_only: bool| DrawList {
-            quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0], from: [0; 8] }],
+            quads: vec![Quad { rect: [1.0; 4], params: [8.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [0.0; 4], spin: [2.0, 3.0, 0.0, 0.0], from: [0; 8], bounce: 0.0 }],
             runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],
@@ -3266,17 +3278,21 @@ mod tests {
     }
 
     /// Every pattern of zero and non-zero parts survives the pipe, and a
-    /// glyph's worth costs what it should.
+    /// glyph's worth costs what it should. Bit 0 is a bounce's height
+    /// (03 §5): the rect, which it used to name, is always there.
     #[test]
     fn a_quad_crosses_the_pipe_sparsely_and_whole() {
-        let full = Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [7.0; 4], from: [1, 2, 3, 4, 5, 6, 7, 8] };
+        let full = Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [7.0; 4], from: [1, 2, 3, 4, 5, 6, 7, 8], bounce: 9.5 };
         for mask in 0u8..=255 {
             let mut q = full;
-            let parts: [&mut [f32; 4]; 7] = [&mut q.rect, &mut q.params, &mut q.fill, &mut q.stroke, &mut q.uv, &mut q.extra, &mut q.spin];
+            let parts: [&mut [f32; 4]; 6] = [&mut q.params, &mut q.fill, &mut q.stroke, &mut q.uv, &mut q.extra, &mut q.spin];
             for (i, part) in parts.into_iter().enumerate() {
-                if mask & (1 << i) == 0 {
+                if mask & (1 << (i + 1)) == 0 {
                     *part = [0.0; 4];
                 }
+            }
+            if mask & 1 == 0 {
+                q.bounce = 0.0;
             }
             if mask & (1 << 7) == 0 {
                 q.from = [0; 8];
@@ -3286,7 +3302,8 @@ mod tests {
             let bytes = w.0;
             let mut r = R { b: &bytes, i: 0 };
             assert_eq!(get_quad(&mut r).unwrap(), q, "mask {mask:#b}");
-            assert_eq!(bytes.len(), 1 + 16 * usize::from((mask & 127).count_ones() as u8) + if mask & 128 != 0 { 16 } else { 0 });
+            let parts = usize::from((mask & 126).count_ones() as u8);
+            assert_eq!(bytes.len(), 1 + 16 + 16 * parts + if mask & 1 != 0 { 4 } else { 0 } + if mask & 128 != 0 { 16 } else { 0 });
         }
         // A glyph: rect, params, fill, uv.
         let glyph = Quad { rect: [1.0; 4], params: [0.0, 0.0, 1.0, 1.0], fill: [1.0; 4], uv: [0.5; 4], ..Quad::default() };
@@ -3330,7 +3347,7 @@ mod tests {
             ],
         };
         let list = DrawList {
-            quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8] }],
+            quads: vec![Quad { rect: [1.0; 4], params: [2.0; 4], fill: [3.0; 4], stroke: [4.0; 4], uv: [5.0; 4], extra: [6.0; 4], spin: [0.0; 4], from: [1, 2, 3, 4, 5, 65535, 7, 8], bounce: 12.0 }],
             runs: vec![Run { clip: 0, chain: 0, first: 0, count: 1, scene: 0 }],
             clips: vec![[0, 0, 10, 10]],
             clear: [0.5; 4],

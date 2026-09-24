@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use eui_proto::limits::MAX_ISLANDS;
-use eui_proto::{limits as proto, Batch, ColorRef, EventKind, Handler, NodeKind, Op, StyleRecord, Subtree, TextRef, Value};
+use eui_proto::{limits as proto, Batch, ColorRef, EventKind, Gradient, Handler, NodeKind, Op, StyleRecord, Subtree, TextRef, Value};
 
 use crate::arena::{dirty, Arena, Node, NodeIx};
 use crate::error::{ApplyError, Result, Table};
@@ -52,6 +52,9 @@ pub(crate) struct Tables {
     pub(crate) styles: DefineOnce<StyleRecord>,
     pub(crate) colors: DefineOnce<u32>,
     pub(crate) chunks: DefineOnce<Chunk>,
+    /// Linear gradients a `bg` may name (02 §5.3). Per namespace like the
+    /// colours, since a stop may name a literal of this namespace's own.
+    pub(crate) gradients: DefineOnce<Gradient>,
     /// Font roles, by role byte, each holding the asset hashes of its faces
     /// (02 §5). A fixed, tiny namespace rather than a `DefineOnce` table:
     /// an id table hands out names, and these are not handed out — roles
@@ -72,6 +75,7 @@ impl Tables {
             styles: DefineOnce::new(Table::Style, limits.max_styles),
             colors: DefineOnce::new(Table::Color, limits.max_colors),
             chunks: DefineOnce::new(Table::Chunk, limits.max_chunks),
+            gradients: DefineOnce::new(Table::Gradient, limits.max_gradients),
             fonts: [const { None }; FONT_ROLES],
         }
     }
@@ -401,6 +405,24 @@ impl Session {
     /// A literal colour, `0xRRGGBBAA`.
     pub fn color(&self, id: u32) -> Option<u32> {
         self.tables.colors.get(id).copied()
+    }
+
+    /// A literal colour in `owner`'s table — the page's for `0`, an
+    /// island's for `1..` (01 §2.7) — `0xRRGGBBAA`.
+    pub fn color_in(&self, owner: u16, id: u32) -> Option<u32> {
+        self.tables_of(owner).colors.get(id).copied()
+    }
+
+    /// A gradient in `owner`'s table (02 §5.3). Owner-keyed for the same
+    /// reason every other table is: an island's gradient 1 is not the
+    /// page's.
+    pub fn gradient_in(&self, owner: u16, id: u32) -> Option<&Gradient> {
+        self.tables_of(owner).gradients.get(id)
+    }
+
+    /// How many gradients the page has defined.
+    pub fn gradient_count(&self) -> usize {
+        self.tables.gradients.len()
     }
 
     /// A chunk, by hash or inline.
@@ -909,6 +931,15 @@ impl Session {
                 self.cur_mut().styles.define(id, record)
             }
             Op::DefColor { id, rgba } => self.cur_mut().colors.define(id, rgba),
+            Op::DefGradient { id, gradient } => {
+                // The decoder refused a stop that is none or a gradient;
+                // what it cannot know is whether a literal stop was defined,
+                // which is this namespace's table to answer.
+                for stop in gradient.stops() {
+                    self.check_color(stop.color)?;
+                }
+                self.cur_mut().gradients.define(id, gradient)
+            }
             Op::DefChunk { id, hash } => self.cur_mut().chunks.define(id, Chunk::Hash(hash)),
             Op::DefChunkBytes { id, bytes } => {
                 // Budgeted like atoms, and across every namespace at once:
@@ -1109,9 +1140,15 @@ impl Session {
                 self.arena.mark_scrolled(ix)
             }
             // Handled by `apply_op`.
-            Op::Notify { .. } | Op::DefAtom { .. } | Op::DefStyle { .. } | Op::DefColor { .. } | Op::DefChunk { .. } | Op::DefChunkBytes { .. } | Op::DefFont { .. } | Op::Mount(_) => {
-                Err(ApplyError::Internal)
-            }
+            Op::Notify { .. }
+            | Op::DefAtom { .. }
+            | Op::DefStyle { .. }
+            | Op::DefColor { .. }
+            | Op::DefGradient { .. }
+            | Op::DefChunk { .. }
+            | Op::DefChunkBytes { .. }
+            | Op::DefFont { .. }
+            | Op::Mount(_) => Err(ApplyError::Internal),
         }
     }
 
@@ -1365,6 +1402,11 @@ impl Session {
     }
 
     fn check_style_record(&self, r: &StyleRecord) -> Result<()> {
+        // 02 §5.3: a gradient is named only after it is defined, like every
+        // other table entry. The decoder already kept it to `bg`.
+        if let Some(id) = r.bg.gradient_id() {
+            self.cur().gradients.require(u32::from(id))?;
+        }
         self.check_color(r.bg)?;
         self.check_color(r.fg)?;
         self.check_color(r.border_color)

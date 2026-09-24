@@ -15,16 +15,16 @@ cargo run --release -p xtask -- bench                      # the budgets; exits 
 ## Built and tested
 
 **`eui-proto` — the wire format.** Encodes and decodes every construct in
-[the wire format specification](/docs/wire-format): frames, batches, all nineteen
-ops, the 64-byte style record, flat subtrees, values, handlers.
+[the wire format specification](/docs/wire-format): frames, batches, all twenty
+ops (`DefGradient`, protocol 6, is the twentieth), the 64-byte style record, flat subtrees, values, handlers.
 
 - No dependencies. Everything this crate touches came off a network socket, so a
   dependency here would be attack surface we did not write and cannot fuzz on
   our own schedule.
 - `#![forbid(unsafe_code)]`.
-- 97 tests: 10 round-trip, 7 byte-level vectors, 4 size budgets, 4 manifest,
+- 102 tests: 13 round-trip, 8 byte-level vectors, 4 size budgets, 4 manifest,
   5 frame-walking, 1 that watches the allocator,
-  **64 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
+  **65 rejection cases**, plus two bulk tests that throw 40 000 mutated and random buffers at
   every entry point and require that none of them panic.
 - Clean under `clippy` with `indexing_slicing`, `panic`, `unwrap_used`,
   `expect_used` and `arithmetic_side_effects` all denied — the decode path
@@ -36,7 +36,8 @@ ops, the 64-byte style record, flat subtrees, values, handlers.
   Android, the web and under `EUI_SANDBOX=0` they run inside the application,
   under `panic = "abort"`, and a panic a server can reach closes the app.
 
-**`eui-tree` — session state.** The four define-once tables, the node arena
+**`eui-tree` — session state.** The five define-once tables (atoms,
+styles, colours, chunks and, since protocol 6, gradients), the node arena
 with a free list, and `apply` for every op in the wire format.
 
 - Every reference — style, atom, colour, chunk, node id — is checked against
@@ -57,7 +58,7 @@ with a free list, and `apply` for every op in the wire format.
   than SipHash — seeded because the ids are a server's to choose.
 - A failed op poisons the session until the next successful `Mount` — the
   transport's own recovery — so no per-batch snapshot is needed.
-- 48 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
+- 49 tests, plus 2 of the hasher, including a random op stream that must keep the arena's live
   count equal to a fresh walk of the tree after every step.
 
 **`eui-theme` — theme resolution.** Roles and scale indices to concrete
@@ -83,7 +84,7 @@ values, per `spec/05-theme.md`, which is now normative.
   contract wants of it. A test holds each role to its tolerance and prints
   both palettes. The light `accent.hover` now lightens, and backs off until
   `accent.on` keeps 3:1 on it.
-- 25 tests (24 in `tests/resolve.rs`, 1 unit).
+- 26 tests (25 in `tests/resolve.rs`, 1 unit).
 
 **`eui-layout` — the layout engine.** One algorithm, `spec/04-layout.md`,
 now normative.
@@ -224,7 +225,7 @@ scissor region.
   then its blur, the corner radius following the spread; a negative spread
   tucks the layer under the box, and a pixel test reads back that the row
   above a `shadow.lg` card is the bare surface and the row below is not.
-- 80 tests (17 unit, 63 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
+- 87 tests (17 unit, 70 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -238,7 +239,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 119 tests.
+  trip. 120 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
@@ -1892,11 +1893,63 @@ session with them never reaches 6 and never carries 13–17 unless a view
 writes the index by hand. Raising one to 6 is that table's five entries and
 the same fallback in its style encoder.
 
-The catalogue is 550 definitions over six files. `tests/tw_spec.sl` is 15
-tests and 437 assertions, one of which sends every one of the 247 example
+The catalogue is 556 definitions over six files. `tests/tw_spec.sl` is 17
+tests and 469 assertions, one of which sends every one of the 255 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 14 files, 77 tests, 856 assertions. The gallery's Catalogue section opens
+are 14 files, 79 tests, 888 assertions. The gallery's Catalogue section opens
 with a card written in nothing but class strings.
+
+**Gradients, pulse and bounce, as the rest of protocol 6** (2026-09-24).
+`tw()` refused `bg-gradient-*`, `from-*`, `via-*`, `to-*`, `animate-pulse`
+and `animate-bounce`; it takes them now, and none of them is an
+approximation. A gradient is a table like the colours — `DefGradient`
+(`0x16`: an angle, two or three stops of a `ColorRef` and a position in
+255ths; at most 1 023 a session and per island) — and a record's `bg` names
+it by a `ColorRef` in `0x4000..=0x7FFF`, carved from the reserved role ids,
+which `fg`, `border_color` and a prop colour are refused for (02 §3.2,
+§5.3). The angle is CSS's degrees or one of CSS's four corner keywords, whose
+direction the box decides, so `bg-gradient-to-tr` on a wide banner is the
+banner's own diagonal and not 45°. Stops are roles or literals, mixed in
+premultiplied sRGB as CSS mixes them, and a gradient of roles follows dark
+mode like any role. It is painted by the rounded-rect pipeline it always
+was: the first stop in `fill`, the other two in the 16-bit `from` a
+transition uses, the positions and the angle code in `uv` — fields a solid
+box leaves empty — so corners, border, shadow, opacity, clip and a `blur`
+behave over it unchanged. The price is that its colours do not ease (03
+§5): a change into or out of a gradient snaps its colours and eases its
+opacity. Two flat `u32` stops' worth of inter-stage variables were the most
+WebGL2's 31 components had room for; the vertex stage turns the positions
+into how far along each segment a fragment is, so nothing else was needed.
+
+`pulse` and `bounce` are `animation` bits 8 and 16, Tailwind's keyframes to
+the curve, and cost what `spin` does: the factor and the lift are the vertex
+stage's, from the window's clock, the list is the same list every frame, and
+a frame owed to them alone is the last one drawn again. A pulse needed a
+flag; a bounce needed the height of the node it lifts, which no quad of it
+carries, so **the instance grew from 128 bytes to 132** —
+`std::mem::size_of::<Quad>()`, pinned in
+`a_pulsing_or_bouncing_node_paints_the_same_list_whatever_the_clock` — and
+the worker pipe carries it on the mask bit the always-present rect used to
+spend. Painting only: the node is laid out and hit where it rests.
+
+A session below 6 decodes none of it, so Soli sends such a session the
+gradient's first stop as a solid `bg` and records without bits 8 and 16
+(`StyleRecord::for_protocol`, and the encoder's `bg`), on the socket, on
+`GET /_eui/view?v=` and through `eui_render`. `SNAPSHOT_AGE` now moves the
+window's clock as well as the list's, which is how a pulse part way down and
+a bounce part way up are photographed. The six servers in `clients/` stay at
+protocol 4 and are unchanged: a gradient or either bit from one of them is
+a view writing the bytes by hand. Tests: `a_gradient_definition_round_trips`,
+`a_gradient_is_refused_outside_its_rules`,
+`pulse_and_bounce_and_a_gradient_are_version_6`, `def_gradient_bytes`
+(eui-proto); `a_gradient_is_defined_once_and_named_only_after` (eui-tree);
+five pixel and paint tests in `render.rs`;
+`a_change_to_or_from_a_gradient_does_not_ease_its_colours` (driver); and in
+lang `a_gradient_background_is_defined_once_per_session`,
+`an_older_session_is_sent_a_gradients_first_stop_and_no_pulse_or_bounce` and
+`a_one_shot_render_below_6_carries_no_gradient_and_no_pulse`. The gallery's
+Tailwind card opens with a gradient banner, a pulsing skeleton and a
+bouncing arrow.
 
 **A whole application in those classes.** `helpdesk`, the demo application's
 twelfth component, is a support desk for an invented scheduling product:

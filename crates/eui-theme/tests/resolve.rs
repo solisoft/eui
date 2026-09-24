@@ -336,6 +336,10 @@ fn check_style_rejects_indices_past_a_scale() {
     // Literals and `none` are not role lookups.
     let r = StyleRecord { bg: ColorRef::literal(5), fg: ColorRef::NONE, ..Default::default() };
     assert!(check_style(&r).is_ok());
+    // Nor is a gradient `bg` (02 §5.3): it names a table entry, and the
+    // role range it was carved from still refuses its last reserved id.
+    assert!(check_style(&StyleRecord { bg: ColorRef::gradient(1), ..Default::default() }).is_ok());
+    assert_eq!(bad(|r| r.bg = ColorRef::role(0x3FFF)), ThemeError::UnknownRole(0x3FFF));
 }
 
 #[test]

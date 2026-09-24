@@ -137,8 +137,11 @@ pub fn check_style(r: &StyleRecord) -> Result<(), ThemeError> {
     if usize::from(r.font_size) >= scale::TEXT.len() {
         return Err(ThemeError::ScaleIndex("text", r.font_size));
     }
+    // A gradient `bg` (02 §5.3) names a table entry, not a role; whether
+    // it is defined is the session's to say. Its stops are roles checked
+    // where the gradient is defined.
     for c in [r.bg, r.fg, r.border_color] {
-        if !c.is_literal() && !c.is_none() {
+        if !c.is_literal() && !c.is_none() && !c.is_gradient() {
             Role::from_id(c.index())?;
         }
     }

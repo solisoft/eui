@@ -175,3 +175,17 @@ fn def_font_bytes() {
     Op::DefFont { role: 0, faces: vec![[7; 32]] }.encode(&mut w);
     assert_eq!(&w.as_slice()[0..3], &[0x15, 0x00, 0x01]);
 }
+
+/// 02 §5.3, byte for byte: opcode, id, angle (little-endian), count, then
+/// each stop's `ColorRef` and position.
+#[test]
+fn def_gradient_bytes() {
+    let mut w = Writer::new();
+    let gradient = Gradient::new(135, &[GradientStop { color: ColorRef::role(9), at: 0 }, GradientStop { color: ColorRef::literal(2), at: 255 }]).unwrap();
+    Op::DefGradient { id: 3, gradient }.encode(&mut w);
+    assert_eq!(w.as_slice(), &[0x16, 0x03, 135, 0x00, 0x02, 0x09, 0x00, 0x00, 0x02, 0x80, 0xFF]);
+    // And a record naming it carries `0x4003` at offset 37.
+    let mut w = Writer::new();
+    StyleRecord { bg: ColorRef::gradient(3), ..Default::default() }.encode(&mut w);
+    assert_eq!(&w.as_slice()[37..39], &[0x03, 0x40]);
+}

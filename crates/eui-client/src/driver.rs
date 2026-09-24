@@ -2364,10 +2364,19 @@ impl Driver {
                 continue;
             };
             let to = colors_of(&self.session, &self.resolved, &new);
-            let from = match self.anims.iter().position(|(n, _)| *n == ix) {
+            let mut from = match self.anims.iter().position(|(n, _)| *n == ix) {
                 Some(i) => self.anims.remove(i).1.at(self.now),
                 None => self.session.style(old).map_or(to, |r| colors_of(&self.session, &self.resolved, r)),
             };
+            // 03 §5: a change of `bg` to or from a gradient does not ease its
+            // colours. The gradient end resolves to no colour here, and
+            // leaving it so would fade the solid end up from transparent.
+            let old_gradient = self.session.style(old).is_some_and(|r| r.bg.is_gradient());
+            if old_gradient || new.bg.is_gradient() {
+                from.bg = to.bg;
+                from.fg = to.fg;
+                from.border = to.border;
+            }
             self.anims.push((ix, Anim { from, to, start: self.now, duration: Duration::from_millis(u64::from(*ms)), curve: eui_theme::Curve::STANDARD }));
             self.next_due = Some(self.now);
             self.redraw = true;

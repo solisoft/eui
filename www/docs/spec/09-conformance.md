@@ -104,7 +104,7 @@ found to be two rules that contradicted each other.
 
 | File | Pins |
 |---|---|
-| `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, a `DefFont`, every op |
+| `vectors.rs` | Byte-exact encodings: a 64-byte style record, varints, the counter's Mount batch, a `DefFont`, a `DefGradient` and the `ColorRef` naming it (`def_gradient_bytes`), every op |
 | `roundtrip.rs` | Every frame, op, value and record survives encode → decode unchanged |
 | `reject.rs` | 64 malformed inputs, each refused with the named error and no allocation past the limit: truncation, non-minimal varints, trailing bytes, unknown enums, undefined `animation` bits, a `motion_kind` with nothing going that way, oversized lists, depth, a font role past the last, a role bound to no face, too many faces on one |
 | `size_budget.rs` | The counter's Mount fits 576 B and a click 25 B |
@@ -125,6 +125,18 @@ before its resume flag.
 2, 3, 4, 11, 12 below it on `gap`, `padding`, `margin` and every
 `Dim::Space`, touches no pixel count or other scale, and never answers an
 index a version-5 scale lacks.
+
+02 §5.3's gradients and 03 §5's `pulse` and `bounce`, the rest of version 6:
+`a_gradient_definition_round_trips` (`roundtrip.rs`) sends every angle,
+`0..=363`, with two and three stops; `a_gradient_is_refused_outside_its_rules`
+(`reject.rs`) refuses `0x4000` as a `bg`, a gradient in `fg`, in
+`border_color` and in a `Value` colour, an angle past 363, one stop and four,
+a stop that is none or a gradient, stops that go backwards, id 0, and a
+definition cut short; `an_animation_bit_this_revision_does_not_define_is_rejected`
+takes 8 and 16 and their combination with `spin`, and refuses 32 up; and
+`pulse_and_bounce_and_a_gradient_are_version_6` holds that `for_protocol`
+leaves all three alone at 6 and below it takes off the two bits and any
+gradient `bg`, and nothing else.
 
 ### 2.1 Font roles — `crates/eui-text/tests/shape.rs`, `crates/eui-client/tests/assets.rs`, `crates/eui-tree/tests/apply.rs`
 
@@ -164,7 +176,11 @@ in the session as well as in the decoder.
 `chunk_bytes_have_one_budget_across_the_page_and_its_islands` refuses the
 inline chunk that would pass `MAX_CHUNK_TOTAL_BYTES`, counting an island's
 bytes against the page's; `atom_budget_is_enforced_before_storing` does the
-same for atoms. And that a refused graft is refused **whole**:
+same for atoms. `a_gradient_is_defined_once_and_named_only_after` holds 02
+§5.3's table to the same rules as the colours: a record naming a gradient
+before it is defined is refused, so is a literal stop whose colour is not,
+an id is defined once and past `max_gradients` not at all — and an island's
+gradient 1 is its own, beside the page's. And that a refused graft is refused **whole**:
 `a_refused_graft_leaves_nothing_behind_and_the_resync_lands` sends a subtree
 with an id used twice, one past the depth limit, and a bad `InsertChild`,
 and requires that none leaves a node live — so the resync's `Mount`, which
@@ -596,6 +612,35 @@ and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.
 
+02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
+pins the instance a gradient `bg` becomes — the first stop as the fill, the
+middle and last in `from`, the positions and the angle code in `uv`, a
+literal stop from the session's own table, and the radius and border kept —
+and that a gradient reference resolves to no colour anywhere a colour is
+asked for. In pixels: `a_gradient_runs_from_its_first_stop_to_its_last_in_srgb`
+(to right, to bottom and 45° on a square: the ends are the stops, half way
+is the mean of their **sRGB** values, and a line across the gradient is one
+colour); `a_corner_gradient_follows_the_box_and_not_45_degrees` (to top right
+on a 200 × 40 banner is half way along the diagonal that misses the corner,
+which 45° is not); and `a_gradient_keeps_its_corners_its_border_and_its_opacity`
+(the rounded corner is surface, the border draws over the gradient, and half
+opacity is the picture a solid fill at half opacity draws). That a change to
+or from a gradient does not ease its colours (03 §5) is
+`a_change_to_or_from_a_gradient_does_not_ease_its_colours` in
+`crates/eui-client/tests/driver.rs`.
+
+03 §5's **pulse** and **bounce**, which are spin's bargain again:
+`a_pulsing_or_bouncing_node_paints_the_same_list_whatever_the_clock` holds
+that every quad painted for the node — its box and its glyphs — carries the
+flag or its height, that the list asks for the next frame, and that the
+factor and the lift are Tailwind's numbers at the phases that pin them (1 and
+0.5 at 0 s and 1 s, a quarter and nothing at 0 s and 0.5 s). In pixels,
+`pulse_dims_to_half_and_back_on_the_clock` draws one list at 0, 1 and 2 s —
+full, the picture a solid half-opacity bar draws, full again — and
+`bounce_lifts_a_quarter_of_the_height_and_lands_at_the_half` draws a 40 px
+bar 10 px up at 0 s and on its laid-out place at 0.5 s, with the layout
+unmoved.
+
 Plus 03 §1's one word about a kind that the painter has to obey: a `sizer`
 carrying a background, a border and a shadow draws **none** of them, and its
 child still draws. The same tree with a `box` in that place draws more. The
@@ -645,7 +690,16 @@ The same crate's encoder speaks the version a session negotiated (05 §2):
 style at 5, at 6 and with no handshake, and checks each `DefStyle`; and
 `snapshot.rs`'s `a_one_shot_render_is_sent_the_space_steps_its_version_has`
 does it through `render_once`, the path `eui_render` and `GET /_eui/view?v=`
-share, decoding the body it answers.
+share, decoding the body it answers. The rest of version 6 is held the same
+two ways: `a_gradient_background_is_defined_once_per_session` (one
+`DefGradient` for one gradient however often it is written, after the colour
+its literal stop names and before the style that names it; evenly spread
+positions; the corner codes; and each malformed `bg` refused with its reason),
+`an_older_session_is_sent_a_gradients_first_stop_and_no_pulse_or_bounce`
+(at 5: no `DefGradient`, the first stop as a solid `bg`, the `animation`
+bits a version-5 client takes), and
+`a_one_shot_render_below_6_carries_no_gradient_and_no_pulse` through
+`render_once`.
 
 ## 10. End to end — `crates/eui-client/tests/soli_e2e.rs`
 
@@ -706,10 +760,16 @@ What is pinned instead:
 accepts — one of each of `tw_examples()` — is sent through `eui_render`, the
 encoder's own path, and must come back a frame rather than a refusal; so
 nothing `tw()` emits is a key or value the wire does not have. The refusals
-are pinned by name: a letter-spacing, a line-height, a gradient, a per-corner
+are pinned by name: a letter-spacing, a line-height, a per-corner
 radius, a transform, a breakpoint and an off-palette hue each raise with the
 class in the message rather than vanish, and the hue's message names the
-nearest role. The four state prefixes land as local styles on the node, so a
+nearest role. So is every gradient that is not one — a direction with no
+stops, a stop with no direction, a gradient with no `to-*` (a role has no
+transparent version to fade to), stops that go backwards — while
+`bg-gradient-to-*` with `from-*`, `via-*`, `to-*` and their `-N%` positions
+compose into one `bg` in any order, a state's stop lies over the resting
+gradient, and `animate-pulse` and `animate-bounce` join `animate-spin` as
+bits that combine (02 §5.3, 03 §5). The four state prefixes land as local styles on the node, so a
 `hover:` needs no round trip.
 `py-1.5`, `px-2.5`, `gap-3.5`, `mt-20`, `p-32` and `space-y-1.5` land on
 `space` 13–17 (05 §2), and a step the scale still lacks (`p-7`, `p-40`) is

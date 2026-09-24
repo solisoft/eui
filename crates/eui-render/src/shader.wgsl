@@ -15,7 +15,9 @@ struct Uniforms {
     // spin phase, a fraction of a revolution (03 §5). Both are computed
     // here rather than baked into the instances, so a spinning or
     // transitioning node does not make the frame a different draw list.
-    // Two spare.
+    // z: the factor a pulsing quad's opacity is multiplied by, and w: how far
+    // a bouncing quad is lifted, as a fraction of its node's height -- both
+    // 03 §5, both from the window's clock like the spin.
     clock: vec4<f32>,
     // What the whole list is doing, as a layer of the frame: xy the shift in
     // device px, z a uniform scale about the target's own centre, w the
@@ -54,6 +56,8 @@ const SPINNING: u32 = 8u;       // turns about its node's centre, 03 §5
 const ANIMATED: u32 = 16u;      // fill, stroke, opacity mix from `*_from`
 const DECELERATE: u32 = 32u;    // along the entrance curve, not the standard
 const SCENE: u32 = 64u;         // a scene's own target, premultiplied
+const GRADIENT: u32 = 128u;     // the fill is a linear gradient, 02 §5.3
+const PULSING: u32 = 65536u;    // opacity times the clock's pulse, 03 §5
 const HELD: u32 = 4u;           // a transform the hand is driving, not the clock
 const TAU: f32 = 6.2831855;
 
@@ -76,6 +80,35 @@ fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 // The eased fraction at t: 0 the theme's standard curve, 1 decelerate (an
 // entrance), 2 smooth (a keyboard scroll, from rest to rest), 3 accelerate
 // (something leaving).
+// 02 §5.3 mixes a gradient's stops in sRGB, as CSS does, and the target is
+// linear: the stops go out through the transfer function and come back.
+fn to_srgb(c: f32) -> f32 {
+    if (c <= 0.0031308) {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+fn to_linear(c: f32) -> f32 {
+    if (c <= 0.04045) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
+// A linear colour as four sRGB bytes, which is exactly what a stop was before
+// it was resolved: a theme role and a literal are both `0xRRGGBBAA`.
+fn pack_srgb(c: vec4<f32>) -> u32 {
+    let b = vec4<u32>(round(clamp(vec4<f32>(to_srgb(c.r), to_srgb(c.g), to_srgb(c.b), c.a), vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0));
+    return (b.r << 24u) | (b.g << 16u) | (b.b << 8u) | b.a;
+}
+
+// Back, premultiplied: the space CSS interpolates a gradient in.
+fn unpack_premul(v: u32) -> vec4<f32> {
+    let c = vec4<f32>(f32((v >> 24u) & 255u), f32((v >> 16u) & 255u), f32((v >> 8u) & 255u), f32(v & 255u)) / 255.0;
+    return vec4<f32>(c.rgb * c.a, c.a);
+}
+
 fn ease(t: f32, curve: u32) -> f32 {
     let c = clamp(t, 0.0, 1.0);
     if (c <= 0.0 || c >= 1.0) {
@@ -104,6 +137,7 @@ struct Inst {
     @location(6) spin: vec4<f32>,  // xy: offset from the spinning node's centre; zw: t0, duration
     @location(7) fill_from: vec4<f32>,
     @location(8) stroke_from: vec4<f32>,
+    @location(9) bounce: f32,      // the bouncing node's height, device px, 03 §5
 };
 
 struct VOut {
@@ -121,6 +155,11 @@ struct VOut {
     // antialiasing ramp is supposed to be. Dividing by it there is what keeps
     // a shrinking page soft-edged and a growing one from going hard.
     @location(7) scale: f32,
+    // 02 §5.3: a gradient quad's three stops as sRGB bytes. Flat and packed
+    // because the inter-stage budget is 31 components on WebGL2 and the rest
+    // of this struct takes 25; the positions arrive in `uv`, already turned
+    // into how far along each of the two segments the fragment is.
+    @location(8) @interpolate(flat) grad: vec4<u32>,
 };
 
 @vertex
@@ -155,6 +194,9 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
         centre = (centre - o) + vec2<f32>(o.x * sc.x - o.y * sc.y, o.x * sc.y + o.y * sc.x);
         angle = angle + a;
     }
+    // 03 §5 `bounce`: lifted by the node's height times the clock's
+    // fraction. Zero for a quad of no bouncing node, so no flag is needed.
+    centre.y = centre.y - inst.bounce * u.clock.w;
     // 03 §5: the page this quad is on, or the shared element it belongs to.
     // Outside the scroller above -- a list mid-glide on a page mid-slide does
     // both -- and inside the frame below.
@@ -197,6 +239,37 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     out.fill = inst.fill;
     out.stroke = inst.stroke;
     out.uv = mix(inst.uv.xy, inst.uv.zw, c);
+    out.grad = vec4<u32>(0u, 0u, 0u, 0u);
+    // 02 §5.3. Where a point projects on the gradient line is affine in its
+    // position, so it is worked out here at the corners and interpolated:
+    // `uv` becomes how far along the first segment (first stop to middle)
+    // and the second (middle to last) the fragment is.
+    if ((flags & GRADIENT) != 0u) {
+        let wh = inst.rect.zw;
+        let code = u32(round(inst.uv.w));
+        var dir = vec2<f32>(0.0, -1.0);
+        if (code < 360u) {
+            let a = f32(code) * TAU / 360.0;
+            dir = vec2<f32>(sin(a), -cos(a));
+        } else {
+            // A corner: perpendicular to the diagonal that misses it, so the
+            // half-way line runs corner to corner whatever the box's shape.
+            var sx = 1.0;
+            var sy = -1.0;
+            if (code == 361u || code == 362u) {
+                sy = 1.0;
+            }
+            if (code == 362u || code == 363u) {
+                sx = -1.0;
+            }
+            dir = normalize(vec2<f32>(sx * wh.y, sy * wh.x));
+        }
+        let len = max(abs(wh.x * dir.x) + abs(wh.y * dir.y), 1e-4);
+        let t = dot((c - vec2<f32>(0.5, 0.5)) * wh, dir) / len + 0.5;
+        let at = inst.uv.xyz;
+        out.uv = vec2<f32>((t - at.x) / max(at.y - at.x, 1e-4), (t - at.y) / max(at.z - at.y, 1e-4));
+        out.grad = vec4<u32>(pack_srgb(inst.fill), pack_srgb(inst.fill_from), pack_srgb(inst.stroke_from), 0u);
+    }
     out.extra = inst.extra;
     out.scale = lscale * u.frame.z;
     // 03 §5: a transition is both its ends and a clock. The instance holds
@@ -205,9 +278,18 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     if ((flags & ANIMATED) != 0u) {
         let curve = select(0u, 1u, (flags & DECELERATE) != 0u);
         let k = ease((u.clock.x - inst.spin.z) / max(inst.spin.w, 1e-3), curve);
-        out.fill = mix(inst.fill_from, inst.fill, k);
-        out.stroke = mix(inst.stroke_from, inst.stroke, k);
+        // A gradient's colours do not ease (03 §5), and its `*_from` are
+        // its stops: only the opacity moves.
+        if ((flags & GRADIENT) == 0u) {
+            out.fill = mix(inst.fill_from, inst.fill, k);
+            out.stroke = mix(inst.stroke_from, inst.stroke, k);
+        }
         out.params.w = mix(inst.extra.w, inst.params.w, k);
+    }
+    // 03 §5 `pulse`: the clock's factor, on top of whatever the quad arrived
+    // at, like the layer's opacity below.
+    if ((flags & PULSING) != 0u) {
+        out.params.w = out.params.w * u.clock.z;
     }
     // The layer's opacity multiplies whatever the quad arrived at, so a page
     // can fade while the things inside it are mid-transition. It is applied
@@ -266,7 +348,25 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
         return vec4<f32>(t.rgb * a, t.a * a);
     }
 
-    var color = in.fill;
+    var fill = in.fill;
+    // 02 §5.3: the gradient, mixed in premultiplied sRGB and brought back to
+    // the linear colour everything else here is. Before the first stop it is
+    // the first stop, past the last the last.
+    if ((flags & GRADIENT) != 0u) {
+        let first = unpack_premul(in.grad.x);
+        let mid = unpack_premul(in.grad.y);
+        let last = unpack_premul(in.grad.z);
+        var g = mix(mid, last, clamp(in.uv.y, 0.0, 1.0));
+        if (in.uv.x < 1.0) {
+            g = mix(first, mid, clamp(in.uv.x, 0.0, 1.0));
+        }
+        var straight = vec3<f32>(0.0, 0.0, 0.0);
+        if (g.a > 0.0) {
+            straight = g.rgb / g.a;
+        }
+        fill = vec4<f32>(to_linear(straight.r), to_linear(straight.g), to_linear(straight.b), g.a);
+    }
+    var color = fill;
     // 03 §2: a blurred node fills over its backdrop rather than over what
     // the target happens to hold, so a translucent fill tints frosted glass
     // instead of merely dimming what is behind it. The backdrop is opaque,
@@ -275,7 +375,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     if ((flags & BLURRED) != 0u) {
         let uv = (in.pos.xy + u.viewport.zw - u.backdrop.xy) / u.backdrop.zw;
         let back = textureSampleLevel(blur_tex, blur_smp, uv, 0.0);
-        color = vec4<f32>(mix(back.rgb, in.fill.rgb, in.fill.a), 1.0);
+        color = vec4<f32>(mix(back.rgb, fill.rgb, fill.a), 1.0);
     }
     let border = in.params.y;
     if (border > 0.0) {

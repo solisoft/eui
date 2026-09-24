@@ -940,6 +940,38 @@ fn a_style_change_with_a_transition_fades_over_the_motion_scale() {
     assert!(!d.tick(t0 + Duration::from_millis(300)));
 }
 
+/// Spec 03 §5: a change of `bg` to or from a gradient (02 §5.3) does not
+/// ease its colours. Into one, the quad is the gradient from the first frame
+/// and its `from` holds the stops, not the colour it left; out of one, the
+/// solid colour starts where it ends rather than fading up from nothing.
+#[test]
+fn a_change_to_or_from_a_gradient_does_not_ease_its_colours() {
+    use std::time::Instant;
+    let mut d = welcomed();
+    d.tick(Instant::now());
+    let _ = d.paint(400, 300);
+    let stop = |role: Role, at: u8| GradientStop { color: ColorRef::role(role.id()), at };
+    let gradient = Gradient::new(90, &[stop(Role::AccentBase, 0), stop(Role::DangerBase, 255)]).unwrap();
+    let button = |bg: ColorRef| StyleRecord { display: Display::Row, padding: [3; 4], bg, fg: ColorRef::role(Role::AccentOn.id()), radius: 2, transition: 2, ..Default::default() };
+    d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefGradient { id: 1, gradient }, Op::DefStyle { id: 3, record: button(ColorRef::gradient(1)) }, Op::SetStyle { node: 3, style: 3 }] }));
+    let list = d.paint(400, 300);
+    let q = *list.quads.iter().find(|q| q.params[2] as u32 & eui_render::GRADIENT != 0).expect("the button is a gradient quad");
+    let accent = eui_render::linear(d.theme_color(Role::AccentBase));
+    let danger = eui_render::linear(d.theme_color(Role::DangerBase));
+    assert_eq!(q.fill, accent, "the first stop, at once");
+    assert_eq!(eui_render::unpack4([q.from[4], q.from[5], q.from[6], q.from[7]]), eui_render::unpack4(eui_render::pack4(danger)), "and `from` is its last stop, not the colour it left");
+    assert_eq!(q.uv, [0.0, 1.0, 1.0, 90.0], "positions and the angle");
+    // And back to a solid danger: it starts where it ends.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::DefStyle { id: 4, record: button(ColorRef::role(Role::DangerBase.id())) }, Op::SetStyle { node: 3, style: 4 }] }));
+    let list = d.paint(400, 300);
+    let q = *list.quads.iter().find(|q| q.params[2] as u32 & (eui_render::TEXTURED | eui_render::TEXTURED_RGBA) == 0 && q.fill[3] > 0.0).expect("the button");
+    assert_eq!(q.params[2] as u32 & eui_render::GRADIENT, 0);
+    assert_eq!(q.fill, danger);
+    if q.params[2] as u32 & eui_render::ANIMATED != 0 {
+        assert_eq!(eui_render::unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]), eui_render::unpack4(eui_render::pack4(danger)), "from where it ends: no fade up from transparent");
+    }
+}
+
 /// Spec 03 §5 `enter`: a node grafted wearing it arrives from nothing —
 /// transparent and unblurred — rather than appearing already there.
 #[test]
