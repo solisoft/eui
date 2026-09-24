@@ -156,6 +156,97 @@ def diff_tally(lines)
   {"added": added, "removed": removed}
 end
 
+def editable(kind, value, on_change, o)
+  base = {
+    "pad": [2, 4, 2, 4],
+    "border": 1,
+    "border_color": "border.default",
+    "radius": 2,
+    "bg": "surface.raised",
+    "size": 1,
+    "shadow": 1,
+    "transition": "fast"
+  }
+  style = base.merge(o["style"] ?? {})
+  # A field drawn inside another box — the entry of a tag well, the number
+  # in a currency field — says `bg: none` and lets the shell be the field. Its
+  # shadow would then be cast by nothing, a grey slab inside the shell.
+  style["shadow"] = 0 if style["bg"] == "none" && (o["style"] ?? {})["shadow"].nil?
+  key = o["key"].to_s
+  key = editable_key(on_change, o) if key.blank?
+  n = {
+    "k": kind,
+    "t": value ?? "",
+    "s": style,
+    "on": {"change": on_change}.merge(o["on"] ?? {})
+  }
+  unless key.blank?
+    n["key"] = key
+    n["on"] = editable_states(style, key, n["on"])
+  end
+  props = o["props"] ?? {}
+  hint = o["placeholder"] ?? ""
+  props = props.merge({"placeholder": hint}) if hint != ""
+  n["p"] = props if props.keys().length() > 0
+  n
+end
+
+def editable_key(on_change, o)
+  label = (o["props"] ?? {})["label"].to_s
+  said = on_change.to_s
+  return "" if said.blank? && label.blank?
+
+  "ed:" + said + ":" + label
+end
+
+def editable_states(style, key, on)
+  bad = style["border_color"] == "danger.base"
+  # The ground does not change under the pointer or the caret: a web field
+  # keeps its white, and says it is live with its edge. Focus paints the edge
+  # in the accent as well as the client's ring, because the ring is drawn for
+  # keyboard focus alone (03 §3) and a field clicked into had nothing else.
+  hover = style.merge({})
+  focus = style.merge({})
+  hover["border_color"] = "border.strong" unless bad
+  focus["border_color"] = "accent.base" unless bad
+  styles = {"base": style, "hover": hover, "focus": focus}
+  mine = "\"" + key + "\""
+  held = "if state.field_focus == " + mine
+  states = {
+    "pointer_enter": {"local": held + " { self.style = @focus } else { self.style = @hover }", "styles": styles},
+    "pointer_leave": {"local": held + " { self.style = @focus } else { self.style = @base }", "styles": styles},
+    "focus": {"local": "state.field_focus = " + mine + "; self.style = @focus", "styles": styles},
+    "blur": {"local": "state.field_focus = \"\"; self.style = @base", "styles": styles}
+  }
+  out = on.merge({})
+  for name in states.keys()
+    said = out[name]
+    if said.nil?
+      out[name] = states[name]
+    elsif said.to_s == said
+      out[name] = states[name].merge({"then": said})
+    end
+  end
+  out
+end
+
+def input(value, on_change, o = {})
+  editable("input", value, on_change, o)
+end
+
+def field_props(label, error, bad, o)
+  props = {"label": o["name"] ?? label}
+  note = error != "" ? error : (o["hint"] ?? "")
+  props["description"] = note if note != ""
+  props["invalid"] = true if bad
+  props["required"] = true if o["required"] == true
+  # The hint an empty field shows in its own box (03 §3). Beside `hint`, not
+  # instead of it: that one is a sentence under the field that stays, this is
+  # an example inside it that goes the moment anything is typed.
+  props["placeholder"] = o["placeholder"] if (o["placeholder"] ?? "") != ""
+  props
+end
+
 def check(label, got, want)
   assert_eq(got, want)
 end
@@ -266,3 +357,28 @@ PATCH = [
 check("added lines are counted", diff_tally(PATCH)["added"], 2)
 check("removed lines are counted", diff_tally(PATCH)["removed"], 1)
 check("an empty patch counts nothing", diff_tally([])["added"], 0)
+
+# ---- what a field says while it is empty ----
+#
+# 03 §3's `placeholder` is a prop the client draws in `text.muted` while the
+# value is empty. The builders pass it through and never make it the value.
+
+ED = input("", "search", {"placeholder": "Search mail"})
+
+check("an input carries its placeholder as a prop", ED["p"]["placeholder"], "Search mail")
+check("and not as its text", ED["t"], "")
+
+ED_PLAIN = input("", "search", {})
+
+check("a field without one declares none", ED_PLAIN["p"].nil?, true)
+
+ED_BOTH = input("x", "search", {"placeholder": "Search mail", "props": {"label": "Search"}})
+
+check("beside the props it was given", ED_BOTH["p"]["label"], "Search")
+check("with its value untouched", ED_BOTH["t"], "x")
+
+FP = field_props("Legal name", "", false, {"placeholder": "Meridian Trading Ltd", "hint": "As registered"})
+
+check("a form field hands it to the control", FP["placeholder"], "Meridian Trading Ltd")
+check("beside the hint under it, which is not the same thing", FP["description"], "As registered")
+check("and a field that names none says nothing", field_props("Legal name", "", false, {})["placeholder"].nil?, true)

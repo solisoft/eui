@@ -1467,6 +1467,55 @@ fn a_secret_field_is_a_password_to_an_assistive_technology() {
     assert_eq!(field.value, "", "the value is never exposed");
 }
 
+/// 03 §3: a `placeholder` is never the value. Typing into an empty field
+/// that shows one starts from nothing, nothing sent names it, emptying the
+/// field shows it again, and an assistive technology is handed it as the
+/// field's placeholder with an empty value.
+#[test]
+fn a_placeholder_is_never_the_value_and_is_announced_as_a_placeholder() {
+    use eui_client::a11y::AccessRole as Role;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Input, id: 2, style: 0, key: 0, text: Some(TextRef::Inline(String::new())), props: (0, 1), handlers: (0, 2), child_count: 0 });
+    tree.props.push((1, Value::Str("Search mail".into())));
+    tree.handlers.push((EventKind::Change, Handler::Server(2)));
+    tree.handlers.push((EventKind::TextInput, Handler::Server(3)));
+    let batch = Batch {
+        seq: 1,
+        ops: vec![
+            Op::DefAtom { id: 1, value: "placeholder".into() },
+            Op::DefAtom { id: 2, value: "changed".into() },
+            Op::DefAtom { id: 3, value: "typed".into() },
+            Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, padding: [6; 4], ..Default::default() } },
+            Op::Mount(tree),
+        ],
+    };
+    let mut d = Driver::new(400.0, 300.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+    d.handle_frame(Frame::Batch(batch));
+    let _ = d.paint(400, 300);
+    let snapshot = d.access_snapshot();
+    let field = snapshot.nodes.iter().find(|n| n.role == Role::TextInput).expect("a text field");
+    assert_eq!(field.state.placeholder, "Search mail", "announced as the placeholder");
+    assert_eq!(field.value, "", "and not as the value");
+
+    let ix = d.session().lookup(2).unwrap();
+    let mut sent = tab(&mut d, false);
+    sent.extend(d.input(Input::Text("hi".into())));
+    assert_eq!(field_text(&d), "hi", "typing starts from nothing");
+    assert_eq!(d.session().shown_placeholder(ix), None, "and hides the hint");
+    for _ in 0..2 {
+        sent.extend(d.input(Input::Key { key: "Backspace".into(), modifiers: 0, down: true }));
+        sent.extend(d.input(Input::Key { key: "Backspace".into(), modifiers: 0, down: false }));
+    }
+    assert_eq!(field_text(&d), "");
+    assert_eq!(d.session().shown_placeholder(ix), Some("Search mail"), "emptied, the hint is back");
+    let _ = d.paint(400, 300);
+    sent.extend(tab(&mut d, false));
+    assert!(sent.iter().any(|f| matches!(f, Frame::Event(_))), "the field did report: {sent:?}");
+    assert!(!format!("{sent:?}").contains("Search"), "and nothing it sent names the hint: {sent:?}");
+}
+
 #[test]
 fn a_click_places_the_caret_and_a_drag_selects() {
     let mut d = Driver::new(400.0, 300.0, 1.0, 0);

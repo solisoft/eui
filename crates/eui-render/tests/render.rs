@@ -1348,6 +1348,86 @@ fn a_secret_field_paints_one_mark_per_character() {
     assert!((width(&hello) - width(&wide)).abs() < 1.0, "marks are the same width whatever was typed");
 }
 
+/// 03 §3: `placeholder` is drawn in `text.muted` while the value is empty,
+/// and only then; a secret field draws it as text, not marks; a `text`
+/// node carrying the prop draws nothing of it; and an empty field with no
+/// width of its own is as wide as its hint.
+#[test]
+fn a_placeholder_is_drawn_muted_only_while_the_field_is_empty() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let field = StyleRecord { padding: [2; 4], ..Default::default() };
+    let run = |kind: NodeKind, value: Option<&str>, secret: bool| {
+        let mut n = node(kind, 2, 2, 0);
+        n.text = value.map(|v| TextRef::Inline(v.into()));
+        let mut props = vec![(1, Value::Str("Search mail".into()))];
+        if secret {
+            props.push((2, Value::Bool(true)));
+        }
+        n.props = (0, props.len() as u32);
+        let mut fx = fixture(vec![col, field], vec![node(NodeKind::Box, 1, 1, 1), n], props, &["placeholder", "secret"], 400.0, 100.0);
+        let list = draw(&mut fx, 400, 100, 1.0);
+        let muted = linear(fx.theme.color(Role::TextMuted));
+        let glyphs: Vec<[f32; 4]> = list.quads.iter().filter(|q| q.params[2] as u32 == TEXTURED).map(|q| q.fill).collect();
+        let w = fx.layout.rect(fx.session.lookup(2).unwrap()).unwrap().w;
+        (glyphs, muted, w)
+    };
+    let (empty, muted, hinted_w) = run(NodeKind::Input, Some(""), false);
+    let (as_value, _, _) = run(NodeKind::Input, Some("Search mail"), false);
+    assert!(!empty.is_empty() && empty.len() == as_value.len(), "the hint's glyphs, as the same words typed: {empty:?}");
+    assert!(empty.iter().all(|f| *f == muted), "all of them muted");
+    let (absent, _, _) = run(NodeKind::Input, None, false);
+    assert_eq!(absent.len(), empty.len(), "a field with no text at all is empty too");
+    let (area, _, _) = run(NodeKind::TextArea, Some(""), false);
+    assert_eq!(area.len(), empty.len(), "a textarea shows it the same way");
+    let (typed, _, typed_w) = run(NodeKind::Input, Some("ab"), false);
+    assert_eq!(typed.len(), 2, "a value hides it: {typed:?}");
+    assert!(typed.iter().all(|f| *f != muted), "and the value is not muted");
+    assert!(hinted_w > typed_w, "an empty field is measured as its hint ({hinted_w}), a filled one by its value ({typed_w})");
+    let (secret, _, _) = run(NodeKind::Input, Some(""), true);
+    assert_eq!(secret, empty, "a secret field's hint is text, not marks");
+    let (label, _, _) = run(NodeKind::Text, Some(""), false);
+    assert!(label.is_empty(), "a text node ignores the prop");
+}
+
+#[test]
+fn a_focused_empty_field_puts_its_caret_where_it_would_without_a_hint() {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let field = StyleRecord { width: Dim::Px(200), padding: [2; 4], text_align: TextAlign::Center, ..Default::default() };
+    let caret_x = |hinted: bool| {
+        let mut n = node(NodeKind::Input, 2, 2, 0);
+        n.text = Some(TextRef::Inline(String::new()));
+        let props = if hinted { vec![(1, Value::Str("Search mail".into()))] } else { vec![] };
+        n.props = (0, props.len() as u32);
+        let mut fx = fixture(vec![col, field], vec![node(NodeKind::Box, 1, 1, 1), n], props, &["placeholder"], 400.0, 100.0);
+        let ix = fx.session.lookup(2).unwrap();
+        let list = paint(&mut Scene {
+            session: &fx.session,
+            layout: &fx.layout,
+            theme: &fx.theme,
+            text: &mut fx.text,
+            atlas: &mut fx.atlas,
+            images: &fx.images,
+            scale: 1.0,
+            size: (400, 100),
+            focus: None,
+            anims: &[],
+            movers: &[],
+            glides: &[],
+            cache: &mut PaintCache::new(),
+            editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0, caret_on: true }),
+            now: 0.0,
+            scenes_allowed: true,
+            scrollbar_hot: None,
+            scrollbars: &[],
+        });
+        let default = linear(fx.theme.color(Role::TextDefault));
+        let caret = list.quads.iter().find(|q| q.params[2] == 0.0 && q.rect[2] == 1.0).expect("a caret");
+        assert_eq!(caret.fill, default, "in the field's own colour, not the hint's");
+        caret.rect[0]
+    };
+    assert_eq!(caret_x(true), caret_x(false), "the middle of a centred field, hint or none");
+}
+
 #[test]
 fn centered_text_sits_in_the_middle_of_its_box() {
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };

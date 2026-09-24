@@ -1839,12 +1839,13 @@ def erp_inputs_card(state, lay)
   erp_card("Input", [badge("family", "info")], [
     muted("Everything that takes a value. None of them keeps it: the handler does."),
     row({"gap": 4, "wrap": "wrap", "align": "start", "width": "100%"}, [
-      restyle(text_field("Legal name", (state["cat_text"] ?? "").to_s, "cat_text", {"key": "cat_text"}), narrow),
+      restyle(text_field("Legal name", (state["cat_text"] ?? "").to_s, "cat_text", {"key": "cat_text", "placeholder": "Meridian Trading Ltd"}), narrow),
       restyle(email_field("Email", "sales@meridian.test", "cat_say", {"key": "cat_mail"}), narrow),
       restyle(number_field("Quantity", (state["cat_num"] ?? "").to_s, "cat_num", {"key": "cat_num", "min": 0, "max": 99}), narrow),
       restyle(currency_field("Amount", (state["demo_amount"] ?? "").to_s, "demo_amount", {"key": "cat_money"}), narrow),
       restyle(password_field("Token", (state["demo_pass"] ?? "").to_s, "demo_pass", {
-        "key": "cat_pass", "on_reveal": "demo_pass_reveal", "shown": state["demo_pass_shown"] == true
+        "key": "cat_pass", "on_reveal": "demo_pass_reveal", "shown": state["demo_pass_shown"] == true,
+        "placeholder": "Paste the API token"
       }), narrow),
       restyle(otp_field("Sign-in code", (state["demo_otp"] ?? "").to_s, {
         "key": "cat_otp",
@@ -1853,7 +1854,7 @@ def erp_inputs_card(state, lay)
         "gen": state["demo_otp_gen"] ?? 0,
         "hint": "Paste a code, or type. Backspace walks back."
       }), {"width": "100%"}),
-      restyle(textarea_field("Note", (state["cat_note"] ?? "").to_s, "cat_note", {"key": "cat_note", "rows": 3}), narrow)
+      restyle(textarea_field("Note", (state["cat_note"] ?? "").to_s, "cat_note", {"key": "cat_note", "rows": 3, "placeholder": "Anything the courier should know"}), narrow)
     ]),
     row({"gap": 5, "wrap": "wrap", "align": "start", "width": "100%"}, [
       spec_of("checkbox", checkbox("Send a copy", state["cat_check"] == true, "cat_check", {})),

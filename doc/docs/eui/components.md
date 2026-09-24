@@ -307,7 +307,7 @@ A widget is not a protocol feature.
 | `scroll(style, children)` | A clipping viewport, laid out as a column |
 | `list(style, item_height, children)` | A virtualised list: the client lays out only the visible rows |
 | `list_window(style, item_height, count, heights, children, on_window)` | A **windowed** list — see below |
-| `input(value, on_change, o = {})` | A bordered single-line field, `change` wired to `on_change`. `o` carries `style`, `props`, `key` and further `on` handlers |
+| `input(value, on_change, o = {})` | A bordered single-line field, `change` wired to `on_change`. `o` carries `style`, `props`, `key`, further `on` handlers, and `placeholder` — the hint the client draws in `text.muted` while the field is empty (03 §3), never the value |
 | `button(label, on_click)` | The primary button: accent roles, local hover and press |
 | `image(src, width, height)` | A picture from a file in the application |
 | `avatar(src, size)` | A round picture |
@@ -460,9 +460,9 @@ press switch between style records the session already holds.
 | `switch(label, on, on_toggle, props, o = {})` | A track and a knob, placed by `justify` |
 | `radio(label, selected, on_pick, props, o = {})` | A ring with a dot in it. It cannot be unticked: the group owns the value |
 | `radio_group(options, value, on_pick, o = {})` | The buttons, the `radio_group` role, and keys namespaced by `o["name"]` so two groups of Yes/No cannot restyle each other. `o["direction"]` is `"column"` unless `"row"` is asked for |
-| `field(label, value, on_change)` | A label over an input |
+| `field(label, value, on_change, o = {})` | A label over an input; `o` goes to the input, `placeholder` included |
 | `field_label(label)` | The label every field takes: 14 px medium in `text.default`, Tailwind's `text-sm font-medium text-gray-900` |
-| `textarea(value, on_change, o = {})` | The multi-line field. `o["rows"]` is a floor, not a ceiling — it grows with what is typed into it |
+| `textarea(value, on_change, o = {})` | The multi-line field. `o["rows"]` is a floor, not a ceiling — it grows with what is typed into it. `o["placeholder"]` as for `input` |
 | `text_link(label, on_click, props = {})` | Text in the accent colour that declares the `link` role. Not `link`: `breadcrumb` keeps a local of that name |
 | `form(children, submit_label, on_submit)` | The children, then a right-aligned submit |
 | `sized_input(value, on_change, width)` | An input of a fixed width |
@@ -534,7 +534,7 @@ is what says the person has had their turn.
 
 | Signature | Notes |
 |---|---|
-| `text_field(label, value, on_change, o = {})` | A line of anything. It judges nothing on its own |
+| `text_field(label, value, on_change, o = {})` | A line of anything. It judges nothing on its own. `o["placeholder"]` is the example inside the empty box, `o["hint"]` the sentence under it — every `*_field` takes both |
 | `password_field(label, value, on_change, o = {})` | The same, with `secret: true` so the client paints marks. `o["shown"]` reveals the text; `o["on_reveal"]` is Show/Hide. The value on the wire is still what was typed |
 | `otp_field(label, value, o = {})` | Six boxes, one code. The value is a prefix; the live cell is the next empty one. `o["digits"]` (default 6), `o["numeric"]` (default true), `o["secret"]` for a PIN. `o["on_input"]` hears `text_input`, `change`, `Backspace` and a click that jumps. `otp_take` / `otp_pop` / `otp_apply` are the algebra |
 | `email_field(label, value, on_change, o = {})` | One local part, one `@`, a domain with a dot in it, no spaces. Everything a field can honestly check — the only test of an address is a message sent to it |

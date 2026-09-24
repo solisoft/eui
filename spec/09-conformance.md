@@ -602,10 +602,43 @@ child still draws. The same tree with a `box` in that place draws more. The
 word in the table is the whole specification of the kind, and it was the one
 thing this file did not do.
 
+03 §3's **`placeholder`**, which is painted and nothing else, so its vectors
+sit a layer apart. In this file,
+`a_placeholder_is_drawn_muted_only_while_the_field_is_empty`: an empty
+`input`, an `input` with no text at all and an empty `textarea` draw the
+hint's glyphs in `text.muted`; a value hides it and draws in the node's own
+colour; an empty field with no width of its own is measured as its hint and a
+filled one by its value; a `secret` field draws the hint as text, not marks;
+a `text` node carrying the prop draws nothing of it. And
+`a_focused_empty_field_puts_its_caret_where_it_would_without_a_hint`: the
+caret of a centred empty field stands in the middle whether a hint is shown
+or not, in the node's colour rather than the hint's. What the prop is to the
+tree is `a_placeholder_is_declared_by_fields_and_shown_only_while_empty` in
+`crates/eui-tree/tests/apply.rs` — shown only while the text is empty, hidden
+by a `SetText`, back when the field is emptied, declared by neither a `text`
+node nor a value that is not a string. And that it is never the value is
+`a_placeholder_is_never_the_value_and_is_announced_as_a_placeholder` in
+`crates/eui-client/tests/driver.rs`: typing starts from nothing, emptying the
+field brings the hint back, nothing the field sends names it, and an
+assistive technology is handed it as the placeholder with an empty value.
+
+**A picture of a restyle is a picture of where it lands.** Not a vector of
+the protocol — the harness is `examples/snapshot`, and its tests are in
+`src/main.rs` — but the reason a conformant server and client were once
+recorded as losing every style-only change.
+`a_restyle_with_a_transition_is_mid_flight_on_the_first_paint` pins what a
+list at age 0 is: the restyled box a moving quad, still the colour it is
+leaving. `the_picture_is_taken_after_the_transition_lands` pins that the tool
+runs the clock until nothing is easing before it draws, so the box is in its
+new colour and no quad is animated.
+
 ## 9. Diff — `lang/src/serve/eui/diff.rs` (feature `eui`)
 
 Keyed rows move rather than rebuild; mixed keyed and unkeyed children match
-by position and key; a changed cell is one `SetText`.
+by position and key; a changed cell is one `SetText`. And a row whose only
+change is its style is one `SetStyle`, keyed or not, through the path a
+Soli view's values take — `a_style_only_change_is_one_set_style_per_row_keyed_or_not`
+in `lang/src/serve/eui/tree.rs`.
 
 The same crate's encoder speaks the version a session negotiated (05 §2):
 `tree.rs`'s `a_space_step_an_older_client_lacks_falls_back` renders one

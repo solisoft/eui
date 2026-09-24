@@ -336,6 +336,26 @@ impl Session {
         matches!(node.prop(atom), Some(Value::Bool(true)))
     }
 
+    /// Spec 03 §3: the `placeholder` an `input` or `textarea` declares, if
+    /// it declares a string — whether or not the field is empty. What an
+    /// assistive technology is handed.
+    pub fn placeholder(&self, ix: NodeIx) -> Option<&str> {
+        let node = self.node(ix)?;
+        if !matches!(node.kind, NodeKind::Input | NodeKind::TextArea) {
+            return None;
+        }
+        match node.prop(self.known.placeholder?) {
+            Some(Value::Str(s)) if !s.is_empty() => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The placeholder as it is *shown*: only while the field's text is
+    /// empty. What the layout measures and the painter draws in its place.
+    pub fn shown_placeholder(&self, ix: NodeIx) -> Option<&str> {
+        self.placeholder(ix).filter(|_| self.text_of(ix).map_or(true, str::is_empty))
+    }
+
     /// The `audio` and `video` nodes in the tree (03 §7, §8).
     pub fn media(&self) -> &[NodeIx] {
         &self.media
@@ -1461,6 +1481,8 @@ pub struct WellKnown {
     pub volume: Option<u32>,
     /// An `input` that hides what was typed (03 §3).
     pub secret: Option<u32>,
+    /// The hint an empty `input` or `textarea` shows (03 §3).
+    pub placeholder: Option<u32>,
     /// A scene's WGSL module, by content hash (03 §1.2).
     pub shader: Option<u32>,
     /// A scene's geometry, by content hash.
@@ -1506,6 +1528,7 @@ impl WellKnown {
             "position" => &mut self.position,
             "volume" => &mut self.volume,
             "secret" => &mut self.secret,
+            "placeholder" => &mut self.placeholder,
             "shader" => &mut self.shader,
             "mesh" => &mut self.mesh,
             "uniforms" => &mut self.uniforms,

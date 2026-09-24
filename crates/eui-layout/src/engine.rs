@@ -805,7 +805,11 @@ impl Layout {
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea => {
                 let text = f.session.text_of(ix).unwrap_or("");
                 let masked = f.session.is_secret(ix).then(|| eui_tree::secret_display(text));
-                let shown = masked.as_deref().unwrap_or(text);
+                // 03 §3: an empty field is measured as though it held its
+                // placeholder, so one sized by its content does not clip its
+                // own hint. `shown_placeholder` is `None` for a `text` node
+                // and for a field that has a value.
+                let shown = f.session.shown_placeholder(ix).or(masked.as_deref()).unwrap_or(text);
                 let tm = f.text.measure(shown, st.font, inner_w.bound(), st.line_clamp);
                 let mut size = Size::new(tm.width, tm.height);
                 if kind != NodeKind::Text {

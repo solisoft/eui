@@ -18,6 +18,34 @@ use eui_client::driver::SceneAsset;
 use eui_client::{Driver, Input};
 use eui_proto::{Frame, Start, ThemeMode, Welcome};
 use eui_render::{Renderer, SessionTextures};
+use std::time::{Duration, Instant};
+
+/// The longest a snapshot waits for transitions to finish. `motion.slowest`
+/// is a second (05 §2); anything still running past twice that is a clock
+/// that never stops, and the picture is taken anyway.
+const LAND_LIMIT: Duration = Duration::from_secs(2);
+
+/// Run the driver's clock until no transition, entrance or glide is in
+/// flight, so the list painted next is where every change *ends*.
+///
+/// The tool paints but only ticks when asked, and the renderer draws a list
+/// at the age it is given — 0 unless `SNAPSHOT_AGE` says otherwise. A style
+/// change with a `transition` is a quad that carries both colours and eases
+/// between them on the vertex stage's clock, so at age 0 it is exactly the
+/// colour it is leaving. A row restyled by `j` came out in last render's
+/// colours on every run, `SNAPSHOT_SETTLE` could not help while it ran
+/// before the keys, and "a style-only change is not delivered" stood as a
+/// fact about the protocol for a week. A spin is not waited for: it never
+/// ends, and `animating` does not count it.
+fn let_transitions_land(driver: &mut Driver, dw: u32, dh: u32) {
+    let until = Instant::now() + LAND_LIMIT;
+    let _ = driver.paint(dw, dh);
+    while driver.animating() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(16));
+        driver.tick(Instant::now());
+        let _ = driver.paint(dw, dh);
+    }
+}
 
 /// Hand the renderer whatever a scene is waiting for.
 ///
@@ -153,7 +181,6 @@ fn snapshot_view(out: &str, url: &str, component: &str, w: f32, h: f32, scale: f
     use eui_client::transport::{fetch_view, Fetcher};
     use eui_client::Incoming;
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
 
     let cookie = std::env::var("SNAPSHOT_COOKIE").ok();
     let (dw, dh) = ((w * scale) as u32, (h * scale) as u32);
@@ -1051,6 +1078,14 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 println!("server: {batches} batch(es), {bytes} bytes, while nothing was touched");
             }
         }
+        // A picture of the page, not of the first frame of its last change.
+        // Without `SNAPSHOT_AGE` the list is drawn at age 0, and a node whose
+        // style carries a `transition` is then photographed in its *old*
+        // colours — which is how a mail reader's cursor was recorded as a
+        // `SetStyle` the server never sent (spec 03 §5; 09 §8 names the test).
+        if std::env::var_os("SNAPSHOT_AGE").is_none() {
+            let_transitions_land(&mut driver, dw, dh);
+        }
         let list = driver.paint(dw, dh);
         let target = renderer.offscreen(dw, dh);
         // SNAPSHOT_AGE=<ms> — draw the list as it will look this long after
@@ -1130,6 +1165,12 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                 if st.live > 0 {
                     says.push(format!("live={}", st.live));
                 }
+                if !n.value.is_empty() {
+                    says.push(format!("value={:?}", n.value));
+                }
+                if !st.placeholder.is_empty() {
+                    says.push(format!("placeholder={:?}", st.placeholder));
+                }
                 println!("a11y {:?} {:?} {}", n.role, n.label, says.join(" "));
             }
         }
@@ -1189,5 +1230,57 @@ fn dump(driver: &Driver, ix: eui_tree::NodeIx, depth: usize) {
     println!("{:indent$}{:?}#{} s{}{on} {rect}{text}{props}", "", node.kind, node.id, node.style, indent = depth * 2);
     for c in s.children(ix) {
         dump(driver, *c, depth + 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eui_proto::{Batch, ColorRef, Op};
+
+    fn animated(q: &eui_render::Quad) -> bool {
+        q.params[2] as u32 & eui_render::ANIMATED != 0
+    }
+
+    /// The counter, with its `+` button restyled by the server to a
+    /// different ground and a `base` transition — the shape of a list row
+    /// whose selection moved.
+    fn restyled() -> Driver {
+        let mut d = Driver::new(420.0, 260.0, 1.0, 0);
+        let mut counter = counter_server::Counter::default();
+        d.handle_frame(Frame::Welcome(Welcome { version: 1, session: [0; 16], start: Start::Fresh }));
+        d.handle_frame(Frame::Batch(counter.first()));
+        let _ = d.paint(420, 260);
+        let plus = d.session().lookup(4).expect("the counter's + button");
+        let button = *d.session().style(d.session().node(plus).expect("a node").style).expect("its style");
+        let lit = eui_proto::StyleRecord { bg: ColorRef::role(button.fg.index()), fg: button.bg, transition: 2, ..button };
+        d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::DefStyle { id: 7, record: lit }, Op::SetStyle { node: 4, style: 7 }] }));
+        d
+    }
+
+    /// The trap the tool used to be: the list painted straight after the
+    /// batch holds the restyled box as a moving quad, and at age 0 a moving
+    /// quad is the colour it is leaving.
+    #[test]
+    fn a_restyle_with_a_transition_is_mid_flight_on_the_first_paint() {
+        let mut d = restyled();
+        let list = d.paint(420, 260);
+        let q = list.quads.iter().find(|q| animated(q)).expect("the restyled box eases");
+        let from = eui_render::unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]);
+        assert_ne!(from, eui_render::unpack4(eui_render::pack4(q.fill)), "and at age 0 it shows where it came from");
+    }
+
+    /// What the picture is taken of now: the change landed, nothing moving,
+    /// the box in its new colour.
+    #[test]
+    fn the_picture_is_taken_after_the_transition_lands() {
+        let mut d = restyled();
+        let target = d.paint(420, 260).quads.iter().find(|q| animated(q)).map(|q| (q.rect, q.fill)).expect("a transition in flight");
+        let_transitions_land(&mut d, 420, 260);
+        assert!(!d.animating(), "at rest");
+        let list = d.paint(420, 260);
+        assert!(!list.quads.iter().any(animated), "no quad still easing");
+        let landed = list.quads.iter().find(|q| q.rect == target.0).expect("the same box");
+        assert_eq!(landed.fill, target.1, "in the colour it was going to");
     }
 }
