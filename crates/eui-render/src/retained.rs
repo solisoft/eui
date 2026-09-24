@@ -13,8 +13,7 @@
 //! quads are pushed, every frame, so a transition that starts later finds
 //! them as it would have.
 
-use std::collections::HashMap;
-
+use eui_layout::FxHashMap;
 use eui_tree::NodeIx;
 
 use crate::paint::Quad;
@@ -79,10 +78,15 @@ pub struct PaintStats {
 /// The retained quads of the text nodes painted last frame.
 #[derive(Default)]
 pub struct PaintCache {
-    text: HashMap<NodeIx, TextEntry>,
+    /// Keyed on a node index the client assigned, never on anything a
+    /// server chose, so the fast hasher is safe here (`eui_layout::hash`).
+    text: FxHashMap<NodeIx, TextEntry>,
     generation: u32,
     quads: usize,
     stats: PaintStats,
+    /// How many quads, runs and clips the last paint's list held: what the
+    /// next list is reserved at.
+    last: (usize, usize, usize),
 }
 
 impl PaintCache {
@@ -120,6 +124,16 @@ impl PaintCache {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// The quads, runs and clips of the last paint's list.
+    pub(crate) fn last_counts(&self) -> (usize, usize, usize) {
+        self.last
+    }
+
+    /// What this paint's list came to, for the next one to reserve.
+    pub(crate) fn note_counts(&mut self, quads: usize, runs: usize, clips: usize) {
+        self.last = (quads, runs, clips);
     }
 
     /// A paint begins.

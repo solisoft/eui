@@ -69,10 +69,22 @@ now normative.
   and a `list` that **does not measure rows it cannot see** — a thousand-row
   list shapes about a dozen.
 - Two phases: `measure` is memoised per frame and pure, `arrange` runs once
-  per node. Hit-testing honours stacking order and scroll clipping.
+  per node. Hit-testing honours stacking order and every clip the painter
+  applies (`scroll`, `list`, `overflow: clip`), and skips what the painter
+  culls — a node whose box misses its clip, with everything under it — so a
+  hit visits what is on screen rather than the whole tree. A stack's paint
+  order is kept from the layout rather than sorted per hit.
+- A frame whose only change is a scroll offset moves the boxes under the
+  scroller instead of laying the tree out again (`Layout::scroll`, 04 §7);
+  a virtualised list, a popover under the scroller, or any other change
+  falls back to the full layout, and a test compares the two box for box.
+- The per-node maps (the measure memo, resolved styles, glides, placed
+  rows) hash with a multiply-rotate hasher of the crate's own rather than
+  SipHash; the painter's text cache uses it too. Still no dependency beyond
+  the other EUI crates.
 - Text shaping is behind a trait; tests use a fixed-pitch stand-in so the
   goldens pin exact pixels.
-- 36 golden tests.
+- 43 golden tests, and 2 unit tests for the hasher.
 
 **`eui-text` — shaping and rasterisation.** Over `cosmic-text`, the one
 third-party dependency on the CPU side of the client: shaping is the part of

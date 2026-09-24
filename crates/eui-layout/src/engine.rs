@@ -7,13 +7,12 @@
 //! under three different constraints from keeping positions computed under
 //! the wrong one.
 
-use std::collections::HashMap;
-
 use eui_proto::{AlignItems, AlignSelf, Display, Justify, NodeKind, Position, Value, Wrap};
 use eui_theme::Resolved;
 use eui_tree::{dirty, NodeIx, Session};
 
 use crate::geom::{Constraint, Rect, Size};
+use crate::hash::FxHashMap;
 use crate::measure::TextMeasurer;
 use crate::style::{Length, Style};
 
@@ -120,8 +119,8 @@ pub struct Layout {
     /// both. What that looks like is an island laid out with the page's
     /// sizes — a box asking for 80×20 that comes out 400×0 — with nothing
     /// anywhere saying a word about it.
-    by_style_id: HashMap<(u16, u32), Style>,
-    memo: HashMap<MemoKey, (Metrics, u32)>,
+    by_style_id: FxHashMap<(u16, u32), Style>,
+    memo: FxHashMap<MemoKey, (Metrics, u32)>,
     /// The frame being computed; memo entries not read or written in it
     /// are dropped at its end, so the memo never outgrows one frame's work.
     generation: u32,
@@ -152,23 +151,116 @@ pub struct Layout {
     tracking: Vec<NodeIx>,
     /// For each windowed list, the rows that had a child this frame, in
     /// order: the painter draws a placeholder for every other row in view.
-    placed_rows: HashMap<NodeIx, Vec<u32>>,
+    placed_rows: FxHashMap<NodeIx, Vec<u32>>,
     /// Each virtualised list's row tops in content coordinates (one more
     /// entry than rows: the content's end). What a keyboard needs to land
     /// on the next row — and what a scroll frame would otherwise rebuild
     /// from ten thousand rows to move a window by a few pixels.
-    row_tops: HashMap<NodeIx, RowTops>,
+    row_tops: FxHashMap<NodeIx, RowTops>,
     /// Scrollers mid-glide (§7): the layout puts their content where the
     /// glide lands, the renderer slides it there, and hit-testing asks
     /// where it is on screen meanwhile.
-    glides: HashMap<NodeIx, Glide>,
+    glides: FxHashMap<NodeIx, Glide>,
     /// Every `overlay` laid out this frame, in tree order — which is paint
     /// order — so the top layer is a list and not a walk of the tree.
     overlays: Vec<NodeIx>,
     /// For each virtualised list, the children placed this frame, in row
     /// order: what a hit has to look at, rather than ten thousand rows
     /// with no rect.
-    placed_ix: HashMap<NodeIx, Vec<NodeIx>>,
+    placed_ix: FxHashMap<NodeIx, Vec<NodeIx>>,
+    /// Per node, what a hit test needs to know about it without a map
+    /// lookup: whether it clips ([`HIT_CLIPS`]), and whether its children
+    /// are asked in an order of their own ([`HIT_PLACED`], [`HIT_STACK`]).
+    /// Read behind `present`, like the rects.
+    hit_bits: Vec<u8>,
+    /// Each stack whose children paint in an order other than the tree's,
+    /// in the order they paint: what a hit asks topmost-first. A stack
+    /// whose children are already in z order — nearly all of them — has no
+    /// entry, and a hit walks its children as they are. It used to clone
+    /// and sort them on every hit, which is to say on every pointer move.
+    stack_order: FxHashMap<NodeIx, Vec<NodeIx>>,
+    /// Every scroller laid out, with the offset its content was placed at
+    /// and the most it could have been: what [`Self::scroll`] needs to move
+    /// the content without placing it again.
+    offsets: FxHashMap<NodeIx, Offset>,
+    /// The popovers and pointer panels settled after the last walk. They
+    /// are placed against the window rather than their parent, so a scroll
+    /// cannot simply carry them, and a scroller holding one is laid out.
+    floating: Vec<NodeIx>,
+    /// A full [`Self::compute`] has run and nothing it read from outside
+    /// the tree — the measures, a glide — has been invalidated since: the
+    /// condition for [`Self::scroll`] to stand in for one.
+    settled: bool,
+    /// Vectors the flow reuses rather than allocating per container per
+    /// frame. A pool, not one of each: placing a container measures its
+    /// children, which places theirs, so a flow is always inside another.
+    scratch: Scratch,
+}
+
+/// [`Layout::hit_bits`]: the node clips what it holds — a `scroll`, a
+/// `list`, or `overflow: clip` — exactly as the painter scissors it.
+const HIT_CLIPS: u8 = 1;
+/// [`Layout::hit_bits`]: a virtualised list, whose children to ask are the
+/// rows it placed, in [`Layout::placed_ix`].
+const HIT_PLACED: u8 = 2;
+/// [`Layout::hit_bits`]: a stack whose paint order is in
+/// [`Layout::stack_order`].
+const HIT_STACK: u8 = 4;
+
+/// Where a scroller's content was placed, and how far it could go.
+#[derive(Debug, Clone, Copy)]
+struct Offset {
+    id: u32,
+    /// The clamped offset the content was placed at.
+    at: (f32, f32),
+    /// The greatest offset on each axis: content less the box.
+    max: (f32, f32),
+}
+
+/// The flow's working vectors, handed out and taken back.
+#[derive(Debug, Default)]
+struct Scratch {
+    items: Vec<Vec<Item>>,
+    lines: Vec<Vec<Line>>,
+    placed: Vec<Vec<Placed>>,
+    ix: Vec<Vec<NodeIx>>,
+}
+
+/// One in-flow child of a flow container, as §4 works on it.
+#[derive(Debug, Clone, Copy)]
+struct Item {
+    ix: NodeIx,
+    st: Style,
+    hyp: f32,
+    main: f32,
+    cross: f32,
+    m_before: f32,
+    m_after: f32,
+    c_before: f32,
+    c_after: f32,
+    frozen: bool,
+    virtual_: bool,
+    baseline: f32,
+    /// §4.3 automatic minimum: the content main size, below which a
+    /// non-scrolling child with an `auto` main-axis `min` never shrinks.
+    auto_min: Option<f32>,
+}
+
+/// One flex line: the items `start..end`, its cross size and baseline.
+#[derive(Debug, Clone, Copy, Default)]
+struct Line {
+    start: usize,
+    end: usize,
+    cross: f32,
+    baseline: f32,
+}
+
+/// Whether two boxes overlap, by the very test the painter culls with
+/// (`Painter::visible` in `eui-render`): strictly, edges touching is not
+/// overlapping. A node the painter culls takes everything under it with
+/// it, and so must a hit.
+fn overlaps(r: Rect, c: Rect) -> bool {
+    r.x < c.x + c.w && r.x + r.w > c.x && r.y < c.y + c.h && r.y + r.h > c.y
 }
 
 /// A scroll in flight, as the layout knows it (§7).
@@ -233,6 +325,12 @@ impl Layout {
         }
         self.present.clear();
         self.present.resize(n, false);
+        self.hit_bits.clear();
+        self.hit_bits.resize(n, 0);
+        self.stack_order.clear();
+        self.offsets.clear();
+        self.floating.clear();
+        self.settled = false;
         self.virtual_.clear();
         self.virtual_.resize(n, false);
         self.by_style_id.clear();
@@ -282,6 +380,99 @@ impl Layout {
         self.memo.retain(|_, (_, seen)| *seen == generation);
         self.row_tops.retain(|_, e| e.seen == generation);
         self.stats.memo_size = self.memo.len() as u32;
+        self.settled = true;
+    }
+
+    /// Bring the last layout up to date with a scroll, when a scroll is all
+    /// that happened: returns `false`, having changed nothing, when a full
+    /// [`Self::compute`] is owed instead.
+    ///
+    /// A scroll moves a scroller's content and changes nothing it measured
+    /// (`dirty::SCROLL`), so every box under it lands exactly where it was
+    /// less the change of offset. `compute` still visited every node of the
+    /// tree to find that out — the measures came from the memo, but the
+    /// arrange walked, allocated each container's placement, and sorted
+    /// each stack, all to add one number: a glide on a long page was a
+    /// fifth of a core. Here the boxes under each scroller that moved are
+    /// translated, and nothing else is touched.
+    ///
+    /// It declines — and the caller lays the tree out as ever — when:
+    /// - anything in the tree changed besides offsets and colours;
+    /// - the viewport did, or the measures were thrown away, or a glide was
+    ///   set, since the last `compute`;
+    /// - the scroller is virtualised (§7): which rows it holds depends on
+    ///   the offset, and the window is recomputed rather than carried;
+    /// - a popover or a pointer panel lives under the scroller, since those
+    ///   are placed against the window and not against their parent.
+    ///
+    /// The caller says a scroll is all it did; this checks the tree agrees.
+    pub fn scroll(&mut self, s: &Session, viewport: Size) -> bool {
+        if !self.settled || viewport != self.viewport {
+            return false;
+        }
+        let Some(root) = s.root() else { return false };
+        if s.node(root).map_or(true, |n| n.dirty & (dirty::SELF | dirty::DESCENDANT) != 0) {
+            return false;
+        }
+        // A pointer panel is placed at the hand by `compute`, and left where
+        // the arrange put it when there is no hand; `track_pointer` may have
+        // moved it since, so only the first case is one this can repeat.
+        if self.pointer.is_none() && !self.tracking.is_empty() {
+            return false;
+        }
+        // The scrollers that moved, found down the dirty path alone: a node
+        // with no bit has nothing marked under it.
+        let mut moved: Vec<(NodeIx, (f32, f32))> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(ix) = stack.pop() {
+            let Some(n) = s.node(ix) else { continue };
+            if n.dirty == 0 {
+                continue;
+            }
+            if n.dirty & dirty::SCROLL != 0 {
+                // Not laid out last time — hidden, or a row a list did not
+                // materialise — and so not laid out this time either.
+                if let Some(o) = self.offsets.get(&ix).filter(|o| o.id == n.id) {
+                    if self.row_tops.contains_key(&ix) || self.glides.contains_key(&ix) {
+                        return false;
+                    }
+                    let (sx, sy) = n.scroll;
+                    let at = ((sx as f32).clamp(0.0, o.max.0), (sy as f32).clamp(0.0, o.max.1));
+                    if at != o.at {
+                        moved.push((ix, at));
+                    }
+                }
+            }
+            stack.extend(n.children.iter().copied().filter(|c| s.node(*c).is_some_and(|c| c.dirty != 0)));
+        }
+        let under = |panel: NodeIx, scroller: NodeIx| {
+            let mut cur = s.node(panel).map(|n| n.parent);
+            while let Some(c) = cur.filter(|c| c.is_some()) {
+                if c == scroller {
+                    return true;
+                }
+                cur = s.node(c).map(|n| n.parent);
+            }
+            false
+        };
+        if moved.iter().any(|(scroller, _)| self.floating.iter().any(|p| under(*p, *scroller))) {
+            return false;
+        }
+        for (ix, at) in moved {
+            let Some(o) = self.offsets.get_mut(&ix) else { continue };
+            let (dx, dy) = (o.at.0 - at.0, o.at.1 - at.1);
+            o.at = at;
+            for &c in s.children(ix) {
+                self.shift(s, c, dx, dy);
+            }
+        }
+        // What `compute` would have done for a panel at the pointer: the
+        // hand is where the caller last said, and the panel goes there.
+        if let Some((x, y)) = self.pointer {
+            self.track_pointer(s, x, y);
+        }
+        self.stats = Stats { memo_size: self.memo.len() as u32, ..Stats::default() };
+        true
     }
 
     /// Forget every memoised measure: the viewport, theme or scale changed,
@@ -289,6 +480,7 @@ impl Layout {
     pub fn invalidate_all(&mut self) {
         self.memo.clear();
         self.row_tops.clear();
+        self.settled = false;
     }
 
     /// Work done by the last `compute`.
@@ -377,6 +569,7 @@ impl Layout {
     /// layout serves the whole glide.
     pub fn set_glide(&mut self, ix: NodeIx, lo: f32, hi: f32, delta: (f32, f32)) {
         self.glides.insert(ix, Glide { lo, hi, delta });
+        self.settled = false;
     }
 
     /// Where a gliding scroller's content stands now, for hit-testing.
@@ -388,12 +581,17 @@ impl Layout {
 
     /// The glide has landed, or was overtaken.
     pub fn clear_glide(&mut self, ix: NodeIx) {
-        self.glides.remove(&ix);
+        if self.glides.remove(&ix).is_some() {
+            self.settled = false;
+        }
     }
 
     /// No scroller is gliding.
     pub fn clear_glides(&mut self) {
-        self.glides.clear();
+        if !self.glides.is_empty() {
+            self.glides.clear();
+            self.settled = false;
+        }
     }
 
     /// The glide on a scroller, if one is running.
@@ -449,6 +647,20 @@ impl Layout {
         if skip == Some(ix) {
             return None;
         }
+        // Nothing under a point outside the clip can be hit: the clip only
+        // narrows on the way down, and a glide moves the point with it.
+        if !clip.contains(x, y) {
+            return None;
+        }
+        let rect = self.rect(ix)?;
+        // The painter culls a node whose box misses the clip, and everything
+        // under it with it (`node_inner` in `eui-render`'s paint), so what is
+        // hit here is what is on screen and nothing that is not. Without this
+        // a hit visited every node of the tree — every row of a long page
+        // scrolled out of view — on every pointer move.
+        if !overlaps(rect, clip) {
+            return None;
+        }
         // 04 §5: a panel placed at the pointer is under the hand by
         // construction, so asking it first would put it between the pointer
         // and the thing it describes — a tooltip would answer the hover that
@@ -456,9 +668,9 @@ impl Layout {
         if self.tracking.contains(&ix) {
             return None;
         }
-        let rect = self.rect(ix)?;
         let node = s.node(ix)?;
-        let clips = matches!(node.kind, NodeKind::Scroll | NodeKind::List);
+        let bits = self.hit_bits.get(ix.raw() as usize).copied().unwrap_or(0);
+        let clips = bits & HIT_CLIPS != 0;
         let inner_clip = if clips { clip.intersect(&rect) } else { clip };
         if clips && !inner_clip.contains(x, y) {
             return None;
@@ -467,22 +679,19 @@ impl Layout {
         // this layout put it, so its children are asked about the point
         // moved back by as much -- and the clip with it, since the clip is
         // where the content shows through, not where it was put.
-        let (cx, cy, child_clip) = match self.glides.get(&ix) {
-            Some(g) if clips => (x - g.delta.0, y - g.delta.1, Rect::new(inner_clip.x - g.delta.0, inner_clip.y - g.delta.1, inner_clip.w, inner_clip.h)),
-            _ => (x, y, inner_clip),
+        let glide = if clips && matches!(node.kind, NodeKind::Scroll | NodeKind::List) { self.glides.get(&ix) } else { None };
+        let (cx, cy, child_clip) = match glide {
+            Some(g) => (x - g.delta.0, y - g.delta.1, Rect::new(inner_clip.x - g.delta.0, inner_clip.y - g.delta.1, inner_clip.w, inner_clip.h)),
+            None => (x, y, inner_clip),
         };
         // Topmost first: later children paint over earlier ones, higher z
         // paints over lower. A virtualised list is asked about the rows it
-        // placed, not the thousands it did not; only a stack needs its
-        // children sorted, and only then are they copied.
-        let sorted: Vec<NodeIx>;
-        let order: &[NodeIx] = if let Some(placed) = self.placed_ix.get(&ix) {
-            placed
-        } else if node.kind == NodeKind::Box && self.style_of(s, ix).map(|st| st.display) == Some(Display::Stack) {
-            let mut o = node.children.clone();
-            o.sort_by_key(|c| self.style_of(s, *c).map(|st| st.z).unwrap_or(0));
-            sorted = o;
-            &sorted
+        // placed, not the thousands it did not; a stack out of z order about
+        // its children in the order the layout sorted them into.
+        let order: &[NodeIx] = if bits & HIT_PLACED != 0 {
+            self.placed_ix.get(&ix).map_or(&[][..], Vec::as_slice)
+        } else if bits & HIT_STACK != 0 {
+            self.stack_order.get(&ix).map_or(node.children.as_slice(), Vec::as_slice)
         } else {
             &node.children
         };
@@ -495,7 +704,7 @@ impl Layout {
                 return Some(hit);
             }
         }
-        if rect.contains(x, y) && clip.contains(x, y) {
+        if rect.contains(x, y) {
             Some(ix)
         } else {
             None
@@ -634,6 +843,7 @@ impl Layout {
                 let p = self.place_scroll(f, ix, st, inner_w, inner_h, true);
                 let baseline = p.baseline;
                 let content = p.content;
+                self.give_placed(p.children);
                 if let Some(slot) = self.content.get_mut(ix.raw() as usize) {
                     *slot = content;
                 }
@@ -654,7 +864,9 @@ impl Layout {
             }
             _ => {
                 let p = self.place(f, ix, st, inner_w, inner_h);
-                (p.content, p.baseline)
+                let out = (p.content, p.baseline);
+                self.give_placed(p.children);
+                out
             }
         };
 
@@ -690,7 +902,8 @@ impl Layout {
         if st.display == Display::None {
             return;
         }
-        let Some(node) = f.session.node(ix) else { return };
+        let session = f.session;
+        let Some(node) = session.node(ix) else { return };
         let kind = node.kind;
         if kind == NodeKind::Overlay && f.session.root() != Some(ix) {
             self.overlays.push(ix);
@@ -707,20 +920,40 @@ impl Layout {
         if let Some(slot) = self.content.get_mut(i) {
             *slot = placement.content;
         }
+        let scrolls = matches!(kind, NodeKind::Scroll | NodeKind::List);
+        let mut bits = if scrolls || st.clip { HIT_CLIPS } else { 0 };
+        if scrolls && self.placed_ix.contains_key(&ix) {
+            bits |= HIT_PLACED;
+        }
+        if st.display == Display::Stack {
+            // The order a hit asks them in, kept only when it is not the
+            // tree's: the placement is a subsequence of the children
+            // exactly when the z sort moved nothing.
+            let mut tree = node.children.iter();
+            if !placement.children.iter().all(|p| tree.any(|c| *c == p.ix)) {
+                self.stack_order.insert(ix, placement.children.iter().map(|p| p.ix).collect());
+                bits |= HIT_STACK;
+            }
+        }
+        if let Some(b) = self.hit_bits.get_mut(i) {
+            *b = bits;
+        }
 
-        let (ox, oy) = if matches!(kind, NodeKind::Scroll | NodeKind::List) {
+        let (ox, oy) = if scrolls {
             // Clamp the offset to the content; the session keeps the raw
             // value and the client normalises it after each frame.
             let max_x = (placement.content.w - inner_w.bound().unwrap_or(0.0)).max(0.0);
             let max_y = (placement.content.h - inner_h.bound().unwrap_or(0.0)).max(0.0);
-            ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y))
+            let at = ((sx as f32).clamp(0.0, max_x), (sy as f32).clamp(0.0, max_y));
+            self.offsets.insert(ix, Offset { id: node.id, at, max: (max_x, max_y) });
+            at
         } else {
             (0.0, 0.0)
         };
         let base_x = x + st.border.l + st.padding.l - ox;
         let base_y = y + st.border.t + st.padding.t - oy;
 
-        for p in placement.children {
+        for &p in &placement.children {
             if p.virtual_ {
                 // Present with a rect so hit-testing and scrollbars are right,
                 // but its own subtree is not visited.
@@ -738,6 +971,7 @@ impl Layout {
             }
             self.arrange(f, p.ix, base_x + p.x, base_y + p.y, p.w, p.h);
         }
+        self.give_placed(placement.children);
         if st.display == Display::Stack {
             self.note_anchored(f, ix);
         }
@@ -748,16 +982,17 @@ impl Layout {
     /// own corner. Both boxes are wanted in viewport coordinates, so the
     /// pair is only noted here and settled when the walk is over.
     fn note_anchored(&mut self, f: &mut Env<'_>, ix: NodeIx) {
-        let children: Vec<NodeIx> = f.session.children(ix).to_vec();
+        let session = f.session;
+        let children = session.children(ix);
         let Some(anchor) = children.iter().copied().find(|c| {
             let st = self.style(f, *c);
             st.display != Display::None && !st.position.out_of_flow()
         }) else {
             return;
         };
-        for c in children {
+        for &c in children {
             let st = self.style(f, c);
-            let overlay = f.session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay);
+            let overlay = session.node(c).is_some_and(|n| n.kind == NodeKind::Overlay);
             if overlay && st.position.out_of_flow() && st.display != Display::None {
                 self.anchored.push((c, anchor));
             }
@@ -769,7 +1004,8 @@ impl Layout {
     /// panel's top margin is the gap it keeps from its anchor.
     fn settle_anchored(&mut self, f: &mut Env<'_>) {
         let pairs = std::mem::take(&mut self.anchored);
-        for (panel, anchor) in pairs {
+        for &(panel, anchor) in &pairs {
+            self.floating.push(panel);
             let (Some(p), Some(a)) = (self.rect(panel), self.rect(anchor)) else { continue };
             let gap = self.style(f, panel).margin.t;
             // §5: a panel that follows the pointer is placed against the hand
@@ -795,6 +1031,9 @@ impl Layout {
             let x = a.x.clamp(0.0, (self.viewport.w - p.w).max(0.0));
             self.shift(f.session, panel, x - p.x, y - p.y);
         }
+        let mut pairs = pairs;
+        pairs.clear();
+        self.anchored = pairs;
     }
 
     /// Where the pointer is, for the next layout. `None` when it has left the
@@ -856,23 +1095,46 @@ impl Layout {
         true
     }
 
-    /// Move a laid-out subtree bodily. Only the popover's own boxes change;
-    /// nothing is measured again.
+    /// Move a laid-out subtree bodily: a popover to where it fits, the
+    /// content of a scroller that scrolled. Only boxes change; nothing is
+    /// measured or placed again. Walked with a stack kept for the purpose
+    /// rather than by recursion that copied each node's children.
     fn shift(&mut self, s: &Session, ix: NodeIx, dx: f32, dy: f32) {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
-        let i = ix.raw() as usize;
-        if self.present.get(i).copied().unwrap_or(false) {
-            if let Some(r) = self.rect.get_mut(i) {
-                r.x += dx;
-                r.y += dy;
+        let mut stack = self.take_ix();
+        stack.push(ix);
+        while let Some(n) = stack.pop() {
+            let i = n.raw() as usize;
+            if self.present.get(i).copied().unwrap_or(false) {
+                if let Some(r) = self.rect.get_mut(i) {
+                    r.x += dx;
+                    r.y += dy;
+                }
             }
+            stack.extend_from_slice(s.children(n));
         }
-        let children: Vec<NodeIx> = s.children(ix).to_vec();
-        for c in children {
-            self.shift(s, c, dx, dy);
-        }
+        self.give_ix(stack);
+    }
+
+    fn take_ix(&mut self) -> Vec<NodeIx> {
+        self.scratch.ix.pop().unwrap_or_default()
+    }
+
+    fn give_ix(&mut self, mut v: Vec<NodeIx>) {
+        v.clear();
+        self.scratch.ix.push(v);
+    }
+
+    fn take_placed(&mut self) -> Vec<Placed> {
+        self.scratch.placed.pop().unwrap_or_default()
+    }
+
+    /// A placement's children, back to the pool once they are placed.
+    fn give_placed(&mut self, mut v: Vec<Placed>) {
+        v.clear();
+        self.scratch.placed.push(v);
     }
 
     // --------------------------------------------------------------- place
@@ -887,7 +1149,8 @@ impl Layout {
             Display::None => Placement::default(),
         };
         let abs = self.place_stack(f, ix, st, inner_w, inner_h, true);
-        p.children.extend(abs.children);
+        p.children.extend_from_slice(&abs.children);
+        self.give_placed(abs.children);
         p
     }
 
@@ -1017,7 +1280,8 @@ impl Layout {
             children.iter().enumerate().take(last.saturating_add(1)).skip(first).map(|(i, &c)| (i, c)).collect()
         };
         self.placed_ix.insert(ix, rows.iter().map(|(_, c)| *c).collect());
-        let mut placed = Vec::with_capacity(window);
+        let mut placed = self.take_placed();
+        placed.reserve(window);
         let mut first_baseline = None;
         for (i, c) in rows {
             self.stats.rows_measured = self.stats.rows_measured.saturating_add(1);
@@ -1037,33 +1301,23 @@ impl Layout {
 
     /// §4. `virt` is `(item height, window start, window end)` for a
     /// virtualised list.
+    ///
+    /// Its working vectors come from [`Scratch`] and go back to it, so a
+    /// frame that places a thousand containers allocates for the deepest
+    /// nesting once rather than for every container every frame; the lines
+    /// are ranges of the items rather than a vector of indices each.
     fn place_flow(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, inner_h: Constraint, virt: Option<(f32, f32, f32)>) -> Placement {
         let row = st.display == Display::Row;
         let (main_c, cross_c) = if row { (inner_w, inner_h) } else { (inner_h, inner_w) };
-        let children: Vec<NodeIx> = f.session.children(ix).to_vec();
-
-        struct Item {
-            ix: NodeIx,
-            st: Style,
-            hyp: f32,
-            main: f32,
-            cross: f32,
-            m_before: f32,
-            m_after: f32,
-            c_before: f32,
-            c_after: f32,
-            frozen: bool,
-            virtual_: bool,
-            baseline: f32,
-            /// §4.3 automatic minimum: the content main size, below which a
-            /// non-scrolling child with an `auto` main-axis `min` never shrinks.
-            auto_min: Option<f32>,
-        }
-        let mut items: Vec<Item> = Vec::new();
+        // A copy of the reference, not of the children: the session outlives
+        // this call, and `f` is lent mutably below.
+        let session = f.session;
+        let mut items = self.scratch.items.pop().unwrap_or_default();
+        let mut lines = self.scratch.lines.pop().unwrap_or_default();
         let mut cursor = 0.0f32; // for virtualisation, main-axis position so far
 
         // §4.1 hypothetical main sizes.
-        for c in children {
+        for &c in session.children(ix) {
             let cst = self.style(f, c);
             if cst.display == Display::None || cst.position.out_of_flow() {
                 continue;
@@ -1083,7 +1337,7 @@ impl Layout {
             };
             let hyp = if row { cst.clamp_w(hyp, main_c) } else { cst.clamp_h(hyp, main_c) };
             let min_dim = if row { cst.min_width } else { cst.min_height };
-            let scrolls = matches!(f.session.node(c).map(|n| n.kind), Some(NodeKind::Scroll | NodeKind::List)) || cst.scroll_both;
+            let scrolls = matches!(session.node(c).map(|n| n.kind), Some(NodeKind::Scroll | NodeKind::List)) || cst.scroll_both;
             let auto_min = if !virtual_ && cst.shrink > 0.0 && !scrolls && min_dim.resolve(main_c).is_none() {
                 // min(content size, specified size), as CSS does: a box given
                 // `width: 200` with nothing inside still shrinks. Along a row
@@ -1101,27 +1355,25 @@ impl Layout {
             items.push(Item { ix: c, st: cst, hyp, main: hyp, cross: 0.0, m_before, m_after, c_before, c_after, frozen: false, virtual_, baseline: 0.0, auto_min });
         }
 
-        // §4.2 lines.
-        let mut lines: Vec<Vec<usize>> = vec![Vec::new()];
+        // §4.2 lines: consecutive runs of the items.
         if st.wrap == Wrap::NoWrap || main_c.bound().is_none() {
-            lines = vec![(0..items.len()).collect()];
+            lines.push(Line { start: 0, end: items.len(), ..Line::default() });
         } else {
             let bound = main_c.bound().unwrap_or(f32::MAX);
             let mut used = 0.0f32;
+            let mut start = 0usize;
             for (i, it) in items.iter().enumerate() {
                 let outer = it.hyp + it.m_before + it.m_after;
-                let line_len = lines.last().map_or(0, Vec::len);
-                let needed = if line_len == 0 { outer } else { used + st.gap + outer };
-                if line_len > 0 && needed > bound + 1e-3 {
-                    lines.push(vec![i]);
+                let needed = if i == start { outer } else { used + st.gap + outer };
+                if i > start && needed > bound + 1e-3 {
+                    lines.push(Line { start, end: i, ..Line::default() });
+                    start = i;
                     used = outer;
                 } else {
-                    if let Some(l) = lines.last_mut() {
-                        l.push(i);
-                    }
                     used = needed;
                 }
             }
+            lines.push(Line { start, end: items.len(), ..Line::default() });
         }
         if st.wrap == Wrap::WrapReverse {
             lines.reverse();
@@ -1129,54 +1381,53 @@ impl Layout {
 
         // §4.3 free space, per line, with a bounded freeze loop.
         let mut main_extent = 0.0f32;
-        for line in &lines {
-            let gaps = st.gap * line.len().saturating_sub(1) as f32;
-            let outer_sum = |items: &Vec<Item>| line.iter().map(|&i| items.get(i).map_or(0.0, |it| it.main + it.m_before + it.m_after)).sum::<f32>();
+        for line in lines.iter() {
+            let span = line.start..line.end;
+            let gaps = st.gap * span.len().saturating_sub(1) as f32;
+            let outer_sum = |items: &[Item]| items.get(span.clone()).map_or(0.0, |l| l.iter().map(|it| it.main + it.m_before + it.m_after).sum::<f32>());
             if let Some(bound) = main_c.bound() {
                 let grow_allowed = matches!(main_c, Constraint::Exact(_));
                 for _ in 0..8 {
                     let free = bound - outer_sum(&items) - gaps;
-                    let live: Vec<usize> = line.iter().copied().filter(|&i| items.get(i).is_some_and(|it| !it.frozen)).collect();
-                    if live.is_empty() {
+                    let Some(line_items) = items.get_mut(span.clone()) else { break };
+                    // The items not frozen when this pass began. An item is
+                    // only ever frozen by its own clamp below, so filtering
+                    // as the pass goes names the same items a list taken
+                    // up front did.
+                    if line_items.iter().all(|it| it.frozen) {
                         break;
                     }
                     let mut changed = false;
                     if free > 1e-3 && grow_allowed {
-                        let total: f32 = live.iter().map(|&i| items.get(i).map_or(0.0, |it| it.st.grow)).sum();
+                        let total: f32 = line_items.iter().filter(|it| !it.frozen).map(|it| it.st.grow).sum();
                         if total <= 0.0 {
                             break;
                         }
-                        for &i in &live {
-                            if let Some(it) = items.get_mut(i) {
-                                if it.st.grow > 0.0 {
-                                    it.main += free * it.st.grow / total;
-                                }
+                        for it in line_items.iter_mut().filter(|it| !it.frozen) {
+                            if it.st.grow > 0.0 {
+                                it.main += free * it.st.grow / total;
                             }
                         }
                     } else if free < -1e-3 {
-                        let total: f32 = live.iter().map(|&i| items.get(i).map_or(0.0, |it| it.st.shrink * it.hyp)).sum();
+                        let total: f32 = line_items.iter().filter(|it| !it.frozen).map(|it| it.st.shrink * it.hyp).sum();
                         if total <= 0.0 {
                             break;
                         }
-                        for &i in &live {
-                            if let Some(it) = items.get_mut(i) {
-                                if it.st.shrink > 0.0 {
-                                    it.main += free * (it.st.shrink * it.hyp) / total;
-                                }
+                        for it in line_items.iter_mut().filter(|it| !it.frozen) {
+                            if it.st.shrink > 0.0 {
+                                it.main += free * (it.st.shrink * it.hyp) / total;
                             }
                         }
                     } else {
                         break;
                     }
-                    for &i in &live {
-                        if let Some(it) = items.get_mut(i) {
-                            let clamped = if row { it.st.clamp_w(it.main, main_c) } else { it.st.clamp_h(it.main, main_c) };
-                            let clamped = it.auto_min.map_or(clamped, |m| clamped.max(m));
-                            if (clamped - it.main).abs() > 1e-3 {
-                                it.main = clamped;
-                                it.frozen = true;
-                                changed = true;
-                            }
+                    for it in line_items.iter_mut().filter(|it| !it.frozen) {
+                        let clamped = if row { it.st.clamp_w(it.main, main_c) } else { it.st.clamp_h(it.main, main_c) };
+                        let clamped = it.auto_min.map_or(clamped, |m| clamped.max(m));
+                        if (clamped - it.main).abs() > 1e-3 {
+                            it.main = clamped;
+                            it.frozen = true;
+                            changed = true;
                         }
                     }
                     if !changed {
@@ -1184,12 +1435,8 @@ impl Layout {
                     }
                     // Unfrozen items are re-derived from their hypothetical size
                     // on the next pass.
-                    for &i in &live {
-                        if let Some(it) = items.get_mut(i) {
-                            if !it.frozen {
-                                it.main = it.hyp;
-                            }
-                        }
+                    for it in line_items.iter_mut().filter(|it| !it.frozen) {
+                        it.main = it.hyp;
                     }
                 }
             }
@@ -1198,12 +1445,11 @@ impl Layout {
 
         // §4.5 cross sizes and baselines.
         let single_definite = lines.len() == 1 && matches!(cross_c, Constraint::Exact(_));
-        let mut line_cross: Vec<f32> = Vec::with_capacity(lines.len());
-        let mut line_baseline: Vec<f32> = Vec::with_capacity(lines.len());
-        for line in &lines {
+        for li in 0..lines.len() {
+            let Some(&Line { start, end, .. }) = lines.get(li) else { continue };
             let mut lc = 0.0f32;
             let mut lb = 0.0f32;
-            for &i in line {
+            for i in start..end {
                 let Some(it) = items.get(i) else { continue };
                 let (cix, cst, main, virtual_) = (it.ix, it.st, it.main, it.virtual_);
                 let cross_dim = if row { cst.height } else { cst.width };
@@ -1231,21 +1477,24 @@ impl Layout {
             if single_definite {
                 lc = cross_c.bound().unwrap_or(lc);
             }
-            line_cross.push(lc);
-            line_baseline.push(lb);
+            if let Some(line) = lines.get_mut(li) {
+                line.cross = lc;
+                line.baseline = lb;
+            }
         }
-        let cross_extent: f32 = line_cross.iter().sum::<f32>() + st.gap * lines.len().saturating_sub(1) as f32;
+        let cross_extent: f32 = lines.iter().map(|l| l.cross).sum::<f32>() + st.gap * lines.len().saturating_sub(1) as f32;
 
         // §4.4 positions.
-        let mut placed = Vec::with_capacity(items.len());
+        let mut placed = self.take_placed();
+        placed.reserve(items.len());
         let mut first_baseline = None;
         let mut cross_pos = 0.0f32;
         let main_bound = main_c.bound().unwrap_or(main_extent);
-        for (li, line) in lines.iter().enumerate() {
-            let lc = line_cross.get(li).copied().unwrap_or(0.0);
-            let lb = line_baseline.get(li).copied().unwrap_or(0.0);
-            let n = line.len();
-            let used: f32 = line.iter().map(|&i| items.get(i).map_or(0.0, |it| it.main + it.m_before + it.m_after)).sum::<f32>() + st.gap * n.saturating_sub(1) as f32;
+        for line in lines.iter() {
+            let (lc, lb) = (line.cross, line.baseline);
+            let line_items = items.get(line.start..line.end).unwrap_or(&[]);
+            let n = line_items.len();
+            let used: f32 = line_items.iter().map(|it| it.main + it.m_before + it.m_after).sum::<f32>() + st.gap * n.saturating_sub(1) as f32;
             let free = if matches!(main_c, Constraint::Exact(_)) { (main_bound - used).max(0.0) } else { 0.0 };
             let (mut pos, between) = match (st.justify, n) {
                 (Justify::Start, _) | (Justify::Between, 1) => (0.0, 0.0),
@@ -1255,8 +1504,7 @@ impl Layout {
                 (Justify::Around, _) => (free / n as f32 / 2.0, free / n as f32),
                 (Justify::Evenly, _) => (free / n.saturating_add(1) as f32, free / n.saturating_add(1) as f32),
             };
-            for &i in line {
-                let Some(it) = items.get(i) else { continue };
+            for it in line_items {
                 let align = self.align_of(st, it.st);
                 let cross_dim_auto = matches!(if row { it.st.height } else { it.st.width }, Length::Auto);
                 let avail = lc - it.c_before - it.c_after;
@@ -1282,6 +1530,10 @@ impl Layout {
             cross_pos += lc + st.gap;
         }
 
+        items.clear();
+        self.scratch.items.push(items);
+        lines.clear();
+        self.scratch.lines.push(lines);
         let content = if row { Size::new(main_extent, cross_extent) } else { Size::new(cross_extent, main_extent) };
         Placement { children: placed, content, baseline: first_baseline }
     }
@@ -1326,11 +1578,11 @@ impl Layout {
 
     /// §5, and the absolute children of any container when `absolute_only`.
     fn place_stack(&mut self, f: &mut Env<'_>, ix: NodeIx, st: Style, inner_w: Constraint, inner_h: Constraint, absolute_only: bool) -> Placement {
-        let children: Vec<NodeIx> = f.session.children(ix).to_vec();
-        let mut placed = Vec::new();
+        let session = f.session;
+        let mut placed = self.take_placed();
         let mut extent = Size::default();
         let mut first_baseline = None;
-        for c in children {
+        for &c in session.children(ix) {
             let cst = self.style(f, c);
             if cst.display == Display::None || (absolute_only && !cst.position.out_of_flow()) {
                 continue;
@@ -1394,8 +1646,14 @@ impl Layout {
             placed.push(Placed { ix: c, x, y, w: m.w, h: m.h, virtual_: false });
         }
         // Paint order is ascending z; `place` returns children in that order.
-        let z_of: HashMap<u32, u8> = placed.iter().map(|p| (p.ix.raw(), self.style_of(f.session, p.ix).map_or(0, |s| s.z))).collect();
-        placed.sort_by_key(|p| z_of.get(&p.ix.raw()).copied().unwrap_or(0));
+        // Almost always they already are — z is for the one popover in a
+        // stack of ordinary children — so the sort, and the keys it needs,
+        // are paid for only when they are not. This used to build a hash
+        // map of every child's z for every stack on every layout.
+        let z = |p: &Placed| self.style_of(f.session, p.ix).map_or(0, |s| s.z);
+        if !placed.windows(2).all(|w| matches!(w, [a, b] if z(a) <= z(b))) {
+            placed.sort_by_cached_key(z);
+        }
         Placement { children: placed, content: extent, baseline: first_baseline }
     }
 
@@ -1423,7 +1681,8 @@ impl Layout {
         let col_w = inner_w.bound().map(|b| ((b - gaps) / n as f32).max(0.0));
         let _ = inner_h;
 
-        let mut placed = Vec::with_capacity(children.len());
+        let mut placed = self.take_placed();
+        placed.reserve(children.len());
         let mut y = 0.0f32;
         let mut first_baseline = None;
         let mut max_w = 0.0f32;

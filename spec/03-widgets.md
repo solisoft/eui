@@ -120,6 +120,14 @@ Everything paints as a rounded rectangle. For a node with style `s`:
    application except as the `scroll` event the resulting offset produces.
    While the pointer is on the strip, or the thumb is being dragged, the
    thumb fills the strip in `text.default` at 70 %.
+7. A node whose `overflow` is `clip` clips its children to its border box
+   exactly as a `scroll` does, and wears no scrollbar. **Hit-testing honours
+   every clip painting does**: a point is on a node only where that node
+   can be painted. A node whose border box lies wholly outside the clip it
+   is painted under is not painted, nor is anything under it — however far
+   a child spills out of its parent — and none of them can be hit. Enforced
+   by the layout's hit test (`hit_in` in `eui-layout`), which culls by the
+   test the painter culls by; see 09 §4.
 
 Rectangles are snapped to device pixels before painting; glyph positions are
 snapped horizontally to whole device pixels and vertically to the line's

@@ -595,9 +595,33 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     let Some(root) = scene.session.root() else {
         return list;
     };
+    // Sized from the last frame, which is nearly always this frame's size:
+    // a list that grows by doubling to ten thousand quads copies itself
+    // fourteen times on the way, every frame.
+    let (quads, runs, clips) = scene.cache.last_counts();
+    list.quads.reserve(quads);
+    list.runs.reserve(runs);
+    list.clips.reserve(clips);
     scene.cache.begin();
-    let mut p =
-        Painter { scene, list, clip: 0, chain: 0, scene_slot: 0, run_start: 0, inherited_fg: vec![], deferred: Vec::new(), in_top: false, own: None, fade: None, slack: (0.0, 0.0), blur: None };
+    let anims = by_node(scene.anims);
+    let movers = by_node(scene.movers);
+    let mut p = Painter {
+        scene,
+        list,
+        clip: 0,
+        chain: 0,
+        scene_slot: 0,
+        run_start: 0,
+        inherited_fg: vec![],
+        deferred: Vec::new(),
+        in_top: false,
+        own: None,
+        fade: None,
+        slack: (0.0, 0.0),
+        blur: None,
+        anims,
+        movers,
+    };
     p.node(root);
     // 03 §2.4: an `overlay` is a layer above the normal flow — it paints
     // after everything, clipped by the window and by nothing else, so a
@@ -612,7 +636,31 @@ pub fn paint(scene: &mut Scene<'_>) -> DrawList {
     p.close_run();
     p.settle_backdrop();
     p.scene.cache.end();
+    p.scene.cache.note_counts(p.list.quads.len(), p.list.runs.len(), p.list.clips.len());
     p.list
+}
+
+/// An index over a scene's `(node, value)` pairs, sorted by node, so the
+/// painter asks each node about them in a binary search rather than a scan.
+/// A page transition carries every node on the page, and a scan per node was
+/// nodes × transitions. Nothing to sort — every frame of nearly every
+/// application — allocates nothing.
+fn by_node<T>(pairs: &[(NodeIx, T)]) -> Vec<(u32, usize)> {
+    let mut ix: Vec<(u32, usize)> = pairs.iter().enumerate().map(|(i, (n, _))| (n.raw(), i)).collect();
+    // Stable, so of two entries for one node the first in the scene's order
+    // is the one found, as `find` found it.
+    ix.sort_by_key(|(n, _)| *n);
+    ix
+}
+
+/// The first of `pairs` that `index` (from [`by_node`]) says is `ix`'s.
+fn lookup<T: Copy>(index: &[(u32, usize)], pairs: &[(NodeIx, T)], ix: NodeIx) -> Option<T> {
+    if index.is_empty() {
+        return None;
+    }
+    let at = index.partition_point(|(n, _)| *n < ix.raw());
+    let (n, i) = index.get(at)?;
+    (*n == ix.raw()).then(|| pairs.get(*i).map(|(_, v)| *v)).flatten()
 }
 
 struct Painter<'s, 'a> {
@@ -653,6 +701,9 @@ struct Painter<'s, 'a> {
     /// the region as `x0, y0, x1, y1` in device pixels, the first blurred
     /// instance, and the standard deviations met.
     blur: Option<([f32; 4], u32, Vec<f32>)>,
+    /// [`Scene::anims`] and [`Scene::movers`] indexed by node ([`by_node`]).
+    anims: Vec<(u32, usize)>,
+    movers: Vec<(u32, usize)>,
 }
 
 /// A node's own transition, as its quads carry it.
@@ -919,7 +970,7 @@ impl Painter<'_, '_> {
         let record = self.scene.session.style_of(ix);
         let spinning = record.animation & eui_proto::ANIMATION_SPIN != 0;
         let first = self.list.quads.len();
-        let mover = self.scene.movers.iter().find(|(n, _)| *n == ix).map(|(_, m)| *m);
+        let mover = lookup(&self.movers, self.scene.movers, ix);
         // A page arriving from off the trailing edge is outside every clip
         // there is, and would be culled before it could slide in. The cull is
         // loosened by however far this subtree still has to travel, exactly
@@ -988,7 +1039,7 @@ impl Painter<'_, '_> {
         // A transition on this node (03 §5). Its quads carry both ends and
         // the vertex stage moves between them -- unless it has to be baked,
         // in which case they carry where it stands now, as they always did.
-        let anim = self.scene.anims.iter().find(|(n, _)| *n == ix).map(|(_, a)| *a);
+        let anim = lookup(&self.anims, self.scene.anims, ix);
         let opacity = match anim {
             Some(a) if a.baked => a.at.opacity,
             Some(a) => a.to.opacity,
@@ -1997,5 +2048,22 @@ mod tests {
         let mut cursor = 0;
         assert_eq!(span_at(&[], &mut cursor, 7), None);
         assert_eq!(cursor, 0);
+    }
+
+    /// The painter's per-node question about transitions is a binary search
+    /// over an index, and it answers exactly what the scan it replaced did:
+    /// the first entry for the node in the scene's order, or none.
+    #[test]
+    fn a_node_finds_its_transition_by_index_as_the_scan_did() {
+        let n = NodeIx::from_raw;
+        let pairs = [(n(9), 'a'), (n(3), 'b'), (n(9), 'c'), (n(1), 'd'), (n(3), 'e')];
+        let index = by_node(&pairs);
+        for raw in 0..12 {
+            let scan = pairs.iter().find(|(k, _)| *k == n(raw)).map(|(_, v)| *v);
+            assert_eq!(lookup(&index, &pairs, n(raw)), scan, "node {raw}");
+        }
+        let none: [(NodeIx, char); 0] = [];
+        assert!(by_node(&none).capacity() == 0, "no transitions, no allocation");
+        assert_eq!(lookup(&by_node(&none), &none, n(1)), None);
     }
 }
