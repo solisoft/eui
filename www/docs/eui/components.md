@@ -150,7 +150,7 @@ unknown colour role.
 | `gap` | A space index, 0–255 |
 | `width`, `height`, `min_width`, `min_height`, `max_width`, `max_height`, `basis` | A length, below |
 | `pad`, `margin`, `border` | Edges, below |
-| `bg`, `fg`, `border_color` | A colour, below |
+| `bg`, `fg`, `border_color` | A colour, below — and `bg` alone may be a gradient |
 | `radius`, `shadow`, `opacity`, `z` | 0–255 |
 | `blur` | 0–255 — the node shows what is behind it through a Gaussian this wide, in px, and `bg` tints the result |
 | `font` | `sans` · `mono` · the name of a font the application declared with `eui_font` |
@@ -169,7 +169,7 @@ said the opposite.
 
 | `overflow` | `visible` · `clip` · `scroll` |
 | `transition` | `none` · `fast` · `base` · `slow` · `slower` · `slowest` |
-| `animation` | A list: `spin` · `enter` · `exit`, or `none` |
+| `animation` | A list: `spin` · `enter` · `exit` · `pulse` · `bounce`, or `none` |
 | `position` | `flow` · `absolute` |
 | `cursor` | `default` · `pointer` · `text` · `grab` · `grabbing` · `resize_h` · `resize_v` · `wait` · `not_allowed` |
 | `blur` | A backdrop radius, 0–255 — what is *behind* the node, not the node |
@@ -229,6 +229,35 @@ series is a chart that wanted to be two.
 
 A literal is right for a brand mark or a chart series, and wrong for a
 surface.
+
+**Gradients** (protocol 6). `bg` may be a hash naming a linear gradient of
+two or three stops, drawn as CSS draws `linear-gradient()` — mixed in sRGB,
+under the node's corners, border, shadow and opacity like any fill:
+
+```
+{"bg": {"gradient": {"to": "right", "stops": ["accent.base", ["#ff80b5", 255]]}}}
+{"bg": {"gradient": {"angle": 45, "stops": [ ["accent.base", 26], ["info.base", 128], "danger.base"]}}}
+```
+
+`to` is a side or a corner (`"top right"`; a corner follows the box's own
+diagonal, as in CSS), `angle` is whole degrees, clockwise from the top, and
+neither means `"bottom"`. A stop is a colour — role or literal, never
+`none` — or `[colour, at]` with `at` in 255ths of the way along; stops left
+without a position are spread evenly. Each distinct gradient is defined once
+a session. Roles make it follow dark mode like any other colour. It does not
+ease: a `transition` into or out of a gradient changes the colours at once
+and fades only the opacity. A client older than protocol 6 is sent the first
+stop as a solid colour. (Write a list of pairs with a space after the outer
+bracket, `[ ["accent.base", 0], …]`: `[[` opens a raw string in Soli.)
+
+**Pulse and bounce** (protocol 6). `"animation": "pulse"` draws the node and
+everything in it at an opacity that dips to half and back every two seconds;
+`"bounce"` lifts it a quarter of its own height and lets it fall, once a
+second — Tailwind's `animate-pulse` and `animate-bounce`, to the curve. Both
+are the client's clock, like `spin`: nothing crosses the wire while they run,
+the node is laid out and pressed where it rests, and a client may hold them
+still for a viewer who asked for reduced motion. They combine with each
+other and with the rest: `["spin", "pulse"]`.
 
 **Frosted glass.** `blur` makes a node show its backdrop — everything painted
 under it — through a Gaussian, with `bg` composited over the result, so one

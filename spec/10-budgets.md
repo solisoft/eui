@@ -181,8 +181,10 @@ table, x86-64 Linux, 2026-09-08:
 | bytes over the pipe per scroll step | — | 27 B out, 47.1 KB back |
 
 Two round trips a frame — the input, then the paint — are most of the
-difference, and the draw list is 128 bytes a quad — 112 until the quad
-took on both ends of a transition (03 §5) — sent in the shape the
+difference, and the draw list is 132 bytes a quad — 112 until the quad
+took on both ends of a transition (03 §5), 128 until it carried a bounce's
+height (03 §5, version 6; a gradient, 02 §5.3, rides in fields a solid box
+leaves empty) — sent in the shape the
 renderer uploads (the gallery is about 760 quads, its documentation dialog
 about 3 900). A frame owed to a spin, a transition or a glide alone is not
 sent at all: the window draws the last list again, and answers the

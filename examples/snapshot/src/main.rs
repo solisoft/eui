@@ -1091,11 +1091,14 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         // SNAPSHOT_AGE=<ms> — draw the list as it will look this long after
         // the paint that produced it. Everything the vertex stage animates
         // from the clock (03 §5) is then visible off-screen: a transition
-        // part way, a page mid-slide, a spinner at an angle.
+        // part way, a page mid-slide — and, since the window's clock is set
+        // to the same age, a spinner at an angle, a pulse part way down and
+        // a bounce part way up. Without it both clocks are 0, where a pulse
+        // is at full strength and a bounce at the top of its arc.
         let age = std::env::var("SNAPSHOT_AGE").ok().and_then(|v| v.trim().parse::<f32>().ok()).map_or(0.0, |ms| ms / 1000.0);
         load_scene_assets(&mut driver, &mut renderer, &mut textures);
         let (atlas, images) = driver.atlases_mut();
-        renderer.render_offscreen_at(&mut textures, &target, 0.0, age, &list, atlas, images);
+        renderer.render_offscreen_at(&mut textures, &target, f64::from(age), age, &list, atlas, images);
         // SNAPSHOT_TIMING=1: how long a scrolled frame takes, five times.
         if std::env::var_os("SNAPSHOT_TIMING").is_some() {
             if let Some(root) = driver.session().root() {

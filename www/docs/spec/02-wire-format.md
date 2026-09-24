@@ -98,7 +98,7 @@ resolution against a parent.
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
 | 60 | 1 | `transition` | 0 none, else `motion` scale index + 1, at most 5 (05 §2): colours and opacity animate into this record (03 §5) |
-| 61 | 1 | `animation` | bit set: 1 `spin` (the node turns about its centre while on screen), 2 `enter` (it arrives when mounted), 4 `exit` (its painting is kept while it leaves) — 03 §5 |
+| 61 | 1 | `animation` | bit set: 1 `spin` (the node turns about its centre while on screen), 2 `enter` (it arrives when mounted), 4 `exit` (its painting is kept while it leaves), and from version 6 8 `pulse` (its painting dims to half and back every 2 s) and 16 `bounce` (its painting is lifted a quarter of its height and let fall every 1 s) — 03 §5 |
 | 62 | 1 | `blur` | backdrop blur, as the standard deviation of a Gaussian in device-independent px; 0 none (03 §2) |
 | 63 | 1 | `motion_kind` | 0 `fade`, 1 `leading`, 2 `trailing`, 3 `top`, 4 `bottom`, 5 `scale`, 6 `paired`: which way an `enter` arrives and an `exit` leaves (03 §5.2) |
 
@@ -132,8 +132,20 @@ Dim := tag:u8  value:u16
 A `u16`:
 
 - `0` — none / inherit from the parent
-- `1..=0x7FFF` — a theme colour role id (see [`05-theme.md`](05-theme.md))
+- `1..=0x3FFF` — a theme colour role id (see [`05-theme.md`](05-theme.md));
+  the ids past the last role are reserved and refused (05 §1)
+- `0x4000..=0x7FFF` — from version 6, `value & 0x3FFF` names an entry in the
+  session's **gradient** table (§5.3). `0x4000` itself names none and MUST be
+  rejected
 - `0x8000..=0xFFFF` — `value & 0x7FFF` indexes the session's literal colour table
+
+A gradient is a background and nothing else. A decoder MUST reject a gradient
+reference in a record's `fg` or `border_color`, and in a `Value` colour
+(§4.4): text, a stroke and a canvas path are drawn in one colour, and a
+reference that means a picture where a colour was asked for is a record two
+clients would draw differently. The range was carved from the reserved role
+ids, so a client that predates it reads such a `bg` as a role it does not
+know — which is why a server sends none to a session below version 6 (§5.3).
 
 ```
 DefColor := id:varint  rgba:u32       -- 0xRRGGBBAA, sRGB
@@ -198,7 +210,11 @@ declares a face mid-session falls back to `sans` for the sessions already
 open rather than ending them. A scale step is the fourth way: the `space`
 entries 13–17 (05 §2) took the protocol to **version 6**, and are paid for
 like an event — a session below 6 is sent the older step each one falls
-back to, so nothing is refused and nothing raises a floor. Everything users would call a widget — button, dialog,
+back to, so nothing is refused and nothing raises a floor. `DefGradient`
+(§5.3), the gradient range of `ColorRef` (§3.2) and the `animation` bits
+`pulse` and `bounce` (03 §5) are version 6 too, and are paid for the same
+way: a session below 6 is sent each gradient's first stop as a solid `bg`,
+and records without the two bits. Everything users would call a widget — button, dialog,
 table, date picker — is composed from these on the server; see
 [`03-widgets.md`](03-widgets.md).
 
@@ -278,6 +294,7 @@ Op    := opcode:u8  payload
 | `0x13` | `DefChunk` | `id:varint hash:32×u8` — fetched as an asset |
 | `0x14` | `DefChunkBytes` | `id:varint bytes:bytes` — inline, ≤ 64 KiB ([`07-bytecode.md`](07-bytecode.md)) |
 | `0x15` | `DefFont` | `role:u8 count:varint count × 32×u8` — bind a font role to its faces, fetched as assets |
+| `0x16` | `DefGradient` | `id:varint angle:u16 count:u8 count × (color:ColorRef at:u8)` — a linear gradient a `bg` may name (§5.3); version 6 |
 | `0x20` | `Mount` | `root:Node` — replaces the whole tree; tables persist |
 | `0x21` | `Replace` | `node:varint subtree:Node` |
 | `0x22` | `SetStyle` | `node:varint style:varint` |
@@ -373,6 +390,44 @@ carrying control characters MUST be cleaned or refused before it reaches a
 platform notifier — a notification's text is a server's string, and every
 platform has an argument parser somewhere behind it.
 
+### 5.3 Gradients
+
+`DefGradient` defines a linear gradient, and a record's `bg` names it by the
+`ColorRef` `0x4000 | id` (§3.2). It is a table like the colours: define-once,
+per session and per island (01 §2.7), ids from 1, at most `MAX_GRADIENTS` of
+them, and a definition MUST precede the first record that names it.
+
+| Field | |
+|---|---|
+| `angle` | `0..=359`: CSS's `<angle>` in whole degrees — `0` points to the top, and it turns clockwise, so `90` is *to right* and `180` *to bottom*. `360..=363`: CSS's corner keywords, *to top right*, *to bottom right*, *to bottom left* and *to top left*, whose angle depends on the box (below). Anything above `363` MUST be rejected. |
+| `count` | `2..=3` (`MAX_GRADIENT_STOPS`); anything else MUST be rejected. |
+| `color` | A role or a literal (§3.2). None, and a gradient, MUST be rejected; a literal MUST already be defined, which is session state and the tree's to check. |
+| `at` | Where the stop sits along the gradient line, in 255ths: `0` its start, `255` its end. Each stop's `at` MUST be at least the one before it. |
+
+A client paints it exactly as CSS paints `linear-gradient()` over the border
+box. The **gradient line** passes through the box's centre in the direction
+of the angle, and is `|w·sin θ| + |h·cos θ|` long, so that its two ends are
+where the perpendiculars through the far corners cross it. For a corner
+keyword the direction is the one perpendicular to the diagonal that does not
+touch that corner — the 50 % line runs corner to corner — so *to top right*
+on a wide banner rises steeply rather than at 45°. A point takes the colour
+of its projection on the line: before the first stop the first stop's
+colour, after the last the last's, and between two stops the mix of the two
+in **premultiplied sRGB**, which is CSS's default interpolation. Colours are
+resolved as any `ColorRef` is — a role against the viewer's theme — so a
+gradient of roles follows dark mode for nothing.
+
+The corners, the border, the shadow, the opacity, the clip and a `blur`
+behave over a gradient exactly as over a solid `bg`: the gradient is the fill
+and nothing else changes. A change of `bg` to or from a gradient does not
+ease (03 §5).
+
+**Version 6.** A server MUST NOT send `DefGradient`, or a `ColorRef` in the
+gradient range, to a session negotiated below 6. The reference server sends
+the gradient's **first stop** as the solid `bg` instead, so an older client
+draws the colour the gradient starts from rather than refusing the batch or
+drawing nothing (`lang/src/serve/eui/tree.rs`, the encoder's `color`).
+
 ## 6. Limits
 
 A conforming client MUST enforce all of these and MUST fail the session, not
@@ -390,6 +445,8 @@ truncate, when one is exceeded.
 | `MAX_COLORS` | 4 095 |
 | `MAX_CHUNKS` | 4 095 |
 | `MAX_CHUNK_TOTAL_BYTES` | 8 MiB per session, of inline chunks (`DefChunkBytes`), the page and its islands (01 §2.7) together |
+| `MAX_GRADIENTS` | 1 023 per session and per island (§5.3) |
+| `MAX_GRADIENT_STOPS` | 3 |
 | `MAX_FONT_ROLE` | 9 (roles `0`–`9`) |
 | `MAX_FACES_PER_ROLE` | 8 |
 | `MAX_CHILDREN` | 65 535 per node |
@@ -403,6 +460,11 @@ truncate, when one is exceeded.
 | `MAX_NOTIFY_BODY` | 1 KiB |
 | `MAX_NOTIFY_TAG` | 64 bytes |
 | `MAX_NOTIFY_PER_BATCH` | 4 (§5.2) |
+
+`MAX_GRADIENTS` is a quarter of `MAX_COLORS` because a gradient is a
+decoration a page has a handful of, not a value a chart plots: the ceiling is
+there for the view that derives one from data, which would otherwise mint a
+permanent entry per reading exactly as a derived colour does.
 
 `MAX_ATOM_TOTAL_BYTES`, `MAX_CHUNK_TOTAL_BYTES`, and the rule that an id is
 defined once and referenced only after, are session state and belong to the

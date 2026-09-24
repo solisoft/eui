@@ -217,6 +217,31 @@ dashes. `bg-transparent` is `none`. `bg-[#1E293B]` is a literal, which
 03 §4 reserves for marks and data: a literal is the same colour in every
 theme, so it is wrong in one of them.
 
+**Gradients** (protocol 6). `bg-gradient-to-t` `-tr` `-r` `-br` `-b` `-bl`
+`-l` `-tl`, with `from-*`, an optional `via-*` and `to-*`, become one `bg`
+gradient (eui 02 §5.3), whatever order the classes were written in:
+
+| Classes | EUI |
+|---|---|
+| `bg-gradient-to-r` · `-l` · `-t` · `-b` | `"to": "right"` … — 90°, 270°, 0°, 180° |
+| `bg-gradient-to-tr` `-br` `-bl` `-tl` | `"to": "top right"` … — CSS's corner, whose angle is the box's own diagonal, not 45° |
+| `from-*`, `via-*`, `to-*` | the stops' colours, read as `bg-*` reads one — roles, `[#hex]`, the status families, grays by what they paint behind |
+| `from-10%`, `via-40%`, `to-90%` | where a stop sits, in 255ths; unwritten, `from` is at 0 %, `via` at 50 % and `to` at 100 %, as in Tailwind |
+| `hover:to-indigo-600` … | a state's stop lies over the resting gradient |
+
+```
+tw("bg-gradient-to-r from-indigo-600 via-info to-[#ff80b5]")["s"]
+# {"bg": {"gradient": {"to": "right",
+#   "stops": [ ["accent.base", 0], ["info.base", 128], ["#ff80b5", 255] ]}}}
+```
+
+A gradient must have `to-*` as well as `from-*`. Tailwind's `from-*` alone
+fades to a transparent copy of its colour, and a role has no transparent
+copy, so `tw()` raises rather than pick one. A stop is mixed in sRGB as CSS
+mixes it, and a gradient of roles follows dark mode like every other role. A
+session whose client is older than protocol 6 is sent the `from-*` colour as
+a solid background.
+
 An opacity suffix is taken in the two places Tailwind UI uses one: the faint
 ring round a card (`ring-gray-900/5`, `ring-black/10`, up to `/20` —
 `border.subtle`; a status colour's ring up to `/30` — its `.subtle`) and a
@@ -243,7 +268,7 @@ alpha).
 | `transition`, `transition-colors` `-all` `-opacity` `-shadow` · `transition-none` | `transition: fast` · `none` |
 | `duration-N` | `fast` to 100 ms, `base` to 200, `slow` to 350, `slower` to 700, `slowest` beyond |
 | `backdrop-blur-sm` … `-3xl` | `blur` 4, 8, 12, 16, 24, 40, 64 px |
-| `animate-spin`, `animate-none` | `animation` |
+| `animate-spin`, `animate-pulse`, `animate-bounce` · `animate-none` | `animation` bits, which combine: `animate-spin animate-pulse` is `["spin", "pulse"]`. Pulse and bounce are protocol 6 (eui 03 §5): Tailwind's keyframes, run from the client's clock, painting only — a bouncing node is hit where it rests |
 | `select-none` | nothing: only editable nodes select text |
 
 ### States
@@ -338,7 +363,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | `font-light`, `font-black` … | four weights |
 | `italic` | no italic face |
 | `tabular-nums` and the other figure variants | the client selects no OpenType feature; `font-mono` sets figures that line up |
-| `bg-gradient-*`, `from-*`, `via-*`, `to-*` | no gradients |
+| `bg-gradient-to-*` without `from-*` and `to-*`; a stop without `bg-gradient-to-*`; `to-transparent` | a gradient runs between two colours, and a role has no transparent copy |
 | `rounded-t-*`, `rounded-tl-*` … | one radius for four corners |
 | `space-*`, `gap-x-*`, `divide-*` where they are not the same thing | see [Between children](#between-children) |
 | `translate-*`, `rotate-*`, `scale-*` | no transforms |
@@ -353,7 +378,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | `overflow-auto`, `overflow-x-*` | scrolling is a `scroll()` node |
 | `ring`, `ring-offset-*`, `outline-*` at rest | a ring is a border of 1 or 2 px; the client draws focus (under `focus:` and `focus-visible:` these are taken as nothing — see *States*) |
 | `blur-*`, `drop-shadow-*` and the other filters | `backdrop-blur-*` is the one blur |
-| `animate-pulse`, `animate-bounce` | `animate-spin` is the one animation |
+| `animate-ping` | the animations are `spin`, `pulse` and `bounce`; an arrival is the `enter` animation |
 | `ease-*`, `delay-*` | one curve, no delay |
 | `sm:`, `md:` … without a width | the width is the view's to give — `tw(classes, width)`, `"vw"` on a node |
 | `max-md:` and the range variants | write mobile first |
@@ -365,7 +390,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | any other name | *unknown class*, with a pointer here |
 
 `examples/demo-app/tests/tw_spec.sl` pins the table and the refusals, and
-sends one of every accepted class — `tw_examples()`, 247 of them, at a width
+sends one of every accepted class — `tw_examples()`, 255 of them, at a width
 past every breakpoint — through the server's encoder (`eui_render`), which
 raises on a key or a value it does not know; a divided tree and a transformed
 text node go through it whole. That is what 03 §4 asks of a translation like

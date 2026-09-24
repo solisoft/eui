@@ -62,7 +62,7 @@
                 </div>
 
                 <div class="reads">
-                    <p class="read" id="r-op"><b>The verb</b>Twenty-three is <code>set_text</code>. There are nineteen ops in the whole protocol, and a client that meets a twentieth refuses the frame.</p>
+                    <p class="read" id="r-op"><b>The verb</b>Twenty-three is <code>set_text</code>. There are twenty ops in the whole protocol, and a client that meets a twenty-first refuses the frame.</p>
                     <p class="read" id="r-node"><b>The address</b>Node 141 already exists on the client. Nothing is re-sent around it: no row, no table, no page.</p>
                     <p class="read" id="r-text"><b>The payload</b>Thirteen bytes of UTF-8 — the number a person actually reads. Nine bytes carried it.</p>
                 </div>

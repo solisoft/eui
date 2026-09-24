@@ -33,10 +33,19 @@ server starting at 1. Id 0 always means "none" and can never be defined.
 | Styles | `DefStyle` | 65 535 |
 | Literal colours | `DefColor` | 4 095 |
 | Bytecode chunks | `DefChunk` | 4 095 |
+| Gradients | `DefGradient` (protocol 6) | 1 023 |
 
 Redefining an id is an error. Referencing an undefined id is an error. The
 tables outlive the tree: a `Mount` replaces the document and clears none of
 them, so a second page costs no second `DefAtom`.
+
+A **gradient** is two or three stops — each a colour reference and a
+position — and an angle: whole degrees, or one of CSS's four corners. A
+record's `bg` names one by a `ColorRef` in `0x4000..=0x7FFF`, a range carved
+from the reserved role ids, and nothing else may: `fg`, `border_color` and a
+prop colour carrying one are refused. The client paints it as CSS paints
+`linear-gradient()`, stops mixed in sRGB. It is protocol 6, and a server sends
+an older client the first stop as a solid colour instead.
 
 **Font roles** are the exception, and the shape of the exception says why.
 `DefFont` binds a role — one byte, `0`–`9` — to the faces that draw it, each
@@ -109,6 +118,7 @@ the call stack.
 ```
 DefAtom  DefStyle  DefColor  DefChunk       definitions
 DefFont(role, faces)                        a font the application supplies
+DefGradient(id, angle, stops)               a linear gradient a bg may name (protocol 6)
 Mount(subtree)                              replace everything
 Replace(node, subtree)
 SetStyle(node, style)

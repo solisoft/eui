@@ -9,7 +9,7 @@
 //! is how two implementations quietly disagree about a layout for a year.
 
 use crate::error::{DecodeError, Result};
-use crate::limits::STYLE_RECORD_BYTES;
+use crate::limits::{MAX_GRADIENT_ANGLE, MAX_GRADIENT_STOPS, STYLE_RECORD_BYTES};
 use crate::reader::Reader;
 use crate::writer::Writer;
 
@@ -302,7 +302,8 @@ impl Dim {
     }
 }
 
-/// A colour: a theme role, a literal from the session table, or nothing.
+/// A colour: a theme role, a literal from the session table, a gradient
+/// from the session table (a `bg` only), or nothing.
 ///
 /// Roles are strongly preferred. Only a role follows the viewer's light/dark
 /// mode, contrast preference and density — a literal is frozen at whatever the
@@ -314,6 +315,9 @@ impl ColorRef {
     /// No colour: inherit from the parent, or draw nothing.
     pub const NONE: Self = Self(0);
     const LITERAL_BIT: u16 = 0x8000;
+    /// The gradient range, `0x4000..=0x7FFF` (02 §3.2), carved from the
+    /// reserved role ids by version 6.
+    const GRADIENT_BIT: u16 = 0x4000;
 
     /// A theme colour role.
     pub const fn role(id: u16) -> Self {
@@ -325,9 +329,29 @@ impl ColorRef {
         Self((index & 0x7FFF) | Self::LITERAL_BIT)
     }
 
+    /// An entry in the session's gradient table (02 §5.3). Only a record's
+    /// `bg` may carry one.
+    pub const fn gradient(id: u16) -> Self {
+        Self((id & 0x3FFF) | Self::GRADIENT_BIT)
+    }
+
     /// True when this is a literal rather than a role.
     pub const fn is_literal(self) -> bool {
         self.0 & Self::LITERAL_BIT != 0
+    }
+
+    /// True when this names a gradient: `0x4000..=0x7FFF`.
+    pub const fn is_gradient(self) -> bool {
+        !self.is_literal() && self.0 & Self::GRADIENT_BIT != 0
+    }
+
+    /// The gradient id this names, or `None` for anything else.
+    pub const fn gradient_id(self) -> Option<u16> {
+        if self.is_gradient() {
+            Some(self.0 & 0x3FFF)
+        } else {
+            None
+        }
     }
 
     /// True when nothing should be drawn.
@@ -361,10 +385,115 @@ pub const ANIMATION_ENTER: u8 = 2;
 /// node is the op that removes it, and a `SetStyle` aimed at one on its way
 /// out would be a style change on something already gone.
 pub const ANIMATION_EXIT: u8 = 4;
+/// `animation`: everything painted for the node is drawn at its opacity
+/// times a factor that falls to a half and back every 2 s — Tailwind's
+/// `animate-pulse` (03 §5). Version 6.
+pub const ANIMATION_PULSE: u8 = 8;
+/// `animation`: everything painted for the node is lifted a quarter of its
+/// height and let fall, once a second — Tailwind's `animate-bounce`
+/// (03 §5). Painting only: layout and hit testing do not move. Version 6.
+pub const ANIMATION_BOUNCE: u8 = 16;
 /// Every `animation` bit this revision defines. A record setting anything
 /// outside it is refused, so a bit meaning something later cannot be read as
 /// nothing today.
-pub const ANIMATION_MASK: u8 = ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_EXIT;
+pub const ANIMATION_MASK: u8 = ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_EXIT | ANIMATION_PULSE | ANIMATION_BOUNCE;
+/// The `animation` bits a session below version 6 knows: its decoder refuses
+/// the rest, so [`StyleRecord::for_protocol`] takes them off.
+const ANIMATION_BEFORE_6: u8 = ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_EXIT;
+
+/// One stop of a [`Gradient`]: a colour, and where along the gradient line
+/// it sits, in 255ths (02 §5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct GradientStop {
+    /// A role or a literal; never none, never a gradient.
+    pub color: ColorRef,
+    /// `0` the start of the gradient line, `255` its end.
+    pub at: u8,
+}
+
+/// A linear gradient, as `DefGradient` defines it (02 §5.3).
+///
+/// Fixed-size rather than a `Vec`, so a session table of them is plain
+/// data and a server can key its interning on the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Gradient {
+    /// `0..=359` degrees, CSS's: `0` to the top, clockwise. `360..=363` the
+    /// corner keywords: to top right, bottom right, bottom left, top left.
+    pub angle: u16,
+    /// How many of `stops` are real: `2..=3`.
+    pub count: u8,
+    /// The stops, the first `count` of them meaningful and the rest zero.
+    pub stops: [GradientStop; MAX_GRADIENT_STOPS],
+}
+
+impl Gradient {
+    /// `angle`: to top right, the first corner keyword.
+    pub const TO_TOP_RIGHT: u16 = 360;
+    /// `angle`: to bottom right.
+    pub const TO_BOTTOM_RIGHT: u16 = 361;
+    /// `angle`: to bottom left.
+    pub const TO_BOTTOM_LEFT: u16 = 362;
+    /// `angle`: to top left.
+    pub const TO_TOP_LEFT: u16 = 363;
+
+    /// A gradient from two or three stops. `None` for any other count.
+    pub fn new(angle: u16, stops: &[GradientStop]) -> Option<Self> {
+        if !(2..=MAX_GRADIENT_STOPS).contains(&stops.len()) {
+            return None;
+        }
+        let mut out = [GradientStop::default(); MAX_GRADIENT_STOPS];
+        for (slot, s) in out.iter_mut().zip(stops) {
+            *slot = *s;
+        }
+        Some(Self { angle, count: u8::try_from(stops.len()).ok()?, stops: out })
+    }
+
+    /// The stops that are real.
+    pub fn stops(&self) -> &[GradientStop] {
+        self.stops.get(..usize::from(self.count)).unwrap_or(&[])
+    }
+
+    /// The colour the gradient starts from: what a session below version 6
+    /// is sent as a solid `bg` instead (02 §5.3).
+    pub fn first(&self) -> ColorRef {
+        self.stops.first().map_or(ColorRef::NONE, |s| s.color)
+    }
+
+    /// Decode the payload after the id.
+    pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let angle = r.u16()?;
+        if angle > MAX_GRADIENT_ANGLE {
+            return Err(DecodeError::IllegalValue("gradient angle is 0-359 degrees or a corner, 360-363"));
+        }
+        let count = r.u8()?;
+        if !(2..=MAX_GRADIENT_STOPS).contains(&usize::from(count)) {
+            return Err(DecodeError::LimitExceeded("gradient stops"));
+        }
+        let mut stops = [GradientStop::default(); MAX_GRADIENT_STOPS];
+        let mut last = 0u8;
+        for slot in stops.iter_mut().take(usize::from(count)) {
+            let color = ColorRef(r.u16()?);
+            if color.is_none() || color.is_gradient() {
+                return Err(DecodeError::IllegalValue("a gradient stop is a role or a literal"));
+            }
+            let at = r.u8()?;
+            if at < last {
+                return Err(DecodeError::IllegalValue("gradient stops go forwards"));
+            }
+            last = at;
+            *slot = GradientStop { color, at };
+        }
+        Ok(Self { angle, count, stops })
+    }
+
+    /// Encode the payload after the id.
+    pub fn encode(&self, w: &mut Writer) {
+        w.u16(self.angle).u8(self.count);
+        for s in self.stops() {
+            w.u16(s.color.0).u8(s.at);
+        }
+    }
+}
 
 u8_enum!(
     /// Which way an [`ANIMATION_ENTER`] arrives, and an [`ANIMATION_EXIT`]
@@ -569,13 +698,25 @@ pub const SPACE_FALLBACK: [u8; 5] = [2, 3, 4, 11, 12];
 impl StyleRecord {
     /// This record as a session at `version` can take it: every `space`
     /// index that version does not have is replaced by its
-    /// [`SPACE_FALLBACK`] (05 §2). A server calls it on the way to
-    /// `DefStyle`, so a view is written once and each session is sent what
-    /// its client can draw. At version 6 and above it is the identity.
+    /// [`SPACE_FALLBACK`] (05 §2), and the `animation` bits it does not
+    /// have — [`ANIMATION_PULSE`], [`ANIMATION_BOUNCE`] (03 §5) — are taken
+    /// off. A server calls it on the way to `DefStyle`, so a view is written
+    /// once and each session is sent what its client can draw. At version 6
+    /// and above it is the identity.
+    ///
+    /// A gradient `bg` is not rewritten here, because a record does not
+    /// carry the gradient it names: the server that interned it sends a
+    /// session below 6 the first stop in its place (02 §5.3). One that
+    /// reaches here all the same is taken off rather than sent as a role id
+    /// the older client does not know.
     #[must_use]
     pub fn for_protocol(mut self, version: u32) -> Self {
         if version >= 6 {
             return self;
+        }
+        self.animation &= ANIMATION_BEFORE_6;
+        if self.bg.is_gradient() {
+            self.bg = ColorRef::NONE;
         }
         let down = |ix: u8| match ix.checked_sub(13) {
             Some(n) => SPACE_FALLBACK.get(usize::from(n)).copied().unwrap_or(ix),
@@ -642,7 +783,16 @@ impl StyleRecord {
             return Err(DecodeError::IllegalValue("transition is a motion index + 1, at most 5"));
         }
         if out.animation & !ANIMATION_MASK != 0 {
-            return Err(DecodeError::IllegalValue("animation is a bit set of 1 (spin), 2 (enter) and 4 (exit)"));
+            return Err(DecodeError::IllegalValue("animation is a bit set of 1 (spin), 2 (enter), 4 (exit), 8 (pulse) and 16 (bounce)"));
+        }
+        // 02 §3.2: a gradient is a background. Id 0 names none, and a
+        // gradient anywhere but `bg` is a colour asked for and a picture
+        // given, which two clients would draw two ways.
+        if out.bg.gradient_id() == Some(0) {
+            return Err(DecodeError::IllegalValue("gradient id 0"));
+        }
+        if out.fg.is_gradient() || out.border_color.is_gradient() {
+            return Err(DecodeError::IllegalValue("only bg may name a gradient"));
         }
         // A direction with nothing to direct. Refusing it costs a server one
         // more interned record in the rare mixed case, and is what keeps two

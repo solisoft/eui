@@ -51,6 +51,18 @@ pub const DECELERATE: u32 = 32;
 /// way -- treating it as straight alpha, the way the atlas path does, puts
 /// a black fringe around everything translucent.
 pub const SCENE: u32 = 64;
+/// The quad's fill is a linear gradient (02 §5.3), not `fill`: `fill` holds
+/// the first stop, `from` the second and the third as 16-bit normals (the
+/// second repeated when there are two), and `uv` the three positions along
+/// the gradient line as fractions and the angle code (`0..=359` degrees,
+/// `360..=363` the corners). None of those fields means anything else on an
+/// untextured box, and `from` means the transition's colours only on a quad
+/// that eases them — which a gradient's never does (03 §5), so an
+/// `ANIMATED` gradient quad eases its opacity alone.
+pub const GRADIENT: u32 = 128;
+/// The quad belongs to a pulsing node (03 §5): the vertex stage multiplies
+/// its opacity by the factor the clock gives, [`pulse_factor`].
+pub const PULSING: u32 = 1 << 16;
 /// Bits 8-11 of the flags: which of the list's `scrollers` carries the
 /// quad — a scroll in flight (04 §7) the vertex stage moves from the
 /// offset the layout baked to the one on screen — or zero for none.
@@ -148,14 +160,97 @@ pub struct Quad {
     /// The fill and the stroke a transition started from, as four 16-bit
     /// unsigned normals each (`ANIMATED`); zero otherwise. Sixteen bits of
     /// linear colour are more than the eye or the target has, at half the
-    /// bytes of floats.
+    /// bytes of floats. On a `GRADIENT` quad, its second and last stops.
     pub from: [u16; 8],
+    /// The height, device px, of the bouncing node this quad belongs to
+    /// (03 §5 `bounce`) — summed over bouncing ancestors, since they bounce
+    /// in step — or zero. The vertex stage lifts the quad by this times
+    /// the fraction the clock gives, [`bounce_lift`]. The one field that
+    /// grew the instance: a bounce is relative to the *node's* height, which
+    /// no quad of it carries, and nothing else on every kind of quad was
+    /// free (128 bytes to 132).
+    pub bounce: f32,
 }
 
 impl Default for Quad {
     fn default() -> Self {
         bytemuck::Zeroable::zeroed()
     }
+}
+
+/// Tailwind's `animate-pulse` at `now` seconds on the client's clock
+/// (03 §5): the factor a pulsing node's opacity is multiplied by, falling
+/// from 1 to 0.5 over the first second of two and back over the second,
+/// each half along `cubic-bezier(0.4, 0, 0.6, 1)`. Double precision in, so
+/// the phase is as exact after a day as at the start.
+#[must_use]
+pub fn pulse_factor(now: f64) -> f32 {
+    const CURVE: eui_theme::Curve = eui_theme::Curve::new(0.4, 0.0, 0.6, 1.0);
+    #[expect(clippy::cast_possible_truncation, reason = "a fraction of one")]
+    let p = (now / 2.0).rem_euclid(1.0) as f32;
+    if p < 0.5 {
+        1.0 - 0.5 * CURVE.at(p * 2.0)
+    } else {
+        0.5 + 0.5 * CURVE.at(p * 2.0 - 1.0)
+    }
+}
+
+/// Tailwind's `animate-bounce` at `now` seconds (03 §5): how far above its
+/// laid-out place a bouncing node is drawn, as a fraction of its height —
+/// a quarter at the top of the second, falling along
+/// `cubic-bezier(0.8, 0, 1, 1)` to nothing at the half, and rising along
+/// `cubic-bezier(0, 0, 0.2, 1)` back to a quarter.
+#[must_use]
+pub fn bounce_lift(now: f64) -> f32 {
+    const FALL: eui_theme::Curve = eui_theme::Curve::new(0.8, 0.0, 1.0, 1.0);
+    const RISE: eui_theme::Curve = eui_theme::Curve::new(0.0, 0.0, 0.2, 1.0);
+    #[expect(clippy::cast_possible_truncation, reason = "a fraction of one")]
+    let p = now.rem_euclid(1.0) as f32;
+    if p < 0.5 {
+        0.25 * (1.0 - FALL.at(p * 2.0))
+    } else {
+        0.25 * RISE.at(p * 2.0 - 1.0)
+    }
+}
+
+/// A gradient's stops resolved for one viewer (02 §5.3): three colours,
+/// linear, the second repeated when there were two; their positions along
+/// the gradient line as fractions; and the angle code.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientPaint {
+    /// First, middle and last stop, linear RGBA.
+    pub colors: [[f32; 4]; 3],
+    /// Where each sits on the gradient line, `0..=1`.
+    pub at: [f32; 3],
+    /// `0..=359` degrees, or `360..=363` a corner.
+    pub angle: u16,
+}
+
+impl GradientPaint {
+    /// Make `q` a gradient quad: the stops go where [`GRADIENT`] says.
+    pub fn wear(&self, q: &mut Quad) {
+        let [first, mid, last] = self.colors;
+        q.fill = first;
+        q.from = [pack4(mid), pack4(last)].concat().try_into().unwrap_or([0; 8]);
+        q.uv = [self.at[0], self.at[1], self.at[2], f32::from(self.angle)];
+        q.params[2] = (flags_of(q) | GRADIENT) as f32;
+    }
+}
+
+/// A gradient `bg` resolved against `owner`'s tables and the theme; `None`
+/// for one that is not defined, or a stop that resolves to nothing.
+pub fn resolve_gradient(session: &Session, theme: &Resolved, owner: u16, c: ColorRef) -> Option<GradientPaint> {
+    let g = session.gradient_in(owner, u32::from(c.gradient_id()?))?;
+    let stop = |c: ColorRef| -> Option<[f32; 4]> {
+        let rgba = if c.is_literal() { session.color_in(owner, u32::from(c.index()))? } else { theme.color_by_id(c.index())? };
+        Some(linear(rgba))
+    };
+    let stops = g.stops();
+    let first = stops.first()?;
+    let last = stops.last()?;
+    let mid = stops.get(1).filter(|_| stops.len() == 3).unwrap_or(last);
+    let frac = |at: u8| f32::from(at) / 255.0;
+    Some(GradientPaint { colors: [stop(first.color)?, stop(mid.color)?, stop(last.color)?], at: [frac(first.at), frac(mid.at), frac(last.at)], angle: g.angle })
 }
 
 /// A linear colour as the 16-bit normals `Quad::from` carries.
@@ -914,7 +1009,11 @@ impl Painter<'_, '_> {
         q.extra[3] = own.opacity_from * ratio;
         q.spin[2] = own.t0;
         q.spin[3] = own.dur;
-        q.from = [pack4(fill_from), pack4(stroke_from)].concat().try_into().unwrap_or([0; 8]);
+        // A gradient's colours do not ease (03 §5), and its `from` holds
+        // its stops: only the opacity and the clock go on.
+        if flags_of(q) & GRADIENT == 0 {
+            q.from = [pack4(fill_from), pack4(stroke_from)].concat().try_into().unwrap_or([0; 8]);
+        }
         let flags = flags_of(q) | ANIMATED | if own.decelerate { DECELERATE } else { 0 };
         q.params[2] = flags as f32;
     }
@@ -946,7 +1045,9 @@ impl Painter<'_, '_> {
                 q.params[3] *= f.to;
                 q.spin[2] = f.t0;
                 q.spin[3] = f.dur;
-                q.from = [pack4(q.fill), pack4(q.stroke)].concat().try_into().unwrap_or([0; 8]);
+                if flags & GRADIENT == 0 {
+                    q.from = [pack4(q.fill), pack4(q.stroke)].concat().try_into().unwrap_or([0; 8]);
+                }
                 q.params[2] = (flags | ANIMATED | if f.decelerate { DECELERATE } else { 0 }) as f32;
             }
         }
@@ -969,6 +1070,8 @@ impl Painter<'_, '_> {
         }
         let record = self.scene.session.style_of(ix);
         let spinning = record.animation & eui_proto::ANIMATION_SPIN != 0;
+        let pulsing = record.animation & eui_proto::ANIMATION_PULSE != 0;
+        let bouncing = record.animation & eui_proto::ANIMATION_BOUNCE != 0;
         let first = self.list.quads.len();
         let mover = lookup(&self.movers, self.scene.movers, ix);
         // A page arriving from off the trailing edge is outside every clip
@@ -1014,6 +1117,24 @@ impl Painter<'_, '_> {
                 #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "params[2] is a small flag bitfield carried as a float")]
                 let flags = q.params[2] as u32 | SPINNING;
                 q.params[2] = flags as f32;
+            }
+            self.list.wants_frame = true;
+        }
+        if pulsing || bouncing {
+            // 03 §5 `pulse` and `bounce`: like the spin above, nothing of
+            // either is baked. The quads say they pulse, and how tall the
+            // node that bounces them is; the factor and the lift are the
+            // vertex stage's, from the clock, so the list is the same list
+            // for every frame of them. Outside the spin, so a spinner that
+            // bounces turns about its centre and then rises.
+            let height = self.device(rect)[3];
+            for q in self.list.quads.iter_mut().skip(first) {
+                if pulsing {
+                    q.params[2] = (flags_of(q) | PULSING) as f32;
+                }
+                if bouncing {
+                    q.bounce += height;
+                }
             }
             self.list.wants_frame = true;
         }
@@ -1087,8 +1208,13 @@ impl Painter<'_, '_> {
         // Background and border. A uniform border is one stroked quad; a
         // border that differs per side — a tab's underline, a banner's left
         // bar — is the fill plus up to four thin quads, square-cornered.
+        // 02 §5.3: a gradient is the fill, and does not ease (03 §5); the
+        // quad is dressed in it once it is built, below.
+        let gradient = if invisible { None } else { resolve_gradient(self.scene.session, self.scene.theme, node.owner, record.bg) };
         let (fill, fill_from) = if invisible {
             (None, None)
+        } else if let Some(g) = gradient {
+            (Some(g.colors[0]), None)
         } else {
             match anim {
                 Some(a) if a.baked => (a.at.bg, None),
@@ -1126,6 +1252,9 @@ impl Painter<'_, '_> {
                     extra: [0.0, 0.0, sigma, 0.0],
                     ..Quad::default()
                 };
+                if let Some(g) = gradient {
+                    g.wear(&mut q);
+                }
                 self.animate(&mut q, fill_from, stroke_from);
                 self.push(q);
                 self.set_chain(0);
@@ -1134,6 +1263,9 @@ impl Painter<'_, '_> {
             if fill.is_some() || frosted {
                 self.set_chain(chain);
                 let mut q = Quad { rect: dev, params: [radius, 0.0, flags, opacity], fill: fill.unwrap_or([0.0; 4]), extra: [0.0, 0.0, sigma, 0.0], ..Quad::default() };
+                if let Some(g) = gradient {
+                    g.wear(&mut q);
+                }
                 self.animate(&mut q, fill_from, None);
                 self.push(q);
                 self.set_chain(0);
@@ -1905,7 +2037,7 @@ fn span_at(spans: &[(usize, usize, [f32; 4])], cursor: &mut usize, at: usize) ->
 /// A colour reference against the session's literal table and the theme,
 /// linear RGBA; `None` for "none" or an unknown id.
 pub fn resolve_color(session: &Session, theme: &Resolved, c: ColorRef) -> Option<[f32; 4]> {
-    if c.is_none() {
+    if c.is_none() || c.is_gradient() {
         return None;
     }
     let rgba = if c.is_literal() { session.color(u32::from(c.index()))? } else { theme.color_by_id(c.index())? };
@@ -1956,16 +2088,19 @@ fn flags_of(q: &Quad) -> u32 {
 fn bake(q: &mut Quad) {
     let flags = flags_of(q);
     let k = GpuAnim::k(q.spin[2], q.spin[3], flags & DECELERATE != 0);
-    let fill_from = unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]);
-    let stroke_from = unpack4([q.from[4], q.from[5], q.from[6], q.from[7]]);
-    q.fill = lerp4(fill_from, q.fill, k);
-    q.stroke = lerp4(stroke_from, q.stroke, k);
+    // A gradient eases only its opacity, and its `from` is its stops.
+    if flags & GRADIENT == 0 {
+        let fill_from = unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]);
+        let stroke_from = unpack4([q.from[4], q.from[5], q.from[6], q.from[7]]);
+        q.fill = lerp4(fill_from, q.fill, k);
+        q.stroke = lerp4(stroke_from, q.stroke, k);
+        q.from = [0; 8];
+    }
     q.params[3] = q.extra[3] + (q.params[3] - q.extra[3]) * k;
     q.params[2] = (flags & !(ANIMATED | DECELERATE)) as f32;
     q.extra[3] = 0.0;
     q.spin[2] = 0.0;
     q.spin[3] = 0.0;
-    q.from = [0; 8];
 }
 
 /// Loosen a node's own clip by however far a glide still has to carry it.

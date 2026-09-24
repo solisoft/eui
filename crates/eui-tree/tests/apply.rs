@@ -904,3 +904,46 @@ fn a_placeholder_is_declared_by_fields_and_shown_only_while_empty() {
     one(&mut s, 3, Op::SetText { node: 2, text: TextRef::Inline(String::new()) }).unwrap();
     assert_eq!(s.shown_placeholder(s.lookup(2).unwrap()), Some("Search mail"), "emptied, it is back");
 }
+
+/// 02 §5.3: gradients are a define-once table like the colours. A record
+/// may name one only after it is defined, a literal stop only after *its*
+/// colour is, an id is defined once, the table has a ceiling — and an
+/// island's gradient 1 is not the page's.
+#[test]
+fn a_gradient_is_defined_once_and_named_only_after() {
+    let stop = |color: ColorRef, at: u8| GradientStop { color, at };
+    let g = |first: ColorRef| Gradient::new(90, &[stop(first, 0), stop(ColorRef::role(19), 255)]).unwrap();
+    let wearing = |id: u16| StyleRecord { bg: ColorRef::gradient(id), ..Default::default() };
+
+    let mut s = mounted();
+    // Named before it exists.
+    assert_eq!(one(&mut s, 2, Op::DefStyle { id: 2, record: wearing(1) }), Err(E::Undefined(Table::Gradient, 1)));
+    // A literal stop whose colour is not defined (the page has colour 1).
+    let mut s = mounted();
+    assert_eq!(one(&mut s, 2, Op::DefGradient { id: 1, gradient: g(ColorRef::literal(2)) }), Err(E::Undefined(Table::Color, 2)));
+    let mut s = mounted();
+    one(&mut s, 2, Op::DefGradient { id: 1, gradient: g(ColorRef::literal(1)) }).unwrap();
+    one(&mut s, 3, Op::DefStyle { id: 2, record: wearing(1) }).unwrap();
+    assert_eq!(s.gradient_in(0, 1), Some(&g(ColorRef::literal(1))));
+    assert_eq!(s.gradient_count(), 1);
+    // Once.
+    assert_eq!(one(&mut s, 4, Op::DefGradient { id: 1, gradient: g(ColorRef::role(9)) }), Err(E::Redefined(Table::Gradient, 1)));
+    // The ceiling.
+    let mut s = Session::with_limits(Limits { max_gradients: 2, ..Default::default() });
+    assert_eq!(one(&mut s, 1, Op::DefGradient { id: 3, gradient: g(ColorRef::role(9)) }), Err(E::IdOutOfRange(Table::Gradient, 3)));
+    assert_eq!(Limits::default().max_gradients, limits::MAX_GRADIENTS);
+
+    // An island's table is its own: its gradient 1 is blue to red where the
+    // page's is its literal to red, and both live.
+    let mut s = Session::new();
+    s.apply(page_with_a_slot()).unwrap();
+    one(&mut s, 2, Op::DefGradient { id: 1, gradient: g(ColorRef::role(1)) }).unwrap();
+    let at = s.lookup(2).unwrap();
+    let owner = s.open_island(at).unwrap();
+    let mut t = Subtree::default();
+    t.nodes.push(flat(NodeKind::Box, 1, 1, 0));
+    let batch = Batch { seq: 1, ops: vec![Op::DefGradient { id: 1, gradient: g(ColorRef::role(22)) }, Op::DefStyle { id: 1, record: wearing(1) }, Op::Mount(t)] };
+    s.apply_region(owner, &batch).expect("an island's gradient 1 is its own");
+    assert_eq!(s.gradient_in(0, 1).map(|g| g.first()), Some(ColorRef::role(1)));
+    assert_eq!(s.gradient_in(owner, 1).map(|g| g.first()), Some(ColorRef::role(22)));
+}

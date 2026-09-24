@@ -2204,8 +2204,25 @@ def erp_tailwind_card(state, lay)
     "a11y": {"role": "button", "label": "Export"},
     "c": [text("Export", tw_style("text-sm font-semibold"))]
   })
+  # A gradient (eui 02 §5.3) and the two animations that are only the
+  # client's clock (03 §5): a skeleton that pulses and an arrow that bounces,
+  # neither of which the server hears about again once they are sent.
+  tw_banner_classes = "bg-gradient-to-r from-indigo-600 via-info to-[#ff80b5]"
+  tw_banner = column({"tw": "flex-col gap-1 w-full rounded-lg px-6 py-5 shadow-sm " + tw_banner_classes}, [
+    text("Gradients, pulse and bounce", tw_style("text-lg font-semibold text-white")),
+    text(tw_banner_classes, tw_style("font-mono text-xs text-white"))
+  ])
+  tw_waiting = row({"tw": "items-center gap-4 w-full px-4 py-3 rounded-lg bg-white ring-1 ring-gray-900/5"}, [
+    column({"tw": "flex-col gap-2 grow animate-pulse"}, [
+      row({"tw": "h-3 w-2/3 rounded bg-gray-200"}, []),
+      row({"tw": "h-3 w-1/2 rounded bg-gray-200"}, [])
+    ]),
+    row({"tw": "items-center justify-center size-8 rounded-full bg-indigo-600 shadow-sm animate-bounce"}, [icon("arrow_down", tw_style("size-4 text-white"))])
+  ])
   erp_card("Tailwind classes", [badge("tw()", "info")], [
     muted("The same look, written the way a Tailwind page writes it. tw(\"...\") turns the classes into a style hash and the hover: and active: ones into local states."),
+    tw_banner,
+    tw_waiting,
     column({"tw": "flex-col w-full rounded-lg bg-white ring-1 ring-gray-900/5 shadow-sm overflow-hidden"}, [
       row({"tw": "items-center gap-3 w-full px-4 py-4 border-b border-gray-200"}, [
         column({"tw": "flex-col gap-1 grow"}, [

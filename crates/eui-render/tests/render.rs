@@ -2326,3 +2326,247 @@ fn a_sizer_draws_nothing_of_its_own_and_its_children_still_draw() {
     assert!(as_box > as_sizer, "a decorated box draws more than an invisible one: {as_box} vs {as_sizer}");
     assert_eq!(as_sizer, 1, "exactly the child's quad, and nothing the sizer would have drawn");
 }
+
+// ---------------------------------------------------- gradients, 02 §5.3
+
+/// A fixture whose batch defines `pre` — gradients, colours — before its
+/// styles, as a server must (02 §5: a definition precedes its use).
+fn fixture_after(pre: Vec<Op>, styles: Vec<StyleRecord>, nodes: Vec<FlatNode>, w: f32, h: f32) -> Fx {
+    let mut ops = pre;
+    ops.extend(styles.into_iter().enumerate().map(|(i, r)| Op::DefStyle { id: i as u32 + 1, record: r }));
+    ops.push(Op::Mount(Subtree { nodes, props: vec![], handlers: Vec::new() }));
+    let mut session = Session::new();
+    session.apply(Batch { seq: 1, ops }).unwrap();
+    let theme = Theme::default().resolve(Viewer::default());
+    let mut text = TextEngine::new();
+    let mut layout = Layout::new();
+    layout.compute(&mut Env { session: &session, theme: &theme, text: &mut text }, Size::new(w, h));
+    Fx { session, layout, theme, text, atlas: Atlas::new(), images: ImageAtlas::new() }
+}
+
+fn stop(role: Role, at: u8) -> GradientStop {
+    GradientStop { color: ColorRef::role(role.id()), at }
+}
+
+/// One `w` x `h` box at the origin wearing gradient 1, drawn at 1x.
+fn gradient_box(angle: u16, stops: &[GradientStop], w: u16, h: u16, extra: impl Fn(&mut StyleRecord)) -> (Fx, DrawList) {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+    let mut card = StyleRecord { bg: ColorRef::gradient(1), width: Dim::Px(w), height: Dim::Px(h), ..Default::default() };
+    extra(&mut card);
+    let pre = vec![Op::DefColor { id: 1, rgba: 0xFF80B5FF }, Op::DefGradient { id: 1, gradient: Gradient::new(angle, stops).unwrap() }];
+    let mut fx = fixture_after(pre, vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], 200.0, 200.0);
+    let list = draw(&mut fx, 200, 200, 1.0);
+    (fx, list)
+}
+
+fn gradient_quad(list: &DrawList) -> Quad {
+    *list.quads.iter().find(|q| q.params[2] as u32 & GRADIENT != 0).expect("a gradient quad")
+}
+
+#[test]
+fn a_gradient_background_carries_its_stops_in_the_quad() {
+    // Two stops: the second is the middle and the last, at the same place.
+    let (fx, list) = gradient_box(90, &[stop(Role::AccentBase, 0), stop(Role::DangerBase, 255)], 80, 40, |_| {});
+    let q = gradient_quad(&list);
+    let accent = linear(fx.theme.color(Role::AccentBase));
+    let danger = linear(fx.theme.color(Role::DangerBase));
+    assert_eq!(q.fill, accent, "the first stop is the fill");
+    let mid = unpack4([q.from[0], q.from[1], q.from[2], q.from[3]]);
+    let last = unpack4([q.from[4], q.from[5], q.from[6], q.from[7]]);
+    assert_eq!((mid, last), (unpack4(pack4(danger)), unpack4(pack4(danger))));
+    assert_eq!(q.uv, [0.0, 1.0, 1.0, 90.0], "positions as fractions, then the angle");
+    assert_eq!(q.bounce, 0.0);
+    // Three, one a literal, with Tailwind's via-50%; and the corner code.
+    let (_, list) = gradient_box(Gradient::TO_TOP_RIGHT, &[stop(Role::AccentBase, 26), GradientStop { color: ColorRef::literal(1), at: 128 }, stop(Role::InfoBase, 230)], 80, 40, |r| {
+        r.radius = 3;
+        r.border_width = [1; 4];
+        r.border_color = ColorRef::role(Role::BorderDefault.id());
+    });
+    let q = gradient_quad(&list);
+    assert_eq!(q.from[0..4], pack4(linear(0xFF80B5FF)), "the literal is the middle stop");
+    assert_eq!(q.uv[3], 360.0, "to top right");
+    assert!((q.uv[0] - 26.0 / 255.0).abs() < 1e-6 && (q.uv[1] - 128.0 / 255.0).abs() < 1e-6);
+    assert!(q.params[0] > 0.0 && q.params[1] == 1.0, "and it keeps its radius and its border");
+    // A gradient is never a colour for anything else that asks for one.
+    assert_eq!(resolve_color(&fx.session, &fx.theme, ColorRef::gradient(1)), None);
+}
+
+/// Read one pixel of a list drawn at `now`.
+fn shot_at(r: &mut Renderer, st: &mut SessionTextures, fx: &mut Fx, list: &DrawList, now: f64, w: u32, h: u32) -> Vec<u8> {
+    let target = r.offscreen(w, h);
+    r.render_offscreen(st, &target, now, list, &mut fx.atlas, &mut fx.images);
+    r.read_back(&target).unwrap()
+}
+
+fn srgb_mid(a: [u8; 4], b: [u8; 4]) -> [u8; 4] {
+    [((u16::from(a[0]) + u16::from(b[0])) / 2) as u8, ((u16::from(a[1]) + u16::from(b[1])) / 2) as u8, ((u16::from(a[2]) + u16::from(b[2])) / 2) as u8, 255]
+}
+
+#[test]
+fn a_gradient_runs_from_its_first_stop_to_its_last_in_srgb() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let stops = [stop(Role::AccentBase, 0), stop(Role::DangerBase, 255)];
+    // To the right: the left edge is the first stop, the right the last, and
+    // half way is the mean of the two *sRGB* values, as CSS mixes them.
+    let (mut fx, list) = gradient_box(90, &stops, 100, 20, |_| {});
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let danger = rgba_of(fx.theme.color(Role::DangerBase));
+    assert!(close(pixel(&px, 200, 0, 10), accent, 3), "left: {:?} vs {accent:?}", pixel(&px, 200, 0, 10));
+    assert!(close(pixel(&px, 200, 99, 10), danger, 3), "right: {:?} vs {danger:?}", pixel(&px, 200, 99, 10));
+    let half = pixel(&px, 200, 50, 10);
+    assert!(close(half, srgb_mid(accent, danger), 3), "half way: {half:?} vs {:?}", srgb_mid(accent, danger));
+    assert!(close(pixel(&px, 200, 50, 2), half, 1) && close(pixel(&px, 200, 50, 17), half, 1), "and constant down a column");
+    // To the bottom: the other axis.
+    let (mut fx, list) = gradient_box(180, &stops, 20, 100, |_| {});
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    assert!(close(pixel(&px, 200, 10, 0), accent, 3) && close(pixel(&px, 200, 10, 99), danger, 3));
+    assert!(close(pixel(&px, 200, 2, 50), pixel(&px, 200, 17, 50), 1), "constant along a row");
+    // 45 degrees on a square is to its top right corner, and the diagonal it
+    // does not touch is the half-way line.
+    let (mut fx, list) = gradient_box(45, &stops, 60, 60, |_| {});
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    assert!(close(pixel(&px, 200, 15, 15), pixel(&px, 200, 45, 45), 2), "on the diagonal: alike");
+    assert!(close(pixel(&px, 200, 59, 0), danger, 4) && close(pixel(&px, 200, 0, 59), accent, 4), "corner to corner");
+}
+
+#[test]
+fn a_corner_gradient_follows_the_box_and_not_45_degrees() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let stops = [stop(Role::AccentBase, 0), stop(Role::DangerBase, 255)];
+    // 02 §5.3: to top right on a 200 x 40 banner. The half-way line joins
+    // the top-left and bottom-right corners, so (50, 10), a quarter of the
+    // way along that diagonal, is half way — where at 45 degrees it would be
+    // barely a third of the way.
+    let (mut fx, list) = gradient_box(Gradient::TO_TOP_RIGHT, &stops, 200, 40, |_| {});
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let danger = rgba_of(fx.theme.color(Role::DangerBase));
+    let mid = srgb_mid(accent, danger);
+    assert!(close(pixel(&px, 200, 50, 10), mid, 4), "on the diagonal: {:?} vs {mid:?}", pixel(&px, 200, 50, 10));
+    assert!(close(pixel(&px, 200, 150, 30), mid, 4), "the whole diagonal");
+    assert!(close(pixel(&px, 200, 199, 0), danger, 4) && close(pixel(&px, 200, 0, 39), accent, 4), "and it ends in the corner it names");
+    let (mut fx, list) = gradient_box(45, &stops, 200, 40, |_| {});
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    assert!(!close(pixel(&px, 200, 50, 10), mid, 12), "45 degrees is another picture: {:?}", pixel(&px, 200, 50, 10));
+}
+
+#[test]
+fn a_gradient_keeps_its_corners_its_border_and_its_opacity() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let stops = [stop(Role::AccentBase, 0), stop(Role::AccentBase, 255)];
+    let (mut fx, list) = gradient_box(90, &stops, 100, 60, |r| {
+        r.radius = 3; // 16 px
+        r.border_width = [2; 4];
+        r.border_color = ColorRef::role(Role::DangerBase.id());
+    });
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    assert!(close(pixel(&px, 200, 1, 1), surface, 2), "the corner is rounded off: {:?}", pixel(&px, 200, 1, 1));
+    assert!(close(pixel(&px, 200, 50, 0), rgba_of(fx.theme.color(Role::DangerBase)), 3), "the border is on top: {:?}", pixel(&px, 200, 50, 0));
+    assert!(close(pixel(&px, 200, 50, 30), rgba_of(fx.theme.color(Role::AccentBase)), 3), "and the gradient inside");
+    // Half opacity: half way to the surface, as a solid fill would be.
+    let (mut fx, list) = gradient_box(90, &stops, 100, 60, |r| r.opacity = 128);
+    let solid = {
+        let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, ..Default::default() };
+        let card = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(100), height: Dim::Px(60), opacity: 128, ..Default::default() };
+        let mut sfx = fixture(vec![col, card], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 200.0, 200.0);
+        let l = draw(&mut sfx, 200, 200, 1.0);
+        shot_at(&mut r, &mut st, &mut sfx, &l, 0.0, 200, 200)
+    };
+    let px = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 200, 200);
+    assert!(close(pixel(&px, 200, 50, 30), pixel(&solid, 200, 50, 30), 2), "{:?} vs {:?}", pixel(&px, 200, 50, 30), pixel(&solid, 200, 50, 30));
+}
+
+// ------------------------------------------------ pulse and bounce, 03 §5
+
+fn animated_bar(animation: u8) -> (Fx, DrawList) {
+    let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [8, 0, 0, 0], ..Default::default() };
+    // 40 x 40 at (0, 32) — space index 8 is 32 px above it — so a bounce's
+    // quarter, 10 px, stays inside the frame.
+    let bar = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(40), animation, ..Default::default() };
+    let mut fx = fixture(vec![col, bar], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 1), text(3, 0, "Hi")], vec![], &[], 100.0, 100.0);
+    let list = draw(&mut fx, 100, 100, 1.0);
+    (fx, list)
+}
+
+#[test]
+fn a_pulsing_or_bouncing_node_paints_the_same_list_whatever_the_clock() {
+    for animation in [ANIMATION_PULSE, ANIMATION_BOUNCE, ANIMATION_PULSE | ANIMATION_BOUNCE | ANIMATION_SPIN] {
+        let (_, a) = animated_bar(animation);
+        assert!(a.wants_frame, "{animation}: it asks for the next frame");
+        // Everything painted for the node carries it: the box and its glyphs.
+        let bar = a.quads.iter().find(|q| q.rect[2] == 40.0).expect("the bar");
+        let glyph = a.quads.iter().find(|q| q.params[2] as u32 & TEXTURED != 0).expect("a glyph");
+        for q in [bar, glyph] {
+            assert_eq!(q.params[2] as u32 & PULSING != 0, animation & ANIMATION_PULSE != 0, "{animation}");
+            assert_eq!(q.bounce, if animation & ANIMATION_BOUNCE != 0 { 40.0 } else { 0.0 }, "{animation}: the node's height, for every quad of it");
+        }
+    }
+    // The one field a bounce added to the instance: 128 bytes to 132 (the
+    // gradient rides in fields a solid box leaves empty). 10 §4 prints it.
+    assert_eq!(std::mem::size_of::<Quad>(), 132);
+    // The factor and the lift are the clock's, not the list's.
+    assert_eq!(pulse_factor(0.0), 1.0);
+    assert!((pulse_factor(1.0) - 0.5).abs() < 1e-6, "half at the second");
+    assert!((pulse_factor(2.0) - 1.0).abs() < 1e-6 && (pulse_factor(3.0) - 0.5).abs() < 1e-6, "every two seconds");
+    assert!(pulse_factor(0.5) > 0.5 && pulse_factor(0.5) < 1.0);
+    assert!((pulse_factor(0.5) - pulse_factor(1.5)).abs() < 1e-5, "down and up along the same curve");
+    assert!((bounce_lift(0.0) - 0.25).abs() < 1e-6, "a quarter up at the top of the second");
+    assert!(bounce_lift(0.5).abs() < 1e-6, "on the floor at the half");
+    assert!(bounce_lift(0.25) > 0.2, "it falls slowly first, cubic-bezier(0.8, 0, 1, 1)");
+    assert!(bounce_lift(0.75) > 0.2, "and rises fast first, cubic-bezier(0, 0, 0.2, 1)");
+    assert!((bounce_lift(7.0) - 0.25).abs() < 1e-6, "once a second");
+}
+
+#[test]
+fn pulse_dims_to_half_and_back_on_the_clock() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, list) = animated_bar(ANIMATION_PULSE);
+    let full = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 100, 100);
+    let half = shot_at(&mut r, &mut st, &mut fx, &list, 1.0, 100, 100);
+    let back = shot_at(&mut r, &mut st, &mut fx, &list, 2.0, 100, 100);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // Inside the bar (laid out at y 32..72), clear of its text.
+    let at = |px: &[u8]| pixel(px, 100, 35, 68);
+    assert!(close(at(&full), accent, 2), "at 0 s, full strength: {:?}", at(&full));
+    assert!(close(at(&back), accent, 2), "and again at 2 s");
+    // Half opacity over the surface, blended in linear light like any other
+    // opacity: somewhere strictly between, and not either end.
+    let h = at(&half);
+    assert!(!close(h, accent, 10) && !close(h, surface, 10), "at 1 s, half: {h:?}");
+    // It is the same picture a solid half-opacity bar draws.
+    let solid = {
+        let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [8, 0, 0, 0], ..Default::default() };
+        let bar = StyleRecord { bg: ColorRef::role(Role::AccentBase.id()), width: Dim::Px(40), height: Dim::Px(40), opacity: 128, ..Default::default() };
+        let mut sfx = fixture(vec![col, bar], vec![node(NodeKind::Box, 1, 1, 1), node(NodeKind::Box, 2, 2, 0)], vec![], &[], 100.0, 100.0);
+        let l = draw(&mut sfx, 100, 100, 1.0);
+        shot_at(&mut r, &mut st, &mut sfx, &l, 0.0, 100, 100)
+    };
+    assert!(close(h, at(&solid), 2), "{h:?} vs {:?}", at(&solid));
+}
+
+#[test]
+fn bounce_lifts_a_quarter_of_the_height_and_lands_at_the_half() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    let (mut fx, list) = animated_bar(ANIMATION_BOUNCE);
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let surface = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // Laid out at y 32..72 (space 8 above it). At 0 s it is drawn a quarter
+    // of its 40 px higher, 22..62; at the half it is where the layout put it.
+    let up = shot_at(&mut r, &mut st, &mut fx, &list, 0.0, 100, 100);
+    let down = shot_at(&mut r, &mut st, &mut fx, &list, 0.5, 100, 100);
+    assert!(close(pixel(&up, 100, 35, 26), accent, 2), "lifted into its parent's padding: {:?}", pixel(&up, 100, 35, 26));
+    assert!(close(pixel(&up, 100, 35, 67), surface, 2), "and off its own bottom edge: {:?}", pixel(&up, 100, 35, 67));
+    assert!(close(pixel(&down, 100, 35, 26), surface, 2), "on the floor at the half: {:?}", pixel(&down, 100, 35, 26));
+    assert!(close(pixel(&down, 100, 35, 67), accent, 2));
+    // Painting only: the layout has not moved.
+    let bar = fx.session.lookup(2).unwrap();
+    assert_eq!(fx.layout.rect(bar).unwrap().y, 32.0);
+}

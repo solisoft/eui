@@ -15,9 +15,12 @@ settings MUST produce the same values, within the tolerance in §7.
 
 ## 1. Colour roles
 
-A `ColorRef` in role space (`1..=0x7FFF`, see [`02-wire-format.md`](02-wire-format.md)
-§3.2) names one of these. The numbering is stable; ids `34..=0x7FFF` are
-reserved and MUST be rejected.
+A `ColorRef` in role space (`1..=0x3FFF`, see [`02-wire-format.md`](02-wire-format.md)
+§3.2) names one of these. The numbering is stable; ids `34..=0x3FFF` are
+reserved and MUST be rejected. `0x4000..=0x7FFF` was carved out of this
+range by version 6 for gradients (02 §5.3), whose stops are roles like any
+other colour and resolve here, so a gradient follows the viewer's mode for
+nothing.
 
 | id | Role | id | Role |
 |---:|---|---:|---|

@@ -69,6 +69,16 @@ fn every_op() {
         Op::DefChunkBytes { id: 2, bytes: b"EUIC\x01\x02\x40".to_vec() },
         Op::DefFont { role: 0, faces: vec![[4; 32]] },
         Op::DefFont { role: 2, faces: vec![[5; 32], [6; 32]] },
+        Op::DefGradient { id: 1, gradient: Gradient::new(90, &[GradientStop { color: ColorRef::role(9), at: 0 }, GradientStop { color: ColorRef::literal(1), at: 255 }]).unwrap() },
+        Op::DefGradient {
+            id: 1023,
+            gradient: Gradient::new(
+                Gradient::TO_TOP_LEFT,
+                &[GradientStop { color: ColorRef::role(9), at: 26 }, GradientStop { color: ColorRef::role(22), at: 128 }, GradientStop { color: ColorRef::role(19), at: 230 }],
+            )
+            .unwrap(),
+        },
+        Op::DefStyle { id: 2, record: StyleRecord { bg: ColorRef::gradient(1023), animation: ANIMATION_PULSE | ANIMATION_BOUNCE | ANIMATION_SPIN, ..Default::default() } },
         Op::Mount(tree.clone()),
         Op::Replace { node: 1, subtree: tree.clone() },
         Op::SetStyle { node: 1, style: 4 },
@@ -275,4 +285,43 @@ fn a_space_step_an_older_session_lacks_falls_back() {
     }
     assert_eq!(space_steps(5), 13);
     assert_eq!(space_steps(6), 18);
+}
+
+#[test]
+fn a_gradient_definition_round_trips() {
+    // 02 §5.3: every angle there is, two and three stops, and the stops as
+    // they were given — including two at one position, which is a hard edge.
+    let stops = [GradientStop { color: ColorRef::role(1), at: 0 }, GradientStop { color: ColorRef::literal(4095), at: 0 }, GradientStop { color: ColorRef::role(33), at: 255 }];
+    for angle in 0..=363u16 {
+        for n in 2..=3 {
+            let gradient = Gradient::new(angle, &stops[..n]).unwrap();
+            assert_eq!(gradient.stops().len(), n);
+            assert_eq!(gradient.first(), ColorRef::role(1));
+            roundtrip(&Frame::Batch(Batch { seq: 1, ops: vec![Op::DefGradient { id: 7, gradient }] }));
+        }
+    }
+    assert!(Gradient::new(0, &stops[..1]).is_none() && Gradient::new(0, &[stops[0]; 4]).is_none(), "two or three stops");
+    assert_eq!(ColorRef::gradient(7).gradient_id(), Some(7));
+    assert_eq!(ColorRef::gradient(7).0, 0x4007);
+}
+
+#[test]
+fn pulse_and_bounce_and_a_gradient_are_version_6() {
+    // 03 §5 and 02 §5.3: a session below 6 decodes no bit 8 or 16 and no
+    // gradient range. `for_protocol` takes the bits off and keeps the rest;
+    // a gradient `bg` a server failed to replace with its first stop is
+    // taken off rather than sent as a role the client does not know.
+    let r = StyleRecord { animation: ANIMATION_SPIN | ANIMATION_ENTER | ANIMATION_PULSE | ANIMATION_BOUNCE, bg: ColorRef::gradient(3), ..Default::default() };
+    assert_eq!(r.for_protocol(6), r);
+    let old = r.for_protocol(5);
+    assert_eq!(old.animation, ANIMATION_SPIN | ANIMATION_ENTER);
+    assert_eq!(old.bg, ColorRef::NONE);
+    let solid = StyleRecord { animation: ANIMATION_PULSE, bg: ColorRef::role(9), ..Default::default() }.for_protocol(4);
+    assert_eq!((solid.animation, solid.bg), (0, ColorRef::role(9)), "a role is left alone");
+    // What comes out decodes under the version-5 rule: no bit past 4.
+    for bits in 0..=ANIMATION_MASK {
+        if bits & !ANIMATION_MASK == 0 {
+            assert_eq!(StyleRecord { animation: bits, ..Default::default() }.for_protocol(5).animation & !7, 0);
+        }
+    }
 }

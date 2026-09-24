@@ -429,7 +429,56 @@ fn a_transition_past_the_motion_scale_is_rejected() {
 
 #[test]
 fn an_animation_bit_this_revision_does_not_define_is_rejected() {
-    assert_eq!(style_with(61, &[8]), E::IllegalValue("animation is a bit set of 1 (spin), 2 (enter) and 4 (exit)"));
+    // 8 and 16 are pulse and bounce (version 6, 03 §5); 32 is nothing yet.
+    for bit in [32u8, 64, 128] {
+        assert_eq!(style_with(61, &[bit]), E::IllegalValue("animation is a bit set of 1 (spin), 2 (enter), 4 (exit), 8 (pulse) and 16 (bounce)"), "{bit}");
+    }
+    let mut raw = style_bytes();
+    raw[61] = 1 | 8 | 16;
+    assert_eq!(StyleRecord::decode(&mut Reader::new(&raw)).map(|s| s.animation), Ok(25), "the bits combine");
+}
+
+/// 02 §3.2 and §5.3: every way a gradient can be malformed, each refused by
+/// name. The gradient range is `0x4000..=0x7FFF`; it is a background, so
+/// only `bg` may carry it, and `0x4000` names none.
+#[test]
+fn a_gradient_is_refused_outside_its_rules() {
+    // In a record: id 0, and anywhere but `bg` (offsets 37, 39, 41).
+    assert_eq!(style_with(37, &0x4000u16.to_le_bytes()), E::IllegalValue("gradient id 0"));
+    assert_eq!(style_with(39, &0x4001u16.to_le_bytes()), E::IllegalValue("only bg may name a gradient"));
+    assert_eq!(style_with(41, &0x7FFFu16.to_le_bytes()), E::IllegalValue("only bg may name a gradient"));
+    let mut raw = style_bytes();
+    raw[37..39].copy_from_slice(&0x4001u16.to_le_bytes());
+    let bg = StyleRecord::decode(&mut Reader::new(&raw)).unwrap().bg;
+    assert_eq!((bg.is_gradient(), bg.gradient_id(), bg.is_literal()), (true, Some(1), false));
+    assert_eq!(ColorRef::literal(1).gradient_id(), None, "a literal is not a gradient, though its bit 14 may be set");
+    assert!(!ColorRef::literal(0x4001).is_gradient());
+    // In a value: a prop is one colour.
+    assert_eq!(value_err(&[0x07, 0x01, 0x40]), E::IllegalValue("a value colour cannot be a gradient"));
+    // The op: angle, count, stop colour, stop order, id.
+    let def = |id: u8, angle: u16, stops: &[(u16, u8)]| {
+        let mut b = vec![0x16, id];
+        b.extend_from_slice(&angle.to_le_bytes());
+        b.push(stops.len() as u8);
+        for (c, at) in stops {
+            b.extend_from_slice(&c.to_le_bytes());
+            b.push(*at);
+        }
+        b
+    };
+    let ok = [(9u16, 0u8), (0x8001, 255)];
+    assert!(Op::decode(&mut Reader::new(&def(1, 363, &ok))).is_ok(), "363 is the last corner");
+    assert_eq!(op_err(&def(1, 364, &ok)), E::IllegalValue("gradient angle is 0-359 degrees or a corner, 360-363"));
+    assert_eq!(op_err(&def(1, 90, &ok[..1])), E::LimitExceeded("gradient stops"));
+    assert_eq!(op_err(&def(1, 90, &[(9, 0), (9, 1), (9, 2), (9, 3)])), E::LimitExceeded("gradient stops"));
+    assert_eq!(op_err(&def(1, 90, &[(0, 0), (9, 255)])), E::IllegalValue("a gradient stop is a role or a literal"));
+    assert_eq!(op_err(&def(1, 90, &[(9, 0), (0x4002, 255)])), E::IllegalValue("a gradient stop is a role or a literal"));
+    assert_eq!(op_err(&def(1, 90, &[(9, 200), (10, 100)])), E::IllegalValue("gradient stops go forwards"));
+    assert_eq!(op_err(&def(0, 90, &ok)), E::IllegalValue("gradient id"));
+    // Cut short inside the last stop.
+    let mut short = def(1, 90, &ok);
+    short.pop();
+    assert_eq!(op_err(&short), E::Truncated);
 }
 
 #[test]

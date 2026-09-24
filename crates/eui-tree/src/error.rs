@@ -18,6 +18,8 @@ pub enum Table {
     Color,
     /// Bytecode chunks.
     Chunk,
+    /// Linear gradients (02 §5.3).
+    Gradient,
 }
 
 impl fmt::Display for Table {
@@ -27,6 +29,7 @@ impl fmt::Display for Table {
             Self::Style => "style",
             Self::Color => "color",
             Self::Chunk => "chunk",
+            Self::Gradient => "gradient",
         })
     }
 }

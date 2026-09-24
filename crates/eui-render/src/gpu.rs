@@ -827,7 +827,7 @@ impl Renderer {
                     buffers: &[wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Quad>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Unorm16x4, 8 => Unorm16x4],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Unorm16x4, 8 => Unorm16x4, 9 => Float32],
                     }],
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1552,7 +1552,7 @@ impl Renderer {
     pub fn render(&mut self, tex: &mut SessionTextures, target: Target<'_>, list: &DrawList, atlas: &mut Atlas, images: &mut ImageAtlas) -> RenderStats {
         let Target { view, format, size, origin, clear, now, age, shift, scale, alpha } = target;
         let frame = [shift.0, shift.1, scale, alpha];
-        let clock = [age, spin_phase(now), 0.0, 0.0];
+        let clock = [age, spin_phase(now), crate::paint::pulse_factor(now), crate::paint::bounce_lift(now)];
         let mut stats = RenderStats { quads: list.quads.len(), runs: list.runs.len(), ..RenderStats::default() };
         stats.atlas_bytes = self.sync_atlas(tex, atlas, images);
         // The same list as last time — a spinner, a transition the vertex

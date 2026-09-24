@@ -9,7 +9,7 @@ use crate::error::{DecodeError, Result};
 use crate::limits::{HASH_BYTES, MAX_ATOM_BYTES, MAX_CHUNK_BYTES, MAX_FACES_PER_ROLE, MAX_FONT_ROLE, MAX_NOTIFY_BODY, MAX_NOTIFY_PER_BATCH, MAX_NOTIFY_TAG, MAX_NOTIFY_TITLE, MAX_OPS_PER_BATCH};
 use crate::node::{EventKind, Handler, Subtree, TextRef, Value};
 use crate::reader::Reader;
-use crate::style::StyleRecord;
+use crate::style::{Gradient, StyleRecord};
 use crate::writer::Writer;
 
 /// One operation in a batch.
@@ -55,6 +55,14 @@ pub enum Op {
         /// BLAKE3 of each face, at least one and at most
         /// [`MAX_FACES_PER_ROLE`]. `font_weight` chooses among them.
         faces: Vec<[u8; HASH_BYTES]>,
+    },
+    /// Define a linear gradient a record's `bg` may name
+    /// (`spec/02-wire-format.md` §5.3). Version 6.
+    DefGradient {
+        /// Gradient id, non-zero, at most [`MAX_GRADIENTS`](crate::limits::MAX_GRADIENTS).
+        id: u32,
+        /// The angle and the stops.
+        gradient: Gradient,
     },
     /// Deliver a bytecode chunk inline (`spec/07-bytecode.md` §2).
     DefChunkBytes {
@@ -215,6 +223,7 @@ impl Op {
                 }
                 Ok(Self::DefFont { role, faces })
             }
+            0x16 => Ok(Self::DefGradient { id: nonzero(r.varint32()?, "gradient id")?, gradient: Gradient::decode(r)? }),
             0x20 => Ok(Self::Mount(Subtree::decode(r)?)),
             0x21 => Ok(Self::Replace { node: nonzero(r.varint32()?, "node id")?, subtree: Subtree::decode(r)? }),
             0x22 => Ok(Self::SetStyle { node: nonzero(r.varint32()?, "node id")?, style: r.varint32()? }),
@@ -260,6 +269,10 @@ impl Op {
                 for face in faces {
                     w.raw(face);
                 }
+            }
+            Self::DefGradient { id, gradient } => {
+                w.u8(0x16).varint32(*id);
+                gradient.encode(w);
             }
             Self::Mount(subtree) => {
                 w.u8(0x20);

@@ -92,8 +92,8 @@ pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
 pub use reader::Reader;
 pub use style::{
-    space_steps, AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Justify, Motion, Overflow, Position, StyleRecord, TextAlign, Wrap, ANIMATION_ENTER, ANIMATION_EXIT,
-    ANIMATION_MASK, ANIMATION_SPIN, SPACE_FALLBACK,
+    space_steps, AlignItems, AlignSelf, ColorRef, Cursor, Dim, Display, FontFamily, FontWeight, Gradient, GradientStop, Justify, Motion, Overflow, Position, StyleRecord, TextAlign, Wrap,
+    ANIMATION_BOUNCE, ANIMATION_ENTER, ANIMATION_EXIT, ANIMATION_MASK, ANIMATION_PULSE, ANIMATION_SPIN, SPACE_FALLBACK,
 };
 pub use writer::Writer;
 
@@ -107,6 +107,10 @@ pub use writer::Writer;
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
 pub const PROTOCOL_VERSION: u32 = 6;
+// 6 also carries `DefGradient` and the gradient range of `ColorRef` (02
+// §5.3), and the `animation` bits `pulse` and `bounce` (03 §5). Paid for the
+// same way: a session below 6 is sent a gradient's first stop as a solid
+// `bg`, and records without the two bits.
 // 6 appends five steps to the `space` scale (05 §2): Tailwind's 1.5, 2.5,
 // 3.5, 20 and 32, at indices 13-17. An index past the end of a scale is an
 // error at style definition time, so a client at 5 would refuse the batch
