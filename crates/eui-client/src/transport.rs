@@ -125,6 +125,12 @@ impl Fetcher {
     /// Fetch an asset on a worker thread; the result arrives as
     /// [`Incoming::Asset`] and the notifier is called.
     pub fn request_asset(&self, hash: [u8; 32]) {
+        self.request_asset_within(hash, crate::assets::MAX_ASSET_BYTES);
+    }
+
+    /// [`Self::request_asset`], abandoned mid-stream past `cap` bytes: what
+    /// is left of the session's asset budget (01 §2.2).
+    pub fn request_asset_within(&self, hash: [u8; 32], cap: usize) {
         let origin = self.origin.clone();
         let tx = self.in_tx.clone();
         let notify = std::sync::Arc::clone(&self.notify);
@@ -136,7 +142,7 @@ impl Fetcher {
             // seconds to show a photograph could be measured everywhere
             // except where the time was going.
             let t0 = crate::time::Instant::now();
-            let result = crate::assets::fetch(&origin, &hash, cookie.as_deref()).map_err(|e| e.to_string());
+            let result = crate::assets::fetch_within(&origin, &hash, cookie.as_deref(), cap).map_err(|e| e.to_string());
             crate::driver::trace(|| match &result {
                 Ok(bytes) => format!("asset {} fetched {} bytes in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), bytes.len(), t0.elapsed().as_millis()),
                 Err(e) => format!("asset {} failed in {} ms: {e}", crate::assets::hex(&hash).get(..8).unwrap_or(""), t0.elapsed().as_millis()),

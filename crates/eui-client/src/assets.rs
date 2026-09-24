@@ -142,7 +142,19 @@ pub struct Fetched {
 /// it from a worker thread.
 #[cfg(has_native_net)]
 pub fn fetch(origin: &str, hash: &Hash, cookie: Option<&str>) -> Result<Vec<u8>, AssetError> {
-    let bytes = get(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie)?;
+    fetch_within(origin, hash, cookie, MAX_ASSET_BYTES)
+}
+
+/// [`fetch`], abandoned the moment the body is known to be larger than
+/// `cap` — from its `Content-Length`, before a byte of it is read, or from
+/// the bytes, whichever says so first. 01 §2.2: `cap` is what is left of
+/// the session's asset budget, and a response larger than that MUST be
+/// abandoned mid-stream rather than read and then thrown away.
+#[cfg(has_native_net)]
+pub fn fetch_within(origin: &str, hash: &Hash, cookie: Option<&str>, cap: usize) -> Result<Vec<u8>, AssetError> {
+    let cap = cap.min(MAX_ASSET_BYTES);
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
+    let bytes = rt.block_on(get_async(origin, &format!("/_eui/asset/{}", hex(hash)), "application/octet-stream", cookie, cap))?.body;
     if *blake3::hash(&bytes).as_bytes() != *hash {
         return Err(AssetError::HashMismatch);
     }
@@ -161,11 +173,11 @@ pub fn get(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Resu
 #[cfg(has_native_net)]
 pub fn get_full(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| AssetError::Connect(e.to_string()))?;
-    rt.block_on(get_async(origin, path, accept, cookie))
+    rt.block_on(get_async(origin, path, accept, cookie, MAX_ASSET_BYTES))
 }
 
 #[cfg(has_native_net)]
-async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>) -> Result<Fetched, AssetError> {
+async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>, cap: usize) -> Result<Fetched, AssetError> {
     let (scheme, hostport) = origin.split_once("://").ok_or_else(|| AssetError::Origin("no scheme".into()))?;
     let (host, port) = match hostport.rsplit_once(':') {
         Some((h, p)) if !h.contains(']') || h.ends_with(']') => (h.trim_matches(|c| c == '[' || c == ']'), p.parse::<u16>().map_err(|_| AssetError::Origin("bad port".into()))?),
@@ -186,24 +198,24 @@ async fn get_async(origin: &str, path: &str, accept: &str, cookie: Option<&str>)
         let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| AssetError::Origin("bad host name".into()))?;
         let mut tls = connector.connect(name, tcp).await.map_err(|e| AssetError::Connect(e.to_string()))?;
         tls.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tls, &mut raw).await?;
+        read_capped(&mut tls, &mut raw, cap).await?;
     } else {
         let mut tcp = tcp;
         tcp.write_all(request.as_bytes()).await.map_err(|e| AssetError::Connect(e.to_string()))?;
-        read_capped(&mut tcp, &mut raw).await?;
+        read_capped(&mut tcp, &mut raw, cap).await?;
     }
-    parse_response(&raw)
+    parse_response(&raw, cap)
 }
 
 #[cfg(has_native_net)]
-async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> Result<(), AssetError> {
+async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>, cap: usize) -> Result<(), AssetError> {
     let mut buf = [0u8; 16 * 1024];
     loop {
         let n = s.read(&mut buf).await.map_err(|e| AssetError::Connect(e.to_string()))?;
         if n == 0 {
             return Ok(());
         }
-        if out.len().saturating_add(n) > MAX_ASSET_BYTES.saturating_add(4096) {
+        if out.len().saturating_add(n) > cap.saturating_add(4096) {
             return Err(AssetError::TooLarge);
         }
         out.extend_from_slice(buf.get(..n).unwrap_or(&[]));
@@ -220,7 +232,7 @@ async fn read_capped<S: AsyncReadExt + Unpin>(s: &mut S, out: &mut Vec<u8>) -> R
 /// this reader will not do is guess, because every guess here is a guess
 /// about where somebody else's bytes end.
 #[cfg(has_native_net)]
-fn parse_response(raw: &[u8]) -> Result<Fetched, AssetError> {
+fn parse_response(raw: &[u8], cap: usize) -> Result<Fetched, AssetError> {
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| AssetError::Http("no header terminator".into()))?;
     let head = std::str::from_utf8(raw.get(..split).unwrap_or(&[])).map_err(|_| AssetError::Http("non-UTF-8 headers".into()))?;
     let mut lines = head.split("\r\n");
@@ -254,7 +266,7 @@ fn parse_response(raw: &[u8]) -> Result<Fetched, AssetError> {
         }
     }
     let length = length.ok_or_else(|| AssetError::Http("no content-length".into()))?;
-    if length > MAX_ASSET_BYTES {
+    if length > cap {
         return Err(AssetError::TooLarge);
     }
     let body = raw.get(split.saturating_add(4)..).unwrap_or(&[]);
@@ -506,26 +518,110 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, AssetError> {
     Ok(Image { width, height, rgba })
 }
 
-/// What the client holds: raw bytes by hash, decoded images by hash, and
-/// the set of hashes it has asked for and not yet received.
-#[derive(Debug, Default)]
+/// Spec 10, *Assets*: bytes one session's asset store may hold — the
+/// fetched files it keeps and the pictures it has decoded, together.
+///
+/// Past it the store lets go of what the live tree no longer names, least
+/// recently used first. What the tree does name is never let go, so a page
+/// that shows more than this at once holds more than this; what it cannot
+/// do is *fetch* more, because a fetch is capped at what is left once the
+/// named assets are counted (01 §2.2), and the one that does not fit is
+/// abandoned mid-stream.
+pub const MAX_STORE_BYTES: usize = 128 * 1024 * 1024;
+
+/// A picture as the store keeps it: the size it was drawn at, which the
+/// layout measures an unsized `image` by (03 §1), and the pixels as the
+/// sheet will hold them — no larger than [`ATLAS_EDGE`] on a side.
+///
+/// The natural pixels are not kept. Nothing but the atlas ever read them,
+/// and the atlas only ever read the shrunk copy; a 4096 × 4096 photograph
+/// held whole beside it was 64 MiB kept for a 4 MiB upload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// Natural width, in pixels.
+    pub width: u32,
+    /// Natural height, in pixels.
+    pub height: u32,
+    /// What goes into the sheet.
+    pub pixels: Image,
+}
+
+/// Everything a picture costs before it can be packed: the decode and the
+/// shrink. Run off the window's thread (see `decode.rs`), because on a
+/// photograph both are tens of milliseconds.
+pub fn prepare_image(bytes: &[u8]) -> Result<Decoded, AssetError> {
+    let img = decode_image(bytes)?;
+    let (width, height) = (img.width, img.height);
+    let pixels = fit_to_atlas(&img).unwrap_or(img);
+    Ok(Decoded { width, height, pixels })
+}
+
+/// Whether the file of a picture is worth keeping once it is decoded.
+///
+/// A PNG or a JPEG is only ever a still, so once its pixels are held its
+/// file is dead weight. A WebP may be a moving picture as well (03 §8),
+/// and a `video` node decodes it from the file — so that one is kept.
+fn keeps_file(bytes: &[u8]) -> bool {
+    !(bytes.starts_with(b"\x89PNG") || bytes.starts_with(&[0xff, 0xd8, 0xff]))
+}
+
+/// What the client holds: raw bytes by hash, decoded pictures by hash, and
+/// the set of hashes it has asked for and not yet received — all of it
+/// counted against a budget ([`MAX_STORE_BYTES`]).
+#[derive(Debug)]
 pub struct AssetStore {
     raw: HashMap<Hash, Arc<Vec<u8>>>,
     images: HashMap<Hash, Arc<Image>>,
+    /// Natural sizes of every picture ever decoded, kept after the pixels
+    /// are let go: a picture evicted and fetched again measures the same in
+    /// the meantime, so the page does not jump while it comes back.
+    sizes: HashMap<Hash, (u32, u32)>,
     failed: HashMap<Hash, String>,
     wanted: HashSet<Hash>,
     pending: Vec<Hash>,
+    /// Bytes held: every raw file plus every decoded picture's pixels.
+    held: usize,
+    budget: usize,
+    /// When each hash was last delivered or last found named by the tree,
+    /// on a counter rather than a clock: least recently used goes first.
+    used: HashMap<Hash, u64>,
+    clock: u64,
+}
+
+impl Default for AssetStore {
+    fn default() -> Self {
+        Self {
+            raw: HashMap::new(),
+            images: HashMap::new(),
+            sizes: HashMap::new(),
+            failed: HashMap::new(),
+            wanted: HashSet::new(),
+            pending: Vec::new(),
+            held: 0,
+            budget: MAX_STORE_BYTES,
+            used: HashMap::new(),
+            clock: 0,
+        }
+    }
 }
 
 impl AssetStore {
-    /// Raw bytes, if fetched.
+    /// Raw bytes, if fetched and still held. A PNG or a JPEG lets go of its
+    /// file once it is decoded; see [`Self::decoded`].
     pub fn raw(&self, hash: &Hash) -> Option<Arc<Vec<u8>>> {
         self.raw.get(hash).cloned()
     }
 
-    /// A decoded image, if fetched and decodable.
+    /// A decoded picture, as the sheet holds it — no larger than
+    /// [`ATLAS_EDGE`] on a side. Its natural size is [`Self::size`].
     pub fn image(&self, hash: &Hash) -> Option<Arc<Image>> {
         self.images.get(hash).cloned()
+    }
+
+    /// A picture's natural size, once it has been decoded — and still after
+    /// its pixels were let go.
+    pub fn size(&self, hash: &Hash) -> Option<(u32, u32)> {
+        self.sizes.get(hash).copied()
     }
 
     /// Why a hash could not be used, if it failed.
@@ -533,9 +629,10 @@ impl AssetStore {
         self.failed.get(hash).map(String::as_str)
     }
 
-    /// Note that `hash` is needed; queues a fetch the first time.
+    /// Note that `hash` is needed; queues a fetch the first time. A hash
+    /// whose bytes were let go is fetched again.
     pub fn want(&mut self, hash: Hash) {
-        if self.raw.contains_key(&hash) || self.failed.contains_key(&hash) {
+        if self.raw.contains_key(&hash) || self.images.contains_key(&hash) || self.failed.contains_key(&hash) {
             return;
         }
         if self.wanted.insert(hash) {
@@ -548,20 +645,60 @@ impl AssetStore {
         std::mem::take(&mut self.pending)
     }
 
-    /// Deliver fetched, already-verified bytes. Images are decoded now.
-    pub fn deliver(&mut self, hash: Hash, bytes: Vec<u8>) {
+    /// Forget that `hash` was asked for, so the next [`Self::want`] asks
+    /// again: a fetch that failed and is owed another try.
+    pub fn unwant(&mut self, hash: &Hash) {
+        self.wanted.remove(hash);
+    }
+
+    /// Hold fetched, already-verified bytes, undecoded. Returns them shared,
+    /// for whatever decodes them next.
+    pub fn hold(&mut self, hash: Hash, bytes: Vec<u8>) -> Arc<Vec<u8>> {
         self.wanted.remove(&hash);
-        if looks_like_image(&bytes) {
-            match decode_image(&bytes) {
-                Ok(img) => {
-                    self.images.insert(hash, Arc::new(img));
+        let bytes = Arc::new(bytes);
+        self.held = self.held.saturating_add(bytes.len());
+        if let Some(old) = self.raw.insert(hash, Arc::clone(&bytes)) {
+            self.held = self.held.saturating_sub(old.len());
+        }
+        self.stamp(hash);
+        bytes
+    }
+
+    /// A picture's decode, finished. The pixels are held; the file is let
+    /// go when nothing else could want it ([`keeps_file`]), and a picture
+    /// that would not decode is remembered as failed, file and all gone.
+    pub fn decoded(&mut self, hash: Hash, result: Result<Decoded, AssetError>) {
+        let drop_file = match result {
+            Ok(d) => {
+                self.sizes.insert(hash, (d.width, d.height));
+                self.held = self.held.saturating_add(d.pixels.rgba.len());
+                if let Some(old) = self.images.insert(hash, Arc::new(d.pixels)) {
+                    self.held = self.held.saturating_sub(old.rgba.len());
                 }
-                Err(e) => {
-                    self.failed.insert(hash, e.to_string());
-                }
+                self.stamp(hash);
+                self.raw.get(&hash).is_some_and(|b| !keeps_file(b))
+            }
+            Err(e) => {
+                self.failed.insert(hash, e.to_string());
+                true
+            }
+        };
+        if drop_file {
+            if let Some(old) = self.raw.remove(&hash) {
+                self.held = self.held.saturating_sub(old.len());
             }
         }
-        self.raw.insert(hash, Arc::new(bytes));
+    }
+
+    /// Deliver fetched, already-verified bytes and decode a picture now, on
+    /// this thread. The driver decodes off it ([`Self::hold`], then
+    /// [`Self::decoded`]); this is the whole of that for everyone else.
+    pub fn deliver(&mut self, hash: Hash, bytes: Vec<u8>) {
+        let bytes = self.hold(hash, bytes);
+        if looks_like_image(&bytes) {
+            let result = prepare_image(&bytes);
+            self.decoded(hash, result);
+        }
     }
 
     /// Record a fetch failure so the hash is not asked for again.
@@ -570,13 +707,86 @@ impl AssetStore {
         self.failed.insert(hash, why);
     }
 
+    /// Bytes held: files and decoded pictures.
+    pub fn held(&self) -> usize {
+        self.held
+    }
+
+    /// What the store may hold, [`MAX_STORE_BYTES`] unless a test lowered it.
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
+    /// Lower the budget, so a test can reach it with a few small pictures.
+    /// Never raises it past [`MAX_STORE_BYTES`].
+    #[doc(hidden)]
+    pub fn set_budget(&mut self, bytes: usize) {
+        self.budget = bytes.min(MAX_STORE_BYTES);
+    }
+
+    /// True when the store holds more than its budget.
+    pub fn over_budget(&self) -> bool {
+        self.held > self.budget
+    }
+
+    /// Bytes held for `hash`: its file, if kept, and its pixels, if decoded.
+    fn weight(&self, hash: &Hash) -> usize {
+        self.raw.get(hash).map_or(0, |b| b.len()).saturating_add(self.images.get(hash).map_or(0, |i| i.rgba.len()))
+    }
+
+    /// How large an asset may still be fetched, given what the tree names:
+    /// the budget less what `live` holds, since everything else can be let
+    /// go to make room. 01 §2.2's "remaining asset budget".
+    pub fn room(&self, live: &HashSet<Hash>) -> usize {
+        let pinned: usize = live.iter().map(|h| self.weight(h)).fold(0, usize::saturating_add);
+        self.budget.saturating_sub(pinned)
+    }
+
+    /// Let go of what `live` does not name, least recently used first,
+    /// until the store is within its budget. Returns how many assets went.
+    ///
+    /// What `live` names is marked used now, so a picture that was on the
+    /// page at the last pass outlives one that has not been since. The
+    /// size of a picture let go is kept ([`Self::size`]); a hash let go is
+    /// neither held nor failed, so the next [`Self::want`] fetches it again.
+    pub fn evict(&mut self, live: &HashSet<Hash>) -> usize {
+        for h in live {
+            if self.raw.contains_key(h) || self.images.contains_key(h) {
+                self.stamp(*h);
+            }
+        }
+        if !self.over_budget() {
+            return 0;
+        }
+        let mut idle: Vec<(u64, Hash)> = self.raw.keys().chain(self.images.keys()).filter(|h| !live.contains(*h)).map(|h| (self.used.get(h).copied().unwrap_or(0), *h)).collect();
+        idle.sort_unstable();
+        idle.dedup();
+        let mut gone = 0;
+        for (_, h) in idle {
+            if !self.over_budget() {
+                break;
+            }
+            self.held = self.held.saturating_sub(self.weight(&h));
+            self.raw.remove(&h);
+            self.images.remove(&h);
+            self.used.remove(&h);
+            gone += 1;
+        }
+        gone
+    }
+
+    fn stamp(&mut self, hash: Hash) {
+        self.clock = self.clock.saturating_add(1);
+        self.used.insert(hash, self.clock);
+    }
+
     /// Number of assets held.
     pub fn len(&self) -> usize {
-        self.raw.len()
+        self.raw.len() + self.images.keys().filter(|h| !self.raw.contains_key(*h)).count()
     }
 
     /// True when nothing is held.
     pub fn is_empty(&self) -> bool {
-        self.raw.is_empty()
+        self.raw.is_empty() && self.images.is_empty()
     }
 }

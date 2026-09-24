@@ -67,6 +67,25 @@ found to be two rules that contradicted each other.
    kind wrongly dialling opens a session when a window is dragged, and one
    wrongly not dialling drops a click into nothing.
 
+### 1.2 Assets — `crates/eui-client/tests/assets.rs`
+
+01 §2.2's budget, and 10's number for it.
+
+1. **A response past the room left is abandoned on its declared length.**
+   `a_fetch_past_the_room_left_is_abandoned`: one byte over the room is
+   `TooLarge`, exactly the room is the body.
+2. **A still is held once, and everything held is counted.**
+   `the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`: a PNG's
+   file goes when its pixels are held, a WebP's stays, and `held` is the sum.
+3. **Past the budget, what nothing names goes, oldest first; what is named
+   stays.** `the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
+   including that the natural size outlives the pixels and that a hash let
+   go is fetched again when it is named again;
+   `the_driver_lets_go_of_a_picture_the_page_stopped_showing` is the same
+   through the driver, with the room measured against the named picture.
+4. **A failed fetch is tried again.** `a_failed_fetch_is_asked_for_again`:
+   the retry is not due at once, is due after its wait, and asks.
+
 ## 2. Wire format — `crates/eui-proto/tests`
 
 | File | Pins |

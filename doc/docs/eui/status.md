@@ -171,7 +171,7 @@ without the third.
   and a release resolving to the same handler; typing edits an `input`
   locally and commits on `Enter` or blur; the wheel scrolls the nearest
   `scroll` or `list` and clamps; dark mode re-resolves the theme with no round
-  trip. 113 tests.
+  trip. 115 tests.
 - The **transport**: a WebSocket over TLS on its own thread, binary frames
   only. `ws://` is refused unless the **host** is `127.0.0.1`, `localhost`
   or `[::1]` *and* somebody asked for it — `EUI_ALLOW_INSECURE_LOOPBACK=1`
@@ -481,6 +481,16 @@ packs images into an RGBA atlas beside the glyph atlas. An image with no
 explicit size takes its intrinsic size the moment it arrives. Chunks defined
 by hash go through the same path. The todo's header carries an avatar that
 the end-to-end test fetches from the real server.
+
+The store has a budget now, 128 MiB a session (spec 10, *Assets*): a
+picture is held once, as the pixels the sheet takes — no more than 1024 on
+a side — with its PNG or JPEG file let go once they are decoded, and past
+the budget what the page no longer names goes, least recently used first. A
+fetch is capped at what is left once the named assets are counted, and
+abandoned on its `Content-Length` when it will not fit. Before, every
+picture a tab had ever shown stayed resident twice, file and full-size
+pixels. Decoded sounds and moving pictures are held only while a node names
+them, under session totals of their own (256 MiB and 192 MiB).
 
 **The catalogue, second half.** `eui_builders.sl` now composes 491 builders
 widgets from the primitives: buttons in four variants with local states,

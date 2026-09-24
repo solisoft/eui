@@ -385,6 +385,39 @@ client's judgement for the same reason every other number here is: a
 budget a reader cannot check is a promise, and this one is a privacy
 promise.
 
+## Assets
+
+What 01 §2.2 calls the session's asset budget.
+
+| Measure | Budget |
+|---|---|
+| One asset | 16 MiB (`MAX_ASSET_BYTES`) |
+| Asset store, per session: files kept and pictures decoded, together | 128 MiB (`MAX_STORE_BYTES`) |
+| A picture's pixels, as held | no more than 1024 on a side (`ATLAS_EDGE`), 4 MiB |
+
+A picture is held once: its pixels, shrunk to what the sheet takes, and its
+natural size, which is what the layout measures it by. The file of a PNG
+or a JPEG goes as soon as its pixels are held; a WebP's is kept, because a
+`video` node may ask for the same bytes as a moving picture. Fonts, chunks,
+meshes, modules, sounds and moving pictures are held as files.
+
+Past the budget the store lets go of what the live tree does not name,
+least recently used first, and keeps the natural size of each picture it
+lets go of, so a page that names it again does not change shape while it is
+fetched again. What the tree does name is never let go — a page that shows
+more than the budget at once holds more than it — and it is what "remaining"
+is measured against: a fetch may bring back the budget less what the named
+assets already hold, and one whose `Content-Length` says more is abandoned
+before its body is read. Until 2026-09-24 the store had no budget at all,
+held every picture twice — file and full-size pixels — and a feed of
+1024 × 768 photographs grew by 3.2 MB a picture for as long as it was open.
+
+Pinned in `crates/eui-client/tests/assets.rs`:
+`the_store_counts_what_it_holds_and_keeps_one_copy_of_a_still`,
+`the_store_lets_go_of_what_nothing_names_least_recently_used_first`,
+`the_driver_lets_go_of_a_picture_the_page_stopped_showing` and
+`a_fetch_past_the_room_left_is_abandoned`.
+
 ## Sound
 
 | Measure | Budget |

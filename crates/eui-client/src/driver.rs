@@ -3036,6 +3036,14 @@ impl Driver {
             let due: Vec<Hash> = self.asset_retry.iter().filter(|(_, at)| *at <= now).map(|(h, _)| *h).collect();
             self.asset_retry.retain(|(_, at)| *at > now);
             for h in due {
+                // Still marked wanted from the fetch that failed, which is
+                // what spaces the retries: the tree walk below cannot ask
+                // for it early. It has to be unmarked now, or `want` takes
+                // it for a fetch still in flight — which it did, so every
+                // retry scheduled was a no-op and a hash that lost one race
+                // sat in limbo for the rest of the session, neither held
+                // nor failed nor asked for.
+                self.assets.unwant(&h);
                 self.assets.want(h);
             }
         }
@@ -3127,13 +3135,12 @@ impl Driver {
                 if self.images.get(h).is_some() {
                     continue;
                 }
+                // Already the size the sheet takes: the store keeps a
+                // picture shrunk (`assets::Decoded`).
                 let Some(img) = self.assets.image(h) else {
                     continue;
                 };
-                match crate::assets::fit_to_atlas(&img) {
-                    Some(small) => self.images.insert(*h, small.width, small.height, &small.rgba),
-                    None => self.images.insert(*h, img.width, img.height, &img.rgba),
-                };
+                self.images.insert(*h, img.width, img.height, &img.rgba);
             }
             if hashes.iter().all(|h| self.images.get(h).is_some()) {
                 break;
@@ -3177,21 +3184,19 @@ impl Driver {
         self.audio_dirty = true;
         self.video_dirty = true;
         if let Some(img) = self.assets.image(&hash) {
-            // Shrunk first when it is bigger than the sheet: the atlas
+            // Shrunk already when it was bigger than the sheet: the atlas
             // refuses what will not fit and remembers the refusal, so a
             // picture handed over whole would be drawn as nothing, for
             // ever, in silence.
             let t1 = crate::time::Instant::now();
-            let (w, h) = (img.width, img.height);
-            match crate::assets::fit_to_atlas(&img) {
-                Some(small) => self.images.insert(hash, small.width, small.height, &small.rgba),
-                None => self.images.insert(hash, img.width, img.height, &img.rgba),
-            };
-            // Where the time goes on a picture, in the three pieces it is
-            // made of. Silent unless `EUI_TRACE=1`.
+            let (w, h) = self.assets.size(&hash).unwrap_or((img.width, img.height));
+            self.images.insert(hash, img.width, img.height, &img.rgba);
+            // Where the time goes on a picture, in the pieces it is made
+            // of. Silent unless `EUI_TRACE=1`.
             let packed = t1.elapsed();
-            trace(|| format!("asset {} {n} bytes -> {w}x{h}: decoded in {} ms, shrunk and packed in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), decoded.as_millis(), packed.as_millis()));
+            trace(|| format!("asset {} {n} bytes -> {w}x{h}: decoded and shrunk in {} ms, packed in {} ms", crate::assets::hex(&hash).get(..8).unwrap_or(""), decoded.as_millis(), packed.as_millis()));
         }
+        self.fit_store();
         self.repack = true;
         // An image's intrinsic size just changed under nodes nothing marked
         // dirty: the memoised measures cannot be trusted.
@@ -3239,6 +3244,54 @@ impl Driver {
             }
             None => self.assets.fail(hash, "font face could not be read".to_owned()),
         }
+    }
+
+    /// Every hash the session names right now: each node's asset props —
+    /// pictures, sounds, moving pictures, scene meshes and modules — and
+    /// the faces of every font role. What the store must not let go of.
+    ///
+    /// A chunk defined by hash is not in it: a chunk is verified once and
+    /// kept verified, so its file is dead weight afterwards, and one let go
+    /// before it was ever run is asked for again by the handler that runs it.
+    fn live_assets(&self) -> HashSet<Hash> {
+        let mut live: HashSet<Hash> = self.session.fonts().flat_map(|(_, faces)| faces.iter().copied()).collect();
+        if let Some(root) = self.session.root() {
+            for n in self.session.preorder(root).filter_map(|ix| self.session.node(ix)) {
+                live.extend(n.props.iter().filter_map(|(_, v)| match v {
+                    Value::Asset(h) => Some(*h),
+                    _ => None,
+                }));
+            }
+        }
+        live
+    }
+
+    /// Spec 10, *Assets*: bring the store back within its budget, if it is
+    /// past it, by letting go of what the tree does not name. The walk only
+    /// happens when it is over, which is never on a page that fits.
+    fn fit_store(&mut self) {
+        if !self.assets.over_budget() {
+            return;
+        }
+        let live = self.live_assets();
+        let gone = self.assets.evict(&live);
+        trace(|| format!("assets: {gone} let go, {} kB held of {} kB", self.assets.held() / 1024, self.assets.budget() / 1024));
+    }
+
+    /// 01 §2.2's "remaining asset budget": how large an asset the next
+    /// fetch may bring back before it is abandoned mid-stream. Everything
+    /// the tree does not name can be let go to make room, so it is the
+    /// budget less what the tree names. A walk of the tree — asked for only
+    /// when there is something to fetch.
+    pub fn asset_room(&self) -> usize {
+        self.assets.room(&self.live_assets()).min(crate::assets::MAX_ASSET_BYTES)
+    }
+
+    /// Lower the asset store's budget (spec 10, *Assets*), so a test can
+    /// reach it with a few small pictures.
+    #[doc(hidden)]
+    pub fn set_asset_budget(&mut self, bytes: usize) {
+        self.assets.set_budget(bytes);
     }
 
     /// The scene assets checked since the last call, for the window to
@@ -8627,8 +8680,8 @@ impl TextMeasurer for Measurer<'_> {
     }
     fn asset_size(&mut self, hash: &[u8; 32]) -> Option<(f32, f32)> {
         self.assets
-            .image(hash)
-            .map(|i| (i.width as f32, i.height as f32))
+            .size(hash)
+            .map(|(w, h)| (w as f32, h as f32))
             // A video is measured by its frame, which no image store holds.
             .or_else(|| self.videos.get(hash).copied())
     }
