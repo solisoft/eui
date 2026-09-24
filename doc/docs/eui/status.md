@@ -98,7 +98,9 @@ text that must not be reinvented.
   measures a run under several constraints per frame and shapes it once.
   The key holds the *role*, so rebinding one drops what was shaped under it.
 - Glyph rasterisation at a device scale behind an opaque key, for the
-  renderer's atlas.
+  renderer's atlas. The atlas is the cache: the bitmap is made, lent to the
+  packer and dropped, where `cosmic-text`'s own cache kept a second copy of
+  every glyph at every scale the session had seen, and never let go of it.
 - The pointer's shape is held while a hover is owed. It comes from the node's
   style, and a `local` hover handler is what puts a beam there — so every
   batch, which restores the style the server last sent before diffing against
@@ -132,7 +134,7 @@ text that must not be reinvented.
   drops trailing glyphs of the last line so the mark fits inside the width it
   was given — otherwise the one line that says "there is more" would be the
   one line that overflows (04 §3).
-- 24 tests, one of which lays out real glyphs through `eui-layout`.
+- 26 tests, one of which lays out real glyphs through `eui-layout`.
 
 **`eui-render` — the renderer.** One shape, one pipeline, one draw call per
 scissor region.

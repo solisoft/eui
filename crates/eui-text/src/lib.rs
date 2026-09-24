@@ -601,7 +601,13 @@ impl TextEngine {
     pub fn with_glyph<T>(&mut self, key: GlyphKey, scale: f32, f: impl FnOnce(GlyphRef<'_>) -> T) -> Option<T> {
         let size = f32::from_bits(key.size_bits) * scale;
         let cache_key = CacheKey::new(key.font, key.glyph, size, (0.0, 0.0), cosmic_text::CacheKeyFlags::empty()).0;
-        let image = self.swash.get_image(&mut self.fonts, cache_key).as_ref()?;
+        // Uncached. `get_image` keeps every bitmap it makes in a map that is
+        // never evicted, and the atlas this is packed into already holds the
+        // copy that is drawn -- rasterised once per glyph and scale, and
+        // remembered there even when it has no image. The second copy was
+        // every glyph and every zoom level the session had seen, for as
+        // long as it ran: tens of megabytes over an afternoon of CJK.
+        let image = self.swash.get_image_uncached(&mut self.fonts, cache_key)?;
         let color = match image.content {
             SwashContent::Mask => false,
             SwashContent::Color => true,
@@ -635,5 +641,25 @@ fn text_hash(text: &str) -> u64 {
 impl TextMeasurer for TextEngine {
     fn measure(&mut self, text: &str, font: FontSpec, max_width: Option<f32>, line_clamp: u8) -> TextMetrics {
         self.shape(text, font, max_width, line_clamp).metrics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rasterised_glyph_is_not_kept_a_second_time() {
+        // The atlas is the cache. Whatever swash would keep beside it is a
+        // copy nothing reads again and nothing ever frees.
+        let mut e = TextEngine::new();
+        let font = FontSpec { family: eui_proto::FontFamily::Sans, weight: FontWeight::Regular, size: 15.0, line_height: 22.0 };
+        let shaped = e.shape("Hello", font, None, 0);
+        for g in &shaped.glyphs {
+            let _ = e.rasterize(g.key, 1.0);
+            let _ = e.rasterize(g.key, 2.0);
+        }
+        assert!(shaped.glyphs.iter().any(|g| e.rasterize(g.key, 1.0).is_some()), "the glyphs do rasterise");
+        assert!(e.swash.image_cache.is_empty(), "and none of them is kept by swash: {}", e.swash.image_cache.len());
     }
 }
