@@ -246,8 +246,8 @@ soli new my-app --eui     # + app/controllers/eui_builders*.sl and a component
 ```
 
 Those copies come from `examples/demo-app/app/controllers/`, where the
-catalogue is edited. It is five files — `eui_builders.sl` and its `_forms`,
-`_charts`, `_feed` and `_markdown` halves — cut where the calls stopped
+catalogue is edited. It is six files — `eui_builders.sl` and its `_forms`,
+`_charts`, `_feed`, `_markdown` and `_tw` companions — cut where the calls stopped
 crossing, and they load into one namespace in no particular order. `scripts/sync-catalogue.sh`
 puts them in the language repository, and `--check` says whether they have
 drifted.

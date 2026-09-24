@@ -1,10 +1,12 @@
 # Widget catalogue
 
-> The primitives are specified (`spec/03`) and painted. Three hundred and
-> forty-three plain Soli functions build the catalogue below, in
+> The primitives are specified (`spec/03`) and painted. Five hundred and
+> thirty-one plain Soli functions build the catalogue below, in
 > `examples/demo-app/app/controllers/eui_builders.sl` and its `_forms`,
-> `_charts` and `_feed` companions, and a `gallery` component shows them
-> together. `soli new <app> --eui` starts an application with those files
+> `_charts`, `_feed`, `_markdown` and `_tw` companions, and a `gallery`
+> component shows them together. It is drawn the way Tailwind UI draws an
+> application, and [`tw()`](/docs/tailwind) writes a style in Tailwind's
+> classes. `soli new <app> --eui` starts an application with those files
 > already in it. Every signature is in
 > [Components](/docs/components); this page is the shape of the catalogue,
 > not its reference.

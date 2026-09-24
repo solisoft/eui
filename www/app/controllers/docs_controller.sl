@@ -151,6 +151,13 @@ class DocsController < Controller
           "lead": "Roles, scales, and why the client resolves them."
         },
         {
+          "slug": "docs/tailwind",
+          "file": "eui/tailwind.md",
+          "source": "doc/docs/eui/tailwind.md",
+          "title": "Tailwind classes",
+          "lead": "tw(): a style in Tailwind's classes, and what it refuses."
+        },
+        {
           "slug": "docs/clients",
           "file": "eui/clients.md",
           "source": "doc/docs/eui/clients.md",

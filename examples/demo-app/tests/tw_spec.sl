@@ -1,21 +1,20 @@
-# The level meter, tested without a client.
+# `tw()`, tested without a client.
 #
-# A meter is two decisions and a lot of arithmetic: which of the three
-# colours a segment belongs to, and how many of them the reading lights.
-# Both are wrong in ways that only show on the edges — the reading of
-# exactly zero that must light nothing, the reading of a hundred that must
-# light everything including the last red one, and the peak-hold marker
-# that sits above the bar rather than inside it.
+#   soli test tests/tw_spec.sl --no-coverage
 #
-# Run with a soli that can see the catalogue:
-#
-#   soli tests/vu_spec.sl
+# Three things are worth pinning, and none of them shows in a screenshot
+# until it is wrong on someone else's page: that a class becomes the style
+# key and the scale index it names, that a class with no equivalent is
+# refused *by name* rather than dropped, and that everything tw() does emit
+# is something the encoder takes. The last is checked against the real
+# encoder: `eui_render` is the same `style_record` a session goes through,
+# and it raises on a key or a value it does not know.
 #
 # The definitions are copied in by `tools/sync_split_spec.py` rather than
 # imported, because `app/controllers` is loaded by the server and not by a
-# bare script.
+# bare script. The memo is a module constant, which the copy does not carry,
+# so it is declared here.
 
-# `node()` reads `tw()`'s memo, a module constant the copy does not carry.
 TW_MEMO = {}
 TW_MEMO_CAP = 1024
 
@@ -848,201 +847,146 @@ def tw_examples()
   ]
 end
 
-def vu_zone(i, n)
-  at = n > 1 ? (i * 100) / (n - 1) : 0
-  return "danger.base" if at >= 88
-  return "warning.base" if at >= 70
-  "success.base"
-end
-
-def vu_segment(i, n, lit, axis)
-  thin = axis == "v" ? 4 : 3
-  long = axis == "v" ? 3 : 4
-  {
-    "k": "box",
-    "s": {
-      "width": axis == "v" ? 18 : long,
-      "height": axis == "v" ? long : 10,
-      "radius": 1,
-      "bg": vu_zone(i, n),
-      "opacity": lit == true ? 255 : 38,
-      "transition": "fast",
-      "shrink": 0,
-      # Both axes now: a segment shares the length the strip was given, the
-      # way the horizontal one always has. Vertically it used to be three
-      # pixels and no growth, so the bar came out the height of its contents
-      # — 58 px — while the legend beside it stretched to 96 and no mark
-      # stood against the segment it names.
-      "grow": 1,
-      "min_width": axis == "v" ? 0 : thin,
-      "min_height": axis == "v" ? long : 0
-    }
-  }
-end
-
-def vu_strip(level, o = {})
-  axis = o["axis"] ?? "h"
-  n = o["segments"] ?? 12
-  now = (level ?? 0).clamp(0, 100)
-  hold = (o["peak"] ?? -1).clamp(-1, 100)
-  lit_to = (now * n) / 100
-  hold_at = hold >= 0 ? (hold * n) / 100 : -1
-  cells = range(0, n).map(fn(i) {
-    vu_segment(i, n, i < lit_to || i == hold_at, axis)
-  })
-  cells = cells.reverse() if axis == "v"
-  # The vertical strip needs a length to share out, exactly as the
-  # horizontal one takes the full width. `height` names it; the legend is
-  # given the same one, which is the whole of making the two line up.
-  tall = o["height"] ?? 96
-  strip = axis == "v"
-    ? column({"gap": 0, "align": "center", "shrink": 0, "height": tall}, cells)
-    : row({"gap": 0, "align": "center", "width": "100%"}, cells)
-  strip["s"]["gap"] = 1
-  strip["p"] = {
-    "role": "progress",
-    "label": o["label"] ?? "Level",
-    "value_now": now,
-    "value_min": 0,
-    "value_max": 100
-  }
-  strip
-end
-
-def vu_scale(o = {})
-  axis = o["axis"] ?? "h"
-  marks = (o["marks"] ?? ["-20", "-10", "-6", "-3", "0", "+3"]).map(fn(m) {
-    text(m, {"size": 0, "fg": "text.muted", "font": "mono"})
-  })
-  # The mirror of the horizontal case, and it was not one. Laid out at its
-  # natural height, six marks of text stand about twice as tall as twelve
-  # three-pixel segments, so the legend ran past the strip and no mark stood
-  # beside the segment it names. `between` is what the row already does
-  # across its width.
-  #
-  # And no `height`: the parent row is `align: "stretch"`, so this column is
-  # already the height of the strips beside it. Asking for `100%` on top of
-  # that resolved against an ancestor instead and laid the meter out 6 232
-  # pixels tall — measured, after writing it.
-  if axis == "v"
-    tall = o["height"] ?? 96
-    return column({"gap": 0, "justify": "between", "align": "end", "shrink": 0, "height": tall}, marks.reverse())
-  end
-
-
-  row({"gap": 0, "justify": "between", "width": "100%"}, marks)
-end
-
-def vu_meter(level, o = {})
-  axis = o["axis"] ?? "h"
-  pair = level.is_a?("array") == true ? level : [level]
-  vals = pair.filter(fn(v) { v != null })
-  # One strip per reading, whatever the readings are. Two is the pair a
-  # `level` event carries and the shape a deck showed, so two is named left
-  # and right; one is named nothing, because there is nothing to tell it
-  # apart from. Anything else — bands of a spectrum, a channel per voice —
-  # is the same drawing and only wants its own words, so `labels` supplies
-  # them. A reader who cannot see the bars is who this is for: without a
-  # name each strip announces itself as "Level" and the screen reader says
-  # the same thing five times.
-  sides = o["labels"].is_a?("array") == true
-    ? o["labels"].map(fn(l) { " " + l.to_s })
-    : (vals.length() == 2 ? [" left", " right"] : [""])
-  # The hold marker has the same shape as the reading it follows: one
-  # number for one strip, a pair for two. A single number shared by both
-  # would put the louder channel's marker over the quieter one, which is
-  # the one thing a peak-hold must not do.
-  holds = (o["peak"] ?? -1).is_a?("array") == true ? o["peak"] : [o["peak"] ?? -1, o["peak"] ?? -1]
-  strips = range(0, vals.length()).map(fn(i) {
-    vu_strip(vals[i], o.merge({
-      "peak": holds[i] ?? -1,
-      "label": (o["label"] ?? "Level") + (sides[i] ?? "")
-    }))
-  })
-  body = axis == "v"
-    ? row({"gap": 1, "align": "end", "shrink": 0}, strips)
-    : column({"gap": 1, "width": "100%"}, strips)
-  return body if o["scale"] == false
-  axis == "v"
-    ? row({"gap": 2, "align": "stretch", "shrink": 0}, [body, vu_scale(o)])
-    : column({"gap": 1, "width": "100%"}, [body, vu_scale(o)])
-end
-
 def check(label, got, want)
   assert_eq(got, want)
 end
 
-# How many segments a strip has lit, read back off the tree it returns.
-def lit_of(strip)
-  strip["c"].filter(fn(c) { c["s"]["opacity"] == 255 }).length()
+# The error a class string raises, or "" when it raises none.
+def tw_refusal(classes)
+  said = ""
+  try
+    tw(classes)
+  catch e
+    said = str(e)
+  end
+  said
 end
 
-def roles_of(strip)
-  strip["c"].map(fn(c) { c["s"]["bg"] })
+# Whether the encoder takes a style: `eui_render` raises on anything
+# `style_record` refuses, and a refused render is `nil` here.
+def encodes?(style)
+  enc_got = eui_render({"k": "box", "s": style, "c": []}) rescue nil
+  !enc_got.nil?
 end
 
-# --- the ramp ---------------------------------------------------------
+describe("tw", fn() {
+  test("a class becomes the key and the index it names", fn() {
+    check("padding is a space index", tw("p-4")["s"], {"pad": 5})
+    check("sides combine", tw("p-4 px-2")["s"], {"pad": [5, 3, 5, 3]})
+    check("a gap", tw("gap-3")["s"], {"gap": 4})
+    check("half a step", tw("mt-0.5")["s"], {"margin": [1, 0, 0, 0]})
+    check("a width is four px a step", tw("w-64")["s"], {"width": 256})
+    check("a fraction is a percent", tw("w-1/2")["s"], {"width": "50%"})
+    check("full", tw("w-full h-full")["s"], {"width": "100%", "height": "100%"})
+    check("an arbitrary length", tw("w-[320px]")["s"], {"width": 320})
+    check("a named max width", tw("max-w-md")["s"], {"max_width": 448})
+    check("flex", tw("flex flex-col items-center justify-between")["s"], {"display": "column", "align": "center", "justify": "between"})
+    check("text sizes are the scale", tw("text-xs")["s"]["size"], 0)
+    check("text-sm is one", tw("text-sm")["s"]["size"], 1)
+    check("text-4xl is the top", tw("text-4xl")["s"]["size"], 7)
+    check("a weight", tw("font-semibold")["s"], {"weight": "semibold"})
+    check("text-right is end", tw("text-right")["s"], {"text_align": "end"})
+    check("truncate is one line", tw("truncate")["s"], {"clamp": 1})
+    check("rounded-lg is radius 2", tw("rounded-lg")["s"], {"radius": 2})
+    check("rounded-full is radius 4", tw("rounded-full")["s"], {"radius": 4})
+    check("shadow-sm is one", tw("shadow-sm")["s"], {"shadow": 1})
+    check("shadow-lg is three", tw("shadow-lg")["s"], {"shadow": 3})
+    check("opacity is a byte", tw("opacity-50")["s"], {"opacity": 128})
+    check("a duration picks a step", tw("duration-300")["s"], {"transition": "slow"})
+    check("grid columns are a prop", tw("grid grid-cols-3")["props"], {"columns": 3})
+  })
 
-# Twelve segments: the first eight are safe, two are warnings, two are
-# not. The boundaries are the whole point of the function, so they are
-# what gets checked rather than the middle of each band.
-check("the bottom of the scale is green", vu_zone(0, 12), "success.base")
-check("and stays green to just under seven tenths", vu_zone(7, 12), "success.base")
-check("amber starts at seven tenths", vu_zone(8, 12), "warning.base")
-check("red starts at just under nine", vu_zone(11, 12), "danger.base")
+  test("a colour becomes a role, and which one depends on what it paints", fn() {
+    check("white is the raised surface", tw("bg-white")["s"], {"bg": "surface.raised"})
+    check("gray-50 is the page", tw("bg-gray-50")["s"], {"bg": "surface.base"})
+    check("gray-100 is sunken", tw("bg-gray-100")["s"], {"bg": "surface.sunken"})
+    check("text-gray-900 is the ink", tw("text-gray-900")["s"], {"fg": "text.default"})
+    check("text-gray-500 is muted", tw("text-gray-500")["s"], {"fg": "text.muted"})
+    check("text-gray-400 is disabled", tw("text-gray-400")["s"], {"fg": "text.disabled"})
+    check("border-gray-300 is the default edge", tw("border-gray-300")["s"], {"border_color": "border.default"})
+    check("border-gray-400 is strong", tw("border-gray-400")["s"], {"border_color": "border.strong"})
+    check("slate is a gray", tw("bg-slate-50")["s"], {"bg": "surface.base"})
+    check("indigo-600 is the accent", tw("bg-indigo-600")["s"], {"bg": "accent.base"})
+    check("indigo-500 is its hover", tw("bg-indigo-500")["s"], {"bg": "accent.hover"})
+    check("red-600 is danger", tw("text-red-600")["s"], {"fg": "danger.base"})
+    check("green-50 is the success tint", tw("bg-green-50")["s"], {"bg": "success.subtle"})
+    check("a role by name", tw("bg-accent text-muted")["s"], {"bg": "accent.base", "fg": "text.muted"})
+    check("a dotted role, dashed", tw("bg-danger-subtle")["s"], {"bg": "danger.subtle"})
+    check("a literal", tw("bg-[#1E293B]")["s"], {"bg": "#1E293B"})
+    check("a scrim", tw("bg-black/50")["s"], {"bg": "#00000080"})
+    check("a card's ring is the subtle edge", tw("ring-1 ring-gray-900/5")["s"], {"border": 1, "border_color": "border.subtle"})
+    check("transparent is none", tw("bg-transparent")["s"], {"bg": "none"})
+  })
 
-# One segment is a whole meter, and it is not a warning.
-check("a single segment is green", vu_zone(0, 1), "success.base")
+  test("borders write sides", fn() {
+    check("border is one all round", tw("border")["s"], {"border": 1})
+    check("border-b is the bottom", tw("border-b")["s"], {"border": [0, 0, 1, 0]})
+    check("border-l-4", tw("border-l-4")["s"], {"border": [0, 0, 0, 4]})
+    check("later sides add to earlier", tw("border border-t-2")["s"], {"border": [2, 1, 1, 1]})
+  })
 
-# --- how much is lit --------------------------------------------------
+  test("hover, active, focus and disabled are deltas over the resting style", fn() {
+    got = tw("bg-white px-4 hover:bg-gray-50 active:bg-gray-100 focus:border-indigo-600 disabled:opacity-50")
+    check("resting", got["s"], {"bg": "surface.raised", "pad": [0, 5, 0, 5]})
+    check("hover", got["hover"], {"bg": "surface.base"})
+    check("press", got["press"], {"bg": "surface.sunken"})
+    check("focus", got["focus"], {"border_color": "accent.base"})
+    check("disabled", got["disabled"], {"opacity": 128})
+    check("a state's sides start from the resting ones", tw("p-2 hover:pt-4")["hover"], {"pad": [5, 3, 3, 3]})
+    check("tw_style lays disabled over", tw_style("bg-white disabled:opacity-50", true), {"bg": "surface.raised", "opacity": 128})
+  })
 
-check("silence lights nothing", lit_of(vu_strip(0, {"segments": 12})), 0)
-check("full scale lights every one", lit_of(vu_strip(100, {"segments": 12})), 12)
-check("half lights half", lit_of(vu_strip(50, {"segments": 12})), 6)
+  test("a node with states gets local handlers, and one without gets none", fn() {
+    plain = node("box", {"tw": "flex gap-2 bg-white"}, [])
+    check("the classes became the style", plain["s"], {"display": "row", "gap": 3, "bg": "surface.raised"})
+    check("no handlers", plain["on"], null)
+    live = node("box", {"tw": "bg-white hover:bg-gray-50", "grow": 1}, [])
+    check("a key written beside tw wins", live["s"], {"bg": "surface.raised", "grow": 1})
+    check("hover is local", live["on"]["pointer_enter"]["local"], "self.style = @hover")
+    check("and carries the hover style", live["on"]["pointer_enter"]["styles"]["hover"], {"bg": "surface.base", "grow": 1})
+    focused = node("box", {"tw": "border focus:border-indigo-600"}, [])
+    check("focus wires a focus and a blur", focused["on"]["focus"]["styles"]["focus"]["border_color"], "accent.base")
+    check("and no pointer states", focused["on"]["pointer_enter"], null)
+    check("column still wins its display", column({"tw": "flex gap-1"}, [])["s"]["display"], "column")
+  })
 
-# A reading the server got wrong does not make a meter longer than itself.
-check("over a hundred is still a hundred", lit_of(vu_strip(150, {"segments": 12})), 12)
-check("under zero is still zero", lit_of(vu_strip(-20, {"segments": 12})), 0)
+  test("a result is a copy, so writing into one does not reach the next", fn() {
+    first = tw("gap-2")
+    first["s"]["display"] = "column"
+    check("the memo is untouched", tw("gap-2")["s"], {"gap": 3})
+  })
 
-# --- peak hold --------------------------------------------------------
+  test("a class with no equivalent is refused by name, with the reason", fn() {
+    check("tracking", tw_refusal("tracking-tight").starts_with?("tw: 'tracking-tight' has no EUI equivalent"), true)
+    check("leading", tw_refusal("leading-6").index_of("line-height") >= 0, true)
+    check("a gradient", tw_refusal("bg-gradient-to-r").index_of("gradients") >= 0, true)
+    check("a corner", tw_refusal("rounded-tl-lg").index_of("four corners") >= 0, true)
+    check("divide", tw_refusal("divide-y").index_of("border-b on each row") >= 0, true)
+    check("space-x", tw_refusal("space-x-4").index_of("gap-N") >= 0, true)
+    check("translate", tw_refusal("translate-x-1").index_of("transforms") >= 0, true)
+    check("ring-offset", tw_refusal("ring-offset-2").index_of("offset") >= 0, true)
+    check("a step off the scale lists the steps", tw_refusal("p-1.5").index_of("0, 0.5, 1, 2") >= 0, true)
+    check("a palette hue that is no role", tw_refusal("bg-purple-600").index_of("accent (indigo-600)") >= 0, true)
+    check("the accent has no tint", tw_refusal("bg-indigo-50").index_of("info-subtle") >= 0, true)
+    check("a breakpoint", tw_refusal("md:flex").index_of("bp(width)") >= 0, true)
+    check("dark mode", tw_refusal("dark:bg-gray-900").index_of("roles") >= 0, true)
+    check("a negative margin", tw_refusal("-mt-2").index_of("unsigned") >= 0, true)
+    check("auto margins", tw_refusal("mx-auto").index_of("auto margins") >= 0, true)
+    check("line height on a size", tw_refusal("text-sm/6").index_of("write text-sm") >= 0, true)
+    check("past the text scale", tw_refusal("text-5xl").index_of("text-4xl") >= 0, true)
+    check("an unknown class", tw_refusal("wobble").starts_with?("tw: unknown class 'wobble'"), true)
+    check("one bad class spoils the string", tw_refusal("flex gap-2 tracking-wide") != "", true)
+    check("a good string raises nothing", tw_refusal("flex gap-2 rounded-lg bg-white shadow-sm"), "")
+  })
 
-# The marker sits above the bar, so it adds one to what is lit rather
-# than being swallowed by it. That is the whole visual point: the bar
-# falls away and the marker stays.
-check("a peak above the bar is one more lit", lit_of(vu_strip(20, {"segments": 10, "peak": 80})), 3)
-check("a peak inside the bar adds nothing", lit_of(vu_strip(80, {"segments": 10, "peak": 20})), 8)
-check("no peak asked for, none drawn", lit_of(vu_strip(20, {"segments": 10})), 2)
-
-# --- the two axes -----------------------------------------------------
-
-# Vertical is the same segments the other way up: the loudest is at the
-# top, so the list is reversed and the last one is the quiet green.
-check("horizontal runs quiet to loud", roles_of(vu_strip(50, {"segments": 12}))[11], "danger.base")
-check("vertical runs loud to quiet", roles_of(vu_strip(50, {"segments": 12, "axis": "v"}))[0], "danger.base")
-check("a horizontal strip is a row", vu_strip(50, {})["s"]["display"], "row")
-check("a vertical strip is a column", vu_strip(50, {"axis": "v"})["s"]["display"], "column")
-
-# --- what a reader is told --------------------------------------------
-
-# A meter is a reading, not a decoration, so it says so — and it says the
-# reading it was given rather than the number of segments it happened to
-# light.
-check("a strip declares its role", vu_strip(37, {})["p"]["role"], "progress")
-check("and the reading it was given", vu_strip(37, {})["p"]["value_now"], 37)
-check("on the scale it was given", vu_strip(37, {})["p"]["value_max"], 100)
-
-# --- one channel or two -----------------------------------------------
-
-# A `level` event carries a pair, which is what the front of a deck
-# showed. One number is one strip; two are two, and they say which is
-# which rather than both calling themselves "Level".
-check("one reading is one strip", vu_meter(50, {"scale": false})["c"].length(), 1)
-check("a pair is two", vu_meter([50, 30], {"scale": false})["c"].length(), 2)
-check("and they are named apart", vu_meter([50, 30], {"scale": false})["c"][0]["p"]["label"], "Level left")
-check("both of them", vu_meter([50, 30], {"scale": false})["c"][1]["p"]["label"], "Level right")
-check("a lone reading is not called left", vu_meter(50, {"scale": false})["c"][0]["p"]["label"], "Level")
-
-# The scale comes with it unless it is turned off, and it is the legend a
-# deck printed rather than a percentage.
-check("the legend is dB", vu_scale({})["c"].length(), 6)
-check("and zero is on it", vu_scale({})["c"][4]["t"], "0")
+  test("everything tw() accepts, the encoder takes", fn() {
+    # One of every shape of class, and each state laid over the resting
+    # style the way the handlers declare it.
+    for cls in tw_examples()
+      got = tw(cls)
+      whole = got["s"].merge(got["hover"]).merge(got["press"]).merge(got["focus"]).merge(got["disabled"])
+      check(cls, encodes?(whole) ? cls : "refused: " + cls, cls)
+    end
+    check("and the encoder does refuse", encodes?({"bg": "accent.subtle"}), false)
+  })
+})

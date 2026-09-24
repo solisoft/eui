@@ -1808,6 +1808,58 @@ absolute address in the markdown on the way out. An `eui-asset:` address is
 resolvable by a client talking to this server and by nothing else, which is
 the whole reason the widget's own default is not what a mail uses.
 
+## A catalogue that looks like Tailwind UI
+
+The client's defaults moved to Tailwind's scale — text, shadows, radius, the
+indigo accent, real medium and semibold faces — and the catalogue had been
+drawn against the old one, with conventions of its own that no web
+application shares: fields in a grey well, cards at radius 3, labels in the
+muted ink, 16 px buttons over 14 px body text. It is now drawn the way
+Tailwind UI draws an application, from roles and scale indices alone, with
+nothing new on the wire:
+
+- **Controls.** Every button is `control` now, `button_variant` included,
+  one control tall (36 px) with a 14 px semibold label. The primary is the
+  filled accent with a small shadow and no visible edge; the secondary is
+  white inside a `border.default` hairline and hovers to the page grey. The
+  edge is reserved on every tone, painted or not, so a primary and a
+  secondary side by side are the same height.
+- **Fields.** White (`surface.raised`) inside `border.default`, 14 px text,
+  shadow 1; focus paints the edge in the accent as well as the client's ring.
+  The label above is 14 px medium in the default ink (`field_label`), no
+  longer muted. Select, combobox, multi select, tag well, currency and the
+  one-time-code cells follow.
+- **Surfaces.** Cards at radius 2 (8 px) with a `border.subtle` hairline and
+  shadow 1; dialogs, sheets, menus, popovers, dropdowns and toasts a step up,
+  at radius 3 and shadow 3. The toast is a white panel with its tone in an
+  icon rather than a tinted strip.
+- **Tables.** Header 14 px semibold in the default ink over a
+  `border.default` rule, rows split by `border.subtle`, 12 px of room, a local
+  `surface.base` hover; `table_row(…, {"dense": true})` keeps the ten
+  thousand-row demo at a 29 px pitch with no handlers per row.
+- **Badges and chips** are `rounded-md` (radius 1), 12 px medium; the pill is
+  kept for dots and avatars. **Tabs** are underlined in the accent, the label
+  inheriting the box's ink so a hover can darken it. The **sidebar**'s current
+  row is the grey wash with the name in the accent, and every row washes
+  under the pointer, locally.
+
+And a sixth catalogue file, `eui_builders_tw.sl`: `tw("flex items-center
+gap-3 rounded-lg bg-white px-4 py-2 shadow-sm hover:bg-gray-50")` answers a
+style hash and its `hover:`/`active:`/`focus:`/`disabled:` deltas, and
+`node()`, `control()` and `stateful()` take the string directly. Spacing is
+the space scale's indices, colours are roles — a gray is a surface, a border
+or an ink depending on what it paints — and a class with no equivalent
+(`tracking-*`, `leading-*`, gradients, per-corner radius, `divide-*`,
+transforms, breakpoints, `dark:`) raises with its name and the reason. Each
+distinct string is parsed once per process. [Tailwind classes](/docs/tailwind)
+has the table.
+
+The catalogue is 531 definitions over six files. `tests/tw_spec.sl` is 8
+tests and 296 assertions, one of which sends every one of the 213 example
+classes through the real encoder (`eui_render`); the demo application's specs
+are 13 files, 47 tests, 641 assertions. The gallery's Catalogue section opens
+with a card written in nothing but class strings.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

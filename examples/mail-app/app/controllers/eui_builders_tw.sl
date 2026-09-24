@@ -1,63 +1,51 @@
-# The level meter, tested without a client.
+# EUI view builders, part 6: Tailwind-style class strings.
 #
-# A meter is two decisions and a lot of arithmetic: which of the three
-# colours a segment belongs to, and how many of them the reading lights.
-# Both are wrong in ways that only show on the edges — the reading of
-# exactly zero that must light nothing, the reading of a hundred that must
-# light everything including the last red one, and the peak-hold marker
-# that sits above the bar rather than inside it.
+#   tw("flex items-center gap-3 rounded-lg bg-white px-4 py-2 shadow-sm
+#       hover:bg-gray-50")
 #
-# Run with a soli that can see the catalogue:
+# answers
 #
-#   soli tests/vu_spec.sl
+#   {"s": base, "hover": {...}, "press": {...}, "focus": {...},
+#    "disabled": {...}, "props": {...}}
 #
-# The definitions are copied in by `tools/sync_split_spec.py` rather than
-# imported, because `app/controllers` is loaded by the server and not by a
-# bare script.
+# `s` is an ordinary EUI style hash. The four states are *deltas* over it, the
+# same shape a `TONES` entry has, so a `tw()` result can be handed to
+# `stateful()` as a tone. `props` carries what Tailwind says in a class and EUI
+# says in a prop — only `grid-cols-N` so far.
+#
+# It is plain Soli and adds nothing to the wire: every class becomes the style
+# keys and values spec 02 already has, colours become the roles of spec 05, and
+# spacing becomes indices into the space scale, which the client multiplies by
+# the viewer's density. A class with no honest equivalent raises, naming the
+# class and saying why, rather than being dropped: a page that silently loses
+# half its classes looks almost right, which is the expensive kind of wrong.
+#
+# `doc/docs/eui/tailwind.md` has the table. Part of the reference catalogue —
+# `eui_builders.sl` has the header that explains the whole of it; `node()`,
+# `stateful()` and `control()` there take a `"tw"` string and call in here.
+#
+# Every local below carries its function's prefix. A bare assignment in a
+# callee writes the caller's variable of the same name, and these functions
+# call each other a dozen deep.
 
-# `node()` reads `tw()`'s memo, a module constant the copy does not carry.
-TW_MEMO = {}
-TW_MEMO_CAP = 1024
-
-# ---- copied from the catalogue, do not edit ----
-
-def node(kind, style, children)
-  # Not `n`: a bare assignment here would write the caller's `n`, and half
-  # the catalogue calls this with one of its own in hand.
-  nd_made = {
-    "k": kind,
-    "s": style,
-    "c": children
-  }
-  return nd_made if style.nil? || style["tw"].nil?
-
-  tw_node(nd_made)
-end
-
-def column(style, children)
-  style["display"] = "column"
-  node("box", style, children)
-end
-
-def row(style, children)
-  style["display"] = "row"
-  node("box", style, children)
-end
-
-def text(content, style)
-  {
-    "k": "text",
-    "t": content,
-    "s": style
-  }
-end
-
+# The words of a class string. A list is taken as already split, so a view can
+# build its classes conditionally without joining them first.
 def tw_split(classes)
   return [] if classes.nil?
 
   sp_list = classes.class == "array" ? classes : classes.to_s.replace("\n", " ").replace("\t", " ").split(" ")
   sp_list.map(fn(w) { w.to_s.strip() }).filter(fn(w) { w != "" })
 end
+
+# Parsing a class string is a quarter of a millisecond, and a view says the
+# same string on every row of every render; so each distinct string is parsed
+# once per process and copied out after that. Copied, because a caller may
+# write into what it is given -- `column()` sets `display` on its style -- and a
+# shared hash would carry that write into every later node. The memo stops
+# growing at `TW_MEMO_CAP` strings, so a view that builds its classes out of
+# data (`"w-[" + str(px) + "px]"`) costs a parse each time and nothing more.
+TW_MEMO = {}
+TW_MEMO_CAP = 1024
 
 def tw(classes)
   tw_key = classes.class == "array" ? classes.join(" ") : classes.to_s
@@ -98,6 +86,7 @@ def tw_parse(classes)
   tw_out
 end
 
+# Just the resting style, with the `disabled:` delta laid over it when asked.
 def tw_style(classes, disabled = false)
   ts_all = tw(classes)
   return ts_all["s"].merge(ts_all["disabled"]) if disabled == true
@@ -105,11 +94,16 @@ def tw_style(classes, disabled = false)
   ts_all["s"]
 end
 
+# Whether a result declares any state at all. A node without one needs no
+# handlers, and should not be given four that do nothing.
 def tw_stateful?(t)
   st_n = t["hover"].keys().length() + t["press"].keys().length() + t["focus"].keys().length()
   st_n > 0
 end
 
+# What `node(kind, {"tw": ...}, children)` does with the string. The style's
+# own keys win over the classes, so a builder can pin `display` after the
+# fact the way `column` and `row` do.
 def tw_node(n)
   tn_style = n["s"]
   tn_t = tw(tn_style["tw"])
@@ -124,6 +118,9 @@ def tw_node(n)
   n
 end
 
+# Local handlers for the states a result declares, and none for the ones it
+# does not. `self` names the node a chunk runs on (07 §1), so this needs no
+# key; a node that is restyled from outside afterwards wants one anyway.
 def tw_wire(base, t, on)
   tww_hover = base.merge(t["hover"] ?? {})
   tww_press = tww_hover.merge(t["press"] ?? {})
@@ -145,6 +142,8 @@ def tw_wire(base, t, on)
   end
   tww_out
 end
+
+# ---- Errors ------------------------------------------------------------------
 
 def tw_no(whole, why)
   "tw: '" + whole + "' has no EUI equivalent — " + why
@@ -170,6 +169,8 @@ def tw_variant(prefix, whole)
   throw tw_no(whole, tv_why)
 end
 
+# Families refused by prefix, with the reason. Only reached after the exact
+# table, so `rounded-sm` is found there before `rounded-s` refuses it here.
 def tw_refused(name)
   rf_why = {
     "tracking-": "EUI has no letter-spacing; the 64-byte style record has no byte for it",
@@ -257,6 +258,7 @@ def tw_refused(name)
   ""
 end
 
+# Classes refused by exact name.
 def tw_refused_exact(name)
   return "there are no auto margins; centre with justify-center, items-center or self-center" if ["m-auto", "mx-auto", "my-auto", "mt-auto", "mr-auto", "mb-auto", "ml-auto"].includes?(name)
   return "there are no positioning schemes; absolute is the one there is, inside a stack" if ["relative", "static", "fixed", "sticky"].includes?(name)
@@ -273,6 +275,11 @@ def tw_refused_exact(name)
   ""
 end
 
+# ---- Scales ------------------------------------------------------------------
+
+# Tailwind's spacing steps, and the index of the space scale (05 §2) each one
+# is. Only the steps both scales share: 1.5 is 6 px, and the space scale has 4
+# and 8, so it is an error rather than a guess.
 def tw_space_steps()
   {"0": 0, "0.5": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "8": 8, "10": 9, "12": 10, "16": 11, "24": 12}
 end
@@ -308,6 +315,7 @@ def tw_numeric?(value)
   nm_dots <= 1 && value != "."
 end
 
+# `[320px]`, `[50%]`: the arbitrary values tw() takes for a length.
 def tw_bracket(value, whole)
   br_inner = value.substring(1, value.length() - 1)
   if br_inner.ends_with?("px")
@@ -321,6 +329,7 @@ def tw_bracket(value, whole)
   throw tw_no(whole, "an arbitrary length is [Npx] or [N%]")
 end
 
+# A width or a height: N x 4 px, a fraction, full, auto, px or [Npx].
 def tw_length(value, whole)
   return "100%" if value == "full"
   return "auto" if value == "auto"
@@ -341,6 +350,8 @@ def tw_length(value, whole)
   throw tw_no(whole, "a length is N (N x 4 px), a fraction, full, auto, px or [Npx]")
 end
 
+# ---- Colours -----------------------------------------------------------------
+
 def tw_roles()
   [
     "surface.base", "surface.raised", "surface.sunken", "surface.overlay",
@@ -356,6 +367,8 @@ def tw_roles()
   ]
 end
 
+# The semantic spellings, which are the roles themselves: `bg-accent`,
+# `text-muted`, `border-subtle`, `bg-danger-subtle`, `bg-surface-raised`.
 def tw_role_alias(prefix, value)
   ra_dotted = value.replace("-", ".")
   return ra_dotted if tw_roles().includes?(ra_dotted)
@@ -382,6 +395,7 @@ def tw_status(family)
   ""
 end
 
+# The nearest role, for the error that refuses a palette colour.
 def tw_nearest(family)
   return "accent (indigo-600), or series-1 to series-5 for data" if ["purple", "violet", "fuchsia", "pink"].includes?(family)
   return "warning (yellow-600)" if family == "orange"
@@ -407,6 +421,10 @@ def tw_hex?(value)
   true
 end
 
+# `bg-black/50`, `ring-gray-900/5`: a colour with an opacity. EUI's roles are
+# opaque, so only the two uses Tailwind UI makes of this are taken — a scrim
+# behind a dialog, which is a literal, and the faint ring round a card, which
+# is `border.subtle`.
 def tw_alpha(prefix, value, whole)
   al_parts = value.split("/")
   al_base = al_parts[0]
@@ -428,6 +446,7 @@ def tw_alpha(prefix, value, whole)
   throw tw_no(whole, "roles are opaque; an opacity is taken only on a ring (ring-gray-900/5 is border.subtle) and on a scrim (bg-black/50, bg-gray-500/75)")
 end
 
+# A colour class's value, for `bg`, `text`, `border` and `ring`.
 def tw_colour(prefix, value, whole)
   return "none" if value == "transparent"
   if value.starts_with?("[#") && value.ends_with?("]")
@@ -482,6 +501,7 @@ def tw_colour(prefix, value, whole)
   co_found
 end
 
+# A gray shade, which is a different role depending on what it paints.
 def tw_gray(prefix, shade)
   if prefix == "bg"
     return "surface.base" if shade == "50"
@@ -502,6 +522,9 @@ def tw_gray(prefix, shade)
   ""
 end
 
+# ---- Classes -----------------------------------------------------------------
+
+# The classes that are one fixed patch, looked up by name.
 def tw_exact()
   {
     "flex": {"display": "row"},
@@ -616,6 +639,7 @@ def tw_exact()
   }
 end
 
+# Which sides a suffix names: "" all four, x, y, t, r, b, l.
 def tw_sides(which)
   return [true, false, false, false] if which == "t"
   return [false, true, false, false] if which == "r"
@@ -631,6 +655,8 @@ def tw_edge(key, which, v)
   {"edge": key, "sides": tw_sides(which), "v": v}
 end
 
+# Four sides, from whatever a style already holds: nothing, one index, a
+# pair, or four.
 def tw_edges(start, sides, v)
   ed_now = [0, 0, 0, 0]
   if start.nil?
@@ -655,6 +681,9 @@ def tw_border_width(value, whole)
   throw tw_no(whole, "a border is border, border-0, -2, -4 or -8")
 end
 
+# One class, without its variant, as a patch: `{"set": style}`, or
+# `{"edge": key, "sides": [...], "v": n}` for a class that writes some sides of
+# `pad`, `margin` or `border`, or `{"props": {...}}`.
 def tw_class(name, whole)
   if name.index_of(":") >= 0
     throw tw_no(whole, "one variant per class; hover:focus: is two states at once")
@@ -679,6 +708,8 @@ def tw_class(name, whole)
   throw tw_unknown(whole)
 end
 
+# The classes that carry a value: spacing, lengths, colours, borders, and the
+# numeric ones. `nil` when the name is none of them.
 def tw_family(name, whole)
   fa_dash = name.index_of("-")
   return nil if fa_dash <= 0
@@ -787,6 +818,7 @@ def tw_family(name, whole)
   nil
 end
 
+# One class into the result, in the variant it names.
 def tw_take(out, variant, name, whole)
   tk_patch = tw_class(name, whole)
   tk_style = out[variant]
@@ -809,6 +841,8 @@ def tw_take(out, variant, name, whole)
   out
 end
 
+# Every class tw() accepts, one of each shape. `tests/tw_spec.sl` sends each
+# through the encoder, and the gallery prints them.
 def tw_examples()
   [
     "p-0", "p-0.5", "p-1", "p-2", "p-3", "p-4", "p-5", "p-6", "p-8", "p-10", "p-12", "p-16", "p-24",
@@ -847,202 +881,3 @@ def tw_examples()
     "hover:bg-gray-50", "active:bg-gray-100", "focus:border-indigo-600", "disabled:opacity-50"
   ]
 end
-
-def vu_zone(i, n)
-  at = n > 1 ? (i * 100) / (n - 1) : 0
-  return "danger.base" if at >= 88
-  return "warning.base" if at >= 70
-  "success.base"
-end
-
-def vu_segment(i, n, lit, axis)
-  thin = axis == "v" ? 4 : 3
-  long = axis == "v" ? 3 : 4
-  {
-    "k": "box",
-    "s": {
-      "width": axis == "v" ? 18 : long,
-      "height": axis == "v" ? long : 10,
-      "radius": 1,
-      "bg": vu_zone(i, n),
-      "opacity": lit == true ? 255 : 38,
-      "transition": "fast",
-      "shrink": 0,
-      # Both axes now: a segment shares the length the strip was given, the
-      # way the horizontal one always has. Vertically it used to be three
-      # pixels and no growth, so the bar came out the height of its contents
-      # — 58 px — while the legend beside it stretched to 96 and no mark
-      # stood against the segment it names.
-      "grow": 1,
-      "min_width": axis == "v" ? 0 : thin,
-      "min_height": axis == "v" ? long : 0
-    }
-  }
-end
-
-def vu_strip(level, o = {})
-  axis = o["axis"] ?? "h"
-  n = o["segments"] ?? 12
-  now = (level ?? 0).clamp(0, 100)
-  hold = (o["peak"] ?? -1).clamp(-1, 100)
-  lit_to = (now * n) / 100
-  hold_at = hold >= 0 ? (hold * n) / 100 : -1
-  cells = range(0, n).map(fn(i) {
-    vu_segment(i, n, i < lit_to || i == hold_at, axis)
-  })
-  cells = cells.reverse() if axis == "v"
-  # The vertical strip needs a length to share out, exactly as the
-  # horizontal one takes the full width. `height` names it; the legend is
-  # given the same one, which is the whole of making the two line up.
-  tall = o["height"] ?? 96
-  strip = axis == "v"
-    ? column({"gap": 0, "align": "center", "shrink": 0, "height": tall}, cells)
-    : row({"gap": 0, "align": "center", "width": "100%"}, cells)
-  strip["s"]["gap"] = 1
-  strip["p"] = {
-    "role": "progress",
-    "label": o["label"] ?? "Level",
-    "value_now": now,
-    "value_min": 0,
-    "value_max": 100
-  }
-  strip
-end
-
-def vu_scale(o = {})
-  axis = o["axis"] ?? "h"
-  marks = (o["marks"] ?? ["-20", "-10", "-6", "-3", "0", "+3"]).map(fn(m) {
-    text(m, {"size": 0, "fg": "text.muted", "font": "mono"})
-  })
-  # The mirror of the horizontal case, and it was not one. Laid out at its
-  # natural height, six marks of text stand about twice as tall as twelve
-  # three-pixel segments, so the legend ran past the strip and no mark stood
-  # beside the segment it names. `between` is what the row already does
-  # across its width.
-  #
-  # And no `height`: the parent row is `align: "stretch"`, so this column is
-  # already the height of the strips beside it. Asking for `100%` on top of
-  # that resolved against an ancestor instead and laid the meter out 6 232
-  # pixels tall — measured, after writing it.
-  if axis == "v"
-    tall = o["height"] ?? 96
-    return column({"gap": 0, "justify": "between", "align": "end", "shrink": 0, "height": tall}, marks.reverse())
-  end
-
-
-  row({"gap": 0, "justify": "between", "width": "100%"}, marks)
-end
-
-def vu_meter(level, o = {})
-  axis = o["axis"] ?? "h"
-  pair = level.is_a?("array") == true ? level : [level]
-  vals = pair.filter(fn(v) { v != null })
-  # One strip per reading, whatever the readings are. Two is the pair a
-  # `level` event carries and the shape a deck showed, so two is named left
-  # and right; one is named nothing, because there is nothing to tell it
-  # apart from. Anything else — bands of a spectrum, a channel per voice —
-  # is the same drawing and only wants its own words, so `labels` supplies
-  # them. A reader who cannot see the bars is who this is for: without a
-  # name each strip announces itself as "Level" and the screen reader says
-  # the same thing five times.
-  sides = o["labels"].is_a?("array") == true
-    ? o["labels"].map(fn(l) { " " + l.to_s })
-    : (vals.length() == 2 ? [" left", " right"] : [""])
-  # The hold marker has the same shape as the reading it follows: one
-  # number for one strip, a pair for two. A single number shared by both
-  # would put the louder channel's marker over the quieter one, which is
-  # the one thing a peak-hold must not do.
-  holds = (o["peak"] ?? -1).is_a?("array") == true ? o["peak"] : [o["peak"] ?? -1, o["peak"] ?? -1]
-  strips = range(0, vals.length()).map(fn(i) {
-    vu_strip(vals[i], o.merge({
-      "peak": holds[i] ?? -1,
-      "label": (o["label"] ?? "Level") + (sides[i] ?? "")
-    }))
-  })
-  body = axis == "v"
-    ? row({"gap": 1, "align": "end", "shrink": 0}, strips)
-    : column({"gap": 1, "width": "100%"}, strips)
-  return body if o["scale"] == false
-  axis == "v"
-    ? row({"gap": 2, "align": "stretch", "shrink": 0}, [body, vu_scale(o)])
-    : column({"gap": 1, "width": "100%"}, [body, vu_scale(o)])
-end
-
-def check(label, got, want)
-  assert_eq(got, want)
-end
-
-# How many segments a strip has lit, read back off the tree it returns.
-def lit_of(strip)
-  strip["c"].filter(fn(c) { c["s"]["opacity"] == 255 }).length()
-end
-
-def roles_of(strip)
-  strip["c"].map(fn(c) { c["s"]["bg"] })
-end
-
-# --- the ramp ---------------------------------------------------------
-
-# Twelve segments: the first eight are safe, two are warnings, two are
-# not. The boundaries are the whole point of the function, so they are
-# what gets checked rather than the middle of each band.
-check("the bottom of the scale is green", vu_zone(0, 12), "success.base")
-check("and stays green to just under seven tenths", vu_zone(7, 12), "success.base")
-check("amber starts at seven tenths", vu_zone(8, 12), "warning.base")
-check("red starts at just under nine", vu_zone(11, 12), "danger.base")
-
-# One segment is a whole meter, and it is not a warning.
-check("a single segment is green", vu_zone(0, 1), "success.base")
-
-# --- how much is lit --------------------------------------------------
-
-check("silence lights nothing", lit_of(vu_strip(0, {"segments": 12})), 0)
-check("full scale lights every one", lit_of(vu_strip(100, {"segments": 12})), 12)
-check("half lights half", lit_of(vu_strip(50, {"segments": 12})), 6)
-
-# A reading the server got wrong does not make a meter longer than itself.
-check("over a hundred is still a hundred", lit_of(vu_strip(150, {"segments": 12})), 12)
-check("under zero is still zero", lit_of(vu_strip(-20, {"segments": 12})), 0)
-
-# --- peak hold --------------------------------------------------------
-
-# The marker sits above the bar, so it adds one to what is lit rather
-# than being swallowed by it. That is the whole visual point: the bar
-# falls away and the marker stays.
-check("a peak above the bar is one more lit", lit_of(vu_strip(20, {"segments": 10, "peak": 80})), 3)
-check("a peak inside the bar adds nothing", lit_of(vu_strip(80, {"segments": 10, "peak": 20})), 8)
-check("no peak asked for, none drawn", lit_of(vu_strip(20, {"segments": 10})), 2)
-
-# --- the two axes -----------------------------------------------------
-
-# Vertical is the same segments the other way up: the loudest is at the
-# top, so the list is reversed and the last one is the quiet green.
-check("horizontal runs quiet to loud", roles_of(vu_strip(50, {"segments": 12}))[11], "danger.base")
-check("vertical runs loud to quiet", roles_of(vu_strip(50, {"segments": 12, "axis": "v"}))[0], "danger.base")
-check("a horizontal strip is a row", vu_strip(50, {})["s"]["display"], "row")
-check("a vertical strip is a column", vu_strip(50, {"axis": "v"})["s"]["display"], "column")
-
-# --- what a reader is told --------------------------------------------
-
-# A meter is a reading, not a decoration, so it says so — and it says the
-# reading it was given rather than the number of segments it happened to
-# light.
-check("a strip declares its role", vu_strip(37, {})["p"]["role"], "progress")
-check("and the reading it was given", vu_strip(37, {})["p"]["value_now"], 37)
-check("on the scale it was given", vu_strip(37, {})["p"]["value_max"], 100)
-
-# --- one channel or two -----------------------------------------------
-
-# A `level` event carries a pair, which is what the front of a deck
-# showed. One number is one strip; two are two, and they say which is
-# which rather than both calling themselves "Level".
-check("one reading is one strip", vu_meter(50, {"scale": false})["c"].length(), 1)
-check("a pair is two", vu_meter([50, 30], {"scale": false})["c"].length(), 2)
-check("and they are named apart", vu_meter([50, 30], {"scale": false})["c"][0]["p"]["label"], "Level left")
-check("both of them", vu_meter([50, 30], {"scale": false})["c"][1]["p"]["label"], "Level right")
-check("a lone reading is not called left", vu_meter(50, {"scale": false})["c"][0]["p"]["label"], "Level")
-
-# The scale comes with it unless it is turned off, and it is the legend a
-# deck printed rather than a percentage.
-check("the legend is dB", vu_scale({})["c"].length(), 6)
-check("and zero is on it", vu_scale({})["c"][4]["t"], "0")

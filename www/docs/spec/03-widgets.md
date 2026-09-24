@@ -985,9 +985,19 @@ catalogue implementation MUST:
 - put the identity a handler needs in the node's `props`, never in the
   event name.
 
+A catalogue that offers styles written some other way — class strings, a
+theme object — is a translation into the style vocabulary of 02 and the roles
+of 05, and nothing more: it adds no key, no value and no wire construct. Such
+a translation MUST refuse what it cannot express, naming the input and the
+reason, rather than drop it — a page that silently loses a class looks almost
+right, which is the costly way to be wrong — and everything it does emit MUST
+be accepted by the encoder. Enforced for the reference catalogue's `tw()` by
+`examples/demo-app/tests/tw_spec.sl` (`soli test`), which runs one of every
+accepted class through `eui_render` and pins the refusals.
+
 The reference catalogue ships with `examples/demo-app` as
-`app/controllers/eui_builders.sl` and its `_forms`, `_charts`, `_feed` and
-`_markdown` companions, and `soli new <app> --eui` writes those same files
+`app/controllers/eui_builders.sl` and its `_forms`, `_charts`, `_feed`,
+`_markdown` and `_tw` companions, and `soli new <app> --eui` writes those same files
 into a new application beside a component that uses them. Its
 families: actions (button variants,
 split button, segmented control, toggle group, menu, context menu, command palette,
@@ -999,7 +1009,15 @@ navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 expandable row, tree table, grid, multi-select list, list item, chart, stat, code block,
 diff, filter builder), markdown (document, document rows for a windowed
 list, block editor and its model), feedback (toast,
-banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip).
+banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip),
+style (`tw`: Tailwind-style class strings, with `hover:`, `active:`, `focus:` and
+`disabled:` as local states).
+
+Its look is Tailwind UI's, drawn from roles and scale indices alone: 14 px
+(`size` 1) for labels and body text, white fields and secondary buttons inside a
+`border.default` hairline, cards at radius 2 with shadow 1, overlays a step up
+at radius 3 and shadow 3. The look is the catalogue's choice and not a
+requirement: another catalogue over the same primitives MAY look like anything.
 
 ## 7. Sound
 

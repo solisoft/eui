@@ -1,8 +1,8 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders*.sl` — 491 functions over
-> five files, all of them plain Soli, none of them native, and what
+> `examples/demo-app/app/controllers/eui_builders*.sl` — 531 functions over
+> six files, all of them plain Soli, none of them native, and what
 > `soli new <app> --eui` writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
@@ -296,7 +296,7 @@ A widget is not a protocol feature.
 
 | Signature | What it returns |
 |---|---|
-| `node(kind, style, children)` | The bare hash. Everything else is built on it |
+| `node(kind, style, children)` | The bare hash. Everything else is built on it. A `"tw"` key in `style` is read as Tailwind classes — see [Tailwind classes](/docs/tailwind) |
 | `column(style, children)` | A box with `display: column` |
 | `row(style, children)` | A box with `display: row` |
 | `stack(style, children)` | A box with `display: stack` — children superimposed |
@@ -324,9 +324,9 @@ A widget is not a protocol feature.
 
 | Signature | What it returns |
 |---|---|
-| `h1(content)` | Size 5, bold |
-| `h2(content)` | Size 4, semibold |
-| `muted(content)` | Size 1, `text.muted` |
+| `h1(content)` | Size 6 (30 px), bold — `text-3xl font-bold` |
+| `h2(content)` | Size 4 (20 px), semibold |
+| `muted(content)` | Size 1 (14 px), `text.muted` |
 | `text_interned(content, style)` | A text marked `intern` — for short strings that repeat across many nodes |
 
 ## Controls and states
@@ -339,7 +339,7 @@ appear in the file.
 | Signature | What it returns |
 |---|---|
 | `control(o)` | A keyed node: the size applied, the tone's resting colours, the caller's shape on top, the four pointer handlers wired to declared styles, the semantics in its props — and, when it is disabled or loading, no handler map at all |
-| `stateful(base, tone, on)` | The four pointer handlers alone, merged onto an existing handler map |
+| `stateful(base, tone, on)` | The four pointer handlers alone, merged onto an existing handler map. `tone` may also be a class string or a `tw()` result, whose `focus:` classes add a focus and a blur |
 | `tone_resting(tone, lit)` | A tone's resting colours, with its selected patch folded in |
 | `a11y_props(o)` | What a widget declares about itself, merged with the props its handler reads back |
 | `control_metrics(size)` | `pad`, `gap` and `min_width` for `sm`, `md` or `lg` |
@@ -348,13 +348,24 @@ appear in the file.
 | `icon_box_px(size)` / `checkbox_box_px(size)` | The square an icon button occupies, and the mark of a checkbox |
 | `size_spec(size)` | The whole row of the size table |
 
-`TONES` names five — `accent`, `neutral`, `ghost`, `danger`, `quiet`. Each is a
+`TONES` names seven — `accent`, `neutral`, `ghost`, `danger`, `quiet`, and the
+underlined tab's `tab` and `tab_on`. Each is a
 resting colour set plus a **hover and a press delta**. Deltas, not whole styles:
 merged over whatever base the caller ended up with, they keep every geometry
 choice inside all three states, so a size, a selection or a patch applied from
 outside cannot go missing under the pointer. That is the invariant `restyle`
 used to repair afterwards, made structural instead — and `restyle` stays, for
 narrowing a widget from outside.
+
+The tones are Tailwind UI's. `accent` is the filled primary with a small
+shadow and no visible edge, hovering to the lighter `accent.hover`; `neutral` is
+the white secondary inside a `border.default` hairline (Tailwind's `ring-1
+ring-inset ring-gray-300`), hovering to the page grey; `danger` lightens by a
+tenth of its opacity under the pointer, because the theme has no `danger.hover`.
+Every tone reserves the one-pixel edge whether it paints it or not, so a primary
+and a secondary side by side are the same height. `o["tw"]` on `control` is the
+same shape in classes: its resting classes go over the tone, its `hover:` and
+`active:` over the tone's deltas.
 
 ```soli
 control({
@@ -426,8 +437,8 @@ everything.
 
 | Signature | What it returns |
 |---|---|
-| `button_variant(label, on_click, bg, fg)` | The engine: a keyed box with `click`, and local `pointer_enter/leave/down/up` that repoint it at declared styles |
-| `secondary_button(label, on_click)` | `surface.sunken` on `text.default` |
+| `button_variant(label, on_click, bg, fg)` | A `control` whose tone the fill picks — `accent.base` is `accent`, `surface.sunken` or `surface.raised` is `neutral`, `danger.base` is `danger`, no fill in the accent is `ghost`, anything else is that pair over `quiet`. One control tall (36 px), 14 px semibold label |
+| `secondary_button(label, on_click)` | White inside a `border.default` hairline, `text.default`, shadow 1 |
 | `danger_button(label, on_click)` | `danger.base` on `danger.on` |
 | `ghost_button(label, on_click)` | No fill, accent text |
 | `icon_button(glyph, on_click, props, o = {})` | A square from the size scale. `o["icon"]` names a vector icon to draw instead of the glyph; `o["name"]` is what it is *called* — a control whose only text is `×` is announced as `×` |
@@ -449,7 +460,8 @@ press switch between style records the session already holds.
 | `switch(label, on, on_toggle, props, o = {})` | A track and a knob, placed by `justify` |
 | `radio(label, selected, on_pick, props, o = {})` | A ring with a dot in it. It cannot be unticked: the group owns the value |
 | `radio_group(options, value, on_pick, o = {})` | The buttons, the `radio_group` role, and keys namespaced by `o["name"]` so two groups of Yes/No cannot restyle each other. `o["direction"]` is `"column"` unless `"row"` is asked for |
-| `field(label, value, on_change)` | A muted label over an input |
+| `field(label, value, on_change)` | A label over an input |
+| `field_label(label)` | The label every field takes: 14 px medium in `text.default`, Tailwind's `text-sm font-medium text-gray-900` |
 | `textarea(value, on_change, o = {})` | The multi-line field. `o["rows"]` is a floor, not a ceiling — it grows with what is typed into it |
 | `text_link(label, on_click, props = {})` | Text in the accent colour that declares the `link` role. Not `link`: `breadcrumb` keeps a local of that name |
 | `form(children, submit_label, on_submit)` | The children, then a right-aligned submit |
@@ -666,16 +678,16 @@ arithmetic reaches the view.
 
 | Signature | Notes |
 |---|---|
-| `card(style, children)` | Raised surface, subtle border, radius 3, shadow 1 — your `style` wins where it sets a key |
-| `tabs(names, active, on_select, o = {})` | A row of labels, the active one underlined; each carries `{"tab": name}` |
+| `card(style, children)` | Raised surface, `border.subtle` hairline, radius 2 (8 px, `rounded-lg`), shadow 1, pad 6 — your `style` wins where it sets a key |
+| `tabs(names, active, on_select, o = {})` | A row of labels, the active one in the accent over a 2 px accent rule; the others muted, drawing a grey rule under the pointer. Each carries `{"tab": name}` |
 | `dialog(title, body_children, actions, opts = {})` | An overlay: dimmed ground, centred panel, actions right. Declares itself `modal` and `autofocus`, so the client traps `Tab` inside it and puts focus there when it opens, and claims `Escape` alone — `opts["on_close"]` is the event that key sends |
-| `sheet(side, children, opts = {})` | A 320 px panel at the left or right edge, over a dimmed ground |
+| `sheet(side, children, opts = {})` | A 384 px panel at the left or right edge, shadow 3, over a dimmed ground |
 | `drawer(children, opts = {})` | `sheet("left", …)` |
 | `popover(anchor, content, open)` | A panel over its anchor; the anchor alone when closed |
 | `toolbar(children)` | A raised strip with a bottom rule |
-| `accordion(sections, open_id, on_toggle)` | Sections of `{id, title, body}`; the open one shows its body |
+| `accordion(sections, open_id, on_toggle)` | Sections of `{id, title, body}`, or `children` in place of `body`; the open one shows it |
 | `stepper(steps, current)` | Numbered dots — done ones filled, the current one ringed |
-| `menu(items, on_pick)` | A raised column; each item carries `{"item": it}` |
+| `menu(items, on_pick)` | A floating column — radius 3, shadow 3 — whose items wash grey under the pointer, locally; each carries `{"item": it}` |
 | `context_menu(anchor, items, open, on_open, on_pick, o = {})` | Right-click opens `menu` over the anchor. The client already emits `context_menu` on button 1; `on_open` is that event. `o["on_close"]` is Escape |
 | `command_palette(query, items, at, o = {})` | Overlay, a field, a list. `items` are `{id, label, hint, group}` or strings. `command_match` narrows them. Include it in the tree only while it is up |
 | `command_match(items, query)` / `command_row(it)` | What of the palette still belongs under the draft, and the shape of one command |
@@ -786,8 +798,8 @@ whatever is leaving, and a pop is the same sentence read backwards.
 
 | Signature | Notes |
 |---|---|
-| `table_header(labels, widths)` | A header row of fixed column widths |
-| `table_row(key, values, widths)` | A keyed body row — keyed, so re-sorting **moves** rows |
+| `table_header(labels, widths)` | A header row of fixed column widths, 14 px semibold in the default ink over a `border.default` rule |
+| `table_row(key, values, widths, o = {})` | A keyed body row — keyed, so re-sorting **moves** rows. The first cell in the default ink, the rest muted, 12 px of room above and below and a local `surface.base` hover. `o["dense"]` is 4 px and no hover, for a virtualised list of thousands |
 | `data_grid(columns, rows, selected, editing, sort, on_select, on_sort, on_change, on_key)` | Header outside the scroll, equal columns filling the width (50 % of two, 33 % of three), a selected cell, an `input` or select in the one being edited |
 | `grid_header(columns, sort, on_sort)` | One labelled cell per column; the active sort is marked |
 | `grid_row(record, columns, selected, editing, on_select, on_change, on_key)` | A keyed row of `grid_cell` |
@@ -799,8 +811,8 @@ whatever is leaving, and a pop is the same sentence read backwards.
 | `multi_select_window(make, count, window, sel, on_toggle, o = {})` | The same over a windowed list (04 §7.1). `make` is `fn(i)` for absolute row `i`; only the rows in `window` are built, `set_size` is the whole `count`, and `o["row_shape"]` pins the height `heights` promised |
 | `selection_toggle(sel, id)` / `selection_count(sel, total)` / `selection_mark(sel, total)` | The model those two share — see **Multi-selection** below |
 | `stat(label, value, hint)` | A card with one big number |
-| `chip(label, on_remove, props)` | A pill, with an optional × carrying `props` |
-| `badge(label, tone)` | `tone` is a role family: `"info"` → `info.subtle` on `info.base` |
+| `chip(label, on_remove, props)` | A grey `rounded-md` tag, with an optional × carrying `props` |
+| `badge(label, tone)` | `tone` is a role family: `"info"` → `info.subtle` on `info.base`, 12 px medium, radius 1. `"neutral"` is the grey one |
 | `progress(fraction)` | A bar; the fraction is clamped to 0–1 |
 | `skeleton(width, height)` | A sunken placeholder |
 | `code_block(code)` | Monospace on a sunken ground |
@@ -809,8 +821,8 @@ whatever is leaving, and a pop is the same sentence read backwards.
 
 | Signature | Notes |
 |---|---|
-| `toast(message, tone)` | A raised, toned strip |
-| `banner(message, tone, action_label, on_action)` | Full width, a 3-unit accent edge, an action at the end |
+| `toast(message, tone)` | A white panel, radius 3 and shadow 3, the tone in an icon beside the words |
+| `banner(message, tone, action_label, on_action)` | Full width on the tone's tint, a 4 px edge in its base, an action at the end |
 | `spinner()` | An 18 px arc the **client** spins — `animation: "spin"`, no frames on the wire |
 | `spinner_sized(size)` | The same, sized |
 | `empty_state(title, body, action_label, on_action)` | Centred: a placeholder mark, a title, a line, one button |
@@ -1230,6 +1242,27 @@ what the feed's card cache does, and why ten thousand cards diff in 44 ms.
 `params["viewport"]` on `connect` and `viewport`, then `bp_min(width, "md")`
 chooses a different tree — a column instead of a row, fewer grid columns.
 The client never runs a media query.
+
+## Tailwind classes
+
+`eui_builders_tw.sl`. A style written as a class string, in the vocabulary a
+Tailwind page already uses; [Tailwind classes](/docs/tailwind) has the whole
+table, the approximations and the refusals.
+
+| Signature | What it returns |
+|---|---|
+| `tw(classes)` | `{"s", "hover", "press", "focus", "disabled", "props"}`: the resting style, the four states as deltas over it, and `grid-cols-N` as a prop. `classes` is a string or a list of them. A class with no equivalent raises, naming it |
+| `tw_style(classes, disabled = false)` | Only the resting style — for a `text` node, whose style is a plain hash — with `disabled:` laid over it when asked |
+| `tw_node(n)` | What `node()` does with a `"tw"` key: the classes under the keys written beside them, the props, and local handlers for the states |
+| `tw_wire(base, t, on)` | Those handlers alone: pointer states when `hover:` or `active:` is present, a focus and a blur when `focus:` is |
+| `tw_examples()` | One of every shape of class `tw()` accepts; the spec sends each through the encoder |
+
+```soli
+row({"tw": "items-center gap-4 px-4 py-4 border-b border-gray-200 hover:bg-gray-50"}, [
+  text(person["name"], tw_style("text-sm font-semibold text-gray-900")),
+  text(person["mail"], tw_style("text-xs text-gray-500 truncate"))
+])
+```
 
 ## Writing your own
 

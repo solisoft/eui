@@ -1726,33 +1726,30 @@ end
 # One row of the channel list. Unread is two signals at once — the name goes
 # bold and a count appears — because either alone is missable in a column of
 # twenty, and losing your place is the thing this row exists to prevent.
+#
+# Written in the catalogue's `tw()` classes, and drawn the way the catalogue's
+# `sidebar` draws the row you are on: Tailwind UI's grey wash with the name in
+# the accent, rather than a filled accent bar. A filled bar was the loudest
+# thing in the window, louder than the conversation it led to.
 def chat_room_row(state, room)
   here = room["id"] == state["room"].to_s
   unread = chat_unread(state, room["id"])
   label = room["kind"] == "dm" ? room["name"] : "# " + room["name"]
-  resting = {
-    "display": "row",
-    "gap": 2,
-    "align": "center",
-    "pad": [1, 2, 1, 2],
-    "radius": 2,
-    "cursor": "pointer",
-    "width": "100%",
-    "transition": "fast",
-    "bg": here ? "accent.base" : "none"
-  }
-  fg = here ? "accent.on" : (unread > 0 ? "text.default" : "text.muted")
+  cr_look = tw("flex items-center gap-2 w-full rounded-md px-2 py-1 cursor-pointer transition " + (here ? "bg-gray-100" : "hover:bg-gray-100 active:bg-gray-100"))
+  resting = cr_look["s"]
+  fg = here ? "accent.base" : (unread > 0 ? "text.default" : "text.muted")
   parts = []
   parts = parts.concat([chat_dm_dot(room)]) if room["kind"] == "dm"
   parts = parts.concat([text(label, {
     "fg": fg,
-    "weight": (unread > 0 && !here) ? "semibold" : "regular",
+    "weight": (unread > 0 || here) ? "semibold" : "regular",
+    "size": 1,
     "grow": 1,
     "shrink": 1,
     "min_width": 0,
     "clamp": 1
   })])
-  parts = parts.concat([chat_unread_badge(unread, here)]) if unread > 0
+  parts = parts.concat([chat_unread_badge(unread, false)]) if unread > 0
   built = {
     "k": "box",
     "s": resting,
@@ -1761,11 +1758,8 @@ def chat_room_row(state, room)
   }
   # Hover is a local chunk (07): the row repoints itself at a style the
   # session already holds, so running a pointer down a list of twenty rooms
-  # sends nothing at all.
-  built["on"] = here ? {"click": "go_room"} : stateful(resting, {
-    "hover": {"bg": "surface.sunken"},
-    "press": {"bg": "surface.sunken"}
-  }, {"click": "go_room"})
+  # sends nothing at all. The `hover:` and `active:` classes are the deltas.
+  built["on"] = here ? {"click": "go_room"} : stateful(resting, cr_look, {"click": "go_room"})
   keyed("room:" + room["id"], built)
 end
 

@@ -27,6 +27,7 @@ describe("Docs", fn() {
       "docs/components",
       "docs/widgets",
       "docs/theming",
+      "docs/tailwind",
       "docs/clients",
       "docs/security",
       "docs/budgets",

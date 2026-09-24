@@ -276,7 +276,7 @@ def table_view(state)
       "Client " + (i % 37).to_s + " SARL",
       i % 3 == 0 ? "Paid" : "Open",
       (100 + i * 37).to_s + " €"
-    ], widths)
+    ], widths, {"dense": true})
   })
   column(
     {
@@ -295,7 +295,10 @@ def table_view(state)
         ]
       ),
       table_header(["Reference", "Client", "Status", "Amount"], widths),
-      list({"height": 400}, 22, rows)
+      # A dense row: 4 px above and below a 20 px line of `text-sm`, and its
+      # one-pixel rule. The list lays rows out at this pitch, so it is the
+      # row's height and not a guess at it.
+      list({"height": 400}, 29, rows)
     ]
   )
 end
@@ -1384,18 +1387,11 @@ def erp_rail(state)
     {"width": "100%", "bg": "none", "border": 0, "pad": 2}
   )
   column(
-    {
-      "gap": 0,
-      "width": 200,
-      "height": "100%",
-      "bg": "surface.raised",
-      "border": [0, 1, 0, 0],
-      "border_color": "border.subtle"
-    },
+    {"tw": "flex-col w-[200px] h-full bg-white border-r border-gray-200"},
     [
       row(
-        {"gap": 2, "align": "center", "pad": [3, 3, 2, 3], "width": "100%"},
-        [initial_avatar("M", "accent.base", 24), text("Meridian", {"weight": "bold"})]
+        {"tw": "items-center gap-2 w-full px-3 pt-3 pb-2"},
+        [initial_avatar("M", "accent.base", 24), text("Meridian", tw_style("text-base font-semibold"))]
       ),
       links,
       spacer(),
@@ -1456,12 +1452,16 @@ end
 
 # A card with a title, an optional aside, and a body — the shape nearly every
 # card on this page has, written once.
+#
+# The title is Tailwind UI's card heading, `text-base font-semibold`, written
+# in its classes: `tw()` is how a screen that is not the catalogue keeps to
+# the catalogue's look without copying its style hashes.
 def erp_card(title, aside, children)
   head = row(
-    {"gap": 3, "align": "center", "width": "100%"},
-    [text(title, {"weight": "bold", "grow": 1})].concat(aside)
+    {"tw": "items-center gap-3 w-full"},
+    [text(title, tw_style("text-base font-semibold text-gray-900 grow"))].concat(aside)
   )
-  card({"gap": 3, "width": "100%"}, [head].concat(children))
+  card({"gap": 4, "width": "100%"}, [head].concat(children))
 end
 
 # ---- Dashboard -------------------------------------------------------------
@@ -2038,7 +2038,8 @@ def erp_structure_card(state, lay)
         "on": {"click": "lazy_toggle"},
         "props": {"id": "doc"},
         "a11y": {"role": "button", "label": "Open the handbook"},
-        "c": [text("Open the handbook", {"weight": "semibold"})]
+        "shape": {"min_height": control_px("md", "cozy")},
+        "c": [text("Open the handbook", {"weight": "semibold", "size": 1})]
       }),
       secondary_button("Open the palette", "palette_toggle"),
       secondary_button("Keyboard shortcuts", "shortcuts_open")
@@ -2157,11 +2158,76 @@ def erp_basics_card(state, lay)
   ])
 end
 
+# Written in Tailwind's classes, and nothing else.
+#
+# Every style on this card is a `tw()` string — the stacked list, the badges,
+# the buttons — so it is the specimen for `eui_builders_tw.sl` the way the
+# cards above are for the rest of the catalogue. The class strings are printed
+# beside what they drew, because the point is that a person who has written a
+# Tailwind page can read them without being told what they became.
+ERP_TW_PEOPLE = [
+  {"name": "Leslie Alexander", "mail": "leslie@meridian.test", "role": "Co-founder, CEO", "state": "Active", "tone": "accent.base"},
+  {"name": "Michael Foster", "mail": "michael@meridian.test", "role": "Head of sales", "state": "Active", "tone": "info.base"},
+  {"name": "Dries Vincent", "mail": "dries@meridian.test", "role": "Warehouse", "state": "Invited", "tone": "success.base"}
+]
+
+def erp_tailwind_card(state, lay)
+  tw_row_classes = "items-center gap-4 w-full px-4 py-4 border-b border-gray-200 hover:bg-gray-50 transition"
+  tw_badge_on = "rounded-md bg-green-50 px-2 py-1 ring-1 ring-green-600/20"
+  tw_badge_off = "rounded-md bg-yellow-50 px-2 py-1 ring-1 ring-yellow-600/20"
+  tw_list = ERP_TW_PEOPLE.map(fn(twp) {
+    twp_on = twp["state"] == "Active"
+    row({"tw": tw_row_classes}, [
+      initial_avatar(twp["name"].substring(0, 1), twp["tone"], 40),
+      column({"tw": "flex-col gap-1 grow min-w-0"}, [
+        text(twp["name"], tw_style("text-sm font-semibold text-gray-900")),
+        text(twp["mail"], tw_style("text-xs text-gray-500 truncate"))
+      ]),
+      text(twp["role"], tw_style("text-sm text-gray-500")),
+      row({"tw": twp_on ? tw_badge_on : tw_badge_off}, [
+        text(twp["state"], tw_style(twp_on ? "text-xs font-medium text-green-700" : "text-xs font-medium text-yellow-800"))
+      ])
+    ])
+  })
+  tw_invite = control({
+    "key": "tw_invite",
+    "tw": "rounded-md bg-indigo-600 px-3 py-2 text-white shadow-sm hover:bg-indigo-500 active:bg-indigo-700",
+    "on": {"click": "cat_say"},
+    "a11y": {"role": "button", "label": "Invite"},
+    "c": [text("Invite", tw_style("text-sm font-semibold"))]
+  })
+  tw_export = control({
+    "key": "tw_export",
+    "tw": "rounded-md bg-white px-3 py-2 text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50",
+    "on": {"click": "cat_say"},
+    "a11y": {"role": "button", "label": "Export"},
+    "c": [text("Export", tw_style("text-sm font-semibold"))]
+  })
+  erp_card("Tailwind classes", [badge("tw()", "info")], [
+    muted("The same look, written the way a Tailwind page writes it. tw(\"...\") turns the classes into a style hash and the hover: and active: ones into local states."),
+    column({"tw": "flex-col w-full rounded-lg bg-white ring-1 ring-gray-900/5 shadow-sm overflow-hidden"}, [
+      row({"tw": "items-center gap-3 w-full px-4 py-4 border-b border-gray-200"}, [
+        column({"tw": "flex-col gap-1 grow"}, [
+          text("Team", tw_style("text-base font-semibold text-gray-900")),
+          text("Who can see the orders, and who can change them.", tw_style("text-sm text-gray-500"))
+        ]),
+        tw_export,
+        tw_invite
+      ])
+    ].concat(tw_list)),
+    column({"tw": "flex-col gap-1 w-full"}, [
+      text(tw_row_classes, tw_style("font-mono text-xs text-gray-500")),
+      text(tw_badge_on, tw_style("font-mono text-xs text-gray-500"))
+    ])
+  ])
+end
+
 def erp_catalogue_section(state, lay)
   column(
     {"gap": lay["wide"] ? 5 : 3, "width": "100%"},
     [
       erp_basics_card(state, lay),
+      erp_tailwind_card(state, lay),
       erp_actions_card(state, lay),
       erp_inputs_card(state, lay),
       erp_dates_card(state, lay),

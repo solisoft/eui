@@ -12,9 +12,11 @@
 # this script should edit one, and every file is byte for byte identical
 # on every side.
 #
-# It is five files because one was eight thousand lines. They load into
-# the same namespace and none depends on which loads first, so adding one
-# is a matter of naming it here and in `templates/eui.rs` next door.
+# It is six files because one was eight thousand lines, and the sixth —
+# `tw()`, Tailwind-style classes as EUI styles — is a thing a new
+# application reaches for on its own. They load into the same namespace
+# and none depends on which loads first, so adding one is a matter of
+# naming it here and in `templates/eui.rs` next door.
 #
 # A vendoring example is a third copy, and a third copy drifts exactly as
 # the second would; so they are listed here too, and skipped when they are
@@ -32,6 +34,7 @@ files=(
   eui_builders_charts.sl
   eui_builders_feed.sl
   eui_builders_markdown.sl
+  eui_builders_tw.sl
 )
 
 [ -d "$lang" ] || { echo "no language repository at $lang (set SOLI_LANG)" >&2; exit 1; }
