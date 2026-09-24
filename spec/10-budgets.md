@@ -392,10 +392,20 @@ promise.
 | Sources playing at once | 8, a ninth refused |
 | Frames buffered ahead of the device | 200 ms |
 | CPU with nothing loaded | 0 — the device is closed |
+| Decoded samples a sound | 128 MiB — 5 min 50 s of stereo at 48 kHz |
 
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once
 per sound.
+
+A sound is held decoded — `f32`, interleaved — because that is what makes
+mixing it cost nothing, and so the bound is on what the samples weigh
+rather than on how long the sound says it is. Frames alone were the bound
+until 2026-09-24: an hour of stereo, which let the largest asset there is
+(16 MB) expand to 1.38 GB before it was refused. A sound past 128 MiB is
+refused, not truncated (`eui_audio::MAX_BYTES`; pinned by
+`a_sound_past_its_decoded_budget_is_refused` in
+`crates/eui-audio/tests/audio.rs`).
 
 ## Moving pictures
 

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use eui_audio::{decode, AudioError, Control, Mixer, Sound, MAX_SOURCES};
+use eui_audio::{decode, decode_within, AudioError, Control, Mixer, Sound, MAX_BYTES, MAX_SOURCES};
 
 /// A RIFF/WAVE file of 16-bit samples, so the tests need no fixture.
 fn wav(samples: &[i16], rate: u32, channels: u16) -> Vec<u8> {
@@ -65,6 +65,19 @@ fn rubbish_is_refused_rather_than_guessed_at() {
     let _ = decode(&truncated, Some("wav"));
     // A PNG is not a sound.
     assert!(decode(b"\x89PNG\r\n\x1a\n", Some("png")).is_err());
+}
+
+#[test]
+fn a_sound_past_its_decoded_budget_is_refused() {
+    // Half a second of 8 kHz mono is 4 000 samples, 16 000 bytes of `f32`.
+    let bytes = wav(&sine(440.0, 8_000, 4_000), 8_000, 1);
+    assert_eq!(decode_within(&bytes, None, 16_000).unwrap().bytes(), 16_000, "exactly the budget fits");
+    assert_eq!(decode_within(&bytes, None, 15_996), Err(AudioError::TooLong), "one sample over does not");
+    // A budget above the crate's own is the crate's own: no caller can
+    // raise it. 128 MiB is spec 10's number, and it is the bound a 16 MB
+    // file can no longer expand past — it used to be an hour of stereo.
+    assert_eq!(MAX_BYTES, 128 * 1024 * 1024);
+    assert!(decode_within(&bytes, None, usize::MAX).is_ok());
 }
 
 fn tone(level: f32, rate: u32, frames: usize) -> Arc<Sound> {

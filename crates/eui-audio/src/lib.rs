@@ -36,7 +36,8 @@ pub enum AudioError {
     Unsupported(String),
     /// The stream is malformed.
     Malformed(String),
-    /// The sound is longer than [`MAX_FRAMES`] allows.
+    /// The sound is longer than [`MAX_FRAMES`] allows, or its samples would
+    /// weigh more than the budget it was decoded under ([`MAX_BYTES`]).
     TooLong,
     /// The stream declares no audio track.
     NoTrack,
@@ -55,10 +56,23 @@ impl std::fmt::Display for AudioError {
 
 impl std::error::Error for AudioError {}
 
-/// Frames a single sound may hold: an hour of stereo at 48 kHz, about
-/// 690 MB decoded — the real bound is the session's asset quota, this one
-/// is the backstop that keeps a crafted header from asking for terabytes.
+/// Frames a single sound may hold: an hour of stereo at 48 kHz. A
+/// backstop against a crafted header asking for terabytes, and no longer
+/// the bound that matters — [`MAX_BYTES`] is.
 pub const MAX_FRAMES: usize = 48_000 * 3_600;
+
+/// Bytes of decoded samples a single sound may hold (spec 10, *Sound*):
+/// 128 MiB, which is five minutes and fifty seconds of stereo at 48 kHz.
+///
+/// [`MAX_FRAMES`] alone let a 16 MB file — the largest asset there is —
+/// expand to an hour of stereo `f32`, 1.38 GB, before it said no. In the
+/// sandboxed worker that is the session killed by the allocator; in the
+/// window's own process it is the application. Samples are kept whole and
+/// uncompressed because that is what makes mixing them cost nothing, so
+/// the budget is on what they weigh, like `eui-video`'s on its frames. A
+/// sound longer than this is refused rather than truncated: an application
+/// that wants a whole album sends tracks.
+pub const MAX_BYTES: usize = 128 * 1024 * 1024;
 
 /// Sources one mixer plays at once. A tenth sound is refused rather than
 /// queued: an application that wants more is doing something the client
@@ -135,6 +149,19 @@ impl Sound {
 /// a client that draws a window is not a home cinema and a surround
 /// stream should not cost six times the memory.
 pub fn decode(bytes: &[u8], hint: Option<&str>) -> Result<Sound, AudioError> {
+    decode_within(bytes, hint, MAX_BYTES)
+}
+
+/// [`decode`], under a budget smaller than [`MAX_BYTES`]: what is left of
+/// the session's room for sounds. `max_bytes` above [`MAX_BYTES`] is
+/// [`MAX_BYTES`].
+///
+/// The budget is checked before the samples grow rather than after, and
+/// the buffer grows no further than it allows, so a refused sound never
+/// held more than the budget — a doubling `Vec` would otherwise reach
+/// twice it on the way to the refusal.
+pub fn decode_within(bytes: &[u8], hint: Option<&str>, max_bytes: usize) -> Result<Sound, AudioError> {
+    let max_samples = max_bytes.min(MAX_BYTES) / std::mem::size_of::<f32>();
     let source = std::io::Cursor::new(bytes.to_vec());
     let stream = MediaSourceStream::new(Box::new(source), Default::default());
     let mut probe_hint = Hint::new();
@@ -186,6 +213,16 @@ pub fn decode(bytes: &[u8], hint: Option<&str>) -> Result<Sound, AudioError> {
         let buf = buffer.get_or_insert_with(|| SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
         buf.copy_interleaved_ref(decoded);
         let frame_len = usize::from(channels);
+        let adding = (buf.samples().len() / src_channels).saturating_mul(frame_len);
+        let wanted = samples.len().saturating_add(adding);
+        if wanted > max_samples {
+            return Err(AudioError::TooLong);
+        }
+        if wanted > samples.capacity() {
+            // Doubling, as a `Vec` would, but never past the budget.
+            let grow = samples.len().max(adding).min(max_samples - samples.len());
+            samples.reserve_exact(grow.max(adding));
+        }
         for frame in buf.samples().chunks(src_channels) {
             if samples.len() / frame_len >= MAX_FRAMES {
                 return Err(AudioError::TooLong);

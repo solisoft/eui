@@ -212,7 +212,10 @@ Sound reports on one clock and says nothing about the machine: `level` and
 not moved sends nothing and a sound that stopped sends one last zero. The
 property that carries 08 §8 is pinned a layer down, in
 `crates/eui-audio/tests/audio.rs` — the reported peak does not change when
-the viewer's master gain does, including when it is zero.
+the viewer's master gain does, including when it is zero. So is 10's
+ceiling on one decoded sound: a sound one sample past the budget it was
+decoded under is refused, and a caller cannot raise the budget past
+`MAX_BYTES` (`a_sound_past_its_decoded_budget_is_refused`).
 
 03 §3.5's address is pinned in the same file, and the three conditions are
 pinned apart: a tree that merely arrives opens nothing; an activation with
