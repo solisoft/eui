@@ -80,3 +80,23 @@ const _: () = {
     assert!(limits::MAX_VIEW_FRAMES > 0);
     assert!(limits::MAX_VIEW_BYTES <= limits::MAX_FRAME_BYTES);
 };
+
+#[test]
+fn the_header_written_in_place_is_the_header_written_in_front() {
+    // `encode` writes the body after room for the longest header and fills
+    // that room in afterwards. Every width of length varint must come out
+    // byte for byte as `kind, varint(len), body` — the lengths either side
+    // of each varint boundary are where an off-by-one would live.
+    for len in [0usize, 1, 120, 125, 126, 127, 128, 16_380, 16_383, 16_384, 70_000, 2_097_152] {
+        let message = "x".repeat(len);
+        let mut body = Writer::new();
+        body.varint32(7).str(&message);
+        let mut want = Writer::new();
+        want.u8(0x08).varint(body.len() as u64).raw(body.as_slice());
+        let got = Frame::Error { code: 7, message }.encode();
+        assert_eq!(got, want.into_vec(), "message of {len} bytes");
+    }
+    let resync = Frame::Resync.encode();
+    assert_eq!(resync, vec![0x09, 0x00]);
+    assert_eq!(Frame::decode(&resync).unwrap(), Frame::Resync);
+}

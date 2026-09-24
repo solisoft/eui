@@ -475,7 +475,21 @@ impl Frame {
 
     /// Encode a complete WebSocket message.
     pub fn encode(&self) -> Vec<u8> {
+        // The header is the kind byte and the body's length, and the length
+        // is not known until the body is written. It used to be written into
+        // a buffer of its own and then copied, whole, behind a header in a
+        // second one -- a second allocation the size of the frame, and a
+        // batch carrying a 64 KB chunk or a mount of a large page copied
+        // once more than it needed to be.
+        //
+        // Instead the body is written after room for the longest header
+        // there can be, the header goes into the end of that room, and the
+        // few bytes of room it did not need are dropped off the front: one
+        // buffer, and the body moved down in place by those few bytes rather
+        // than copied into a new allocation.
+        const HEAD: usize = 11; // the kind byte and the longest u64 varint
         let mut body = Writer::new();
+        body.raw(&[0; HEAD]);
         let kind = match self {
             Self::Hello(h) => {
                 body.varint32(h.version);
@@ -538,9 +552,14 @@ impl Frame {
             }
         };
 
-        let body = body.into_vec();
-        let mut out = Writer::with_capacity(body.len().saturating_add(8));
-        out.u8(kind).varint(body.len() as u64).raw(&body);
-        out.into_vec()
+        let mut out = body.into_vec();
+        let mut head = Writer::with_capacity(HEAD);
+        head.u8(kind).varint(out.len().saturating_sub(HEAD) as u64);
+        let skip = HEAD.saturating_sub(head.len());
+        if let Some(room) = out.get_mut(skip..HEAD) {
+            room.copy_from_slice(head.as_slice());
+        }
+        out.drain(..skip);
+        out
     }
 }
