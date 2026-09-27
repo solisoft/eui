@@ -53,17 +53,21 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # 2.3.3 is the first release whose `eui-proto` knows the `scene` capability
-  # bit and the `scene` node kind (EUI protocol 2; it pins eui 5a9f9d9). An
-  # older server refuses this application at boot — `eui_capabilities:
-  # unknown capability 'scene'` — and would refuse the gallery's Scene section
-  # at render even if the capability were dropped, because `kind_of` does not
-  # know the kind either. Which is why the version is checked before the
-  # switch rather than hoped for.
+  # 2.5.5 is what eui-data.solisoft.net runs (the deploy of d66c4bc printed
+  # "server: 2.5.5 — pinned: 2.3.3"), so it is what the checks below must
+  # boot: 2.3.3 could no longer open the gallery at all, which does not know
+  # the `level` event, and this job passed while testing a version nobody
+  # deployed. Every component but `broken` opens on 2.5.5 (checked with
+  # `snapshot` on 2026-09-27). Protocol 7 needs 2.6.1; until the server has
+  # it, the landing page draws its badges the older way.
   #
-  # 2.2.1 held this line before, for `nfc` and the `location` and `nfc_tag`
-  # event kinds, for the same reason and in the same way.
-  SOLI_VERSION: "2.3.3"
+  # 2.3.3 held this line before, as the first release whose `eui-proto` knows
+  # the `scene` capability bit and node kind (EUI protocol 2): an older
+  # server refuses this application at boot — `eui_capabilities: unknown
+  # capability 'scene'`. Which is why the version is checked before the
+  # switch rather than hoped for. 2.2.1 before that, for `nfc` and the
+  # `location` and `nfc_tag` event kinds, for the same reason.
+  SOLI_VERSION: "2.5.5"
   APP_DIR: examples/demo-app
 
 jobs:

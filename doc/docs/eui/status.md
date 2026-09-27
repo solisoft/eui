@@ -2097,7 +2097,8 @@ measured 111 nodes and took 1,547 from its memo: 0.2 ms of layout against
 encoder it runs on, once, whether it takes protocol 6 and 7 styles, and on
 a released Soli draws solid fills for the gradients, no pulse, and its two
 corner badges from a `justify-end` stack instead of `right-6` — the same
-picture; checked by opening it on Soli 2.3.3 and 2.4.2.
+picture; checked by opening it on Soli 2.3.3 and 2.4.2. The deploy pins
+2.5.5 since, which is what the server runs.
 
 ## Not started
 
