@@ -75,8 +75,11 @@ jobs:
           key: eui-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: eui-corpus-${{ matrix.target }}-
 
+      # The cache above restores ~/.cargo, and `cargo install` refuses to
+      # overwrite a binary it finds there ("already exists in destination"),
+      # which failed the shader job on 2026-09-27 before it fuzzed anything.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
 
       # Ten minutes a target at night, twenty seconds on a pull request. The
       # short one is not there to find anything; it is there so that a change
