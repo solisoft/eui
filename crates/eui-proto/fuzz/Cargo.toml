@@ -37,3 +37,10 @@ name = "layout"
 path = "fuzz_targets/layout.rs"
 test = false
 doc = false
+
+# Its own workspace, as eui-shader's fuzz crate is: it sits inside the
+# repository's without being a member, and cargo refuses to build a package
+# that believes it is in a workspace that does not list it. Every run of the
+# fuzz job failed on that from 2026-09-21 until this line.
+[workspace]
+members = ["."]

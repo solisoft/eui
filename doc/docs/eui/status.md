@@ -325,6 +325,21 @@ minutes a night and twenty seconds on a pull request that touches the
 crate under it, and carries the corpus between runs. The in-tree
 hostile-input tests still run on every `cargo test`.
 
+It was red every night from its first on 2026-09-21 to 2026-09-27, for two
+reasons, and neither had been looked at. The four eui-proto targets never
+built: their crate sits inside the repository's workspace without being in
+it, and cargo refuses that, where eui-shader's crate had always declared a
+`[workspace]` of its own; now both do. And the shader verifier's target had
+found a real bug on 2026-09-25 — three thousand `(` overflowed the stack of
+the thread verifying the module, because naga's WGSL parser descends once
+per level and bounds only braces. In the client that thread is the worker,
+so a hostile scene ended the session instead of being refused. The verifier
+now measures expression nesting on the source before naga sees it and
+refuses past 32 (11 §2.1); the fuzzer's input is a vector, and so are seven
+shapes of nesting at 3 000 levels on a 256 KiB stack, which overflowed with
+the check taken out, and the same seven at 32 levels inside 63 braces, which
+still reach the parser.
+
 **`eui-shader` — what a scene's module must be.** The second verifier, and
 the second exception to "no code from the network".
 
@@ -337,6 +352,8 @@ the second exception to "no code from the network".
   a uniform is refused, because a uniform is a number the server sends
   *after* verification.
 - Around forty vectors and a fuzz target, all of which decide without a GPU.
+- Expression nesting is capped at 32, counted on the source before naga
+  parses it, because its parser recursed into a stack overflow on deep input.
   That is the point: a scene's pixels are not a conformance surface, and its
   verdicts are.
 - What it does not prove is written down in `spec/11-shaders.md` §6 rather

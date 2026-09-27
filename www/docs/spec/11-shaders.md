@@ -42,10 +42,25 @@ MUST refuse it **before** handing it to a shader compiler.
 | Statements, across every function | 4 096 |
 | Expressions, across every function | 16 384 |
 | Types | 256 |
+| Expression nesting: open brackets, template arguments and prefix operators, counted together | 32 |
 
 64 KiB is `MAX_CHUNK_BYTES` (02), and the same number for the same reason: it
 is the size at which a thing the network sends stops being a handler and
 starts being a program.
+
+Nesting is measured on the **source text**, before anything parses it,
+because a parser is where it bites: a front end descends once per level, and
+three thousand `(` exhaust a thread's stack — which, in a client that
+verifies in its worker, ends the session instead of refusing the module. At
+each point of the text the depth is the `(` and `[` still open, plus the
+template lists still open (a `<` directly after a name, closed by `>`, and
+all closed at `;`, `{` or `}`), plus the prefix operators (`-` `!` `~` `*`
+`&`) met since the last operand; comments are skipped. It over-counts rather
+than under-counts — `a < b` opens a list that the statement's end closes —
+and 32 is twice WGSL's own limit on composite-type nesting, so a module a
+person wrote does not meet it. Braces are not counted here: WGSL bounds
+statement nesting itself, and a client MUST refuse past 64 levels of it
+(naga's limit; WGSL's is 127).
 
 ### 2.2 Entry points
 

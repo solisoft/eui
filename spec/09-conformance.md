@@ -748,7 +748,11 @@ What is pinned instead:
    body also moves, nested loops over the step budget, a compute stage, a
    storage buffer, a texture, a barrier, a binding outside group 0, a uniform
    block of the server's own shape, an entry point by another name, a fragment
-   result that is not `@location(0) vec4<f32>`, a module over 64 KiB. These
+   result that is not `@location(0) vec4<f32>`, a module over 64 KiB, and
+   expression nesting past 32 — three thousand `(`, a run of `-`, `array<`
+   inside `array<`, and the fuzzer's own find, each refused on a 256 KiB
+   stack, while 32 levels of each inside 63 braces still reach the parser
+   (`deep_nesting_is_refused_before_the_parser_meets_it`). These
    decide on a machine with no GPU, which is what makes them vectors and not
    hopes; a fuzz target sits beside them (08 §5).
 2. **The mesh decoder's**, likewise: a container that is not one, an undefined

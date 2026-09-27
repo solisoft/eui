@@ -482,3 +482,81 @@ fn an_index_that_is_not_a_constant_is_refused() {
     // And a swizzle is not an index at all.
     verify(&frag("return vec4<f32>(u.tint.zyx, u.tint.w);")).expect("a swizzle");
 }
+
+// ---------------------------------------------------------------- nesting
+
+/// Runs `f` on a thread with `kib` KiB of stack, so a test fails by
+/// aborting when the verifier recurses as deep as its input — which is
+/// the failure these vectors exist for — rather than passing on the main
+/// thread's 8 MiB.
+fn on_stack<T: Send + 'static>(kib: usize, f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new().stack_size(kib * 1024).spawn(f).unwrap().join().unwrap()
+}
+
+/// Each shape of expression nesting, `n` levels deep, in a fragment stage.
+fn deep(n: usize) -> Vec<(&'static str, String)> {
+    vec![
+        ("parentheses", frag(&format!("let x = {}1.0{};\nreturn u.tint * x;", "(".repeat(n), ")".repeat(n)))),
+        ("negations", frag(&format!("let x = {}1.0;\nreturn u.tint * x;", "- ".repeat(n)))),
+        ("nots", frag(&format!("let b = {}true;\nreturn u.tint;", "!".repeat(n)))),
+        ("indexing", frag(&format!("var a = array<f32, 1>(1.0);\nlet x = {}0{};\nreturn u.tint * x;", "a[".repeat(n), "]".repeat(n)))),
+        ("templates", frag(&format!("var a: {}f32{};\nreturn u.tint;", "array<".repeat(n), ", 1>".repeat(n)))),
+        ("calls", frag(&format!("let x = {}1.0{};\nreturn u.tint * x;", "abs(".repeat(n), ")".repeat(n)))),
+        ("mixed", frag(&format!("let x = {}1.0{};\nreturn u.tint * x;", "-(!(".repeat(n / 4), "))".repeat(n / 4)))),
+    ]
+}
+
+#[test]
+fn deep_nesting_is_refused_before_the_parser_meets_it() {
+    // 11 §2.1. naga's front end descends once per level and bounds only
+    // braces, so each of these overflowed the verifying thread's stack —
+    // on a 256 KiB thread, and on the fuzzer's 8 MiB one at 3 000 levels.
+    on_stack(256, || {
+        for (what, src) in deep(3_000) {
+            match verify(&src) {
+                Err(Reject::TooMuch { what: "levels of expression nesting", found, allowed: 32 }) => assert!(found > 32, "{what}: {found}"),
+                other => panic!("{what}: {other:?}"),
+            }
+        }
+        let found = include_str!("data/fuzz-stack-overflow-2026-09-25.wgsl");
+        assert!(matches!(verify(found), Err(Reject::TooMuch { what: "levels of expression nesting", .. })), "the fuzzer's input");
+    });
+}
+
+#[test]
+fn nesting_at_the_limit_inside_the_deepest_braces_still_reaches_the_parser() {
+    // The limit must leave the parser room on a small stack: 32 levels of
+    // each shape, inside 63 nested blocks (naga refuses the 65th brace), on
+    // 256 KiB. Each answer is the parser's or the validator's — or a pass —
+    // never the nesting rule and never an overflow.
+    on_stack(256, || {
+        for (what, src) in deep(32) {
+            let inner = src.replace("fn fs_main() -> @location(0) vec4<f32> {\n", &format!("fn fs_main() -> @location(0) vec4<f32> {{\n{}", "{ ".repeat(63)));
+            let inner = inner.replacen("\n}\n", &format!("\n{}}}\n", "} ".repeat(63)), 1);
+            if let Err(Reject::TooMuch { what: "levels of expression nesting", found, .. }) = verify(&inner) {
+                panic!("{what}: 32 levels counted as {found}");
+            }
+        }
+    });
+}
+
+#[test]
+fn ordinary_modules_are_nowhere_near_the_nesting_limit() {
+    // Comparisons, shifts, arrows, generics and comments that would each
+    // trip a careless count.
+    let src = format!(
+        "{BLOCK}
+/* a comment with ((((( and /* a nested one (((( */ still inside */
+fn shade(p: vec2<f32>) -> vec4<f32> {{
+    // ((((((((((((((((((((((((((((((((((((((((((( in a line comment
+    var m: array<array<vec4<f32>, 2>, 2>;
+    let k = (1u << 3u) >> 1u;
+    let near = select(0.0, 1.0, p.x < p.y && p.y <= 2.0 || -p.x > -1.0);
+    m[0][1] = vec4<f32>(near, f32(k), -(-p.x), 1.0);
+    return m[0][1];
+}}
+@fragment fn fs_main() -> @location(0) vec4<f32> {{ return shade(u.size.xy) * u.tint; }}
+"
+    );
+    verify(&src).expect("an ordinary module");
+}

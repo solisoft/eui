@@ -156,6 +156,73 @@ pub fn wrap(source: &str) -> Vec<u8> {
     out
 }
 
+/// The deepest an expression nests in `source`, as 11 §2.1 counts it: the
+/// `(` and `[` still open, the template lists still open, and the prefix
+/// operators met since the last operand, at the worst point of the text.
+///
+/// Lexical and deliberately rough in one direction. A `<` straight after a
+/// name opens a list whether it is a template or a comparison, and the end
+/// of the statement closes it, so `a < b` costs a level until the `;`; a run
+/// of `-` counts every one, although `a - b` is binary. Both over-count,
+/// which refuses a strange module rather than overflowing on a hostile one.
+fn nesting(source: &str) -> usize {
+    let bytes = source.as_bytes();
+    let (mut brackets, mut templates, mut prefix, mut deepest) = (0usize, 0usize, 0usize, 0usize);
+    let mut prev = b' ';
+    let mut i = 0;
+    while let Some(&c) = bytes.get(i) {
+        let next = bytes.get(i.saturating_add(1)).copied().unwrap_or(b' ');
+        // Comments: `//` to the end of the line, `/* */` nesting as WGSL's do.
+        if c == b'/' && next == b'/' {
+            while bytes.get(i).is_some_and(|&b| b != b'\n') {
+                i = i.saturating_add(1);
+            }
+            continue;
+        }
+        if c == b'/' && next == b'*' {
+            let mut open = 0usize;
+            while let Some(&b) = bytes.get(i) {
+                let after = bytes.get(i.saturating_add(1)).copied().unwrap_or(b' ');
+                if b == b'/' && after == b'*' {
+                    open = open.saturating_add(1);
+                    i = i.saturating_add(2);
+                } else if b == b'*' && after == b'/' {
+                    open = open.saturating_sub(1);
+                    i = i.saturating_add(2);
+                    if open == 0 {
+                        break;
+                    }
+                } else {
+                    i = i.saturating_add(1);
+                }
+            }
+            continue;
+        }
+        match c {
+            b'(' | b'[' => brackets = brackets.saturating_add(1),
+            b')' | b']' => {
+                brackets = brackets.saturating_sub(1);
+                prefix = 0;
+            }
+            b'<' if (prev.is_ascii_alphanumeric() || prev == b'_') && next != b'<' && next != b'=' => templates = templates.saturating_add(1),
+            b'>' if prev != b'-' && next != b'=' => templates = templates.saturating_sub(1),
+            b';' | b'{' | b'}' => {
+                templates = 0;
+                prefix = 0;
+            }
+            b'-' | b'!' | b'~' | b'*' | b'&' => prefix = prefix.saturating_add(1),
+            b if b.is_ascii_alphanumeric() || b == b'_' || b == b'.' => prefix = 0,
+            _ => {}
+        }
+        deepest = deepest.max(brackets.saturating_add(templates).saturating_add(prefix));
+        if !c.is_ascii_whitespace() {
+            prev = c;
+        }
+        i = i.saturating_add(1);
+    }
+    deepest
+}
+
 /// Check `source`, and say what it is.
 ///
 /// # Errors
@@ -166,6 +233,11 @@ pub fn wrap(source: &str) -> Vec<u8> {
 pub fn verify(source: &str) -> Result<Shape, Reject> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err(Reject::TooLong(source.len()));
+    }
+    // Before the parser, because the parser is what a deep module breaks.
+    let depth = nesting(source);
+    if depth > MAX_NESTING {
+        return Err(Reject::TooMuch { what: "levels of expression nesting", found: depth, allowed: MAX_NESTING });
     }
     let module = naga::front::wgsl::parse_str(source).map_err(|e| Reject::Parse(e.message().to_owned()))?;
 

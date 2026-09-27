@@ -47,6 +47,16 @@ pub const MAX_EXPRESSIONS: usize = 16_384;
 /// Types a module may declare.
 pub const MAX_TYPES: usize = 256;
 
+/// How deep an expression may nest in the source: open brackets, open
+/// template lists and prefix operators, counted together (11 §2.1).
+///
+/// A cap on the *parser*, not on the module. naga's WGSL front end descends
+/// once per level and bounds only braces (at 64), so three thousand `(`
+/// overflowed the stack of whatever thread verified it — the fuzzer's find
+/// of 2026-09-25. Twice WGSL's own limit of 15 on composite-type nesting,
+/// so a module a person wrote does not meet it.
+pub const MAX_NESTING: usize = 32;
+
 /// The one binding a module may have: the client's uniform block.
 ///
 /// Not a convention the server is asked to follow — the only one it is
