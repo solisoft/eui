@@ -24,6 +24,43 @@ def site(event_data)
   sr_out
 end
 
+# ---- What the encoder speaks -----------------------------------------------------
+
+# The deploy runs a released Soli, which may predate protocol 6 (gradients,
+# pulse) or 7 (an absolute child naming its edge), and whose encoder refuses
+# a style it does not know -- ending the session. So the page asks the
+# encoder it runs on, once per process, through `eui_render` (the same
+# `style_record` a session's frames go through), as the gallery's Tailwind
+# card does, and draws the older way when the answer is no.
+SV_PROBE = {}
+
+def sv_speaks(sp_level)
+  sp_key = "v" + str(sp_level)
+  return SV_PROBE[sp_key] unless SV_PROBE[sp_key].nil?
+
+  sp_style = {"position": "absolute_end"}
+  sp_style = tw_style("bg-gradient-to-r from-indigo-600 to-[#ec4899] animate-pulse") if sp_level == 6
+  sp_frame = eui_render({"k": "box", "s": sp_style, "c": []}) rescue nil
+  SV_PROBE[sp_key] = !sp_frame.nil?
+  SV_PROBE[sp_key]
+end
+
+# Protocol-6 classes, or what stands in for them on an older encoder.
+def sv_v6(v6_classes, v6_plain)
+  sv_speaks(6) ? v6_classes : v6_plain
+end
+
+# A badge in a card's top right corner. With protocol 7 the badge names its
+# edge (`right-6`); before it, the stack packs every child from the end and
+# the badge keeps a right margin, which is the same picture because the card
+# fills the stack.
+def sv_corner(co_w, co_card, co_classes, co_label)
+  co_badge_text = text(co_label, tw_style("text-xs font-semibold text-white"))
+  return stack({"width": co_w}, [co_card, node("box", {"tw": "absolute top-6 right-6 " + co_classes}, [co_badge_text])]) if sv_speaks(7)
+
+  stack({"tw": "justify-end", "width": co_w}, [co_card, node("box", {"tw": "absolute top-6 mr-6 " + co_classes}, [co_badge_text])])
+end
+
 # ---- Measures ------------------------------------------------------------------
 
 def sv_lay(ly_state)
@@ -77,7 +114,7 @@ end
 
 def sv_logo()
   row({"tw": "items-center gap-2"}, [
-    node("box", {"tw": "size-8 rounded-lg bg-gradient-to-br from-indigo-600 to-[#ec4899]"}, []),
+    node("box", {"tw": "size-8 rounded-lg " + sv_v6("bg-gradient-to-br from-indigo-600 to-[#ec4899]", "bg-indigo-600")}, []),
     text("Meridian", tw_style("text-lg font-bold text-gray-900"))
   ])
 end
@@ -103,7 +140,7 @@ end
 
 def sv_pill()
   row({"tw": "self-start items-center gap-2 px-3 py-1 rounded-full bg-white ring-1 ring-gray-900/5 shadow-sm"}, [
-    node("box", {"tw": "size-2 rounded-full bg-green-500 animate-pulse"}, []),
+    node("box", {"tw": "size-2 rounded-full bg-green-500" + sv_v6(" animate-pulse", "")}, []),
     text("Meridian 3 is live", tw_style("text-xs font-semibold text-gray-900")),
     text("Read the notes", tw_style("text-xs font-medium text-indigo-600"))
   ])
@@ -132,7 +169,7 @@ def sv_preview_card(pc_w)
   ]
   pc_list = column({"tw": "divide-y divide-gray-100"}, pc_rows.map(fn(r) {
     row({"tw": "items-center gap-3 py-2.5"}, [
-      node("box", {"tw": "size-2 rounded-full " + (r[2] == "success" ? "bg-green-500" : "bg-yellow-500 animate-pulse")}, []),
+      node("box", {"tw": "size-2 rounded-full " + (r[2] == "success" ? "bg-green-500" : "bg-yellow-500" + sv_v6(" animate-pulse", ""))}, []),
       text(r[0], tw_style("text-sm font-mono text-gray-900 truncate")),
       row({"tw": "ml-auto items-center gap-3"}, [
         text(r[3], tw_style("text-xs text-gray-500")),
@@ -140,7 +177,7 @@ def sv_preview_card(pc_w)
       ])
     ])
   }))
-  stack({"width": pc_w}, [
+  sv_corner(pc_w,
     column({"tw": "flex-col gap-4 p-6 rounded-2xl bg-white shadow-xl ring-1 ring-gray-900/5"}, [
       text("Deploys today", tw_style("text-sm font-semibold text-gray-900")),
       row({"tw": "items-end gap-3"}, [
@@ -149,9 +186,7 @@ def sv_preview_card(pc_w)
       ]),
       sv_chart(pc_w - 48, 96),
       pc_list
-    ]),
-    node("box", {"tw": "absolute top-6 right-6 px-2 py-0.5 rounded-md bg-indigo-600"}, [text("LIVE", tw_style("text-xs font-bold text-white"))])
-  ])
+    ]), "px-2 py-0.5 rounded-md bg-indigo-600", "LIVE")
 end
 
 def sv_hero(he_lay)
@@ -172,7 +207,7 @@ def sv_hero(he_lay)
     ])
   ])
   he_body = he_two ? row({"tw": "items-center gap-16"}, [he_copy, sv_preview_card(he_card_w)]) : column({"tw": "flex-col gap-12"}, [he_copy, sv_preview_card(he_card_w)])
-  column({"tw": "w-full items-center py-16 lg:py-20 bg-gradient-to-b from-blue-50 to-white", "vw": he_lay["w"]}, [
+  column({"tw": "w-full items-center py-16 lg:py-20 " + sv_v6("bg-gradient-to-b from-blue-50 to-white", "bg-gray-50"), "vw": he_lay["w"]}, [
     column({"tw": "flex-col", "width": he_lay["inner"]}, [he_body])
   ])
 end
@@ -314,10 +349,7 @@ def sv_plan(pl_name, pl_month, pl_yearly, pl_blurb, pl_points, pl_hot, pl_w)
   ])
   return pl_card unless pl_hot
 
-  stack({"width": pl_w}, [
-    pl_card,
-    node("box", {"tw": "absolute top-6 right-6 px-2.5 py-1 rounded-full bg-indigo-600"}, [text("Most popular", tw_style("text-xs font-semibold text-white"))])
-  ])
+  sv_corner(pl_w, pl_card, "px-2.5 py-1 rounded-full bg-indigo-600", "Most popular")
 end
 
 def sv_pricing(pr_state, pr_lay)
@@ -385,7 +417,7 @@ def sv_signup(sg_state, sg_lay)
   ])
   sg_inner = sg_lay["inner"] - 96
   sv_section(sg_lay, "bg-white pb-20", [
-    column({"tw": "flex-col items-center gap-6 px-6 py-16 rounded-3xl bg-gradient-to-r from-indigo-600 via-info to-[#ec4899] shadow-lg"}, [
+    column({"tw": "flex-col items-center gap-6 px-6 py-16 rounded-3xl shadow-lg " + sv_v6("bg-gradient-to-r from-indigo-600 via-info to-[#ec4899]", "bg-indigo-600")}, [
       text("A changelog worth reading", tw_style("text-3xl font-bold text-white text-center")),
       text("One email a month. What shipped, what broke, what we learned.", tw_style("text-base text-white text-center opacity-90")),
       column({"tw": "flex-col p-2 rounded-xl bg-white shadow-sm"}, [sg_form])

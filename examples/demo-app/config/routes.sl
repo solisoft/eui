@@ -43,9 +43,10 @@ router_eui("chat", "chat#chat", "chat#chat_view")
 # into the session's state, so it needs no table.
 router_eui("helpdesk", "helpdesk#helpdesk", "helpdesk#helpdesk_view")
 # Meridian: a product landing page for an invented service, every style a
-# `tw()` class string. No session state worth keeping, so it is also served
-# as a one-shot render over `GET /_eui/view/site`.
-router_eui("site", "site#site", "site#site_view", {"static": "public, max-age=60"})
+# `tw()` class string. No `{"static": ...}` here, which would also serve it
+# over `GET /_eui/view/site`: the deploy's pinned Soli (2.3.3) refuses the
+# option and the routes do not load.
+router_eui("site", "site#site", "site#site_view")
 
 # The one HTML page here: an EUI session in a browser, beside the Soli that
 # produces it. It must be served by *this* application and not by the

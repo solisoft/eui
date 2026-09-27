@@ -2069,12 +2069,18 @@ cards on `grid-cols-N`, tabs underlined with `border-b-2 border-b-indigo-600`,
 two split rows, one `flex-row-reverse`, pricing whose monthly/yearly toggle
 changes three prices on the server, a `divide-y` FAQ, a signup field with a
 placeholder, and a footer. One literal colour, a gradient stop; the rest
-are roles, so dark mode needed nothing. It opts into `GET /_eui/view/site`:
-measured on 2026-09-27, the first render is 14,395 bytes (4,709 gzipped),
-272 nodes and 564 quads at 1 280 px and 14,016 bytes, 261 nodes at 390 px,
-and `snapshot --view` of that response draws the same PNG as `--soli` over
-a socket. After the toggle, the client measured 111 nodes and took 1,547
-from its memo: 0.2 ms of layout against 5 ms for the first frame.
+are roles, so dark mode needed nothing. Measured on 2026-09-27 on a local
+server that opted it into `GET /_eui/view/site` (the demo's routes do not:
+the deploy's pinned Soli 2.3.3 refuses `{"static": ...}`), the first render
+is 14,395 bytes (4,709 gzipped), 272 nodes and 564 quads at 1 280 px and
+14,016 bytes, 261 nodes at 390 px, and `snapshot --view` of that response
+draws the same PNG as `--soli` over a socket. After the toggle, the client
+measured 111 nodes and took 1,547 from its memo: 0.2 ms of layout against
+5 ms for the first frame. Like the gallery's Tailwind card, it asks the
+encoder it runs on, once, whether it takes protocol 6 and 7 styles, and on
+a released Soli draws solid fills for the gradients, no pulse, and its two
+corner badges from a `justify-end` stack instead of `right-6` — the same
+picture; checked by opening it on Soli 2.3.3 and 2.4.2.
 
 ## Not started
 
