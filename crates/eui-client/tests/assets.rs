@@ -641,10 +641,16 @@ fn a_page_of_pictures_is_fetched_by_a_few_workers() {
                     let _ = s.read(&mut req);
                     // Slow enough that a burst would overlap if it could.
                     std::thread::sleep(std::time::Duration::from_millis(40));
+                    // Counted closed *before* the answer goes out. After it,
+                    // the worker that got it may already have connected
+                    // again, and this thread not yet have counted down: CI
+                    // saw "5 connections open at once" from four workers
+                    // (d0b1018). A worker cannot ask again before it has
+                    // read this answer, so here the count is exact.
+                    open.fetch_sub(1, Ordering::SeqCst);
                     let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                     let _ = s.write_all(head.as_bytes());
                     let _ = s.write_all(&body);
-                    open.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
