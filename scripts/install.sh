@@ -25,6 +25,17 @@ DEST="${EUI_DEST:-$HOME/.local/bin}"
 say() { echo "install: $*"; }
 die() { echo "install: $*" >&2; exit 1; }
 
+# Which build a file is, read out of the file rather than asked of it: every
+# client since the stamp carries one line, `eui-build: eui 0.1.0, protocol 7,
+# commit 6563617;`, which is what `eui --version` prints. Running the binary
+# already installed would be the obvious way and is the wrong one -- one that
+# predates `--version` takes the flag for an address and opens a window.
+# `tr` and `sed` rather than `grep -a -o`, which busybox's grep may not have.
+stamp_of() {
+  [ -f "$1" ] || return 0
+  LC_ALL=C tr -c '[:print:]' '\n' <"$1" | sed -n 's/.*eui-build: \([^;]*\);.*/\1/p' | head -n 1
+}
+
 # ---- which machine is this ------------------------------------------------
 #
 # Three desktop builds exist and no more (`.github/workflows/build.yml`), so
@@ -83,6 +94,14 @@ mkdir -p "$DEST" || die "could not create $DEST."
 DEST="$(cd "$DEST" && pwd)"
 [ -w "$DEST" ] || die "$DEST is not writable. Set EUI_DEST, or run this where it is."
 
+# What is there now, if anything, so the end of this can say what changed.
+old=""
+if [ -f "$DEST/$binary" ]; then
+  old="$(stamp_of "$DEST/$binary")"
+  [ -n "$old" ] || old="a build from before versions were stamped"
+  say "installed now: $old"
+fi
+
 # ---- fetch ----------------------------------------------------------------
 #
 # curl if it is here, wget if it is not; a machine with neither cannot be
@@ -107,7 +126,7 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "fetching $url"
+say "fetching the '$TAG' release: $url"
 fetch "$url" "$tmp/$asset" || die "could not fetch $asset from the '$TAG' release."
 
 # ---- unpack ---------------------------------------------------------------
@@ -124,6 +143,10 @@ case "$asset" in
 esac
 
 [ -f "$tmp/$member" ] || die "no $member inside $asset."
+
+new="$(stamp_of "$tmp/$member")"
+[ -n "$new" ] || new="a build from before versions were stamped"
+say "fetched: $new"
 
 # There is no published checksum to compare this against — the release
 # carries binaries and nothing else — so the guarantee is the HTTPS
@@ -149,6 +172,15 @@ mv -f "$tmp/$member" "$DEST/$binary" ||
   die "could not write $DEST/$binary."
 
 say "installed $DEST/$binary"
+say "version: $new"
+if [ -n "$old" ]; then
+  # Equal stamps are the same build; two unstamped ones may not be.
+  if [ "$old" = "$new" ] && [ "$new" != "a build from before versions were stamped" ]; then
+    say "that is the build that was already there; it has been replaced by the same one."
+  else
+    say "was:     $old"
+  fi
+fi
 
 # ---- what it will want at run time ----------------------------------------
 #

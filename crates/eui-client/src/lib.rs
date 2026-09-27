@@ -92,6 +92,17 @@ pub mod web;
 /// no repository to ask. Shown in the window so a demo from the wrong run
 /// can be told from the right one at a glance.
 pub const BUILD: &str = env!("EUI_BUILD");
+/// Which client this is, as one line a script can find in the file without
+/// running it: `eui-build: eui 0.1.0, protocol 7, commit 6563617;`.
+/// `eui --version` prints it without the prefix and the `;`, and
+/// `scripts/install.sh` greps it out of the binary it replaces.
+pub const STAMP: &str = env!("EUI_STAMP");
+
+/// [`STAMP`] as a person reads it: `eui 0.1.0, protocol 7, commit 6563617`.
+#[must_use]
+pub fn version() -> &'static str {
+    STAMP.strip_prefix("eui-build: ").and_then(|s| s.strip_suffix(';')).unwrap_or(STAMP)
+}
 /// Where the pointer is during a drag, which no winit backend says.
 /// The safe half; the `unsafe` is in `eui-cursor`, one crate over.
 pub mod cursor;

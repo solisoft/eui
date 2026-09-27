@@ -17,8 +17,29 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let id = std::env::var("GITHUB_SHA").ok().map(|sha| sha.chars().take(7).collect::<String>()).or_else(git_short_sha).unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=EUI_BUILD={id}");
+    stamp(&id);
     platform_parts();
     windows_icon();
+}
+
+/// One line that says which client this is, in a form a script can find in
+/// the file without running it: `eui-build: eui 0.1.0, protocol 7, commit
+/// 6563617;`. `eui --version` prints it, and `scripts/install.sh` reads it
+/// out of the binary it is about to replace -- a binary that predates
+/// `--version` would take the flag for an address and open a window.
+///
+/// The protocol is read from `eui-proto`'s source because a build script
+/// cannot see the crate's constants; `the_stamp_names_the_protocol_this_build_speaks`
+/// holds the two to the same number.
+fn stamp(id: &str) {
+    let proto = concat!(env!("CARGO_MANIFEST_DIR"), "/../eui-proto/src/lib.rs");
+    println!("cargo:rerun-if-changed={proto}");
+    let protocol = std::fs::read_to_string(proto)
+        .ok()
+        .and_then(|src| src.lines().find_map(|l| l.trim().strip_prefix("pub const PROTOCOL_VERSION: u32 = ").and_then(|v| v.strip_suffix(';')).map(str::to_owned)))
+        .unwrap_or_else(|| "unknown".to_owned());
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    println!("cargo:rustc-env=EUI_STAMP=eui-build: eui {version}, protocol {protocol}, commit {id};");
 }
 
 /// Three of the client's parts are a feature *and* a platform: the system

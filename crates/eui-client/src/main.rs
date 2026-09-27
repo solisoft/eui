@@ -38,6 +38,10 @@ fn main() {
         if a == "--install" || a == "--uninstall" || a == "--installed" {
             std::process::exit(launcher(a, it.next()));
         }
+        if a == "--version" || a == "-V" {
+            println!("{}", eui_client::version());
+            std::process::exit(0);
+        }
         if a == "--standalone" {
             alone = true;
         } else if a == "--allow" {
@@ -198,5 +202,6 @@ fn usage() -> ! {
     let all = eui_proto::caps::NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(",");
     eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}] [--standalone]");
     eprintln!("       eui --install <wss://host/...> | --uninstall <address|app id> | --installed");
+    eprintln!("       eui --version");
     std::process::exit(2);
 }

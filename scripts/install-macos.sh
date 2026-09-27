@@ -30,10 +30,27 @@ DEST="${EUI_DEST:-/Applications}"
 # never open.
 [ "$(uname -m)" = "arm64" ] || { echo "install-macos: only Apple Silicon is built" >&2; exit 1; }
 
+# Which build a bundle holds, read out of its executable rather than asked
+# of it (see `stamp_of` in install.sh): `eui 0.1.0, protocol 7, commit ...`.
+stamp_of() {
+  local f
+  for f in "$1"/Contents/MacOS/*; do
+    [ -f "$f" ] || continue
+    LC_ALL=C tr -c '[:print:]' '\n' <"$f" | sed -n 's/.*eui-build: \([^;]*\);.*/\1/p' | head -n 1
+  done | head -n 1
+}
+
+OLD=""
+if [ -d "$DEST/EUI.app" ]; then
+  OLD="$(stamp_of "$DEST/EUI.app")"
+  [ -n "$OLD" ] || OLD="a build from before versions were stamped"
+  echo "install-macos: installed now: $OLD"
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "install-macos: fetching $URL"
+echo "install-macos: fetching the '$TAG' release: $URL"
 curl -fL --progress-bar -o "$TMP/$ASSET" "$URL"
 
 # ditto, not unzip: a .app is a directory, and this is the unpacker that
@@ -41,6 +58,10 @@ curl -fL --progress-bar -o "$TMP/$ASSET" "$URL"
 ditto -x -k "$TMP/$ASSET" "$TMP/unpacked"
 APP="$TMP/unpacked/EUI.app"
 [ -d "$APP" ] || { echo "install-macos: no EUI.app in $ASSET" >&2; exit 1; }
+
+NEW="$(stamp_of "$APP")"
+[ -n "$NEW" ] || NEW="a build from before versions were stamped"
+echo "install-macos: fetched: $NEW"
 
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
@@ -58,3 +79,12 @@ fi
 ditto "$APP" "$DEST/EUI.app"
 
 echo "install-macos: installed $DEST/EUI.app — open it from the Finder"
+echo "install-macos: version: $NEW"
+if [ -n "$OLD" ]; then
+  # Equal stamps are the same build; two unstamped ones may not be.
+  if [ "$OLD" = "$NEW" ] && [ "$NEW" != "a build from before versions were stamped" ]; then
+    echo "install-macos: that is the build that was already there; it has been replaced by the same one."
+  else
+    echo "install-macos: was:     $OLD"
+  fi
+fi
