@@ -28,9 +28,10 @@ def node(kind, style, children)
     "s": style,
     "c": children
   }
-  return nd_made if style.nil? || style["tw"].nil?
+  nd_made = tw_node(nd_made) unless style.nil? || style["tw"].nil?
+  return tw_auto_place(nd_made) if tw_autos?(nd_made["c"])
 
-  tw_node(nd_made)
+  nd_made
 end
 
 def column(style, children)
@@ -65,6 +66,9 @@ def tw(classes, width = nil)
   tw_dv = tw_t["divide"]
   if tw_dv.keys().length() > 0
     throw tw_no(tw_dv["c"], "a divider borders the children, so it is written where they are: node(), row() or column() with \"tw\"")
+  end
+  unless tw_t["s"]["tw_reverse"].nil?
+    throw tw_no(tw_t["s"]["tw_reverse"], "a reversed box is its children in the other order, so it is written where they are: node() with \"tw\"")
   end
   if tw_t["gaps"].keys().length() > 0
     tw_dir = tw_t["s"]["display"]
@@ -163,7 +167,7 @@ def tw_word(word)
 end
 
 def tw_focus_ring?(said, name)
-  return true if name == "outline-none"
+  return true if name == "outline-none" || name == "outline-0"
   return true if (said == "focus" || said == "focus-visible") && name.starts_with?("outline")
   return true if said == "focus-visible" && name.starts_with?("ring")
 
@@ -184,19 +188,23 @@ def tw_parse(classes, rank)
   twp_out = tw_blank()
   for twp_pass in ["rest", "state"]
     for twp_level in range(0, 6)
+      # Which rule of the stylesheet a class is, for the one place its order
+      # decides and the order it was written in does not: a side's border
+      # colour over the whole box's (tw_bc_settle).
+      twp_rule = (twp_pass == "state" ? 10 : 0) + twp_level
       for twp_w in twp_words
         twp_stated = twp_w["state"] != "s"
         if twp_w["noop"] != true && twp_w["bp"] == twp_level && twp_stated == (twp_pass == "state")
           if twp_level <= rank || twp_level == 0
-            twp_out = tw_take(twp_out, twp_w["state"], twp_w["name"], twp_w["whole"])
+            twp_out = tw_take(twp_out, twp_w["state"], twp_w["name"], twp_w["whole"], twp_rule)
           else
-            tw_take(tw_blank(), twp_w["state"], twp_w["name"], twp_w["whole"])
+            tw_take(tw_blank(), twp_w["state"], twp_w["name"], twp_w["whole"], twp_rule)
           end
         end
       end
     end
   end
-  tw_grad_settle(twp_out)
+  tw_place_settle(tw_bc_settle(tw_grad_settle(twp_out)))
 end
 
 def tw_style(classes, disabled = false, width = nil)
@@ -223,10 +231,15 @@ def tw_node(n)
   unless tn_case.nil?
     throw tw_no(tw_case_class(tn_case), "a text transform changes a string, and a box has none: put it on the text, text(s, tw_style(\"" + tw_case_class(tn_case) + "\"))")
   end
+  tn_reversed = !tn_base["tw_reverse"].nil?
+  tn_base = tw_reverse_style(tn_base) if tn_reversed
   tn_base = tw_gap_settle(tn_base, tn_t["gaps"], tn_base["display"] ?? "row")
   n["s"] = tn_base
   n["p"] = (n["p"] ?? {}).merge(tn_t["props"]) if tn_t["props"].keys().length() > 0
   n["c"] = tw_divide(n["c"] ?? [], tn_t["divide"]) if tn_t["divide"].keys().length() > 0
+  # After the rules, which Tailwind lays on in the order the children were
+  # given, as `> * ~ *` does; the eye then sees them the other way round.
+  n["c"] = (n["c"] ?? []).reverse() if tn_reversed
   n["on"] = tw_wire(tn_base, tn_t, n["on"] ?? {}) if tw_stateful?(tn_t)
   n
 end
@@ -251,6 +264,64 @@ def tw_wire(base, t, on)
     })
   end
   tww_out
+end
+
+def tw_reverse_style(style)
+  rv_out = tw_without(style, "tw_reverse")
+  rv_just = rv_out["justify"] ?? "start"
+  rv_out["justify"] = "end" if rv_just == "start"
+  rv_out["justify"] = "start" if rv_just == "end"
+  rv_out
+end
+
+def tw_autos?(kids)
+  return false if kids.nil? || kids.class != "array"
+
+  for au_kid in kids
+    if !au_kid.nil? && au_kid.class == "hash"
+      au_s = au_kid["s"]
+      return true if !au_s.nil? && au_s.class == "hash" && !au_s["tw_auto"].nil?
+    end
+  end
+  false
+end
+
+def tw_auto_place(n)
+  ap_disp = (n["s"] ?? {})["display"] ?? "row"
+  ap_out = []
+  for ap_kid in n["c"]
+    ap_s = (ap_kid.nil? || ap_kid.class != "hash" || ap_kid["s"].class != "hash") ? nil : ap_kid["s"]
+    ap_auto = ap_s.nil? ? nil : ap_s["tw_auto"]
+    if ap_auto.nil?
+      ap_out = ap_out.concat([ap_kid])
+    else
+      ap_c = ap_auto["c"]
+      if n["k"] != "box" || (ap_disp != "row" && ap_disp != "column")
+        throw tw_no(ap_c, "an auto margin takes the free space along a row or a column, and a " + (n["k"] == "box" ? ap_disp : n["k"]) + " lays its children out another way")
+      end
+      ap_row = ap_disp == "row"
+      ap_before = ap_row ? ap_auto["l"] : ap_auto["t"]
+      ap_after = ap_row ? ap_auto["r"] : ap_auto["b"]
+      ap_near = ap_row ? ap_auto["t"] : ap_auto["l"]
+      ap_far = ap_row ? ap_auto["b"] : ap_auto["r"]
+      ap_self = nil
+      ap_self = "center" if ap_near == true && ap_far == true
+      ap_self = "end" if ap_near == true && ap_far != true
+      ap_self = "start" if ap_near != true && ap_far == true
+      ap_placed = tw_restyle_kid(ap_kid, fn(st) { tw_auto_style(st, ap_self) })
+      ap_out = ap_out.concat([{"k": "spacer", "s": {"grow": 1}}]) if ap_before == true
+      ap_out = ap_out.concat([ap_placed])
+      ap_out = ap_out.concat([{"k": "spacer", "s": {"grow": 1}}]) if ap_after == true
+    end
+  end
+  n["c"] = ap_out
+  n
+end
+
+def tw_auto_style(st, self_to)
+  as_out = tw_without(st, "tw_auto")
+  as_out["self"] = self_to unless self_to.nil?
+  as_out
 end
 
 def tw_no(whole, why)
@@ -297,11 +368,6 @@ def tw_refused(name)
     "skew-": "EUI has no transforms",
     "origin-": "EUI has no transforms",
     "transform": "EUI has no transforms",
-    "inset-": "there are no offsets; an absolute node is placed by the stack it is in",
-    "top-": "there are no offsets; an absolute node is placed by the stack it is in",
-    "bottom-": "there are no offsets; an absolute node is placed by the stack it is in",
-    "left-": "there are no offsets; an absolute node is placed by the stack it is in",
-    "right-": "there are no offsets; an absolute node is placed by the stack it is in",
     "outline": "the client draws its own focus ring; there is no outline",
     "ring-inset-": "a ring is written as a border",
     "blur": "there are no filters; backdrop-blur is the one blur",
@@ -328,7 +394,6 @@ def tw_refused(name)
     "justify-self-": "write self-* on the child",
     "whitespace-": "text wraps at its box's width; truncate keeps it to one line with an ellipsis, or give the box the width",
     "break-": "text wraps at the box edge, and clamp decides how far",
-    "aspect-": "there is no aspect ratio; give the box a width and a height",
     "object-": "an image fills the box it is given",
     "pointer-events-": "the topmost node takes the pointer, handler or not, and an event walks up from it, never through it to a sibling below",
     "select-": "only editable nodes select text; select-none is what every other node already is",
@@ -359,14 +424,13 @@ def tw_refused(name)
 end
 
 def tw_refused_exact(name)
-  return "an auto margin along the parent's line pushes its siblings away, and there are no auto margins: put spacer() before the node (ml-auto, mt-auto) or after it (mr-auto, mb-auto), or justify-between on the parent" if ["mt-auto", "mr-auto", "mb-auto", "ml-auto"].includes?(name)
-  return "an auto margin on both axes centres the node both ways: self-center on it, and justify-center on its parent" if name == "m-auto"
   return "there are no positioning schemes; absolute is the one there is, inside a stack" if name == "fixed" || name == "sticky"
   return "there is no inline flow; a box is flex, flex-col, block, grid or hidden, and text wraps inside its own node" if ["inline", "inline-block", "table", "contents", "flow-root"].includes?(name)
   return "the client ships no italic face" if name == "italic" || name == "not-italic"
   return "Inter's figures are drawn proportional and the client selects no OpenType feature; font-mono sets figures that line up" if name == "tabular-nums" || name == "proportional-nums" || name == "lining-nums" || name == "oldstyle-nums"
-  return "children are drawn in the order they are given; reverse the list" if name == "flex-row-reverse" || name == "flex-col-reverse"
-  return "the view is given the viewport's size; use it" if ["w-screen", "h-screen", "min-h-screen", "min-w-screen", "max-w-screen"].includes?(name)
+  return "the view is given the viewport's size; use it" if ["w-screen", "h-screen", "min-h-screen", "min-w-screen", "max-w-screen", "max-h-screen", "h-dvh", "h-svh", "h-lvh", "min-h-dvh", "min-h-svh", "min-h-lvh", "w-dvw", "w-svw", "w-lvw"].includes?(name)
+  return "a line that does not wrap runs out of its box; truncate keeps it to one line and ends it with an ellipsis" if name == "text-nowrap" || name == "text-clip"
+  return "a line breaks where the next word does not fit, and the client balances nothing" if name == "text-balance" || name == "text-pretty"
   return "a bare ring is three pixels; write ring-1 or ring-2, which become a border" if name == "ring"
   return "there is no container query and no typography plugin; give the box a width" if name == "container" || name == "prose"
   return "a shadow is cast, never inset" if name == "shadow-inner"
@@ -658,6 +722,20 @@ def tw_exact()
     "flex-auto": {"grow": 1, "shrink": 1, "basis": "auto"},
     "flex-initial": {"grow": 0, "shrink": 1},
     "flex-none": {"grow": 0, "shrink": 0},
+    # Tailwind 2's names, still in Tailwind UI's markup.
+    "flex-grow": {"grow": 1},
+    "flex-grow-0": {"grow": 0},
+    "flex-shrink": {"shrink": 1},
+    "flex-shrink-0": {"shrink": 0},
+    # Reversed by node(), which has the children; see tw_reverse_style.
+    "flex-row-reverse": {"display": "row", "tw_reverse": "flex-row-reverse"},
+    "flex-col-reverse": {"display": "column", "tw_reverse": "flex-col-reverse"},
+    # In a flexbox, normal and stretch pack the line from its start.
+    "justify-normal": {"justify": "start"},
+    "justify-stretch": {"justify": "start"},
+    "z-auto": {"z": 0},
+    "max-w-none": {"max_width": "auto"},
+    "max-h-none": {"max_height": "auto"},
     "text-xs": {"size": 0},
     "text-sm": {"size": 1},
     "text-base": {"size": 2},
@@ -676,6 +754,12 @@ def tw_exact()
     "font-medium": {"weight": "medium"},
     "font-semibold": {"weight": "semibold"},
     "font-bold": {"weight": "bold"},
+    # The nearest of the four faces; see Approximations.
+    "font-thin": {"weight": "regular"},
+    "font-extralight": {"weight": "regular"},
+    "font-light": {"weight": "regular"},
+    "font-extrabold": {"weight": "bold"},
+    "font-black": {"weight": "bold"},
     "font-sans": {"font": "sans"},
     "font-mono": {"font": "mono"},
     "underline": {"underline": true},
@@ -748,6 +832,21 @@ def tw_exact()
     "isolate": {},
     # Only editable nodes select text (06 §3).
     "select-none": {},
+    # What every node already is: no native look to reset, no list marker,
+    # no resize handle (a textarea grows), the pointer taken as usual, text
+    # that wraps at its box, an ellipsis wherever a line is cut, and glyphs
+    # drawn by the client's own rasteriser.
+    "appearance-none": {},
+    "list-none": {},
+    "resize-none": {},
+    "pointer-events-auto": {},
+    "whitespace-normal": {},
+    "text-wrap": {},
+    "text-ellipsis": {},
+    "overflow-ellipsis": {},
+    "antialiased": {},
+    "visible": {},
+    "aspect-auto": {"tw_aspect": "auto"},
     # An auto margin on the cross axis centres the node on it: mx-auto in a
     # column, which is where Tailwind writes it (a centred container in block
     # flow), and my-auto in a row. On the main axis it is a spacer instead.
@@ -836,6 +935,9 @@ def tw_family(name, whole)
     return tw_edge("pad", fa_head.substring(1, fa_head.length()), tw_space(fa_rest, whole))
   end
   if ["m", "mx", "my", "mt", "mr", "mb", "ml"].includes?(fa_head)
+    # ml-auto, mt-auto, m-auto: placed by the box the node is put in
+    # (tw_auto_place). mx-auto and my-auto are in the exact table.
+    return {"auto": tw_sides(fa_head.substring(1, fa_head.length()))} if fa_rest == "auto"
     return tw_edge("margin", fa_head.substring(1, fa_head.length()), tw_space(fa_rest, whole))
   end
   return {"set": {"gap": tw_space(fa_rest, whole)}} if fa_head == "gap" && fa_rest.index_of("-") < 0
@@ -846,7 +948,9 @@ def tw_family(name, whole)
   if (fa_head == "gap" || fa_head == "space") && (fa_rest.starts_with?("x-") || fa_rest.starts_with?("y-"))
     fa_axis = fa_rest.substring(0, 1)
     fa_step = fa_rest.substring(2, fa_rest.length())
-    throw tw_no(whole, "children are drawn in the order they are given; reverse the list") if fa_step == "reverse"
+    # space-x-reverse: the margin on the other side of each child, for a
+    # reversed box. EUI's gap is the same on both sides, so it is nothing.
+    return {"set": {}} if fa_step == "reverse" && fa_head == "space"
 
     fa_kind = fa_head == "gap" ? fa_axis : "space_" + fa_axis
     return {"set": {}, "gap": {"k": fa_kind, "v": tw_space(fa_step, whole)}}
@@ -898,18 +1002,25 @@ def tw_family(name, whole)
     return tw_edge("border", "", tw_border_width(fa_rest, whole)) if tw_numeric?(fa_rest)
     if ["x", "y", "t", "r", "b", "l"].includes?(fa_rest.substring(0, 1)) && (fa_rest.length() == 1 || fa_rest.substring(1, 2) == "-")
       fa_width = fa_rest.length() == 1 ? "" : fa_rest.substring(2, fa_rest.length())
+      # border-b-indigo-600: one side's colour, which tw_bc_settle makes the
+      # box's one border colour when the sides that are drawn agree.
+      return tw_bc_side(fa_rest.substring(0, 1), fa_width, whole) if fa_width != "" && !tw_numeric?(fa_width)
       return tw_edge("border", fa_rest.substring(0, 1), tw_border_width(fa_width, whole))
     end
     return {"set": {"border_color": tw_colour("border", fa_rest, whole)}}
   end
   if fa_head == "ring"
-    return tw_edge("border", "", int(fa_rest)) if fa_rest == "1" || fa_rest == "2"
+    return tw_edge("border", "", int(fa_rest)) if fa_rest == "0" || fa_rest == "1" || fa_rest == "2"
     return nil if fa_rest.starts_with?("offset") || fa_rest.starts_with?("inset")
     if tw_numeric?(fa_rest)
       throw tw_no(whole, "a ring is written as a border, and ring-1 and ring-2 are the widths that read as one")
     end
     return {"set": {"border_color": tw_colour("ring", fa_rest, whole)}}
   end
+
+  # inset-0, top-4, right-0: where an absolute node sits in its stack.
+  return tw_inset(fa_head, fa_rest, whole) if ["inset", "top", "right", "bottom", "left"].includes?(fa_head)
+  return tw_aspect(fa_rest, whole) if fa_head == "aspect"
 
   # opacity-50, z-10, line-clamp-2, duration-150, grid-cols-3
   if fa_head == "opacity"
@@ -950,17 +1061,35 @@ def tw_family(name, whole)
   nil
 end
 
-def tw_take(out, variant, name, whole)
+def tw_take(out, variant, name, whole, rule = 0)
   tk_patch = tw_class(name, whole)
   tk_style = out[variant]
-  if tk_patch["edge"].nil?
-    tk_style = tk_style.merge(tk_patch["set"] ?? {})
+  tk_set = tk_patch["set"] ?? {}
+  tk_placed = !tk_patch["auto"].nil? || !tk_patch["inset"].nil? || !tk_set["tw_aspect"].nil? || !tk_set["tw_reverse"].nil?
+  if tk_placed && variant != "s"
+    throw tw_no(whole, "where a node sits is laid out once and has no states; write it without the state")
+  end
+  if !tk_patch["auto"].nil?
+    tk_style = tk_style.merge({"tw_auto": tw_sided(tk_style["tw_auto"], tk_patch["auto"], true).merge({"c": whole})})
+    # The side's number goes: `ml-4 ml-auto` is auto, not 16 px and auto.
+    tk_style["margin"] = tw_edges(tk_style["margin"], tk_patch["auto"], 0) unless tk_style["margin"].nil?
+  elsif !tk_patch["inset"].nil?
+    tk_style = tk_style.merge({"tw_inset": tw_sided(tk_style["tw_inset"], tk_patch["inset"]["sides"], tk_patch["inset"]["v"]).merge({"c": whole})})
+  elsif !tk_patch["side_c"].nil?
+    tk_style = tk_style.merge({"tw_bc": tw_sided(tk_style["tw_bc"], tk_patch["side_c"]["sides"], [tk_patch["side_c"]["c"], rule, whole])})
+  elsif tk_patch["edge"].nil?
+    tk_style = tk_style.merge(tk_set)
+    tk_style["tw_bc_lvl"] = rule unless tk_set["border_color"].nil?
+    # `flex-row-reverse md:flex-row`: a direction written later is not reversed.
+    tk_style = tw_without(tk_style, "tw_reverse") if !tk_set["display"].nil? && tk_set["tw_reverse"].nil?
   else
     tk_key = tk_patch["edge"]
     tk_from = tk_style[tk_key]
     tk_from = out["s"][tk_key] if tk_from.nil? && variant != "s"
     tk_style = tk_style.merge({})
     tk_style[tk_key] = tw_edges(tk_from, tk_patch["sides"], tk_patch["v"])
+    # `ml-auto md:ml-4`: a number written later is not auto.
+    tk_style["tw_auto"] = tw_sided(tk_style["tw_auto"], tk_patch["sides"], false) if tk_key == "margin" && !tk_style["tw_auto"].nil?
   end
   tk_gap = tk_patch["gap"]
   tk_rule = tk_patch["divide"]
@@ -989,6 +1118,23 @@ def tw_take(out, variant, name, whole)
   end
   out[variant] = tk_style
   out
+end
+
+def tw_sided(marker, sides, v)
+  sd_out = (marker ?? {}).merge({})
+  sd_names = ["t", "r", "b", "l"]
+  for sd_i in range(0, 4)
+    sd_out[sd_names[sd_i]] = v if sides[sd_i]
+  end
+  sd_out
+end
+
+def tw_without(style, key)
+  wo_out = {}
+  for wo_key in style.keys()
+    wo_out[wo_key] = style[wo_key] unless wo_key == key
+  end
+  wo_out
 end
 
 def tw_grad_direction(rest, whole)
@@ -1067,6 +1213,186 @@ def tw_grad_settle(out)
   out
 end
 
+def tw_bc_side(which, colour, whole)
+  {"side_c": {"sides": tw_sides(which), "c": tw_colour("border", colour, whole)}}
+end
+
+def tw_bc_settle(out)
+  bt_s = out["s"]
+  bt_rest = bt_s["tw_bc"] ?? {}
+  for bt_state in ["hover", "press", "focus", "disabled"]
+    bt_st = out[bt_state]
+    bt_touches = !bt_st["tw_bc"].nil? || !bt_st["border"].nil? || !bt_st["border_color"].nil?
+    if bt_touches && (bt_rest.keys().length() > 0 || !bt_st["tw_bc"].nil?)
+      bt_sides = bt_rest.merge(bt_st["tw_bc"] ?? {})
+      bt_own = !bt_st["border_color"].nil?
+      bt_general = bt_own ? bt_st["border_color"] : bt_s["border_color"]
+      bt_rule = bt_own ? bt_st["tw_bc_lvl"] : (bt_s["tw_bc_lvl"] ?? -1)
+      bt_c = tw_bc_state(bt_sides, bt_general, bt_rule, bt_st["border"] ?? bt_s["border"])
+      bt_st = tw_bc_strip(bt_st)
+      bt_st["border_color"] = bt_c unless bt_c.nil?
+      out[bt_state] = bt_st
+    else
+      out[bt_state] = tw_bc_strip(bt_st)
+    end
+  end
+  if bt_rest.keys().length() > 0
+    bt_c = tw_bc_state(bt_rest, bt_s["border_color"], bt_s["tw_bc_lvl"] ?? -1, bt_s["border"])
+    bt_s = tw_bc_strip(bt_s)
+    bt_s["border_color"] = bt_c unless bt_c.nil?
+    out["s"] = bt_s
+  else
+    out["s"] = tw_bc_strip(bt_s)
+  end
+  out
+end
+
+def tw_bc_state(sides, general, general_rule, widths)
+  bs_w = tw_four(widths)
+  bs_drawn = bs_w[0] > 0 || bs_w[1] > 0 || bs_w[2] > 0 || bs_w[3] > 0
+  bs_names = ["t", "r", "b", "l"]
+  bs_said = ["top", "right", "bottom", "left"]
+  bs_first = nil
+  bs_first_side = ""
+  bs_class = ""
+  for bs_i in range(0, 4)
+    bs_side = sides[bs_names[bs_i]]
+    bs_counts = bs_drawn ? bs_w[bs_i] > 0 : !bs_side.nil?
+    if bs_counts
+      bs_own = !bs_side.nil? && bs_side[1] >= general_rule
+      bs_c = bs_own ? bs_side[0] : (general ?? "border.subtle")
+      bs_class = bs_side[2] if bs_own && bs_class == ""
+      if bs_first.nil?
+        bs_first = bs_c
+        bs_first_side = bs_said[bs_i]
+      elsif bs_c != bs_first
+        bs_named = bs_class
+        bs_named = sides[sides.keys()[0]][2] if bs_named == ""
+        throw tw_no(bs_named, "a box has one border colour for its four sides, and this one would draw the " + bs_first_side + " " + bs_first + " and the " + bs_said[bs_i] + " " + bs_c + "; colour every side that is drawn the same, or draw only this one")
+      end
+    end
+  end
+  bs_first ?? general
+end
+
+def tw_bc_strip(style)
+  bp_out = {}
+  for bp_key in style.keys()
+    bp_out[bp_key] = style[bp_key] unless bp_key == "tw_bc" || bp_key == "tw_bc_lvl"
+  end
+  bp_out
+end
+
+def tw_four(v)
+  return [0, 0, 0, 0] if v.nil?
+  return [v[0], v[1], v[2], v[3]] if v.class == "array" && v.length() == 4
+  return [v[0], v[1], v[0], v[1]] if v.class == "array" && v.length() == 2
+
+  [v, v, v, v]
+end
+
+def tw_inset(head, rest, whole)
+  ti_which = {"top": "t", "right": "r", "bottom": "b", "left": "l"}[head] ?? ""
+  ti_v = rest
+  if head == "inset" && (rest.starts_with?("x-") || rest.starts_with?("y-"))
+    ti_which = rest.substring(0, 1)
+    ti_v = rest.substring(2, rest.length())
+  end
+  if ti_v == "auto" || ti_v == "full" || ti_v == "px" || ti_v.index_of("/") >= 0 || ti_v.starts_with?("[")
+    throw tw_no(whole, "an offset is a margin from the stack's edge, so it is a step on the space scale: top-0, right-4, inset-x-0")
+  end
+  {"inset": {"sides": tw_sides(ti_which), "v": tw_space(ti_v, whole)}}
+end
+
+def tw_inset_across(style, inset, m)
+  ia_l = inset["l"]
+  ia_r = inset["r"]
+  return style if ia_l.nil? && ia_r.nil?
+
+  ia_out = style.merge({})
+  if !ia_l.nil? && !ia_r.nil? && ia_out["width"].nil?
+    throw tw_no(inset["c"], "an offset from both edges is the stack's width less the two, and EUI has no such length; write inset-x-0 for the whole of it, or one edge and a w-*") unless ia_l == 0 && ia_r == 0
+
+    ia_out["width"] = "100%"
+    ia_out["position"] = "absolute_start"
+    return ia_out
+  end
+  ia_side = ia_l.nil? ? "r" : "l"
+  ia_by = ia_l.nil? ? ia_r : ia_l
+  ia_out["position"] = ia_l.nil? ? "absolute_end" : "absolute_start"
+  if ia_by > 0
+    throw tw_no(inset["c"], "an offset is laid on as a margin from the edge, and that side has a margin already") if m[ia_l.nil? ? 1 : 3] != 0
+
+    ia_out["margin"] = tw_edges(ia_out["margin"], tw_sides(ia_side), ia_by)
+  end
+  ia_out
+end
+
+def tw_aspect(rest, whole)
+  return {"set": {"tw_aspect": [1, 1, whole]}} if rest == "square"
+  return {"set": {"tw_aspect": [16, 9, whole]}} if rest == "video"
+
+  ta_r = rest.starts_with?("[") && rest.ends_with?("]") ? rest.substring(1, rest.length() - 1) : rest
+  ta_parts = ta_r.split("/")
+  if ta_parts.length() == 2 && tw_numeric?(ta_parts[0]) && tw_numeric?(ta_parts[1]) && float(ta_parts[0]) > 0.0 && float(ta_parts[1]) > 0.0
+    return {"set": {"tw_aspect": [float(ta_parts[0]), float(ta_parts[1]), whole]}}
+  end
+  throw tw_no(whole, "an aspect ratio is aspect-square, aspect-video, aspect-W/H or aspect-[W/H]")
+end
+
+def tw_place_settle(out)
+  pl_s = out["s"]
+  # `ml-auto md:ml-0`: an auto margin every side of which was undone.
+  pl_auto = pl_s["tw_auto"]
+  if !pl_auto.nil? && pl_auto["t"] != true && pl_auto["r"] != true && pl_auto["b"] != true && pl_auto["l"] != true
+    pl_s = tw_without(pl_s, "tw_auto")
+    out["s"] = pl_s
+  end
+  pl_ratio = pl_s["tw_aspect"]
+  pl_in = pl_s["tw_inset"]
+  return out if pl_ratio.nil? && pl_in.nil?
+
+  pl_out = tw_without(tw_without(pl_s, "tw_aspect"), "tw_inset")
+  if !pl_ratio.nil? && pl_ratio != "auto"
+    pl_w = pl_out["width"]
+    pl_h = pl_out["height"]
+    pl_w_px = !pl_w.nil? && pl_w.class == "int"
+    pl_h_px = !pl_h.nil? && pl_h.class == "int"
+    if pl_w_px && (pl_h.nil? || pl_h == "auto")
+      pl_out["height"] = int((float(pl_w) * float(pl_ratio[1]) / float(pl_ratio[0])).round())
+    elsif pl_h_px && (pl_w.nil? || pl_w == "auto")
+      pl_out["width"] = int((float(pl_h) * float(pl_ratio[0]) / float(pl_ratio[1])).round())
+    elsif !(pl_w_px && pl_h_px)
+      throw tw_no(pl_ratio[2], "a ratio is the height worked out from a width in px, or the width from a height, and EUI lays out no ratio of its own; give the box w-N or h-N")
+    end
+  end
+  unless pl_in.nil?
+    throw tw_no(pl_in["c"], "an offset places an absolute node against its stack; write absolute with it, and put the node in a stack()") unless pl_out["position"] == "absolute"
+
+    pl_m = tw_four(pl_out["margin"])
+    pl_t = pl_in["t"]
+    pl_b = pl_in["b"]
+    if !pl_t.nil? && !pl_b.nil? && pl_out["height"].nil?
+      throw tw_no(pl_in["c"], "an offset from both edges is the stack's height less the two, and EUI has no such length; write inset-y-0 for the whole of it, or one edge and an h-*") unless pl_t == 0 && pl_b == 0
+
+      pl_out["height"] = "100%"
+      pl_out["self"] = "start"
+    elsif !pl_t.nil?
+      # With a height, the top wins, as it does in CSS.
+      pl_out["self"] = "start"
+      throw tw_no(pl_in["c"], "an offset is laid on as a margin from the edge, and that side has a margin already") if pl_t > 0 && pl_m[0] != 0
+      pl_out["margin"] = tw_edges(pl_out["margin"], tw_sides("t"), pl_t) if pl_t > 0
+    elsif !pl_b.nil?
+      pl_out["self"] = "end"
+      throw tw_no(pl_in["c"], "an offset is laid on as a margin from the edge, and that side has a margin already") if pl_b > 0 && pl_m[2] != 0
+      pl_out["margin"] = tw_edges(pl_out["margin"], tw_sides("b"), pl_b) if pl_b > 0
+    end
+    pl_out = tw_inset_across(pl_out, pl_in, pl_m)
+  end
+  out["s"] = pl_out
+  out
+end
+
 def tw_divider(rest, whole)
   if rest == "x" || rest == "y"
     dr_one = {}
@@ -1075,7 +1401,12 @@ def tw_divider(rest, whole)
   end
   if rest.starts_with?("x-") || rest.starts_with?("y-")
     dr_width = rest.substring(2, rest.length())
-    throw tw_no(whole, "children are drawn in the order they are given; reverse the list") if dr_width == "reverse"
+    if dr_width == "reverse"
+      # divide-y-reverse: the rule on the trailing edge, for a reversed box.
+      dr_rev = {}
+      dr_rev[rest.substring(0, 1) + "_rev"] = true
+      return {"set": {}, "divide": dr_rev}
+    end
 
     dr_rule = {}
     dr_rule[rest.substring(0, 1)] = tw_border_width(dr_width, whole)
@@ -1144,47 +1475,53 @@ def tw_divide(kids, rule)
       dv_out = dv_out.concat([dv_kid])
       dv_seen = true unless dv_kid.nil?
     else
-      dv_out = dv_out.concat([tw_divide_kid(dv_kid, rule)])
+      dv_out = dv_out.concat([tw_restyle_kid(dv_kid, fn(st) { tw_divide_style(st, rule) })])
     end
   end
   dv_out
 end
 
-def tw_divide_kid(kid, rule)
-  dk_new = kid.merge({})
-  dk_new["s"] = tw_divide_style(kid["s"] ?? {}, rule)
-  dk_on = kid["on"]
-  return dk_new if dk_on.nil? || dk_on.class != "hash"
+def tw_restyle_kid(kid, f)
+  rk_new = kid.merge({})
+  rk_new["s"] = f(kid["s"] ?? {})
+  rk_on = kid["on"]
+  return rk_new if rk_on.nil? || rk_on.class != "hash"
 
-  dk_handlers = {}
-  for dk_event in dk_on.keys()
-    dk_handlers[dk_event] = tw_divide_handler(dk_on[dk_event], rule)
+  rk_handlers = {}
+  for rk_event in rk_on.keys()
+    rk_handlers[rk_event] = tw_restyle_handler(rk_on[rk_event], f)
   end
-  dk_new["on"] = dk_handlers
-  dk_new
+  rk_new["on"] = rk_handlers
+  rk_new
 end
 
-def tw_divide_handler(h, rule)
+def tw_restyle_handler(h, f)
   return h unless h.class == "hash"
   return h unless h["local"].class == "string" && h["styles"].class == "hash"
   return h unless h["local"].starts_with?("self.style = @")
 
-  dh_styles = {}
-  for dh_name in h["styles"].keys()
-    dh_styles[dh_name] = tw_divide_style(h["styles"][dh_name], rule)
+  rh_styles = {}
+  for rh_name in h["styles"].keys()
+    rh_styles[rh_name] = f(h["styles"][rh_name])
   end
-  h.merge({"styles": dh_styles})
+  h.merge({"styles": rh_styles})
 end
 
 def tw_divide_style(st, rule)
   ds_out = st.merge({})
+  ds_top = [true, false, false, false]
+  ds_bottom = [false, false, true, false]
+  ds_left = [false, false, false, true]
+  ds_right = [false, true, false, false]
   unless rule["y"].nil?
-    ds_ruled = tw_edges(ds_out["border"], [true, false, false, false], rule["y"])
-    ds_out["border"] = tw_edges(ds_ruled, [false, false, true, false], 0)
+    ds_rev = rule["y_rev"] == true
+    ds_ruled = tw_edges(ds_out["border"], ds_rev ? ds_bottom : ds_top, rule["y"])
+    ds_out["border"] = tw_edges(ds_ruled, ds_rev ? ds_top : ds_bottom, 0)
   end
   unless rule["x"].nil?
-    ds_ruled = tw_edges(ds_out["border"], [false, false, false, true], rule["x"])
-    ds_out["border"] = tw_edges(ds_ruled, [false, true, false, false], 0)
+    ds_rev = rule["x_rev"] == true
+    ds_ruled = tw_edges(ds_out["border"], ds_rev ? ds_right : ds_left, rule["x"])
+    ds_out["border"] = tw_edges(ds_ruled, ds_rev ? ds_left : ds_right, 0)
   end
   ds_out["border_color"] = rule["color"] ?? (st["border_color"] ?? "border.subtle")
   ds_out
@@ -1271,7 +1608,15 @@ def tw_examples()
     "sm:flex", "md:flex-row", "lg:px-8", "xl:max-w-7xl", "2xl:text-lg", "md:hover:bg-gray-50",
     "flex space-x-4", "flex-col space-y-2", "block space-y-4", "flex gap-x-4", "flex-col gap-y-2", "grid gap-x-4 gap-y-4",
     "block", "relative", "static", "isolate", "select-none", "mx-auto", "my-auto",
-    "uppercase", "lowercase", "capitalize", "normal-case"
+    "uppercase", "lowercase", "capitalize", "normal-case",
+    "border-b-2 border-b-indigo-600", "border-x border-x-gray-300", "border-t-2 border-transparent hover:border-t-indigo-600", "ring-0",
+    "flex-grow", "flex-grow-0", "flex-shrink", "flex-shrink-0", "justify-normal", "justify-stretch", "z-auto", "max-w-none", "max-h-none",
+    "font-thin", "font-extralight", "font-light", "font-extrabold", "font-black",
+    "appearance-none", "list-none", "resize-none", "pointer-events-auto", "whitespace-normal", "text-wrap", "text-ellipsis",
+    "overflow-ellipsis", "antialiased", "visible", "outline-0", "flex space-x-reverse",
+    "absolute inset-0", "absolute top-0 left-0", "absolute top-0 right-0", "absolute bottom-4 left-2", "absolute bottom-1 right-1", "absolute inset-x-0 bottom-0", "absolute inset-y-0 right-4",
+    "size-10 aspect-square", "w-64 aspect-video", "h-24 aspect-[4/3]", "w-40 aspect-4/3", "aspect-auto",
+    "ml-auto", "mr-auto", "mt-auto", "mb-auto", "m-auto"
   ]
 end
 
@@ -1464,7 +1809,7 @@ describe("tw", fn() {
     check("a wrapping row spaces its lines", tw_refusal("flex flex-wrap gap-x-4").index_of("both axes") >= 0, true)
     check("a grid spaces its rows", tw_refusal("grid gap-x-4").index_of("both axes") >= 0, true)
     check("no states", tw_refusal("flex hover:space-x-2").index_of("no states") >= 0, true)
-    check("no reverse", tw_refusal("flex space-x-reverse").index_of("reverse the list") >= 0, true)
+    check("space-x-reverse is the same gap", tw("flex space-x-4 space-x-reverse")["s"], {"display": "row", "gap": 5})
   })
 
   test("a divider is laid onto every child but the first", fn() {
@@ -1494,14 +1839,13 @@ describe("tw", fn() {
     check("the tree encodes", renders?(list), true)
     check("tw() alone has no children to divide", tw_refusal("divide-y").index_of("written where they are") >= 0, true)
     check("no dashes", tw_refusal("divide-dashed").index_of("always solid") >= 0, true)
-    check("no reverse", tw_refusal("divide-y-reverse").index_of("reverse the list") >= 0, true)
+    flipped = column({"tw": "divide-y divide-y-reverse"}, [text("a", {}), text("b", {})])
+    check("divide-y-reverse rules the trailing edge", flipped["c"][1]["s"]["border"], [0, 0, 1, 0])
   })
 
   test("auto margins, positioning and flow, where EUI already behaves so", fn() {
     check("mx-auto centres across a column", tw("mx-auto")["s"], {"self": "center"})
     check("my-auto across a row", tw("my-auto")["s"], {"self": "center"})
-    check("an auto margin along the line", tw_refusal("ml-auto").index_of("spacer()") >= 0, true)
-    check("both axes", tw_refusal("m-auto").index_of("justify-center on its parent") >= 0, true)
     check("relative is in flow", tw("relative")["s"], {"position": "flow"})
     check("and undoes absolute from a breakpoint", tw("absolute md:relative", 900)["s"], {"position": "flow"})
     check("static", tw("static")["s"], {"position": "flow"})
@@ -1511,6 +1855,114 @@ describe("tw", fn() {
     check("select-none is what every box is", tw("select-none")["s"], {})
     check("inline flow is still refused", tw_refusal("inline-block").index_of("no inline flow") >= 0, true)
     check("fixed is still refused", tw_refusal("fixed").index_of("positioning") >= 0, true)
+  })
+
+  test("an auto margin is placed by the box the node is put in", fn() {
+    spacer_node = {"k": "spacer", "s": {"grow": 1}}
+    along = row({"gap": 2}, [text("a", {}), text("b", tw_style("ml-auto"))])
+    check("ml-auto in a row is a spacer before it", along["c"], [text("a", {}), spacer_node, text("b", {})])
+    after = row({}, [text("a", tw_style("mr-auto")), text("b", {})])
+    check("mr-auto a spacer after it", after["c"], [text("a", {}), spacer_node, text("b", {})])
+    down = column({}, [text("a", {}), text("b", tw_style("mt-auto"))])
+    check("mt-auto in a column", down["c"], [text("a", {}), spacer_node, text("b", {})])
+    across = column({}, [text("a", tw_style("ml-auto")), text("b", tw_style("mr-auto"))])
+    check("across a column ml-auto is self end", across["c"][0]["s"], {"self": "end"})
+    check("and mr-auto self start", across["c"][1]["s"], {"self": "start"})
+    check("mt-auto across a row", row({}, [text("a", tw_style("mt-auto"))])["c"][0]["s"], {"self": "end"})
+    both = row({}, [text("a", tw_style("m-auto"))])
+    check("m-auto centres both ways", both["c"], [spacer_node, text("a", {"self": "center"}), spacer_node])
+    check("the parent needs no classes of its own", node("box", {"tw": "flex items-center"}, [text("a", tw_style("ml-auto"))])["c"].length(), 2)
+    live = node("box", {"tw": "mt-auto hover:bg-gray-50"}, [])
+    placed = row({}, [live])["c"][0]
+    check("the hover style keeps its place", placed["on"]["pointer_enter"]["styles"]["hover"], {"bg": "surface.base", "self": "end"})
+    check("and the resting one has no marker", placed["on"]["pointer_leave"]["styles"]["base"], {"self": "end"})
+    check("the number goes", tw("ml-4 ml-auto")["s"]["margin"], 0)
+    check("a number written later undoes it", tw("ml-auto md:ml-4", 900)["s"], {"margin": [0, 0, 0, 5]})
+    check("and before the breakpoint it is auto", tw("ml-auto md:ml-4", 500)["s"]["tw_auto"]["l"], true)
+    check("the tree encodes", renders?(along), true)
+    check("a marker no box placed is refused", encodes?(tw("ml-auto")["s"]), false)
+    check("not in a grid", node_refusal({"display": "grid"}, [text("a", tw_style("ml-auto"))]).index_of("lays its children out another way") >= 0, true)
+    check("not in a stack", node_refusal({"display": "stack"}, [text("a", tw_style("mt-auto"))]).index_of("stack") >= 0, true)
+    check("no states", tw_refusal("hover:ml-auto").index_of("no states") >= 0, true)
+    check("mx-auto is still self-center", tw("mx-auto")["s"], {"self": "center"})
+  })
+
+  test("a reversed box is its children the other way round", fn() {
+    rv = node("box", {"tw": "flex flex-row-reverse"}, [text("1", {}), text("2", {}), text("3", {})])
+    check("the children reversed", rv["c"].map(fn(c) { c["t"] }), ["3", "2", "1"])
+    check("packed from the far end, as a reversed line is", rv["s"], {"display": "row", "justify": "end"})
+    check("justify-end packs from the near one", node("box", {"tw": "flex-col-reverse justify-end"}, [])["s"], {"display": "column", "justify": "start"})
+    check("between is symmetric", node("box", {"tw": "flex-row-reverse justify-between"}, [])["s"]["justify"], "between")
+    ruled = node("box", {"tw": "flex-col-reverse divide-y"}, [text("1", {}), text("2", {})])
+    check("rules laid on in the order given, as the browser does", ruled["c"].map(fn(c) { c["s"] }), [{"border": [1, 0, 0, 0], "border_color": "border.subtle"}, {}])
+    check("a direction written later is not reversed", node("box", {"tw": "flex-col-reverse md:flex-row", "vw": 900}, [text("1", {}), text("2", {})])["c"][0]["t"], "1")
+    check("the tree encodes", renders?(rv), true)
+    check("tw() alone has no children", tw_refusal("flex-row-reverse").index_of("written where they are") >= 0, true)
+    check("no states", tw_refusal("hover:flex-row-reverse").index_of("no states") >= 0, true)
+  })
+
+  test("one side's border colour is the box's, when the sides drawn agree", fn() {
+    check("the one side drawn", tw("border-b-2 border-b-indigo-600")["s"], {"border": [0, 0, 2, 0], "border_color": "accent.base"})
+    check("two sides", tw("border-x border-x-gray-300")["s"], {"border": [0, 1, 0, 1], "border_color": "border.default"})
+    check("a side's colour over the box's, whatever the order", tw("border-b-2 border-b-indigo-600 border-gray-200")["s"]["border_color"], "accent.base")
+    check("every side named", tw("border border-t-red-500 border-r-red-500 border-b-red-500 border-l-red-500")["s"]["border_color"], "danger.base")
+    check("a state's side over the resting box", tw("border-b-2 border-transparent hover:border-b-indigo-600")["hover"], {"border_color": "accent.base"})
+    check("a state's box colour over a resting side", tw("border-b-2 border-b-red-500 hover:border-gray-300")["hover"], {"border_color": "border.default"})
+    check("a wider breakpoint's box colour over a side", tw("border-b border-b-red-500 md:border-gray-300", 900)["s"]["border_color"], "border.default")
+    check("the tree encodes", encodes?(tw("border-b-2 border-b-indigo-600")["s"]), true)
+    check("two colours drawn", tw_refusal("border border-b-indigo-600").index_of("one border colour") >= 0, true)
+    check("and they are named", tw_refusal("border border-b-indigo-600").index_of("top border.subtle and the bottom accent.base") >= 0, true)
+    check("ring-0 takes the ring off", tw("ring-1 ring-0")["s"], {"border": 0})
+    check("a side's width is still a width", tw("border-l-4")["s"], {"border": [0, 0, 0, 4]})
+  })
+
+  test("an offset places an absolute node in its stack", fn() {
+    # eui 04 §5: down the stack by the node's own `self`, across by the
+    # edge its `position` names (protocol 7), the offset a margin from it.
+    check("top-0 left-0", tw("absolute top-0 left-0")["s"], {"position": "absolute_start", "self": "start"})
+    check("top-0 right-0", tw("absolute top-0 right-0")["s"], {"position": "absolute_end", "self": "start"})
+    check("an offset is a margin from the edge", tw("absolute bottom-4 left-2")["s"], {"position": "absolute_start", "self": "end", "margin": [0, 0, 5, 3]})
+    check("right-1 is a right margin", tw("absolute top-0 right-1")["s"], {"position": "absolute_end", "self": "start", "margin": [0, 2, 0, 0]})
+    check("inset-0 fills it", tw("absolute inset-0")["s"], {"position": "absolute_start", "width": "100%", "height": "100%", "self": "start"})
+    check("inset-x-0 fills across", tw("absolute inset-x-0 bottom-0")["s"], {"position": "absolute_start", "width": "100%", "self": "end"})
+    check("left-0 right-0 is inset-x-0", tw("absolute left-0 right-0")["s"], {"position": "absolute_start", "width": "100%"})
+    check("with a width left wins", tw("absolute left-2 right-4 w-10")["s"], {"position": "absolute_start", "width": 40, "margin": [0, 0, 0, 3]})
+    check("with a height the top wins", tw("absolute top-0 bottom-0 h-10")["s"], {"position": "absolute", "height": 40, "self": "start"})
+    check("no offset across leaves it to the stack", tw("absolute top-2")["s"], {"position": "absolute", "self": "start", "margin": [3, 0, 0, 0]})
+    badge = node("box", {"display": "stack"}, [node("box", {"tw": "absolute top-0 right-0 size-3 rounded-full bg-red-500"}, [])])
+    check("the tree encodes", renders?(badge), true)
+    check("absolute is needed", tw_refusal("top-0").index_of("write absolute with it") >= 0, true)
+    check("both edges, not zero", tw_refusal("absolute top-2 bottom-2").index_of("inset-y-0") >= 0, true)
+    check("both edges across", tw_refusal("absolute left-2 right-2").index_of("inset-x-0") >= 0, true)
+    check("a fraction", tw_refusal("absolute top-1/2").index_of("space scale") >= 0, true)
+    check("an offset over a margin", tw_refusal("absolute top-2 mt-1").index_of("margin already") >= 0, true)
+    check("and across", tw_refusal("absolute right-2 mr-1").index_of("margin already") >= 0, true)
+    check("no states", tw_refusal("absolute hover:top-0").index_of("no states") >= 0, true)
+  })
+
+  test("a ratio is the length the box was not given", fn() {
+    check("square", tw("size-10 aspect-square")["s"], {"width": 40, "height": 40})
+    check("video", tw("w-64 aspect-video")["s"], {"width": 256, "height": 144})
+    check("from the height", tw("h-24 aspect-[4/3]")["s"], {"height": 96, "width": 128})
+    check("a bare ratio", tw("aspect-4/3 w-40")["s"], {"width": 160, "height": 120})
+    check("aspect-auto undoes it", tw("aspect-square aspect-auto")["s"], {})
+    check("no length to work from", tw_refusal("aspect-square").index_of("w-N or h-N") >= 0, true)
+    check("a percentage is no length in px", tw_refusal("w-full aspect-video").index_of("w-N or h-N") >= 0, true)
+    check("not a ratio", tw_refusal("aspect-wide").index_of("aspect-square") >= 0, true)
+  })
+
+  test("the aliases and the classes that are what EUI already does", fn() {
+    check("Tailwind 2's grow and shrink", tw("flex-grow flex-shrink-0")["s"], {"grow": 1, "shrink": 0})
+    check("justify-normal", tw("justify-normal")["s"], {"justify": "start"})
+    check("z-auto", tw("z-auto")["s"], {"z": 0})
+    check("max-w-none", tw("max-w-none")["s"], {"max_width": "auto"})
+    check("font-light is the regular face", tw("font-light")["s"], {"weight": "regular"})
+    check("font-black the bold", tw("font-black")["s"], {"weight": "bold"})
+    check("nothing to reset", tw("appearance-none list-none resize-none pointer-events-auto antialiased visible outline-0")["s"], {})
+    check("text wraps already", tw("text-wrap whitespace-normal text-ellipsis")["s"], {})
+    check("the screen's height", tw_refusal("h-dvh").index_of("viewport") >= 0, true)
+    check("no balancing", tw_refusal("text-balance").index_of("balances nothing") >= 0, true)
+    check("no nowrap by another name", tw_refusal("text-nowrap").index_of("truncate") >= 0, true)
   })
 
   test("a text transform is applied to the string by text()", fn() {
@@ -1620,6 +2072,7 @@ describe("tw", fn() {
       whole = got["s"].merge(got["hover"]).merge(got["press"]).merge(got["focus"]).merge(got["disabled"])
       made = {"k": "box", "s": whole, "c": []}
       made = text("Ab", whole) unless whole["tw_case"].nil?
+      made = row({}, [made]) unless whole["tw_auto"].nil?
       check(cls, renders?(made) ? cls : "refused: " + cls, cls)
     end
     check("and the encoder does refuse", encodes?({"bg": "accent.subtle"}), false)

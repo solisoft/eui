@@ -1,4 +1,4 @@
-# Twelve EUI components. Needs a `soli` built with `--features eui`.
+# Thirteen EUI components. Needs a `soli` built with `--features eui`.
 #
 # router_eui(component, handler, view, options?):
 #   handler — a LiveView handler: {event, params, state} -> state
@@ -6,7 +6,7 @@
 #   options — {"session": "required"}
 #
 # **The first one is the default.** The EUI manifest carries a single `entry`
-# (01 §2.1) and this server carries twelve components, so one of them has to
+# (01 §2.1) and this server carries thirteen components, so one of them has to
 # be what `wss://host` means, and it is this one — which is why the gallery
 # leads rather than the counter. A newer soli also takes `{"default": true}`
 # to say so explicitly, and this file does not use it: the deploy installs a
@@ -42,6 +42,10 @@ router_eui("chat", "chat#chat", "chat#chat_view")
 # application, from `tw()` classes and the catalogue. Its queue is seeded
 # into the session's state, so it needs no table.
 router_eui("helpdesk", "helpdesk#helpdesk", "helpdesk#helpdesk_view")
+# Meridian: a product landing page for an invented service, every style a
+# `tw()` class string. No session state worth keeping, so it is also served
+# as a one-shot render over `GET /_eui/view/site`.
+router_eui("site", "site#site", "site#site_view", {"static": "public, max-age=60"})
 
 # The one HTML page here: an EUI session in a browser, beside the Soli that
 # produces it. It must be served by *this* application and not by the

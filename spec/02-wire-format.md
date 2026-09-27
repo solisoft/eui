@@ -94,7 +94,7 @@ resolution against a parent.
 | 54 | 1 | `line_clamp` | 0 = unlimited |
 | 55 | 1 | `text_decoration` | bitfield: 1 underline, 2 strikethrough |
 | 56 | 1 | `overflow` | 0 `visible`, 1 `clip`, 2 `scroll` |
-| 57 | 1 | `position` | 0 `flow`, 1 `absolute`, 2 `pointer` (meaningful inside `stack`; see [`04-layout.md`](04-layout.md) §5) |
+| 57 | 1 | `position` | 0 `flow`, 1 `absolute`, 2 `pointer`, and from version 7 3 `absolute_start`, 4 `absolute_center`, 5 `absolute_end` — an absolute child that names the edge it sits against across its parent (meaningful inside `stack`; see [`04-layout.md`](04-layout.md) §5) |
 | 58 | 1 | `z` | stacking order within the parent |
 | 59 | 1 | `cursor` | 0 `default`, 1 `pointer`, 2 `text`, 3 `grab`, … |
 | 60 | 1 | `transition` | 0 none, else `motion` scale index + 1, at most 5 (05 §2): colours and opacity animate into this record (03 §5) |
@@ -214,7 +214,10 @@ back to, so nothing is refused and nothing raises a floor. `DefGradient`
 (§5.3), the gradient range of `ColorRef` (§3.2) and the `animation` bits
 `pulse` and `bounce` (03 §5) are version 6 too, and are paid for the same
 way: a session below 6 is sent each gradient's first stop as a solid `bg`,
-and records without the two bits. Everything users would call a widget — button, dialog,
+and records without the two bits. `position` 3–5 (04 §5) took it to
+**version 7**, paid for the same way again: a session below 7 is sent
+`absolute` in their place, and its client places the node by its parent's
+`justify`, as it placed every absolute child before. Everything users would call a widget — button, dialog,
 table, date picker — is composed from these on the server; see
 [`03-widgets.md`](03-widgets.md).
 

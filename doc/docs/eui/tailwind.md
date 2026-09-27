@@ -22,7 +22,10 @@ and the demo application's `helpdesk` component is a whole Tailwind UI app
 shell written the same way — sidebar, top bar, tables, a thread, forms —
 in `examples/demo-app/app/controllers/helpdesk_controller.sl`, with
 breakpoints, `divide-y`, `space-y-*`, `mx-auto` and the half steps where
-Tailwind UI writes them.
+Tailwind UI writes them. Its `site` component (`site_controller.sl`) is a
+product landing page in the same classes: a hero with a gradient band and a
+chart, tabbed features, pricing with a monthly/yearly toggle and a badge at
+`absolute top-6 right-6`, an FAQ, and a signup form.
 
 ## What it answers
 
@@ -45,7 +48,7 @@ result is a tone, and everything that takes a tone takes one.
 
 | Where | What it does with the classes |
 |---|---|
-| `node(kind, {"tw": "...", "vw": width}, children)` — so `column`, `row`, `stack` | The resting classes become the style, under any key written beside `"tw"` (a builder's own `display` still wins). `space-*` and `gap-x-*` are settled against that final direction, and `divide-*` is laid onto the children. States become local handlers on `self`: `pointer_enter`/`leave`/`down`/`up` for `hover:` and `active:`, `focus` and `blur` for `focus:`. No state, no handlers. `"vw"` is the viewport width, for breakpoints; it is not a style key and does not reach the style |
+| `node(kind, {"tw": "...", "vw": width}, children)` — so `column`, `row`, `stack` | The resting classes become the style, under any key written beside `"tw"` (a builder's own `display` still wins). `space-*` and `gap-x-*` are settled against that final direction, `divide-*` is laid onto the children, `flex-row-reverse` reverses them, and a child's `ml-auto` and its kin are placed — with or without classes on the box. States become local handlers on `self`: `pointer_enter`/`leave`/`down`/`up` for `hover:` and `active:`, `focus` and `blur` for `focus:`. No state, no handlers. `"vw"` is the viewport width, for breakpoints; it is not a style key and does not reach the style |
 | `control({"tw": "...", ...})` | The resting classes go over the tone's resting colours and under `shape`; `hover:` and `active:` over the tone's deltas; `disabled:` over the disabled look |
 | `stateful(base, "hover:bg-gray-50 ...", on)` | A class string, or a `tw()` result, as the tone |
 | `tw_style(classes, disabled = false, width = nil)` | Only the resting style, for a `text` node, whose style is a plain hash |
@@ -71,15 +74,17 @@ Copied, because builders write into the style they are given.
 | Classes | EUI |
 |---|---|
 | `flex`, `inline-flex`, `flex-row` · `flex-col` · `grid` · `hidden` | `display: row` · `column` · `grid` · `none` |
+| `flex-row-reverse`, `flex-col-reverse` | the children in the other order, on a node — see [Placed by the parent](#placed-by-the-parent) |
 | `grid-cols-N` | the `columns` prop |
 | `flex-wrap`, `flex-nowrap`, `flex-wrap-reverse` | `wrap` |
 | `items-start` … `items-baseline` | `align` |
-| `justify-start` … `justify-evenly` | `justify` |
+| `justify-start` … `justify-evenly`, `justify-normal`, `justify-stretch` | `justify` — the last two are `start`, which is what they do in a flexbox |
 | `self-auto` … `self-baseline` | `self` |
-| `grow`, `grow-0`, `shrink`, `shrink-0` | `grow`, `shrink` |
+| `grow`, `grow-0`, `shrink`, `shrink-0`, and Tailwind 2's `flex-grow`, `flex-grow-0`, `flex-shrink`, `flex-shrink-0` | `grow`, `shrink` |
 | `flex-1` · `flex-auto` · `flex-initial` · `flex-none` | `grow 1 shrink 1 basis 0` · `basis auto` · `grow 0 shrink 1` · `grow 0 shrink 0` |
 | `block` | `display: column` — a block's children stack down it at its width, which is a column stretching them; see *Approximations* |
-| `absolute`, `z-N` | `position: absolute`, `z` — inside a `stack` |
+| `absolute`, `z-N`, `z-auto` | `position: absolute`, `z` (`z-auto` is 0) — inside a `stack` |
+| `top-N`, `right-N`, `bottom-N`, `left-N`, `inset-0`, `inset-x-0`, `inset-y-0` | where an absolute node sits in its `stack` — see [Placed by the parent](#placed-by-the-parent) |
 | `relative`, `static` | `position: flow`. In flow is what both mean for the box itself; the box an `absolute` child is placed against is the `stack` it sits in (04 §5), so the element a Tailwind page marks `relative` is written `stack()` |
 | `isolate` | nothing: `z` orders siblings only, and no box's children paint across another's (04: no `z-index` across containers) |
 | `overflow-hidden`, `overflow-clip` · `overflow-visible` | `overflow: clip` · `visible` |
@@ -112,7 +117,7 @@ nearest steps and listing the rest, not a guess: `py-7` says *the nearest are
 |---|---|
 | `mx-auto` | `self: center`. An auto margin on the cross axis centres the node on it, and `mx-auto` is written for a box in a column — a centred container in block flow |
 | `my-auto` | `self: center`, for a node in a row |
-| `ml-auto`, `mr-auto`, `mt-auto`, `mb-auto`, `m-auto` | refused: along the parent's line an auto margin pushes the siblings apart, which is a `spacer()` before or after the node, or `justify-between` on the parent |
+| `ml-auto`, `mr-auto`, `mt-auto`, `mb-auto`, `m-auto` | placed by the box the node is put in: a spacer along its line, `self` across it — see [Placed by the parent](#placed-by-the-parent) |
 
 ### Between children
 
@@ -145,8 +150,9 @@ unspaced) or on a grid; `space-*` beside a non-zero gap (the browser draws the
 sum); `gap-x` and `gap-y` that differ where both axes are spaced; a cross-axis
 gap on a line that does not wrap, unless it is `0` or the same (it would
 space nothing, and writing it says the author expected it to show); anything
-here under a state; `space-x-reverse`, `divide-y-reverse`; `divide-dashed`
-and the other border styles.
+here under a state; `divide-dashed` and the other border styles.
+`space-x-reverse` and `divide-y-reverse` are taken, for a reversed box — see
+[Placed by the parent](#placed-by-the-parent).
 
 ### Sizes
 
@@ -156,6 +162,8 @@ and the other border styles.
 | `w-full`, `w-1/2`, `w-2/3` … | `"100%"`, `"50%"`, `"67%"` |
 | `w-auto`, `w-px`, `w-[320px]`, `h-[50%]` | `"auto"`, `1`, `320`, `"50%"` |
 | `max-w-xs` … `max-w-7xl` | Tailwind's pixels: 320, 384, 448, 512, 576, 672, 768, 896, 1024, 1152, 1280 |
+| `max-w-none`, `max-h-none` | `"auto"` |
+| `aspect-square`, `aspect-video`, `aspect-4/3`, `aspect-[4/3]` · `aspect-auto` | the length the box was not given, worked out from the one it was: `size-10 aspect-square` is 40 × 40, `w-64 aspect-video` 256 × 144. With neither a width nor a height in px (`w-full`) it raises — EUI lays out no ratio of its own. `aspect-auto` undoes it |
 
 `max_width` does not narrow what text is measured against (see *Writing
 views*): a paragraph that has to wrap wants a `w-[Npx]`, not a `max-w-*`.
@@ -166,9 +174,11 @@ views*): a paragraph that has to wrap wants a `w-[Npx]`, not a `max-w-*`.
 |---|---|
 | `text-xs` `sm` `base` `lg` `xl` `2xl` `3xl` `4xl` | `size` 0 – 7: 12, 14, 16, 18, 20, 24, 30, 36 px, Tailwind's line heights with them |
 | `font-normal` `medium` `semibold` `bold` | `weight` — four real faces of Inter |
+| `font-thin` `extralight` `light` · `font-extrabold` `black` | the nearest face: regular · bold — see *Approximations* |
 | `font-sans`, `font-mono` | `font` |
 | `text-left` · `text-center` · `text-right` · `text-justify` | `text_align: start` · `center` · `end` · `justify` |
 | `truncate`, `line-clamp-N`, `line-clamp-none` | `clamp` 1, N, 0 |
+| `text-wrap`, `whitespace-normal`, `text-ellipsis`, `overflow-ellipsis` | nothing: text wraps at its box, and a clamped line always ends in an ellipsis |
 | `underline`, `no-underline`, `line-through` | `underline`, `strike` |
 | `uppercase`, `lowercase`, `capitalize`, `normal-case` | the string, transformed by `text()` on the server |
 
@@ -256,10 +266,24 @@ alpha).
 |---|---|
 | `border`, `border-0` `-2` `-4` `-8` | `border` width on all four sides |
 | `border-x` `-y` `-t` `-r` `-b` `-l`, with an optional width | those sides |
+| `border-b-indigo-600`, `border-x-gray-300`, `border-t-transparent` … | the box's one `border_color`, when every side that is drawn comes out the same colour — see below |
+| `ring-0` | no border |
 | `ring-1`, `ring-2` | a **border** of that width — see below |
 | `ring-inset` | nothing: an EUI border is already inside the box |
 | `rounded-none` · `rounded-sm` · `rounded`, `-md`, `-lg` · `-xl`, `-2xl`, `-3xl` · `-full` | `radius` 0 · 1 · 2 · 3 · 4 |
 | `shadow-none` · `shadow-sm` · `shadow`, `-md` · `-lg`, `-xl`, `-2xl` | `shadow` 0 · 1 · 2 · 3 |
+
+An EUI box has one border colour for its four sides (02 §3), so a side's
+colour is taken when it is the colour of every side that is drawn:
+`border-b-2 border-b-indigo-600` is a bottom rule in `accent.base`, and so is
+the tab underline `border-b-2 border-transparent hover:border-b-indigo-600`
+on hover. Each drawn side's colour is worked out as the stylesheet would: the
+side's own class if it has one, else the box's (`border-gray-200`), else the
+gray-200 of Tailwind's preflight, `border.subtle`. A side's class beats the
+box's whatever the order they were written in, because Tailwind writes
+`border-b-*` after `border-*`; a state or a wider breakpoint beats both.
+Where two drawn sides would differ — `border border-b-indigo-600`, three
+gray sides and one indigo — it raises, naming the two colours.
 
 ### Everything else
 
@@ -272,6 +296,7 @@ alpha).
 | `backdrop-blur-sm` … `-3xl` | `blur` 4, 8, 12, 16, 24, 40, 64 px |
 | `animate-spin`, `animate-pulse`, `animate-bounce` · `animate-none` | `animation` bits, which combine: `animate-spin animate-pulse` is `["spin", "pulse"]`. Pulse and bounce are protocol 6 (eui 03 §5): Tailwind's keyframes, run from the client's clock, painting only — a bouncing node is hit where it rests |
 | `select-none` | nothing: only editable nodes select text |
+| `appearance-none`, `list-none`, `resize-none`, `pointer-events-auto`, `antialiased`, `visible`, `outline-0` | nothing: what every node already is — no native look to reset, no list marker, no resize handle (a textarea grows), the pointer taken as usual, glyphs from the client's own rasteriser, no outline |
 
 ### States
 
@@ -321,6 +346,70 @@ write the narrow classes bare and the wider ones prefixed.
 The memo keeps a string once per breakpoint the width falls in, never per
 width: a window dragged across three hundred widths is six entries.
 
+## Placed by the parent
+
+Three things Tailwind says on a node are about where it sits among its
+siblings, and only the box it is put in can do them. `tw()` leaves a marker
+in the style and `node()` — so `row`, `column`, `stack`, and a box built
+with no classes of its own — places the child and takes the marker out.
+A marker no `node()` placed is refused by the encoder by name.
+
+**Auto margins.** Along the parent's line, an auto margin takes the free
+space, which is a spacer on that side; across it, it pushes the node to the
+far side, which is `self`:
+
+| In a row | In a column | EUI |
+|---|---|---|
+| `ml-auto` · `mr-auto` | `mt-auto` · `mb-auto` | a spacer before · after the node |
+| `mt-auto` · `mb-auto` | `ml-auto` · `mr-auto` | `self: end` · `start` |
+| `m-auto` | `m-auto` | a spacer each side and `self: center` |
+
+```soli
+row({"tw": "flex items-center gap-3"}, [
+  text("Invoices", tw_style("text-sm font-semibold")),
+  control({"tw": "ml-auto ...", ...})     # against the right edge
+])
+```
+
+Two auto margins share the space between them, as two spacers do. A node's
+hover and focus styles keep the `self` it was given. `ml-auto md:ml-4` is
+auto below 768 px and 16 px from it; `ml-4 ml-auto` is auto. In a grid or a
+stack it raises — neither lays its children along a line — and under a state
+it raises, since where a node sits is laid out once.
+
+**`flex-row-reverse`, `flex-col-reverse`.** `node()` reverses the children
+and turns `justify` with them, so the line packs from the far end as a
+reversed flexbox does (`justify-start` becomes `end`; `center`, `between` and
+the rest are symmetric). `divide-*` is laid on in the order the children were
+given, as the browser does, and `divide-y-reverse` moves the rule to the
+trailing edge, as it does there. `space-x-reverse` is nothing: EUI's gap is
+the same on both sides of a child. A bare `tw()` has no children and raises.
+
+**Offsets in a stack.** A `stack` places a child down it by the child's own
+`self`, with its margin as the offset from that edge (04 §5), so `absolute
+top-2` is `self: start` and an 8 px top margin, `absolute bottom-0` is
+`self: end`, and `inset-y-0` and `inset-0` fill the height. **Across** it,
+the node names its edge in its `position` (protocol 7): `left-N` is
+`absolute_start` and a left margin, `right-N` is `absolute_end` and a right
+margin, and `inset-x-0` or `left-0 right-0` is the full width. With neither,
+the node is plain `absolute` and the stack's `justify` places it. With a
+width or a height, `left` beats `right` and `top` beats `bottom`, as in CSS.
+An offset needs `absolute` beside it; a fraction, `full`, `px` or `auto`
+raises (an offset is a step on the space scale), and so do `top-2 bottom-2`
+and `left-2 right-2` (the stack's length less the two, which EUI has no
+length for) and an offset on a side that already has a margin.
+
+```soli
+stack({"tw": "size-12"}, [
+  avatar,
+  node("box", {"tw": "absolute top-0 right-0 size-3 rounded-full bg-green-500 ring-2 ring-white"}, [])
+])
+```
+
+A session whose client is older than protocol 7 is sent `absolute` for all
+three, so its client places them by the stack's `justify`: a `right-0`
+badge in a stack that packs from the start is drawn at the left there.
+
 ## Approximations
 
 Where the two scales differ, the class lands on the nearest step, and the
@@ -348,6 +437,18 @@ difference is written down here rather than discovered:
 - **`focus-visible:`** styles are laid on for any focus, from a click as well
   as a key; the ring itself is drawn only for the keyboard, in `focus.ring`
   and not in the outline's colour.
+- **Weights.** `font-thin`, `font-extralight` and `font-light` are the
+  regular face, `font-extrabold` and `font-black` the bold: the client
+  ships four faces of Inter.
+- **An auto margin beside a gap** is a spacer, which is one more child and
+  so one more gap. It absorbs it whenever the line has that much room to
+  give; on a line with less free space than the gap, the node sits a gap
+  further along than in a browser.
+- **A reversed box** is its children in the other order, so the keyboard
+  visits them in the order they are seen, where a browser follows the
+  source.
+- **`inset-0`** fills the stack's content box, inside its padding; CSS's
+  fills the padding box.
 
 ## Refusals
 
@@ -362,21 +463,24 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 |---|---|
 | `tracking-*`, `leading-*`, `text-sm/6` | no letter-spacing; line height comes with the size |
 | `text-5xl` and up | the text scale stops at index 7 |
-| `font-light`, `font-black` … | four weights |
 | `italic` | no italic face |
 | `tabular-nums` and the other figure variants | the client selects no OpenType feature; `font-mono` sets figures that line up |
 | `bg-gradient-to-*` without `from-*` and `to-*`; a stop without `bg-gradient-to-*`; `to-transparent` | a gradient runs between two colours, and a role has no transparent copy |
 | `rounded-t-*`, `rounded-tl-*` … | one radius for four corners |
+| `border border-b-indigo-600` and any side colours that differ where drawn | one border colour for four sides |
 | `space-*`, `gap-x-*`, `divide-*` where they are not the same thing | see [Between children](#between-children) |
 | `translate-*`, `rotate-*`, `scale-*` | no transforms |
 | `-m*` | margins are unsigned bytes |
 | `p-7`, `gap-40` and every step off the space scale | the message names the two nearest steps; see [Spacing](#spacing) |
-| `m-auto`, `ml-auto`, `mr-auto`, `mt-auto`, `mb-auto` | no auto margins along a line: `spacer()`, or `justify-between` on the parent |
-| `fixed`, `sticky`, `inset-*`, `top-*` … | `absolute` inside a `stack` is the one positioning |
+| `ml-auto` … in a grid or a stack, or on a style no `node()` places | an auto margin is a spacer along a row or a column |
+| `fixed`, `sticky` | `absolute` inside a `stack` is the one positioning |
+| `top-1/2`, `top-2 bottom-2`, `left-2 right-2`, an offset without `absolute` | an offset is a step on the space scale, from one edge of a `stack` |
+| `aspect-*` with no width or height in px | EUI lays out no ratio; the length is worked out from the one given |
 | `inline`, `inline-block`, `table`, `contents` | no inline flow; a box is `flex`, `flex-col`, `block`, `grid` or `hidden` |
-| `whitespace-*` | text wraps at its box's width; `truncate` keeps it to one line |
+| `whitespace-nowrap`, `text-nowrap`, `text-clip` and the other `whitespace-*` | text wraps at its box's width; `truncate` keeps it to one line |
+| `text-balance`, `text-pretty` | a line breaks where the next word does not fit |
 | `pointer-events-none` | the topmost node takes the pointer, and an event walks up from it, never through to a sibling below |
-| `w-screen`, `h-screen` | the view is given the viewport; use it |
+| `w-screen`, `h-screen`, `h-dvh`, `max-h-screen` … | the view is given the viewport; use it |
 | `overflow-auto`, `overflow-x-*` | scrolling is a `scroll()` node |
 | `ring`, `ring-offset-*`, `outline-*` at rest | a ring is a border of 1 or 2 px; the client draws focus (under `focus:` and `focus-visible:` these are taken as nothing — see *States*) |
 | `blur-*`, `drop-shadow-*` and the other filters | `backdrop-blur-*` is the one blur |
@@ -392,7 +496,7 @@ tw: 'tracking-tight' has no EUI equivalent — EUI has no letter-spacing; the 64
 | any other name | *unknown class*, with a pointer here |
 
 `examples/demo-app/tests/tw_spec.sl` pins the table and the refusals, and
-sends one of every accepted class — `tw_examples()`, 255 of them, at a width
+sends one of every accepted class — `tw_examples()`, 300 of them, at a width
 past every breakpoint — through the server's encoder (`eui_render`), which
 raises on a key or a value it does not know; a divided tree and a transformed
 text node go through it whole. That is what 03 §4 asks of a translation like

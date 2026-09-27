@@ -106,7 +106,13 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
+// 7 lets an absolute child say which edge of its parent it sits against
+// across the line — `position` 3, 4 and 5 (04 §5) — where before the
+// parent's `justify` placed every one: Tailwind's `right-0` on a badge whose
+// stack packs from the start. A session below 7 is sent `absolute` (1) in
+// their place (`StyleRecord::for_protocol`), and is drawn at the parent's
+// `justify` as it always was.
 // 6 also carries `DefGradient` and the gradient range of `ColorRef` (02
 // §5.3), and the `animation` bits `pulse` and `bounce` (03 §5). Paid for the
 // same way: a session below 6 is sent a gradient's first stop as a solid

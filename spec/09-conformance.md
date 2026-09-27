@@ -210,6 +210,17 @@ an `overflow: clip` box cut away, and `what_is_culled_from_the_paint_is_not_hit`
 refuses a child that spills out of a box scrolled wholly out of view — the
 painter drops that box and everything under it, and so must a hit.
 
+An absolute child that names its edge (04 §5, version 7):
+`an_absolute_child_may_name_its_own_edge_across_a_stack` places one against
+the end of a stack that packs from the start, less its right margin, one
+centred, and one against the start of a stack that packs from the end, while
+a plain `absolute` sibling still follows the stack's `justify`.
+`an_absolute_child_naming_its_edge_is_version_7` (`roundtrip.rs`) round-trips
+3–5, refuses 6, and holds that `for_protocol` sends a session below 7 plain
+`absolute` with nothing else changed; lang's
+`an_absolute_child_naming_its_edge_is_plain_absolute_below_7` holds the
+server to it.
+
 A scroll is not a new layout (04 §7): `a_scroll_alone_translates_to_what_a_full_layout_places`
 moves the boxes under scrollers that scrolled — nested, clamped past the end,
 a stack out of z order among them — and compares every box and every hit with
@@ -779,3 +790,11 @@ bits that combine (02 §5.3, 03 §5). The four state prefixes land as local styl
 `py-1.5`, `px-2.5`, `gap-3.5`, `mt-20`, `p-32` and `space-y-1.5` land on
 `space` 13–17 (05 §2), and a step the scale still lacks (`p-7`, `p-40`) is
 refused naming the two nearest.
+What a node says about its place is settled on the server too: a child's
+`ml-auto` and its kin become a spacer along its parent's line or a `self`
+across it, in its hover styles as well; `flex-row-reverse` reverses the
+children and turns `justify`; a side's border colour is the box's one
+`border_color` only when every drawn side agrees, and raises naming both
+colours otherwise; `top-*`, `bottom-*`, `left-*`, `right-*` and `inset-*`
+on an absolute node are `self`, a `position` that names its edge (04 §5,
+version 7) and a margin.

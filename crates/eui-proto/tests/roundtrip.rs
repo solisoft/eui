@@ -306,6 +306,33 @@ fn a_gradient_definition_round_trips() {
 }
 
 #[test]
+fn an_absolute_child_naming_its_edge_is_version_7() {
+    // 04 §5: 3, 4 and 5 round-trip, a value past them is refused, and a
+    // session below 7 is sent `absolute`, which its client places by the
+    // parent's `justify` as it always did.
+    for p in [Position::AbsoluteStart, Position::AbsoluteCenter, Position::AbsoluteEnd] {
+        let r = StyleRecord { position: p, margin: [0, 2, 0, 0], ..Default::default() };
+        let mut w = Writer::new();
+        r.encode(&mut w);
+        assert_eq!(StyleRecord::decode(&mut Reader::new(w.as_slice())).unwrap(), r);
+        assert!(p.out_of_flow());
+        assert_eq!(r.for_protocol(7), r);
+        let old = r.for_protocol(6);
+        assert_eq!((old.position, old.margin), (Position::Absolute, [0, 2, 0, 0]));
+        assert_eq!(r.for_protocol(4).position, Position::Absolute);
+    }
+    for p in [Position::Flow, Position::Absolute, Position::Pointer] {
+        assert_eq!(StyleRecord { position: p, ..Default::default() }.for_protocol(6).position, p, "left alone");
+        assert_eq!(p.across(), None);
+    }
+    let mut w = Writer::new();
+    StyleRecord::default().encode(&mut w);
+    let mut bytes = w.as_slice().to_vec();
+    bytes[57] = 6;
+    assert!(StyleRecord::decode(&mut Reader::new(&bytes)).is_err());
+}
+
+#[test]
 fn pulse_and_bounce_and_a_gradient_are_version_6() {
     // 03 §5 and 02 §5.3: a session below 6 decodes no bit 8 or 16 and no
     // gradient range. `for_protocol` takes the bits off and keeps the rest;

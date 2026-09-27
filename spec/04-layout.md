@@ -146,9 +146,18 @@ box independently of its siblings. A child's size comes from its `width`/
 `height` when resolved; otherwise an in-flow child under `stretch` (the
 default) fills the container's definite inner size on that axis, and any other
 child takes its content size given the container's inner size as available
-space. It is then positioned by `align_self` on the vertical
-axis and `justify` on the horizontal, with its margins as offsets from the
-chosen edge. Children paint in ascending `z`, ties in child order.
+space. It is then positioned by its own `align_self` on the vertical
+axis and by the **stack's** `justify` on the horizontal — one value for every
+child, since a child's `justify` is about its own children — with its
+margins as offsets from the chosen edge. An absolute child whose `position`
+is `absolute_start`, `absolute_center` or `absolute_end` (version 7) names
+its horizontal edge itself instead, placed as `justify` `start`, `center` or
+`end` would place it, whatever the stack's `justify` says: a badge at a
+card's top right beside children that start at the left. It is absolute in
+every other respect. A popover and a panel at the pointer are placed as
+below, whichever of the absolute values they carry. The same holds for an
+absolute child of a row or a column, which is placed as a stack places
+one. Children paint in ascending `z`, ties in child order.
 
 A `stack` with indefinite size takes the largest **in-flow** child border box
 plus that child's margins, per axis: an absolute child is placed on the stack,

@@ -1904,11 +1904,50 @@ session with them never reaches 6 and never carries 13–17 unless a view
 writes the index by hand. Raising one to 6 is that table's five entries and
 the same fallback in its style encoder.
 
-The catalogue is 556 definitions over six files. `tests/tw_spec.sl` is 17
-tests and 469 assertions, one of which sends every one of the 255 example
+The catalogue is 571 definitions over six files. `tests/tw_spec.sl` is 23
+tests and 591 assertions, one of which sends every one of the 302 example
 classes through the real encoder (`eui_render`); the demo application's specs
-are 14 files, 79 tests, 888 assertions. The gallery's Catalogue section opens
-with a card written in nothing but class strings.
+are 14 files, 85 tests, 1 010 assertions (counted 2026-09-27). The gallery's
+Catalogue section opens with a card written in nothing but class strings.
+
+**What a node says about its place** (2026-09-27), still with nothing on the
+wire. `tw()` refused `ml-auto`, `flex-row-reverse`, `border-b-indigo-600`,
+`top-0`, `aspect-square` and a handful of names for what EUI already does;
+it takes them now, where they have an exact meaning. An auto margin is
+placed by the box the node is put in: `node()` — so any `row`, `column` or
+box, with classes or without — turns a child's `ml-auto` into a spacer
+along its line or a `self` across it, and a reversed box is its children
+the other way round with `justify` turned to match. A side's border colour
+is the box's one `border_color` when every drawn side comes out the same,
+worked out in the stylesheet's order (a side's class over the box's,
+a state or a wider breakpoint over both), and raises naming the two colours
+otherwise. In a `stack`, `top-*`, `right-*`, `bottom-*`, `left-*` and
+`inset-*` are `self`, a `position` naming the edge across, and a margin. A
+ratio is the height
+worked out from a width in px, or the reverse. `flex-grow`/`flex-shrink`,
+`justify-normal`, `z-auto`, `max-w-none`, `ring-0` and eleven classes that
+are what every node already is (`appearance-none`, `list-none`,
+`text-wrap` …) are taken; the light and black weights land on the nearest
+of the four faces, an approximation written down with the others.
+[Tailwind classes](/docs/tailwind#placed-by-the-parent) has the rules.
+
+**An absolute child names its edge: protocol 7** (2026-09-27). A stack
+placed every child across by the **stack's** `justify` (`place_stack` in
+`eui-layout`) — 04 §5 said "`justify` on the horizontal" without saying
+whose, and a first draft of `right-0` above took it for the child's: a
+snapshot put the `top-0 right-0` dot on the left. So a badge at a card's top
+right beside children that start at the left had no spelling, and wrapping
+it in a full-width transparent row would have taken the pointer across that
+whole strip (06 §2: the topmost node takes it, handler or not). `position`
+gains 3 `absolute_start`, 4 `absolute_center` and 5 `absolute_end` —
+absolute in every respect, placed across as that `justify` would place it —
+and `PROTOCOL_VERSION` went from 6 to 7. It cost one match in the layout
+and no byte: the record stays 64 bytes. A session below 7 is sent
+`absolute` (`StyleRecord::for_protocol`), placed as it always was; lang's
+encoder takes the three words. The six servers in `clients/` stay at
+protocol 4 and are unchanged. Tests: `an_absolute_child_may_name_its_own_edge_across_a_stack`
+(eui-layout), `an_absolute_child_naming_its_edge_is_version_7` (eui-proto),
+and in lang `an_absolute_child_naming_its_edge_is_plain_absolute_below_7`.
 
 **Gradients, pulse and bounce, as the rest of protocol 6** (2026-09-24).
 `tw()` refused `bg-gradient-*`, `from-*`, `via-*`, `to-*`, `animate-pulse`
@@ -2020,6 +2059,22 @@ end. The sidebar against the drawer, the tables against stacked lists, and
 the split ticket and settings layouts are still width branches, because
 each changes the tree or is decided by the content width, not by a
 breakpoint.
+
+**And a landing page** (2026-09-27). `site`, the thirteenth component, is
+the other shape a Tailwind site takes: a marketing page for an invented
+deploy-preview service, in `site_controller.sl` (424 lines). Nav with the
+CTA pushed right by `ml-auto`, a gradient hero with a `canvas` bar chart and
+a LIVE badge at `absolute top-6 right-6` (protocol 7), stats and feature
+cards on `grid-cols-N`, tabs underlined with `border-b-2 border-b-indigo-600`,
+two split rows, one `flex-row-reverse`, pricing whose monthly/yearly toggle
+changes three prices on the server, a `divide-y` FAQ, a signup field with a
+placeholder, and a footer. One literal colour, a gradient stop; the rest
+are roles, so dark mode needed nothing. It opts into `GET /_eui/view/site`:
+measured on 2026-09-27, the first render is 14,395 bytes (4,709 gzipped),
+272 nodes and 564 quads at 1 280 px and 14,016 bytes, 261 nodes at 390 px,
+and `snapshot --view` of that response draws the same PNG as `--soli` over
+a socket. After the toggle, the client measured 111 nodes and took 1,547
+from its memo: 0.2 ms of layout against 5 ms for the first frame.
 
 ## Not started
 

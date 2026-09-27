@@ -718,6 +718,49 @@ fn display_none_is_absent_and_absolute_children_leave_the_flow() {
 }
 
 #[test]
+fn an_absolute_child_may_name_its_own_edge_across_a_stack() {
+    // 04 §5, version 7: a stack that packs from the start, an avatar in flow,
+    // and three dots — one against the end edge 4 px in (Tailwind's
+    // `absolute top-0 right-1`), one centred, and one that leaves it to the
+    // stack. The stack is the avatar's size, as `size-12` on it says.
+    let mut b = B::default();
+    let stack = b.style(StyleRecord { display: Display::Stack, width: px(48), height: px(48), ..st() });
+    let avatar = b.style(StyleRecord { width: px(48), height: px(48), ..st() });
+    let end = b.style(StyleRecord { position: Position::AbsoluteEnd, width: px(12), height: px(12), margin: [0, 2, 0, 0], ..st() });
+    let mid = b.style(StyleRecord { position: Position::AbsoluteCenter, align_self: AlignSelf::End, width: px(10), height: px(10), ..st() });
+    let plain = b.style(StyleRecord { position: Position::Absolute, width: px(8), height: px(8), ..st() });
+    let root = b.style(StyleRecord { align_items: AlignItems::Start, ..col() });
+    b.push(NodeKind::Box, root, 1);
+    b.push(NodeKind::Box, stack, 4);
+    let a = b.push(NodeKind::Box, avatar, 0);
+    let e = b.push(NodeKind::Box, end, 0);
+    let m = b.push(NodeKind::Box, mid, 0);
+    let p = b.push(NodeKind::Box, plain, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    assert_rect(&l, &s, a, 0.0, 0.0, 48.0, 48.0);
+    assert_rect(&l, &s, e, 32.0, 0.0, 12.0, 12.0);
+    assert_rect(&l, &s, m, 19.0, 38.0, 10.0, 10.0);
+    assert_rect(&l, &s, p, 0.0, 0.0, 8.0, 8.0);
+
+    // And the other way round: a stack that packs from the end, and a
+    // child that names the start.
+    let mut b = B::default();
+    let stack = b.style(StyleRecord { display: Display::Stack, justify: Justify::End, width: px(100), ..st() });
+    let start = b.style(StyleRecord { position: Position::AbsoluteStart, width: px(10), height: px(10), margin: [0, 0, 0, 3], ..st() });
+    let plain = b.style(StyleRecord { position: Position::Absolute, width: px(8), height: px(8), ..st() });
+    let root = b.style(StyleRecord { align_items: AlignItems::Start, ..col() });
+    b.push(NodeKind::Box, root, 1);
+    b.push(NodeKind::Box, stack, 2);
+    let st_ = b.push(NodeKind::Box, start, 0);
+    let p = b.push(NodeKind::Box, plain, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    assert_rect(&l, &s, st_, 8.0, 0.0, 10.0, 10.0);
+    assert_rect(&l, &s, p, 92.0, 0.0, 8.0, 8.0);
+}
+
+#[test]
 fn a_tree_at_the_depth_limit_lays_out_without_blowing_the_stack() {
     // Layout recurses per level. Measured for depth 255: under 512 KiB in
     // release, ~2.3 MiB unoptimised — more than the 2 MiB a test thread gets.

@@ -170,7 +170,7 @@ said the opposite.
 | `overflow` | `visible` · `clip` · `scroll` |
 | `transition` | `none` · `fast` · `base` · `slow` · `slower` · `slowest` |
 | `animation` | A list: `spin` · `enter` · `exit` · `pulse` · `bounce`, or `none` |
-| `position` | `flow` · `absolute` |
+| `position` | `flow` · `absolute` · `pointer`, and from protocol 7 `absolute_start` · `absolute_center` · `absolute_end` — an absolute child of a `stack` that sits against that edge across it, whatever the stack's `justify` (a session below 7 is sent `absolute`) |
 | `cursor` | `default` · `pointer` · `text` · `grab` · `grabbing` · `resize_h` · `resize_v` · `wait` · `not_allowed` |
 | `blur` | A backdrop radius, 0–255 — what is *behind* the node, not the node |
 | `motion` | `fade` · `leading` · `trailing` · `top` · `bottom` · `scale` · `paired` |

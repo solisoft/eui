@@ -218,6 +218,14 @@ u8_enum!(
         /// against its anchor: a tooltip follows the hand, and only the client
         /// knows where the hand is.
         Pointer = 2,
+        /// `Absolute`, and placed across its parent at the start edge
+        /// whatever the parent's `justify` says (04 §5). Version 7.
+        AbsoluteStart = 3,
+        /// `Absolute`, centred across its parent. Version 7.
+        AbsoluteCenter = 4,
+        /// `Absolute`, against its parent's end edge — Tailwind's `right-0`.
+        /// Version 7.
+        AbsoluteEnd = 5,
     }
 );
 
@@ -226,7 +234,19 @@ impl Position {
     /// laid out, and never counted into the box it sits in.
     #[must_use]
     pub const fn out_of_flow(self) -> bool {
-        matches!(self, Self::Absolute | Self::Pointer)
+        !matches!(self, Self::Flow)
+    }
+
+    /// Where an absolute child sits across its parent when it says so
+    /// itself, rather than leaving it to the parent's `justify` (04 §5).
+    #[must_use]
+    pub const fn across(self) -> Option<Justify> {
+        match self {
+            Self::AbsoluteStart => Some(Justify::Start),
+            Self::AbsoluteCenter => Some(Justify::Center),
+            Self::AbsoluteEnd => Some(Justify::End),
+            _ => None,
+        }
     }
 }
 
@@ -700,9 +720,11 @@ impl StyleRecord {
     /// index that version does not have is replaced by its
     /// [`SPACE_FALLBACK`] (05 §2), and the `animation` bits it does not
     /// have — [`ANIMATION_PULSE`], [`ANIMATION_BOUNCE`] (03 §5) — are taken
-    /// off. A server calls it on the way to `DefStyle`, so a view is written
-    /// once and each session is sent what its client can draw. At version 6
-    /// and above it is the identity.
+    /// off; below 7, a `position` that names its own edge
+    /// ([`Position::across`]) becomes plain `absolute` (04 §5). A server
+    /// calls it on the way to `DefStyle`, so a view is written once and each
+    /// session is sent what its client can draw. At version 7 and above it
+    /// is the identity.
     ///
     /// A gradient `bg` is not rewritten here, because a record does not
     /// carry the gradient it names: the server that interned it sends a
@@ -711,6 +733,14 @@ impl StyleRecord {
     /// the older client does not know.
     #[must_use]
     pub fn for_protocol(mut self, version: u32) -> Self {
+        if version >= 7 {
+            return self;
+        }
+        // 04 §5: an older client places every absolute child by its
+        // parent's `justify`, which is what `absolute` still means.
+        if self.position.across().is_some() {
+            self.position = Position::Absolute;
+        }
         if version >= 6 {
             return self;
         }

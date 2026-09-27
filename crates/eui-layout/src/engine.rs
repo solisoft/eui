@@ -1627,7 +1627,11 @@ impl Layout {
             let m = self.measure(f, c, cw, ch);
             let bw = inner_w.bound().unwrap_or(m.w + cst.margin.horizontal());
             let bh = inner_h.bound().unwrap_or(m.h + cst.margin.vertical());
-            let x = match st.justify {
+            // §5: across, by the parent's `justify` -- unless an absolute
+            // child names its own edge, which is what lets one badge sit at
+            // the right of a stack whose other children start at the left.
+            let across = cst.position.across().unwrap_or(st.justify);
+            let x = match across {
                 Justify::Center | Justify::Around | Justify::Evenly => cst.margin.l + (bw - cst.margin.horizontal() - m.w) / 2.0,
                 Justify::End => bw - cst.margin.r - m.w,
                 Justify::Start | Justify::Between => cst.margin.l,

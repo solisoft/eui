@@ -46,8 +46,8 @@ crates/
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table, a gallery, Atrium —
-                  a team messenger — and a Tailwind UI-style help desk, as a
-                  Soli app; the catalogue (buttons to date pickers to charts)
+                  a team messenger — a Tailwind UI-style help desk and a
+                  landing page written in tw() classes, as a Soli app; the catalogue (buttons to date pickers to charts)
                   is app/controllers/eui_builders*.sl
   snapshot        render the counter, or any live Soli component, off-screen
 clients/     the protocol's server half in six more languages, each its own
