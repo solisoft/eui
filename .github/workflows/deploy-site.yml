@@ -46,10 +46,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Pinned, so the CI tests exactly what the server runs. The step
-  # "Check the server runs the pinned version" verifies that rather than
-  # hoping for it — a CI testing a different version tests nothing.
-  SOLI_VERSION: "2.3.3"
+  # Pinned, so the CI tests exactly what the server runs. The step "Note the
+  # version the server runs" compares the two on every deploy and warns when
+  # they differ -- a CI testing a different version tests nothing. 2.5.5 is
+  # what eui.solisoft.net runs (2026-09-27); 2.3.3 held this line until then,
+  # which made the warning the normal state of every run. `soli fmt --check`
+  # and `soli lint` from 2.5.5 are clean over the site.
+  SOLI_VERSION: "2.5.5"
   # The site is a Soli app in this subdirectory, not at the repository root.
   APP_DIR: www
 
