@@ -31,7 +31,9 @@ KIND="${1:-sim}"
 OUT_DIR="${2:-$ROOT/dist}"
 APP_NAME="${APP_NAME:-EUI}"
 BUNDLE_ID="${BUNDLE_ID:-com.soli.eui}"
-VERSION="${VERSION:-0.1.0}"
+# The workspace's version, which is the release's (CHANGELOG.md): read, not
+# repeated, so a bundle never says a version the binary inside it does not.
+VERSION="${VERSION:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$(cd "$SCRIPT_DIR/.." && pwd)/Cargo.toml")}"
 
 case "$KIND" in
   sim)    TARGET="aarch64-apple-ios-sim"; PLATFORM="iPhoneSimulator" ;;

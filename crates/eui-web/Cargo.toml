@@ -23,11 +23,11 @@ crate-type = ["cdylib", "rlib"]
 # the module and 10 §1 counts them, but a gallery without JPEG is not a
 # gallery.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-eui-client = { path = "../eui-client", version = "0.1.0", default-features = false, features = ["jpeg", "webp"] }
-eui-proto = { path = "../eui-proto", version = "0.1.0" }
+eui-client = { path = "../eui-client", version = "0.7.0", default-features = false, features = ["jpeg", "webp"] }
+eui-proto = { path = "../eui-proto", version = "0.7.0" }
 # For the bisecting probes only; see `probe_text`.
-eui-text = { path = "../eui-text", version = "0.1.0" }
-eui-layout = { path = "../eui-layout", version = "0.1.0" }
+eui-text = { path = "../eui-text", version = "0.7.0" }
+eui-layout = { path = "../eui-layout", version = "0.7.0" }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement"] }
 console_error_panic_hook = "0.1"

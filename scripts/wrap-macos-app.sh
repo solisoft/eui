@@ -15,7 +15,9 @@ BINARY="${1:?binary path}"
 APP_NAME="${2:?app name}"
 BUNDLE_ID="${3:?bundle id}"
 OUT_DIR="${4:?output dir}"
-VERSION="${VERSION:-0.1.0}"
+# The workspace's version, which is the release's (CHANGELOG.md): read, not
+# repeated, so a bundle never says a version the binary inside it does not.
+VERSION="${VERSION:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$(cd "$SCRIPT_DIR/.." && pwd)/Cargo.toml")}"
 # The icon, committed as .icns because macOS reads nothing else, and made
 # from assets/icon/eui.svg by scripts/make-icons.py. `ICON=` points this at
 # another one, the way the same script dresses another app's bundle.

@@ -260,7 +260,7 @@ without the third.
   event that the server refuses; and an upload's backlog, counted against a
   server that stops reading until the socket drains. 3 tests.
 - **Which build it is** (2026-09-27): `eui --version` prints
-  `eui 0.1.0, protocol 7, commit 6563617`, from one stamp baked in by
+  `eui 0.7.0, protocol 7, commit 6563617`, from one stamp baked in by
   `build.rs` (the protocol read out of eui-proto's source, and held to the
   constant by `the_stamp_names_the_protocol_this_build_speaks`). The stamp is
   also one run of bytes in the file, so `scripts/install.sh` and

@@ -117,7 +117,7 @@ The workflow `.github/workflows/build-macos-demo.yml` automatically:
 5. **Publishes** releases:
    - Automatically creates GitHub releases for tags
    - Attaches all build artifacts
-   - Triggered when pushing `v*` tags (e.g., `v0.1.0`)
+   - Triggered when pushing `v*` tags (e.g., `v0.7.0`)
 
 ### Triggering a Build
 
@@ -169,8 +169,8 @@ Two ways to stop repeating it:
 Push a semantic version tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 GitHub Actions will:

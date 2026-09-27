@@ -26,7 +26,7 @@ say() { echo "install: $*"; }
 die() { echo "install: $*" >&2; exit 1; }
 
 # Which build a file is, read out of the file rather than asked of it: every
-# client since the stamp carries one line, `eui-build: eui 0.1.0, protocol 7,
+# client since the stamp carries one line, `eui-build: eui 0.7.0, protocol 7,
 # commit 6563617;`, which is what `eui --version` prints. Running the binary
 # already installed would be the obvious way and is the wrong one -- one that
 # predates `--version` takes the flag for an address and opens a window.

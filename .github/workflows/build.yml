@@ -510,11 +510,34 @@ jobs:
     name: Create Release (on tag push)
     # The phone jobs are `continue-on-error`, so a packaging break cannot
     # keep a release from happening; it just means that file is not in it.
-    needs: [build-matrix, build-android, build-ios]
+    #
+    # `test` too: a tag is a promise the rolling build does not make, so a
+    # release is published only from a commit whose suite passed.
+    needs: [build-matrix, build-android, build-ios, test]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+
+      # The notes are the tag's section of CHANGELOG.md, and a tag without
+      # one is refused rather than published bare: a release nobody wrote
+      # down is the rolling build with a name.
+      - name: Release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md has no section for $version: write '## [$version] - <date>' first." >&2
+            exit 1
+          fi
+          # The client in this release must say the same version.
+          workspace="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          [ "$workspace" = "$version" ] || { echo "tag $GITHUB_REF_NAME, but Cargo.toml says $workspace" >&2; exit 1; }
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -528,6 +551,7 @@ jobs:
             eui-*/*.dmg
             eui-android-apk/*.apk
             eui-ios-app/*.zip
+          body_path: notes.md
           draft: false
           prerelease: false
         env:

@@ -37,6 +37,26 @@ The surfaces, and when each one is owed:
    build.
 6. **`README.md`** — the crate table says what each crate is and whether it is
    built. It goes stale quietly.
+7. **`CHANGELOG.md`** — a line under `## [Unreleased]` for anything a user of
+   the client, the protocol or the catalogue would notice. A release renames
+   that section (below), so what is not written there is not in its notes.
+
+## Releases
+
+A tag `vX.Y.Z` is a release, and **its minor number is the protocol version**
+(`CHANGELOG.md` says why; `the_minor_version_is_the_protocol_version` fails
+the build when the two part). To cut one:
+
+1. Raise `[workspace.package] version` in `Cargo.toml` — the minor with the
+   protocol, the patch otherwise — and every `path = …, version = …` beside
+   it, and the local packages' entries in `Cargo.lock`.
+2. Rename `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] - date` and
+   open a new empty one above it. The release job takes its notes from that
+   section and refuses a tag without one, or one whose `Cargo.toml` says
+   another version.
+3. Tag the commit whose suite passed, and push the tag. CI builds every
+   platform, runs the tests, and publishes the release.
+4. Move lang's pin to the tagged commit (below).
 
 ## It reaches a second repository
 

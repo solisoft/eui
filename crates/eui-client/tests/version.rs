@@ -26,3 +26,14 @@ fn the_binary_says_its_version_and_carries_it_where_a_script_can_find_it() {
     let needle = eui_client::STAMP.as_bytes();
     assert!(bytes.windows(needle.len()).any(|w| w == needle), "the stamp is not in the binary as one run of bytes");
 }
+
+#[test]
+fn the_minor_version_is_the_protocol_version() {
+    // CHANGELOG.md's rule: a release's minor number is the protocol it
+    // speaks, so `v0.7.x` speaks 7. A protocol bump that forgets the
+    // version -- or a version bump that forgets the protocol -- fails here,
+    // before a tag can publish a release that names the wrong one.
+    let version = env!("CARGO_PKG_VERSION");
+    let minor: u32 = version.split('.').nth(1).and_then(|m| m.parse().ok()).expect("a semver version");
+    assert_eq!(minor, eui_proto::PROTOCOL_VERSION, "eui {version} speaks protocol {}", eui_proto::PROTOCOL_VERSION);
+}
