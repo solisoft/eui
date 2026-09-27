@@ -4,7 +4,40 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><%= title %></title>
-    <meta name="description" content="EUI is a binary protocol for applications served over HTTPS without HTML, CSS or JavaScript: the server sends a resolved interface tree, a native Rust client draws it on the GPU. A one-cell update is 22 bytes.">
+    <%# What a link to this page unfurls into. The description is the page's own
+        (`description` from home_controller, a docs page's one-line `lead`), and
+        the site's otherwise. The URLs are absolute and name production, because
+        an unfurler fetches them from wherever the link was pasted. The picture
+        is www/share/card.html, rendered by scripts/make-share-card.sh; its
+        `?v=` changes with the file, so a scraper's cached copy does not
+        outlive an edit. %>
+    <% share_text = description ?? lead ?? "EUI is a binary protocol for applications served over HTTPS without HTML, CSS or JavaScript: the server sends a resolved interface tree, a native Rust client draws it on the GPU. A one-cell update is 22 bytes." %>
+    <% share_title = title.index_of("EUI") >= 0 ? title : title + " — EUI" %>
+    <% share_origin = "https://eui.solisoft.net" %>
+    <% share_url = share_origin + (req["path"] ?? "/") %>
+    <% share_image = share_origin + public_path("images/share/eui.png") %>
+    <meta name="description" content="<%= share_text %>">
+    <link rel="canonical" href="<%= share_url %>">
+    <link rel="icon" type="image/svg+xml" href="<%= public_path("favicon.svg") %>">
+    <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1216" media="(prefers-color-scheme: dark)">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="EUI">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:title" content="<%= share_title %>">
+    <meta property="og:description" content="<%= share_text %>">
+    <meta property="og:url" content="<%= share_url %>">
+    <meta property="og:image" content="<%= share_image %>">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="An interface is not a document. Stop sending one. — the 22 bytes of one EUI update, field by field.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="<%= share_title %>">
+    <meta name="twitter:description" content="<%= share_text %>">
+    <meta name="twitter:image" content="<%= share_image %>">
+    <meta name="twitter:image:alt" content="An interface is not a document. Stop sending one. — the 22 bytes of one EUI update, field by field.">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

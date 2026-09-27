@@ -8,22 +8,54 @@ class HomeController < Controller
 
   # GET /components
   def components
-    render("home/components", {"title": "EUI components"})
+    render(
+      "home/components",
+      {
+        "title": "EUI components",
+        "description": "The component catalogue: Soli functions that return a hash, "
+        + "composed from primitives. No widget runtime, no registry, no "
+        + "client release behind any name."
+      }
+    )
   end
 
   # GET /controls
   def controls
-    render("home/controls", {"title": "EUI controls — the base every widget is built on"})
+    render(
+      "home/controls",
+      {
+        "title": "EUI controls — the base every widget is built on",
+        "description": "control: one options hash that carries a widget's states, "
+        + "size and tone, so every interactive widget can be disabled, "
+        + "pressed and focused the same way."
+      }
+    )
   end
 
   # GET /gaps
   def gaps
-    render("home/gaps", {"title": "EUI gaps — what is not there yet"})
+    render(
+      "home/gaps",
+      {
+        "title": "EUI gaps — what is not there yet",
+        "description": "What a desktop application expects and EUI does not do yet — "
+        + "text shaping, input methods, accessibility, selection — each "
+        + "with where it would be fixed."
+      }
+    )
   end
 
   # GET /samples
   def samples
-    render("home/samples", {"title": "EUI samples — seven applications, one client"})
+    render(
+      "home/samples",
+      {
+        "title": "EUI samples — eight applications, one client",
+        "description": "Eight applications, one client: real renders taken off the "
+        + "wire from a Soli server, laid out and painted on the GPU by "
+        + "the Rust client. No mockups, no browser."
+      }
+    )
   end
 
   # GET /demo
@@ -36,7 +68,13 @@ class HomeController < Controller
   def demo
     render(
       "home/demo",
-      {"title": "EUI demo — the gallery, running in this page", "eui_build": this._eui_build()}
+      {
+        "title": "EUI demo — the gallery, running in this page",
+        "description": "The EUI gallery running in your browser: the same Rust "
+        + "client as the downloads, compiled to WebAssembly and drawing "
+        + "on a canvas.",
+        "eui_build": this._eui_build()
+      }
     )
   end
 

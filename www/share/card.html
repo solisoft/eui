@@ -1,0 +1,116 @@
+<!doctype html>
+<!--
+  The picture a link to the site unfurls into: 1200 × 630, the size every
+  large-card preview (Open Graph, X, LinkedIn, Slack, Discord) crops to.
+  Rendered to public/images/share/eui.png by scripts/make-share-card.sh;
+  edit this, run that, commit both.
+
+  Drawn in the site's own hand -- the paper, the rules, the serif thesis and
+  the byte strip of the home page -- because a preview is the first thing
+  most people ever see of it. Every number on it exists in the repository:
+  the frame is the home page's, byte for byte.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&family=Instrument+Serif&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --paper: #f4f6f3;
+        --paper-sunk: #eceff0;
+        --ink: #12171b;
+        --ink-soft: #4b565e;
+        --rule: #c3ccd1;
+        --rule-faint: #dde3e5;
+        --blue: #1f35d6;
+        --amber: #a96a00;
+        --rose: #b32a55;
+        --green: #2f6b3a;
+        --serif: "Instrument Serif", Georgia, serif;
+        --sans: "IBM Plex Sans", system-ui, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    html, body { width: 1200px; height: 630px; overflow: hidden; }
+    body {
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        /* The drawing sheet: a faint 30 px grid, as the site's rules are. */
+        background-image:
+            linear-gradient(var(--rule-faint) 1px, transparent 1px),
+            linear-gradient(90deg, var(--rule-faint) 1px, transparent 1px);
+        background-size: 30px 30px;
+        background-position: -1px -1px;
+    }
+    .sheet {
+        position: absolute; inset: 36px;
+        border: 1px solid var(--rule);
+        background: var(--paper);
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        padding: 52px 64px 44px 44px;
+    }
+    .mark {
+        font-family: var(--mono); font-size: 15px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--ink-soft);
+        padding-top: 14px; position: relative;
+    }
+    .mark b { display: block; color: var(--blue); font-weight: 500; font-size: 30px; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .mark::after { content: ""; position: absolute; top: 34px; right: 14px; width: 34px; height: 1px; background: var(--rule); }
+    h1 {
+        font-family: var(--serif); font-weight: 400;
+        font-size: 74px; line-height: 1.02; letter-spacing: -0.01em;
+        max-width: 880px;
+    }
+    h1 em { font-style: normal; color: var(--blue); }
+    .claim {
+        margin-top: 20px; font-size: 22px; line-height: 1.4; color: var(--ink-soft); max-width: 840px;
+    }
+    .frame { margin-top: 34px; border-top: 1px solid var(--rule); padding-top: 16px; }
+    .frame-head {
+        display: flex; justify-content: space-between;
+        font-family: var(--mono); font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft);
+        margin-bottom: 14px;
+    }
+    .frame-head span:last-child { color: var(--ink); }
+    .bytes { display: flex; gap: 10px; font-family: var(--mono); font-size: 22px; }
+    .field { display: flex; flex-direction: column; gap: 6px; padding: 2px 4px 6px; border-bottom: 3px solid currentColor; }
+    .field .hex { color: var(--ink); letter-spacing: 0.05em; white-space: nowrap; }
+    .f-text .hex { white-space: normal; }
+    .field .name { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+    .f-frame { color: var(--blue); } .f-len { color: var(--ink-soft); } .f-op { color: var(--green); }
+    .f-num { color: var(--amber); } .f-text { color: var(--rose); }
+    .foot {
+        position: absolute; left: 238px; right: 64px; bottom: 26px;
+        display: flex; justify-content: space-between;
+        font-family: var(--mono); font-size: 15px; letter-spacing: 0.08em; color: var(--ink-soft);
+    }
+    .foot b { color: var(--ink); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="sheet">
+    <div class="mark"><b>EUI</b>Thesis §00</div>
+    <div>
+        <h1>An interface is not a document. <em>Stop sending one.</em></h1>
+        <p class="claim">Applications over HTTPS with no HTML, no CSS and no JavaScript: the server sends a resolved tree, a native Rust client draws it on the GPU.</p>
+        <div class="frame">
+            <div class="frame-head"><span>Frame · Batch · one op</span><span>22 bytes on the wire</span></div>
+            <div class="bytes">
+                <span class="field f-frame"><span class="hex">03</span><span class="name">batch</span></span>
+                <span class="field f-len"><span class="hex">14</span><span class="name">len 20</span></span>
+                <span class="field f-num"><span class="hex">02</span><span class="name">seq 2</span></span>
+                <span class="field f-len"><span class="hex">01</span><span class="name">1 op</span></span>
+                <span class="field f-op"><span class="hex">23</span><span class="name">set_text</span></span>
+                <span class="field f-num"><span class="hex">8d 01</span><span class="name">node 141</span></span>
+                <span class="field f-op"><span class="hex">01</span><span class="name">inline</span></span>
+                <span class="field f-len"><span class="hex">0d</span><span class="name">13 bytes</span></span>
+                <span class="field f-text"><span class="hex">31 20 39 38 34 2c 20 34 32 20 e2 82 ac</span><span class="name">“1 984, 42 €”</span></span>
+            </div>
+        </div>
+    </div>
+    <div class="foot"><b>eui.solisoft.net</b><span>spec · Rust client · Soli server</span></div>
+</div>
+</body>
+</html>

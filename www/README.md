@@ -7,6 +7,11 @@ beyond fifteen lines that light up a paragraph when you hover a byte.**
 - `app/views/home/index.html.slv` — the page.
 - `app/views/layouts/application.html.slv` — head, fonts, stylesheet.
 - `public/css/site.css` — hand-written, with the design tokens at the top.
+- `share/card.html` — the 1200 × 630 picture a link to the site unfurls into
+  (Open Graph and X cards, which the layout declares on every page). It is
+  rendered to `public/images/share/eui.png` by `../scripts/make-share-card.sh`,
+  which needs a Chromium; edit the HTML, run the script, commit both. Its
+  byte strip is the hero's twenty-two bytes, and follows the rule below.
 
 The documentation site is the sibling app in `../doc`.
 
