@@ -439,3 +439,30 @@ fn a_picture_is_decoded_in_the_confined_worker_and_lands_later() {
         backend.tick(Instant::now());
     }
 }
+
+/// A window resized after its session is up tells the server, through the
+/// worker as through an in-process driver: the `Viewport` is held for the
+/// settle, the worker says when to come back for it, and the paint then
+/// hands it over. Reported as a page that stayed laid out for the width it
+/// connected at (609 px) after its window grew, until a reload.
+#[test]
+fn a_resize_after_the_mount_reaches_the_server_through_the_worker() {
+    std::env::set_var("EUI_ALLOW_INSECURE_LOOPBACK", "1");
+    let url = start_server();
+    let (mut backend, how) = Backend::open_with(eui_binary(), 609.0, 800.0, 1.0, 0);
+    assert!(matches!(backend, Backend::Remote { .. }), "a worker started: {how}");
+    let (conn, wake) = open(&mut backend, &url);
+    pump(&mut backend, &conn, &wake, |b| quads(b).len() > 5);
+
+    let mut sent: Vec<eui_proto::Frame> = backend.input(Input::Resized(1270.0, 800.0, 1.0)).iter().map(|f| eui_proto::Frame::decode(f).unwrap()).collect();
+    sent.extend(backend.paint(1270, 800).1.iter().map(|f| eui_proto::Frame::decode(f).unwrap()));
+    assert!(backend.next_frame_at().is_some(), "the worker must ask to be woken for the held viewport; sent so far: {sent:?}");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !sent.iter().any(|f| matches!(f, eui_proto::Frame::Viewport(_))) {
+        assert!(Instant::now() < deadline, "no Viewport left the worker: {sent:?}");
+        std::thread::sleep(Duration::from_millis(20));
+        sent.extend(backend.paint(1270, 800).1.iter().map(|f| eui_proto::Frame::decode(f).unwrap()));
+    }
+    let Some(eui_proto::Frame::Viewport(v)) = sent.iter().find(|f| matches!(f, eui_proto::Frame::Viewport(_))) else { unreachable!() };
+    assert_eq!(v.width, 1270);
+}
