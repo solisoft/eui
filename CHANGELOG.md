@@ -22,6 +22,8 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-28
+
 ### Changed
 
 - A page follows a window being resized. The client used to tell the server

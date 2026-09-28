@@ -20,7 +20,7 @@ crate-type = ["cdylib"]
 # The three parts that have no Android behind them are left out by name
 # rather than by accident: no platform file dialogs, no system clipboard,
 # no accessibility adapter. Pictures stay.
-eui-client = { path = "../eui-client", version = "0.7.0", default-features = false, features = ["jpeg", "webp"] }
+eui-client = { path = "../eui-client", version = "0.7.1", default-features = false, features = ["jpeg", "webp"] }
 android-activity = { version = "0.6", features = ["native-activity"] }
 
 [lints]

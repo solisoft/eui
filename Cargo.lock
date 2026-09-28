@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "counter-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "blake3",
  "eui-proto",
@@ -1070,7 +1070,7 @@ checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "eui-android"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "android-activity",
  "eui-client",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "eui-audio"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-proto",
  "symphonia",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "eui-client"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "eui-cursor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
@@ -1152,14 +1152,14 @@ dependencies = [
 
 [[package]]
 name = "eui-ios"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-client",
 ]
 
 [[package]]
 name = "eui-layout"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-proto",
  "eui-theme",
@@ -1168,14 +1168,14 @@ dependencies = [
 
 [[package]]
 name = "eui-proto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "eui-render"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bytemuck",
  "eui-layout",
@@ -1189,14 +1189,14 @@ dependencies = [
 
 [[package]]
 name = "eui-shader"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "naga",
 ]
 
 [[package]]
 name = "eui-text"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cosmic-text",
  "eui-layout",
@@ -1207,21 +1207,21 @@ dependencies = [
 
 [[package]]
 name = "eui-theme"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-proto",
 ]
 
 [[package]]
 name = "eui-tree"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-proto",
 ]
 
 [[package]]
 name = "eui-uikit"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "objc2 0.5.2",
  "objc2-ui-kit",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "eui-video"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "gif",
  "image-webp",
@@ -1237,14 +1237,14 @@ dependencies = [
 
 [[package]]
 name = "eui-vm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "eui-proto",
 ]
 
 [[package]]
 name = "eui-wayland"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "rustix 1.1.4",
  "wayland-backend",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "eui-web"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "console_error_panic_hook",
  "eui-client",
@@ -3407,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "snapshot"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "counter-server",
  "eui-client",
@@ -4851,7 +4851,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "counter-server",
  "eui-client",
@@ -4866,7 +4866,7 @@ dependencies = [
 
 [[package]]
 name = "xtask-web"
-version = "0.7.0"
+version = "0.7.1"
 
 [[package]]
 name = "yazi"

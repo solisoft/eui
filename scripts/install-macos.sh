@@ -31,7 +31,7 @@ DEST="${EUI_DEST:-/Applications}"
 [ "$(uname -m)" = "arm64" ] || { echo "install-macos: only Apple Silicon is built" >&2; exit 1; }
 
 # Which build a bundle holds, read out of its executable rather than asked
-# of it (see `stamp_of` in install.sh): `eui 0.7.0, protocol 7, commit ...`.
+# of it (see `stamp_of` in install.sh): `eui 0.7.1, protocol 7, commit ...`.
 stamp_of() {
   local f
   for f in "$1"/Contents/MacOS/*; do

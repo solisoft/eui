@@ -12,20 +12,20 @@ name = "eui"
 path = "src/main.rs"
 
 [dependencies]
-eui-cursor = { path = "../eui-cursor", version = "0.7.0" }
-eui-proto = { path = "../eui-proto", version = "0.7.0" }
-eui-tree = { path = "../eui-tree", version = "0.7.0" }
-eui-theme = { path = "../eui-theme", version = "0.7.0" }
-eui-layout = { path = "../eui-layout", version = "0.7.0" }
-eui-text = { path = "../eui-text", version = "0.7.0" }
-eui-render = { path = "../eui-render", version = "0.7.0" }
+eui-cursor = { path = "../eui-cursor", version = "0.7.1" }
+eui-proto = { path = "../eui-proto", version = "0.7.1" }
+eui-tree = { path = "../eui-tree", version = "0.7.1" }
+eui-theme = { path = "../eui-theme", version = "0.7.1" }
+eui-layout = { path = "../eui-layout", version = "0.7.1" }
+eui-text = { path = "../eui-text", version = "0.7.1" }
+eui-render = { path = "../eui-render", version = "0.7.1" }
 # The shader verifier. Linked here so the parse that meets a module a server
 # chose happens in the confined worker (08 §10), beside the image decoders,
 # and not in the window beside TLS.
-eui-shader = { path = "../eui-shader", version = "0.7.0" }
-eui-vm = { path = "../eui-vm", version = "0.7.0" }
-eui-audio = { path = "../eui-audio", version = "0.7.0" }
-eui-video = { path = "../eui-video", version = "0.7.0" }
+eui-shader = { path = "../eui-shader", version = "0.7.1" }
+eui-vm = { path = "../eui-vm", version = "0.7.1" }
+eui-audio = { path = "../eui-audio", version = "0.7.1" }
+eui-video = { path = "../eui-video", version = "0.7.1" }
 winit = "0.30"
 wgpu = "23"
 # Reinterpreting a validated mesh as bytes across the worker pipe, and back.
@@ -124,7 +124,7 @@ web-sys = { version = "0.3", features = [
 # `#![forbid(unsafe_code)]`. `ios.rs` does the safe half: it pulls the
 # `UIView` out of the window handle and hands the pointer over.
 [target.'cfg(target_os = "ios")'.dependencies]
-eui-uikit = { path = "../eui-uikit", version = "0.7.0" }
+eui-uikit = { path = "../eui-uikit", version = "0.7.1" }
 
 # Android. `android-native-activity` is what makes winit's event loop take
 # an `AndroidApp` instead of starting from `main`; the crate itself is here
@@ -145,9 +145,9 @@ webp = ["dep:image-webp"]
 files = ["dep:rfd"]
 
 [dev-dependencies]
-eui-render = { path = "../eui-render", version = "0.7.0" }
-eui-theme = { path = "../eui-theme", version = "0.7.0" }
-counter-server = { path = "../../examples/counter-server", version = "0.7.0" }
+eui-render = { path = "../eui-render", version = "0.7.1" }
+eui-theme = { path = "../eui-theme", version = "0.7.1" }
+counter-server = { path = "../../examples/counter-server", version = "0.7.1" }
 gif = "0.13"
 
 [lints]
@@ -157,7 +157,7 @@ workspace = true
 # The drop half of 03 §3.2, which winit's Wayland backend does not report.
 # Its own crate because attaching to winit's `wl_display` needs `unsafe`,
 # and this one is `#![forbid(unsafe_code)]`.
-eui-wayland = { path = "../eui-wayland", version = "0.7.0" }
+eui-wayland = { path = "../eui-wayland", version = "0.7.1" }
 # The XDG desktop portal, for the one thing winit will not answer on this
 # platform: whether the desktop is light or dark. `org.freedesktop.appearance`
 # is where GNOME, KDE and the rest keep it, and it is what a browser answers

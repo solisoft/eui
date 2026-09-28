@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 # No dependencies: this executes bytes a server sent.
 [dependencies]
-eui-proto = { path = "../eui-proto", version = "0.7.0" }
+eui-proto = { path = "../eui-proto", version = "0.7.1" }
 
 [lints]
 workspace = true

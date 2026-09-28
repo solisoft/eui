@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-eui-proto = { path = "../eui-proto", version = "0.7.0" }
+eui-proto = { path = "../eui-proto", version = "0.7.1" }
 # Decoding runs on bytes a server chose, so it runs where the decoder
 # runs: in the sandboxed worker. Pure Rust, no system codec, no network.
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "flac", "mp3", "ogg", "vorbis"] }

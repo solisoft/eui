@@ -23,7 +23,7 @@ fn main() {
 }
 
 /// One line that says which client this is, in a form a script can find in
-/// the file without running it: `eui-build: eui 0.7.0, protocol 7, commit
+/// the file without running it: `eui-build: eui 0.7.1, protocol 7, commit
 /// 6563617;`. `eui --version` prints it, and `scripts/install.sh` reads it
 /// out of the binary it is about to replace -- a binary that predates
 /// `--version` would take the flag for an address and open a window.
