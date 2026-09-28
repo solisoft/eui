@@ -22,6 +22,15 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Changed
+
+- A page follows a window being resized. The client used to tell the server
+  the new size only once the resize had been still for 50 ms, so a view laid
+  out from the width stayed at its old layout for the whole drag and jumped
+  at the end. It now sends a single resize (a window snapped or maximised)
+  at once, and during a drag a size every 32 ms, never more than one waiting
+  on the server (spec 01 §3). A server render of the landing page is 4–7 ms.
+
 ## [0.7.0] - 2026-09-27
 
 The first versioned release. Everything before it was the `rolling` build of

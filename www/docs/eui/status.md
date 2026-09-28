@@ -267,6 +267,12 @@ without the third.
   `install-macos.sh` read it out of the build they replace and the one they
   fetched, and say old and new, without running a binary that might predate
   `--version` and open a window. 2 tests.
+- **A resize is followed, not waited out** (2026-09-28): the size goes to
+  the server at the next paint when none went in the last 32 ms, then every
+  32 ms of a drag, one at a time until the server answers (01 §3). It used to
+  go 50 ms after the resize *stopped*, so a view laid out from the width
+  stood still for the whole drag; a server render of `site` is 4–7 ms, so
+  that wait was the delay. 3 tests, and the worker test beside them.
 
 The end-to-end run found a protocol mistake on both sides: a re-mount after
 `Resync` was repeating definitions, and the client was answering a rejected

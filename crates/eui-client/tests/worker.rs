@@ -441,9 +441,8 @@ fn a_picture_is_decoded_in_the_confined_worker_and_lands_later() {
 }
 
 /// A window resized after its session is up tells the server, through the
-/// worker as through an in-process driver: the `Viewport` is held for the
-/// settle, the worker says when to come back for it, and the paint then
-/// hands it over. Reported as a page that stayed laid out for the width it
+/// worker as through an in-process driver: the paint hands the `Viewport`
+/// over, or the worker says when to come back for it. Reported as a page that stayed laid out for the width it
 /// connected at (609 px) after its window grew, until a reload.
 #[test]
 fn a_resize_after_the_mount_reaches_the_server_through_the_worker() {
@@ -456,7 +455,11 @@ fn a_resize_after_the_mount_reaches_the_server_through_the_worker() {
 
     let mut sent: Vec<eui_proto::Frame> = backend.input(Input::Resized(1270.0, 800.0, 1.0)).iter().map(|f| eui_proto::Frame::decode(f).unwrap()).collect();
     sent.extend(backend.paint(1270, 800).1.iter().map(|f| eui_proto::Frame::decode(f).unwrap()));
-    assert!(backend.next_frame_at().is_some(), "the worker must ask to be woken for the held viewport; sent so far: {sent:?}");
+    // It goes with the first paint when none has gone for a period (01 §3);
+    // if it has not, the worker must say when to come back for it.
+    if !sent.iter().any(|f| matches!(f, eui_proto::Frame::Viewport(_))) {
+        assert!(backend.next_frame_at().is_some(), "the worker must ask to be woken for the held viewport; sent so far: {sent:?}");
+    }
     let deadline = Instant::now() + Duration::from_secs(2);
     while !sent.iter().any(|f| matches!(f, eui_proto::Frame::Viewport(_))) {
         assert!(Instant::now() < deadline, "no Viewport left the worker: {sent:?}");

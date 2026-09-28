@@ -1068,9 +1068,17 @@ const DRAG_ANSWER_WAIT: Duration = Duration::from_millis(32);
 /// outrun: often enough that a drag sees rows rather than placeholders,
 /// seldom enough that a drag is not a server render a frame.
 const WINDOW_OUTRUN: Duration = Duration::from_millis(50);
-/// Wait this long after the last resize before telling the server. Sending
-/// every size during a drag makes charts and grids step through layouts.
-const VIEWPORT_SETTLE: Duration = Duration::from_millis(50);
+/// How often a resize tells the server its size (01 §3): at once when nothing
+/// has gone for this long, otherwise this long after the last one went -- a
+/// period a later step does not push back. It used to be a wait for the resize to *stop*
+/// (50 ms after the last step), so a view laid out from the width sat at its
+/// old layout for the whole drag and jumped once the hand was still -- the
+/// server render it waited for was 4-7 ms.
+const VIEWPORT_EVERY: Duration = Duration::from_millis(32);
+/// And not again until the server answered the last one, unless this has
+/// passed: a view slower than [`VIEWPORT_EVERY`] would otherwise be handed a
+/// queue of widths, each rendered after the window had left it.
+const VIEWPORT_ANSWER_WAIT: Duration = Duration::from_millis(250);
 
 /// Spec 06 §1.1: the fastest a node may ask to be woken. A clock is not a
 /// render loop, and the budget of 10 §1 says a window at rest costs
@@ -1525,9 +1533,15 @@ pub struct Driver {
     /// When the next video frame is due. Applied at the end of the paint,
     /// after the transition scheduling, which overwrites `next_due`.
     video_due: Option<Instant>,
-    /// After a resize, wait [`VIEWPORT_SETTLE`] before sending `Viewport`
-    /// so a drag does not restyle the tree once per pixel.
+    /// When the size a resize reached is next owed to the server
+    /// ([`VIEWPORT_EVERY`]); `None` when nothing is owed.
     viewport_due: Option<Instant>,
+    /// When the last `Viewport` went out, until a `Batch` answers it
+    /// ([`VIEWPORT_ANSWER_WAIT`]).
+    viewport_unanswered: Option<Instant>,
+    /// When the last `Viewport` went, answered or not, which the next one
+    /// keeps [`VIEWPORT_EVERY`] from.
+    viewport_sent: Option<Instant>,
     /// Spec 03 §7: the sounds this session is playing, and the decoded
     /// bytes behind them. The mixer lives here — in the worker — because
     /// decoding runs on bytes a server chose; the window owns the device.
@@ -1695,6 +1709,8 @@ impl Driver {
             video_clock: None,
             video_due: None,
             viewport_due: None,
+            viewport_unanswered: None,
+            viewport_sent: None,
             mixer: eui_audio::Mixer::new(48_000),
             sounds: HashMap::new(),
             sound_budget: MAX_SOUND_BYTES,
@@ -1969,7 +1985,21 @@ impl Driver {
                 Vec::new()
             }
             Frame::Blob(t) => self.blob(t),
-            Frame::Batch(batch) => self.apply(batch),
+            Frame::Batch(batch) => {
+                // Whatever it carries, the server has answered: a size held
+                // back for that answer goes as soon as the period allows,
+                // not when the fallback wait runs out (01 §3).
+                if let Some(sent) = self.viewport_unanswered.take() {
+                    if let Some(due) = self.viewport_due {
+                        let sooner = (sent + VIEWPORT_EVERY).max(self.now);
+                        if sooner < due {
+                            self.viewport_due = Some(sooner);
+                            self.next_due = Some(self.next_due.map_or(sooner, |d| d.min(sooner)));
+                        }
+                    }
+                }
+                self.apply(batch)
+            }
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
             Frame::Error { code, message } => {
@@ -3080,10 +3110,16 @@ impl Driver {
                 self.invalidate();
                 // The clock this input arrived on, not a fresh reading of
                 // the wall: `input_at` exists so that a test can say when.
+                // At the next paint when nothing went for a period, else a
+                // period after the last one; armed once and left alone by
+                // the steps after it, because the frame says whatever size
+                // the window has when it goes (01 §3).
                 let now = self.now;
-                let due = now + VIEWPORT_SETTLE;
-                self.viewport_due = Some(due);
-                self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+                if self.viewport_due.is_none() {
+                    let due = self.viewport_sent.map(|at| at + VIEWPORT_EVERY).filter(|at| *at > now).unwrap_or(now);
+                    self.viewport_due = Some(due);
+                    self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+                }
                 Vec::new()
             }
             Input::Covered(px) => self.set_covered(px),
@@ -7956,8 +7992,17 @@ impl Driver {
         let now = self.now;
         if let Some(due) = self.viewport_due {
             if now >= due {
-                self.viewport_due = None;
-                self.pending.push(Frame::Viewport(self.viewport()));
+                // One in flight at a time: until the server has answered the
+                // last size, or has had long enough to, this one waits.
+                let held = self.viewport_unanswered.map(|at| at + VIEWPORT_ANSWER_WAIT).filter(|until| now < *until);
+                if let Some(until) = held {
+                    self.viewport_due = Some(until);
+                } else {
+                    self.viewport_due = None;
+                    self.viewport_unanswered = Some(now);
+                    self.viewport_sent = Some(now);
+                    self.pending.push(Frame::Viewport(self.viewport()));
+                }
             }
         }
         let ticks = self.time_updates();

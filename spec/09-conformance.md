@@ -275,6 +275,16 @@ handlers with and without a following server event, resync on a bad batch,
 transitions on a style change, a back reaching the mounted root and a back
 reaching nobody when the root holds no handler for one.
 
+`Viewport` during a resize (01 §3): a single step goes at the next paint,
+and the window then sleeps (`a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest`);
+a 300 ms drag the server answers is followed during the drag, a size about
+every 32 ms and never faster, each the width the window had then
+(`a_drag_the_server_answers_is_followed_during_the_drag`); one it does not
+answer sends one size, then only the size it settled at once the answer wait
+runs out (`a_drag_the_server_does_not_answer_sends_one_size_then_the_last`);
+and through a real worker process the size arrives
+(`a_resize_after_the_mount_reaches_the_server_through_the_worker`, `worker.rs`).
+
 And the two kinds that had payloads, decoders and a server mapping the word
 while no client had ever produced one (§2): **`double_click`** — the first
 click is a click alone, the second is a click *and* a double in that order,

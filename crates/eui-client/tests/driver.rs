@@ -218,7 +218,7 @@ fn an_unusable_version_is_refused() {
 #[test]
 fn resize_and_mode_changes_report_the_viewport_and_relayout() {
     let mut d = welcomed();
-    assert!(d.input(Input::Resized(800.0, 600.0, 2.0)).is_empty(), "viewport waits until the resize settles");
+    assert!(d.input(Input::Resized(800.0, 600.0, 2.0)).is_empty(), "the viewport leaves with the next paint, not with the input");
     assert!(d.needs_redraw());
     d.tick(std::time::Instant::now() + std::time::Duration::from_millis(50));
     let _ = d.paint(1600, 1200);
@@ -3374,7 +3374,7 @@ fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
     d.tick(Instant::now());
     let _ = d.paint(400, 300);
     // The resize. Nothing is animating, so the only reason to wake is the
-    // viewport that is owed in 50 ms.
+    // viewport it owes -- at once, since none has gone for a period (01 §3).
     //
     // The clock below is anchored *after* the input, not before it: `input`
     // reads the wall clock itself, so the settle it arms is 50 ms from
@@ -3384,12 +3384,7 @@ fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
     // guards against a busy loop is worse than no test at all.
     d.input(Input::Resized(380.0, 280.0, 1.0));
     let resized = Instant::now();
-    d.tick(resized + Duration::from_millis(5));
-    let _ = d.paint(380, 280);
-    assert!(d.take_pending().iter().all(|f| !matches!(f, Frame::Viewport(_))), "held back for the settle");
-    // The settle passes and the frame falls due.
-    let after = resized + Duration::from_millis(60);
-    assert!(d.tick(after), "a frame is due: the viewport the resize owes");
+    assert!(d.tick(resized + Duration::from_millis(1)), "a frame is due: the viewport the resize owes");
     let _ = d.paint(380, 280);
     let sent = d.take_pending();
     assert!(sent.iter().any(|f| matches!(f, Frame::Viewport(v) if v.width == 380)), "the viewport is sent: {sent:?}");
@@ -3398,7 +3393,7 @@ fn a_resize_that_settles_while_nothing_moves_leaves_the_window_at_rest() {
     // the event loop, which is one core, for ever, on a window nobody is
     // touching.
     assert_eq!(d.next_frame_at(), None, "nothing is due once the viewport has gone");
-    assert!(!d.tick(after + Duration::from_millis(1)), "the window sleeps");
+    assert!(!d.tick(resized + Duration::from_millis(60)), "the window sleeps");
 }
 
 /// A session the window refuses to open must say why *on the glass*.
@@ -4759,4 +4754,62 @@ fn a_hover_whose_node_left_in_a_batch_waits_for_the_paint() {
     let _ = d.paint(400, 300);
     assert_eq!(d.hovered(), d.session().lookup(6), "the paint settled it on what is actually there");
     assert_eq!(d.cursor(), Cursor::Default, "which claims no shape");
+}
+
+/// The sizes a drag sends, on a clock the test holds: a step every 10 ms
+/// for `steps`, a paint after each, and `answer` deciding whether the server
+/// answers each `Viewport` with a (possibly empty) batch.
+fn drag_viewports(steps: u32, answer: bool) -> (Vec<(u128, u32)>, Driver, std::time::Instant) {
+    use std::time::{Duration, Instant};
+    let mut d = welcomed();
+    let t0 = Instant::now();
+    d.tick(t0);
+    let _ = d.paint(400, 300);
+    let mut seq = 1;
+    let mut sent = Vec::new();
+    for i in 1..=steps {
+        let at = t0 + Duration::from_millis(u64::from(i) * 10);
+        let w = 400.0 + i as f32 * 10.0;
+        d.input_at(Input::Resized(w, 300.0, 1.0), at);
+        d.tick(at);
+        let _ = d.paint(w as u32, 300);
+        for f in d.take_pending() {
+            if let Frame::Viewport(v) = f {
+                sent.push((at.duration_since(t0).as_millis(), v.width));
+                if answer {
+                    seq += 1;
+                    let _ = d.handle_frame(Frame::Batch(eui_proto::Batch { seq, ops: vec![] }));
+                }
+            }
+        }
+    }
+    (sent, d, t0)
+}
+
+#[test]
+fn a_drag_the_server_answers_is_followed_during_the_drag() {
+    // 01 §3: within 32 ms of the first step, then about every 32 ms, not
+    // only once the hand is still -- the old settle sent nothing at all
+    // for these 300 ms.
+    let (sent, _, _) = drag_viewports(30, true);
+    assert!(sent.first().is_some_and(|(ms, _)| *ms <= 40), "the first size goes within a period of the first step: {sent:?}");
+    assert!(sent.len() >= 7, "a size about every 32 ms of a 300 ms drag: {sent:?}");
+    assert!(sent.windows(2).all(|w| w[1].0 - w[0].0 >= 30), "never faster than the period: {sent:?}");
+    assert!(sent.windows(2).all(|w| w[1].1 > w[0].1), "each one is the size the window had then: {sent:?}");
+}
+
+#[test]
+fn a_drag_the_server_does_not_answer_sends_one_size_then_the_last() {
+    use std::time::Duration;
+    // One in flight at a time: with no batch coming back, nothing more goes
+    // until the answer wait runs out -- and then the size the window
+    // settled at, not a queue of the ones it passed through.
+    let (sent, mut d, t0) = drag_viewports(20, false);
+    assert_eq!(sent.len(), 1, "one size while the first is unanswered: {sent:?}");
+    let later = t0 + Duration::from_millis(600);
+    d.tick(later);
+    let _ = d.paint(600, 300);
+    let last: Vec<u32> = d.take_pending().into_iter().filter_map(|f| if let Frame::Viewport(v) = f { Some(v.width) } else { None }).collect();
+    assert_eq!(last, vec![600], "the final size, once");
+    assert_eq!(d.next_frame_at(), None, "and then nothing is owed");
 }

@@ -442,6 +442,20 @@ Any other `kind` MUST be rejected. Unknown kinds are not reserved for
 forward compatibility; version negotiation in `Hello`/`Welcome` is the only
 extension mechanism, so that a client never has to guess at semantics.
 
+**`Viewport` during a resize.** A view that lays itself out from the width
+is re-rendered by the server, so how often a client says the size is how
+closely the page follows the window. A client SHOULD send the size a resize
+reached **at once** when no size has gone in the last 32 ms — a window snapped
+or maximised is one step, and waiting on it is all delay — and otherwise
+32 ms after the last one went, a period a later step does not push back; and
+it SHOULD NOT send another while the server has not yet answered the last
+(a `Batch` arrived) unless 250 ms have passed, so that a view slower than the
+period never builds a queue of widths nobody will see. The size the window
+finally settles at MUST be sent. Waiting for the resize to stop instead, as
+the reference client did until 2026-09-28, leaves the page at its old layout
+for the whole drag and moves it only once the hand is still — a server render
+of the landing page (`site`) is 4–7 ms, so the wait was the delay.
+
 ## 4. Ordering and recovery
 
 `Batch` frames carry a monotonically increasing sequence number. A client
