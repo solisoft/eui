@@ -273,6 +273,16 @@ without the third.
   go 50 ms after the resize *stopped*, so a view laid out from the width
   stood still for the whole drag; a server render of `site` is 4–7 ms, so
   that wait was the delay. 3 tests, and the worker test beside them.
+- **A view can leave widths to the client** (2026-09-28). Two layout bugs
+  had forced views to compute pixel widths on the server, which follow a
+  resize one round trip at a time and so move in steps: `max_width` was
+  applied after text was measured (a paragraph measured on one line, drawn
+  on three), and a row stretched across a column was measured with its
+  width only bounded, so a `flex-1` child in it was measured at 0 px and the
+  row took a word-a-line height (8 578 px for `site`'s hero at 1 100 px).
+  Both follow CSS now (04 §2, §4.1); `site` is written in `w-full`,
+  `flex-1` and constant caps, and reflows on every frame. 3 tests; the first
+  and the last fail on the 0.7.0 engine.
 
 The end-to-end run found a protocol mistake on both sides: a re-mount after
 `Resync` was repeating definitions, and the client was answering a rejected

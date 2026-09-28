@@ -533,9 +533,11 @@ fn a_virtualised_list_does_not_measure_what_it_cannot_see() {
     // A row outside the window is not laid out at all: no rect, nothing to
     // hit or paint. Scrollbars come from the content size, not from rects.
     assert!(l.rect(s.lookup(rows[500]).unwrap()).is_none(), "row 500 has no rect");
-    // Hypothetical size, cross size, then arrange: three placements, and only
-    // the last materialises rows.
-    assert_eq!(l.stats().list_placements, 3);
+    // Hypothetical size and cross size, then arrange -- and only the last
+    // materialises rows. Two placements, not three: stretched in a column of
+    // definite width, the list is measured at that width for its
+    // hypothetical size as for its cross size, and the second is the memo's.
+    assert_eq!(l.stats().list_placements, 2);
     assert!(l.stats().rows_measured < 40, "{} rows measured", l.stats().rows_measured);
     // The visible rows were really measured: a text row is 22 px, not the estimate.
     assert_eq!(r(&l, &s, rows[0]).h, 22.0);
@@ -1247,4 +1249,88 @@ fn overflow_clip_trims_the_hit_as_it_trims_the_paint() {
     assert_eq!(l.hit(&s, 5.0, 5.0), s.lookup(inner));
     assert_eq!(l.hit(&s, 5.0, 15.0), s.lookup(1), "below the frame the text is cut away");
     assert_eq!(r(&l, &s, fr).h, 10.0);
+}
+
+/// `max_width` narrows what text is measured against, as in CSS: a
+/// paragraph that wraps at it is as tall as the lines it wraps into, and
+/// what follows it starts below them. It used to be measured on one line
+/// and clamped afterwards, and drawn over its sibling.
+#[test]
+fn max_width_is_the_width_text_wraps_at_and_is_measured_at() {
+    let mut b = B::default();
+    let c = b.style(StyleRecord { align_items: AlignItems::Start, ..col() });
+    let narrow = b.style(StyleRecord { max_width: px(100), ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, c, 2);
+    let para = b.text(narrow, "four word text that wraps well past a hundred pixels");
+    let next = b.text(t, "after");
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    let p = r(&l, &s, para);
+    assert!(p.w <= 100.0, "{p:?}");
+    assert!(p.h >= 44.0, "wrapped, and measured as wrapped: {p:?}");
+    assert!(r(&l, &s, next).y >= p.y + p.h, "the sibling is below it, not under it");
+}
+
+/// Text with no width of its own wraps at the column it is in, and is as
+/// tall as it wraps: a loosened constraint keeps its bound. Pinned because
+/// it is what lets a view say `w-full` and reflow on the client rather than
+/// set pixel widths computed on the server, which move a resized window in
+/// steps, one per round trip.
+#[test]
+fn a_stretched_child_of_a_column_wraps_at_the_column() {
+    let mut b = B::default();
+    let root = b.style(StyleRecord { align_items: AlignItems::Start, ..col() });
+    let column = b.style(StyleRecord { width: px(180), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, root, 1);
+    b.push(NodeKind::Box, column, 2);
+    let para = b.text(t, "a paragraph with no width of its own wraps at the column it is in");
+    let next = b.text(t, "after");
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    let p = r(&l, &s, para);
+    assert_eq!(p.w, 180.0, "stretched to the column: {p:?}");
+    assert!(p.h >= 66.0, "and as tall as it wraps: {p:?}");
+    assert!(r(&l, &s, next).y >= p.y + p.h, "the sibling is below it");
+    // The same paragraph in a column 90 px wider is shorter: it follows the
+    // width, which is what lets a view say `w-full` and reflow on the client.
+    let mut b = B::default();
+    let root = b.style(StyleRecord { align_items: AlignItems::Start, ..col() });
+    let column = b.style(StyleRecord { width: px(270), ..col() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, root, 1);
+    b.push(NodeKind::Box, column, 1);
+    let wide = b.text(t, "a paragraph with no width of its own wraps at the column it is in");
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    assert!(r(&l, &s, wide).h < p.h, "wider column, fewer lines");
+}
+
+/// A row stretched across a column of definite width is measured at that
+/// width (flexbox §9.4, §9.8), so a `flex-1` child in it is given its share
+/// when the row's height is decided, not only when it is placed. Measured
+/// with the width loosened, the row distributed nothing, the `flex-1` column
+/// was measured at its basis of 0 px -- a word a line -- and the row took
+/// that height: a landing page's hero drew 8 578 px of empty band around
+/// copy that, once placed, was 120 px tall.
+#[test]
+fn a_flex_1_column_in_a_stretched_row_is_as_tall_as_its_share_makes_it() {
+    let mut b = B::default();
+    let root = b.style(col());
+    let hero = b.style(row());
+    let copy = b.style(StyleRecord { grow: 1, shrink: 1, basis: px(0), min_width: px(0), ..col() });
+    let card = b.style(StyleRecord { width: px(300), height: px(100), shrink: 0, ..st() });
+    let t = b.style(st());
+    b.push(NodeKind::Box, root, 1);
+    let row_id = b.push(NodeKind::Box, hero, 2);
+    b.push(NodeKind::Box, copy, 1);
+    let para = b.text(t, "a paragraph that wraps at the share of the row it is given");
+    b.push(NodeKind::Box, card, 0);
+    let s = b.session();
+    let (l, _) = lay(&s, 800.0, 600.0);
+    let p = r(&l, &s, para);
+    assert_eq!(p.w, 500.0, "the share left beside the card: {p:?}");
+    assert!(p.h <= 44.0, "at 500 px it is a line or two: {p:?}");
+    assert!(r(&l, &s, row_id).h <= 100.0, "and the row is as tall as its tallest child, the card: {:?}", r(&l, &s, row_id));
 }

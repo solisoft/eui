@@ -204,6 +204,15 @@ style lays out as a row, and a `slot` that is `display: none` is still gone —
 the kind decides the direction and must not put back a node the author took
 out of the flow.
 
+**Measured at the width it is drawn at** (04 §2, §4.1):
+`max_width_is_the_width_text_wraps_at_and_is_measured_at` — a paragraph with
+only a `max_width` wraps at it and its sibling starts below;
+`a_stretched_child_of_a_column_wraps_at_the_column` — text with no width
+follows its column's; `a_flex_1_column_in_a_stretched_row_is_as_tall_as_its_share_makes_it`
+— a `grow`, `basis: 0` child of a stretched row is measured at its share,
+and the row is as tall as its tallest child, not as a word-a-line column.
+The first and the last fail on the 0.7.0 engine.
+
 And **what is hit is what is painted** (03 §2 item 7):
 `overflow_clip_trims_the_hit_as_it_trims_the_paint` refuses a point on text
 an `overflow: clip` box cut away, and `what_is_culled_from_the_paint_is_not_hit`

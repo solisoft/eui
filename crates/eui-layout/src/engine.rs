@@ -789,16 +789,26 @@ impl Layout {
         let Some(node) = f.session.node(ix) else { return Metrics::default() };
         let kind = node.kind;
 
-        // Exact wins: the parent decided. Otherwise the node's own dims.
+        // Exact wins: the parent decided. Otherwise the node's own dims,
+        // under its own max: `width: 100%` with `max_width: 480` is 480.
         let own_w = match cw {
             Constraint::Exact(v) => Some(v),
-            _ => st.width.resolve(cw),
+            _ => st.width.resolve(cw).map(|w| st.clamp_w(w, cw)),
+        };
+        // And with no width of its own, `max_width` narrows what the content
+        // is measured against *before* it is measured, as in CSS. Clamping
+        // the result afterwards, which is what this did, measured a
+        // paragraph as one line and then drew it on three, over whatever
+        // came next.
+        let cw_content = match (cw, st.max_width.resolve(cw)) {
+            (Constraint::Exact(_), _) | (_, None) => cw,
+            (c, Some(max)) => Constraint::AtMost(c.bound().map_or(max, |b| b.min(max))),
         };
         let own_h = match ch {
             Constraint::Exact(v) => Some(v),
             _ => st.height.resolve(ch),
         };
-        let inner_w = own_w.map_or(cw.shrink(st.inset_h()), |w| Constraint::Exact((w - st.inset_h()).max(0.0)));
+        let inner_w = own_w.map_or(cw_content.shrink(st.inset_h()), |w| Constraint::Exact((w - st.inset_h()).max(0.0)));
         let inner_h = own_h.map_or(ch.shrink(st.inset_v()), |h| Constraint::Exact((h - st.inset_v()).max(0.0)));
 
         let (content, baseline) = match kind {
@@ -1328,16 +1338,17 @@ impl Layout {
             }
             let (m_before, m_after, c_before, c_after) = if row { (cst.margin.l, cst.margin.r, cst.margin.t, cst.margin.b) } else { (cst.margin.t, cst.margin.b, cst.margin.l, cst.margin.r) };
             let mut virtual_ = false;
+            let hyp_cross = self.stretched_width(st, cst, cross_c, row, c_before + c_after).unwrap_or_else(|| cross_c.loosen());
             let hyp = if let Some((item_h, start, end)) = virt {
                 let outside = cursor + item_h < start || cursor > end;
                 if outside {
                     virtual_ = true;
                     item_h
                 } else {
-                    self.hyp_main(f, c, cst, main_c, cross_c, row)
+                    self.hyp_main(f, c, cst, main_c, hyp_cross, row)
                 }
             } else {
-                self.hyp_main(f, c, cst, main_c, cross_c, row)
+                self.hyp_main(f, c, cst, main_c, hyp_cross, row)
             };
             let hyp = if row { cst.clamp_w(hyp, main_c) } else { cst.clamp_h(hyp, main_c) };
             let min_dim = if row { cst.min_width } else { cst.min_height };
@@ -1350,7 +1361,8 @@ impl Layout {
                 // wraps before it squeezes its siblings; down a column it is
                 // the height at the width on offer.
                 let main_for_min = if row { Constraint::AtMost(0.0) } else { main_c.loosen().shrink(m_before + m_after) };
-                let m = self.measure_axes(f, c, row, main_for_min, cross_c.loosen());
+                let cross = self.stretched_width(st, cst, cross_c, row, c_before + c_after).unwrap_or_else(|| cross_c.loosen());
+                let m = self.measure_axes(f, c, row, main_for_min, cross);
                 Some(if row { m.content_w.min(m.w) } else { m.content_h.min(m.h) })
             } else {
                 None
@@ -1466,7 +1478,8 @@ impl Layout {
                     let m = self.measure_axes(f, cix, row, Constraint::Exact(main), Constraint::Exact(v));
                     (v, m.baseline)
                 } else {
-                    let m = self.measure_axes(f, cix, row, Constraint::Exact(main), cross_c.loosen().shrink(it.c_before + it.c_after));
+                    let cross = self.stretched_width(st, cst, cross_c, row, it.c_before + it.c_after).unwrap_or_else(|| cross_c.loosen().shrink(it.c_before + it.c_after));
+                    let m = self.measure_axes(f, cix, row, Constraint::Exact(main), cross);
                     (if row { m.h } else { m.w }, m.baseline)
                 };
                 if let Some(it) = items.get_mut(i) {
@@ -1563,7 +1576,24 @@ impl Layout {
         }
     }
 
-    fn hyp_main(&mut self, f: &mut Env<'_>, c: NodeIx, cst: Style, main_c: Constraint, cross_c: Constraint, row: bool) -> f32 {
+    /// The width a column's child is measured at when it will be stretched
+    /// to the column's: the column's own, when that is definite and the
+    /// child has no width of its own (CSS flexbox §9.4, §9.8). Measured
+    /// loose instead, a paragraph was one line tall and then stretched to a
+    /// width it wrapped at, which is why views had to compute pixel widths
+    /// on the server -- and a window being resized then moved in steps, one
+    /// per round trip, instead of reflowing on every frame.
+    fn stretched_width(&self, st: Style, cst: Style, cross_c: Constraint, row: bool, margins: f32) -> Option<Constraint> {
+        if row || st.wrap != Wrap::NoWrap || !matches!(cst.width, Length::Auto) || self.align_of(st, cst) != AlignItems::Stretch {
+            return None;
+        }
+        let Constraint::Exact(b) = cross_c else { return None };
+        Some(Constraint::Exact(cst.clamp_w((b - margins).max(0.0), cross_c)))
+    }
+
+    /// `cross` is the cross-axis space to measure with: loosened, or the
+    /// width a stretched child will have ([`Self::stretched_width`]).
+    fn hyp_main(&mut self, f: &mut Env<'_>, c: NodeIx, cst: Style, main_c: Constraint, cross: Constraint, row: bool) -> f32 {
         if let Some(b) = cst.basis.resolve(main_c) {
             return b;
         }
@@ -1572,7 +1602,7 @@ impl Layout {
             return v;
         }
         let margins = if row { cst.margin.horizontal() } else { cst.margin.vertical() };
-        let m = self.measure_axes(f, c, row, main_c.loosen().shrink(margins), cross_c.loosen());
+        let m = self.measure_axes(f, c, row, main_c.loosen().shrink(margins), cross);
         if row {
             m.w
         } else {

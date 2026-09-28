@@ -46,6 +46,13 @@ After `width`/`height` resolve, `min_*`/`max_*` clamp the result, with
 `min` winning over `max` when they conflict. Padding, margin and gap are
 `space` indices and always resolve.
 
+A node with no `width` of its own and a resolved `max_width` is **sized
+against the narrower of the two**: its content — so a text run's wrapping,
+and therefore its height — is measured at `min(available, max_width)`, not
+measured wide and clamped afterwards. Clamped afterwards, a paragraph was
+measured on one line and drawn on three, over what followed it (the
+reference client until 0.7.1).
+
 ## 3. Sizing a node
 
 `size(node, avail_w, avail_h) → (w, h, baseline)` is defined per kind.
@@ -80,6 +87,17 @@ order; there is no `order` property.
 For each in-flow child: `basis` if resolved; else `width`/`height` on the main
 axis if resolved; else the child's content size on the main axis, sized with
 the container's cross-axis available space. Clamp by `min`/`max`.
+
+The cross-axis space a child is sized with is **definite** when it will be
+stretched to a definite size: in a `column` of definite inner width that does
+not wrap, a child whose `width` is `Auto` and whose alignment is `stretch` is
+sized at that width (less its margins, within its own `min`/`max`) — as CSS
+does (flexbox §9.4, §9.8). Only the width axis: a `row`'s children are not
+given a definite height this way. It matters to a child that is itself a
+container: a `row` measured with its width only bounded distributes no free
+space (§4.3), so a `grow` child with `basis: 0` in it was measured at 0 px —
+a word a line — and the row took that height, though it was later placed at
+its real share (the reference client until 0.7.1).
 
 ### 4.2 Lines
 

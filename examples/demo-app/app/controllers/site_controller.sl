@@ -1,7 +1,13 @@
 # Meridian: a product landing page for an invented deploy-preview service,
-# written in `tw()` classes and nothing else -- no colour, no pixel of
-# spacing written down outside a class string, except the text widths a
-# wrapping paragraph needs (a text node is measured against its own width).
+# written in `tw()` classes and nothing else -- no colour and no pixel of
+# spacing written down outside a class string.
+#
+# Widths are the client's to resolve: `w-full`, `flex-1`, and a constant cap
+# once the window is wider than a block (`sv_fill`). A width worked out here
+# from the viewport follows a resize only one server round trip at a time,
+# which moved the page in steps while a browser flows; what this file still
+# decides from the width is a breakpoint or a cap being crossed, once each,
+# as a media query would.
 #
 # Every local carries its function's prefix: Soli's scope is flat across
 # calls, and a local named like a builder rebinds it.
@@ -54,11 +60,11 @@ end
 # edge (`right-6`); before it, the stack packs every child from the end and
 # the badge keeps a right margin, which is the same picture because the card
 # fills the stack.
-def sv_corner(co_w, co_card, co_classes, co_label)
+def sv_corner(co_box, co_card, co_classes, co_label)
   co_badge_text = text(co_label, tw_style("text-xs font-semibold text-white"))
-  return stack({"width": co_w}, [co_card, node("box", {"tw": "absolute top-6 right-6 " + co_classes}, [co_badge_text])]) if sv_speaks(7)
+  return stack(co_box.merge({}), [co_card, node("box", {"tw": "absolute top-6 right-6 " + co_classes}, [co_badge_text])]) if sv_speaks(7)
 
-  stack({"tw": "justify-end", "width": co_w}, [co_card, node("box", {"tw": "absolute top-6 mr-6 " + co_classes}, [co_badge_text])])
+  stack(co_box.merge({"justify": "end"}), [co_card, node("box", {"tw": "absolute top-6 mr-6 " + co_classes}, [co_badge_text])])
 end
 
 # ---- Measures ------------------------------------------------------------------
@@ -68,15 +74,32 @@ def sv_lay(ly_state)
   ly_pad = 16
   ly_pad = 24 if ly_w >= 640
   ly_pad = 32 if ly_w >= 1024
-  ly_inner = ly_w - 2 * ly_pad
-  ly_inner = 1152 if ly_inner > 1152
-  {"w": ly_w, "inner": ly_inner, "md": ly_w >= 768, "lg": ly_w >= 1024}
+  {"w": ly_w, "room": ly_w - 2 * ly_pad, "md": ly_w >= 768, "lg": ly_w >= 1024}
 end
 
-# A paragraph that wraps, at a width in px.
-def sv_para(pa_text, pa_classes, pa_px)
+# A block's width: its cap in px once there is room for it, the whole of
+# what it is given below that. Either way nothing here changes as the window
+# is dragged, except once, when the cap is crossed. (`max_width` would say it
+# in one key, but a client before 0.7.1 measures text against the width it
+# was offered rather than the cap, and overlaps it.)
+def sv_fill(fl_room, fl_cap)
+  return {"width": fl_cap} if fl_room >= fl_cap
+
+  {"width": "100%"}
+end
+
+# A style of `classes` with a box laid over it, the box's own classes added
+# to them rather than replacing them: `{"tw": "flex-1 min-w-0"}` merged in
+# plainly took a card's padding, ring and gaps with it.
+def sv_with(wi_classes, wi_box)
+  wi_out = wi_box.merge({"tw": wi_classes + " " + (wi_box["tw"] ?? "")})
+  wi_out
+end
+
+# A paragraph that wraps at whatever width it is given.
+def sv_para(pa_text, pa_classes)
   pa_s = tw_style(pa_classes)
-  pa_s["width"] = pa_px
+  pa_s["width"] = "100%"
   text(pa_text, pa_s)
 end
 
@@ -101,8 +124,8 @@ def sv_clickable(ck_node, ck_event, ck_props)
 end
 
 def sv_section(se_lay, se_classes, se_kids)
-  column({"tw": "w-full items-center " + se_classes, "vw": se_lay["w"]}, [
-    column({"tw": "flex-col", "width": se_lay["inner"]}, se_kids)
+  column({"tw": "w-full items-center px-4 sm:px-6 lg:px-8 " + se_classes, "vw": se_lay["w"]}, [
+    column({"tw": "flex-col"}.merge(sv_fill(se_lay["room"], 1152)), se_kids)
   ])
 end
 
@@ -161,7 +184,7 @@ def sv_chart(ch_w, ch_h)
   canvas(ch_w, ch_h, ch_paths)
 end
 
-def sv_preview_card(pc_w)
+def sv_preview_card(pc_box, pc_chart_w)
   pc_rows = [
     ["feat/checkout-v2", "Ready", "success", "42 s"],
     ["fix/cart-rounding", "Building", "warning", "…"],
@@ -177,26 +200,32 @@ def sv_preview_card(pc_w)
       ])
     ])
   }))
-  sv_corner(pc_w,
+  sv_corner(pc_box,
     column({"tw": "flex-col gap-4 p-6 rounded-2xl bg-white shadow-xl ring-1 ring-gray-900/5"}, [
       text("Deploys today", tw_style("text-sm font-semibold text-gray-900")),
       row({"tw": "items-end gap-3"}, [
         text("412", tw_style("text-4xl font-bold text-gray-900")),
         text("+18% on last week", tw_style("pb-1 text-sm font-semibold text-green-600"))
       ]),
-      sv_chart(pc_w - 48, 96),
+      sv_chart(pc_chart_w, 96),
       pc_list
     ]), "px-2 py-0.5 rounded-md bg-indigo-600", "LIVE")
 end
 
 def sv_hero(he_lay)
   he_two = he_lay["lg"]
-  he_card_w = he_two ? 440 : (he_lay["inner"] > 480 ? 480 : he_lay["inner"])
-  he_text_w = he_two ? he_lay["inner"] - he_card_w - 64 : he_lay["inner"]
-  he_copy = column({"tw": "flex-col gap-6", "width": he_text_w}, [
+  he_room = he_lay["room"] > 1152 ? 1152 : he_lay["room"]
+  # Beside the copy the card is 440 px; above it, 480 px or the width there
+  # is. The chart is drawn in px, so it is the one thing sized from the
+  # viewport -- and only on a screen narrower than the card.
+  he_card_px = he_two ? 440 : (he_room >= 480 ? 480 : he_room)
+  he_card_box = he_two ? {"tw": "shrink-0", "width": 440} : sv_fill(he_room, 480)
+  he_copy_room = he_two ? he_room - 440 - 64 : he_room
+  he_lede = tw_style("text-lg text-gray-600").merge(sv_fill(he_copy_room, 560))
+  he_copy = column({"tw": he_two ? "flex-col gap-6 flex-1 min-w-0" : "flex-col gap-6 w-full"}, [
     sv_pill(),
-    sv_para("Every pull request, a live preview your whole team can click.", "text-4xl font-bold text-gray-900", he_text_w),
-    sv_para("Meridian builds each branch in under a minute, gives it a URL, and tears it down when the branch merges. Reviewers stop reading diffs of a checkout page and start using one.", "text-lg text-gray-600", he_text_w > 560 ? 560 : he_text_w),
+    sv_para("Every pull request, a live preview your whole team can click.", "text-4xl font-bold text-gray-900"),
+    text("Meridian builds each branch in under a minute, gives it a URL, and tears it down when the branch merges. Reviewers stop reading diffs of a checkout page and start using one.", he_lede),
     row({"tw": "items-center gap-3 flex-wrap"}, [
       sv_button("Start free for 14 days", "noop", {}, "accent", "hero-start"),
       sv_button("Book a demo", "noop", {}, "neutral", "hero-demo")
@@ -206,9 +235,10 @@ def sv_hero(he_lay)
       text("No card needed · SOC 2 Type II", tw_style("text-sm text-gray-500"))
     ])
   ])
-  he_body = he_two ? row({"tw": "items-center gap-16"}, [he_copy, sv_preview_card(he_card_w)]) : column({"tw": "flex-col gap-12"}, [he_copy, sv_preview_card(he_card_w)])
-  column({"tw": "w-full items-center py-16 lg:py-20 " + sv_v6("bg-gradient-to-b from-blue-50 to-white", "bg-gray-50"), "vw": he_lay["w"]}, [
-    column({"tw": "flex-col", "width": he_lay["inner"]}, [he_body])
+  he_card = sv_preview_card(he_card_box, he_card_px - 48)
+  he_body = he_two ? row({"tw": "items-center gap-16"}, [he_copy, he_card]) : column({"tw": "flex-col gap-12"}, [he_copy, he_card])
+  column({"tw": "w-full items-center px-4 sm:px-6 lg:px-8 py-16 lg:py-20 " + sv_v6("bg-gradient-to-b from-blue-50 to-white", "bg-gray-50"), "vw": he_lay["w"]}, [
+    column({"tw": "flex-col"}.merge(sv_fill(he_lay["room"], 1152)), [he_body])
   ])
 end
 
@@ -250,20 +280,18 @@ end
 def sv_features(fe_state, fe_lay)
   fe_tab = fe_state["tab"] ?? "Previews"
   fe_cols = fe_lay["md"] ? 3 : 1
-  fe_gap = fe_lay["md"] ? 32 : 0
-  fe_card_w = (fe_lay["inner"] - fe_gap * (fe_cols - 1)) / fe_cols
   fe_cards = sv_features_of(fe_tab).map(fn(f) {
     column({"tw": "flex-col gap-3 p-6 rounded-xl bg-white ring-1 ring-gray-200 shadow-sm hover:shadow-lg transition"}, [
       node("box", {"tw": "flex size-10 items-center justify-center rounded-lg bg-indigo-600"}, [icon(f[2], tw_style("size-5 text-white"))]),
       text(f[0], tw_style("text-base font-semibold text-gray-900")),
-      sv_para(f[1], "text-sm text-gray-600", fe_card_w - 50)
+      sv_para(f[1], "text-sm text-gray-600")
     ])
   })
   sv_section(fe_lay, "bg-gray-50 py-20", [
     column({"tw": "flex-col gap-10"}, [
       column({"tw": "flex-col gap-3"}, [
         sv_eyebrow("Why teams switch"),
-        sv_para("Review the product, not the patch", "text-3xl font-bold text-gray-900", fe_lay["inner"])
+        sv_para("Review the product, not the patch", "text-3xl font-bold text-gray-900")
       ]),
       sv_tabs(fe_tab),
       node("box", {"tw": "grid gap-8 grid-cols-" + str(fe_cols)}, fe_cards)
@@ -274,20 +302,18 @@ end
 # ---- Alternating rows (flex-row-reverse) -------------------------------------------
 
 def sv_split(sp_lay, sp_flip, sp_title, sp_body, sp_visual)
-  sp_half = sp_lay["md"] ? (sp_lay["inner"] - 64) / 2 : sp_lay["inner"]
-  sp_copy = column({"tw": "flex-col gap-4", "width": sp_half}, [
-    sv_para(sp_title, "text-2xl font-bold text-gray-900", sp_half),
-    sv_para(sp_body, "text-base text-gray-600", sp_half)
+  sp_half = sp_lay["md"] ? "flex-col gap-4 flex-1 min-w-0" : "flex-col gap-4 w-full"
+  sp_copy = column({"tw": sp_half}, [
+    sv_para(sp_title, "text-2xl font-bold text-gray-900"),
+    sv_para(sp_body, "text-base text-gray-600")
   ])
   sp_cls = sp_lay["md"] ? (sp_flip ? "flex flex-row-reverse items-center gap-16" : "flex items-center gap-16") : "flex flex-col gap-8"
-  node("box", {"tw": sp_cls}, [sp_copy, sp_visual(sp_half)])
+  node("box", {"tw": sp_cls}, [sp_copy, column({"tw": sp_lay["md"] ? "flex-col flex-1 min-w-0" : "flex-col w-full"}, [sp_visual()])])
 end
 
-def sv_ring_visual(rv_w)
-  rv_h = 200
-  rv_c = rv_w / 2
-  column({"tw": "items-center justify-center rounded-2xl bg-white ring-1 ring-gray-200 py-6", "width": rv_w}, [
-    canvas(220, rv_h - 40, [
+def sv_ring_visual()
+  column({"tw": "w-full items-center justify-center rounded-2xl bg-white ring-1 ring-gray-200 py-6"}, [
+    canvas(220, 160, [
       [4, "surface.sunken", 18, 110, 80, 60, 0, 6.283],
       [4, "accent.base", 18, 110, 80, 60, -1.571, 3.77],
       [3, "success.base", 110, 80, 8]
@@ -296,8 +322,8 @@ def sv_ring_visual(rv_w)
   ])
 end
 
-def sv_list_visual(lv_w)
-  column({"tw": "flex-col rounded-2xl bg-white ring-1 ring-gray-200 divide-y divide-gray-100", "width": lv_w}, [
+def sv_list_visual()
+  column({"tw": "w-full flex-col rounded-2xl bg-white ring-1 ring-gray-200 divide-y divide-gray-100"}, [
     ["Maya approved", "checkout-v2 · 2 min ago", "success"],
     ["Tom commented", "\"The total jumps on hover\"", "info"],
     ["Preview rebuilt", "fix/cart-rounding · 38 s", "neutral"]
@@ -312,8 +338,8 @@ end
 def sv_story(so_lay)
   sv_section(so_lay, "bg-white py-20", [
     column({"tw": "flex-col gap-20"}, [
-      sv_split(so_lay, false, "Fast enough to be the default", "A warm, per-repository cache and incremental builds mean the preview is usually ready before the CI checks finish. Nobody waits for it, so everybody uses it.", fn(w) { sv_ring_visual(w) }),
-      sv_split(so_lay, true, "Feedback where the pixels are", "Reviewers comment on the running page. Every note carries the branch, the viewport and the account it was left from, so a bug report is reproducible by construction.", fn(w) { sv_list_visual(w) })
+      sv_split(so_lay, false, "Fast enough to be the default", "A warm, per-repository cache and incremental builds mean the preview is usually ready before the CI checks finish. Nobody waits for it, so everybody uses it.", fn() { sv_ring_visual() }),
+      sv_split(so_lay, true, "Feedback where the pixels are", "Reviewers comment on the running page. Every note carries the branch, the viewport and the account it was left from, so a bug report is reproducible by construction.", fn() { sv_list_visual() })
     ])
   ])
 end
@@ -332,12 +358,15 @@ def sv_toggle(tg_yearly)
   ]), "billing", {})
 end
 
-def sv_plan(pl_name, pl_month, pl_yearly, pl_blurb, pl_points, pl_hot, pl_w)
+def sv_plan(pl_name, pl_month, pl_yearly, pl_blurb, pl_points, pl_hot, pl_box)
   pl_price = pl_month == 0 ? "$0" : "$" + str(pl_yearly ? pl_month * 8 / 10 : pl_month)
   pl_ring = pl_hot ? "ring-2 ring-indigo-600 shadow-xl" : "ring-1 ring-gray-200 shadow-sm"
-  pl_card = column({"tw": "flex-col gap-6 p-8 rounded-2xl bg-white " + pl_ring, "width": pl_w}, [
+  # The popular plan's card fills the stack its badge hangs in, and the stack
+  # takes the box; the others take it themselves.
+  pl_own = pl_hot ? {} : pl_box
+  pl_card = column(sv_with("flex-col gap-6 p-8 rounded-2xl bg-white " + pl_ring, pl_own), [
     text(pl_name, tw_style("text-lg font-semibold " + (pl_hot ? "text-indigo-600" : "text-gray-900"))),
-    sv_para(pl_blurb, "text-sm text-gray-600", pl_w - 68),
+    sv_para(pl_blurb, "text-sm text-gray-600"),
     row({"tw": "items-end gap-1"}, [
       text(pl_price, tw_style("text-4xl font-bold text-gray-900")),
       text(pl_month == 0 ? "forever" : "/ seat / month", tw_style("text-sm text-gray-500 pb-1"))
@@ -349,13 +378,13 @@ def sv_plan(pl_name, pl_month, pl_yearly, pl_blurb, pl_points, pl_hot, pl_w)
   ])
   return pl_card unless pl_hot
 
-  sv_corner(pl_w, pl_card, "px-2.5 py-1 rounded-full bg-indigo-600", "Most popular")
+  sv_corner(pl_box, pl_card, "px-2.5 py-1 rounded-full bg-indigo-600", "Most popular")
 end
 
 def sv_pricing(pr_state, pr_lay)
   pr_yearly = pr_state["yearly"] == true
   pr_cols = pr_lay["lg"] ? 3 : 1
-  pr_w = pr_lay["lg"] ? (pr_lay["inner"] - 64) / 3 : (pr_lay["inner"] > 440 ? 440 : pr_lay["inner"])
+  pr_w = pr_lay["lg"] ? {"tw": "flex-1 min-w-0"} : sv_fill(pr_lay["room"], 440)
   pr_plans = [
     sv_plan("Hobby", 0, pr_yearly, "For side projects and trying it out.", ["3 previews at a time", "Public repositories", "Community support"], false, pr_w),
     sv_plan("Team", 24, pr_yearly, "For product teams who review in the browser.", ["Unlimited previews", "SSO and private previews", "Comments on the page", "Seeded databases"], true, pr_w),
@@ -378,7 +407,7 @@ end
 
 def sv_faq(fq_state, fq_lay)
   fq_open = fq_state["faq"] ?? 0
-  fq_w = fq_lay["inner"] > 768 ? 768 : fq_lay["inner"]
+  fq_box = sv_fill(fq_lay["room"], 768)
   fq_items = [
     ["Does a preview use production data?", "Never. Each preview gets its own database, seeded from fixtures you commit. Production credentials are not available to a preview build."],
     ["How long does a preview live?", "Until its branch merges or is deleted, then it is torn down within a minute. You can pin one for a demo."],
@@ -393,11 +422,11 @@ def sv_faq(fq_state, fq_lay)
         icon(fq_is ? "chevron_up" : "chevron_down", tw_style("ml-auto size-5 text-gray-500"))
       ])
     ]
-    fq_kids = fq_kids.concat([sv_para(fq_items[i][1], "text-sm text-gray-600 pb-5", fq_w - 40)]) if fq_is
+    fq_kids = fq_kids.concat([sv_para(fq_items[i][1], "text-sm text-gray-600 pb-5")]) if fq_is
     sv_clickable(column({"tw": "flex-col"}, fq_kids), "faq", {"q": i})
   })
   sv_section(fq_lay, "bg-white py-20", [
-    column({"tw": "flex-col gap-8 mx-auto", "width": fq_w}, [
+    column({"tw": "flex-col gap-8 mx-auto"}.merge(fq_box), [
       text("Questions", tw_style("text-3xl font-bold text-gray-900")),
       column({"tw": "flex-col divide-y divide-gray-200 border-t border-b border-gray-200"}, fq_rows)
     ])
@@ -415,7 +444,6 @@ def sv_signup(sg_state, sg_lay)
     input(sg_state["email"] ?? "", "email", {"key": "sg-email", "placeholder": "you@company.com", "style": {"width": 280}}),
     sv_button("Subscribe", "subscribe", {}, "accent", "subscribe")
   ])
-  sg_inner = sg_lay["inner"] - 96
   sv_section(sg_lay, "bg-white pb-20", [
     column({"tw": "flex-col items-center gap-6 px-6 py-16 rounded-3xl shadow-lg " + sv_v6("bg-gradient-to-r from-indigo-600 via-info to-[#ec4899]", "bg-indigo-600")}, [
       text("A changelog worth reading", tw_style("text-3xl font-bold text-white text-center")),
