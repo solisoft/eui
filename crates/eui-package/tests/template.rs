@@ -33,7 +33,10 @@ fn a_real_client_package_becomes_an_application() {
     )
     .unwrap();
     let (key, _) = eui_package::sign::Key::load_or_create(&dir.join("keys")).unwrap();
-    let packaged = eui_package::android::package(&std::fs::read(template).unwrap(), &cfg, &key).unwrap();
+    // Cargo runs this from the crate's directory, so a relative path is
+    // relative to that, not to the workspace.
+    let bytes = std::fs::read(&template).unwrap_or_else(|e| panic!("EUI_PACKAGE_TEMPLATE={}: {e} (from {})", PathBuf::from(&template).display(), std::env::current_dir().unwrap().display()));
+    let packaged = eui_package::android::package(&bytes, &cfg, &key).unwrap();
     std::fs::write(&out, packaged.apk).unwrap();
     eprintln!("{}", out.display());
     let _ = std::fs::remove_dir_all(&dir);

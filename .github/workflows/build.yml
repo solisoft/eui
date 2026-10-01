@@ -400,7 +400,9 @@ jobs:
       # `aapt2 dump badging` is what the launcher will say it is.
       - name: Package an application from it
         run: |
-          EUI_PACKAGE_TEMPLATE=dist/eui.apk EUI_PACKAGE_OUT=dist/packaged.apk cargo test -p eui-package --test template -- --nocapture
+          # Absolute: cargo runs an integration test from the crate's own
+          # directory, where `dist/` is not.
+          EUI_PACKAGE_TEMPLATE="$PWD/dist/eui.apk" EUI_PACKAGE_OUT="$PWD/dist/packaged.apk" cargo test -p eui-package --test template -- --nocapture
           BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           "$BT/apksigner" verify -v --min-sdk-version 26 dist/packaged.apk
           "$BT/zipalign" -c -p 4 dist/packaged.apk
