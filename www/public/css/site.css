@@ -2809,8 +2809,23 @@ footer a:hover {
     display: grid;
     grid-template-columns: 15rem minmax(0, 1fr);
     gap: 0 3rem;
-    padding: 2.5rem var(--rail) 6rem;
+    padding: 2.5rem 0 6rem;
     align-items: start;
+}
+
+/* The documentation takes the window rather than the site's 68rem column.
+ * A reference is read beside an editor, and the column left a third of a
+ * wide screen empty while code blocks scrolled sideways inside it. Prose
+ * keeps a measure of its own (below); what is wide by nature — code, tables,
+ * a running session — gets the room. The spine is the landing page's
+ * device, and on a page whose left edge is a rail it only cut through it. */
+.sheet.docs {
+    max-width: none;
+    padding-inline: clamp(1.5rem, 3vw, 3rem);
+}
+
+.sheet.docs::before {
+    display: none;
 }
 
 @media (max-width: 60rem) {
@@ -2925,9 +2940,17 @@ footer a:hover {
     font-weight: 600;
 }
 
-/* One column, one measure. A specification is read, not skimmed, and a
- * line of ninety characters is read twice. */
-.docs-page .prose { max-width: 44rem; }
+/* One measure for reading, and the width of the column for what is not
+ * read line by line. A specification is read, not skimmed, and a line of
+ * ninety characters is read twice; a code block or a table is scanned, and
+ * one that scrolls sideways hides the half that mattered. */
+.docs-page .prose { max-width: 76rem; }
+
+.docs-page .prose > :is(p, ul, ol, blockquote, h1, h2, h3, h4) { max-width: 46rem; }
+
+/* A session in the page: wide enough for a layout that branches on width to
+ * take its wide branch, not so wide that 3:2 fills the screen. */
+.docs-page .prose .demo--inline { max-width: 56rem; }
 
 .docs-page .prose h1 { font: 400 2.25rem/1.15 var(--serif); margin: 0 0 1rem; }
 .docs-page .prose h2 { font: 600 1.375rem/1.25 var(--sans); margin: 2.75rem 0 0.75rem; }
