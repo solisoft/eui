@@ -81,6 +81,13 @@ def pantry_2_view(state)
   ])
 end
 
+def pantry_heading(line)
+  column({"gap": 1}, [
+    text("Pantry", {"size": 6, "weight": "bold"}),
+    text(line, {"size": 1, "fg": "text.muted"})
+  ])
+end
+
 def pantry_page(style, children)
   column({"height": "100%", "bg": "surface.base"}, [
     scroll({"grow": 1, "min_height": 0}, [column(style.merge({"width": "100%"}), children)])
@@ -101,8 +108,9 @@ classes into the same style keys you would write by hand, and refuses the ones
 EUI cannot draw by name ([Tailwind classes](/docs/tailwind)). `grow: 1` on the
 name pushes the badge to the end of its row.
 
-`pantry_page` is the other new thing, and every step from here on stands on
-it. A window is as tall as the reader made it, and a list is as long as it
+`pantry_heading` is step 1's two lines of text, with the second one given by
+the caller; every later step opens with it. `pantry_page` is the other new
+thing, and every step from here on stands on it. A window is as tall as the reader made it, and a list is as long as it
 is; something has to give. In a browser that is the page, which scrolls
 because it is a document. In EUI nothing scrolls unless a node says so: the
 root fills the window, a `scroll` takes the room it is given, and the page
@@ -126,6 +134,21 @@ def pantry_3(event_data)
     "less" => {"goods": pantry_bump(goods, id, -1)},
     _ => {"goods": goods}
   }
+end
+
+def pantry_bump(goods, id, by)
+  goods.map { |it| it["id"] == id ? it.merge({"qty": pantry_at_least_one(it["qty"] + by)}) : it }
+end
+
+def pantry_at_least_one(n)
+  n < 1 ? 1 : n
+end
+
+def pantry_row_3(it)
+  keyed(it["id"], row({"gap": 3, "align": "center", "pad": [3, 6, 3, 6]}, [
+    text(it["name"], {"size": 1, "weight": "medium", "grow": 1}),
+    pantry_stepper(it)
+  ]))
 end
 
 def pantry_stepper(it)
@@ -170,6 +193,22 @@ def pantry_4(event_data)
   }
 end
 
+def pantry_defaults(saved)
+  {"goods": saved["goods"] ?? pantry_seed, "draft": saved["draft"].to_s, "next_id": saved["next_id"] ?? 4}
+end
+
+def pantry_add(was)
+  name = was["draft"].trim()
+  return was if name.blank?
+
+  item = {"id": was["next_id"], "name": name, "qty": 1, "done": false}
+  was.merge({"goods": was["goods"].concat([item]), "draft": "", "next_id": was["next_id"] + 1})
+end
+
+def pantry_toggle(goods, id)
+  goods.map { |it| it["id"] == id ? it.merge({"done": !it["done"]}) : it }
+end
+
 def pantry_entry(draft)
   row({"gap": 2}, [
     input(draft, "draft", {"placeholder": "Add something…", "on": {"submit": "add"}, "style": {"grow": 1}}),
@@ -178,7 +217,9 @@ def pantry_entry(draft)
 end
 ```
 
-The placeholder is drawn by the client in `text.muted` while the field is
+`pantry_defaults` gives a session that has never sent an event the seed list
+and an empty draft, so the handler and the view can read every key without a
+`??`. The placeholder is drawn by the client in `text.muted` while the field is
 empty and is never sent back. Each row is now a `checkbox` naming the event
 `got`, with the same `{"id": …}` props as the buttons beside it.
 
@@ -191,6 +232,10 @@ invisible; on a train it is not. A handler can also run **in the client
 first**:
 
 ```soli
+def pantry_5(event_data)
+  pantry_4(event_data)
+end
+
 def pantry_local_stepper(it)
   q = "q" + str(it["id"])
   more = icon_button("+", "more", {"id": it["id"]}, {"icon": "plus", "key": "more" + str(it["id"]), "name": "One more " + it["name"]})
@@ -201,9 +246,25 @@ def pantry_local_stepper(it)
     more
   ])
 end
+
+def pantry_row_5(it)
+  keyed(it["id"], row({"gap": 2, "align": "center", "pad": [2, 4, 2, 4]}, [
+    checkbox(it["name"], it["done"], "got", {"id": it["id"]}),
+    spacer(),
+    pantry_local_stepper(it)
+  ]))
+end
+
+def pantry_counts(goods)
+  counts = {}
+  goods.each do |it|
+    counts["q" + str(it["id"])] = it["qty"]
+  end
+  counts
+end
 ```
 
-For Lemons the `local` string reads `state.q2 += 1; q2.text = str(state.q2)`.
+The handler is step 4's, unchanged; only the stepper's `+` is new. For Lemons the `local` string reads `state.q2 += 1; q2.text = str(state.q2)`.
 Soli compiles it to the bytecode of [spec 07](/spec/07-bytecode); the client
 verifies it once, runs it with a fuel budget, changes the number where it was
 pressed, and *then* sends `more`. The server's answer confirms it — or
@@ -243,6 +304,31 @@ def pantry_6_view(state)
   body = wide ? row({"gap": 6, "align": "start"}, [shelf, side]) : column({"gap": 6}, [shelf, side])
   page = pantry_page({"pad": wide ? 8 : 5, "gap": 6}, [pantry_heading(pantry_left(was["goods"])), body])
   with_state(pantry_counts(was["goods"]), page)
+end
+
+def pantry_left(goods)
+  left = goods.filter { |it| !it["done"] }.length()
+  left == 0 ? "Nothing left to buy." : str(left) + " left to buy."
+end
+
+def pantry_summary(goods, wide)
+  todo_items = goods.filter { |it| !it["done"] }
+  units = todo_items.reduce(fn(acc, it) { acc + it["qty"] }, 0)
+  card({"gap": 3, "width": wide ? 240 : "100%"}, [
+    text("Summary", {"size": 1, "weight": "semibold"}),
+    pantry_fact("To buy", str(todo_items.length())),
+    pantry_fact("Units", str(units)),
+    pantry_fact("In the basket", str(goods.length() - todo_items.length())),
+    secondary_button("Clear bought", "clear")
+  ])
+end
+
+def pantry_fact(label, value)
+  row({"align": "center"}, [
+    text(label, {"size": 1, "fg": "text.muted"}),
+    spacer(),
+    text(value, {"size": 1, "weight": "semibold"})
+  ])
 end
 ```
 

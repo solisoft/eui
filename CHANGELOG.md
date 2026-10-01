@@ -68,6 +68,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- The tutorial (`/docs/tutorial`) shows every helper its excerpts call. Ten
+  were used and never defined on the page — `pantry_heading` from step 2 on,
+  then `pantry_bump`, `pantry_defaults`, `pantry_add`, `pantry_toggle`,
+  `pantry_counts`, `pantry_row_5`, `pantry_left`, `pantry_summary` and the
+  step-5 handler — so code copied from it did not run. The demo application's
+  `tests/tutorial_spec.sl` now fails when the page calls a helper it does not
+  show, or shows one the component does not have.
 - The browser client runs any number of embeds on one page. The second
   *Run it* used to fail with "EventLoop can't be recreated" — winit allows a
   page one event loop — and the first session was only hidden, never closed.
