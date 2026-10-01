@@ -24,15 +24,29 @@
 <% share_path = req["path"] ?? "/" -%>
 <% share_url = share_origin + share_path -%>
 <% share_image = share_origin + public_path("images/share/eui.png") -%>
-<% share_alt = "The Meridian demo dashboard drawn by the EUI client, in a window whose bar shows its session address, beside the line: An interface is not a document. Stop sending one." -%>
+<% share_alt = "The Meridian demo dashboard drawn by the EUI client, in a window whose bar shows " -%>
+<% share_alt = share_alt + "its session address, beside the line: An interface is not a document. " -%>
+<% share_alt = share_alt + "Stop sending one." -%>
 <% share_article = share_path.starts_with("/docs/") || share_path.starts_with("/spec/") -%>
 <% share_site = {"@type": "WebSite", "name": "EUI", "url": share_origin + "/"} -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "WebPage", "name": share_title} -%>
+<% share_ld["description"] = share_text -%>
+<% share_ld["url"] = share_url -%>
+<% share_ld["image"] = share_image -%>
+<% share_ld["inLanguage"] = "en" -%>
+<% share_ld["isPartOf"] = share_site -%>
 <% if share_path == "/" -%>
-<% share_ld = {"@context": "https://schema.org", "@type": "WebSite", "name": "EUI", "url": share_origin + "/", "description": share_text, "image": share_image, "inLanguage": "en"} -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "WebSite", "name": "EUI", "url": share_origin + "/"} -%>
+<% share_ld["description"] = share_text -%>
+<% share_ld["image"] = share_image -%>
+<% share_ld["inLanguage"] = "en" -%>
 <% elsif share_article -%>
-<% share_ld = {"@context": "https://schema.org", "@type": "TechArticle", "headline": title, "description": share_text, "url": share_url, "image": share_image, "inLanguage": "en", "isPartOf": share_site} -%>
-<% else -%>
-<% share_ld = {"@context": "https://schema.org", "@type": "WebPage", "name": share_title, "description": share_text, "url": share_url, "image": share_image, "inLanguage": "en", "isPartOf": share_site} -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "TechArticle", "headline": title} -%>
+<% share_ld["description"] = share_text -%>
+<% share_ld["url"] = share_url -%>
+<% share_ld["image"] = share_image -%>
+<% share_ld["inLanguage"] = "en" -%>
+<% share_ld["isPartOf"] = share_site -%>
 <% end -%>
     <title><%= share_title %></title>
     <meta name="description" content="<%= share_text %>">
