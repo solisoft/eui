@@ -177,8 +177,31 @@ p a {
     color: var(--ink-soft);
 }
 
+/* Seven entries do not fit a phone on one line: they wrap under the wordmark
+ * rather than running off the right edge, where the last two were cut. */
+@media (max-width: 60rem) {
+    .top nav {
+        margin-left: 0;
+        flex-wrap: wrap;
+        gap: 0.5rem 1.25rem;
+    }
+}
+
 .top nav a:hover {
     color: var(--ink);
+}
+
+/* The GitHub mark in place of the word "Source": drawn in currentColor, so it
+   takes the links' colour, their hover and the dark palette with them. */
+.top nav a.gh {
+    display: inline-flex;
+    align-self: center;
+}
+
+.top nav a.gh svg {
+    display: block;
+    width: 1.05rem;
+    height: 1.05rem;
 }
 
 .tagline {
@@ -2641,12 +2664,36 @@ footer a:hover {
    the sheet's 6rem tail and the figure's own margin would leave a band of
    paper under a canvas that runs to both edges, which reads as the page
    having failed to finish rather than as breathing room. */
-.sheet:has(.demo) {
+.sheet:has(.demo:not(.demo--inline)) {
     padding-bottom: 0;
 }
 
 .demo:last-child {
     margin-bottom: 0;
+}
+
+/* The same figure inside a documentation page (`::: eui <component>` in the
+   markdown, `DocsController#_live_demos`): one step of the tutorial beside
+   the code that makes it. It sits in the text's measure rather than running
+   to both edges, and is as tall as the 3:2 still it starts as, because a
+   page that is mostly prose cannot give every example the whole window. */
+.demo.demo--inline {
+    grid-column: auto;
+    margin: 1.5rem 0 2rem;
+    margin-inline: 0;
+}
+
+.demo--inline .demo__stage {
+    height: auto;
+    aspect-ratio: 3 / 2;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+}
+
+.demo--inline figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--ink-soft);
 }
 
 .demo__stage {
@@ -2769,7 +2816,9 @@ footer a:hover {
 @media (max-width: 60rem) {
     .docs-shell {
         grid-template-columns: minmax(0, 1fr);
-        padding: 2rem 1.25rem 4rem;
+        /* The sheet already holds the gutter; a second one here set the page
+         * 20 px in from the masthead above it. */
+        padding: 2rem 0 4rem;
     }
 }
 
@@ -2782,18 +2831,63 @@ footer a:hover {
     padding-right: 1.25rem;
 }
 
+/* Narrower than this the rail would sit above the page, thirty titles deep,
+ * so it is folded into one line instead (`docs/show`): the same list, opened
+ * on request, with the current page named in the line itself. */
+.docs-jump { display: none; }
+
 @media (max-width: 60rem) {
-    .docs-rail {
-        position: static;
-        max-height: none;
-        border-right: 0;
-        border-bottom: 1px solid var(--rule-faint);
-        padding: 0 0 1.5rem;
+    .docs-rail { display: none; }
+
+    .docs-jump {
+        display: block;
+        border: 1px solid var(--rule-faint);
+        border-radius: 4px;
         margin-bottom: 2rem;
+    }
+
+    .docs-jump summary {
+        display: flex;
+        align-items: baseline;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        cursor: pointer;
+        font: 600 0.75rem/1.4 var(--sans);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        list-style: none;
+    }
+
+    .docs-jump summary::-webkit-details-marker { display: none; }
+
+    .docs-jump summary::after {
+        content: "+";
+        margin-left: auto;
+        font: 400 1rem/1 var(--mono);
+    }
+
+    .docs-jump[open] summary::after { content: "\2212"; }
+
+    .docs-jump summary span {
+        font: 400 0.9375rem/1.4 var(--sans);
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--ink);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .docs-jump nav {
+        padding: 0.25rem 1rem 1rem 1.75rem;
+        border-top: 1px solid var(--rule-faint);
     }
 }
 
-.docs-rail h2 {
+.docs-rail h2,
+.docs-jump h2 {
     font: 600 0.75rem/1.4 var(--sans);
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -2801,12 +2895,16 @@ footer a:hover {
     margin: 1.75rem 0 0.5rem;
 }
 
-.docs-rail h2:first-child { margin-top: 0; }
+.docs-rail h2:first-child,
+.docs-jump h2:first-child { margin-top: 0; }
 
-.docs-rail ol { list-style: none; margin: 0; padding: 0; }
-.docs-rail li { margin: 0; }
+.docs-rail ol,
+.docs-jump ol { list-style: none; margin: 0; padding: 0; }
+.docs-rail li,
+.docs-jump li { margin: 0; }
 
-.docs-rail a {
+.docs-rail a,
+.docs-jump nav a {
     display: block;
     padding: 0.25rem 0 0.25rem 0.75rem;
     margin-left: -0.75rem;
@@ -2817,9 +2915,11 @@ footer a:hover {
     line-height: 1.45;
 }
 
-.docs-rail a:hover { color: var(--ink); }
+.docs-rail a:hover,
+.docs-jump nav a:hover { color: var(--ink); }
 
-.docs-rail a[aria-current="page"] {
+.docs-rail a[aria-current="page"],
+.docs-jump nav a[aria-current="page"] {
     color: var(--ink);
     border-left-color: var(--blue);
     font-weight: 600;
@@ -2841,6 +2941,18 @@ footer a:hover {
 .docs-page .prose code { font: 0.875em/1.4 var(--mono); background: var(--paper-sunk); padding: 0.1em 0.3em; border-radius: 3px; }
 .docs-page .prose pre { background: var(--paper-sunk); border: 1px solid var(--rule-faint); border-radius: 4px; padding: 0.875rem 1rem; overflow-x: auto; margin: 0 0 1.25rem; }
 .docs-page .prose pre code { background: none; padding: 0; font-size: 0.8125rem; }
+
+/* Code colours, from the site's own four inks so they follow the theme with
+ * everything else. Set on the server (`DocsController#_highlight`); a block
+ * in a language it does not lex keeps the plain ink below. */
+.docs-page .prose pre code { color: var(--ink); }
+.docs-page .prose .tk-k { color: var(--rose); }
+.docs-page .prose .tk-s { color: var(--green); }
+.docs-page .prose .tk-c { color: var(--ink-soft); font-style: italic; }
+.docs-page .prose .tk-n,
+.docs-page .prose .tk-t,
+.docs-page .prose .tk-v { color: var(--amber); }
+.docs-page .prose .tk-f { color: var(--blue); }
 .docs-page .prose blockquote { margin: 0 0 1.25rem; padding-left: 1rem; border-left: 2px solid var(--rule); color: var(--ink-soft); }
 .docs-page .prose a { color: var(--blue); }
 .docs-page .prose hr { border: 0; border-top: 1px solid var(--rule-faint); margin: 2.5rem 0; }

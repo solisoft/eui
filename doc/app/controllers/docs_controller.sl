@@ -88,6 +88,12 @@ class DocsController < Controller
       ]},
       {"title": "Building", "items": [
         {
+          "slug": "tutorial",
+          "file": "tutorial.md",
+          "title": "Tutorial",
+          "lead": "A shopping list in six steps, each one running in the page."
+        },
+        {
           "slug": "views",
           "file": "views.md",
           "title": "Writing views",

@@ -53,18 +53,287 @@ class DocsController < Controller
       }
     end
 
-    # Which of the two the masthead should mark: a specification page is
-    # reached from `Spec`, not from `Docs`, and highlighting the wrong one
-    # tells the reader they are somewhere they are not.
+    # Which of the two this page is. The masthead has one entry for both —
+    # the specification is a section of the rail under `Docs` — and marks it
+    # either way; the word is kept for whatever later tells the two apart.
     @here = kind
     @slug = kind + "/" + slug
     @title = entry["title"]
     @lead = entry["lead"]
     @sections = this._sections()
     @source = entry["source"]
-    @html = Markdown.to_safe_html(File.read("docs/" + entry["file"]))
+    @html = this._highlight(this._live_demos(Markdown.to_safe_html(File.read("docs/" + entry["file"]))))
+    # The embed's script is two megabytes behind a button, and a page with no
+    # session on it does not load even the five kilobytes in front of them.
+    @eui_build = @html.contains("data-eui") ? this._eui_build() : nil
 
     render("docs/show", {"layout": "layouts/application"})
+  end
+
+  # A line reading `::: eui <component>` in a page's markdown becomes a live
+  # session of that component beside the prose around it: the still it was
+  # photographed as (`public/images/live/<component>-{light,dark}.png`), a
+  # button, and a canvas the browser client draws on once asked
+  # (`public/eui/eui-embed.js`). The safe renderer keeps the line as a
+  # paragraph of text, so it is found as one; read anywhere else — GitHub, an
+  # editor — it is what it looks like, a marker.
+  #
+  # The name lands in an attribute and in a URL, so it is held to a closed
+  # alphabet; a line that fails it is left as the text it was.
+  def _live_demos(html)
+    pieces = html.split("<p>::: eui ")
+    return html if pieces.length() == 1
+
+    out = [pieces[0]]
+    for piece in pieces.drop(1)
+      parts = piece.split("</p>")
+      words = parts[0].trim().split(" ")
+      tall = words.length() > 1 ? words[1] : ""
+      if parts.length() > 1 && words.length() <= 2 && this._demo_name_ok(words[0]) && this._demo_tall_ok(tall)
+        out.push(this._demo_figure(words[0], tall) + parts.drop(1).join("</p>"))
+      else
+        out.push("<p>::: eui " + piece)
+      end
+    end
+    out.join("")
+  end
+
+  # `::: eui <component> 380` asks for a frame at least 380 px tall, for a
+  # component taller than the 3:2 the frame otherwise takes. It is a floor:
+  # a wide column still gets its 3:2, and whatever is taller than either
+  # scrolls inside the component, which is the component's business.
+  def _demo_tall_ok(tall)
+    return true if tall.blank?
+    return false if tall.length > 4 || tall.chars().filter(fn(c) { "0123456789".index_of(c) < 0 }).length() > 0
+
+    int(tall) >= 120 && int(tall) <= 1200
+  end
+
+  def _demo_name_ok(name)
+    return false if name.blank? || name.length > 40
+
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
+    name.chars().filter(fn(c) { allowed.index_of(c) < 0 }).length() == 0
+  end
+
+  # ------------------------------------------------------------ highlighting
+  # Code blocks are coloured here, on the server, and not by a highlighter
+  # in the page: the site's one script is the embed's, and a colour is not
+  # worth a second. The markdown renderer marks a fenced block with its
+  # language (`<pre><code class="language-soli">`) and has already escaped
+  # what is inside; this unescapes it, cuts it into tokens and escapes each
+  # one again inside a span. Soli and Ruby share a lexer, `sh` has a smaller
+  # one, and a block in anything else — the grammars in `spec/` are untagged
+  # — is left exactly as it was rendered.
+  #
+  # Cut with `split` rather than `index_of`: the code holds `×` and `−`, and
+  # `index_of` counts bytes where `substring` counts characters.
+  def _highlight(html)
+    pieces = html.split("<pre><code class=\"language-")
+    return html if pieces.length() == 1
+
+    out = [pieces[0]]
+    for piece in pieces.drop(1)
+      head = piece.split("\">")
+      parts = head.drop(1).join("\">").split("</code></pre>")
+      if head.length() < 2 || parts.length() < 2
+        out.push("<pre><code class=\"language-" + piece)
+      else
+        lang = head[0]
+        out.push("<pre><code class=\"language-" + lang + "\">" + this._tokens(lang, html_unescape(parts[0])))
+        out.push("</code></pre>" + parts.drop(1).join("</code></pre>"))
+      end
+    end
+    out.join("")
+  end
+
+  def _tokens(lang, source)
+    return html_escape(source) unless [
+      "soli",
+      "ruby",
+      "sh"
+    ].includes?(lang)
+
+    shell = lang == "sh"
+    cs = source.chars()
+    out = []
+    i = 0
+    first = true
+    while i < cs.length()
+      cut = this._cut(cs, i, shell, first)
+      text = html_escape(cs.slice(i, cut[0]).join(""))
+      out.push(cut[1].blank? ? text : "<span class=\"tk-" + cut[1] + "\">" + text + "</span>")
+      first = cs[i] == "\n" || (first && (cs[i] == " " || cs[i] == "\t"))
+      i = cut[0]
+    end
+    out.join("")
+  end
+
+  # Where the token that starts at `i` ends, and what kind it is: `c`omment,
+  # `s`tring, `n`umber, `k`eyword, `f`unction, `t`ype, `v`ariable, or "" for
+  # a character that is none of them.
+  def _cut(cs, i, shell, first)
+    c = cs[i]
+    spaced = i == 0 || cs[i - 1] == " " || cs[i - 1] == "\n"
+    return [this._skip(cs, i + 1, "line"), "c"] if c == "#" && (!shell || spaced)
+    return [this._past_string(cs, i), "s"] if c == "\"" || c == "'"
+    return [this._skip(cs, i + 1, "number"), "n"] if this._digit(c) && (i == 0 || !this._word_char(cs[i - 1]))
+    return [i + 1, ""] unless this._word_char(c) || c == "@" || (shell && c == "$")
+
+    j = this._skip(cs, i + 1, "word");
+    [j, this._word_kind(cs.slice(i, j).join(""), shell, first, j < cs.length() ? cs[j] : "")]
+  end
+
+  def _skip(cs, start_at, mode)
+    j = start_at
+    while j < cs.length() && this._keeps(mode, cs[j])
+      j = j + 1
+    end
+    j
+  end
+
+  def _keeps(mode, c)
+    return c != "\n" if mode == "line"
+    return this._digit(c) || c == "." || c == "_" if mode == "number"
+
+    this._word_char(c)
+  end
+
+  # The index just past a string that opens at `at`, or the end of its line:
+  # an apostrophe in a shell line is more often prose than a quote, and a
+  # string that ran on would colour the whole block.
+  def _past_string(cs, at)
+    quote = cs[at]
+    j = at + 1
+    while j < cs.length()
+      if cs[j] == "\\"
+        j = j + 2
+      elsif cs[j] == quote
+        return j + 1
+      elsif cs[j] == "\n"
+        return j
+      else
+        j = j + 1
+      end
+    end
+    cs.length()
+  end
+
+  def _word_kind(word, shell, first, after)
+    return "v" if word.starts_with?("@") || word.starts_with?("$")
+    return first ? "f" : "" if shell
+    return "k" if this._keywords().includes?(word)
+    return "f" if after == "("
+    return "t" if "ABCDEFGHIJKLMNOPQRSTUVWXYZ".index_of(word.chars()[0]) >= 0
+
+    ""
+  end
+
+  def _keywords
+    [
+      "def",
+      "end",
+      "if",
+      "elsif",
+      "else",
+      "unless",
+      "while",
+      "for",
+      "in",
+      "do",
+      "return",
+      "match",
+      "fn",
+      "class",
+      "module",
+      "nil",
+      "null",
+      "true",
+      "false",
+      "let",
+      "const",
+      "self",
+      "this",
+      "case",
+      "when",
+      "then",
+      "begin",
+      "rescue",
+      "ensure",
+      "yield",
+      "next",
+      "break",
+      "and",
+      "or",
+      "not",
+      "static",
+      "private",
+      "require",
+      "import"
+    ]
+  end
+
+  def _digit(c)
+    "0123456789".index_of(c) >= 0
+  end
+
+  def _word_char(c)
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_".index_of(c) >= 0
+  end
+
+  # The markup `/demo` uses, at the size of the text rather than the window.
+  def _demo_figure(name, tall)
+
+    # Fingerprinted, because `public/` is served immutable: a still shot
+    # again under the same name would otherwise never reach a reader who
+    # had seen the old one.
+    light = this._still("images/live/" + name + "-light.png")
+    dark = this._still("images/live/" + name + "-dark.png")
+    floor = tall.blank? ? "" : " style=\"min-height: " + tall + "px\""
+    "<figure class=\"demo demo--inline\" data-eui data-component=\"" + name + "\" data-allow=\"\">"
+    + "<div class=\"demo__stage\""
+    + floor
+    + ">"
+    + "<img class=\"demo__poster\" src=\""
+    + light
+    + "\" data-light=\""
+    + light
+    + "\" data-dark=\""
+    + dark
+    + "\" width=\"1440\" height=\"960\" alt=\"The component "
+    + name
+    + " as the client draws it, before it is run.\" loading=\"lazy\" decoding=\"async\">"
+    + "<canvas class=\"demo__canvas\" id=\"eui-"
+    + name
+    + "\" tabindex=\"0\" aria-label=\"A live EUI session: "
+    + name
+    + "\" hidden></canvas>"
+    + "<button class=\"demo__run\" type=\"button\">Run it <small>&asymp;2 MB</small></button>"
+    + "<p class=\"demo__note\" role=\"status\" hidden></p>"
+    + "</div>"
+    + "<figcaption>Live: the component <code>"
+    + name
+    + "</code>, running in this page.</figcaption>"
+    + "</figure>"
+  end
+
+  # A file under `public/`, stamped with when it last changed. `public_path`
+  # does this in a view and is not reachable from here; a still that is
+  # missing goes out unstamped, and its figure says so when it fails to load.
+  def _still(path)
+    stamp = File.modified("public/" + path) rescue nil
+    stamp.nil? ? "/" + path : "/" + path + "?v=" + str(stamp)
+  end
+
+  # Which build of the browser client is on disk, for the page to stamp on the
+  # script URL. The same five lines as `HomeController#_eui_build`, which
+  # serves `/demo`; change both.
+  def _eui_build
+    raw = slurp("public/eui/manifest.json") rescue nil
+    return "none" if raw.nil?
+
+    parsed = JSON.parse(raw) rescue nil
+    parsed.nil? ? "none" : (parsed["version"] ?? "none")
   end
 
   # slug -> file, title, one-line lead. Adding a page means adding a row
@@ -122,6 +391,13 @@ class DocsController < Controller
         }
       ]},
       {"title": "Building", "items": [
+        {
+          "slug": "docs/tutorial",
+          "file": "eui/tutorial.md",
+          "source": "doc/docs/eui/tutorial.md",
+          "title": "Tutorial",
+          "lead": "A shopping list in six steps, each one running in the page."
+        },
         {
           "slug": "docs/views",
           "file": "eui/views.md",

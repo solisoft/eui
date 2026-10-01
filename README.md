@@ -48,7 +48,8 @@ examples/
   demo-app        counter, todo, a 10 000-row table, a gallery, Atrium —
                   a team messenger — a Tailwind UI-style help desk and a
                   landing page written in tw() classes, as a Soli app; the catalogue (buttons to date pickers to charts)
-                  is app/controllers/eui_builders*.sl
+                  is app/controllers/eui_builders*.sl, and the documentation's
+                  tutorial is app/controllers/tutorial_controller.sl
   snapshot        render the counter, or any live Soli component, off-screen
 clients/     the protocol's server half in six more languages, each its own
              repository and each with no runtime dependencies: eui-ruby,

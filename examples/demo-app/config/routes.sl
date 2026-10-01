@@ -1,4 +1,4 @@
-# Thirteen EUI components. Needs a `soli` built with `--features eui`.
+# Nineteen EUI components. Needs a `soli` built with `--features eui`.
 #
 # router_eui(component, handler, view, options?):
 #   handler — a LiveView handler: {event, params, state} -> state
@@ -6,7 +6,7 @@
 #   options — {"session": "required"}
 #
 # **The first one is the default.** The EUI manifest carries a single `entry`
-# (01 §2.1) and this server carries thirteen components, so one of them has to
+# (01 §2.1) and this server carries nineteen components, so one of them has to
 # be what `wss://host` means, and it is this one — which is why the gallery
 # leads rather than the counter. A newer soli also takes `{"default": true}`
 # to say so explicitly, and this file does not use it: the deploy installs a
@@ -47,6 +47,14 @@ router_eui("helpdesk", "helpdesk#helpdesk", "helpdesk#helpdesk_view")
 # over `GET /_eui/view/site`: the deploy's pinned Soli (2.3.3) refuses the
 # option and the routes do not load.
 router_eui("site", "site#site", "site#site_view")
+# The tutorial (doc/docs/eui/tutorial.md): one shopping list in six steps,
+# each a component so the page can run every step beside its code.
+router_eui("pantry_1", "tutorial#pantry_1", "tutorial#pantry_1_view")
+router_eui("pantry_2", "tutorial#pantry_2", "tutorial#pantry_2_view")
+router_eui("pantry_3", "tutorial#pantry_3", "tutorial#pantry_3_view")
+router_eui("pantry_4", "tutorial#pantry_4", "tutorial#pantry_4_view")
+router_eui("pantry_5", "tutorial#pantry_5", "tutorial#pantry_5_view")
+router_eui("pantry_6", "tutorial#pantry_6", "tutorial#pantry_6_view")
 
 # The one HTML page here: an EUI session in a browser, beside the Soli that
 # produces it. It must be served by *this* application and not by the

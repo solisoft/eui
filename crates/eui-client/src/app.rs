@@ -70,6 +70,15 @@ pub enum Wake {
     /// one thread and it is the one drawing.
     #[cfg(target_arch = "wasm32")]
     Gpu(Box<Gpu>),
+    /// The page started another embed: the address, and what it grants.
+    ///
+    /// winit builds one event loop per page and refuses a second
+    /// ("EventLoop can't be recreated"), so a page with several embeds runs
+    /// every one of them in this loop, one at a time, in the window it
+    /// already has — the session in it is closed and the new one opened in
+    /// its place (`crate::web::swap`).
+    #[cfg(target_arch = "wasm32")]
+    Swap(String, u32),
 }
 
 /// What the probe came back with: a whole [`Shared`], plus the window and
@@ -4738,6 +4747,37 @@ impl App {
         }
     }
 
+    /// Put the session the page just asked for where the last one was.
+    ///
+    /// The window, its canvas, the device and every pipeline stay: the page
+    /// moved that canvas into the figure that asked (`eui-embed.js`), and
+    /// what changes is the tab in it, closed and replaced as a reload would
+    /// replace it. `announced` goes back to false so the new session tells
+    /// the page when it has drawn, which is what uncovers it.
+    ///
+    /// A swap that arrives while the GPU is still being asked for replaces
+    /// what is waiting for it rather than queueing behind it: two clicks in
+    /// quick succession mean the second embed, not both.
+    #[cfg(target_arch = "wasm32")]
+    fn swap(&mut self, url: String, allowed: u32, event_loop: &ActiveEventLoop) {
+        if self.shared.is_none() {
+            self.pending = vec![Pending { launches: vec![Launch::new(url, allowed)], chrome: false, allowed }];
+            return;
+        }
+        if self.shells.is_empty() {
+            self.pending.push(Pending { launches: vec![Launch::new(url, allowed)], chrome: false, allowed });
+            self.open_pending(event_loop);
+            return;
+        }
+        let Some(shared) = self.shared.as_ref() else { return };
+        for shell in self.shells.values_mut() {
+            shell.allowed = allowed;
+            shell.announced = false;
+            shell.go_to(url.clone(), &shared.renderer, Trail::Stay);
+            shell.window.request_redraw();
+        }
+    }
+
     /// Make the page's window, then ask the browser about it.
     ///
     /// Both halves have to be here and in this order. The window is made
@@ -4928,6 +4968,8 @@ impl ApplicationHandler<Wake> for App {
                 Wake::Drop => 6,
                 #[cfg(target_arch = "wasm32")]
                 Wake::Gpu(_) => 7,
+                #[cfg(target_arch = "wasm32")]
+                Wake::Swap(..) => 11,
                 #[cfg(has_instance)]
                 Wake::Open(_) => 8,
                 #[cfg(not(no_subprocess))]
@@ -4949,6 +4991,8 @@ impl ApplicationHandler<Wake> for App {
                 self.shared = Some(g.0);
                 self.open_pending(event_loop);
             }
+            #[cfg(target_arch = "wasm32")]
+            Wake::Swap(url, allowed) => self.swap(url, allowed, event_loop),
             // Which window the transport, the audio thread or the desktop
             // meant is not in the wake, and asking each is a `try_recv` on
             // an empty channel — cheaper than carrying an id would be.
@@ -5364,6 +5408,8 @@ fn build_event_loop() -> Result<EventLoop<Wake>, String> {
 fn run_loop(build: impl FnOnce(EventLoopProxy<Wake>) -> App) -> Result<(), String> {
     use winit::platform::web::EventLoopExtWebSys;
     let event_loop = build_event_loop()?;
+    // Kept for the page's next `start`, which cannot build a loop of its own.
+    crate::web::hold(event_loop.create_proxy());
     let app = build(event_loop.create_proxy());
     WINDOW_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
     EXIT_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -5430,11 +5476,10 @@ fn open_in_browser(url: &str) {
     let opener = "open";
     #[cfg(target_os = "windows")]
     let opener = "explorer";
+    // Nowhere else is there an opener to start, and nothing follows here on
+    // those targets: the block below is not compiled for them.
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = url;
-        return;
-    }
+    let _ = url;
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
         use std::process::{Command, Stdio};

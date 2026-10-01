@@ -24,6 +24,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A tutorial in the documentation (`/docs/tutorial`): a shopping list built in
+  six steps, each a component of the demo application (`pantry_1` …
+  `pantry_6`) and each running in the page beside its code. A line reading
+  `::: eui <component>` in any documentation page now becomes such a session.
 - **Protocol 8: a session over a pipe** (spec 01 §7). `eui --pipe [--title
   <name>] [--allow …]` opens a window whose session is on the client's own
   standard input and output, so an application on the same machine can start
@@ -33,11 +37,28 @@ release. A wire change lands here first, is released, and then the pin moves.
   always its own process, ends when either side closes its end, and closes
   the window when the application finishes without an `Error`. The Ruby
   server speaks it (`App#run_pipe` in `clients/eui-ruby`).
+- Documentation code blocks are coloured (Soli, Ruby and `sh`), on the server.
 
 ### Changed
 
 - The version is 0.8.0 and the protocol 8. Nothing on a socket changed: a
   server at 7 and this client meet exactly as before.
+- The site's masthead has no `Spec` entry — the specification is a section
+  of the documentation's own contents — and shows the GitHub mark where it
+  said `Source`.
+- Documentation pages fit a phone: the contents fold into one line naming the
+  current page, and the masthead wraps instead of running off the edge.
+
+### Fixed
+
+- The browser client runs any number of embeds on one page. The second
+  *Run it* used to fail with "EventLoop can't be recreated" — winit allows a
+  page one event loop — and the first session was only hidden, never closed.
+  The page now keeps one loop, one window and one canvas, and each embed
+  replaces the session in it.
+- An embed on a page reached through Soli's prefetching navigation had a
+  button that did nothing and a still in the wrong theme: the bootstrap ran
+  once per document. It binds again after every page swap (`soli:load`).
 
 ## [0.7.1] - 2026-09-28
 

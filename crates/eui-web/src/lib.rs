@@ -59,6 +59,16 @@ pub fn start(canvas: &str, url: &str, allow: &str) -> Result<(), JsValue> {
     let url = url.as_str();
     eui_client::check_url(url, false).map_err(|e| JsValue::from_str(&format!("eui: {e}")))?;
 
+    // A page with several embeds starts this once per *Run it*. Only the
+    // first may build an event loop — winit refuses a second, and that
+    // refusal was all the second embed on a page ever showed — so every
+    // later call hands its session to the loop already running, which opens
+    // it in the window, and the canvas, it already has. The page moves that
+    // canvas into the figure that asked (`eui-embed.js`), which is why
+    // `element` is not handed over again.
+    if eui_client::web::swap(url.to_owned(), allowed) {
+        return Ok(());
+    }
     eui_client::web::start(element);
     // One chromeless session: no tab strip, no address to type into. A
     // page embeds an application, and the page is the shell.

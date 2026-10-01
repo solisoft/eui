@@ -11,10 +11,13 @@
 //      on a real picture with a sentence under it, and "never a blank
 //      canvas" is structural rather than a code path anyone has to
 //      remember. Stopping a session puts the poster back.
-//   3. One module and one session per page. Eight embeds share one
-//      instantiation, and starting a second stops the first: eight sockets
-//      and eight GPU surfaces is a thing the reader's fan would tell them
-//      about.
+//   3. One module, one event loop, one canvas and one session per page.
+//      Eight embeds share one instantiation, and starting a second replaces
+//      the first: eight sockets and eight GPU surfaces is a thing the
+//      reader's fan would tell them about. It is also all winit allows — a
+//      page gets one event loop and never a second — so the canvas the first
+//      session drew on is lent to each later figure in turn (`borrow`), and
+//      the client swaps the session inside it.
 
 // The module is served `immutable` for a year: right for bytes that never
 // change, fatal for bytes that do. A deploy that replaced the client would
@@ -33,6 +36,31 @@ const BASE = "/eui/";
 let loading = null;
 /** The session that is running, if any. */
 let live = null;
+/** The canvas the client draws on, once one session has started: the only
+    one it ever will, since its window was made from it. */
+let drawn = null;
+
+/**
+ * The canvas this figure should run on: its own the first time anything runs
+ * on the page, and the one the client already draws on every time after.
+ * That one is moved into this figure, and this figure's own canvas goes to
+ * where it was, hidden — so every figure still holds exactly one canvas and
+ * every id is still unique. Moving an element keeps its drawing context, and
+ * the client's window follows the element, not the figure.
+ */
+function borrow(own) {
+  if (!drawn) {
+    drawn = own;
+    return own;
+  }
+  if (drawn === own) return own;
+  const parent = own.parentNode;
+  const next = own.nextSibling;
+  drawn.replaceWith(own);
+  own.hidden = true;
+  parent.insertBefore(drawn, next);
+  return drawn;
+}
 
 const dark = window.matchMedia("(prefers-color-scheme: dark)");
 
@@ -74,7 +102,6 @@ function dressPoster(img) {
 
 async function run(fig) {
   const stage = fig.querySelector(".demo__stage");
-  const canvas = fig.querySelector(".demo__canvas");
   const note = fig.querySelector(".demo__note");
   const button = fig.querySelector(".demo__run");
 
@@ -88,6 +115,7 @@ async function run(fig) {
   try {
     const m = await load();
     if (live) { live.stop(); live = null; }
+    const canvas = borrow(fig.querySelector(".demo__canvas"));
 
     // Same origin as the page, always: the server refuses a WebSocket
     // upgrade whose Origin is not its own, which is what stops a page
@@ -154,6 +182,10 @@ async function run(fig) {
     // different size. It reads as a rendering bug in EUI, which is the
     // worst thing a page arguing for EUI could do.
     const poster = fig.querySelector(".demo__poster");
+    // Withdrawn when this session gives way to another, because the canvas
+    // it listens on goes on to serve that one: a first frame that never came
+    // here would otherwise uncover *this* figure when the next one draws.
+    const heard = new AbortController();
     canvas.addEventListener(
       "eui:frame",
       () => {
@@ -162,7 +194,7 @@ async function run(fig) {
         canvas.style.opacity = "";
         if (poster) poster.hidden = true;
       },
-      { once: true },
+      { once: true, signal: heard.signal },
     );
 
     // What the page grants, and it grants it rather than asking.
@@ -187,6 +219,7 @@ async function run(fig) {
 
     live = {
       stop: () => {
+        heard.abort();
         canvas.hidden = true;
         canvas.style.opacity = "0";
         // Back to the picture it was covering, or starting a second embed
@@ -202,11 +235,36 @@ async function run(fig) {
   }
 }
 
-for (const fig of document.querySelectorAll("[data-eui]")) {
-  const img = fig.querySelector(".demo__poster");
-  if (img) {
-    dressPoster(img);
-    dark.addEventListener("change", () => dressPoster(img));
+// Every figure on the page, once each. At load, and again after each page
+// Soli's navigation swaps in (`/__soli/nav.js` fires `soli:load`): that
+// script never runs the same script twice, and a module is evaluated once
+// per document anyway, so a page reached through a prefetched link — or this
+// page visited a second time — had figures whose button did nothing and whose
+// poster kept the light still in a dark theme. The mark on each figure makes
+// a second pass harmless, including over a page morphed rather than swapped,
+// where the figures are the same nodes.
+function bind() {
+  for (const fig of document.querySelectorAll("[data-eui]:not([data-eui-bound])")) {
+    fig.dataset.euiBound = "";
+    const img = fig.querySelector(".demo__poster");
+    if (img) dressPoster(img);
+    fig.querySelector(".demo__run")?.addEventListener("click", () => run(fig));
   }
-  fig.querySelector(".demo__run")?.addEventListener("click", () => run(fig));
 }
+
+bind();
+document.addEventListener("soli:load", bind);
+
+// One listener for the theme, over whatever posters the page holds now: one
+// per poster would outlive the page it came from at every navigation.
+dark.addEventListener("change", () => document.querySelectorAll("[data-eui] .demo__poster").forEach(dressPoster));
+
+// Leaving for another page takes the running figure with it. The session
+// itself goes on in the client until the next *Run it* replaces it — the
+// client has no way to be told to stop, and one window is the most it holds.
+document.addEventListener("soli:visit", () => {
+  if (live) {
+    live.stop();
+    live = null;
+  }
+});
