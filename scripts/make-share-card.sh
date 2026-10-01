@@ -6,6 +6,9 @@
 # The card is HTML so that it is drawn in the site's own fonts and colours
 # and can be edited like the rest of the site; this turns it into the one
 # PNG every unfurler (Open Graph, X, LinkedIn, Slack, Discord) fetches.
+# The card draws the demo application's own render
+# (www/public/images/demo/gallery-light.png), so it is read from disk beside
+# the HTML: a regenerated demo screenshot is a reason to run this again.
 # Needs a Chromium (or Chrome) and the network, for Google Fonts. Commit the
 # source and the PNG together.
 
@@ -29,7 +32,7 @@ trap 'rm -rf "$tmp"' EXIT
 # without it the card is photographed in the fallback faces.
 "$chrome" --headless=new --disable-gpu --hide-scrollbars --no-first-run \
   --user-data-dir="$tmp/profile" --force-device-scale-factor=1 \
-  --window-size=1200,630 --virtual-time-budget=5000 \
+  --window-size=1200,630 --virtual-time-budget=5000 --allow-file-access-from-files \
   --screenshot="$tmp/card.png" "file://$src" >/dev/null 2>&1
 
 [ -s "$tmp/card.png" ] || { echo "make-share-card: $chrome wrote no picture" >&2; exit 1; }

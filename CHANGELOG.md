@@ -57,6 +57,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 - The site's masthead has no `Spec` entry — the specification is a section
   of the documentation's own contents — and shows the GitHub mark where it
   said `Source`.
+- A link to the site unfurls into the demo application: its Meridian
+  dashboard in a client window beside the thesis, instead of a text card.
+  Every page now carries its full title (`Phone packages — EUI`), `og:type`
+  `article` for the documentation and the specification, an `og:image:alt`
+  that describes the picture, JSON-LD, a touch icon and a web manifest; the
+  documentation's own 404 asks not to be indexed.
 - Documentation pages fit a phone: the contents fold into one line naming the
   current page, and the masthead wraps instead of running off the edge.
 

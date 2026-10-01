@@ -8,10 +8,14 @@ beyond fifteen lines that light up a paragraph when you hover a byte.**
 - `app/views/layouts/application.html.slv` — head, fonts, stylesheet.
 - `public/css/site.css` — hand-written, with the design tokens at the top.
 - `share/card.html` — the 1200 × 630 picture a link to the site unfurls into
-  (Open Graph and X cards, which the layout declares on every page). It is
-  rendered to `public/images/share/eui.png` by `../scripts/make-share-card.sh`,
-  which needs a Chromium; edit the HTML, run the script, commit both. Its
-  byte strip is the hero's twenty-two bytes, and follows the rule below.
+  (Open Graph and X cards, which the layout declares on every page, with the
+  canonical URL, an `og:image:alt`, JSON-LD, the touch icon and
+  `public/manifest.json`). It is the demo's Meridian dashboard — the real
+  render `public/images/demo/gallery-light.png` — in a client window beside
+  the thesis, rendered to `public/images/share/eui.png` by
+  `../scripts/make-share-card.sh`, which needs a Chromium; edit the HTML (or
+  re-take the demo render), run the script, commit both.
+  `tests/share_spec.sl` checks every tag and fetches every file they name.
 
 The documentation site is the sibling app in `../doc`.
 

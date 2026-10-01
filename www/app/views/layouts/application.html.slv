@@ -3,44 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><%= title %></title>
     <%# What a link to this page unfurls into. The description is the page's own
         (`description` from home_controller, a docs page's one-line `lead`), and
         the site's otherwise. The URLs are absolute and name production, because
         an unfurler fetches them from wherever the link was pasted. The picture
-        is www/share/card.html, rendered by scripts/make-share-card.sh; its
-        `?v=` changes with the file, so a scraper's cached copy does not
-        outlive an edit. %>
-    <% share_default = "EUI is a binary protocol for applications served over HTTPS without HTML, CSS or JavaScript: " %>
-    <% share_default = share_default + "the server sends a resolved interface tree, a native Rust client draws it " %>
-    <% share_default = share_default + "on the GPU. A one-cell update is 22 bytes." %>
-    <% share_text = description ?? lead ?? share_default %>
-    <% share_title = title.index_of("EUI") >= 0 ? title : title + " — EUI" %>
-    <% share_origin = "https://eui.solisoft.net" %>
-    <% share_url = share_origin + (req["path"] ?? "/") %>
-    <% share_image = share_origin + public_path("images/share/eui.png") %>
+        is www/share/card.html — the demo's Meridian dashboard in a client
+        window — rendered by scripts/make-share-card.sh; its `?v=` changes with
+        the file, so a scraper's cached copy does not outlive an edit.
+
+        A page of the documentation or the specification is an article, with
+        the date nothing here knows left out rather than guessed; everything
+        else is a page of the site. `noindex` is set by DocsController#_missing,
+        whose 404 is a page of the docs and must not be indexed as one. -%>
+<% share_default = "EUI is a binary protocol for applications served over HTTPS without HTML, CSS or JavaScript: " -%>
+<% share_default = share_default + "the server sends a resolved interface tree, a native Rust client draws it " -%>
+<% share_default = share_default + "on the GPU. A one-cell update is 22 bytes." -%>
+<% share_text = description ?? lead ?? share_default -%>
+<% share_title = title.index_of("EUI") >= 0 ? title : title + " — EUI" -%>
+<% share_origin = "https://eui.solisoft.net" -%>
+<% share_path = req["path"] ?? "/" -%>
+<% share_url = share_origin + share_path -%>
+<% share_image = share_origin + public_path("images/share/eui.png") -%>
+<% share_alt = "The Meridian demo dashboard drawn by the EUI client, in a window whose bar shows its session address, beside the line: An interface is not a document. Stop sending one." -%>
+<% share_article = share_path.starts_with("/docs/") || share_path.starts_with("/spec/") -%>
+<% share_site = {"@type": "WebSite", "name": "EUI", "url": share_origin + "/"} -%>
+<% if share_path == "/" -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "WebSite", "name": "EUI", "url": share_origin + "/", "description": share_text, "image": share_image, "inLanguage": "en"} -%>
+<% elsif share_article -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "TechArticle", "headline": title, "description": share_text, "url": share_url, "image": share_image, "inLanguage": "en", "isPartOf": share_site} -%>
+<% else -%>
+<% share_ld = {"@context": "https://schema.org", "@type": "WebPage", "name": share_title, "description": share_text, "url": share_url, "image": share_image, "inLanguage": "en", "isPartOf": share_site} -%>
+<% end -%>
+    <title><%= share_title %></title>
     <meta name="description" content="<%= share_text %>">
+<% if noindex -%>
+    <meta name="robots" content="noindex">
+<% end -%>
     <link rel="canonical" href="<%= share_url %>">
     <link rel="icon" type="image/svg+xml" href="<%= public_path("favicon.svg") %>">
+    <link rel="apple-touch-icon" href="<%= public_path("images/icons/eui-180.png") %>">
+    <link rel="manifest" href="<%= public_path("manifest.json") %>">
+    <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0e1216" media="(prefers-color-scheme: dark)">
 
-    <meta property="og:type" content="website">
+    <meta property="og:type" content="<%= share_article ? "article" : "website" %>">
     <meta property="og:site_name" content="EUI">
     <meta property="og:locale" content="en_US">
     <meta property="og:title" content="<%= share_title %>">
     <meta property="og:description" content="<%= share_text %>">
     <meta property="og:url" content="<%= share_url %>">
     <meta property="og:image" content="<%= share_image %>">
+    <meta property="og:image:secure_url" content="<%= share_image %>">
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="An interface is not a document. Stop sending one. — the 22 bytes of one EUI update, field by field.">
+    <meta property="og:image:alt" content="<%= share_alt %>">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="<%= share_title %>">
     <meta name="twitter:description" content="<%= share_text %>">
     <meta name="twitter:image" content="<%= share_image %>">
-    <meta name="twitter:image:alt" content="An interface is not a document. Stop sending one. — the 22 bytes of one EUI update, field by field.">
+    <meta name="twitter:image:alt" content="<%= share_alt %>">
+    <script type="application/ld+json"><%- share_ld.to_json().replace("</", "<\\/") %></script>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

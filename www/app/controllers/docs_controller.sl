@@ -71,6 +71,7 @@ class DocsController < Controller
   def _missing(kind, slug)
     @here = kind
     @slug = ""
+    @noindex = true
     @title = "No such page"
     @lead = nil
     @sections = this._sections()
