@@ -24,6 +24,18 @@ socket never leaves the machine and the host arms its own gate. The client
 library exposes this as an explicit call; the `eui` binary has no flag for
 it.
 
+An application on the same machine has a better door than either: it
+spawns the client and speaks over its standard input and output (01 §7),
+with no socket for another process to reach and nothing to arm. On that
+door the capabilities granted are the ones on the client's command line,
+which the application wrote, because a process the person started can
+already do everything a capability names (01 §7.6). What is parsed does not
+change: the frames still go to the confined worker of §10. *Enforced:
+`Tab::open` in `eui-client/src/app.rs` grants `--allow` and skips the
+manifest only for the pipe's own address (`dial::PIPE_URL`), which no typed
+address or link can be; `eui_client::pipe::stdio` hands out the process's
+standard input and output once.*
+
 ## 2. Provenance and integrity
 
 - The manifest is signed with Ed25519; the client pins the publisher key on
@@ -337,7 +349,14 @@ the display, the GPU driver, TLS, the pin store, the clipboard, the
 accessibility adapter. Two pipes carry a private request/reply protocol
 between them: the window forwards raw frames and inputs; the worker
 answers with outbound frames and, on request, a draw list and the atlas
-bitmaps behind it. The window never decodes a frame. A worker that dies —
+bitmaps behind it. The window never decodes a frame. On a pipe (01 §7) it
+reads each frame's `kind` and `len` to find where the frame ends, and checks
+`len` against `MAX_FRAME_BYTES` before it reserves anything; that is a cut,
+not a decode. The one payload it reads is an `Asset` chunk's — the hash,
+the sequence, the flag and the bytes — which it assembles and hashes exactly
+as it reads an HTTPS response's body to fetch an asset over a socket: the
+transport's framing, not the content, which still goes to the worker to be
+decoded (`eui_client::pipe`). A worker that dies —
 a panic, a runaway allocation, a sandbox kill — ends the session with a
 reason; the window stays standing.
 

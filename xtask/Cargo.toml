@@ -9,15 +9,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-eui-proto = { path = "../crates/eui-proto", version = "0.7.1" }
-eui-tree = { path = "../crates/eui-tree", version = "0.7.1" }
-eui-theme = { path = "../crates/eui-theme", version = "0.7.1" }
-eui-layout = { path = "../crates/eui-layout", version = "0.7.1" }
-eui-text = { path = "../crates/eui-text", version = "0.7.1" }
-eui-render = { path = "../crates/eui-render", version = "0.7.1" }
-eui-client = { path = "../crates/eui-client", version = "0.7.1" }
-eui-shader = { path = "../crates/eui-shader", version = "0.7.1" }
-counter-server = { path = "../examples/counter-server", version = "0.7.1" }
+eui-proto = { path = "../crates/eui-proto", version = "0.8.0" }
+eui-tree = { path = "../crates/eui-tree", version = "0.8.0" }
+eui-theme = { path = "../crates/eui-theme", version = "0.8.0" }
+eui-layout = { path = "../crates/eui-layout", version = "0.8.0" }
+eui-text = { path = "../crates/eui-text", version = "0.8.0" }
+eui-render = { path = "../crates/eui-render", version = "0.8.0" }
+eui-client = { path = "../crates/eui-client", version = "0.8.0" }
+eui-shader = { path = "../crates/eui-shader", version = "0.8.0" }
+counter-server = { path = "../examples/counter-server", version = "0.8.0" }
 
 [lints]
 workspace = true

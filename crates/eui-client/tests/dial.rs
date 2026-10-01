@@ -107,9 +107,9 @@ fn err_text(code: u16, why: &str) -> String {
 /// `true` dials a session when somebody drags a window edge, and a kind
 /// wrongly `false` drops a click into nothing. Neither says anything.
 ///
-/// So the twelve of `spec/01-transport.md` §7 are written out here rather
-/// than sampled, and `0x0D` is asserted not to be a kind yet — the line
-/// that fails on the day a thirteenth is added, which is the day somebody
+/// So the fourteen of `spec/01-transport.md` §3 are written out here rather
+/// than sampled, and `0x0F` is asserted not to be a kind yet — the line
+/// that fails on the day a fifteenth is added, which is the day somebody
 /// has to decide which side of this it falls.
 #[test]
 fn every_frame_kind_is_classified_on_purpose() {
@@ -124,15 +124,19 @@ fn every_frame_kind_is_classified_on_purpose() {
     // And these must not. `Viewport` is the one that matters: it fires on
     // every resize and every palette change, so a denylist would open a
     // session for a window being dragged.
-    for kind in [0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0C] {
+    //
+    // `Fetch` and `Asset` are a pipe's (01 §7.3), and a pipe is open from
+    // the first frame to the last: there is never a socket to dial for one.
+    for kind in [0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0A, 0x0C, 0x0D, 0x0E] {
         assert!(!kind_needs_server(kind), "{kind:#04x} must not dial");
     }
 
     // A kind this client does not know is not a kind this client produced.
-    assert!(!kind_needs_server(0x0D));
+    assert!(!kind_needs_server(0x0F));
     assert!(!kind_needs_server(0xFF));
 
-    // The guard: `Frame::decode` knows twelve kinds. When it knows
-    // thirteen, the loop above is missing one and this line says so.
-    assert_eq!(eui_proto::Frame::decode(&[0x0D, 0x00]), Err(eui_proto::DecodeError::UnknownTag("frame kind")), "a thirteenth frame kind exists; classify it above");
+    // The guard: the pipe's decoder, the wider of the two, knows fourteen
+    // kinds. When it knows fifteen, the loop above is missing one and this
+    // line says so.
+    assert_eq!(eui_proto::Frame::decode_pipe(&[0x0F, 0x00]), Err(eui_proto::DecodeError::UnknownTag("frame kind")), "a fifteenth frame kind exists; classify it above");
 }

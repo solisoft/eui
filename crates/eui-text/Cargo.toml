@@ -8,8 +8,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-eui-proto = { path = "../eui-proto", version = "0.7.1" }
-eui-layout = { path = "../eui-layout", version = "0.7.1" }
+eui-proto = { path = "../eui-proto", version = "0.8.0" }
+eui-layout = { path = "../eui-layout", version = "0.8.0" }
 # The one third-party dependency on the CPU side of the client. Shaping is
 # the part of text that must not be reinvented; everything around it is ours.
 
@@ -32,8 +32,8 @@ cosmic-text = { version = "0.12", default-features = false, features = ["std", "
 cosmic-text = { version = "0.12", default-features = false, features = ["no_std", "swash"] }
 
 [dev-dependencies]
-eui-theme = { path = "../eui-theme", version = "0.7.1" }
-eui-tree = { path = "../eui-tree", version = "0.7.1" }
+eui-theme = { path = "../eui-theme", version = "0.8.0" }
+eui-tree = { path = "../eui-tree", version = "0.8.0" }
 
 [lints]
 workspace = true

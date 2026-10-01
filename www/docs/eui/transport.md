@@ -239,8 +239,11 @@ frame := kind:u8  len:varint  payload
 | `0x0A` | `Viewport` | client to server |
 | `0x0B` | `Upload` | client to server |
 | `0x0C` | `Blob` | server to client |
+| `0x0D` | `Fetch` | client to server, on a pipe only |
+| `0x0E` | `Asset` | server to client, on a pipe only |
 
-Any other kind is rejected. Unknown kinds are **not** reserved for forward
+Any other kind is rejected — and so are `Fetch` and `Asset` on a socket, where
+an asset is an HTTPS request. Unknown kinds are **not** reserved for forward
 compatibility: version negotiation in `Hello` and `Welcome` is the only
 extension mechanism, so a client never has to guess at semantics.
 
@@ -308,3 +311,47 @@ Whichever side has been silent for 30 seconds sends a ping. A client does not
 poll, does not keep a timer that fires when nothing has changed, and does not
 redraw unless a frame or an input event asked it to. The zero-wakeup idle budget
 is a property of that rule, not of a setting.
+
+## Over a pipe, with no server
+
+An application on the person's own machine has no origin and nothing to
+serve, and making it bind a port so the client can dial it back costs a
+socket any other process of the user can reach, a cookie to keep them out of
+it, and an environment variable that says "insecure" about a connection that
+never left the machine. So such an application **starts the client itself**
+(spec 01 §7):
+
+```sh
+eui --pipe [--title <name>] [--allow <capability,…>]
+```
+
+and speaks to it over the client's standard input and output. It is the same
+session — `Hello`, `Welcome`, batches, events, files — with three
+differences:
+
+- **Framing.** There are no messages on a pipe, so frames simply follow one
+  another and each one's own length says where it ends. The client checks
+  that length against the 8 MiB ceiling before it reserves a byte for it, and
+  the end of the pipe in the middle of a frame is a broken session, not a
+  finished one. Standard output carries frames and nothing else; every
+  diagnostic goes to standard error.
+- **Assets.** There is nowhere to `GET` one from, so the client asks for it
+  in the session with a `Fetch` (its hash and the room it has left) and the
+  application sends it back in `Asset` chunks of at most 256 KiB. The client
+  still hashes what arrives and discards a mismatch; an asset nobody asked
+  for, or one past its room, ends the session.
+- **Trust.** There is no manifest, no pin and no consent sheet: the process at
+  the other end was started by the person and can already do everything a
+  capability names, so the grant is what `--allow` says. What is parsed does
+  not change — the frames still go to the confined worker.
+
+It ends when either side closes its end, and it never reconnects. If the
+application sent an `Error` first, the window stays open and shows it;
+otherwise the application finished, and the window closes with it. A pipe
+session is always its own process: it is never handed to an `eui` already
+running, since the pipe belongs to the process that was started.
+
+The Ruby server speaks it today — `app.run_pipe` starts `eui --pipe` and runs
+the session over it ([Servers in six languages](/docs/clients)). The other
+five, and Soli, do not yet.
+

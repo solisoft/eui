@@ -162,6 +162,14 @@ impl Launch {
         let url = crate::assets::normalise_url(&url);
         Self { url, allowed, title: "EUI".into(), cookie: None, host_loopback: false }
     }
+
+    /// The session on this process's standard input and output (01 §7):
+    /// `eui --pipe`, started by an application on the same machine. There is
+    /// no address, so there is no manifest, pin or remembered grant, and
+    /// `allowed` is the whole of the grant (01 §7.6).
+    pub fn piped(title: String, allowed: u32) -> Self {
+        Self { url: crate::dial::PIPE_URL.to_owned(), allowed, title, cookie: None, host_loopback: false }
+    }
 }
 
 /// What a tab's socket is doing (spec 01 §4.1).
@@ -1103,6 +1111,18 @@ impl Tab {
         // and a `Hello` built from it would tell the server so.
         tab.start_in(mode);
 
+        // 01 §7.5: a pipe has no origin, so there is no manifest to fetch,
+        // no key to pin and no answer to remember. The process at the other
+        // end was started by the person and runs as them; what it may do is
+        // what the command line it wrote says (01 §7.6).
+        if crate::dial::is_pipe(&tab.url) {
+            tab.backend.grant(tab.allowed);
+            tab.trust = crate::chrome::Trust::Local;
+            tab.title = launch.title;
+            tab.dial(&proxy);
+            return tab;
+        }
+
         // Spec 01 §2.1: the manifest first. Its signature is verified and
         // its key pinned before a byte of the session is trusted; only the
         // debug loopback of 08 §1 may go on without one.
@@ -1426,7 +1446,11 @@ impl Tab {
         if !std::mem::take(&mut self.dial_due) {
             return;
         }
-        let Ok(origin) = crate::assets::origin_for(&self.url) else { return };
+        // A page with no origin has nowhere to open an island (01 §7.5): a
+        // pipe session's islands keep the children they were rendered with.
+        if crate::dial::island_url(&self.url, "/").is_none() {
+            return;
+        }
         let wanted = self.backend.islands_wanted();
         // `islands_wanted` closes the islands the tree stopped asking for,
         // and their sockets must be gone before `open_island` hands one of
@@ -1450,7 +1474,10 @@ impl Tab {
             // it is built here rather than taken from the tree: §2.7 allows
             // a path and nothing else, so nothing the tree says can decide
             // where this connects.
-            let url = format!("{}{path}", origin.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1));
+            let Some(url) = crate::dial::island_url(&self.url, &path) else {
+                self.backend.island_ended(owner);
+                continue;
+            };
             let p = Arc::clone(proxy);
             match transport::connect(&url, self.backend.hello(), self.cookie.clone(), self.host_loopback, move || {
                 let _ = p.send_event(Wake::Transport);
@@ -1472,6 +1499,28 @@ impl Tab {
     fn dial(&mut self, proxy: &Proxy) {
         let hello = self.backend.hello();
         let p = Arc::clone(proxy);
+        // 01 §7: the pipe this process was started on, once. It is talking
+        // from the first byte — there is no handshake to wait out and no
+        // other pipe to try — so it is `Up` at once and never `Trying`.
+        #[cfg(has_native_net)]
+        if crate::dial::is_pipe(&self.url) {
+            match crate::pipe::stdio(hello, move || {
+                let _ = p.send_event(Wake::Transport);
+            }) {
+                Ok(c) => {
+                    self.fetch = Some(c.fetcher());
+                    self.conn = Some(c);
+                    self.link = Link::Up;
+                }
+                Err(e) => {
+                    eprintln!("eui: {e}");
+                    self.trouble = Some(e.to_string());
+                    self.backend.close(e.to_string());
+                    self.link = Link::Ended;
+                }
+            }
+            return;
+        }
         match transport::connect(&self.url, hello, self.cookie.clone(), self.host_loopback, move || {
             let _ = p.send_event(Wake::Transport);
         }) {
@@ -1676,6 +1725,28 @@ impl Tab {
         if matches!(self.link, Link::Up) && !self.queued.is_empty() {
             let held = std::mem::take(&mut self.queued);
             self.send(held);
+        }
+        // 01 §7.4: a pipe does not come back. Either the application said
+        // why it stopped and the window shows it, or it finished and the
+        // window goes with it.
+        #[cfg(has_native_net)]
+        if let Some(e) = closed.as_ref().filter(|_| crate::dial::is_pipe(&self.url)) {
+            self.conn = None;
+            self.link = Link::Ended;
+            match crate::pipe::ending(e, self.backend.closed()) {
+                crate::pipe::Ending::Show(why) => {
+                    eprintln!("eui: {why}");
+                    self.trouble = Some(why.clone());
+                    if self.backend.closed().is_none() {
+                        self.backend.close(why);
+                    }
+                }
+                crate::pipe::Ending::Finished => {
+                    eprintln!("eui: the application closed its end of the pipe; closing the window");
+                    request_exit();
+                }
+            }
+            return self.backend.needs_redraw();
         }
         match closed {
             // An HTTP status is the server answering, not the network

@@ -22,6 +22,23 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Added
+
+- **Protocol 8: a session over a pipe** (spec 01 §7). `eui --pipe [--title
+  <name>] [--allow …]` opens a window whose session is on the client's own
+  standard input and output, so an application on the same machine can start
+  the client itself — no port, no TLS, no manifest. Assets travel in the
+  session as two new frame kinds, `Fetch` (`0x0D`) and `Asset` (`0x0E`),
+  which exist only on a pipe and are refused on a socket. A pipe session is
+  always its own process, ends when either side closes its end, and closes
+  the window when the application finishes without an `Error`. The Ruby
+  server speaks it (`App#run_pipe` in `clients/eui-ruby`).
+
+### Changed
+
+- The version is 0.8.0 and the protocol 8. Nothing on a socket changed: a
+  server at 7 and this client meet exactly as before.
+
 ## [0.7.1] - 2026-09-28
 
 ### Changed

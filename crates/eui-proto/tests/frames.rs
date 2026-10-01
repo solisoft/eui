@@ -100,3 +100,46 @@ fn the_header_written_in_place_is_the_header_written_in_front() {
     assert_eq!(resync, vec![0x09, 0x00]);
     assert_eq!(Frame::decode(&resync).unwrap(), Frame::Resync);
 }
+
+/// 01 §7.3 and §3: the two frames a pipe needs exist on a pipe and nowhere
+/// else. On a socket an asset is an HTTPS request, so either kind arriving
+/// there is refused exactly as a kind nobody has heard of is.
+#[test]
+fn fetch_and_asset_are_refused_on_a_socket() {
+    let fetch = Frame::Fetch { hash: [7u8; 32], cap: 1 << 20 };
+    let asset = Frame::Asset(AssetChunk { hash: [7u8; 32], seq: 0, flag: Chunked::Last, bytes: b"png".to_vec() });
+    for frame in [fetch, asset] {
+        let bytes = frame.encode();
+        assert_eq!(Frame::decode_pipe(&bytes).unwrap(), frame, "a pipe reads back what was written");
+        assert_eq!(Frame::decode(&bytes), Err(DecodeError::UnknownTag("frame kind")), "a socket does not know {:#04x}", bytes[0]);
+    }
+    // The kinds after them are unknown on both roads.
+    assert_eq!(Frame::decode_pipe(&[0x0F, 0x00]), Err(DecodeError::UnknownTag("frame kind")));
+}
+
+/// The bytes on the wire, written out, so another implementation has
+/// something to agree with rather than a round trip that would pass however
+/// both halves were wrong.
+#[test]
+fn fetch_and_asset_have_the_bytes_01_7_3_gives_them() {
+    let fetch = Frame::Fetch { hash: [0xAB; 32], cap: 300 };
+    let mut want = vec![0x0D, 34];
+    want.extend_from_slice(&[0xAB; 32]);
+    want.extend_from_slice(&[0xAC, 0x02]);
+    assert_eq!(fetch.encode(), want);
+
+    let asset = Frame::Asset(AssetChunk { hash: [0x01; 32], seq: 2, flag: Chunked::More, bytes: vec![9, 8, 7] });
+    let mut want = vec![0x0E, 38];
+    want.extend_from_slice(&[0x01; 32]);
+    want.extend_from_slice(&[0x02, 0x00, 0x03, 9, 8, 7]);
+    assert_eq!(asset.encode(), want);
+}
+
+/// A chunk is §6's size, and an abort's reason is §6's too.
+#[test]
+fn an_asset_chunk_is_bounded_like_a_transfer() {
+    let big = Frame::Asset(AssetChunk { hash: [0; 32], seq: 0, flag: Chunked::More, bytes: vec![0; eui_proto::limits::MAX_TRANSFER_CHUNK_BYTES + 1] }).encode();
+    assert!(Frame::decode_pipe(&big).is_err());
+    let why = Frame::Asset(AssetChunk { hash: [0; 32], seq: 0, flag: Chunked::Abort, bytes: vec![b'x'; eui_proto::limits::MAX_ABORT_REASON + 1] }).encode();
+    assert!(Frame::decode_pipe(&why).is_err());
+}

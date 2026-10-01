@@ -31,6 +31,12 @@ pub enum TransportError {
     TextFrame,
     /// The socket closed.
     Closed,
+    /// A session over a pipe broke a rule of 01 §7: a frame cut short by
+    /// the end of the pipe, a length past the limit, an asset nobody asked
+    /// for or larger than it was allowed to be. Not retried — there is no
+    /// other pipe — and shown, because the application's author is the one
+    /// reading it.
+    Pipe(String),
 }
 
 impl std::fmt::Display for TransportError {
@@ -42,6 +48,7 @@ impl std::fmt::Display for TransportError {
             Self::Refused(code, why) => write!(f, "the server answered {code}: {why}"),
             Self::TextFrame => f.write_str("server sent a text frame"),
             Self::Closed => f.write_str("connection closed"),
+            Self::Pipe(why) => write!(f, "the pipe: {why}"),
         }
     }
 }
@@ -100,6 +107,9 @@ impl std::fmt::Debug for Connection {
 /// one per tab.
 #[derive(Clone)]
 pub struct Fetcher {
+    /// On a pipe, where a request goes instead: down the session as a
+    /// `Fetch` (01 §7.3). The HTTPS pool below is then never started.
+    pipe: Option<std::sync::Arc<crate::pipe::Assets>>,
     origin: String,
     /// Where a fetch is queued. The workers that drain it belong to every
     /// clone of this fetcher at once, and end when the last clone goes.
@@ -196,7 +206,16 @@ impl Fetcher {
             workers: std::sync::atomic::AtomicUsize::new(0),
             waiting: std::sync::atomic::AtomicUsize::new(0),
         };
-        Self { origin, jobs, pool: std::sync::Arc::new(pool) }
+        Self { pipe: None, origin, jobs, pool: std::sync::Arc::new(pool) }
+    }
+
+    /// A fetcher that asks down a pipe rather than over HTTPS (01 §7.3).
+    /// What arrives is delivered by the pipe's reader, as [`Incoming::Asset`]
+    /// on the same channel a socket's fetches land on.
+    pub(crate) fn piped(assets: std::sync::Arc<crate::pipe::Assets>, in_tx: mpsc::Sender<Incoming>, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
+        let mut f = Self::new(crate::dial::PIPE_URL.to_owned(), None, in_tx, notify);
+        f.pipe = Some(assets);
+        f
     }
 
     /// The HTTPS origin this fetches from.
@@ -218,6 +237,10 @@ impl Fetcher {
     /// taken, so the pool grows with the page and not with the call count.
     pub fn request_asset_within(&self, hash: [u8; 32], cap: usize) {
         use std::sync::atomic::Ordering;
+        if let Some(pipe) = &self.pipe {
+            pipe.ask(hash, cap);
+            return;
+        }
         self.pool.waiting.fetch_add(1, Ordering::Relaxed);
         if self.jobs.send((hash, cap)).is_err() {
             self.pool.waiting.fetch_sub(1, Ordering::Relaxed);
@@ -240,6 +263,12 @@ impl Fetcher {
 }
 
 impl Connection {
+    /// A connection whose far end is not a socket: the pipe of 01 §7, which
+    /// builds the same two channels and hands them over here.
+    pub(crate) fn assembled(tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>, rx: mpsc::Receiver<Incoming>, backlog: std::sync::Arc<std::sync::atomic::AtomicUsize>, fetch: Fetcher) -> Self {
+        Self { tx, rx, origin: crate::dial::PIPE_URL.to_owned(), backlog, fetch }
+    }
+
     /// This session's asset fetching, as a handle that outlives the socket.
     ///
     /// The same pool every time: it used to be a new fetcher per call, which

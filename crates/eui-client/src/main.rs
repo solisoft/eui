@@ -14,6 +14,12 @@
 //!
 //! Either way it is one process: one GPU device, one set of pipelines, one
 //! runtime. Each application still gets its own confined worker.
+//!
+//! `eui --pipe [--title <name>] [--allow …]` is the other way in (01 §7):
+//! an application on the same machine starts the client and speaks to it
+//! over this process's standard input and output. Nothing but frames is
+//! ever written to standard output then, and the window is always this
+//! process's own — a pipe cannot be handed to another one.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -28,6 +34,9 @@ fn main() {
     // for a build under a debugger, a session that must not share the fate
     // of the others, or two builds side by side.
     let mut alone = std::env::var_os("EUI_STANDALONE").is_some();
+    // 01 §7: the session is on this process's own stdin and stdout.
+    let mut pipe = false;
+    let mut title: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         // The three that do their work and leave, rather than opening a
@@ -44,6 +53,11 @@ fn main() {
         }
         if a == "--standalone" {
             alone = true;
+        } else if a == "--pipe" {
+            pipe = true;
+        } else if a == "--title" {
+            let Some(t) = it.next() else { usage() };
+            title = Some(t.clone());
         } else if a == "--allow" {
             let Some(list) = it.next() else { usage() };
             for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
@@ -78,6 +92,23 @@ fn main() {
     // opened asked for a capability it could never be given, and a file
     // dialog that will not open looks exactly like a button that is not
     // wired to anything.
+    // A pipe session takes no address, and is always this process's own
+    // window: the pipe belongs to the process that was spawned (01 §7.1).
+    if pipe {
+        if !urls.is_empty() {
+            eprintln!("eui: --pipe takes no address; the application is on the other end of the pipe");
+            usage();
+        }
+        let launch = eui_client::app::Launch::piped(title.unwrap_or_else(|| "EUI".into()), allowed);
+        if let Err(e) = eui_client::app::launch(launch) {
+            eprintln!("eui: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if title.is_some() {
+        eprintln!("eui: --title is for --pipe; an address's window is named by its manifest");
+    }
     let chrome = urls.is_empty();
     let launches: Vec<eui_client::app::Launch> = urls.into_iter().map(|u| eui_client::app::Launch::new(u, allowed)).collect();
     // The instance already running opens it, if there is one and it
@@ -201,6 +232,7 @@ fn usage() -> ! {
     // worse than none, because it reads as a list of everything there is.
     let all = eui_proto::caps::NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(",");
     eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}] [--standalone]");
+    eprintln!("       eui --pipe [--title <name>] [--allow all|{all}]");
     eprintln!("       eui --install <wss://host/...> | --uninstall <address|app id> | --installed");
     eprintln!("       eui --version");
     std::process::exit(2);

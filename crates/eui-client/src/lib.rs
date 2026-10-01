@@ -132,6 +132,10 @@ pub mod instance;
 pub mod manifest;
 pub mod mesh;
 pub mod nfc;
+/// A session over the process's standard input and output (01 §7), for an
+/// application on the same machine that starts the client itself.
+#[cfg(has_native_net)]
+pub mod pipe;
 pub mod place;
 pub mod sandbox;
 /// The evdev scancode behind a winit physical key: what the window's own

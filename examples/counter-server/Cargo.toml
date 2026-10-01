@@ -13,7 +13,7 @@ name = "counter-server"
 path = "src/main.rs"
 
 [dependencies]
-eui-proto = { path = "../../crates/eui-proto", version = "0.7.1" }
+eui-proto = { path = "../../crates/eui-proto", version = "0.8.0" }
 # 01 §2.6: a tree's identity, for the adoption offer a client brings.
 blake3 = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }

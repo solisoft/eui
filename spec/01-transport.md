@@ -6,6 +6,11 @@ EUI runs over HTTPS. There is no EUI-specific port, no new TLS profile, and no
 new certificate story: an EUI application is served from an ordinary origin,
 behind ordinary proxies and CDNs.
 
+The one exception is an application on the person's own machine, which
+starts the client itself and speaks to it over a pair of pipes (§7). Nothing
+in that case is served, and nothing in this document about origins,
+manifests or certificates applies to it.
+
 ## 1. Requirements
 
 - TLS 1.3 is REQUIRED, and a client MUST offer no earlier version: a server
@@ -423,6 +428,10 @@ frame  := kind:u8  len:varint  payload:len×u8
 whose declared length does not match the remaining message bytes exactly —
 trailing bytes are an error, not padding.
 
+On a pipe (§7) there are no messages, and frames follow one another with
+nothing between them: a frame's own `len` is what ends it. The frame is the
+same bytes either way, which is the whole of what lets one decoder serve both.
+
 | kind | Name | Direction | Payload |
 |---|---|---|---|
 | `0x01` | `Hello` | C→S | protocol version, viewport, theme mode, density, font scale, granted capabilities, and what the client brings — a session (§4.1) or a tree (§2.6) |
@@ -437,6 +446,13 @@ trailing bytes are an error, not padding.
 | `0x0A` | `Viewport` | C→S | size, scale factor, theme mode, density, font scale changed |
 | `0x0B` | `Upload` | C→S | a chunk of a file the person picked (§6) |
 | `0x0C` | `Blob` | S→C | a chunk of what a node's `save` offers (§6) |
+| `0x0D` | `Fetch` | C→S | an asset wanted, on a pipe only (§7.3) |
+| `0x0E` | `Asset` | S→C | a chunk of an asset, on a pipe only (§7.3) |
+
+`Fetch` and `Asset` arrived with version 8, and exist only on a pipe —
+whatever version the session negotiated there (§7.1). Over a WebSocket an
+asset is an HTTPS request (§2.2), and either kind arriving there MUST be
+rejected as if it were unknown.
 
 Any other `kind` MUST be rejected. Unknown kinds are not reserved for
 forward compatibility; version negotiation in `Hello`/`Welcome` is the only
@@ -600,3 +616,200 @@ ends the session ([`08-security.md`](08-security.md) §7.1).
 The ceilings are in [`10-budgets.md`](10-budgets.md) §5. Nothing here is a
 stream in the general sense: there is no seeking, no resumption of a
 transfer across sockets, and a transfer whose session ends is gone.
+
+## 7. A session over a pipe
+
+Status: implemented in the reference client from 0.8.0 (`eui --pipe`) and in
+the Ruby server (`clients/eui-ruby`, `EUI::Pipe`); no other server speaks it
+yet.
+
+Everything above assumes the application lives on a server and the client
+reaches it across a network it does not trust. An application on the
+person's own machine — a Ruby script, a Go binary, a tool somebody ran from
+a terminal — has no origin, no certificate and nothing to serve, and making
+it bind a port so that a client can dial it back costs a listening socket
+any other process of the user can reach, a cookie to keep them out of it,
+and an environment variable that says "insecure" about a connection that
+never left the machine.
+
+So such an application **starts the client itself** and speaks to it over
+the client's standard input and output. The session is the same session:
+the same frames, the same `Hello` and `Welcome`, the same batches, events
+and files. What changes is who opens it, how assets travel, and what is
+trusted.
+
+### 7.1 Opening
+
+The application spawns the client with its standard input and output
+connected to two pipes the application holds. The reference client is
+asked for this as
+
+```
+eui --pipe [--title <name>] [--allow <capability,…>]
+```
+
+and from then on:
+
+- **The client's standard output carries frames and nothing else.** A
+  diagnostic, a warning or a trace goes to standard error. One stray line
+  on standard output is a corrupt frame on the other side, and the session
+  ends with it.
+- **The client speaks first,** with `Hello`, exactly as it does on a socket.
+  A server MUST NOT write before it has read the `Hello`, and answers it
+  with `Welcome`.
+- **The version is negotiated as on a socket.** A client that speaks the
+  pipe speaks at least version 8 and offers its own in `Hello`; the server
+  answers with the lower of the two, as everywhere. `Fetch` and `Asset`
+  (§7.3) belong to the *transport*, not to a version: a session on a pipe
+  carries them whatever version it agreed, because a pipe has no other way
+  to move an asset. So a server that only speaks version 4 can still serve
+  a pipe — the Ruby server does — and nothing above 4 is sent to it.
+- **`resume` MUST be `0x00`.** There is no session to come back to (§7.4) and
+  no tree fetched over §2.4, and a server MUST answer anything else with
+  `Error`.
+- **One pipe is one session is one window.** An application that wants two
+  windows starts two clients.
+
+The client does not hand a pipe session to an already running window
+process, as it does a launch (08 §10): the pipe belongs to the process that
+was spawned, and passing it across the instance socket would need the
+descriptors sent with it. The reference client runs every pipe session as
+if `--standalone` had been given. A client MAY pass them instead; the first
+pixel it saves is the only thing that changes.
+
+*Enforced: `eui-client/src/pipe.rs` (the transport), `eui-client/src/main.rs`
+for the flag, the standalone process and keeping standard output clean.*
+
+### 7.2 Framing
+
+Frames follow one another on each pipe with nothing between them, and a
+frame's own `len` is what ends it (§3). Everything §3 requires of a frame
+still holds: `len` MUST NOT exceed `MAX_FRAME_BYTES`, and a reader MUST
+check it **before** reserving room for the payload, since on a pipe nothing
+else bounds what a declared length asks for.
+
+The end of a pipe in the middle of a frame is a truncated frame, and ends
+the session as any malformed frame does.
+
+*Enforced: `eui_client::pipe::read_frame`, which reads the header a byte at
+a time and asks `Frame::framed_len` where the frame ends — the function that
+refuses a length past the limit — before it reserves the payload. Ruby:
+`EUI::Pipe::Socket#recv`.*
+
+Both pipes MUST be read while the other is written. A pipe holds a few tens
+of kilobytes, and two processes each blocked writing into a full one, each
+waiting for the other to read, is the classic way a pipe protocol stops
+without an error. The reference client reads and writes on two threads of
+its own, so its input path never waits on the application; an application
+SHOULD do the same, or at least never block writing a batch while an event
+is waiting to be read.
+
+### 7.3 Assets
+
+There is no origin to `GET` an asset from, so on a pipe an asset travels in
+the session, beside the batches:
+
+```
+Fetch := hash:32  cap:varint
+Asset := hash:32  seq:varint  flag:u8  bytes:len-prefixed
+flag  := 0x00 more | 0x01 last | 0x02 aborted
+```
+
+**`Fetch` (C→S)** asks for the asset named by `hash`, at most `cap` bytes
+of it: the session's remaining asset budget, measured exactly as §2.2
+measures it. A client MUST NOT ask again for a hash that is still in flight.
+
+**`Asset` (S→C)** answers it in chunks, in the shape of §6's transfers with
+the hash in place of an id: `seq` counts from 0 and MUST be contiguous,
+`bytes` is at most 256 KiB, and on `aborted` it is a UTF-8 reason of at most
+256 bytes rather than content. A server that does not hold the hash answers
+with a single `aborted` chunk — the `404` of §2.2 — and one whose asset is
+larger than `cap` answers the same way, without sending any of it.
+
+- A client MUST refuse an `Asset` for a hash it has not asked for, and an
+  `Asset` whose bytes pass `cap`; either is a protocol error and ends the
+  session.
+- A client MUST recompute the BLAKE3 of the whole asset on `last` and
+  discard it on a mismatch, exactly as over HTTPS. The pipe is not hostile,
+  but the check is what makes "the name is the content" true for every
+  cache the client keeps, and a cache that holds one unverified entry holds
+  no guarantee about the rest.
+- A server SHOULD interleave batches between the chunks of an asset, rather
+  than send a whole picture before the next `Batch`. A frame is applied in
+  order, and an asset that fills the pipe for a second is a second the
+  window does not move.
+
+What arrives is held, counted and let go exactly as an asset fetched over
+HTTPS is ([`10-budgets.md`](10-budgets.md), *Assets*).
+
+*Enforced: `eui_proto::Frame::decode` refuses both kinds as unknown (it is
+what the socket and the worker decode with), and `Frame::decode_pipe` reads
+them; `eui_client::pipe::Assets` keeps what is in flight, refuses the
+unasked, the out-of-order and the over-cap, and checks the hash on `last`.
+Ruby: `Session#serve_asset`, which refuses a hash it does not hold, or one
+larger than `cap`, with one `aborted` chunk, and sends the chunks of an
+asset one after another — it does not yet interleave batches between them.*
+
+### 7.4 Ending
+
+A pipe session ends when either side closes its end, and it does not
+resume: there is no other pipe to resume it on, and the process that held
+the session is the one that went away.
+
+- **The person closes the window:** the client closes its standard output
+  and exits. The application reads the end of the pipe and SHOULD exit in
+  turn; it has no window left.
+- **The application ends:** the client reads the end of its standard input.
+  If an `Error` came before it, the client shows the reason, as §4 asks of
+  every ended session; if none did, the application has finished, and the
+  client closes the window and exits with status 0. An application that
+  wants its reason seen sends `Error` first.
+- **The client is killed:** the application reads the end of the pipe, and
+  a write to it fails rather than raising a signal the application did not
+  ask for. A server SHOULD ignore `SIGPIPE`, or write in a way that reports
+  the failure instead.
+
+`Ping` keeps a proxy's idle timer from closing a socket, and a pipe has
+neither: neither side needs to send one, and a closed pipe is seen at once.
+A side that receives a `Ping` still answers it with `Pong`.
+
+*Enforced: `eui_client::pipe::ending` decides between the reason and the
+exit, and `Tab::pump` acts on it — never `lost()`, so a pipe is never
+redialled. Ruby sends no `Ping` on a pipe (`Session#pump`).*
+
+### 7.5 What does not apply
+
+Several things a socket session depends on have nothing to stand on here,
+and a client MUST NOT try:
+
+- **No manifest, no pin, no remembered grant.** There is no origin to fetch
+  one from and none to key a pin or a grant under (§2.1). The window's
+  title is the one `--title` gave, or the client's own name.
+- **No islands.** An `island` is a path on the page's origin (§2.7), and a
+  pipe session has none: the node keeps the children it came with, which is
+  the degradation §2.7 already describes for an island that cannot open.
+- **No one-shot render and no adoption** (§2.4, §2.6): there is no URL to
+  fetch a component from.
+
+*Enforced: `Tab::open` returns before the manifest, the pin store and the
+one-shot render are reached; `dial::island_url` has no address for a pipe
+session, so `Tab::dial_islands` opens none.*
+
+### 7.6 Trust
+
+A capability defends the person against a server they do not control, on a
+machine that is not theirs. The process at the other end of a pipe is
+neither: it was started by the person, it runs as them, and it can already
+open their camera, read their files and post their notifications without
+asking anybody. A consent sheet in front of it would be theatre.
+
+So on a pipe **the grant is what the command line says**, `--allow` on the
+reference client, and the command line is written by the application. That
+is not a hole: anything that can choose the client's arguments can choose
+to do the thing itself.
+
+What the pipe does **not** change is what is parsed. The frames still go to
+the client's confined worker (08 §10), because an application that renders
+what it read from the network — a message, a feed, a file somebody sent —
+relays bytes nobody on the machine chose, and a bug in the decoder is the
+same bug whoever handed it the bytes.

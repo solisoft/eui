@@ -86,7 +86,7 @@ pub mod style;
 pub mod writer;
 
 pub use error::{DecodeError, Result};
-pub use frame::{caps, Chunked, Density, EventFrame, Frame, Hello, Offer, Resume, Start, ThemeMode, Transfer, Viewport, Welcome};
+pub use frame::{caps, AssetChunk, Chunked, Density, EventFrame, Frame, Hello, Offer, Resume, Start, ThemeMode, Transfer, Viewport, Welcome};
 pub use manifest::{Manifest, Rotation};
 pub use node::{EventKind, FlatNode, Handler, NodeKind, Subtree, TextRef, Value};
 pub use op::{Batch, Op};
@@ -106,7 +106,13 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
+// 8 is a session over a pipe (01 §7): an application on the same machine
+// starts the client and speaks over its standard input and output, and its
+// assets travel in the session as `Fetch` and `Asset` (`0x0D`, `0x0E`)
+// because there is no origin to `GET` them from. Nothing on a socket
+// changed: both kinds are refused there exactly as unknown kinds are, so a
+// server at 7 and a client at 8 meet as they always did.
 // 7 lets an absolute child say which edge of its parent it sits against
 // across the line — `position` 3, 4 and 5 (04 §5) — where before the
 // parent's `justify` placed every one: Tailwind's `right-0` on a badge whose

@@ -332,6 +332,44 @@ impl Transfer {
     }
 }
 
+/// One chunk of an asset travelling in the session, on a pipe (01 §7.3).
+///
+/// §6's transfer with the asset's name in place of an id: there is no origin
+/// to `GET` it from, so the bytes come down the same pipe as the batches,
+/// cut small enough that a picture never holds the next `Batch` back for
+/// long. What arrives is still named by its content, and the receiver still
+/// hashes it before believing the name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetChunk {
+    /// The BLAKE3 of the whole asset, as the `Fetch` named it.
+    pub hash: [u8; 32],
+    /// Chunk index, from 0, contiguous. A receiver MUST reject a gap.
+    pub seq: u32,
+    /// Whether more follow; `Abort` is the server's "not here" or "too
+    /// large", with a reason in `bytes`.
+    pub flag: Chunked,
+    /// The chunk, at most [`MAX_TRANSFER_CHUNK_BYTES`]; on `Abort`, a
+    /// reason of at most [`MAX_ABORT_REASON`] bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl AssetChunk {
+    /// Decode.
+    pub fn decode(r: &mut Reader<'_>) -> Result<Self> {
+        let hash = r.array::<32>()?;
+        let seq = r.varint32()?;
+        let flag = Chunked::from_u8(r.u8()?)?;
+        let max = if matches!(flag, Chunked::Abort) { MAX_ABORT_REASON } else { MAX_TRANSFER_CHUNK_BYTES };
+        let bytes = r.bytes(max, "asset chunk")?.to_vec();
+        Ok(Self { hash, seq, flag, bytes })
+    }
+
+    /// Encode.
+    pub fn encode(&self, w: &mut Writer) {
+        w.raw(&self.hash).varint32(self.seq).u8(self.flag as u8).bytes(&self.bytes);
+    }
+}
+
 /// A client-originated event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventFrame {
@@ -380,6 +418,18 @@ pub enum Frame {
     Upload(Transfer),
     /// S→C: a chunk of what a node's `save` offers (spec 03 §3.2).
     Blob(Transfer),
+    /// C→S, on a pipe only: the asset named by `hash`, at most `cap` bytes
+    /// of it (01 §7.3). Refused on a socket by [`Frame::decode`].
+    Fetch {
+        /// BLAKE3 of the asset wanted.
+        hash: [u8; 32],
+        /// What is left of the session's asset budget: the server sends
+        /// nothing larger, and the client refuses anything that passes it.
+        cap: u64,
+    },
+    /// S→C, on a pipe only: a chunk of an asset a `Fetch` asked for
+    /// (01 §7.3). Refused on a socket by [`Frame::decode`].
+    Asset(AssetChunk),
 }
 
 impl Frame {
@@ -418,7 +468,23 @@ impl Frame {
     /// Rejects trailing bytes: a frame's declared length must account for every
     /// byte of the message. "Ignore what you don't understand" is how one
     /// implementation's frame becomes another's smuggling channel.
+    ///
+    /// `Fetch` and `Asset` are refused here as unknown kinds are (01 §3): on
+    /// a socket an asset is an HTTPS request, and a server that sent one
+    /// down the session would be asking the client to believe bytes by a
+    /// road it does not have. [`Frame::decode_pipe`] is the one that knows
+    /// them.
     pub fn decode(message: &[u8]) -> Result<Self> {
+        Self::decode_on(message, false)
+    }
+
+    /// Decode one frame read off a pipe (01 §7): the same rules as
+    /// [`Frame::decode`], and `Fetch` and `Asset` besides.
+    pub fn decode_pipe(message: &[u8]) -> Result<Self> {
+        Self::decode_on(message, true)
+    }
+
+    fn decode_on(message: &[u8], pipe: bool) -> Result<Self> {
         let mut r = Reader::new(message);
         let kind = r.u8()?;
         let len = usize::try_from(r.varint()?).map_err(|_| DecodeError::BadVarint)?;
@@ -467,6 +533,8 @@ impl Frame {
             0x0A => Self::Viewport(Viewport::decode(&mut p)?),
             0x0B => Self::Upload(Transfer::decode(&mut p)?),
             0x0C => Self::Blob(Transfer::decode(&mut p)?),
+            0x0D if pipe => Self::Fetch { hash: p.array::<32>()?, cap: p.varint()? },
+            0x0E if pipe => Self::Asset(AssetChunk::decode(&mut p)?),
             _ => return Err(DecodeError::UnknownTag("frame kind")),
         };
         p.finish()?;
@@ -549,6 +617,14 @@ impl Frame {
             Self::Blob(t) => {
                 t.encode(&mut body);
                 0x0C
+            }
+            Self::Fetch { hash, cap } => {
+                body.raw(hash).varint(*cap);
+                0x0D
+            }
+            Self::Asset(a) => {
+                a.encode(&mut body);
+                0x0E
             }
         };
 

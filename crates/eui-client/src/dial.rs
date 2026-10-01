@@ -31,6 +31,9 @@ pub const fn kind_needs_server(kind: u8) -> bool {
     match kind {
         0x04 | 0x09 | 0x0B => true,         // Event, Resync, Upload
         0x05 | 0x07 | 0x0A | 0x08 => false, // Ack, Pong, Viewport, Error
+        // `Fetch` is a pipe's alone (01 §7.3), and a pipe is open from the
+        // first frame to the last: there is never a socket to dial for it.
+        0x0D => false,
         // A `Hello` is sent by dialling rather than through this path, and a
         // kind this client does not know is not one this client produced.
         _ => false,
@@ -78,6 +81,36 @@ pub fn is_loopback_url(url: &str) -> bool {
         None => hostport,
     };
     matches!(host, "127.0.0.1" | "localhost")
+}
+
+/// The address a pipe session's tab carries (01 §7). Not a URL anything can
+/// dial: it has no origin, so nothing that builds an address from the page's
+/// origin — an asset fetch, an island (01 §7.5) — can find one in it.
+pub const PIPE_URL: &str = "pipe:stdio";
+
+/// Is this tab's session the pipe of 01 §7 rather than a socket?
+#[must_use]
+pub fn is_pipe(url: &str) -> bool {
+    url == PIPE_URL
+}
+
+/// The address an island at `path` is dialled on, from the page's own
+/// address (01 §2.7) — or `None` where the page has no origin to put a path
+/// on, which is what a session over a pipe is (01 §7.5): its islands are
+/// never opened, and each keeps the children it was rendered with.
+#[must_use]
+pub fn island_url(page: &str, path: &str) -> Option<String> {
+    if is_pipe(page) {
+        return None;
+    }
+    let (scheme, rest) = page.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().filter(|a| !a.is_empty())?;
+    let scheme = match scheme {
+        "wss" | "https" => "wss",
+        "ws" | "http" => "ws",
+        _ => return None,
+    };
+    Some(format!("{scheme}://{authority}{path}"))
 }
 
 #[cfg(test)]

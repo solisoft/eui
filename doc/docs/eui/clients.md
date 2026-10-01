@@ -89,6 +89,25 @@ Rust crate has no TLS, because Rust's standard library has none and the crate
 takes no dependencies — it answers `ws://` and belongs behind a terminator.
 The other five terminate TLS 1.3 themselves.
 
+## With no server at all: the pipe
+
+The Ruby one can also run an application with **no server**: `app.run_pipe`
+starts `eui --pipe` as a child process and runs one session over its standard
+input and output (spec 01 §7). No port is opened, there is no TLS and no
+manifest, and the window is this process's child — closing it ends the
+script, and the script ending closes it.
+
+```ruby
+app = EUI::App.new(name: "Counter")
+app.mount("counter", Counter)
+app.run_pipe(allow: %w[clipboard.write])
+```
+
+Assets still work: the client asks for them in the session and the gem sends
+them back in 256 KiB chunks. `clients/eui-ruby/examples/pipe.rb` is the
+counter this way, and `test/pipe_test.rb` its five tests. Python, PHP, Node,
+Go and Rust do not speak the pipe yet.
+
 ## What they cost
 
 The same application written seven times — the same node hash, the same keys,

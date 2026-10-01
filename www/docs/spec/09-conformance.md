@@ -61,9 +61,9 @@ found to be two rules that contradicted each other.
 4. **An HTTP status is an answer, not a dropped socket.** `dial.rs` pins
    that a refused upgrade ends the tab with the server's reason rather than
    climbing a retry ladder, and that the reason reads as a sentence.
-5. **Every frame kind is classified for lazy dialling.** All twelve of §7,
+5. **Every frame kind is classified for lazy dialling.** All fourteen of 01 §3,
    written out rather than sampled, plus a line that fails the day a
-   thirteenth is added — because the failure modes either way are silent: a
+   fifteenth is added — because the failure modes either way are silent: a
    kind wrongly dialling opens a session when a window is dragged, and one
    wrongly not dialling drops a click into nothing.
 
@@ -104,6 +104,58 @@ found to be two rules that contradicted each other.
    `every_thread_has_started_before_the_sandbox_closes`: 128 confined
    workers lock down at once, and none is killed for a call one of its own
    threads made on the way in (08 §10).
+
+### 1.3 A session over a pipe — `crates/eui-client/tests/pipe.rs`, `crates/eui-proto/tests/frames.rs`
+
+01 §7. Every name below is a test that exists and passes.
+
+1. **Frames end where their `len` says.** `frames_on_a_pipe_are_cut_by_their_own_length`:
+   three frames written back to back, split at every byte boundary across
+   reads and then fed a byte at a time, come out as the same three frames
+   and then the clean end.
+2. **A declared length is checked before it is reserved.**
+   `a_pipe_frame_past_the_limit_is_refused_before_it_is_read`: a header
+   declaring `MAX_FRAME_BYTES + 1` with no payload behind it is refused on
+   the header — a reader that tried to read the payload would report the
+   pipe ending instead.
+3. **A pipe that ends mid-frame is a truncated frame**, not a clean end:
+   `a_pipe_cut_mid_frame_ends_with_a_reason`, at every cut, and through a
+   connection as a `TransportError::Pipe`.
+4. **The client speaks first, at version 8, with nothing to resume.**
+   `a_pipe_hello_offers_eight_and_no_resume`: the driver's `Hello`, and the
+   first bytes the application reads off the pipe are exactly it.
+5. **An asset is fetched in the session and verified.**
+   `an_asset_arrives_over_the_pipe_in_chunks_and_is_hashed`: one asset over
+   three chunks lands; one whose bytes do not hash to its name is discarded;
+   one asked for twice while on its way is asked for once, and once answered
+   `aborted` may be asked for again.
+6. **An asset nobody asked for, or past its `cap`, ends the session.**
+   `an_unasked_or_oversized_asset_ends_the_pipe_session`.
+7. **`Fetch` and `Asset` do not exist on a socket.** In `eui-proto`,
+   `fetch_and_asset_are_refused_on_a_socket`: both decode with
+   `decode_pipe` and are rejected as unknown kinds by `decode`;
+   `fetch_and_asset_have_the_bytes_01_7_3_gives_them` writes the bytes out,
+   and `an_asset_chunk_is_bounded_like_a_transfer` holds a chunk to §6's
+   sizes.
+8. **The end of the pipe after `Error` shows the reason; without one, the
+   window closes.** `a_pipe_that_ends_after_an_error_shows_it` and
+   `a_pipe_that_ends_cleanly_closes_the_window`, through `pipe::ending` —
+   the decision `Tab::pump` acts on.
+9. **Standard output carries frames only.** `nothing_but_frames_on_stdout`
+   runs the `eui` binary with `--pipe`, `EUI_TRACE=1`, an empty pipe for
+   input and no display, and decodes everything it wrote: what it checks is
+   the start-up and its refusal, every word of which goes to standard error.
+   A session with a window is not run here — a test machine has no screen.
+10. **No island opens from a pipe session.**
+    `an_island_in_a_pipe_session_keeps_its_children`: `dial::island_url`
+    has no address for a pipe session, and a tree naming an island keeps the
+    child it was rendered with.
+
+The Ruby server's half is `clients/eui-ruby/test/pipe_test.rb`: the bytes of
+both frames, a session over two pipes that mounts and answers a click, an
+asset in three 256 KiB-bounded chunks that hashes to its name, the two
+`aborted` answers, a length past the limit, and `run_pipe` starting a
+stand-in client with the arguments it was given.
 
 ## 2. Wire format — `crates/eui-proto/tests`
 

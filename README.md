@@ -36,7 +36,7 @@ crates/
   eui-cursor where the pointer is during a drag, which no backend says [built]
   eui-wayland the drop half of 03 §3.2 and the keymap, which winit
               does not report and does not share                       [built]
-  eui-client driver, WSS transport, manifest check, assets, winit,
+  eui-client driver, WSS transport and a pipe (eui --pipe), manifest check, assets, winit,
              keyboard focus, editing, IME, AccessKit, transitions,
              file dialogs, touch, a session that survives its socket [built]
   eui-android the shared object Android loads, and its packaging   [untested]

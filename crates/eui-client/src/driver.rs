@@ -2006,9 +2006,16 @@ impl Driver {
                 self.closed = Some(Close::ServerError(code, message));
                 Vec::new()
             }
-            Frame::Hello(_) | Frame::Event(_) | Frame::Ack { .. } | Frame::Resync | Frame::Viewport(_) | Frame::Upload(_) => {
+            Frame::Hello(_) | Frame::Event(_) | Frame::Ack { .. } | Frame::Resync | Frame::Viewport(_) | Frame::Upload(_) | Frame::Fetch { .. } => {
                 self.closed = Some(Close::Protocol("client-only frame from server"));
                 vec![Frame::Error { code: 101, message: "client-only frame from server".into() }]
+            }
+            // A pipe's asset chunk is the transport's to assemble (01 §7.3);
+            // one that reaches the session came some other way, which no
+            // road the client has allows.
+            Frame::Asset(_) => {
+                self.closed = Some(Close::Protocol("an asset chunk reached the session"));
+                vec![Frame::Error { code: 101, message: "an asset chunk reached the session".into() }]
             }
         }
     }

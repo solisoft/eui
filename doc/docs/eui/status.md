@@ -1512,6 +1512,20 @@ implements it and the vectors that pin it:
   stopped being true. Still specified and not built: the `pin` field of
   §2.1's manifest, which has no slot in the key table below it and no code
   in either repository.
+- **A session over a pipe** (`01` §7) — built on 2026-10-01, and the reason
+  this is 0.8.0 and protocol 8: an application on the same machine starts
+  `eui --pipe` and speaks to it over standard input and output, with assets
+  travelling in the session as `Fetch` and `Asset` (`0x0D`, `0x0E`), which
+  `Frame::decode` — the socket's decoder — still refuses as unknown.
+  `crates/eui-client/src/pipe.rs` cuts frames by their own length, keeps the
+  assets in flight and hashes them, and decides what the end of the pipe
+  means; the window opens with no manifest and the grant `--allow` gave.
+  Pinned by the ten vectors of `09` §1.3 (`tests/pipe.rs`, 10 passing) and
+  three in `eui-proto/tests/frames.rs`. The server half exists in Ruby only
+  (`clients/eui-ruby`, `App#run_pipe`, five tests); Python, PHP, Node, Go,
+  Rust and Soli do not speak it. Not yet run: a window on a screen driven by
+  a real application over the pipe — the vectors drive both ends through a
+  socket pair, and the binary only as far as a machine with no display goes.
 
 ## The browser: it paints, and what that cost
 
@@ -2129,6 +2143,8 @@ picture; checked by opening it on Soli 2.3.3 and 2.4.2. The deploy pins
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
   the worker is its own process there, so a crash is contained, but it is
   not confined.
+- A session over a pipe (01 §7) in five of the six servers — Python, PHP,
+  Node, Go, Rust — and in Soli. The client and the Ruby server speak it.
 
 **Specified, and not built — found by auditing `spec/` against the tree on
 2026-09-20, and written here rather than left to be rediscovered.** Each of
