@@ -70,9 +70,38 @@ describe("Docs", fn() {
     assert_eq(res_status(get("/docs/routing")), 404)
   })
 
-  test("the masthead marks which of the two you are in", fn() {
-    assert_contains(res_body(get("/docs/overview")), ">Docs</a>")
-    assert_contains(res_body(get("/spec/01-transport")), ">Spec</a>")
+  test("the masthead has one entry for the docs and the spec, and marks it in both", fn() {
+    # The specification is a section of the documentation's contents, so the
+    # masthead stopped carrying an entry of its own for it.
+    let marked = "href=\"/docs\" aria-current=\"page\">Docs</a>"
+    assert_contains(res_body(get("/docs/overview")), marked)
+    assert_contains(res_body(get("/spec/01-transport")), marked)
+    assert_not(res_body(get("/docs/overview")).includes?(">Spec</a>"))
+  })
+
+  test("a page the contents do not have is answered inside the docs", fn() {
+    let response = get("/docs/wire")
+    assert_eq(res_status(response), 404)
+    let body = res_body(response)
+    # The rail, which lists every page there is, and the pages whose address
+    # shares a word with the one asked for.
+    assert_contains(body, "class=\"docs-rail\"")
+    assert_contains(body, "No such page")
+    assert_contains(body, "href=\"/docs/wire-format\"")
+    assert_contains(body, "href=\"/spec/02-wire-format\"")
+    # The name asked for is shown as it was asked for, and never as markup:
+    # the segment arrives undecoded and is escaped on its way out besides.
+    let hostile = res_body(get("/docs/%3Cq9%3E"))
+    assert_not(hostile.includes?("<q9>"))
+    assert_contains(hostile, "<code>%3Cq9%3E</code>")
+  })
+
+  test("an address the site does not route gets the site's own 404", fn() {
+    let response = get("/an/address/nobody/serves")
+    assert_eq(res_status(response), 404)
+    let body = res_body(response)
+    assert_contains(body, "Nothing is served at this address.")
+    assert_contains(body, "href=\"/docs/tutorial\"")
   })
 
   test("the site no longer sends a reader to GitHub for its own documentation", fn() {

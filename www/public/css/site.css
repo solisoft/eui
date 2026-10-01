@@ -2973,3 +2973,58 @@ footer a:hover {
     color: var(--ink-soft);
     max-width: 44rem;
 }
+
+/* ------------------------------------------------------------------ 404 */
+/* `app/views/errors/404.html.slv`: an address the site does not route. Set
+ * in the content column of every other page, right of the spine, so it reads
+ * as this site and not as the framework's; the number is the one display
+ * line, in the serif the headings use. */
+.lost__body {
+    padding: var(--step) 0 6rem calc(var(--rail) + 2.5rem);
+    max-width: calc(var(--rail) + 2.5rem + 40rem);
+}
+
+@media (max-width: 60rem) {
+    .lost__body {
+        padding: 3rem 0 4rem;
+    }
+}
+
+.lost__body .lost__code {
+    font: 400 clamp(4.5rem, 12vw, 7.5rem)/1 var(--serif);
+    color: var(--blue);
+    margin: 0 0 0.75rem;
+}
+
+.lost__body h1 {
+    font: 400 clamp(1.75rem, 4vw, 2.25rem)/1.15 var(--serif);
+    margin: 0 0 1.25rem;
+}
+
+.lost__body p,
+.lost__body li {
+    font-size: 1.0625rem;
+    line-height: 1.6;
+}
+
+.lost__ways {
+    list-style: none;
+    margin: 1.75rem 0 2.5rem;
+    padding: 0;
+    border-top: 1px solid var(--rule-faint);
+}
+
+.lost__ways li {
+    padding: 0.65rem 0;
+    border-bottom: 1px solid var(--rule-faint);
+    color: var(--ink-soft);
+}
+
+.lost__ways a {
+    color: var(--blue);
+}
+
+.lost__body .lost__id {
+    font: 0.75rem/1.4 var(--mono);
+    color: var(--ink-soft);
+}

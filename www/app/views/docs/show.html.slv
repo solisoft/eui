@@ -17,12 +17,16 @@
         <article class="docs-page">
             <div class="prose"><%- html %></div>
 
+            <%# A page that is not there (`DocsController#_missing`) has no file to
+                be rendered from and nothing to edit. %>
+            <% if !source.nil? %>
             <p class="colophon">
                 Rendered from <code><%= source %></code> in the repository. The
                 normative text is <code>spec/</code>; where it and a prose page
                 disagree the spec wins, and that is a bug worth reporting.
                 <a href="https://github.com/solisoft/eui/blob/main/<%= source %>">Edit this page</a>
             </p>
+            <% end %>
         </article>
     </div>
 </main>

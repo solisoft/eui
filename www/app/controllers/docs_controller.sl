@@ -43,15 +43,7 @@ class DocsController < Controller
   def _page(kind, slug)
     entry = this._pages()[kind + "/" + slug]
 
-    if entry.nil?
-      return {
-        "status": 404,
-        "headers": {"Content-Type": "text/html; charset=utf-8"},
-        "body": "<!doctype html><meta charset=utf-8><title>No such page</title>" + "<p>No page named <code>"
-        + html_escape(slug)
-        + "</code>. <a href=\"/docs\">Start from the overview</a>."
-      }
-    end
+    return this._missing(kind, slug) if entry.nil?
 
     # Which of the two this page is. The masthead has one entry for both —
     # the specification is a section of the rail under `Docs` — and marks it
@@ -68,6 +60,49 @@ class DocsController < Controller
     @eui_build = @html.contains("data-eui") ? this._eui_build() : nil
 
     render("docs/show", {"layout": "layouts/application"})
+  end
+
+  # An address the contents do not have. It used to be one line of bare HTML
+  # with no stylesheet and no way on but a link to the overview; it is a page
+  # of the documentation now, still a 404, because the rail beside it lists
+  # every page there is — the most useful answer a wrong address can get —
+  # and above it, the pages whose address or title shares a word with the
+  # one asked for, which is usually the page that was meant.
+  def _missing(kind, slug)
+    @here = kind
+    @slug = ""
+    @title = "No such page"
+    @lead = nil
+    @sections = this._sections()
+    @source = nil
+    @eui_build = nil
+    near = this._near(slug)
+    page = "<h1>No such page</h1><p>Nothing in the documentation or the specification is called <code>"
+    + html_escape(slug)
+    + "</code>. Every page there is is listed in the contents.</p>"
+    unless near.length() == 0
+      links = near.map do |it|
+        "<li><a href=\"/" + it["slug"] + "\">" + html_escape(it["title"]) + "</a></li>"
+      end
+      page = page + "<p>Perhaps one of these:</p><ul>" + links.join("") + "</ul>"
+    end
+    @html = page
+    render("docs/show", {"layout": "layouts/application"}, {"status": 404})
+  end
+
+  # The pages sharing a word of three letters or more with `slug`, in the
+  # order of the contents, five at most.
+  def _near(slug)
+    words = slug.downcase.replace("_", "-").replace("/", "-").replace(".", "-").split("-").filter do |w|
+      w.length >= 3
+    end
+    return [] if words.length() == 0
+
+    this._pages().values().filter do |it|
+      words.any? do |w|
+        it["slug"].contains(w) || it["title"].downcase.contains(w)
+      end
+    end.take(5)
   end
 
   # A line reading `::: eui <component>` in a page's markdown becomes a live

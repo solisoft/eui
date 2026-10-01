@@ -1,0 +1,45 @@
+<%# Any address the site does not route (an unknown page under /docs or /spec
+    is answered by DocsController#_missing instead, inside the docs).
+
+    Soli renders an error template on its own, without the layout, so this
+    is a whole document: the layout's head cut down to what a page nobody
+    should share or index needs. `status`, `message` and `request_id` are the
+    three things the framework hands an error page. %>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>Not found — EUI</title>
+    <link rel="icon" type="image/svg+xml" href="<%= public_path("favicon.svg") %>">
+    <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1216" media="(prefers-color-scheme: dark)">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="<%= public_path("css/site.css") %>">
+</head>
+<body>
+<main class="sheet lost">
+    <%- partial("layouts/top", {"here": ""}) %>
+
+    <div class="lost__body">
+        <p class="lost__code"><%= status %></p>
+        <h1>Nothing is served at this address.</h1>
+        <p>
+            It may have moved when the documentation came onto this site, or it
+            was typed from memory. What there is, is one of these:
+        </p>
+        <ul class="lost__ways">
+            <li><a href="/">The protocol</a>, on one page</li>
+            <li><a href="/docs">The documentation</a>, from what EUI is to what works today</li>
+            <li><a href="/docs/tutorial">The tutorial</a>, an application in six steps, running in the page</li>
+            <li><a href="/demo">The demo</a>, the gallery in your browser</li>
+            <li><a href="/samples">Samples</a>, <a href="/components">components</a> and <a href="/controls">controls</a></li>
+        </ul>
+        <p class="lost__id">Request <code><%= request_id %></code></p>
+    </div>
+</main>
+</body>
+</html>
