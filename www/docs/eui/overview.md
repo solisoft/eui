@@ -182,7 +182,7 @@ full of identical pictures. `--installed` lists what is there and says
 where; `--uninstall` takes an address, or an `app_id` to remove every entry
 an application has.
 
-## Four ways to open an application, and one of them is a courier
+## Five ways to open an application, and one of them is a courier
 
 - `eui <wss://host/_eui/session/app> [--allow cap,cap]` — the standalone
   client, twelve megabytes, no browser.
@@ -191,6 +191,9 @@ an application has.
 - `soli desktop build --eui <component>` — one executable that carries the
   app, its database and the window; the server runs on a thread behind a
   loopback gate only the embedded client can pass.
+- `eui_window("name", "handler", "view")` in a Soli script — the same
+  window and gate around a script's own handler and view, with no
+  application: `soli app.sl` opens it and returns when it is closed.
 - **A page, on a `<canvas>`** — the same client compiled to WebAssembly, so
   that a documentation page can put a running application beside its source
   instead of a picture of one:
