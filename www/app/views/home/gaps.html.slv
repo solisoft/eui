@@ -11,15 +11,16 @@
                 this project and it is not hidden in a later milestone. This page is the
                 other half of the catalogue &mdash; the things a desktop application
                 expects, each one with where it would be fixed and whether anything is
-                actually blocking it. Seven of them are closed now, and the page keeps
-                those rather than deleting them: what a gap cost to shut is the most
-                useful thing it leaves behind.
+                actually blocking it. Ten of the ledger&rsquo;s twenty-three rows read
+                <em>built</em> now, and two events and a password field closed beside
+                them; the page keeps those rather than deleting them: what a gap cost to
+                shut is the most useful thing it leaves behind.
             </p>
 
             <nav class="toc">
                 <a href="#ledger"><b>The ledger</b><span>twenty-three needs, scored</span></a>
                 <a href="#icons"><b>Icons</b><span>the first one closed</span></a>
-                <a href="#events"><b>Two dead events</b><span>on the wire, nowhere else</span></a>
+                <a href="#events"><b>Every event is sent</b><span>the last two dead ones closed</span></a>
                 <a href="#menus"><b>Placement</b><span>the anchor, and what it still cannot say</span></a>
                 <a href="#keyboard"><b>Accelerators</b><span>still no global key capture</span></a>
                 <a href="#layout"><b>Layout, stated</b><span>what version 1 leaves out</span></a>
@@ -47,14 +48,14 @@
                 </thead>
                 <tbody>
                     <tr><td>icons</td><td>Thirty-three icons under forty-seven names, stroked from the client's own table; an unknown name draws nothing and keeps its space</td><td class="yes">built</td></tr>
-                    <tr><td>drag &amp; drop</td><td>All three wire events are emitted, with a grabbed source and a payload measured against the node that catches it; a file dropped from the desktop arrives on Wayland and nowhere else</td><td class="part">partial</td></tr>
+                    <tr><td>drag &amp; drop</td><td>All three wire events are emitted, with a grabbed source and a payload measured against the node that catches it; a file dropped from the desktop arrives on Wayland, X11, macOS and Windows, though on X11 the drop zone lights where the pointer last was rather than following the file</td><td class="part">partial</td></tr>
                     <tr><td>context menu</td><td>The event fires on right-click, <code>position: pointer</code> places a panel at the hand, and the catalogue wraps both</td><td class="yes">built</td></tr>
                     <tr><td>command palette</td><td>Needs an accelerator to open it, and there is no global key capture</td><td class="no">absent</td></tr>
                     <tr><td>focus trap</td><td>A <code>modal</code> prop makes its subtree the whole Tab order, and nests</td><td class="yes">built</td></tr>
                     <tr><td>escape to close</td><td>Reaches a handler on the path that asked for it; blurs only when none did</td><td class="yes">built</td></tr>
                     <tr><td>accelerators</td><td>Keys reach only a focused node holding <code>key_down</code></td><td class="no">absent</td></tr>
                     <tr><td>arrow navigation</td><td>A widget can now take the arrows and keep Enter, but there is still no roving focus and no type-ahead</td><td class="part">partial</td></tr>
-                    <tr><td>a11y roles</td><td>Declared in props and preferred over the kind; 40 role names, states, values and set positions</td><td class="yes">built</td></tr>
+                    <tr><td>a11y roles</td><td>Declared in props and preferred over the kind; 39 role names, states, values and set positions</td><td class="yes">built</td></tr>
                     <tr><td>overlay dismissal</td><td>A press outside shuts an overlay that holds a <code>blur</code> handler; still no close on scroll or on focus leaving</td><td class="part">partial</td></tr>
                     <tr><td>overlay placement</td><td>Two shapes: under its anchor &mdash; left-aligned, flipped up, clamped &mdash; or at the pointer. No start, end or centred, no offset, no arrow</td><td class="part">partial</td></tr>
                     <tr><td>sticky headers</td><td>Sticky positioning is out of layout version 1</td><td class="no">absent</td></tr>
@@ -164,18 +165,31 @@
     <section id="events">
         <div class="mark">Events<span>&sect;06.1</span></div>
         <div>
-            <h2>Two of the thirty-two are on the wire and nowhere else</h2>
+            <h2>All thirty-two are sent now</h2>
             <p>
-                The protocol names thirty-two event kinds. Thirty are emitted by the
-                client. The other two are decodable, documented, and never sent &mdash;
-                a server may subscribe to them and will wait forever.
+                The protocol names thirty-two event kinds, and the client emits every
+                one of them. Until 2026-09-20 two were decodable, documented, and never
+                sent &mdash; a server could subscribe to them and would wait forever.
+                Commit <code>7b59316</code> closed both.
             </p>
 
-            <div class="wire dead">
+            <div class="wire live">
                 <div><b>double_click</b><i>0x02</i></div>
                 <div><b>resize</b><i>0x10</i></div>
             </div>
 
+            <p>
+                <code>double_click</code> is a second click on the same
+                <em>handler</em> within 500&nbsp;ms, sent <strong>as well as</strong>
+                that click and never instead of it; a third click starts a new pair
+                rather than reporting a second double. <code>resize</code> is a node&rsquo;s
+                laid-out box changing <em>size</em>, in logical px, for a node that
+                asked &mdash; never for a move, and not on its first layout, since a size
+                that was never anything else has not changed. Its watch list is rebuilt
+                when the tree changes rather than walked per frame, so an application
+                that never asks pays nothing (06&nbsp;&sect;2,
+                <code>crates/eui-client/src/driver.rs</code>).
+            </p>
             <p>
                 Drag and drop used to be three of the dead ones, and is not any more:
                 a node carrying <code>drag</code> is grabbed, <code>drag_over</code>
@@ -183,15 +197,20 @@
                 <code>drop</code> &mdash; each payload measured against the node whose
                 handler catches it. A file dragged in from the desktop arrives too, as a
                 <code>file_drag</code> and then the same <code>file_pick</code> the
-                dialog sends, on Wayland and nowhere else yet.
+                dialog sends: through <code>eui-wayland</code>&rsquo;s data device on
+                Wayland, and through winit&rsquo;s <code>HoveredFile</code> and
+                <code>DroppedFile</code> on X11, macOS and Windows
+                (<code>crates/eui-client/src/app.rs</code>). X11 is the rough one: winit
+                drops the position updates, so the zone lights where the pointer last was
+                and stays there.
             </p>
             <p class="note">
-                It is worth being exact about which of the two left is a hole and
-                which is a decision. <code>double_click</code> is a convenience a server
-                can approximate from two clicks and a clock. <code>resize</code> cannot
-                be approximated by anything: the server never learns a node&rsquo;s box,
-                so a view that needs one works it out from the viewport it is told
-                about.
+                This note used to separate a hole from a decision: <code>double_click</code>
+                could be approximated from two clicks and a clock, and
+                <code>resize</code> could not be approximated by anything, because the
+                server never learned a node&rsquo;s box. It learns one now, from any node
+                that holds a <code>resize</code> handler &mdash; so a view that only
+                needs its own box no longer has to work it out from the viewport.
             </p>
         </div>
     </section>
@@ -230,10 +249,16 @@
             </div>
 
             <p class="note">
-                And there is no <code>top</code>, <code>left</code>, <code>right</code> or
-                <code>bottom</code> in the style record at all: absolute position is
-                alignment plus margins. So a menu at the cursor cannot be expressed by
-                going around the anchoring rule either.
+                There is still no <code>top</code>, <code>left</code>, <code>right</code> or
+                <code>bottom</code> in the style record. An absolute child of a stack is
+                placed by alignment plus margins, and since protocol&nbsp;7
+                (<code>5bf0354</code>) it may name its own horizontal edge &mdash;
+                <code>absolute_start</code>, <code>absolute_center</code>,
+                <code>absolute_end</code> (04&nbsp;&sect;5) &mdash; which is how a badge sits
+                at a card&rsquo;s top right. A popover gets none of that: it is placed by
+                the anchor rule above whichever of those values it carries, so the
+                missing placements cannot be had by going around the anchoring rule.
+                <code>position: pointer</code> is the only other shape there is.
             </p>
         </div>
     </section>
@@ -268,7 +293,7 @@
                 capture, so no accelerator and no command palette opened by the gesture
                 that opens command palettes. That one <em>is</em> the specification&rsquo;s
                 decision rather than unwritten work, and changing it means changing
-                06&nbsp;&sect;5 first.
+                06&nbsp;&sect;3 first.
             </p>
         </div>
     </section>
@@ -306,7 +331,9 @@
                     <b>no aspect-ratio</b>
                     <p>
                         Thumbnails, media placeholders and avatars in a responsive grid
-                        need a height the server has worked out for them.
+                        need a height the server has worked out for them. <code>tw()</code>
+                        does that sum for <code>aspect-*</code> when one side is given in
+                        px, and refuses it when neither is.
                     </p>
                 </div>
                 <div>
@@ -328,7 +355,8 @@
                     <p>
                         Pushing one button to the right of a toolbar is a
                         <code>spacer</code> with grow, which the catalogue does
-                        throughout.
+                        throughout &mdash; and which <code>tw()</code> writes for
+                        <code>ml-auto</code> and its kin.
                     </p>
                 </div>
             </div>
@@ -404,7 +432,7 @@
             </p>
             <p>
                 A node may now <strong>declare</strong> itself, in props the client reads:
-                a role from forty names, a label that overrides the text inside, and
+                a role from thirty-nine names, a label that overrides the text inside, and
                 the states &mdash; checked (with its third value), expanded, selected,
                 disabled, read-only, required, invalid, busy, modal &mdash; plus a value
                 with its range, a place in a set, a level, an orientation and a live
@@ -448,13 +476,16 @@
                 it; the catalogue is still declaring its way through. Checkbox, switch,
                 tabs, segmented, icon buttons, pagination, the calendar arrows, the
                 chip&rsquo;s remove, slider, progress, toast and the split divider say
-                what they are &mdash; a run of the gallery answers with six
+                what they are, and so do dialogs (<code>dialog</code> or
+                <code>alert_dialog</code>, and <code>modal</code>), the tree and its
+                items, and a menu&rsquo;s items. A run of the gallery on 2026-09-10,
+                before the last three were declared, answered with six
                 <code>TabList</code>s, sixteen <code>Tab</code>s, four
                 <code>Separator</code>s, two <code>Slider</code>s and two
                 <code>Progress</code>es where every one of those used to be a button or a
-                group. Against that, three hundred and thirty-eight nodes are still plain
-                buttons: menus, the select, the tree, the data grid, dialogs and the day
-                cells have not been declared yet.
+                group, against three hundred and thirty-eight plain buttons. That count
+                has not been taken again since. What is still undeclared is the select
+                and its options, the data grid and the calendar&rsquo;s day cells.
                 And a real screen reader remains the only honest test &mdash;
                 <code>SNAPSHOT_A11Y=1</code> on the off-screen renderer is the one that
                 can run without one.
@@ -467,11 +498,14 @@
         <div>
             <h2>Four things a server cannot do for itself</h2>
             <p>
-                It does not own <code>Tab</code>. It was never told about
+                It does not own <code>Tab</code> &mdash; unless the node declares
+                <code>typing</code>, below. It was never told about
                 <code>Escape</code>. And it cannot know which node the client will treat
                 as pressed. So a dialog could not trap focus, could not open with focus
                 inside it, and could not close on the key every dialog closes on. Three
-                props and one changed rule fix all four.
+                props and one changed rule fix all four, and a fourth prop,
+                <code>typing</code>, gives the one surface that means the tab character
+                its <code>Tab</code>.
             </p>
 
             <div class="split">
@@ -481,6 +515,7 @@
                         <li><code>modal</code> &mdash; while it is laid out, the Tab order is <strong>its subtree alone</strong>. Innermost wins, so a dialog over a dialog traps in the second</li>
                         <li><code>autofocus</code> &mdash; focus starts here when the surface arrives, and is <em>not</em> reclaimed by a later batch: someone tabbing through an open dialog is not pulled back to its first field</li>
                         <li><code>keys</code> &mdash; the keys this node wants, and it is sent no others</li>
+                        <li><code>typing</code> &mdash; a node that takes typed text without being a field. Since <code>f7ada1c</code> a focused one is also sent <code>Tab</code> and <code>Shift+Tab</code>, and the focus stays put; <code>Ctrl+Shift+Tab</code> still moves it back whatever the tree says, and is never reported</li>
                     </ul>
                 </div>
                 <div>
@@ -498,12 +533,15 @@
                 <code>Escape</code> follows from the third. It reaches a handler on the
                 path that asked for it, and focus is left where it was so the surface can
                 put it back; with nothing listening it drops focus, which is what it has
-                always done. Driven through a real server: the gallery&rsquo;s sheet opens
-                at 940 nodes carrying <code>Dialog "A sheet" modal</code>, and one
-                <code>Escape</code> later it is 934 and the dialog is gone.
+                always done. Driven through a real server on 2026-09-10, the
+                gallery&rsquo;s sheet opened at 940 nodes carrying
+                <code>Dialog "A sheet" modal</code>, and one <code>Escape</code> later it
+                was 934 and the dialog was gone. Both figures are that day&rsquo;s and
+                have not been measured again.
             </p>
             <p class="note">
-                Seventeen vectors hold it, and the off-screen renderer grew
+                Twenty-one vectors in <code>crates/eui-client/tests/keyboard.rs</code>
+                hold it, and the off-screen renderer grew
                 <code>SNAPSHOT_KEYS</code> so a focus ring, a trapped Tab or a surface
                 that closes on a key can be looked at without a keyboard. What is still
                 missing is above this: roving focus and type-ahead are a widget&rsquo;s
@@ -528,7 +566,6 @@
                     <b>genuinely blocked</b>
                     <ul>
                         <li><strong>Sticky headers</strong> &mdash; layout version&nbsp;1 has no sticky, and faking it needs a scroll offset the server does not have</li>
-                        <li><strong>A masked password field</strong> &mdash; nothing in the client hides an <code>input</code>&rsquo;s glyphs</li>
                         <li><strong>Local keyboard navigation and local drag</strong> &mdash; a bytecode chunk cannot see the event that triggered it, so it never learns which key, or where the pointer is</li>
                         <li><strong>Control heights that follow density</strong> &mdash; the theme resolves them and no dimension on the wire can reference them</li>
                     </ul>
@@ -537,7 +574,7 @@
                     <b>merely unwritten</b>
                     <ul>
                         <li><strong>Column resize</strong> &mdash; the same server-driven drag <code>split_pane</code> now uses; what is left is re-emitting the row styles a width change touches</li>
-                        <li><strong>link, time_picker, list_item, panel</strong> &mdash; ordinary compositions, waiting their turn. <strong>context_menu</strong>, <strong>textarea</strong>, <strong>radio_group</strong>, <strong>combobox</strong> and <strong>rating</strong> came off this list and are in the catalogue</li>
+                        <li><strong>list_item, panel</strong> &mdash; ordinary compositions, waiting their turn. <strong>context_menu</strong>, <strong>textarea</strong>, <strong>radio_group</strong>, <strong>combobox</strong> and <strong>rating</strong> came off this list and are in the catalogue, and so are a link (<code>text_link</code>, which declares the <code>link</code> role) and a time picker (<code>time_select</code>, inside <code>datetime_picker</code>)</li>
                     </ul>
                 </div>
             </div>
@@ -547,6 +584,13 @@
                 would need a new node kind, a new style key, a new event, or a chunk that
                 can read its own event. Everything else is a function someone has not
                 written yet.
+            </p>
+            <p class="note">
+                <strong>A masked password field</strong> used to head the first column,
+                and is closed: an <code>input</code> carrying <code>secret: true</code>
+                draws one disc per character and hands an assistive technology an empty
+                value (03&nbsp;&sect;3, <code>891b864</code>). By the rule above it was
+                never blocked: it is a prop, not a new kind, style key or event.
             </p>
         </div>
     </section>

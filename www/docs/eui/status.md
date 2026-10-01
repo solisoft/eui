@@ -1222,7 +1222,7 @@ reader user could not tell a switch from a link, or a ticked box from an
 unticked one.
 
 A node declares itself now, in props the client reads: a role from
-forty names, a `label` that overrides the text gathered from inside,
+thirty-nine names, a `label` that overrides the text gathered from inside,
 and the states — `checked` with its third value, `expanded`, `selected`,
 `disabled`, `read_only`, `required`, `invalid`, `busy`, `modal` — plus
 `value_now` with its range, `pos_in_set`/`set_size`, `level`, `orientation`
@@ -1246,11 +1246,14 @@ declares nothing is provably exposed as it was before §6.1 existed.
 
 The catalogue is declaring its way through: checkbox, switch, tabs, segmented,
 icon buttons, pagination, the calendar arrows, the chip's remove, slider,
-progress, toast and the split divider say what they are. A run of the gallery
-answers with six `TabList`s, sixteen `Tab`s, four `Separator`s, two `Slider`s
-and two `Progress`es where each of those used to be a button or a group —
-against three hundred and thirty-eight nodes that are still plain buttons:
-menus, the select, the tree, the data grid, dialogs and the day cells. `SNAPSHOT_A11Y=1` on
+progress, toast and the split divider say what they are, and so do dialogs
+(`dialog` or `alert_dialog`, and `modal`), the tree and its items, and a
+menu's items. A run of the gallery on 2026-09-10, before those last three were
+declared, answered with six `TabList`s, sixteen `Tab`s, four `Separator`s, two
+`Slider`s and two `Progress`es where each of those used to be a button or a
+group — against three hundred and thirty-eight nodes that were still plain
+buttons. That count has not been taken again. Still undeclared: the select and
+its options, the data grid and the calendar's day cells. `SNAPSHOT_A11Y=1` on
 the off-screen renderer prints the tree an assistive technology is handed,
 which is the check that can run without a screen reader — the todo's rows
 now read `CheckBox "Write the spec" checked=Yes` and
@@ -1287,12 +1290,13 @@ it drops focus, as always. `dialog`, `alert`, `confirm`, `sheet` and `drawer`
 declare all of it now, and `spec/06` §3's "no global key capture" gained the
 clause `keys` adds to it.
 
-Seventeen vectors in `crates/eui-client/tests/keyboard.rs`, named in `spec/09` §7.1.
+Twenty-one vectors in `crates/eui-client/tests/keyboard.rs`, named in `spec/09` §7.1.
 And the off-screen renderer grew `SNAPSHOT_KEYS`, so a focus ring, a trapped
 `Tab` or a surface that closes on a key can be looked at without a keyboard:
-driven through a real server, the gallery's sheet opens at 940 nodes carrying
-`Dialog "A sheet" modal`, and one `Escape` later it is 934 nodes with no
-dialog at all.
+driven through a real server on 2026-09-10, the gallery's sheet opened at 940
+nodes carrying `Dialog "A sheet" modal`, and one `Escape` later it was 934
+nodes with no dialog at all. Both figures are that day's and have not been
+measured again.
 
 A printable key is now named by **what was typed**, not by what the layout
 calls the key: `key_down` carries `event.text` when no control, alt or super
@@ -1360,8 +1364,9 @@ still do over the wire at a round trip per arrow, and accelerators, which need
 the global key capture the specification still refuses.
 
 Nor does it reach a modifier-click. `key_down` carries the modifier bits;
-`click` carries `[x, y]` and nothing else (06 §1), and `double_click` and
-`long_press` are decodable but no client emits either. So the catalogue's
+`click` carries `[x, y]` and nothing else (06 §1), and so do `double_click`
+and `long_press`, which the client emits now (`driver.rs`) but which carry no
+modifiers either. So the catalogue's
 multi-selection ticks one row at a time and offers select-all, and there is no
 shift-click range. The fix is small and is a protocol change rather than a
 catalogue one: a third element on `click`'s payload, mirroring the mouse
