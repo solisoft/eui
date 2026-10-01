@@ -29,6 +29,7 @@ describe("Docs", fn() {
       "docs/theming",
       "docs/tailwind",
       "docs/clients",
+      "docs/packaging",
       "docs/security",
       "docs/budgets",
       "spec/01-transport",

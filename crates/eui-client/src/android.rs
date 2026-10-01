@@ -101,16 +101,36 @@ pub fn covered(scale: f32) -> f32 {
     below as f32 / if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
 }
 
-/// The address this package was built for, baked in at build time.
+/// The address this package opens.
 ///
 /// An APK is one application, not a browser: there is no command line to
 /// take a session URL from and no address bar worth typing into on a phone.
-/// So the packaging sets `EUI_ANDROID_URL` and the address is in the binary.
-/// Without one the client falls back to the shell, which is what a
-/// development build wants — somewhere to type an address while the
-/// packaging is still being worked out.
-pub fn url() -> Option<&'static str> {
-    option_env!("EUI_ANDROID_URL").filter(|u| !u.is_empty())
+/// So the address is in the package, in one of two places:
+///
+/// - `assets/eui.url`, which `eui package android` writes into the
+///   release's client package (`crates/eui-package`). This is how an
+///   application gets a package without compiling anything, and it wins.
+/// - `EUI_ANDROID_URL` at build time, for a package built from source by
+///   `scripts/make-android-apk.sh`.
+///
+/// With neither the client falls back to the shell, which is what a
+/// development build wants — somewhere to type an address. The string
+/// `eui.url` is also how `eui package` tells a client that reads the asset
+/// from one that predates it, so it must stay a literal here.
+pub fn url() -> Option<String> {
+    packaged_url().or_else(|| option_env!("EUI_ANDROID_URL").filter(|u| !u.is_empty()).map(str::to_owned))
+}
+
+/// `assets/eui.url`, trimmed, if the package carries one.
+fn packaged_url() -> Option<String> {
+    use std::io::Read;
+    let name = std::ffi::CStr::from_bytes_with_nul(b"eui.url\0").ok()?;
+    let mut asset = app()?.asset_manager().open(name)?;
+    let mut text = String::new();
+    // An address is a line; anything longer is not one.
+    asset.by_ref().take(4096).read_to_string(&mut text).ok()?;
+    let url = text.trim();
+    (!url.is_empty()).then(|| url.to_owned())
 }
 
 /// Everything after `android_main` has handed the platform over: open the
@@ -118,7 +138,7 @@ pub fn url() -> Option<&'static str> {
 /// one, and run until the activity ends.
 pub fn run() -> Result<(), String> {
     match url() {
-        Some(u) => crate::app::run(u.to_owned(), 0),
+        Some(u) => crate::app::run(u, 0),
         // No command line on a phone, so nothing is pre-allowed; what an
         // application asks for is asked about (01 §2.1).
         None => crate::app::shell(0),

@@ -18,6 +18,7 @@ members = [
     "crates/eui-web",
     "crates/eui-android",
     "crates/eui-ios",
+    "crates/eui-package",
     "examples/counter-server",
     "examples/snapshot",
     "xtask",

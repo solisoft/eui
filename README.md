@@ -41,6 +41,8 @@ crates/
              file dialogs, touch, a session that survives its socket [built]
   eui-android the shared object Android loads, and its packaging   [untested]
   eui-ios     the static library Xcode links, and its entry point  [untested]
+  eui-package `eui package android|ios`: an application's own APK or
+              iOS bundle from its eui.toml, nothing compiled  [built; no device yet]
   eui-uikit   the one UIKit question winit does not answer         [untested]
   eui-web     where a page's client starts, on wasm32                 [built]
 examples/
@@ -135,6 +137,33 @@ no CI runner has an identity to sign with: give it one with
 none of that.
 
 Neither phone build has been run on a device by anyone yet.
+
+Those packages are the client with a shell, for typing an address. An
+application gets **its own**, with its name, icon and address, from one
+command run in its directory. The command reads an `eui.toml` beside
+`soli.toml` and compiles nothing:
+
+```toml
+[app]
+url       = "https://mail.example.com"
+component = "inbox"
+label     = "Mail"
+icon      = "public/icon.png"
+
+[android]
+package = "com.example.mail"
+
+[ios]
+bundle_id = "com.example.mail"
+```
+
+```sh
+eui package android      # → dist/com.example.mail.apk, signed with a key kept in ~/.config/eui
+eui package ios --sim    # → dist/Mail.app; on a Mac with [ios] identity, a signed .ipa too
+```
+
+[`doc/docs/eui/packaging.md`](doc/docs/eui/packaging.md) has the whole file
+and what each step does.
 
 ## Try it
 

@@ -394,6 +394,21 @@ jobs:
       - name: Build the APK
         run: ./scripts/make-android-apk.sh dist
 
+      # `eui package android` on the APK just built: the package an
+      # application gets from it, read by Google's own tools rather than by
+      # ours. `apksigner` is what decides whether a phone installs it, and
+      # `aapt2 dump badging` is what the launcher will say it is.
+      - name: Package an application from it
+        run: |
+          EUI_PACKAGE_TEMPLATE=dist/eui.apk EUI_PACKAGE_OUT=dist/packaged.apk cargo test -p eui-package --test template -- --nocapture
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$BT/apksigner" verify -v --min-sdk-version 26 dist/packaged.apk
+          "$BT/zipalign" -c -p 4 dist/packaged.apk
+          "$BT/aapt2" dump badging dist/packaged.apk | tee badging.txt
+          grep -q "^package: name='net.example.check' versionCode='9' versionName='9.0'" badging.txt
+          grep -q "^application-label:'Check'" badging.txt
+          unzip -p dist/packaged.apk assets/eui.url | grep -qx 'https://example.test/_eui/session/check'
+
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:

@@ -83,6 +83,9 @@ arboard = { version = "3", optional = true, default-features = false, features =
 # XDG portal rather than GTK, so a client in a sandbox asks the desktop for
 # a file the way everything else does.
 rfd = { version = "0.17.2", optional = true }
+# `eui package android|ios`: an application's own phone package, assembled
+# from the release's client package. A desktop's job, so a desktop's crate.
+eui-package = { path = "../eui-package", version = "0.8.0" }
 
 # A page. Nothing here is new to the lock file: `winit` and `wgpu` already
 # resolve every one of these for this target, so naming them is the client

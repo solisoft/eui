@@ -1637,9 +1637,32 @@ note where a target's standard library is missing.
   its looper. `cargo apk build -p eui-android` reads the packaging in its
   manifest. `crates/eui-ios` is the static library Xcode links: iOS has no
   `main` of ours, so `eui_start` is a function Xcode's own `main` calls once
-  `UIApplicationMain` is up. Either way the session address is baked in at
-  build time — `EUI_ANDROID_URL`, `EUI_IOS_URL` — because an application is
-  one application and not a browser.
+  `UIApplicationMain` is up. Either way the session address is in the
+  package, because an application is one application and not a browser:
+  `assets/eui.url` in an APK, `eui.url` beside the iOS executable, read
+  before anything else and opened instead of the shell. `EUI_ANDROID_URL`
+  and `EUI_IOS_URL` at build time still work for a package built from
+  source, and lose to the file.
+- **An application's own package, without a compiler** (`crates/eui-package`,
+  2026-10-01). `eui package android` and `eui package ios [--sim]`, run in
+  an application's directory, read its `eui.toml` (address, label, icon,
+  version, package name or bundle id) and assemble a package from the
+  client package the release publishes. Nothing is compiled, and neither the
+  SDK, the NDK nor Xcode is needed. On Android the command patches the
+  compiled manifest, redraws the five launcher icons, adds the address,
+  aligns the archive as `zipalign` would, and signs it with APK Signature
+  Scheme v2 using an ECDSA P-256 key it creates once and keeps. On iOS it
+  writes the `.app` with its plist, icons and address, and on a Mac with an
+  identity it runs `codesign` and makes the `.ipa`. It refuses a template
+  older than 0.8.0, whose client would ignore the address. 15 unit tests,
+  plus `tests/template.rs`, which CI's `build-android` job runs on the APK
+  it has just built before handing the result to `apksigner verify`,
+  `zipalign -c` and `aapt2 dump badging`. By hand, with build-tools 34, a
+  package from the 0.7.1 APK verified under v2 and read back its package,
+  versions, label and icons. It has not been installed on a device or an
+  emulator, and no iOS bundle it made has been signed or run: the first
+  client that reads the address is the build this change produces.
+  [Phone packages](/docs/packaging) is the page for it.
 - **iOS asks least of the client**, because winit's UIKit backend already
   speaks both dialects that mattered on Android. `touchesBegan/Moved/Ended/
   Cancelled` arrive as `WindowEvent::Touch` with all four phases, so 06 §5
@@ -1709,9 +1732,9 @@ note where a target's standard library is missing.
   `email_field`, `number_field`, `date_field` — should each raise a
   different keypad, and nothing in the tree says which.
 - The shell (`chrome.rs`) is a tab strip and an address bar: the wrong
-  shape for a phone. An APK built with `EUI_ANDROID_URL` is chromeless and
-  right; one built without it opens the shell, which works and looks like a
-  desktop.
+  shape for a phone. A package made by `eui package` (or built with
+  `EUI_ANDROID_URL`) is chromeless and right; the bare client package opens
+  the shell, which works and looks like a desktop.
 - Safe-area insets around a notch, on either phone. winit's `WindowExtIOS`
   exposes what iOS needs — the home indicator, the status bar, and which
   screen edges defer system gestures — and none of it is called yet.

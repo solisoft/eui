@@ -57,20 +57,40 @@ pub fn data_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Library").join("Application Support").join("eui"))
 }
 
-/// The address this build was made for, baked in at build time or passed at runtime.
+/// The address this bundle opens.
 ///
 /// An application is one application, not a browser: there is no command
 /// line on a phone to take a session URL from, and no address bar worth
-/// typing into. So the packaging sets `EUI_IOS_URL` and the address is in
-/// the binary. Without one the client checks the runtime `EUI_IOS_URL` env var,
-/// and if that is also absent, falls back to the shell, which is what
-/// a development build wants — somewhere to type an address while the
-/// packaging is still being worked out.
+/// typing into. So the address comes from, in order:
+///
+/// - `eui.url` beside the executable, which `eui package ios` writes into
+///   the release's client bundle (`crates/eui-package`) — an application's
+///   own bundle, made without compiling anything;
+/// - `EUI_IOS_URL` at build time, for a bundle built from source by
+///   `scripts/make-ios-app.sh`;
+/// - `EUI_IOS_URL` in the environment, which `xcrun simctl launch` can set.
+///
+/// With none of them the client falls back to the shell, which is what a
+/// development build wants — somewhere to type an address. The string
+/// `eui.url` is also how `eui package` tells a client that reads the file
+/// from one that predates it, so it must stay a literal here.
 pub fn url() -> Option<String> {
+    if let Some(u) = packaged_url() {
+        return Some(u);
+    }
     if let Some(u) = option_env!("EUI_IOS_URL").filter(|u| !u.is_empty()) {
         return Some(u.to_owned());
     }
     std::env::var("EUI_IOS_URL").ok().filter(|u| !u.is_empty())
+}
+
+/// `eui.url` in the bundle, trimmed, if there is one. The executable is at
+/// the bundle's top level, so the bundle is the directory it is in.
+fn packaged_url() -> Option<String> {
+    let path = std::env::current_exe().ok()?.parent()?.join("eui.url");
+    let text = std::fs::read_to_string(path).ok()?;
+    let url = text.trim();
+    (!url.is_empty() && url.len() <= 4096).then(|| url.to_owned())
 }
 
 /// Everything after UIKit has started: open the address this build was made

@@ -474,6 +474,13 @@ class DocsController < Controller
           "source": "doc/docs/eui/clients.md",
           "title": "Servers in six languages",
           "lead": "Ruby, Python, PHP, Node, Go and Rust: what they implement."
+        },
+        {
+          "slug": "docs/packaging",
+          "file": "eui/packaging.md",
+          "source": "doc/docs/eui/packaging.md",
+          "title": "Phone packages",
+          "lead": "eui package android|ios: an application's own APK or iOS bundle."
         }
       ]},
       {"title": "Guarantees", "items": [

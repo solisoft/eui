@@ -122,6 +122,12 @@ class DocsController < Controller
           "file": "clients.md",
           "title": "Servers in six languages",
           "lead": "Ruby, Python, PHP, Node, Go and Rust: what they implement, and what they cost."
+        },
+        {
+          "slug": "packaging",
+          "file": "packaging.md",
+          "title": "Phone packages",
+          "lead": "eui package android|ios: an application's own APK or iOS bundle, from eui.toml."
         }
       ]},
       {"title": "Guarantees", "items": [

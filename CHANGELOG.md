@@ -38,9 +38,20 @@ release. A wire change lands here first, is released, and then the pin moves.
   the window when the application finishes without an `Error`. The Ruby
   server speaks it (`App#run_pipe` in `clients/eui-ruby`).
 - Documentation code blocks are coloured (Soli, Ruby and `sh`), on the server.
+- **`eui package android` and `eui package ios`**: an application's own APK
+  or iOS bundle, made from the client package the release publishes and an
+  `eui.toml` in the application's directory (address, label, icon, version,
+  package name or bundle id), with no SDK, NDK or Xcode. The APK is signed
+  with APK Signature Scheme v2 and a key kept in `~/.config/eui`, so a later
+  package upgrades the installed one. On a Mac, `[ios] identity` signs the
+  bundle and makes an `.ipa`. See `/docs/packaging`.
 
 ### Changed
 
+- On Android and iOS the client opens the address in `eui.url` — an asset of
+  the APK, a file beside the iOS executable — before any compiled in with
+  `EUI_ANDROID_URL` or `EUI_IOS_URL`, and opens the shell only when there is
+  neither.
 - The version is 0.8.0 and the protocol 8. Nothing on a socket changed: a
   server at 7 and this client meet exactly as before.
 - The site's masthead has no `Spec` entry — the specification is a section

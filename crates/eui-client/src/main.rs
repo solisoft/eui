@@ -15,6 +15,9 @@
 //! Either way it is one process: one GPU device, one set of pipelines, one
 //! runtime. Each application still gets its own confined worker.
 //!
+//! `eui package android|ios` makes a phone package for one application
+//! from its `eui.toml`, and opens nothing (`crates/eui-package`).
+//!
 //! `eui --pipe [--title <name>] [--allow …]` is the other way in (01 §7):
 //! an application on the same machine starts the client and speaks to it
 //! over this process's standard input and output. Nothing but frames is
@@ -26,6 +29,13 @@ fn main() {
     // Spawned by a window as its worker: take that role and nothing else.
     if let Some(code) = eui_client::worker::entry(&args) {
         std::process::exit(code);
+    }
+    // `eui package android|ios`: make a phone package and leave. The word
+    // comes first and alone, so it cannot be an address — an address has a
+    // scheme or at least a dot in it.
+    #[cfg(has_launchers)]
+    if args.first().map(String::as_str) == Some("package") {
+        std::process::exit(eui_package::cli(args.get(1..).unwrap_or(&[]), eui_client::manifest::config_dir()));
     }
     let mut urls: Vec<String> = Vec::new();
     let mut allowed = 0u32;
@@ -234,6 +244,7 @@ fn usage() -> ! {
     eprintln!("usage: eui <wss://host/_eui/session/app>... [--allow all|{all}] [--standalone]");
     eprintln!("       eui --pipe [--title <name>] [--allow all|{all}]");
     eprintln!("       eui --install <wss://host/...> | --uninstall <address|app id> | --installed");
+    eprintln!("       eui package android|ios [dir]   (reads dir/eui.toml; eui package --help)");
     eprintln!("       eui --version");
     std::process::exit(2);
 }

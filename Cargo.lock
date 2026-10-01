@@ -1099,6 +1099,7 @@ dependencies = [
  "eui-audio",
  "eui-cursor",
  "eui-layout",
+ "eui-package",
  "eui-proto",
  "eui-render",
  "eui-shader",
@@ -1164,6 +1165,16 @@ dependencies = [
  "eui-proto",
  "eui-theme",
  "eui-tree",
+]
+
+[[package]]
+name = "eui-package"
+version = "0.8.0"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide 0.8.9",
+ "png",
+ "ring",
 ]
 
 [[package]]

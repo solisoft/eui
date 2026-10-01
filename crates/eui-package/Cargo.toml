@@ -1,0 +1,20 @@
+[package]
+name = "eui-package"
+description = "`eui package android|ios`: an application's own phone package, made from the published client and an eui.toml, with no SDK, NDK or Xcode project."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Every one of these is already in the tree under the client: the PNG codec
+# for the launcher icons, `ring` for the APK signature, and the inflater and
+# checksum a zip needs. Nothing here is new to `deny.toml`.
+png = "0.17"
+ring = "0.17"
+miniz_oxide = "0.8"
+crc32fast = "1"
+
+[lints]
+workspace = true
