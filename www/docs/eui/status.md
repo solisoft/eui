@@ -1590,6 +1590,19 @@ FA-1028 with its scrollbar, laying out only the rows that have boxes. The
 canvas is 914×685 CSS and 1828×1370 device, which is the page's own box at
 its own pixel ratio.
 
+**Several sessions on one page, one after another.** winit gives a page one
+event loop for its life, so the documentation's embeds share one window and
+one canvas: each *Run it* moves that canvas into its own figure and swaps the
+session inside it. Until 2026-10-03 the second one drew into a corner of the
+canvas under WebGL and nothing at all under WebGPU on a Mac — the page had
+resized the canvas's backing store for the new figure, winit watches only the
+CSS box, and the surface stayed at the old size. The first session also
+opened at 1x on a 2x screen, for the same reason. The client now measures the
+canvas's box itself when the window opens and at every swap, and sizes the
+surface to it. Checked headless in Chromium, WebGL and WebGPU both, on three
+embeds in a row, the third in a figure of another size (1796×1196 device,
+then 1276×756).
+
 **Not cut, just not wired: a page always dials.** The one-shot render of
 01 §2.4 — fetch the tree over HTTPS, draw it, open no socket until something
 happens that only a server can answer — is `#[cfg(has_native_net)]` and so

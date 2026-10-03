@@ -2065,16 +2065,10 @@ impl Shell {
         // lost reliably and is won every time locally.
         #[cfg(target_arch = "wasm32")]
         let size = {
-            use winit::platform::web::WindowExtWebSys;
             let asked = window.inner_size();
-            let measured = window.canvas().map(|canvas| {
-                let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio()).clamp(1.0, 2.0);
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-                winit::dpi::PhysicalSize::new((f64::from(canvas.client_width().max(1)) * dpr).round() as u32, (f64::from(canvas.client_height().max(1)) * dpr).round() as u32)
-            });
-            match measured {
-                Some(m) if m.width > 1 && m.height > 1 && (asked.width <= 1 || asked.height <= 1) => {
-                    eprintln!("eui: the window opened at {}x{}; the canvas says {}x{} and the canvas is right", asked.width, asked.height, m.width, m.height);
+            match page_size(&window) {
+                Some(m) if m != asked => {
+                    eprintln!("eui: the window opened at {}x{} (scale {}); the canvas says {}x{} and the canvas is right", asked.width, asked.height, window.scale_factor(), m.width, m.height);
                     let _ = window.request_inner_size(m);
                     m
                 }
@@ -4773,6 +4767,20 @@ impl App {
         for shell in self.shells.values_mut() {
             shell.allowed = allowed;
             shell.announced = false;
+            // The figure the canvas was moved into is a box of its own, and
+            // the page set the canvas's backing store for it before asking —
+            // a change winit never hears of, because it watches the CSS box
+            // and that may not have moved at all. Left alone, the surface and
+            // every target sized from it stay at the last figure's size
+            // while the canvas does not: WebGL draws the new session into a
+            // corner of it, and WebGPU on a Mac draws nothing at all.
+            if let Some(m) = page_size(&shell.window) {
+                if m.width != shell.config.width || m.height != shell.config.height {
+                    eprintln!("eui: the canvas moved to a {}x{} box; the surface was {}x{}", m.width, m.height, shell.config.width, shell.config.height);
+                    let _ = shell.window.request_inner_size(m);
+                    shell.pending_resize = Some(m);
+                }
+            }
             shell.go_to(url.clone(), &shared.renderer, Trail::Stay);
             shell.window.request_redraw();
         }
@@ -4904,6 +4912,26 @@ impl App {
             let _ = proxy.send_event(Wake::Gpu(Box::new(Gpu(shared))));
         });
     }
+}
+/// The page's window as the page has laid it out right now: the canvas's CSS
+/// box times `devicePixelRatio`, clamped at 2 as `probe_gpu` clamps it, or
+/// `None` while the canvas measures nothing.
+///
+/// Asked rather than taken from winit, because winit's idea of the size is
+/// the canvas's *backing store*, and the page sets that itself — before the
+/// window exists, and again each time it moves the canvas into another
+/// figure — without winit hearing of either.
+#[cfg(target_arch = "wasm32")]
+fn page_size(window: &Window) -> Option<winit::dpi::PhysicalSize<u32>> {
+    use winit::platform::web::WindowExtWebSys;
+    let canvas = window.canvas()?;
+    let (w, h) = (canvas.client_width(), canvas.client_height());
+    if w <= 1 || h <= 1 {
+        return None;
+    }
+    let dpr = web_sys::window().map_or(1.0, |win| win.device_pixel_ratio()).clamp(1.0, 2.0);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    Some(winit::dpi::PhysicalSize::new((f64::from(w) * dpr).round() as u32, (f64::from(h) * dpr).round() as u32))
 }
 
 impl ApplicationHandler<Wake> for App {

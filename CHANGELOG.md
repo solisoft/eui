@@ -80,6 +80,12 @@ release. A wire change lands here first, is released, and then the pin moves.
   page one event loop — and the first session was only hidden, never closed.
   The page now keeps one loop, one window and one canvas, and each embed
   replaces the session in it.
+- A second embed on the same page (the tutorial's second *Run it*) drew into
+  a corner of the canvas under WebGL and showed a black box under WebGPU, as
+  on a Mac: the page resized the canvas for the new figure and the client's
+  surface never followed. The client now sizes its surface to the canvas's
+  box when a session is swapped in, and when the window opens — where the
+  first session had been opening at 1x on a 2x screen.
 - An embed on a page reached through Soli's prefetching navigation had a
   button that did nothing and a still in the wrong theme: the bootstrap ran
   once per document. It binds again after every page swap (`soli:load`).
