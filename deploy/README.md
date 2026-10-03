@@ -19,7 +19,7 @@ specification are not a website.
 1. `rsync www/` into `/home/rocky/sites/eui.solisoft.net/`, excluding what
    lives on the server (`.env`, `app.infos`, `restart.txt`) and what has no
    business there (`.git/`, `.claude/`, `.env.*`);
-2. `soli-proxy deploy -c /home/rocky/sites/config.toml eui`: the proxy starts
+2. `soli-proxy deploy -c /home/rocky/proxy.conf eui`: the proxy starts
    the idle slot, waits for `/up`, moves the traffic across, stops the old
    slot;
 3. `soli-proxy restart …`, because after a switch the proxy balances across
@@ -48,8 +48,13 @@ leaves the page rendering.
 > for x in $(pgrep -x soli); do
 >   [ "$(readlink /proc/$x/cwd)" = "/home/rocky/sites/eui.solisoft.net" ] && kill $x
 > done
-> soli-proxy deploy -c /home/rocky/sites/config.toml eui
+> soli-proxy deploy -c /home/rocky/proxy.conf eui
 > ```
+>
+> `-c` names the routing rules the running proxy was started with, and
+> `config.toml` is read from beside them. Since soli-proxy 1.0 that file is
+> parsed strictly, so `-c …/config.toml` — which the workflows passed until
+> 2026-10-03 — fails the switch with `cannot parse "[server]"`.
 
 ### One route the repository cannot set: `/_eui/` on the site
 
@@ -268,6 +273,7 @@ Repository → Settings → Secrets and variables → Actions.
 | `DEPLOY_DOMAIN` | variable | `eui.solisoft.net` (the default if absent) |
 | `DEPLOY_USER` | variable | `rocky` (the default if absent) |
 | `DEPLOY_SITES_DIR` | variable | `/home/rocky/sites` (the default if absent) |
+| `DEPLOY_PROXY_CONF` | variable | `/home/rocky/proxy.conf` (the default if absent): what `soli-proxy … -c` takes |
 | `DEPLOY_APP` | variable | the `name` in `app.infos`, `eui` by default |
 | `DATA_DOMAIN` | variable | `eui-data.solisoft.net` (the default if absent) |
 | `DATA_APP` | variable | the `name` in the demo application's `app.infos`, `eui-data` by default |

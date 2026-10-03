@@ -131,6 +131,11 @@ jobs:
       HOST: ${{ secrets.DEPLOY_HOST }}
       USER: ${{ vars.DEPLOY_USER || 'rocky' }}
       SITES_DIR: ${{ vars.DEPLOY_SITES_DIR || '/home/rocky/sites' }}
+      # What `soli-proxy deploy|restart|logs -c` takes: the routing rules,
+      # proxy.conf, never config.toml. Since soli-proxy 1.0 that file is
+      # parsed strictly, so handing it config.toml fails the switch with
+      # `cannot parse "[server]"`; config.toml is read from beside it.
+      PROXY_CONF: ${{ vars.DEPLOY_PROXY_CONF || '/home/rocky/proxy.conf' }}
       DOMAIN: ${{ vars.DEPLOY_DOMAIN || 'eui.solisoft.net' }}
       # The `name` declared in app.infos, which soli-proxy uses as the app's id.
       APP: ${{ vars.DEPLOY_APP || 'eui' }}
@@ -257,11 +262,11 @@ jobs:
           echo "processes before: ${before:-none}"
           echo "$before" > /tmp/pids-before
 
-          if ! ssh "$USER@$HOST" "soli-proxy deploy -c '$SITES_DIR/config.toml' '$APP' 2>&1"; then
+          if ! ssh "$USER@$HOST" "soli-proxy deploy -c '$PROXY_CONF' '$APP' 2>&1"; then
             echo "" >&2
             echo "The switch failed. Common cause: an orphaned slot still holds" >&2
             echo "its port, so the proxy cannot start a new one." >&2
-            echo "  ssh $USER@$HOST 'soli-proxy logs -c $SITES_DIR/config.toml $APP'" >&2
+            echo "  ssh $USER@$HOST 'soli-proxy logs -c $PROXY_CONF $APP'" >&2
             exit 1
           fi
 
@@ -285,14 +290,14 @@ jobs:
           done
           echo "" >&2
           echo "No new slot answered 200 on /up within 90 s." >&2
-          echo "  ssh $USER@$HOST 'soli-proxy logs -c $SITES_DIR/config.toml $APP'" >&2
+          echo "  ssh $USER@$HOST 'soli-proxy logs -c $PROXY_CONF $APP'" >&2
           exit 1
 
       # After a switch the proxy still balances across BOTH slot ports while
       # only one process is up: every other request hits a dead port and gets
       # a 421. `restart` brings both slots up on the current code.
       - name: Bring both slots up
-        run: ssh "$USER@$HOST" "soli-proxy restart -c '$SITES_DIR/config.toml' '$APP'"
+        run: ssh "$USER@$HOST" "soli-proxy restart -c '$PROXY_CONF' '$APP'"
 
       # End to end, through the proxy, with the real hostname — where the 421
       # shows. The /up probe on the app's own port bypasses exactly the part
@@ -316,7 +321,7 @@ jobs:
           echo "" >&2
           echo "The site does not answer reliably through the proxy." >&2
           echo "A dead slot is still taking traffic; restart it:" >&2
-          echo "  ssh $USER@$HOST 'soli-proxy restart -c $SITES_DIR/config.toml $APP'" >&2
+          echo "  ssh $USER@$HOST 'soli-proxy restart -c $PROXY_CONF $APP'" >&2
           exit 1
 
       # The samples page is the one that can rot without anything failing:
