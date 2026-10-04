@@ -15,9 +15,7 @@
     <link rel="icon" type="image/svg+xml" href="<%= public_path("favicon.svg") %>">
     <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#0e1216" media="(prefers-color-scheme: dark)">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    <%- partial("layouts/fonts") %>
     <link rel="stylesheet" href="<%= public_path("css/site.css") %>">
 </head>
 <body>

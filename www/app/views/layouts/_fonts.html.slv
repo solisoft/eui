@@ -1,0 +1,30 @@
+<%# The site's faces (public/css/fonts.css), kept off the first paint.
+
+    They used to come from Google Fonts, whose stylesheet sat on the critical
+    path behind two other origins: on a phone, three connections before the
+    first paint, and the one thing between the landing page and 100 in
+    Lighthouse's mobile run. Served from here they are one origin — but a
+    face that is asked for before the first paint is still on its path, and
+    IBM Plex Sans alone is 46 KB.
+
+    So the stylesheet is linked as `print`, which a screen does not wait for
+    and whose faces it does not fetch, and turned on at `load`: the page paints
+    in the fallback faces the tokens name (Georgia, system-ui, ui-monospace),
+    then takes its own. Once they have been taken, the browser has them, and
+    every later page turns them on before it paints — so the swap is seen
+    once, on a first visit, not on every page. Without JavaScript, `noscript`
+    links the same file the ordinary way. %>
+<link id="eui-fonts" rel="stylesheet" href="<%= public_path("css/fonts.css") %>" media="print">
+<script>
+  (() => {
+    const link = document.getElementById("eui-fonts");
+    const on = () => {
+      link.media = "all";
+      try { localStorage.setItem("eui-fonts", "1"); } catch (e) {}
+    };
+    let seen = false;
+    try { seen = localStorage.getItem("eui-fonts") === "1"; } catch (e) {}
+    if (seen) on(); else addEventListener("load", on);
+  })();
+</script>
+<noscript><link rel="stylesheet" href="<%= public_path("css/fonts.css") %>"></noscript>

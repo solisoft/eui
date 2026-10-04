@@ -2,10 +2,25 @@
 
 One page, server-rendered by Soli, describing what EUI is. It is deliberately
 plain machinery: **no framework, no build step, no npm, and no JavaScript
-beyond fifteen lines that light up a paragraph when you hover a byte.**
+beyond fifteen lines that light up a paragraph when you hover a byte, and
+ten that turn the fonts on once the page has painted.**
 
 - `app/views/home/index.html.slv` — the page.
-- `app/views/layouts/application.html.slv` — head, fonts, stylesheet.
+- `app/views/layouts/application.html.slv` — head, stylesheet.
+- `app/views/layouts/_fonts.html.slv` and `public/css/fonts.css` — the three
+  faces (IBM Plex Mono, IBM Plex Sans, Instrument Serif; SIL OFL), served
+  from `public/fonts/` rather than Google Fonts, latin and latin-ext only.
+  The stylesheet is linked as `print` and switched on at `load`, so the first
+  paint uses the fallback faces the tokens name and no font is on its path;
+  a browser that has had them once turns them on before painting.
+
+**Lighthouse, landing page, 2026-10-04** (12.8.2, a local replica — Soli in
+production mode behind a brotli HTTPS proxy, calibrated against
+eui.solisoft.net, which scored the same 99 there before the change): 100 for
+performance, accessibility, best practices and SEO, on mobile and on desktop.
+Mobile: first contentful paint 0.9 s, largest 1.4 s, CLS 0.0008, TBT 0 —
+from 1.6 s and 1.6 s with Google Fonts, whose stylesheet alone was 0.8 s of
+render blocking on the simulated phone. Desktop: 0.35 s and 0.39 s.
 - `public/css/site.css` — hand-written, with the design tokens at the top.
 - `share/card.html` — the 1200 × 630 picture a link to the site unfurls into
   (Open Graph and X cards, which the layout declares on every page, with the

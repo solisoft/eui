@@ -48,6 +48,11 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
+- The site serves its own fonts (IBM Plex Mono, IBM Plex Sans, Instrument
+  Serif) instead of loading them from Google Fonts, and turns them on once
+  the page has painted. Lighthouse scores the landing page 100 in all four
+  categories on mobile and desktop; mobile first paint went from 1.6 s to
+  0.9 s.
 - On Android and iOS the client opens the address in `eui.url` — an asset of
   the APK, a file beside the iOS executable — before any compiled in with
   `EUI_ANDROID_URL` or `EUI_IOS_URL`, and opens the shell only when there is
