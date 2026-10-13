@@ -54,6 +54,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- The score editor's Examples menu has four more pieces: a song with
+  lyrics, a piano minuet, a two-voice Ode to Joy and a three-voice round.
+- A source with two voices on a staff is read back as two voices; it was
+  read as one, the second voice's notes after the first's.
 - With two voices, a click selects a note of either and switches to its
   voice; the first voice's notes can be picked again after writing in the
   second.

@@ -2655,6 +2655,18 @@ one whose note is nearest the pitch pressed. The editor's engraving gives
 the second voice's map beside the first's. `tests/score_spec.sl` is 125
 tests.
 
+**And examples that show it** (2026-10-13). The Examples menu offers four
+more public-domain pieces, each for something the editor does: *Au clair
+de la lune* with its words (44 syllables for its 44 notes), Petzold's
+*Minuet in G* on a piano's two staves, *Ode to Joy* in two voices on one
+staff, and *Frère Jacques* as a round for three voices, each with its
+words, entering two bars apart. Loading the *Ode* showed that a source's
+second voice was read back as more notes of the first — 60 notes on one
+voice — so a score with two voices lost them when pasted or reloaded: the
+import now gives the second voice its own notes, silent up to each of its
+blocks, and what the editor writes reads back the same. `tests/score_spec.sl`
+is 126 tests.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

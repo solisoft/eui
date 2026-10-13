@@ -56,7 +56,7 @@ const SCORE_ED_VIEWS = ["Screen", "A4 page"]
 # The height of a row of track chips, gap included, in px.
 const SCORE_ED_CHIP_ROW = 28
 # What the Examples menu loads.
-const SCORE_ED_EXAMPLES = ["Frère Jacques", "Beethoven, Symphony No. 5 (exposition)"]
+const SCORE_ED_EXAMPLES = ["Frère Jacques", "Beethoven, Symphony No. 5 (exposition)", "Au clair de la lune (with lyrics)", "Minuet in G (piano, two staves)", "Ode to Joy (two voices on a staff)", "Frère Jacques, a round (choir, three voices)"]
 # The tabs under the palette.
 const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Lyrics", "Tracks"]
 # Where a track sits, left to right, and its MIDI pan for each.
@@ -1604,15 +1604,20 @@ def score_ed_example(state, name)
   score_ed_from_source(state, src)
 end
 
-# Frère Jacques, written here; the Beethoven exposition from the file
-# tools/mutopia_beethoven5.py made of Mutopia's public-domain engraving.
+# Frère Jacques, written here; the others from `public/scores/`, each
+# showing something the editor does: the Beethoven exposition (made by
+# tools/mutopia_beethoven5.py of Mutopia's public-domain engraving) a dozen
+# tracks, a song with its lyrics, a piano piece on two staves, two voices
+# on one staff, and a round for a choir, every voice its words.
 def score_ed_example_source(name)
   if name == SCORE_ED_EXAMPLES[0]
     return "\\header { title = \"Frère Jacques\" composer = \"Traditional\" } { \\tempo \"Moderato\" 4 = 100 \\clef treble \\key c \\major \\time 4/4 c'4 d' e' c' c' d' e' c' e' f' g'2 e'4 f' g'2 }"
   end
-  return nil unless name == SCORE_ED_EXAMPLES[1]
+  files = ["", "beethoven-symphony-5-1.ly", "au-clair-de-la-lune.ly", "minuet-in-g.ly", "ode-to-joy-two-voices.ly", "frere-jacques-round.ly"]
+  k = SCORE_ED_EXAMPLES.index_of(name)
+  return nil if k <= 0 || k >= files.length
 
-  File.read("public/scores/beethoven-symphony-5-1.ly") rescue nil
+  File.read("public/scores/" + files[k]) rescue nil
 end
 
 # ---- Sound -----------------------------------------------------------------
@@ -3030,6 +3035,7 @@ def score_ed_from_source(state, src)
       pan = props["midiPanPosition"] ?? 0.0
       trk["pan"] = int(pan * 100.0 + (pan < 0.0 ? -0.5 : 0.5))
       trk["notes"] = got["notes"]
+      trk["notes2"] = got["notes2"]
       trk["clef"] = got["clef"]
       trk["lyrics"] = score_ed_lyrics_text(stf["lyrics"])
       tracks.push(trk)
@@ -3038,9 +3044,12 @@ def score_ed_from_source(state, src)
     state["group"] = {"brace": "Brace", "bracket": "Bracket", "choir": "Bracket", "none": "None"}[kind] ?? "Bracket"
     state["tracks"] = tracks
     state["track"] = 0
+    state["voice"] = 1
     state["notes"] = tracks[0]["notes"]
+    state["notes2"] = tracks[0]["notes2"]
     state["clef"] = tracks[0]["clef"]
     tracks[0]["notes"] = nil
+    tracks[0]["notes2"] = nil
     tracks[0]["clef"] = nil
     state["sel"] = state["notes"].length > 0 ? 0 : -1
     return state
@@ -3050,7 +3059,9 @@ def score_ed_from_source(state, src)
   state["tracks"][0]["lyrics"] = score_ed_lyrics_text(parsed["staves"][0]["lyrics"])
   state["track"] = 0
   state["clef"] = got["clef"]
+  state["voice"] = 1
   state["notes"] = got["notes"]
+  state["notes2"] = got["notes2"]
   state["sel"] = got["notes"].length > 0 ? 0 : -1
   state
 end
@@ -3058,8 +3069,15 @@ end
 # One staff's events as the model's notes, and its clef. The first staff
 # also gives the piece its key, metre and tempo and the bars their changes,
 # repeats and breaks; another's are the first's already, and are not kept.
+# The notes of a second voice (`<< { … } \\\\ { … } >>`) are its own, in
+# `notes2`: silent (spacers) up to where each of its blocks starts, its own
+# `s` spacers too — as the editor writes it.
 def score_ed_import(state, events, first)
   notes = []
+  notes2 = []
+  t1 = 0
+  t2 = 0
+  block_at = 0
   clef = "Treble"
   # Settings before the first note are the piece's; after it, they are
   # changes, written on the note that follows them.
@@ -3068,6 +3086,18 @@ def score_ed_import(state, events, first)
   # come back as the notes they hold, without their brackets.
   rep_next = false
   for ev in events
+    block_at = t1 if ev["k"] == "voices"
+    if ev["k"] == "voice_next" && block_at > t2
+      notes2 = notes2 + score_ed_chunks(block_at - t2).map { |c| {"rest": true, "spacer": true, "pitches": [], "base": c[0], "dots": c[1], "tie": false} }
+      t2 = block_at
+    end
+    if (ev["k"] == "note" || ev["k"] == "rest") && ev["voice"] == 2
+      two = score_ed_imported(ev, {})
+      two["spacer"] = true if ev["spacer"] == true
+      notes2.push(two)
+      t2 += score_ed_ticks(two)
+      next
+    end
     if first && (ev["k"] == "repeat_start" || (ev["k"] == "bar" && ev["v"].ends_with?("|:")))
       rep_next = true
     end
@@ -3111,35 +3141,43 @@ def score_ed_import(state, events, first)
         ev["set"] = pending
         pending = {}
       end
-      fresh = {
-        "rest": ev["k"] == "rest",
-        "pitches": ev["pitches"].map { |pt| {"step": score_mod(pt["d"], 7), "oct": (pt["d"] - score_mod(pt["d"], 7)) / 7 + 3, "alter": pt["alter"]} },
-        "base": ev["base"],
-        "dots": score_min(ev["dots"], 1),
-        "tie": ev["tie"] == true,
-        "slur_on": ev["slur_on"] == true,
-        "slur_off": ev["slur_off"] == true,
-        "set": ev["set"] ?? {}
-      }
+      fresh = score_ed_imported(ev, state)
       fresh["rep_start"] = true if rep_next
-      fresh["dyn"] = ev["dyn"] if SCORE_ED_DYNAMICS.includes?(ev["dyn"] ?? "")
-      fresh["hairpin"] = ev["hairpin"] unless ev["hairpin"].nil?
-      fresh["hairpin_end"] = true if ev["hairpin_end"] == true
-      fresh["scripts"] = (ev["scripts"] ?? []).map { |sc| {"name": sc["name"], "dir": sc["dir"]} } unless ev["scripts"].nil?
-      fresh["texts"] = ev["texts"] unless ev["texts"].nil?
-      unless ev["tuplet"].nil?
-        fresh["tup"] = {"g": ev["tuplet"]["id"], "n": ev["tuplet"]["n"], "d": ev["tuplet"]["d"]}
-        state["tup_seq"] = score_max(state["tup_seq"] ?? 0, ev["tuplet"]["id"])
-      end
       rep_next = false
       notes.push(fresh)
+      t1 += score_ed_ticks(fresh)
       # R1*4 is four bars of rest in the model; the writer gathers them again.
       for _ in range(1, ev["count"] ?? 1)
         notes.push(fresh.merge({"set": {}, "rep_start": false}))
+        t1 += score_ed_ticks(fresh)
       end
     end
   end
-  {"notes": notes, "clef": clef}
+  {"notes": notes, "notes2": notes2, "clef": clef}
+end
+
+# A note or a rest read as the model's note, with what is written on it.
+def score_ed_imported(ev, state)
+  fresh = {
+    "rest": ev["k"] == "rest",
+    "pitches": ev["pitches"].map { |pt| {"step": score_mod(pt["d"], 7), "oct": (pt["d"] - score_mod(pt["d"], 7)) / 7 + 3, "alter": pt["alter"]} },
+    "base": ev["base"],
+    "dots": score_min(ev["dots"], 1),
+    "tie": ev["tie"] == true,
+    "slur_on": ev["slur_on"] == true,
+    "slur_off": ev["slur_off"] == true,
+    "set": ev["set"] ?? {}
+  }
+  fresh["dyn"] = ev["dyn"] if SCORE_ED_DYNAMICS.includes?(ev["dyn"] ?? "")
+  fresh["hairpin"] = ev["hairpin"] unless ev["hairpin"].nil?
+  fresh["hairpin_end"] = true if ev["hairpin_end"] == true
+  fresh["scripts"] = (ev["scripts"] ?? []).map { |sc| {"name": sc["name"], "dir": sc["dir"]} } unless ev["scripts"].nil?
+  fresh["texts"] = ev["texts"] unless ev["texts"].nil?
+  unless ev["tuplet"].nil?
+    fresh["tup"] = {"g": ev["tuplet"]["id"], "n": ev["tuplet"]["n"], "d": ev["tuplet"]["d"]}
+    state["tup_seq"] = score_max(state["tup_seq"] ?? 0, ev["tuplet"]["id"])
+  end
+  fresh
 end
 
 # ---- The view --------------------------------------------------------------
