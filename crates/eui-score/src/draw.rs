@@ -10,7 +10,7 @@ use crate::engrave::{
     Engraved, Line, System,
 };
 use crate::glyphs::{glyph, letters, Weight};
-use crate::marks::{dyn_letters, rest_lift, DynEl, TempoMark, TupletPlace, Volta};
+use crate::marks::{dyn_letters, reach, rest_lift, DynEl, TempoMark, TupletPlace, Volta};
 use crate::measure::{Bar, Beam, Opening};
 use crate::parse::{Clef, Ev, GroupKind, Kind};
 use crate::text::{args_of, em, text_box, text_width};
@@ -171,6 +171,18 @@ pub fn bands(eng: &Engraved, sp: f64, page: usize, total: i64) -> Vec<Band> {
         if let Some(last) = out.last_mut() {
             last.h = y - last.y;
         }
+        if sys.multi {
+            for piece in staff_bands(eng, sys, pad, sp) {
+                let at = y + piece.cut;
+                if piece.cut > 0 {
+                    if let Some(last) = out.last_mut() {
+                        last.h = at - last.y;
+                    }
+                }
+                out.push(Band { y: at, h: 0, paths: piece.paths, ranges: piece.ranges });
+            }
+            continue;
+        }
         let mut paths = Vec::new();
         let mut ranges = Vec::new();
         draw_system(&mut paths, eng, sys, pad as f64 / sp, sp, &mut ranges);
@@ -180,6 +192,118 @@ pub fn bands(eng: &Engraved, sp: f64, page: usize, total: i64) -> Vec<Band> {
         last.h = (total - last.y).max(0);
     }
     out
+}
+
+/// One staff's band of a system of several: its top, px below the
+/// system's, its paths and where each item's are among them.
+struct Piece {
+    cut: i64,
+    paths: Vec<Path>,
+    ranges: Ranges,
+}
+
+/// A system of several staves as a band a staff (`score_staff_bands`), so
+/// that an edit on one staff resends that staff's band and no other. The
+/// system is drawn once, as one band would draw it; each staff's band is
+/// cut half way between its staff's lowest ink and the next one's highest,
+/// and takes its staff's paths and whatever else reaches into it — the bar
+/// lines a brace or a bracket draws down from the staff above, the brace,
+/// the bracket, the names — moved to its own top: the canvas clips each to
+/// its box, and the shares meet where they were.
+fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
+    let n = sys.lines.len();
+    let top = pad as f64 / sp;
+    let mut paths = Vec::new();
+    let mut ranges: Ranges = Vec::new();
+    let mut starts = Vec::with_capacity(n + 1);
+    for (s, line) in sys.lines.iter().enumerate() {
+        starts.push(paths.len());
+        let offset = sys.offsets.get(s).copied().unwrap_or(0.0);
+        if let Some(bars) = eng.staves.get(s) {
+            draw_line(&mut paths, bars, line, top + offset, sp, &mut ranges);
+        }
+    }
+    starts.push(paths.len());
+    draw_groups(&mut Pen { paths: &mut paths, sp }, eng, sys, top);
+    let tops: Vec<f64> = (0..n).map(|s| pad as f64 + sys.offsets.get(s).copied().unwrap_or(0.0) * sp).collect();
+    let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, line)| eng.staves.get(s).map_or((0.0, 4.0), |bars| reach(bars, line))).collect();
+    let mut cuts: Vec<i64> = vec![0];
+    for s in 1..n {
+        let a = tops[s - 1] + reaches[s - 1].1 * sp;
+        let b = tops[s] + reaches[s].0 * sp;
+        let prev = cuts.last().copied().unwrap_or(0);
+        cuts.push((prev + 1).max(((a + b) / 2.0).floor() as i64));
+    }
+    let mut out = Vec::with_capacity(n);
+    for s in 0..n {
+        let first = starts[s];
+        let upto = starts[s + 1];
+        let cut = cuts[s];
+        let bottom = if s + 1 < n { cuts[s + 1] - cut } else { -1 };
+        let mut mine: Vec<Path> = paths.get(first..upto).unwrap_or(&[]).iter().map(|pa| moved(pa, cut)).collect();
+        for (j, pa) in paths.iter().enumerate() {
+            if j >= first && j < upto {
+                continue;
+            }
+            let pa = moved(pa, cut);
+            if meets(&pa, bottom) {
+                mine.push(pa);
+            }
+        }
+        let own: Ranges = ranges.iter().filter(|(_, r)| r.start >= first && r.end <= upto).map(|(item, r)| (*item, (r.start - first)..(r.end - first))).collect();
+        out.push(Piece { cut, paths: mine, ranges: own });
+    }
+    out
+}
+
+/// A path moved `dy` px up, to the hundredth as every path is.
+fn moved(pa: &Path, dy: i64) -> Path {
+    let dy = dy as f64;
+    match pa {
+        Path::Rect([x, y, w, h]) => Path::Rect([*x, r(y - dy), *w, *h]),
+        Path::Fill(cmds) => {
+            let mut out = Vec::with_capacity(cmds.len());
+            let mut i = 0;
+            while i < cmds.len() {
+                let c = cmds[i];
+                out.push(c);
+                let args = args_of(c);
+                for jj in 0..args {
+                    let v = cmds.get(i + 1 + jj).copied().unwrap_or(0.0);
+                    out.push(if jj % 2 == 1 { r(v - dy) } else { v });
+                }
+                i += 1 + args;
+            }
+            Path::Fill(out)
+        }
+    }
+}
+
+/// Whether a path reaches into a band `bottom` px tall (-1: no bottom).
+fn meets(pa: &Path, bottom: i64) -> bool {
+    let (lo, hi) = match pa {
+        Path::Rect([_, y, _, h]) => (*y, y + h),
+        Path::Fill(cmds) => {
+            let mut lo = 0.0;
+            let mut hi = 0.0;
+            let mut first = true;
+            let mut i = 0;
+            while i < cmds.len() {
+                let args = args_of(cmds[i]);
+                for jj in 0..args {
+                    if jj % 2 == 1 {
+                        let v = cmds.get(i + 1 + jj).copied().unwrap_or(0.0);
+                        lo = if first { v } else { f64::min(lo, v) };
+                        hi = if first { v } else { f64::max(hi, v) };
+                        first = false;
+                    }
+                }
+                i += 1 + args;
+            }
+            (lo, hi)
+        }
+    };
+    hi >= 0.0 && (bottom < 0 || lo <= bottom as f64)
 }
 
 /// A page's titles if it is the first, its number if it is numbered.

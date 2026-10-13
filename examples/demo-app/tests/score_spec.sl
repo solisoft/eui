@@ -4094,10 +4094,117 @@ def score_bands(engraved, sp, opts, total)
   for st, k in starts
     y = k == 0 ? first_y : score_max(st[2], bands[-1]["y"])
     bands[-1]["h"] = y - bands[-1]["y"]
-    bands.push({"y": y, "h": 0, "drawn": score_band_drawn(st[0], st[1], sp, ink), "items": score_band_items(st[0])})
+    if st[0].has_key("staves")
+      for piece in score_staff_bands(st[0], st[1], sp, ink)
+        at = y + piece["cut"]
+        bands[-1]["h"] = at - bands[-1]["y"] if piece["cut"] > 0
+        bands.push({"y": at, "h": 0, "drawn": piece["drawn"], "items": piece["items"]})
+      end
+    else
+      bands.push({"y": y, "h": 0, "drawn": score_band_drawn(st[0], st[1], sp, ink), "items": score_band_items(st[0])})
+    end
   end
   bands[-1]["h"] = score_max(total - bands[-1]["y"], 0)
   bands.map { |bd| {"y": bd["y"], "h": bd["h"], "paths": bd["drawn"]["paths"], "lit": score_band_lit(bd, marks)} }
+end
+
+def score_staff_bands(sys, pad, sp, ink)
+  staves = sys["staves"]
+  n = staves.length
+  drawn = score_system_drawn(sys, pad, sp, ink)
+  tops = range(0, n).map { |s| pad + sys["offsets"][s] * sp }
+  reaches = staves.map { |ss| score_reach(ss) }
+  cuts = [0]
+  for s in range(1, n)
+    a = tops[s - 1] + reaches[s - 1][1] * sp
+    b = tops[s] + reaches[s][0] * sp
+    cuts.push(score_max(cuts[s - 1] + 1, int(Math.floor((a + b) / 2.0))))
+  end
+  starts = drawn["starts"]
+  paths = drawn["paths"]
+  out = []
+  for ss, s in staves
+    first_path = starts[s]
+    upto = starts[s + 1]
+    bottom = s + 1 < n ? cuts[s + 1] - cuts[s] : -1
+    mine = range(first_path, upto).map { |j| score_path_moved(paths[j], cuts[s]) }
+    others = []
+    for pa, j in paths
+      next if j >= first_path && j < upto
+
+      moved = score_path_moved(pa, cuts[s])
+      others.push(moved) if score_path_meets?(moved, bottom)
+    end
+    ranges = {}
+    for item, k in score_band_items(ss)
+      span = drawn["ranges"][item]
+      ranges[str(k)] = [span[0] - first_path, span[1] - first_path] unless span.nil?
+    end
+    out.push({"cut": cuts[s], "drawn": {"paths": mine + others, "ranges": ranges}, "items": score_band_items(ss)})
+  end
+  out
+end
+
+def score_system_drawn(sys, pad, sp, ink)
+  key = str(sp) + "|" + ink + "|" + str(pad) + "|" + score_sys_sig(sys)
+  hit = score_memo_get("systems_drawn", key)
+  return hit unless hit.nil?
+
+  paths = []
+  by_item = {}
+  starts = []
+  top = pad / float(sp)
+  for ss, s in sys["staves"]
+    starts.push(paths.length)
+    score_draw_system(paths, ss.merge({"top": top + sys["offsets"][s]}), sp, ink, by_item)
+  end
+  starts.push(paths.length)
+  score_draw_groups(paths, sys.merge({"top": top}), sp, ink)
+  score_memo_put("systems_drawn", key, {"paths": paths, "ranges": by_item, "starts": starts}, 16)
+end
+
+def score_path_moved(pa, dy)
+  return [1, pa[1], pa[2], score_r(pa[3] - dy), pa[4], pa[5], pa[6]] if pa[0] == 1
+
+  out = [pa[0], pa[1]]
+  i = 2
+  while i < pa.length
+    c = pa[i]
+    out.push(c)
+    args = [2, 2, 4, 6, 0][c]
+    for jj in 0..args
+      v = pa[i + 1 + jj]
+      out.push(jj % 2 == 1 ? score_r(v - dy) : v)
+    end
+    i += 1 + args
+  end
+  out
+end
+
+def score_path_meets?(pa, bottom)
+  lo = 0.0
+  hi = 0.0
+  if pa[0] == 1
+    lo = pa[3]
+    hi = pa[3] + pa[5]
+  else
+    first = true
+    i = 2
+    while i < pa.length
+      c = pa[i]
+      args = [2, 2, 4, 6, 0][c]
+      for jj in 0..args
+        if jj % 2 == 1
+          v = pa[i + 1 + jj]
+          lo = first ? v : score_min(lo, v)
+          hi = first ? v : score_max(hi, v)
+          first = false
+        end
+      end
+      i += 1 + args
+    end
+  end
+  hi >= 0.0 && (bottom < 0 || lo <= bottom)
 end
 
 def score_band_items(sys)
@@ -8523,6 +8630,19 @@ describe("the editor", fn() {
     check("neighbours still share a beam", still["items"].filter { |ev| ev["voice"] == 2 }.map { |ev| ev["beam"].nil? }, [false, false])
     apart = score_engrave("{ << { e''4 f''4 g''2 } \\\\ { c'4 d'4 e'2 } >> }", 100.0)["systems"][0]["bars"][0]
     check("voices well apart share their column", apart["items"][0]["x"], apart["items"][1]["x"])
+  })
+
+  test("a system of several staves is a band a staff: a note changed on one resends that staff's band only", fn() {
+    before = score_engrave("\\new PianoStaff << \\new Staff { c''4 d''4 e''4 f''4 } \\new Staff { \\clef bass c4 d4 e4 f4 } >>", 100.0)
+    after = score_engrave("\\new PianoStaff << \\new Staff { c''4 d''4 e''4 f''4 } \\new Staff { \\clef bass c4 d4 g4 f4 } >>", 100.0)
+    total = int(Math.ceil(before["height"] * 8.0))
+    a = score_bands(before, 8.0, {}, total)
+    b = score_bands(after, 8.0, {}, total)
+    check("the titles' band and a band a staff", [a.length, b.length], [3, 3])
+    check("the bands follow on", a[2]["y"], a[1]["y"] + a[1]["h"])
+    check("the upper staff's band, the brace's share in it, unchanged", b[1]["paths"], a[1]["paths"])
+    check("the lower staff's, changed", b[2]["paths"] == a[2]["paths"], false)
+    check("the brace is in both", [a[1]["paths"].length > 0, a[2]["paths"].length > 0], [true, true])
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {

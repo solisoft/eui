@@ -2,8 +2,9 @@
 //!
 //! `tests/golden/<name>.json` holds what `eui_builders_score.sl` drew for
 //! `tests/corpus/<name>.ly`: its paths on a screen 900 px wide at 8 px a
-//! staff space, each A4 page's at 600 px a page, and its MIDI at 100 beats a
-//! minute; `<name>.pdf` its PDF. The paths must agree to the hundredth of a
+//! staff space, each A4 page's at 600 px a page, its MIDI at 100 beats a
+//! minute, and the screen's bands — a canvas each, a staff each in a system
+//! of several; `<name>.pdf` its PDF. The paths must agree to the hundredth of a
 //! pixel (one rounding step either way), the MIDI and the PDF to the byte,
 //! and every refusal in `refusals.json` word for word.
 
@@ -12,7 +13,7 @@
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 
-use eui_score::{engrave, engrave_a4, midi, paths, pdf, Layout, MidiOptions, Paper, Path};
+use eui_score::{bands, engrave, engrave_a4, midi, paths, pdf, Layout, MidiOptions, Paper, Path};
 use serde_json::Value;
 
 fn dir(sub: &str) -> PathBuf {
@@ -63,6 +64,28 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
         match engrave(&src, 900.0 / 8.0, &Layout::default()).and_then(|e| paths(&e, 8.0, 0)) {
             Ok((p, _)) => compare(&format!("{name} screen"), &p, &golden["screen"], &mut failures),
             Err(e) => failures.push(format!("{name} screen: refused: {e}")),
+        }
+
+        let laid = engrave(&src, 900.0 / 8.0, &Layout::default()).and_then(|e| {
+            let total = (e.height * 8.0).ceil() as i64;
+            bands(&e, 8.0, 0, total)
+        });
+        match laid {
+            Ok(got) => {
+                let want = golden["bands"].as_array().cloned().unwrap_or_default();
+                if got.len() != want.len() {
+                    failures.push(format!("{name} bands: {} bands, the Soli engraver cut {}", got.len(), want.len()));
+                }
+                for (k, (a, b)) in got.iter().zip(&want).enumerate() {
+                    let (by, bh) = (b["y"].as_i64(), b["h"].as_i64());
+                    if Some(a.y) != by || Some(a.h) != bh {
+                        failures.push(format!("{name} band {k}: at {} px, {} px tall; the Soli engraver's at {by:?}, {bh:?}", a.y, a.h));
+                        continue;
+                    }
+                    compare(&format!("{name} band {k}"), &a.paths, &b["paths"], &mut failures);
+                }
+            }
+            Err(e) => failures.push(format!("{name} bands: refused: {e}")),
         }
 
         let sp = 600.0 / Paper::a4().w;

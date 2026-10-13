@@ -4098,10 +4098,131 @@ def score_bands(engraved, sp, opts, total)
   for st, k in starts
     y = k == 0 ? first_y : score_max(st[2], bands[-1]["y"])
     bands[-1]["h"] = y - bands[-1]["y"]
-    bands.push({"y": y, "h": 0, "drawn": score_band_drawn(st[0], st[1], sp, ink), "items": score_band_items(st[0])})
+    if st[0].has_key("staves")
+      for piece in score_staff_bands(st[0], st[1], sp, ink)
+        at = y + piece["cut"]
+        bands[-1]["h"] = at - bands[-1]["y"] if piece["cut"] > 0
+        bands.push({"y": at, "h": 0, "drawn": piece["drawn"], "items": piece["items"]})
+      end
+    else
+      bands.push({"y": y, "h": 0, "drawn": score_band_drawn(st[0], st[1], sp, ink), "items": score_band_items(st[0])})
+    end
   end
   bands[-1]["h"] = score_max(total - bands[-1]["y"], 0)
   bands.map { |bd| {"y": bd["y"], "h": bd["h"], "paths": bd["drawn"]["paths"], "lit": score_band_lit(bd, marks)} }
+end
+
+# A system of several staves as a band a staff, so that an edit on one
+# staff resends that staff's band and no other. The system is drawn once,
+# as one band would draw it; each staff's band is cut half way between its
+# staff's lowest ink and the next one's highest — the stacking keeps a
+# space between them — and takes its staff's paths and whatever else
+# reaches into it (the bar lines a brace or a bracket draws down from the
+# staff above, the brace, the bracket, the names), moved to its own top:
+# the canvas clips each to its box, and the shares meet where they were.
+# `cut` is each band's top, px below the system's band.
+def score_staff_bands(sys, pad, sp, ink)
+  staves = sys["staves"]
+  n = staves.length
+  drawn = score_system_drawn(sys, pad, sp, ink)
+  tops = range(0, n).map { |s| pad + sys["offsets"][s] * sp }
+  reaches = staves.map { |ss| score_reach(ss) }
+  cuts = [0]
+  for s in range(1, n)
+    a = tops[s - 1] + reaches[s - 1][1] * sp
+    b = tops[s] + reaches[s][0] * sp
+    cuts.push(score_max(cuts[s - 1] + 1, int(Math.floor((a + b) / 2.0))))
+  end
+  starts = drawn["starts"]
+  paths = drawn["paths"]
+  out = []
+  for ss, s in staves
+    first_path = starts[s]
+    upto = starts[s + 1]
+    bottom = s + 1 < n ? cuts[s + 1] - cuts[s] : -1
+    mine = range(first_path, upto).map { |j| score_path_moved(paths[j], cuts[s]) }
+    others = []
+    for pa, j in paths
+      next if j >= first_path && j < upto
+
+      moved = score_path_moved(pa, cuts[s])
+      others.push(moved) if score_path_meets?(moved, bottom)
+    end
+    ranges = {}
+    for item, k in score_band_items(ss)
+      span = drawn["ranges"][item]
+      ranges[str(k)] = [span[0] - first_path, span[1] - first_path] unless span.nil?
+    end
+    out.push({"cut": cuts[s], "drawn": {"paths": mine + others, "ranges": ranges}, "items": score_band_items(ss)})
+  end
+  out
+end
+
+# A system of several staves drawn as one band draws it, with where each
+# staff's paths start (and, last, where the groups' start), first_path the cache
+# when the system drew the same before. Ranges by item number.
+def score_system_drawn(sys, pad, sp, ink)
+  key = str(sp) + "|" + ink + "|" + str(pad) + "|" + score_sys_sig(sys)
+  hit = score_memo_get("systems_drawn", key)
+  return hit unless hit.nil?
+
+  paths = []
+  by_item = {}
+  starts = []
+  top = pad / float(sp)
+  for ss, s in sys["staves"]
+    starts.push(paths.length)
+    score_draw_system(paths, ss.merge({"top": top + sys["offsets"][s]}), sp, ink, by_item)
+  end
+  starts.push(paths.length)
+  score_draw_groups(paths, sys.merge({"top": top}), sp, ink)
+  score_memo_put("systems_drawn", key, {"paths": paths, "ranges": by_item, "starts": starts}, 16)
+end
+
+# A path moved `dy` px up, to the hundredth as every path is.
+def score_path_moved(pa, dy)
+  return [1, pa[1], pa[2], score_r(pa[3] - dy), pa[4], pa[5], pa[6]] if pa[0] == 1
+
+  out = [pa[0], pa[1]]
+  i = 2
+  while i < pa.length
+    c = pa[i]
+    out.push(c)
+    args = [2, 2, 4, 6, 0][c]
+    for jj in 0..args
+      v = pa[i + 1 + jj]
+      out.push(jj % 2 == 1 ? score_r(v - dy) : v)
+    end
+    i += 1 + args
+  end
+  out
+end
+
+# Whether a path reaches into a band `bottom` px tall (-1: no bottom).
+def score_path_meets?(pa, bottom)
+  lo = 0.0
+  hi = 0.0
+  if pa[0] == 1
+    lo = pa[3]
+    hi = pa[3] + pa[5]
+  else
+    first = true
+    i = 2
+    while i < pa.length
+      c = pa[i]
+      args = [2, 2, 4, 6, 0][c]
+      for jj in 0..args
+        if jj % 2 == 1
+          v = pa[i + 1 + jj]
+          lo = first ? v : score_min(lo, v)
+          hi = first ? v : score_max(hi, v)
+          first = false
+        end
+      end
+      i += 1 + args
+    end
+  end
+  hi >= 0.0 && (bottom < 0 || lo <= bottom)
 end
 
 # The items of a system in drawing order, by their numbers.

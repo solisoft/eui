@@ -1146,7 +1146,9 @@ ChoirStaff` under a bracket, `<< … >>`, each `\new Staff \with {
 instrumentName … }`, inside `\score { … }` or not; one MIDI track per
 staff) — engraved
 into `canvas` rectangles and fills (§1.1, kind `5`), one canvas for each
-system so that an edit redraws and resends only the system it is in, cut from the
+system — for each staff of a system of several, cut half way between one
+staff's ink and the next's, what spans the staves drawn into each it
+crosses — so that an edit redraws and resends only the staff it is on, cut from the
 outlines of a music font and a text face, with LilyPond's spacing, stem,
 beam and slur rules, on a screen or on A4 pages; a construct it cannot draw
 is refused with its position, as `tw()` refuses a class; a server that has

@@ -54,6 +54,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- A score of several staves is drawn a band per staff: a note moved in
+  the full score resends one staff (17 KB on Beethoven's Fifth), not its
+  whole system (up to 255 KB).
 - Insert mode writes two eighths under one quarter: in the second voice a
   click falls at the moment under the pointer, rounded to the value
   chosen, not at the nearest note's start.

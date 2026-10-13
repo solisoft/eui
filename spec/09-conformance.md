@@ -810,7 +810,9 @@ one rather than to a second description:
 `the_corpus_draws_as_the_soli_engraver_drew_it`
 (`crates/eui-score/tests/golden.rs`) engraves each piece of
 `tests/corpus/` on a 900 px screen and on A4 and requires every path to be
-the Soli engraver's to the hundredth of a pixel, and its MIDI file and its
+the Soli engraver's to the hundredth of a pixel — the screen's bands too, a
+staff each in a system of several, their tops and heights to the pixel —
+and its MIDI file and its
 PDF to be the same bytes; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
 requires its refusals word for word, character position included. Two
 voices are among the pieces (`voices.ly`, `voices_spacers.ly`,

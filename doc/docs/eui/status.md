@@ -446,14 +446,16 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 6 358 lines; `serde_json` its one dependency, for the font data.
+writers. 6 482 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 5.0 MB) are what the Soli engraver drew for the 26
-  pieces of `tests/corpus/` — 5 455 paths on a 900 px screen, 29 A4 pages
-  and 5 462 paths on them, a MIDI file and a PDF each — and
-  `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
-  agree to the hundredth of a pixel and the MIDI and the PDF to the byte;
+  (`tests/golden/`, 6.6 MB) are what the Soli engraver drew for the 26
+  pieces of `tests/corpus/` — 5 455 paths on a 900 px screen and the 108
+  bands they are cut into, 29 A4 pages and 5 462 paths on them, a MIDI
+  file and a PDF each — and
+  `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path, and
+  every band's top and height, to agree to the hundredth of a pixel and
+  the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
   44 refusals to theirs, character position included. Both pass. The last
   difference to go was rounding: Soli's `round(2)` rounds the shortest
@@ -2624,6 +2626,25 @@ falls where it is between two of the first voice's heads, as that much of
 the time between them rounded to the value chosen: on a head, its note's
 start; half way along a quarter with an eighth chosen, the off-beat.
 `tests/score_spec.sl` is 123 tests.
+
+**And a band a staff** (2026-10-13). A note moved in the full score resent
+its whole system — one canvas, every staff of it: on Beethoven's
+exposition at 8 px a space a system's band is **158–255 KB** of paths. A
+system of several staves is a band a staff now, cut half way between one
+staff's lowest ink and the next one's highest (the stacking keeps a space
+there, so a staff's ink is all in its band). The system is drawn once, as
+before; each band takes its staff's paths and whatever else reaches into
+it — the bar lines a brace or a bracket draws down from the staff above,
+the brace, the bracket, the names — moved to its own top, and the canvas,
+which always clips to its box, keeps its share. A staff's band is
+**7–29 KB, 17 on average**, and a note moved resends that one: twelve times
+less, for the same 623 KB in all (634 before). Drawn clipped and stacked,
+the new cut and the old one differ by under a pixel's worth of
+anti-aliasing at the seams on the six pieces of several staves (Beethoven:
+0.7 of 2.9 million). Both engravers; the goldens hold the bands now, 108 of
+them, and `golden.rs` compares each — no change in lang, whose
+`eui_score_bands` builds them from the same fields. `tests/score_spec.sl`
+is 124 tests.
 
 ## Not started
 
