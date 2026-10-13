@@ -4445,6 +4445,7 @@ def score_ed_answer(state, ed_event, params, props)
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
     "playhead" => score_ed_playhead(state, params["payload"] ?? [0, 0]),
+    "play_tick" => score_ed_play_tick(state),
     "src_open" => score_ed_flag(state, "src_open", !(state["src_open"] == true)),
     "page_to" => score_ed_flag(state, props["which"] == "cond_page" ? "cond_page" : "page", int(props["to"] ?? 0)),
     "ended" => score_ed_stop(state),
@@ -4934,17 +4935,52 @@ def score_ed_dynamic(state, dyn)
 end
 
 def score_ed_hairpin(state, grow)
-  current = score_ed_selected(state)
-  return state if current.nil? || !["<", ">", "!"].includes?(grow)
+  return state unless ["<", ">"].includes?(grow)
 
-  state = score_ed_remember(state)
   current = score_ed_selected(state)
-  if grow == "!"
-    current["hairpin_end"] = !(current["hairpin_end"] == true)
-  else
-    current["hairpin"] = current["hairpin"] == grow ? nil : grow
+  start = state["pin_from"] ?? -1
+  start = -1 if start >= state["notes"].length
+  if start >= 0
+    if !current.nil? && state["sel"] == start && state["pin_grow"] != grow
+      state["pin_grow"] = grow
+      return state
+    end
+    kind = state["pin_grow"] ?? grow
+    state["pin_from"] = -1
+    return state if current.nil? || state["sel"] == start
+
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    first = score_min(start, state["sel"])
+    last = score_max(start, state["sel"])
+    notes[first]["hairpin"] = kind
+    notes[last]["hairpin_end"] = true
+    return state
   end
+  return state if current.nil?
+
+  if !current["hairpin"].nil?
+    state = score_ed_remember(state)
+    score_ed_unpin(state["notes"], state["sel"])
+    return state
+  end
+  state["pin_from"] = state["sel"]
+  state["pin_grow"] = grow
   state
+end
+
+def score_ed_unpin(notes, at)
+  notes[at]["hairpin"] = nil
+  done = false
+  for k in range(at, notes.length)
+    if !done && notes[k]["hairpin_end"] == true
+      notes[k]["hairpin_end"] = false
+      done = true
+    end
+    # Another hairpin or a dynamic ends this one where it stands.
+    done = true if k > at && (!notes[k]["hairpin"].nil? || !notes[k]["dyn"].nil?)
+  end
+  notes
 end
 
 def score_ed_artic(state, name)
@@ -5056,6 +5092,7 @@ def score_ed_switch(state, k)
   state["sel"] = state["notes"].length > 0 ? 0 : -1
   state["typing"] = false
   state["slur_from"] = -1
+  state["pin_from"] = -1
   state
 end
 
@@ -5534,7 +5571,10 @@ def score_ed_play(state)
   state["playing"] = true
   state["plays"] = (state["plays"] ?? 0) + 1
   state["play_at"] = 0
-  state
+  state["play_ms"] = 0
+  state["play_wall"] = clock()
+  state["play_shown_ms"] = -1
+  score_ed_light_to(state, 0)
 end
 
 def score_ed_stop(state)
@@ -5546,9 +5586,38 @@ end
 def score_ed_playhead(state, payload)
   return state unless state["playing"] == true
 
-  at = payload[0] ?? 0
-  state["play_ms"] = at
-  state["play_at"] = score_ed_lit_at(state["starts_tracks"] ?? [state["starts"] ?? []], state["track"] ?? 0, at)
+  state["play_ms"] = payload[0] ?? 0
+  state["play_wall"] = clock()
+  score_ed_light_to(state, state["play_ms"])
+end
+
+def score_ed_play_tick(state)
+  return state unless state["playing"] == true && !state["play_wall"].nil?
+
+  # Carried on from the last report, never more than 600 ms past it: a
+  # window that stopped reporting has stopped playing too.
+  ahead = score_min(600.0, (clock() - state["play_wall"]) * 1000.0)
+  score_ed_light_to(state, state["play_ms"] + int(ahead))
+end
+
+def score_ed_light_to(state, at)
+  shown_to = state["play_shown_ms"] ?? -1
+  return state if at <= shown_to
+
+  starts_tracks = state["starts_tracks"] ?? [state["starts"] ?? []]
+  lit_tracks = []
+  for starts, k in starts_tracks
+    lit = []
+    for start, j in starts
+      lit.push(j) if start > shown_to && start <= at
+    end
+    now_on = score_ed_lit_at(starts_tracks, k, at)
+    lit.push(now_on) if now_on >= 0 && !lit.includes?(now_on)
+    lit_tracks.push(lit)
+  end
+  state["play_lit"] = lit_tracks
+  state["play_shown_ms"] = at
+  state["play_at"] = score_ed_lit_at(starts_tracks, state["track"] ?? 0, at)
   state
 end
 
@@ -5665,7 +5734,7 @@ def score_ed_sounds(state)
   bank = score_ed_soundfont()
   out = []
   if !state["audio"].nil? && state["playing"] == true
-    out.push({"k": "audio", "key": "song:" + str(state["plays"] ?? 0), "p": {"src": state["audio"], "playing": true, "soundfont": bank}, "on": {"time_update": "playhead", "ended": "ended"}})
+    out.push({"k": "audio", "key": "song:" + str(state["plays"] ?? 0), "p": {"src": state["audio"], "playing": true, "soundfont": bank, "wake": 100}, "on": {"time_update": "playhead", "ended": "ended", "wake": "play_tick"}})
   end
   player = {"soundfont": bank, "notes_seq": state["blips"] ?? 0}
   player["notes"] = state["blip_notes"] if !state["blip_notes"].nil? && state["sound"] == true
@@ -5850,11 +5919,11 @@ def score_ed_conductor_marks(state, full)
   playing = state["playing"] == true
   active = state["track"] ?? 0
   for owners, k in full["maps"]
-    lit = playing ? score_ed_lit_at(state["starts_tracks"] ?? [], k, state["play_ms"] ?? 0) : (k == active ? (state["sel"] ?? -1) : -1)
-    next if lit < 0
+    lit_set = playing ? ((state["play_lit"] ?? [])[k] ?? []) : (k == active && (state["sel"] ?? -1) >= 0 ? [state["sel"]] : [])
+    next if lit_set.length == 0
 
     for owner, j in owners
-      marks[str(full["firsts"][k] + j)] = "accent.base" if owner == lit
+      marks[str(full["firsts"][k] + j)] = "accent.base" if owner >= 0 && lit_set.includes?(owner)
     end
   end
   marks
@@ -5902,6 +5971,7 @@ def score_ed_key(state, key, mods)
   return score_ed_alter(state, 0, true) if key == "="
   return score_ed_tie(state) if lower == "t"
   return score_ed_slur(state) if lower == "s"
+  return score_ed_hairpin(state, key) if key == "<" || key == ">"
   return score_ed_repeat(state, "rep_start") if key == "["
   return score_ed_repeat(state, "rep_end") if key == "]"
   return score_ed_play(state) if key == " "
@@ -6554,14 +6624,30 @@ def score_ed_panels(state)
   card({"gap": 4, "pad": [2, 5, body.length > 0 ? 5 : 2, 5], "width": "100%"}, [tabs(SCORE_ED_PANELS, panel, "panel", {"key": "score_panels", "size": "sm"})] + body)
 end
 
+def score_ed_pin_button(state, grow, label, no_note)
+  armed = (state["pin_from"] ?? -1) >= 0 && state["pin_grow"] == grow
+  return score_ed_tool(label + "  " + grow, "hairpin", {"grow": grow}, no_note, grow) unless armed
+
+  control({
+    "key": "tool:hairpin:" + label,
+    "tone": "accent",
+    "size": "sm",
+    "on": {"click": "hairpin"},
+    "props": {"grow": grow},
+    "shape": {"gap": 2, "pad": [1, 3, 1, 3]},
+    "a11y": {"role": "button", "label": label + ": armed — press on the last note to end it", "pressed": true},
+    "c": [text(label + " ●", {"size": 1, "weight": "medium", "fg": "accent.on"}), kbd(grow)]
+  })
+end
+
 def score_ed_expression_panel(state)
   current = score_ed_selected(state)
   none = current.nil?
   dyns = SCORE_ED_DYNAMICS.map { |dyn| score_ed_glyph_button("dyn:" + dyn, "dyn", {"dyn": dyn}, score_ed_dyn_icon(dyn), !none && current["dyn"] == dyn, "", dyn) }
+  armed = (state["pin_from"] ?? -1) >= 0
   pins = [
-    score_ed_tool("Crescendo  <", "hairpin", {"grow": "<"}, none, nil),
-    score_ed_tool("Diminuendo  >", "hairpin", {"grow": ">"}, none, nil),
-    score_ed_tool("End it here", "hairpin", {"grow": "!"}, none, nil)
+    score_ed_pin_button(state, "<", "Crescendo", none),
+    score_ed_pin_button(state, ">", "Diminuendo", none)
   ]
   names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata"}
   glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove"}
@@ -6578,7 +6664,7 @@ def score_ed_expression_panel(state)
       score_ed_labelled("Words above", input(above, "words", {"key": "score_words_up", "placeholder": "dolce", "props": {"dir": "up"}, "style": {"width": 150}})),
       score_ed_labelled("below", input(below, "words", {"key": "score_words_down", "placeholder": "cresc.", "props": {"dir": "down"}, "style": {"width": 150}}))
     ]),
-    muted(none ? "Select a note to give it a dynamic, a hairpin, an articulation or words." : "On the selected note. Pressed again, each comes off; a hairpin runs to the next dynamic or to its end.")
+    muted(none ? "Select a note to give it a dynamic, a hairpin, an articulation or words." : (armed ? "A hairpin is armed: select the note it ends on and press it again." : "On the selected note; pressed again, each comes off. A hairpin, like a slur: once here, once on the note it ends on."))
   ])
 end
 
@@ -7483,6 +7569,8 @@ describe("the editor's expression", fn() {
     ed = score_ed_dynamic(ed, "p")
     ed = score_ed_hairpin(ed, "<")
     ed = score_ed_artic(ed, "staccato")
+    ed["sel"] = 3
+    ed = score_ed_hairpin(ed, "<")
     ed["sel"] = 2
     ed = score_ed_words(ed, "dolce", -1)
     ed["sel"] = 4
@@ -7490,6 +7578,7 @@ describe("the editor's expression", fn() {
     ed = score_ed_artic(ed, "fermata")
     src = score_ed_layout(ed)["src"]
     assert(src.includes?("c''4\\p-.\\<"))
+    assert(src.includes?("f''4\\!"))
     assert(src.includes?("e''4^\"dolce\""))
     assert(src.includes?("g''1\\f-\\fermata"))
     again = score_ed_from_source(spec_state(), src)
@@ -7678,7 +7767,8 @@ describe("the editor's tracks", fn() {
     ed = score_ed_switch(ed, 0)
     ed["playing"] = true
     ed["starts_tracks"] = [ [0, 600, 1200, 1800], [0] ]
-    ed["play_ms"] = 700
+    ed["play_shown_ms"] = 650
+    ed = score_ed_light_to(ed, 700)
     marks = score_ed_conductor_marks(ed, score_ed_conductor(ed))
     check("d'' on the first, the first note on the second", marks.keys.sort(), ["1", "4"])
   })
@@ -7969,5 +8059,52 @@ describe("a part's bars of rest", fn() {
     st = score_ed_switch(st, 1)
     part = score_ed_layout(st)["src"]
     check("not over the key change", part.includes?("R1*3"), false)
+  })
+})
+
+describe("the playhead", fn() {
+  test("notes shorter than the gap between two reports are lit, not skipped", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''8 d''8 e''8 f''8 g''2 }")
+    st = score_ed_play(st)
+    st["starts_tracks"] = [ [0, 150, 300, 450, 600] ]
+    st = score_ed_playhead(st, [400, 2000])
+    check("c, d and e began by 400 ms: all three lit", st["play_lit"][0], [1, 2])
+    st = score_ed_playhead(st, [650, 2000])
+    check("then f and g", st["play_lit"][0], [3, 4])
+  })
+
+  test("between two reports the playhead goes on, at most 600 ms past the last", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 }")
+    st = score_ed_play(st)
+    st["starts_tracks"] = [ [0, 600] ]
+    st = score_ed_playhead(st, [100, 1200])
+    st["play_wall"] = clock() - 0.55
+    st = score_ed_play_tick(st)
+    check("d lit 550 ms on", st["play_lit"][0], [1])
+    st["play_wall"] = clock() - 5.0
+    st = score_ed_play_tick(st)
+    check("never past 700 ms with no report", st["play_shown_ms"] <= 700, true)
+  })
+})
+
+describe("hairpins, like slurs", fn() {
+  test("armed on one note, closed on another; the same note drops it", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }")
+    st["sel"] = 0
+    st = score_ed_hairpin(st, "<")
+    check("armed, nothing written", [st["pin_from"], score_ed_layout(st)["src"].includes?("\\<")], [0, false])
+    st = score_ed_hairpin(st, ">")
+    check("the other button switches it", st["pin_grow"], ">")
+    st["sel"] = 2
+    st = score_ed_hairpin(st, "<")
+    check("closed: a diminuendo from c to e", score_ed_layout(st)["src"].includes?("c''4\\> d''4 e''4\\!"), true)
+    st["sel"] = 0
+    st = score_ed_hairpin(st, "<")
+    check("pressed on its start: gone, end and all", score_ed_layout(st)["src"].includes?("\\!"), false)
+    st["sel"] = 3
+    st = score_ed_key(st, "<", 1)
+    st["sel"] = 1
+    st = score_ed_key(st, "<", 1)
+    check("backwards with the key: from d to f", score_ed_layout(st)["src"].includes?("d''4\\< e''4 f''4\\!"), true)
   })
 })

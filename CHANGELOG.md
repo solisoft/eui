@@ -59,6 +59,11 @@ release. A wire change lands here first, is released, and then the pin moves.
   within five ledger lines of the staff and a piano's keys. A keyboard's
   step input (a key, a note; keys together, a chord) is written and waits
   for EUI 9 on the server side.
+- The score editor's playhead lights every note that began since the last
+  report — a run of eighths lights rather than being skipped — and moves on
+  its own every 100 ms between the window's four reports a second;
+  crescendo and diminuendo are set as a slur is, once on the first note and
+  once on the last (`<` and `>`).
 
 - **Canvas fills** (spec 03 §1.1, path kind `5`): a filled outline of moves,
   lines, quadratic and cubic Béziers and closes, filled by the non-zero

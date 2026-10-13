@@ -156,6 +156,7 @@ def score_ed_answer(state, ed_event, params, props)
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
     "playhead" => score_ed_playhead(state, params["payload"] ?? [0, 0]),
+    "play_tick" => score_ed_play_tick(state),
     "src_open" => score_ed_flag(state, "src_open", !(state["src_open"] == true)),
     "page_to" => score_ed_flag(state, props["which"] == "cond_page" ? "cond_page" : "page", int(props["to"] ?? 0)),
     "ended" => score_ed_stop(state),
@@ -706,18 +707,61 @@ end
 # A hairpin from the selected note, "<" or ">", running to the next note
 # with a dynamic or an end; "!" ends one on the selected note. Each, again,
 # takes itself off.
+# A crescendo or a diminuendo is set as a slur is (`score_ed_slur`): the
+# first press arms it on the selected note and lights its button, the
+# second closes it on the note selected then — `\\<` on the first, `\\!` on
+# the last. Pressed on the note it started from it is dropped; on an
+# earlier note it runs from there; the other button while armed switches
+# which it is. With nothing armed, a press on a note a hairpin starts from
+# takes that hairpin away, end and all.
 def score_ed_hairpin(state, grow)
-  current = score_ed_selected(state)
-  return state if current.nil? || !["<", ">", "!"].includes?(grow)
+  return state unless ["<", ">"].includes?(grow)
 
-  state = score_ed_remember(state)
   current = score_ed_selected(state)
-  if grow == "!"
-    current["hairpin_end"] = !(current["hairpin_end"] == true)
-  else
-    current["hairpin"] = current["hairpin"] == grow ? nil : grow
+  start = state["pin_from"] ?? -1
+  start = -1 if start >= state["notes"].length
+  if start >= 0
+    if !current.nil? && state["sel"] == start && state["pin_grow"] != grow
+      state["pin_grow"] = grow
+      return state
+    end
+    kind = state["pin_grow"] ?? grow
+    state["pin_from"] = -1
+    return state if current.nil? || state["sel"] == start
+
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    first = score_min(start, state["sel"])
+    last = score_max(start, state["sel"])
+    notes[first]["hairpin"] = kind
+    notes[last]["hairpin_end"] = true
+    return state
   end
+  return state if current.nil?
+
+  if !current["hairpin"].nil?
+    state = score_ed_remember(state)
+    score_ed_unpin(state["notes"], state["sel"])
+    return state
+  end
+  state["pin_from"] = state["sel"]
+  state["pin_grow"] = grow
   state
+end
+
+# A hairpin that starts on note `at` goes, its end with it.
+def score_ed_unpin(notes, at)
+  notes[at]["hairpin"] = nil
+  done = false
+  for k in range(at, notes.length)
+    if !done && notes[k]["hairpin_end"] == true
+      notes[k]["hairpin_end"] = false
+      done = true
+    end
+    # Another hairpin or a dynamic ends this one where it stands.
+    done = true if k > at && (!notes[k]["hairpin"].nil? || !notes[k]["dyn"].nil?)
+  end
+  notes
 end
 
 # An articulation on the selected note, on or off.
@@ -857,6 +901,7 @@ def score_ed_switch(state, k)
   state["sel"] = state["notes"].length > 0 ? 0 : -1
   state["typing"] = false
   state["slur_from"] = -1
+  state["pin_from"] = -1
   state
 end
 
@@ -1385,7 +1430,10 @@ def score_ed_play(state)
   state["playing"] = true
   state["plays"] = (state["plays"] ?? 0) + 1
   state["play_at"] = 0
-  state
+  state["play_ms"] = 0
+  state["play_wall"] = clock()
+  state["play_shown_ms"] = -1
+  score_ed_light_to(state, 0)
 end
 
 def score_ed_stop(state)
@@ -1396,12 +1444,50 @@ end
 
 # The window says where the sound is; the note it is on is the last one to
 # have started.
+# The window says where the sound is, four times a second: too seldom for
+# an eighth at a quick tempo to be lit by the one report that falls inside
+# it. So the report is a fix and not the whole clock: it is stamped with
+# the server's time, a `wake` every 100 ms carries the playhead on from it
+# (`score_ed_play_tick`), and every note that began since the last step is
+# lit with the one sounding now — a run of short notes lights together
+# rather than not at all.
 def score_ed_playhead(state, payload)
   return state unless state["playing"] == true
 
-  at = payload[0] ?? 0
-  state["play_ms"] = at
-  state["play_at"] = score_ed_lit_at(state["starts_tracks"] ?? [state["starts"] ?? []], state["track"] ?? 0, at)
+  state["play_ms"] = payload[0] ?? 0
+  state["play_wall"] = clock()
+  score_ed_light_to(state, state["play_ms"])
+end
+
+def score_ed_play_tick(state)
+  return state unless state["playing"] == true && !state["play_wall"].nil?
+
+  # Carried on from the last report, never more than 600 ms past it: a
+  # window that stopped reporting has stopped playing too.
+  ahead = score_min(600.0, (clock() - state["play_wall"]) * 1000.0)
+  score_ed_light_to(state, state["play_ms"] + int(ahead))
+end
+
+# The notes of every track that began after the last step and by `at`,
+# and the one sounding at `at`, lit.
+def score_ed_light_to(state, at)
+  shown_to = state["play_shown_ms"] ?? -1
+  return state if at <= shown_to
+
+  starts_tracks = state["starts_tracks"] ?? [state["starts"] ?? []]
+  lit_tracks = []
+  for starts, k in starts_tracks
+    lit = []
+    for start, j in starts
+      lit.push(j) if start > shown_to && start <= at
+    end
+    now_on = score_ed_lit_at(starts_tracks, k, at)
+    lit.push(now_on) if now_on >= 0 && !lit.includes?(now_on)
+    lit_tracks.push(lit)
+  end
+  state["play_lit"] = lit_tracks
+  state["play_shown_ms"] = at
+  state["play_at"] = score_ed_lit_at(starts_tracks, state["track"] ?? 0, at)
   state
 end
 
@@ -1539,7 +1625,7 @@ def score_ed_sounds(state)
   bank = score_ed_soundfont()
   out = []
   if !state["audio"].nil? && state["playing"] == true
-    out.push({"k": "audio", "key": "song:" + str(state["plays"] ?? 0), "p": {"src": state["audio"], "playing": true, "soundfont": bank}, "on": {"time_update": "playhead", "ended": "ended"}})
+    out.push({"k": "audio", "key": "song:" + str(state["plays"] ?? 0), "p": {"src": state["audio"], "playing": true, "soundfont": bank, "wake": 100}, "on": {"time_update": "playhead", "ended": "ended", "wake": "play_tick"}})
   end
   player = {"soundfont": bank, "notes_seq": state["blips"] ?? 0}
   player["notes"] = state["blip_notes"] if !state["blip_notes"].nil? && state["sound"] == true
@@ -1757,11 +1843,11 @@ def score_ed_conductor_marks(state, full)
   playing = state["playing"] == true
   active = state["track"] ?? 0
   for owners, k in full["maps"]
-    lit = playing ? score_ed_lit_at(state["starts_tracks"] ?? [], k, state["play_ms"] ?? 0) : (k == active ? (state["sel"] ?? -1) : -1)
-    next if lit < 0
+    lit_set = playing ? ((state["play_lit"] ?? [])[k] ?? []) : (k == active && (state["sel"] ?? -1) >= 0 ? [state["sel"]] : [])
+    next if lit_set.length == 0
 
     for owner, j in owners
-      marks[str(full["firsts"][k] + j)] = "accent.base" if owner == lit
+      marks[str(full["firsts"][k] + j)] = "accent.base" if owner >= 0 && lit_set.includes?(owner)
     end
   end
   marks
@@ -1813,6 +1899,7 @@ def score_ed_key(state, key, mods)
   return score_ed_alter(state, 0, true) if key == "="
   return score_ed_tie(state) if lower == "t"
   return score_ed_slur(state) if lower == "s"
+  return score_ed_hairpin(state, key) if key == "<" || key == ">"
   return score_ed_repeat(state, "rep_start") if key == "["
   return score_ed_repeat(state, "rep_end") if key == "]"
   return score_ed_play(state) if key == " "
@@ -2588,14 +2675,32 @@ end
 
 # The expression tab: on the selected note, a dynamic, a hairpin, its
 # articulations, and words over or under it. What the note has is lit.
+# A hairpin's button: lit while one of its kind is armed, and pressable
+# then with no note, to drop it.
+def score_ed_pin_button(state, grow, label, no_note)
+  armed = (state["pin_from"] ?? -1) >= 0 && state["pin_grow"] == grow
+  return score_ed_tool(label + "  " + grow, "hairpin", {"grow": grow}, no_note, grow) unless armed
+
+  control({
+    "key": "tool:hairpin:" + label,
+    "tone": "accent",
+    "size": "sm",
+    "on": {"click": "hairpin"},
+    "props": {"grow": grow},
+    "shape": {"gap": 2, "pad": [1, 3, 1, 3]},
+    "a11y": {"role": "button", "label": label + ": armed — press on the last note to end it", "pressed": true},
+    "c": [text(label + " ●", {"size": 1, "weight": "medium", "fg": "accent.on"}), kbd(grow)]
+  })
+end
+
 def score_ed_expression_panel(state)
   current = score_ed_selected(state)
   none = current.nil?
   dyns = SCORE_ED_DYNAMICS.map { |dyn| score_ed_glyph_button("dyn:" + dyn, "dyn", {"dyn": dyn}, score_ed_dyn_icon(dyn), !none && current["dyn"] == dyn, "", dyn) }
+  armed = (state["pin_from"] ?? -1) >= 0
   pins = [
-    score_ed_tool("Crescendo  <", "hairpin", {"grow": "<"}, none, nil),
-    score_ed_tool("Diminuendo  >", "hairpin", {"grow": ">"}, none, nil),
-    score_ed_tool("End it here", "hairpin", {"grow": "!"}, none, nil)
+    score_ed_pin_button(state, "<", "Crescendo", none),
+    score_ed_pin_button(state, ">", "Diminuendo", none)
   ]
   names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata"}
   glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove"}
@@ -2612,7 +2717,7 @@ def score_ed_expression_panel(state)
       score_ed_labelled("Words above", input(above, "words", {"key": "score_words_up", "placeholder": "dolce", "props": {"dir": "up"}, "style": {"width": 150}})),
       score_ed_labelled("below", input(below, "words", {"key": "score_words_down", "placeholder": "cresc.", "props": {"dir": "down"}, "style": {"width": 150}}))
     ]),
-    muted(none ? "Select a note to give it a dynamic, a hairpin, an articulation or words." : "On the selected note. Pressed again, each comes off; a hairpin runs to the next dynamic or to its end.")
+    muted(none ? "Select a note to give it a dynamic, a hairpin, an articulation or words." : (armed ? "A hairpin is armed: select the note it ends on and press it again." : "On the selected note; pressed again, each comes off. A hairpin, like a slur: once here, once on the note it ends on."))
   ])
 end
 
@@ -2998,10 +3103,12 @@ def score_ed_sheet(state, drawn)
     inner = text(drawn["problem"], {"fg": "danger.base", "size": 1})
   else
     marks = {}
-    lit = state["playing"] == true ? (state["play_at"] ?? -1) : (state["sel"] ?? -1)
-    armed = state["playing"] == true ? -1 : (state["slur_from"] ?? -1)
+    playing = state["playing"] == true
+    lit = playing ? -1 : (state["sel"] ?? -1)
+    lit_set = playing ? ((state["play_lit"] ?? [])[state["track"] ?? 0] ?? []) : []
+    armed = playing ? -1 : ((state["slur_from"] ?? -1) >= 0 ? state["slur_from"] : (state["pin_from"] ?? -1))
     for owner, k in drawn["map"]
-      marks[str(k)] = "accent.base" if owner == lit
+      marks[str(k)] = "accent.base" if owner >= 0 && (owner == lit || lit_set.includes?(owner))
       marks[str(k)] = "info.base" if owner == armed && owner != lit
     end
     if drawn["a4"]
@@ -3143,6 +3250,7 @@ def score_ed_help(state)
     [ ["←", "→"], "Select the previous or next note" ],
     [ ["T"], "Tie to the next note" ],
     [ ["S"], "Slur: on here, then S on the last note turns it off" ],
+    [ ["<", ">"], "Crescendo, diminuendo: here, then again on the last note" ],
     [ ["Ctrl", "3"], "Make the note a triplet (Ctrl+6: a sextuplet)" ],
     [ ["["], "A repeat starts at this bar" ],
     [ ["]"], "A repeat ends after this bar" ],
