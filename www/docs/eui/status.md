@@ -2551,6 +2551,23 @@ Ctrl+Alt+1/2 do nothing there. The sheet is the window less the 212 px
 toolbar: at 1 400 px it is 1 091 px wide, still 12 px a staff space.
 `tests/score_spec.sl` is 113 tests.
 
+**And an undo that does not grow the state** (2026-10-13). Moving notes in
+the full score was slow, and slower the longer one worked. Measured on
+Beethoven's exposition (12 tracks), with the native engraver, a note moved
+with ↑ cost 32 ms in the handler and 19 ms in the view — but every undo step
+copied all twelve tracks, so the state grew by **390 KB a move**
+(783 → 1 173 → 1 564 KB over three) toward 23 MB at the 60-step limit, and
+the server reads and writes the state whole as JSON at every event. A step
+now copies the track edited and says which; an edit that changes other
+tracks (one added, removed or moved, a change a bar carries on the first
+track, a whole piece read) still copies them all. A move now adds **28 KB**
+(420 → 448 → 476 KB) and the handler takes **2 ms**. Undo goes back to the
+track the step was made on, and redo re-applies there. Still to cut: a move
+in the full score resends its whole system, **307 KB** of canvas for 12
+staves (a single track's sheet: 130 KB), since a band is a system — a band
+per staff would need `eui-score`'s and the catalogue's band cutters and
+lang's pin to move. `tests/score_spec.sl` is 114 tests.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

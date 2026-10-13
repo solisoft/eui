@@ -230,8 +230,28 @@ end
 
 # Every edit goes through here: what it is about to change is copied onto
 # the undo stack first, and the redo stack is dropped, as every editor does.
+# Only the track being edited is copied — its voices, clef and the
+# settings — and which track it is: copying every track made each step of
+# an orchestra's undo 390 KB, and the state, read and written whole at every
+# event, grew by that much with each note moved.
 def score_ed_remember(state)
-  snap = score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0, "tracks": score_ed_tracks(state)})
+  score_ed_push_undo(state, score_ed_snap(state, false))
+end
+
+# For an edit that changes other tracks than the one edited — a track
+# added, removed or moved, a change a bar carries on the first track, a
+# whole piece read — every track is copied.
+def score_ed_remember_all(state)
+  score_ed_push_undo(state, score_ed_snap(state, true))
+end
+
+def score_ed_snap(state, all)
+  snap = {"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0}
+  snap["tracks"] = score_ed_tracks(state) if all
+  score_ed_copy(snap)
+end
+
+def score_ed_push_undo(state, snap)
   undo = state["undo"] ?? []
   undo.push(snap)
   if undo.length > SCORE_ED_UNDO
@@ -271,16 +291,26 @@ def score_ed_restore(state, snap)
   state
 end
 
+# A step that copied one track is undone on that track: the editor goes
+# back to it first, so what was there is put back where it was, and the
+# step to redo is that track as it is now.
 def score_ed_undo(state)
   undo = state["undo"] ?? []
   return state if undo.length == 0
 
   snap = undo.pop()
+  state = score_ed_onto_track(state, snap)
   redo = state["redo"] ?? []
-  redo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  redo.push(score_ed_snap(state, snap.has_key("tracks")))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
+end
+
+def score_ed_onto_track(state, snap)
+  return state if snap.has_key("tracks") || !snap.has_key("track") || snap["track"] == (state["track"] ?? 0)
+
+  score_ed_switch(state, snap["track"])
 end
 
 def score_ed_redo(state)
@@ -288,8 +318,9 @@ def score_ed_redo(state)
   return state if redo.length == 0
 
   snap = redo.pop()
+  state = score_ed_onto_track(state, snap)
   undo = state["undo"] ?? []
-  undo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  undo.push(score_ed_snap(state, snap.has_key("tracks")))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
@@ -960,7 +991,7 @@ def score_ed_switch(state, k)
 end
 
 def score_ed_track_add(state)
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = score_ed_tracks(state)
   if tracks.length == 1 && tracks[0]["name"] == ""
     tracks[0]["name"] = "Track 1"
@@ -976,7 +1007,7 @@ def score_ed_track_remove(state)
   tracks = score_ed_tracks(state)
   return state if tracks.length < 2
 
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = state["tracks"]
   gone = state["track"] ?? 0
   to = gone == 0 ? 1 : gone - 1
@@ -992,7 +1023,7 @@ def score_ed_track_move(state, by)
   to = at + by
   return state if to < 0 || to >= tracks.length
 
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = state["tracks"]
   moving = tracks[at]
   tracks[at] = tracks[to]
@@ -1399,7 +1430,7 @@ def score_ed_settings_first(state, which, value, at)
     state["error"] = "The first track has no note starting at that bar to carry the change."
     return state
   end
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   opener = first[hit]
   changes = opener["set"] ?? {}
   changes[which] = value
@@ -2788,7 +2819,7 @@ def score_ed_from_source(state, src)
     state["error"] = problem.replace("score: ", "")
     return state
   end
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   notes = []
   hdr = {}
   for name in SCORE_ED_HEADER

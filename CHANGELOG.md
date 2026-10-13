@@ -54,6 +54,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- Moving notes in a large score no longer slows down as you go: an undo
+  step keeps only the track edited (28 KB on Beethoven's Fifth, not 390 KB),
+  and is undone on that track.
 - The score editor keeps its frame: Play, Undo and the title, subtitle,
   composer and arranger fields stay in a bar on top, the toolbar stays down
   the left, and only the score scrolls. On the full score the toolbar

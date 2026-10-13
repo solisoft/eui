@@ -797,7 +797,9 @@ on any track, the full score's included — staves
 read back as tracks with their names and MIDI settings, a click on the full
 score editing that staff's note — the insert tool and the voices,
 which only a single staff has, neither offered nor reachable by their keys
-there — and each track's sounding note lit there while it plays; and the
+there — and each track's sounding note lit there while it plays; an undo step
+that copies the track edited and not the others, undone and redone on that
+track whichever is shown, and a track-level edit copying them all; and the
 frame: the toolbar and the score each exactly the height under the top bar
 that holds the titles, the score as wide as the window less the toolbar.
 

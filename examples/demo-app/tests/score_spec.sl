@@ -4829,7 +4829,20 @@ def score_ed_note(step, octave, alter, base, dots)
 end
 
 def score_ed_remember(state)
-  snap = score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0, "tracks": score_ed_tracks(state)})
+  score_ed_push_undo(state, score_ed_snap(state, false))
+end
+
+def score_ed_remember_all(state)
+  score_ed_push_undo(state, score_ed_snap(state, true))
+end
+
+def score_ed_snap(state, all)
+  snap = {"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0}
+  snap["tracks"] = score_ed_tracks(state) if all
+  score_ed_copy(snap)
+end
+
+def score_ed_push_undo(state, snap)
   undo = state["undo"] ?? []
   undo.push(snap)
   if undo.length > SCORE_ED_UNDO
@@ -4872,11 +4885,18 @@ def score_ed_undo(state)
   return state if undo.length == 0
 
   snap = undo.pop()
+  state = score_ed_onto_track(state, snap)
   redo = state["redo"] ?? []
-  redo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  redo.push(score_ed_snap(state, snap.has_key("tracks")))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
+end
+
+def score_ed_onto_track(state, snap)
+  return state if snap.has_key("tracks") || !snap.has_key("track") || snap["track"] == (state["track"] ?? 0)
+
+  score_ed_switch(state, snap["track"])
 end
 
 def score_ed_redo(state)
@@ -4884,8 +4904,9 @@ def score_ed_redo(state)
   return state if redo.length == 0
 
   snap = redo.pop()
+  state = score_ed_onto_track(state, snap)
   undo = state["undo"] ?? []
-  undo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  undo.push(score_ed_snap(state, snap.has_key("tracks")))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
@@ -5455,7 +5476,7 @@ def score_ed_switch(state, k)
 end
 
 def score_ed_track_add(state)
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = score_ed_tracks(state)
   if tracks.length == 1 && tracks[0]["name"] == ""
     tracks[0]["name"] = "Track 1"
@@ -5471,7 +5492,7 @@ def score_ed_track_remove(state)
   tracks = score_ed_tracks(state)
   return state if tracks.length < 2
 
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = state["tracks"]
   gone = state["track"] ?? 0
   to = gone == 0 ? 1 : gone - 1
@@ -5487,7 +5508,7 @@ def score_ed_track_move(state, by)
   to = at + by
   return state if to < 0 || to >= tracks.length
 
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   tracks = state["tracks"]
   moving = tracks[at]
   tracks[at] = tracks[to]
@@ -5857,7 +5878,7 @@ def score_ed_settings_first(state, which, value, at)
     state["error"] = "The first track has no note starting at that bar to carry the change."
     return state
   end
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   opener = first[hit]
   changes = opener["set"] ?? {}
   changes[which] = value
@@ -7070,7 +7091,7 @@ def score_ed_from_source(state, src)
     state["error"] = problem.replace("score: ", "")
     return state
   end
-  state = score_ed_remember(state)
+  state = score_ed_remember_all(state)
   notes = []
   hdr = {}
   for name in SCORE_ED_HEADER
@@ -8016,6 +8037,27 @@ describe("the editor", fn() {
     st = score_editor({"event": "track", "params": {"props": {"track": 0}}, "state": st})
     st = score_editor({"event": "tool", "params": {"props": {"option": SCORE_ED_TOOLS[1]}}, "state": st})
     check("a track again: the insert tool works", st["tool"], SCORE_ED_TOOLS[1])
+  })
+
+  test("an undo step copies the track edited, not the orchestra, and is undone on that track", fn() {
+    st = score_ed_from_source(spec_state(), "\\new StaffGroup << \\new Staff { c''4 d''4 e''4 f''4 } \\new Staff { \\clef bass c4 d4 e4 f4 } >>")
+    st = score_ed_switch(st, 0)
+    st["sel"] = 0
+    st = score_ed_key(st, "ArrowUp", 0)
+    step = st["undo"][-1]
+    check("one track copied, and which", [step.has_key("tracks"), step["track"]], [false, 0])
+    check("the C a D now", st["notes"][0]["pitches"][0]["step"], 1)
+    st = score_ed_switch(st, 1)
+    st = score_ed_undo(st)
+    check("undone on the track it was made on", [st["track"], st["notes"][0]["pitches"][0]["step"]], [0, 0])
+    check("the other track untouched", score_ed_tracks(st)[1]["notes"].length, 4)
+    st = score_ed_switch(st, 1)
+    st = score_ed_redo(st)
+    check("redone there too", [st["track"], st["notes"][0]["pitches"][0]["step"]], [0, 1])
+    st = score_ed_track_add(st)
+    check("a track added: every track copied", st["undo"][-1].has_key("tracks"), true)
+    st = score_ed_undo(st)
+    check("and undone whole", score_ed_tracks(st).length, 2)
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {
