@@ -2646,6 +2646,15 @@ them, and `golden.rs` compares each — no change in lang, whose
 `eui_score_bands` builds them from the same fields. `tests/score_spec.sl`
 is 124 tests.
 
+**And both voices under the pointer** (2026-10-13). A note written into
+the second voice leaves the editor in it, and the pointer picked only the
+voice being edited: a click on a first-voice note found it in no map and
+put the selection out. A click now picks a note of either voice, and
+edits that voice; where both stand in one column, or a head apart, the
+one whose note is nearest the pitch pressed. The editor's engraving gives
+the second voice's map beside the first's. `tests/score_spec.sl` is 125
+tests.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

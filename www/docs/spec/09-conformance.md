@@ -830,7 +830,8 @@ stems, shared columns and rests, and the editor's second voice — written
 beside the first, chosen with Ctrl+Alt+2, an insert-mode press writing at
 the moment pressed with the silence around it kept — between two heads of
 the first voice, that much of the time between them rounded to the value
-chosen, so two eighths go under one quarter.
+chosen, so two eighths go under one quarter — and the pointer picking a
+note of either voice and going to that voice.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

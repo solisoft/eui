@@ -6860,6 +6860,9 @@ def score_ed_pick(state, point, page)
       end
     end
   end
+  # Two voices may stand in one column, or a head apart: of the items as
+  # near as the nearest, the one whose note is nearest the pitch pressed.
+  hit = (score_ed_pick_voice(state, drawn, best_sys, xs, hit_gap, pitch) ?? hit) unless hit.nil?
   is_last_sys = best_sys["bars"][-1]["number"] == every[-1]["bars"][-1]["number"]
   # Past the last note of the score: a new note at the pitch under the
   # pointer.
@@ -6872,13 +6875,53 @@ def score_ed_pick(state, point, page)
   end
   return state if hit.nil? || hit_gap > 2.0
 
-  model = drawn["map"][hit["i"]]
+  model = hit["i"] < drawn["map"].length ? drawn["map"][hit["i"]] : -1
+  # A note of the other voice: edit that voice, and select it there.
+  if model < 0
+    other_map = state["voice"] == 2 ? drawn["map1"] : (drawn["map2"] ?? [])
+    other = hit["i"] < other_map.length ? other_map[hit["i"]] : -1
+    return state if other < 0
+
+    state = score_ed_set_voice(state, state["voice"] == 2 ? 1 : 2)
+    state["sel"] = other
+    state["typing"] = false
+    return state
+  end
   if state["sel"] == model
     return score_ed_set_pitch(state, pitch)
   end
   state["sel"] = model
   state["typing"] = false
   state
+end
+
+def score_ed_pick_voice(state, drawn, sys, xs, gap, pitch)
+  map_now = drawn["map"]
+  map_other = state["voice"] == 2 ? drawn["map1"] : (drawn["map2"] ?? [])
+  want = pitch["oct"] * 7 + pitch["step"]
+  best = nil
+  best_d = 999
+  count = 0
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      next if ((xs - ev["x"] - (ev["head_w"] ?? 1.18) / 2.0).abs - gap) > 0.34
+
+      i = ev["i"]
+      nt = nil
+      nt = state["notes"][map_now[i]] if i < map_now.length && map_now[i] >= 0 && map_now[i] < state["notes"].length
+      others = state["notes2"] ?? []
+      nt = others[map_other[i]] if nt.nil? && i < map_other.length && map_other[i] >= 0 && map_other[i] < others.length
+      next if nt.nil?
+
+      count += 1
+      d = nt["rest"] ? 500 : nt["pitches"].map { |pt| (pt["oct"] * 7 + pt["step"] - want).abs }.reduce(fn(acc, v) score_min(acc, v), 999)
+      if d < best_d
+        best_d = d
+        best = ev
+      end
+    end
+  end
+  count > 1 ? best : nil
 end
 
 def score_ed_pos_at(ys, top)
@@ -7207,7 +7250,7 @@ def score_ed_layout(state)
   # `map` is the voice being edited's — what a click picks — and `map1`
   # the first voice's, what the playhead lights.
   src = score_ed_with_lyrics(both["words"], score_ed_lyrics_ly(score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] ?? ""))
-  {"src": src, "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+  {"src": src, "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"], "map2": both["map2"]}
 end
 
 def score_ed_with_lyrics(words, lyrics)
@@ -7671,7 +7714,7 @@ def score_ed_engrave(state)
   catch e
     problem = str(e)
   end
-  {"engraved": engraved, "map": laid["map"], "map1": laid["map1"] ?? laid["map"], "src": laid["src"], "problem": problem, "sp": sp, "a4": a4}
+  {"engraved": engraved, "map": laid["map"], "map1": laid["map1"] ?? laid["map"], "map2": laid["map2"], "src": laid["src"], "problem": problem, "sp": sp, "a4": a4}
 end
 
 def score_ed_page_width(state)
@@ -8461,6 +8504,34 @@ describe("the editor", fn() {
     end
     check("on the beat and half a beat after it", starts, [0, score_whole() / 8])
     check("the quarter kept", score_ed_v1(st)["notes"][0]["base"], 4)
+  })
+
+  test("with two voices the pointer picks a note of either, and goes to its voice", fn() {
+    st = score_ed_from_source(spec_state(), "{ c'4 d'4 e'4 f'4 }")
+    st = score_ed_flag(st, "tool", SCORE_ED_TOOLS[1])
+    st = score_ed_duration(st, 8)
+    drawn = score_ed_engrave(st)
+    sp = score_ed_space(st)
+    sys = drawn["engraved"]["systems"][0]
+    items = sys["bars"][0]["items"]
+    st = score_editor({"event": "press", "params": {"payload": [(items[0]["x"] + 0.6) * sp, sys["top"] * sp], "props": {"page": 0}}, "state": st})
+    check("an eighth in the second voice, edited there", st["voice"], 2)
+    st = score_ed_flag(st, "tool", SCORE_ED_TOOLS[0])
+    drawn = score_ed_engrave(st)
+    sys = drawn["engraved"]["systems"][0]
+    ones = sys["bars"][0]["items"].filter { |ev| ev["i"] < drawn["map1"].length && drawn["map1"][ev["i"]] >= 0 }
+    on_d = [(ones[1]["x"] + 0.6) * sp, (sys["top"] + 4.5) * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_d, "props": {"page": 0}}, "state": st})
+    check("the D picked: the first voice again, its second note", [st["voice"] ?? 1, st["sel"]], [1, 1])
+    on_c = [(ones[0]["x"] + 0.6) * sp, (sys["top"] + 5.0) * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_c, "props": {"page": 0}}, "state": st})
+    check("low in the first column: the first voice's C", [st["voice"] ?? 1, st["sel"]], [1, 0])
+    drawn = score_ed_engrave(st)
+    sys = drawn["engraved"]["systems"][0]
+    twos = sys["bars"][0]["items"].filter { |ev| ev["i"] < drawn["map2"].length && drawn["map2"][ev["i"]] >= 0 }
+    high = [(twos[0]["x"] + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": high, "props": {"page": 0}}, "state": st})
+    check("high in it: the second voice's eighth", [st["voice"], score_ed_selected(st)["base"]], [2, 8])
   })
 
   test("in insert mode another value on a rest writes over it: an eighth leaves a rest, a half covers two", fn() {
