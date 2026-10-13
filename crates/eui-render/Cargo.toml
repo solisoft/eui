@@ -15,7 +15,7 @@ eui-layout = { path = "../eui-layout", version = "0.8.0" }
 eui-text = { path = "../eui-text", version = "0.8.0" }
 # The GPU boundary. `unsafe` lives inside wgpu, behind its safe API; this
 # crate itself stays forbid(unsafe_code).
-wgpu = "23"
+wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 
 # The blocking front door on `with_adapter_async`. A page has no thread to
@@ -27,7 +27,7 @@ pollster = "0.4"
 # Without it a browser with no WebGPU gets no adapter at all, which is a
 # blank canvas rather than an error.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { version = "23", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "30", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
 
 [lints]
 workspace = true

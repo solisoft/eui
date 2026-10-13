@@ -27,7 +27,7 @@ eui-vm = { path = "../eui-vm", version = "0.8.0" }
 eui-audio = { path = "../eui-audio", version = "0.8.0" }
 eui-video = { path = "../eui-video", version = "0.8.0" }
 winit = "0.30"
-wgpu = "23"
+wgpu = "30"
 # Reinterpreting a validated mesh as bytes across the worker pipe, and back.
 bytemuck = "1"
 blake3 = "1"
@@ -106,7 +106,7 @@ tokio = { version = "1", default-features = false, features = ["sync"] }
 # feature is named for a hazard that does not exist here — a page has one
 # thread and wasm has no threads without `SharedArrayBuffer`, which this
 # build does not use and whose headers the sites deliberately do not set.
-wgpu = { version = "23", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "30", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }
 # `std::time::Instant` panics here; this is `performance.now()` behind
 # `std`'s own names, and it is what winit's `ControlFlow::WaitUntil` takes.
 web-time = "1"

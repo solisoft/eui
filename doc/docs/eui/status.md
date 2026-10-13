@@ -254,6 +254,25 @@ without the third.
 - The **window**: winit in `ControlFlow::Wait` over a wgpu surface. There is
   no render loop; a redraw happens when a frame arrived, the viewer acted, or
   the OS asked. Compiled, not yet exercised on a display.
+- **wgpu 30** (2026-10-13, from 23; naga with it, MSRV 1.87). Checked on
+  x86-64 Linux: the workspace and the `wasm32` client pass `clippy -D
+  warnings`, and the renderer's 74 pixel tests, the verifier's 46 vectors
+  and `eui-client`'s 41 unit tests pass unchanged. macOS, Windows, Android
+  and iOS have only CI's build to speak for them. On a display it has been
+  run on Hyprland (Wayland, Vulkan): the demo gallery drew and played its
+  video and sound. One vector changed and why: naga 30's parser now checks
+  a return type itself, so `return 1.0;` from a `vec4` function is a parse
+  refusal rather than a validation one, and the "parses but is invalid"
+  vector uses a constant index past an array's end instead. The upgrade
+  also took `paste` out of the tree, and with it one of the four `cargo
+  deny` exceptions. **It costs 0.79 MB**: the client is 19.21 MB stripped
+  (fat LTO, one codegen unit) against 18.42 MB for the same tree on wgpu
+  23. By symbol, naga grew from 858 KB to 1.23 MB, wgpu-core by 154 KB,
+  and `ash` and `gpu-allocator` by 45 KB together, while `wgpu` itself
+  shrank by 69 KB — 527 KB of GPU stack in all, the rest spread thin.
+  Measured twice: the first pair read 4.5 MB because a build beside it on
+  the shared server relinked one binary with ThinLTO into the same
+  `target/`, which its `.text` gave away.
 - **End to end**, over a real socket against the example counter server:
   Welcome, Mount, a click leaving as an event of under 40 bytes, the new
   value coming back, a resync that restores the server's state, and a forged
@@ -332,9 +351,9 @@ full layout of the table from 1.6 ms to about 0.15 ms. Along the way:
 no longer allocates on a hit, and the per-frame layout reset no longer
 memsets a per-node style cache.
 
-`cargo deny check` passes with four tracked exceptions — unmaintained
-`ttf-parser`, `rustybuzz`, `paste` and `instant`, under cosmic-text, wgpu
-and notify — each with its reason and the condition that ends it in
+`cargo deny check` passes with three tracked exceptions — unmaintained
+`ttf-parser`, `rustybuzz` and `instant`, under cosmic-text and notify (a
+fourth, `paste`, left the tree with wgpu 23) — each with its reason and the condition that ends it in
 `deny.toml`. It is a CI job now, and the first run of it earned its place:
 a live advisory against `rustls` 0.23.43 (RUSTSEC-2026-0285, TLS 1.3
 handshake messages accepted across encryption-level boundaries) had landed

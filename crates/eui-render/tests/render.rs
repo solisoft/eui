@@ -1603,15 +1603,15 @@ fn read_texture(r: &mut Renderer, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8
     });
     let mut encoder = r.device().create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::ImageCopyBuffer { buffer: &buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
+        wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } },
         wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
     r.queue().submit([encoder.finish()]);
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    r.device().poll(wgpu::Maintain::Wait);
-    let mapped = slice.get_mapped_range();
+    r.device().poll(wgpu::PollType::wait_indefinitely()).expect("the copy lands");
+    let mapped = slice.get_mapped_range().expect("the buffer is mapped");
     let mut out = Vec::with_capacity((w * h * 4) as usize);
     for row in 0..h {
         let start = (row * bpr) as usize;

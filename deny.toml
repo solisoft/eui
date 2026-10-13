@@ -12,13 +12,11 @@ ignore = [
     # exactly the kind of code an advisory matters for, so this is a tracked
     # exception, not a dismissal: revisit whenever cosmic-text releases.
     "RUSTSEC-2026-0192",
-    # rustybuzz (RUSTSEC-2026-0206), the shaper under cosmic-text, and paste
-    # (RUSTSEC-2024-0436), a proc-macro helper under wgpu's dependency tree:
-    # both "unmaintained", neither with a known vulnerability. Tracked here
-    # for the same reason as above — the exception is visible, and it is
-    # reviewed when the upstream crates move.
+    # rustybuzz (RUSTSEC-2026-0206), the shaper under cosmic-text:
+    # "unmaintained", with no known vulnerability. Tracked here for the same
+    # reason as above — the exception is visible, and it is reviewed when
+    # the upstream crate moves. (paste, RUSTSEC-2024-0436, left with wgpu 23.)
     "RUSTSEC-2026-0206",
-    "RUSTSEC-2024-0436",
     # instant is unmaintained (RUSTSEC-2024-0384). It arrives under
     # notify 7, by way of notify-types, and is a clock rather than a parser:
     # nothing hostile reaches it. `notify` 8 drops it, so this exception ends

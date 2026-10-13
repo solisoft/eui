@@ -1990,7 +1990,7 @@ impl Shell {
         // Android is the exception, and it is not a small one: there is no
         // Mesa and no LLVM to load there — GLES *is* the system driver — and
         // an emulator very often has no working Vulkan at all. Without GL in
-        // the set `request_adapter` answers `None`, and the only thing this
+        // the set `request_adapter` answers no adapter, and the only thing this
         // function can then do is refuse to open, which ends the event loop
         // and closes the activity. That reads as an application that does not
         // start, and the whole of its report is one line in `logcat`.
@@ -2016,7 +2016,9 @@ impl Shell {
             Some(g) => make_surface(&g.instance)?,
             None => {
                 let backends = if cfg!(target_os = "android") { wgpu::Backends::PRIMARY | wgpu::Backends::GL } else { wgpu::Backends::PRIMARY };
-                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..Default::default() });
+                // The display is the instance's since wgpu 29, not each
+                // surface's: given once here, from the loop that owns it.
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle())) });
                 let surface = make_surface(&instance)?;
                 // The adapter is chosen for the first window's surface, so
                 // it is asked to be compatible with it.
@@ -2024,10 +2026,14 @@ impl Shell {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: Some(&surface),
                     force_fallback_adapter: false,
+                    apply_limit_buckets: false,
                 }));
-                let Some(adapter) = adapter else {
-                    eprintln!("eui: no GPU adapter");
-                    return None;
+                let adapter = match adapter {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("eui: no GPU adapter: {e}");
+                        return None;
+                    }
                 };
                 let renderer = match eui_render::Renderer::with_adapter(&adapter) {
                     Ok(r) => r,
@@ -2127,6 +2133,10 @@ impl Shell {
             alpha_mode: caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto),
             view_formats,
             desired_maximum_frame_latency: 2,
+            // sRGB, as before wgpu had a choice: the palette is written in
+            // it, and a wider space is a decision about colour, not about
+            // the upgrade.
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(gpu_shared.renderer.device(), &config);
         let scale = window.scale_factor() as f32;
@@ -3614,14 +3624,19 @@ impl Shell {
         // because the paint is what settles hover and hands the driver its
         // clock. Only the picture has nowhere to go.
         let Some(surface) = &self.surface else { return };
+        // A suboptimal frame is still drawn, as it always was: skipping it
+        // to reconfigure is a window that never paints wherever the
+        // compositor keeps saying so.
         let frame = match surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 surface.configure(renderer.device(), &self.config);
                 return;
             }
-            Err(e) => {
-                eprintln!("eui: surface: {e}");
+            // Minimised or covered: nothing to draw into, and nothing wrong.
+            wgpu::CurrentSurfaceTexture::Occluded => return,
+            other => {
+                eprintln!("eui: surface: {other:?}");
                 return;
             }
         };
@@ -3713,7 +3728,7 @@ impl Shell {
                 stats.gpu_ms = st.gpu_ms.or(stats.gpu_ms);
             }
         }
-        frame.present();
+        renderer.queue().present(frame);
         // Still moving? Ask for the next frame here, not on a timer.
         //
         // A deadline of `now + 16 ms` is armed at the *start* of a paint,
@@ -4347,7 +4362,7 @@ impl Shell {
         self.pointer_at = None;
         self.pointer_in_app = false;
         // A frame may still be in flight; the surface must not go under it.
-        renderer.device().poll(wgpu::Maintain::Wait);
+        let _ = renderer.device().poll(wgpu::PollType::wait_indefinitely());
         self.surface = None;
     }
 
@@ -4424,7 +4439,7 @@ impl Shell {
         // Dropping a surface with a frame still in flight is the classic
         // hang. Wait for the device to go idle, let the surface go, and only
         // then the window it was made from.
-        renderer.device().poll(wgpu::Maintain::Wait);
+        let _ = renderer.device().poll(wgpu::PollType::wait_indefinitely());
         drop(surface);
         drop(window);
     }
@@ -4873,15 +4888,22 @@ impl App {
             // touches no canvas. So it is asked first about nothing: if it
             // answers, this instance keeps the canvas; if it does not, it
             // never held one and a GL instance gets it instead.
-            let webgpu = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::BROWSER_WEBGPU, ..Default::default() });
-            let has_webgpu =
-                webgpu.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::LowPower, compatible_surface: None, force_fallback_adapter: false }).await.is_some();
+            let webgpu = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::BROWSER_WEBGPU, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+            let has_webgpu = webgpu
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                })
+                .await
+                .is_ok();
             let instance = if has_webgpu {
                 webgpu
             } else {
                 drop(webgpu);
                 eprintln!("eui: no WebGPU adapter here; drawing through WebGL2");
-                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..Default::default() })
+                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..wgpu::InstanceDescriptor::new_without_display_handle() })
             };
             let surface = match instance.create_surface(Arc::clone(&window)) {
                 Ok(s) => s,
@@ -4894,9 +4916,15 @@ impl App {
             // backend builds its context out of the canvas, so an adapter
             // for that backend does not exist until there is one to ask
             // about.
-            let adapter =
-                instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::LowPower, compatible_surface: Some(&surface), force_fallback_adapter: false }).await;
-            let Some(adapter) = adapter else {
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                })
+                .await;
+            let Ok(adapter) = adapter else {
                 eprintln!("eui: this browser would not give the page a GPU — WebGPU and WebGL2 both said no");
                 return;
             };

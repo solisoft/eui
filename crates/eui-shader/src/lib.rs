@@ -357,7 +357,9 @@ fn bindings(m: &Module) -> Result<(), Reject> {
             A::Uniform => {}
             A::Storage { .. } => return Err(Reject::Forbidden("a storage buffer")),
             A::WorkGroup => return Err(Reject::Forbidden("workgroup memory")),
-            A::PushConstant => return Err(Reject::Forbidden("a push constant")),
+            A::Immediate => return Err(Reject::Forbidden("a push constant")),
+            A::TaskPayload => return Err(Reject::Forbidden("a task payload")),
+            A::RayPayload | A::IncomingRayPayload => return Err(Reject::Forbidden("a ray payload")),
             A::Handle => return Err(Reject::Forbidden("a texture or a sampler")),
             A::Function => return Err(Reject::Binding("a function variable at module scope")),
         }
@@ -392,6 +394,8 @@ fn entries(m: &Module) -> Result<bool, Reject> {
     for e in &m.entry_points {
         match e.stage {
             naga::ShaderStage::Compute => return Err(Reject::Forbidden("a compute stage")),
+            naga::ShaderStage::Task | naga::ShaderStage::Mesh => return Err(Reject::Forbidden("a mesh stage")),
+            naga::ShaderStage::RayGeneration | naga::ShaderStage::Miss | naga::ShaderStage::AnyHit | naga::ShaderStage::ClosestHit => return Err(Reject::Forbidden("a ray-tracing stage")),
             naga::ShaderStage::Fragment => {
                 if e.name != FRAGMENT_ENTRY {
                     return Err(Reject::Entry("the fragment stage is named fs_main"));
@@ -460,11 +464,13 @@ fn block_cost(b: &Block, f: &Function, costs: &HashMap<usize, u64>) -> Result<u6
         n = n.saturating_add(match s {
             // The statements a scene may not have. Each is refused in one
             // place so there is one vector per rule.
-            Statement::Atomic { .. } => return Err(Reject::Forbidden("an atomic")),
+            Statement::Atomic { .. } | Statement::ImageAtomic { .. } => return Err(Reject::Forbidden("an atomic")),
             Statement::ImageStore { .. } => return Err(Reject::Forbidden("an image store")),
-            Statement::Barrier(_) => return Err(Reject::Forbidden("a barrier")),
+            Statement::ControlBarrier(_) | Statement::MemoryBarrier(_) => return Err(Reject::Forbidden("a barrier")),
             Statement::WorkGroupUniformLoad { .. } => return Err(Reject::Forbidden("a workgroup load")),
             Statement::RayQuery { .. } => return Err(Reject::Forbidden("a ray query")),
+            Statement::RayPipelineFunction(_) => return Err(Reject::Forbidden("a ray-tracing call")),
+            Statement::CooperativeStore { .. } => return Err(Reject::Forbidden("a cooperative matrix")),
             Statement::SubgroupBallot { .. } | Statement::SubgroupGather { .. } | Statement::SubgroupCollectiveOperation { .. } => return Err(Reject::Forbidden("a subgroup operation")),
 
             Statement::Block(inner) => block_cost(inner, f, costs)?,

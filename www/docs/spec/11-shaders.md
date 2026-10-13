@@ -65,8 +65,9 @@ statement nesting itself, and a client MUST refuse past 64 levels of it
 ### 2.2 Entry points
 
 Exactly one fragment entry named `fs_main`, returning `@location(0) vec4<f32>`.
-At most one vertex entry named `vs_main`. **No compute stage.** No early depth
-test.
+At most one vertex entry named `vs_main`. **No compute stage**, and none of
+the stages WGSL extensions add beside it — task, mesh, or any ray-tracing
+stage — even where the module enables the extension. No early depth test.
 
 The names and the fragment result are fixed rather than declared, so that no
 identifier and no `@location` a server chose ever reaches pipeline creation.

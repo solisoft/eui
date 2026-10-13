@@ -48,6 +48,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
+- The client draws through **wgpu 30** (was 23), and the shader verifier
+  parses with naga 30. The renderer's pixel tests pass unchanged, the
+  surface stays sRGB, and a suboptimal frame is still drawn. Building from
+  source now needs Rust 1.87. The client binary grows by 0.79 MB (18.42 →
+  19.21 MB, stripped), most of it naga. The verifier also refuses, by name,
+  the task, mesh and ray-tracing stages naga 30 can parse (spec 11 §2.2).
 - The site serves its own fonts (IBM Plex Mono, IBM Plex Sans, Instrument
   Serif) instead of loading them from Google Fonts, and turns them on once
   the page has painted. Lighthouse scores the landing page 100 in all four

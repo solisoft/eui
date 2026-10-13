@@ -123,7 +123,11 @@ fn nonsense_does_not_parse() {
 
 #[test]
 fn wgsl_that_parses_but_does_not_typecheck_is_invalid() {
-    assert!(matches!(kind(&frag("return 1.0;")), Reject::Invalid(_)));
+    // A constant index past the end: the parser takes it, the validator
+    // does not. (`return 1.0;` from a `vec4` function used to be the
+    // example, until naga 30's parser began checking return types itself.)
+    let k = kind(&frag("var a: array<f32, 4>;\nlet i = 7;\nreturn vec4<f32>(a[i]);"));
+    assert!(matches!(k, Reject::Invalid(_)), "{k:?}");
 }
 
 #[test]
@@ -143,6 +147,25 @@ fn too_many_statements_is_refused() {
 fn a_compute_stage_is_refused() {
     let src = format!("{}\n@compute @workgroup_size(1) fn cs() {{}}\n", frag("return u.tint;"));
     assert_eq!(kind(&src), Reject::Forbidden("a compute stage"));
+}
+
+#[test]
+fn a_mesh_or_task_stage_is_refused_even_with_its_extension_enabled() {
+    // Without `enable` the parser refuses it; with it, the validator or the
+    // stage check does. Whichever answers, it is never compiled.
+    let src = format!(
+        "enable wgpu_mesh_shader;\n{}\nvar<task_payload> p: u32;\n@task @payload(p) @workgroup_size(1) fn ts() -> @builtin(mesh_task_size) vec3<u32> {{ return vec3<u32>(1u); }}\n",
+        frag("return u.tint;")
+    );
+    let k = kind(&src);
+    assert!(matches!(k, Reject::Parse(_) | Reject::Invalid(_) | Reject::Forbidden("a mesh stage" | "a task payload")), "{k:?}");
+}
+
+#[test]
+fn a_ray_tracing_stage_is_refused_even_with_its_extension_enabled() {
+    let src = format!("enable wgpu_ray_tracing_pipeline;\n{}\n@ray_generation fn rg() {{}}\n", frag("return u.tint;"));
+    let k = kind(&src);
+    assert!(matches!(k, Reject::Parse(_) | Reject::Invalid(_) | Reject::Forbidden("a ray-tracing stage")), "{k:?}");
 }
 
 #[test]

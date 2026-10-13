@@ -47,9 +47,15 @@ per boundary crossed, which the one-answer-at-a-time rule of
 client goes on following the hand, because nothing about the hand waits on the
 server, and the rows arrive behind it. That degrades; it does not break.
 
-Measured on 2026-09-15, `cargo build --release -p eui-client`, x86-64 Linux,
-LTO, stripped: **16.28 MB** (16 284 888 bytes) with the default features. The
-same build was 15.64 MB on 2026-09-08 and 12.13 MB on 2026-09-06; with
+Measured on 2026-10-13, `cargo build --release -p eui-client`, x86-64 Linux,
+fat LTO, one codegen unit, stripped: **19.21 MB** (19 207 664 bytes) with the
+default features. The same tree with wgpu 23 in place of 30 is 18.42 MB
+(18 420 816 bytes), so the upgrade costs **0.79 MB** — 0.37 MB of it naga,
+0.15 MB wgpu-core, and the rest spread over constants, unwind tables and
+the generic code instantiated for it; the 2.14 MB between 2026-09-15 and the
+wgpu 23 build is the client's own growth. The same build was 16.28 MB
+(16 284 888 bytes) on 2026-09-15, 15.64 MB on 2026-09-08 and 12.13 MB on
+2026-09-06; with
 `--no-default-features` it was 12.66 MB on 2026-09-08, and that one has not
 been re-measured since. Of that 2026-09-08 difference, 0.25 MB is the two
 pictures beside PNG (03 §1) — JPEG 157 KB (`zune-jpeg`) and WebP 64 KB
@@ -66,7 +72,8 @@ content is two and a half times what the two extra picture formats cost and
 under a quarter of what the accessibility adapter costs — which is the
 comparison that matters, because those two are levers and this one is not.
 
-It was one per cent over in September's first week. It is a third over now,
+It was one per cent over in September's first week. It is three fifths over
+now (19.21 MB against 12),
 and the budget stays: what grew is what the client
 learned to do — sound and moving pictures decoded in the worker (03 §7,
 §8: symphonia's WAV, FLAC, MP3 and Vorbis, GIF and animated WebP), still
@@ -78,8 +85,8 @@ is free: the accessibility adapter (2.72 MB, by building without it), OGG
 and Vorbis (0.72 MB — symphonia reserves FFT twiddle tables up to 65 536
 points, half a megabyte of zeroes in `.data` because they are `Lazy`
 statics rather than `.bss`), the four embedded faces (1.33 MB of
-`.rodata`), and the shader translator wgpu needs at runtime (naga, 876 KB
-of `.text`).
+`.rodata`), and the shader translator wgpu needs at runtime (naga, 1.23 MB
+of `.text` under wgpu 30, where it was 0.86 MB under 23).
 
 A face an application supplies (02 §5.1) does not move this line at all: it
 is an asset, it travels once per session and lives in the asset budget of 01

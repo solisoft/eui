@@ -817,6 +817,8 @@ What is pinned instead:
 1. **The shader verifier's verdicts**, one vector per rule of 11 §2 — an
    unbounded loop, a bound read from a uniform, a step of zero, a counter the
    body also moves, nested loops over the step budget, a compute stage, a
+   task or mesh stage and a ray-tracing stage with their extensions enabled
+   (`a_mesh_or_task_stage_is_refused_even_with_its_extension_enabled`), a
    storage buffer, a texture, a barrier, a binding outside group 0, a uniform
    block of the server's own shape, an entry point by another name, a fragment
    result that is not `@location(0) vec4<f32>`, a module over 64 KiB, and
