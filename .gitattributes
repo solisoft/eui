@@ -1,0 +1,4 @@
+# The score engraver's golden PDFs are compared byte for byte
+# (crates/eui-score/tests/golden.rs). They are ASCII, so a Windows checkout
+# with core.autocrlf would turn every LF into CRLF and fail all of them.
+crates/eui-score/tests/golden/*.pdf binary
