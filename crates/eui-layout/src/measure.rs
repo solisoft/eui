@@ -63,7 +63,7 @@ impl TextMeasurer for Monospace {
             for word in paragraph.split(' ') {
                 let wl = word.chars().count();
                 let candidate = if started { line.saturating_add(1).saturating_add(wl) } else { wl };
-                let fits = max_width.map_or(true, |mw| candidate as f32 * cw <= mw);
+                let fits = max_width.is_none_or(|mw| candidate as f32 * cw <= mw);
                 if started && !fits {
                     lines.push(line as f32 * cw);
                     line = wl;

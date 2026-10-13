@@ -1334,7 +1334,7 @@ impl Renderer {
             let key = self.scene_key(s);
             let depth = key.depth;
             let held = tex.scenes.targets.get(&s.id);
-            let fresh = held.map_or(true, |t| t.size != size || t.depth_view.is_some() != depth || t.samples != key.samples);
+            let fresh = held.is_none_or(|t| t.size != size || t.depth_view.is_some() != depth || t.samples != key.samples);
             // The quota (08 §6). A scene that cannot have a target draws its
             // own background, exactly as one whose module is still compiling
             // does: the application already has to cope with that, so this

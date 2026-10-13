@@ -18,7 +18,7 @@ const HEADERS: [&str; 4] = ["Référence", "Client", "Statut", "Montant"];
 
 /// Cell text for row `i`, close to what an invoice list really holds.
 fn cells(i: usize) -> [String; 4] {
-    [format!("FA-2026-{:04}", i + 1), format!("Client {:02} SARL", i % 37), (if i % 3 == 0 { "Payée" } else { "En attente" }).to_string(), format!("{}, {:02} €", 100 + i * 37, i % 100)]
+    [format!("FA-2026-{:04}", i + 1), format!("Client {:02} SARL", i % 37), (if i.is_multiple_of(3) { "Payée" } else { "En attente" }).to_string(), format!("{}, {:02} €", 100 + i * 37, i % 100)]
 }
 
 /// The EUI batch: six shared style records, the column headers interned, and

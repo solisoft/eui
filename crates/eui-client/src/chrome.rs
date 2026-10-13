@@ -455,7 +455,7 @@ impl Chrome {
         let mut b = Builder::new();
         self.actions.clear();
         let keep = std::mem::take(&mut self.keep_address);
-        self.blank = tabs.get(active).map_or(true, |t| t.trust.is_none());
+        self.blank = tabs.get(active).is_none_or(|t| t.trust.is_none());
         let editing = self.editing && !self.blank;
 
         // ------------------------------------------------------- styles

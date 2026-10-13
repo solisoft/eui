@@ -293,7 +293,7 @@ impl Sessions {
     /// Drop what has been idle longer than [`KEEP`].
     fn reap(&self) {
         if let Ok(mut map) = self.0.lock() {
-            map.retain(|_, h| h.idle_since.map_or(true, |t| t.elapsed() < KEEP));
+            map.retain(|_, h| h.idle_since.is_none_or(|t| t.elapsed() < KEEP));
         }
     }
 

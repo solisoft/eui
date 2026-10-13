@@ -357,7 +357,7 @@ impl Session {
     /// The placeholder as it is *shown*: only while the field's text is
     /// empty. What the layout measures and the painter draws in its place.
     pub fn shown_placeholder(&self, ix: NodeIx) -> Option<&str> {
-        self.placeholder(ix).filter(|_| self.text_of(ix).map_or(true, str::is_empty))
+        self.placeholder(ix).filter(|_| self.text_of(ix).is_none_or(str::is_empty))
     }
 
     /// The `audio` and `video` nodes in the tree (03 §7, §8).

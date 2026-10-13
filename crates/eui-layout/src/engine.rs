@@ -411,7 +411,7 @@ impl Layout {
             return false;
         }
         let Some(root) = s.root() else { return false };
-        if s.node(root).map_or(true, |n| n.dirty & (dirty::SELF | dirty::DESCENDANT) != 0) {
+        if s.node(root).is_none_or(|n| n.dirty & (dirty::SELF | dirty::DESCENDANT) != 0) {
             return false;
         }
         // A pointer panel is placed at the hand by `compute`, and left where

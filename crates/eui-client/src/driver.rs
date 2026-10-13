@@ -2912,7 +2912,7 @@ impl Driver {
     /// that drops it is a paint, so both pages sat there until some unrelated
     /// event woke the window.
     fn nothing_on_the_clock(&self) -> bool {
-        self.movers.iter().all(|(_, m)| m.held.is_some()) && self.departing.as_ref().map_or(true, |d| d.go.held.is_some())
+        self.movers.iter().all(|(_, m)| m.held.is_some()) && self.departing.as_ref().is_none_or(|d| d.go.held.is_some())
     }
 
     /// Whether a glide from `from` to `to` can be the vertex stage's (04
@@ -3997,7 +3997,7 @@ impl Driver {
         let focused = self.focused?;
         let grabbed = self.pointer.drag.is_some_and(|d| d.grabbed);
         let axis = self.session.node(focused).map(|n| n.parent).filter(|p| p.is_some());
-        let vertical = axis.map_or(true, |p| self.drag_axis_is_vertical(p));
+        let vertical = axis.is_none_or(|p| self.drag_axis_is_vertical(p));
         let (back, on) = if vertical { ("ArrowUp", "ArrowDown") } else { ("ArrowLeft", "ArrowRight") };
 
         // A grab in progress owns the arrows, `Space`, `Escape` and the ends —
@@ -6291,7 +6291,7 @@ impl Driver {
     /// empty means the desktop has none and the theme's colours return.
     pub fn set_desktop_theme(&mut self, mode: Option<ThemeMode>, colors: Vec<(eui_theme::Role, u32)>) -> Vec<Frame> {
         self.touched = true;
-        let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.map_or(true, |m| m == self.viewer.mode);
+        let same = self.desktop_colors == colors && self.desktop_mode == mode && mode.is_none_or(|m| m == self.viewer.mode);
         if same {
             return Vec::new();
         }
@@ -7927,7 +7927,7 @@ impl Driver {
         self.take_decoded();
         if !self.touched && !dragging {
             if let Some(c) = &self.cached {
-                if c.until.map_or(true, |u| self.now < u) {
+                if c.until.is_none_or(|u| self.now < u) {
                     self.redraw = false;
                     // Due at its cadence, and no later than the list runs
                     // out: the settle, the timer or the report it is
@@ -8026,7 +8026,7 @@ impl Driver {
         // them — once the view has been still for a moment, not per frame
         // of a glide or a drag: a request a frame is a server render a
         // frame, and rows that will be scrolled past before they arrive.
-        let settled = self.scroll_anim.is_none() && self.scroll_touched.map_or(true, |t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
+        let settled = self.scroll_anim.is_none() && self.scroll_touched.is_none_or(|t| now.saturating_duration_since(t) >= WINDOW_SETTLE);
         let mut settle_due = None;
         let resized = self.resize_events();
         self.pending.extend(resized);

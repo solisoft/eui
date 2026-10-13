@@ -1355,7 +1355,7 @@ fn get_paint_rest(r: &mut R<'_>) -> Wire<PaintRest> {
                 // entitled to refuse it. Copying is what this
                 // path was going to do anyway.
                 let stride = eui_render::scene::VERTEX_BYTES as usize;
-                if vertex_bytes.len() % stride != 0 || index_bytes.len() % 4 != 0 {
+                if !vertex_bytes.len().is_multiple_of(stride) || !index_bytes.len().is_multiple_of(4) {
                     return Err("mesh");
                 }
                 let vertices: Vec<eui_render::scene::Vertex> = vertex_bytes
@@ -1374,7 +1374,7 @@ fn get_paint_rest(r: &mut R<'_>) -> Wire<PaintRest> {
                 // GPU: the index bound is the one wgpu does not
                 // make, and on a GLES backend does not make at
                 // all.
-                if vertices.len() != count || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
+                if vertices.len() != count || !indices.len().is_multiple_of(3) || indices.iter().any(|i| *i as usize >= vertices.len()) {
                     return Err("mesh");
                 }
                 (hash, crate::driver::SceneAsset::Mesh(crate::mesh::Mesh { vertices, indices }))
@@ -2854,7 +2854,7 @@ impl Backend {
             // window's to keep: the driver would only say what the reply
             // already did, and the round trip is the one cost a repeated
             // frame has left.
-            if w.repeat.as_ref().is_some_and(|r| r.until.map_or(true, |u| now < u)) {
+            if w.repeat.as_ref().is_some_and(|r| r.until.is_none_or(|u| now < u)) {
                 return w.due.is_some_and(|d| now >= d + Duration::from_millis(u64::from(ms)));
             }
             matches!(w.call(&Request::Tick).map(|r| r.payload), Some(Payload::Tick(true)))

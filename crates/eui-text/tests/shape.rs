@@ -135,7 +135,7 @@ fn glyphs_rasterise_to_coverage_bitmaps() {
     let sp = e.shape(" ", base(), None, 0);
     if let Some(space) = sp.glyphs.first() {
         let img = e.rasterize(space.key, 1.0);
-        assert!(img.map_or(true, |i| i.width == 0 || i.data.iter().all(|&p| p == 0)));
+        assert!(img.is_none_or(|i| i.width == 0 || i.data.iter().all(|&p| p == 0)));
     }
 }
 
