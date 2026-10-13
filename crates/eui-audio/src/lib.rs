@@ -10,6 +10,9 @@
 //! the GPU. This crate is what the worker runs; [`Mixer::fill`] is what
 //! the window's audio callback ultimately consumes.
 //!
+//! A Standard MIDI File is synthesized instead ([`midi`]): with a
+//! SoundFont's instruments, or with voices of this crate's own.
+//!
 //! Everything is `f32` interleaved. A source is resampled to the output
 //! rate as it plays, by linear interpolation: cheap, and honest about
 //! what it is — a player, not a mastering chain.
@@ -21,6 +24,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub mod midi;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -161,6 +166,11 @@ pub fn decode(bytes: &[u8], hint: Option<&str>) -> Result<Sound, AudioError> {
 /// held more than the budget — a doubling `Vec` would otherwise reach
 /// twice it on the way to the refusal.
 pub fn decode_within(bytes: &[u8], hint: Option<&str>, max_bytes: usize) -> Result<Sound, AudioError> {
+    // A MIDI file is not decoded but synthesized, on the client's own
+    // voices; one with a bank goes through [`midi::render`] directly.
+    if midi::is_midi(bytes) {
+        return midi::render(bytes, None, max_bytes.min(MAX_BYTES));
+    }
     let max_samples = max_bytes.min(MAX_BYTES) / std::mem::size_of::<f32>();
     let source = std::io::Cursor::new(bytes.to_vec());
     let stream = MediaSourceStream::new(Box::new(source), Default::default());

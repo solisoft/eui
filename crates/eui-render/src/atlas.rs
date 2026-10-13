@@ -29,6 +29,9 @@ pub struct Atlas {
     shelves: Vec<(u32, u32, u32)>, // (y, height, next x)
     next_y: u32,
     map: HashMap<(GlyphKey, u32), Option<Region>>,
+    /// Canvas fills (03 §1.1), by a hash of the outline as it lands on
+    /// device pixels: a tile of coverage the painter rasterised itself.
+    shapes: HashMap<u64, Option<Region>>,
     /// Bands of rows `y0..y1` written since the last upload, empty when
     /// clean. A shelf packer touches a shelf at a time, and two glyphs on
     /// shelves far apart used to cost every row between them; a few bands
@@ -61,7 +64,7 @@ impl Atlas {
     /// glyph is packed. Uploading a megabyte of nothing was the first
     /// frame's largest write.
     fn with_size(size: u32) -> Self {
-        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), dirty: Vec::new(), generation: 0 }
+        Self { size, pixels: vec![0; (size * size) as usize], shelves: Vec::new(), next_y: 0, map: HashMap::new(), shapes: HashMap::new(), dirty: Vec::new(), generation: 0 }
     }
 
     /// Which arrangement of glyphs this is: a region taken under one
@@ -179,9 +182,9 @@ impl Atlas {
         }
     }
 
-    /// Glyphs currently packed.
+    /// Glyphs and fill tiles currently packed.
     pub fn len(&self) -> usize {
-        self.map.values().filter(|r| r.is_some()).count()
+        self.map.values().chain(self.shapes.values()).filter(|r| r.is_some()).count()
     }
 
     /// True when nothing is packed.
@@ -229,6 +232,35 @@ impl Atlas {
             }
         }
         self.map.insert(k, region);
+        region
+    }
+
+    /// A canvas fill's tile, packed the way a glyph is.
+    ///
+    /// `key` names the coverage, and `raster` makes it -- `(width, height,
+    /// bytes)`, one byte a texel -- only when the key is new. A tile with no
+    /// coverage, or one larger than the sheet can ever hold, is remembered
+    /// as `None` and draws nothing. A full sheet makes room as [`Self::get`]
+    /// does: it grows once, then empties, and the generation says so.
+    pub fn get_shape(&mut self, key: u64, raster: impl FnOnce() -> Option<(u32, u32, Vec<u8>)>) -> Option<Region> {
+        if let Some(r) = self.shapes.get(&key) {
+            return *r;
+        }
+        let Some((width, height, data)) = raster().filter(|(w, h, d)| *w > 0 && *h > 0 && d.iter().any(|&b| b != 0)) else {
+            self.shapes.insert(key, None);
+            return None;
+        };
+        let img = GlyphRef { left: 0, top: 0, width, height, color: false, data: &data };
+        let mut region = self.pack(img);
+        if region.is_none() && self.size < Self::MAX {
+            self.grow();
+            region = self.pack(img);
+        }
+        if region.is_none() && (!self.shelves.is_empty() || self.next_y > 0) {
+            self.clear();
+            region = self.pack(img);
+        }
+        self.shapes.insert(key, region);
         region
     }
 

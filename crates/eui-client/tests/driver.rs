@@ -4813,3 +4813,132 @@ fn a_drag_the_server_does_not_answer_sends_one_size_then_the_last() {
     assert_eq!(last, vec![600], "the final size, once");
     assert_eq!(d.next_frame_at(), None, "and then nothing is owed");
 }
+
+/// An `audio` node of `props`, under a box, with the atoms they name.
+fn midi_tree(d: &mut Driver, props: Vec<(u32, Value)>, atoms: &[(u32, &str)]) {
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Audio, id: 2, style: 0, key: 0, text: None, props: (0, props.len() as u32), handlers: (0, 0), child_count: 0 });
+    tree.props.extend(props);
+    let mut ops: Vec<Op> = atoms.iter().map(|(id, v)| Op::DefAtom { id: *id, value: (*v).into() }).collect();
+    ops.push(Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } });
+    ops.push(Op::Mount(tree));
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+}
+
+fn loud(out: &[f32]) -> bool {
+    out.iter().any(|s| s.abs() > 0.01)
+}
+
+/// Spec 03 §7, *MIDI commands*: `notes` play at once, with no asset to
+/// fetch; again when `notes_seq` changes, and not when the server only
+/// renders the tree again.
+#[test]
+fn notes_play_when_their_seq_changes_and_not_on_a_re_render() {
+    let mut d = welcomed();
+    const A_NOTES: u32 = 40;
+    const A_SEQ: u32 = 41;
+    const A_VOLUME: u32 = 42;
+    let note = |at: i64, status: i64, key: i64, vel: i64| Value::List(vec![Value::Int(at), Value::Int(status), Value::Int(key), Value::Int(vel)]);
+    let notes = Value::List(vec![note(0, 0x90, 69, 110), note(100, 0x80, 69, 0)]);
+    midi_tree(&mut d, vec![(A_NOTES, notes), (A_SEQ, Value::Int(1))], &[(A_NOTES, "notes"), (A_SEQ, "notes_seq"), (A_VOLUME, "volume")]);
+    let _ = d.paint(400, 300);
+    assert!(d.pending_assets().is_empty(), "nothing to fetch: {:?}", d.pending_assets());
+    d.finish_decoding();
+    let _ = d.paint(400, 300);
+    let mut out = vec![0.0f32; 4410 * 2];
+    d.fill_audio(&mut out, 2, 44_100);
+    assert!(loud(&out), "the note sounds at once");
+    // Run it out: a tenth of a second of note and a second of tail.
+    let mut ended = Vec::new();
+    for _ in 0..30 {
+        ended.extend(d.fill_audio(&mut out, 2, 44_100));
+    }
+    assert!(!loud(&out), "and stops");
+    // The same `notes_seq` with another prop: no replay.
+    d.handle_frame(Frame::Batch(Batch { seq: 3, ops: vec![Op::SetProp { node: 2, prop: A_VOLUME, value: Value::Int(90) }] }));
+    let _ = d.paint(400, 300);
+    d.finish_decoding();
+    let _ = d.paint(400, 300);
+    d.fill_audio(&mut out, 2, 44_100);
+    assert!(!loud(&out), "a re-render is not a replay");
+    // A new `notes_seq`: the same list plays again.
+    d.handle_frame(Frame::Batch(Batch { seq: 4, ops: vec![Op::SetProp { node: 2, prop: A_SEQ, value: Value::Int(2) }] }));
+    let _ = d.paint(400, 300);
+    d.finish_decoding();
+    let _ = d.paint(400, 300);
+    d.fill_audio(&mut out, 2, 44_100);
+    assert!(loud(&out), "played again");
+}
+
+/// Spec 03 §7, *A MIDI sound*: a MIDI `src` is fetched and played like
+/// any sound, its `soundfont` parts are fetched beside it, and a bank that
+/// will not load leaves the client's own voices playing.
+#[test]
+fn a_midi_src_asks_for_its_soundfont_parts_and_plays_without_a_bank() {
+    let mut d = welcomed();
+    const A_SRC: u32 = 40;
+    const A_PLAYING: u32 = 41;
+    const A_FONT: u32 = 42;
+    let (src, parts) = ([3u8; 32], [[4u8; 32], [5u8; 32]]);
+    let font = Value::List(parts.iter().map(|h| Value::Asset(*h)).collect());
+    midi_tree(&mut d, vec![(A_SRC, Value::Asset(src)), (A_PLAYING, Value::Bool(true)), (A_FONT, font)], &[(A_SRC, "src"), (A_PLAYING, "playing"), (A_FONT, "soundfont")]);
+    let wanted = d.pending_assets();
+    assert!(wanted.contains(&src) && parts.iter().all(|p| wanted.contains(p)), "the file and both parts: {wanted:?}");
+    let midi = eui_audio::midi::notes_to_midi(&[[0, 0x90, 60, 100], [200, 0x80, 60, 0]]).unwrap();
+    d.asset_ready(src, midi);
+    // Two halves of something that is not a SoundFont.
+    d.asset_ready(parts[0], b"RIFF\x10\x00\x00\x00sfbk".to_vec());
+    d.asset_ready(parts[1], vec![0; 8]);
+    for _ in 0..3 {
+        let _ = d.paint(400, 300);
+        d.finish_decoding();
+    }
+    let _ = d.paint(400, 300);
+    let mut out = vec![0.0f32; 4410 * 2];
+    d.fill_audio(&mut out, 2, 44_100);
+    assert!(loud(&out), "the client's voices play it");
+}
+
+/// Spec 03 §7: a bank in two parts is put back together and plays its own
+/// instruments — given a real one: `EUI_TEST_SOUNDFONT=/path/to/bank.sf2`.
+#[test]
+fn a_soundfont_in_parts_plays_its_own_instruments() {
+    let Ok(path) = std::env::var("EUI_TEST_SOUNDFONT") else {
+        eprintln!("EUI_TEST_SOUNDFONT unset: a real bank is not tested here");
+        return;
+    };
+    let bank = std::fs::read(path).unwrap();
+    let (a, b) = bank.split_at(bank.len() / 2);
+    const A_SRC: u32 = 40;
+    const A_PLAYING: u32 = 41;
+    const A_FONT: u32 = 42;
+    let src = [3u8; 32];
+    let parts = [*blake3::hash(a).as_bytes(), *blake3::hash(b).as_bytes()];
+    let midi = eui_audio::midi::notes_to_midi(&[[0, 0xC0, 40, 0], [0, 0x90, 67, 100], [400, 0x80, 67, 0]]).unwrap();
+    let play = |font: bool| {
+        let mut d = welcomed();
+        let mut props = vec![(A_SRC, Value::Asset(src)), (A_PLAYING, Value::Bool(true))];
+        if font {
+            props.push((A_FONT, Value::List(parts.iter().map(|h| Value::Asset(*h)).collect())));
+        }
+        midi_tree(&mut d, props, &[(A_SRC, "src"), (A_PLAYING, "playing"), (A_FONT, "soundfont")]);
+        let _ = d.pending_assets();
+        d.asset_ready(src, midi.clone());
+        d.asset_ready(parts[0], a.to_vec());
+        d.asset_ready(parts[1], b.to_vec());
+        // The file decodes on the client's voices, the bank parses, the
+        // file decodes again on the bank.
+        for _ in 0..4 {
+            let _ = d.paint(400, 300);
+            d.finish_decoding();
+        }
+        let _ = d.paint(400, 300);
+        let mut out = vec![0.0f32; 4410 * 2];
+        d.fill_audio(&mut out, 2, 44_100);
+        out
+    };
+    let (violin, ours) = (play(true), play(false));
+    assert!(loud(&violin) && loud(&ours));
+    assert_ne!(violin, ours, "the bank's violin is not the client's");
+}

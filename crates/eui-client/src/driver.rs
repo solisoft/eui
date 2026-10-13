@@ -1564,8 +1564,19 @@ pub struct Driver {
     /// The asset each sounding node was loaded from. A node keeps its id
     /// when its `src` changes — a tracker renders a new wav into the same
     /// node — and without this the mixer would go on playing the first
-    /// sound it was ever given.
-    audio_src: HashMap<u32, Hash>,
+    /// sound it was ever given. Beside the asset, the key its sound was
+    /// decoded under: a MIDI file played with a bank is another sound than
+    /// the same file on the client's own voices (03 §7).
+    audio_src: HashMap<u32, (Hash, Hash)>,
+    /// SoundFont banks by the hash of their parts' hashes, `None` once one
+    /// would not load — the client's own voices play instead (03 §7).
+    banks: HashMap<Hash, Option<Arc<eui_audio::midi::Bank>>>,
+    /// The MIDI files written from nodes' `notes`, by their hash: what
+    /// the decoder is handed in place of a fetched asset.
+    note_files: HashMap<Hash, Arc<Vec<u8>>>,
+    /// The `notes_seq` each node last played: `notes` play when it
+    /// changes, as a seek happens when `position` does.
+    audio_seq: HashMap<u32, i64>,
     /// The tree changed, so the audio nodes must be looked at again.
     audio_dirty: bool,
     /// When `time_update` was last sent, for the rate limit of 03 §7.
@@ -1717,6 +1728,9 @@ impl Driver {
             movie_budget: MAX_MOVIE_BYTES,
             audio_at: HashMap::new(),
             audio_src: HashMap::new(),
+            banks: HashMap::new(),
+            note_files: HashMap::new(),
+            audio_seq: HashMap::new(),
             video_at: HashMap::new(),
             audio_dirty: false,
             audio_reported: None,
@@ -2447,6 +2461,7 @@ impl Driver {
         self.video_at.retain(|id, _| self.session.lookup(*id).is_some());
         self.audio_at.retain(|id, _| self.session.lookup(*id).is_some());
         self.audio_src.retain(|id, _| self.session.lookup(*id).is_some());
+        self.audio_seq.retain(|id, _| self.session.lookup(*id).is_some());
     }
 
     /// Put the page that has left back into the frame, on its way out.
@@ -3323,6 +3338,7 @@ impl Driver {
         // grant the module is not even fetched -- an absent code path rather
         // than a check that fails, which is what 08 §3 asks for.
         let shader_atom = self.session.atoms().shader;
+        let font_atom = self.session.atoms().soundfont;
         let modules = self.granted & caps::SCENE != 0;
         if self.media_watch_stale {
             self.rebuild_media_watch();
@@ -3336,6 +3352,15 @@ impl Driver {
             }
             let scene = n.kind == NodeKind::Scene;
             for (a, v) in &n.props {
+                // A bank comes in parts, a list of assets (03 §7).
+                if let (Value::List(parts), true) = (v, n.kind == NodeKind::Audio && Some(*a) == font_atom) {
+                    for part in parts {
+                        if let Value::Asset(h) = part {
+                            assets.want(*h);
+                        }
+                    }
+                    continue;
+                }
                 let Value::Asset(h) = v else { continue };
                 let module = scene && Some(*a) == shader_atom;
                 if !module || modules {
@@ -3540,6 +3565,20 @@ impl Driver {
                     self.sounds.insert(hash, sound);
                     self.audio_dirty = true;
                 }
+                Done::Bank(result) => {
+                    let bank = match result {
+                        Ok(b) => {
+                            trace(|| format!("audio: soundfont {short} parsed, {} presets", b.presets()));
+                            Some(Arc::new(b))
+                        }
+                        Err(e) => {
+                            eprintln!("eui: soundfont {short}: {e}; the client's own voices play instead");
+                            None
+                        }
+                    };
+                    self.banks.insert(hash, bank);
+                    self.audio_dirty = true;
+                }
                 Done::Movie(result) => {
                     let held: usize = self.movies.values().flatten().map(|m| m.bytes()).sum();
                     let movie = match result {
@@ -3647,9 +3686,19 @@ impl Driver {
         let mut live: HashSet<Hash> = self.session.fonts().flat_map(|(_, faces)| faces.iter().copied()).collect();
         if let Some(root) = self.session.root() {
             for n in self.session.preorder(root).filter_map(|ix| self.session.node(ix)) {
-                live.extend(n.props.iter().filter_map(|(_, v)| match v {
-                    Value::Asset(h) => Some(*h),
-                    _ => None,
+                live.extend(n.props.iter().flat_map(|(_, v)| {
+                    match v {
+                        Value::Asset(h) => vec![*h],
+                        // A bank's parts (03 §7).
+                        Value::List(items) => items
+                            .iter()
+                            .filter_map(|i| match i {
+                                Value::Asset(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    }
                 }));
             }
         }
@@ -5930,9 +5979,16 @@ impl Driver {
             // all-or-nothing meaning is kept narrow, to the node itself. A
             // dialog carrying a bare `key_down` used to swallow `Enter` from
             // every button inside it.
+            //
+            // And nothing typed into a field below it (03 §3.1, protocol
+            // 9): a page's shortcuts sit on its root, and a `Backspace` at
+            // the start of a title is not "delete the selected note". A
+            // widget wrapped around a field names what it wants.
             _ => {
                 if target == f {
                     Claim::Claimed
+                } else if self.is_editable(f) {
+                    Claim::Ignored
                 } else {
                     Claim::Reported
                 }
@@ -8423,13 +8479,18 @@ impl Driver {
             self.mixer.retain(&[]);
             self.audio_at.clear();
             self.audio_src.clear();
+            self.audio_seq.clear();
+            self.note_files.clear();
             self.sounds.clear();
             return;
         }
         let known = *self.session.atoms();
         let (a_src, a_playing, a_volume, a_loop, a_position) = (known.src, known.playing, known.volume, known.loop_, known.position);
+        let (a_font, a_notes, a_seq) = (known.soundfont, known.notes, known.notes_seq);
         let mut live: Vec<u32> = Vec::new();
-        let mut work: Vec<(u32, Hash, Control, Option<i64>)> = Vec::new();
+        let mut work: Vec<Sounding> = Vec::new();
+        let mut notes_named: HashSet<Hash> = HashSet::new();
+        let mut waiting: Vec<Vec<Hash>> = Vec::new();
         for ix in self.session.media().iter().copied() {
             let Some(node) = self.session.node(ix) else {
                 continue;
@@ -8438,49 +8499,137 @@ impl Driver {
                 continue;
             }
             let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
-            let Some(Value::Asset(hash)) = prop(a_src) else {
-                continue;
+            let font: Vec<Hash> = match prop(a_font) {
+                Some(Value::List(parts)) => parts
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::Asset(h) => Some(*h),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            // A node is a sound or a player of commands, not both (03 §7):
+            // with an `src`, its `notes` are not looked at.
+            let (asset, seq) = match (prop(a_src), prop(a_notes)) {
+                (Some(Value::Asset(hash)), _) => (*hash, None),
+                (None | Some(Value::Null), Some(Value::List(list))) => {
+                    let Some(file) = notes_file(list) else {
+                        trace(|| format!("audio: node {} has notes that are not MIDI commands", node.id));
+                        continue;
+                    };
+                    let hash = *blake3::hash(&file).as_bytes();
+                    self.note_files.entry(hash).or_insert_with(|| Arc::new(file));
+                    notes_named.insert(hash);
+                    let seq = match prop(a_seq) {
+                        Some(Value::Int(n)) => *n,
+                        _ => 0,
+                    };
+                    (hash, Some(seq))
+                }
+                // Nothing to play yet. A bank it names is parsed all the
+                // same, so the first note does not wait for 30 MB.
+                _ => {
+                    if !font.is_empty() {
+                        waiting.push(font);
+                    }
+                    continue;
+                }
             };
             let control = Control {
-                playing: matches!(prop(a_playing), Some(Value::Bool(true))),
+                // Commands play when they arrive; `playing` is a recording's.
+                playing: seq.is_some() || matches!(prop(a_playing), Some(Value::Bool(true))),
                 volume: match prop(a_volume) {
                     Some(Value::Int(v)) => (*v as f32 / 100.0).clamp(0.0, 1.0),
                     Some(Value::Float(v)) => (*v as f32).clamp(0.0, 1.0),
                     _ => 1.0,
                 },
-                looping: matches!(prop(a_loop), Some(Value::Bool(true))),
+                looping: seq.is_none() && matches!(prop(a_loop), Some(Value::Bool(true))),
             };
             let position = match prop(a_position) {
-                Some(Value::Int(ms)) => Some(*ms),
+                Some(Value::Int(ms)) if seq.is_none() => Some(*ms),
                 _ => None,
             };
             live.push(node.id);
-            work.push((node.id, *hash, control, position));
+            work.push(Sounding { id: node.id, asset, key: asset, bank: None, font, control, position, seq });
         }
+        self.note_files.retain(|h, _| notes_named.contains(h));
         self.mixer.retain(&live);
         self.audio_at.retain(|id, _| live.contains(id));
         self.audio_src.retain(|id, _| live.contains(id));
+        self.audio_seq.retain(|id, _| live.contains(id));
         self.audio_level.retain(|id, _| live.contains(id));
+        // A MIDI file with a bank that has been parsed is decoded under a
+        // key of its own; until the bank is there, it is the file alone,
+        // played on the client's voices.
+        let mut banks_named: HashSet<Hash> = HashSet::new();
+        for parts in waiting {
+            let key = bank_key(&parts);
+            banks_named.insert(key);
+            let _ = self.bank(key, &parts);
+        }
+        for w in &mut work {
+            if w.font.is_empty() {
+                continue;
+            }
+            let bank_key = bank_key(&w.font);
+            banks_named.insert(bank_key);
+            let Some(bank) = self.bank(bank_key, &w.font) else {
+                continue;
+            };
+            let midi = w.seq.is_some() || self.assets.raw(&w.asset).is_some_and(|b| eui_audio::midi::is_midi(&b));
+            if midi {
+                let mut h = blake3::Hasher::new();
+                h.update(&w.asset);
+                h.update(&bank_key);
+                w.key = *h.finalize().as_bytes();
+                w.bank = Some(bank);
+            }
+        }
+        // Parsed once a session: a bank no node names is kept while there
+        // are no more than two, so a player that leaves the tree and comes
+        // back does not parse its 30 MB again.
+        if self.banks.len() > 2 {
+            self.banks.retain(|k, _| banks_named.contains(k));
+        }
         // A decoded sound lives as long as a node names it. The mixer has
         // already let go of the sources whose nodes went; this lets go of
         // the samples behind them, which were most of the memory.
-        let named: HashSet<Hash> = work.iter().map(|w| w.1).collect();
+        let named: HashSet<Hash> = work.iter().map(|w| w.key).collect();
         self.sounds.retain(|h, _| named.contains(h));
-        for (id, hash, control, position) in work {
+        for Sounding { id, asset, key, bank, control, position, seq, .. } in work {
+            let had = self.audio_src.get(&id).copied();
             // Load when the node is new to the mixer, and again when it is
-            // pointed at a different asset: same node, another sound.
-            if !self.mixer.has(id) || self.audio_src.get(&id) != Some(&hash) {
-                match self.sound(&hash) {
+            // pointed at a different asset: same node, another sound. A
+            // player of commands loads when its `notes_seq` moves.
+            let fresh = match seq {
+                Some(seq) => self.audio_seq.get(&id) != Some(&seq),
+                None => !self.mixer.has(id) || had.map(|h| h.1) != Some(key),
+            };
+            if fresh {
+                match self.sound(&key, &asset, bank) {
                     Some(sound) => {
+                        // The same file, its bank arrived: carry on from
+                        // where the client's own voices had got to.
+                        let carry = if seq.is_none() && had.is_some_and(|h| h.0 == asset) { self.mixer.position_ms(id) } else { None };
                         if !self.mixer.load(id, sound) {
                             trace(|| format!("audio: node {id} refused, {} sources already", self.mixer.len()));
                             continue;
                         }
-                        self.audio_src.insert(id, hash);
-                        // A new sound starts at its own beginning; the
-                        // position the tree carries is applied below only
-                        // when it changed, which a fresh source has not.
-                        self.audio_at.remove(&id);
+                        self.audio_src.insert(id, (asset, key));
+                        if let Some(seq) = seq {
+                            self.audio_seq.insert(id, seq);
+                        }
+                        match carry {
+                            Some(ms) => self.mixer.seek(id, ms),
+                            // A new sound starts at its own beginning; the
+                            // position the tree carries is applied below
+                            // only when it changed, which a fresh source
+                            // has not.
+                            None => {
+                                self.audio_at.remove(&id);
+                            }
+                        }
                     }
                     // Not fetched yet, or it failed: the node stays silent.
                     None => continue,
@@ -8496,23 +8645,60 @@ impl Driver {
         }
     }
 
-    /// The decoded sound for a hash, if it has been: the first call hands it
-    /// to be decoded and returns `None`. A sound that will not decode is
-    /// remembered as such, so a tree that keeps naming it does not re-decode
-    /// it every frame.
-    fn sound(&mut self, hash: &Hash) -> Option<Arc<eui_audio::Sound>> {
-        if let Some(known) = self.sounds.get(hash) {
+    /// The decoded sound under `key`, if it has been: the first call hands
+    /// `asset`'s bytes to be decoded — with `bank`, when it is a MIDI file
+    /// to be played on one — and returns `None`. A sound that will not
+    /// decode is remembered as such, so a tree that keeps naming it does
+    /// not re-decode it every frame.
+    fn sound(&mut self, key: &Hash, asset: &Hash, bank: Option<Arc<eui_audio::midi::Bank>>) -> Option<Arc<eui_audio::Sound>> {
+        if let Some(known) = self.sounds.get(key) {
             return known.clone();
         }
         let held: usize = self.sounds.values().flatten().map(|s| s.bytes()).sum();
         let work = crate::decode::Work::Sound { max: self.sound_budget.saturating_sub(held) };
-        if !self.decoder.decoding(hash, work) {
-            let bytes = self.assets.raw(hash)?;
+        if !self.decoder.decoding(key, work) {
+            let bytes = self.note_files.get(asset).cloned().or_else(|| self.assets.raw(asset))?;
             // Off this thread, and out from under the lock the audio
             // callback takes: a sound playing while another decodes keeps
             // playing. It lands in `take_decoded`, which syncs the mixer.
-            self.decoder.submit(*hash, bytes, work);
+            self.decoder.submit_with(*key, bytes, work, bank);
         }
+        None
+    }
+
+    /// The bank whose parts are `parts`, once parsed. The first call with
+    /// every part fetched hands their concatenation to the decoder; a
+    /// part that failed, or a bank past [`eui_audio::midi::MAX_SOUNDFONT_BYTES`],
+    /// is remembered as no bank, and the client's voices play.
+    fn bank(&mut self, key: Hash, parts: &[Hash]) -> Option<Arc<eui_audio::midi::Bank>> {
+        if let Some(known) = self.banks.get(&key) {
+            return known.clone();
+        }
+        if self.decoder.decoding(&key, crate::decode::Work::Bank) {
+            return None;
+        }
+        // A part that failed is not a bank that failed: the store asks
+        // for it again (`asset_retry`), and a bank remembered as none on
+        // its first miss would stay none after the retry brought it.
+        if let Some(why) = parts.iter().find_map(|p| self.assets.failure(p)) {
+            trace(|| format!("audio: soundfont waits, a part failed ({why}); the client's own voices play meanwhile"));
+            return None;
+        }
+        let mut bytes = Vec::new();
+        for part in parts {
+            let Some(raw) = self.assets.raw(part) else {
+                trace(|| format!("audio: soundfont waits for part {}", &crate::assets::hex(part)[..8]));
+                return None;
+            };
+            if bytes.len().saturating_add(raw.len()) > eui_audio::midi::MAX_SOUNDFONT_BYTES {
+                eprintln!("eui: soundfont: past {} MiB; the client's own voices play instead", eui_audio::midi::MAX_SOUNDFONT_BYTES >> 20);
+                self.banks.insert(key, None);
+                return None;
+            }
+            bytes.extend_from_slice(&raw);
+        }
+        trace(|| format!("audio: soundfont of {} parts, {} kB, handed to the decoder", parts.len(), bytes.len() / 1024));
+        self.decoder.submit(key, Arc::new(bytes), crate::decode::Work::Bank);
         None
     }
 
@@ -9422,4 +9608,48 @@ mod provisional_tests {
         d.keep_provisional(undo);
         assert_eq!(d.provisional.len(), MAX_PROVISIONAL);
     }
+}
+
+/// An `audio` node as [`Driver::sync_audio`] found it.
+struct Sounding {
+    id: u32,
+    /// The fetched file, or the MIDI file written from `notes`.
+    asset: Hash,
+    /// What its decoded sound is held under.
+    key: Hash,
+    bank: Option<Arc<eui_audio::midi::Bank>>,
+    /// The parts of its `soundfont`, in order.
+    font: Vec<Hash>,
+    control: Control,
+    position: Option<i64>,
+    /// `notes_seq`, for a player of commands.
+    seq: Option<i64>,
+}
+
+/// What a bank is known by: the hash of its parts' hashes, in order.
+fn bank_key(parts: &[Hash]) -> Hash {
+    let mut h = blake3::Hasher::new();
+    for part in parts {
+        h.update(part);
+    }
+    *h.finalize().as_bytes()
+}
+
+/// A node's `notes` as a MIDI file (03 §7): `None` when an entry is not
+/// four integers or the list is past what a client plays.
+fn notes_file(list: &[Value]) -> Option<Vec<u8>> {
+    let mut events = Vec::with_capacity(list.len());
+    for entry in list {
+        let Value::List(fields) = entry else { return None };
+        let mut out = [0i64; 4];
+        if fields.len() != 4 {
+            return None;
+        }
+        for (slot, v) in out.iter_mut().zip(fields) {
+            let Value::Int(n) = v else { return None };
+            *slot = *n;
+        }
+        events.push(out);
+    }
+    eui_audio::midi::notes_to_midi(&events).ok()
 }

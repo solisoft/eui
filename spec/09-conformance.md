@@ -457,7 +457,10 @@ claimed `Enter` reporting the value *before* the key and withholding only the
 `submit`, and an unclaimed one still submitting; a node with a bare handler not
 swallowing the `Enter` that presses a button inside it; and a printable
 character landing in the field whatever the prop says, because text never
-arrives as a key.
+arrives as a key. And (protocol 9) a handler above a field that named no
+`keys` hearing nothing typed into it — `Backspace` with nothing to delete, the
+arrows, `Ctrl+Z` — while the same handler hears everything once focus is its
+own (`shortcuts_above_a_field_hear_nothing_typed_into_it`).
 
 ### 7.2 Accessibility — `crates/eui-client/tests/a11y.rs`
 
@@ -693,11 +696,75 @@ a frame without one asks for none, that the region is the blurred rects
 grown by three standard deviations and no more, and that two radii are two
 chains; and, where a GPU adapter exists, pixels read back from an off-screen
 target for the clear colour, a filled box, a clipped scroll, a canvas line,
+a canvas fill (03 §1.1, kind `5`) covering by the non-zero rule — a square
+inside a square wound the same way leaves no hole, wound the other way
+leaves one (`a_canvas_fill_covers_by_the_non_zero_rule`) — and a cubic
+staying inside its hull (`a_canvas_cubic_stays_inside_its_hull`),
 a `shadow.lg` whose negative spreads leave the row above its box the bare
 surface and darken the row below (`a_negative_spread_keeps_the_shadow_under_the_box`),
 and a frosted pane carrying each half of a seam into the other — both when
 it covers the whole frame and when it covers a part of it, which is what
 pins the backdrop's origin.
+
+A fill's painting is pinned without a GPU as well: one textured quad per
+tile from the glyph atlas, one region for an outline repeated at the same
+phase, a path with an unknown or short command skipped alone, more than
+`MAX_FILL_COMMANDS` skipped whole
+(`a_canvas_fill_is_one_textured_quad_per_tile_from_the_glyph_atlas`), and
+the mask cut to the canvas's clip and into `FILL_TILE` tiles
+(`a_canvas_fill_is_cut_to_its_clip_and_tiled`). A rectangle thinner than a
+device pixel keeps one (`a_canvas_hairline_keeps_a_device_pixel`).
+
+A MIDI `src` (03 §7) is pinned by `crates/eui-audio/tests/midi.rs`: a
+Standard MIDI File synthesizes to as long as its tempo map says
+(`a_midi_file_lasts_what_its_tempo_says`), its notes sound where they are
+(`a_midi_note_sounds_at_its_time_and_not_before`), on the client's own
+voices without a bank and on a SoundFont's with one
+(`a_soundfont_plays_its_own_instruments`), panned by controller 10
+(`a_pan_moves_the_sound_to_one_side`); a `notes` list becomes the same
+file (`notes_are_a_midi_file_of_their_own`) and is held to its ceiling
+(`a_notes_list_past_its_ceiling_is_refused`).
+
+The catalogue's `score()` (03 §4) is pinned by
+`examples/demo-app/tests/score_spec.sl` (`soli test`): `\relative` octaves,
+alterations and durations; every refusal named with its position; the
+accidentals a key and a bar imply; the spacing's increment; stem
+directions; beams grouped by metre, held to a space of slope and quanted;
+LilyPond's slur height; every path a kind `1` or `5` the encoder takes
+(`eui_render`); systems inside the width; a `\header` read and set as
+LilyPond's title page sets it, `\tempo` marks over the staff, the
+naturals a key change cancels with, and A4 pages that break and stay inside
+their margins; repeat signs and endings, a start repeat moved past a
+line break, bars of rest counted in the bar numbers and gathered when
+asked; tuplets' durations, their beams by the beat, their brackets and
+refusals; `\break` and `\pageBreak` ending a line and a page; dynamics,
+hairpins, articulations and words read onto their notes, dynamics clear of
+the stems on one line where they touch, a staccato opposite its stem and in
+a space; the cache recolouring a copy of a lit note's paths; one band
+canvas per system adding up to the page, an edited note changing one
+band, and the line search not run again for the same widths; a MIDI file's
+header, division and notes, a tie held as one note and dynamics as its
+loudness; staves and their groups, names and instruments read, their notes
+sharing columns, nine spaces apart or more, bar lines run through a
+brace's staves, and one format-1 track per staff with its program; a PDF
+with a page per A4 page, its cross-reference where `startxref` says and its
+title in UTF-16; and the
+score editor's model —
+a note across a bar cut and tied, the keys its help lists, undo, slurs,
+the source read back to the same model with its titles, tempo and changes,
+a key or metre from the selected bar written where that bar starts (and
+moved to the next bar line when the bar moves under it), a click resolved
+to a note and a pitch on screen and on an A4 page, repeats set and taken
+off at the selected bar, bars of rest in a row written as one and read back
+as bars, triplets and sextuplets made with Ctrl+3 and Ctrl+6 and broken by
+a deletion, breaks set after the selected bar, a dynamic, a hairpin,
+articulations and words written after their note and read back, and the
+tune mixed into a `.wav`; and its tracks — added and edited one at a time
+with Alt+↑/↓ between them, written as a staff group with the shorter
+filled, a change from a bar the first track's and every staff's, staves
+read back as tracks with their names and MIDI settings, a click on the full
+score editing that staff's note, and each track's sounding note lit there
+while it plays.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

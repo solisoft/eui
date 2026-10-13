@@ -25,6 +25,8 @@
 **/.env.*
 !**/.env.example
 
+# The score editor's SoundFont, 32 MB: fetched by tools/fetch_soundfont.sh.
+examples/demo-app/public/soundfonts/
 # Album art fetched from a catalogue at runtime: a cache, never committed.
 examples/demo-app/public/covers/
 # Pictures fetched from x.com for the feed, cached as PNG the same way.

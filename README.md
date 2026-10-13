@@ -49,7 +49,8 @@ examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table, a gallery, Atrium —
                   a team messenger — a Tailwind UI-style help desk, a
-                  campaign-performance table with sparklines and meters, and a
+                  campaign-performance table with sparklines and meters, a
+                  score editor that engraves and plays LilyPond input, and a
                   landing page written in tw() classes, as a Soli app; the catalogue (buttons to date pickers to charts)
                   is app/controllers/eui_builders*.sl, and the documentation's
                   tutorial is app/controllers/tutorial_controller.sl
@@ -289,8 +290,8 @@ soli new my-app --eui     # + app/controllers/eui_builders*.sl and a component
 ```
 
 Those copies come from `examples/demo-app/app/controllers/`, where the
-catalogue is edited. It is six files — `eui_builders.sl` and its `_forms`,
-`_charts`, `_feed`, `_markdown` and `_tw` companions — cut where the calls stopped
+catalogue is edited. It is nine files — `eui_builders.sl` and its `_forms`,
+`_charts`, `_feed`, `_markdown`, `_tw`, `_score`, `_smufl` and `_letters` companions — cut where the calls stopped
 crossing, and they load into one namespace in no particular order. `scripts/sync-catalogue.sh`
 puts them in the language repository, and `--check` says whether they have
 drifted.

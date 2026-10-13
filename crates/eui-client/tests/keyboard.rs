@@ -351,6 +351,26 @@ fn a_dialog_that_asked_for_keys_does_not_swallow_its_buttons_enter() {
     assert!(seen.iter().any(|(k, n)| *k == EventKind::Click && *n == 4), "the button was still pressed: {seen:?}");
 }
 
+/// 03 §3.1, protocol 9: a handler above a field that named no `keys` hears
+/// nothing typed into the field — the keys the field has no use for
+/// included. A page's shortcuts are on its root; a `Backspace` at the start
+/// of an empty title, an arrow, `Ctrl+Z` must not reach them.
+#[test]
+fn shortcuts_above_a_field_hear_nothing_typed_into_it() {
+    let mut d = driver(field_page(None));
+    in_the_field(&mut d);
+    for key in ["Backspace", "ArrowUp", "ArrowLeft", "Delete"] {
+        let out = press(&mut d, key);
+        assert!(events(&out).is_empty(), "{key} reached the wrapper: {:?}", events(&out));
+    }
+    let out = d.input(Input::Key { key: "z".into(), modifiers: 2, down: true });
+    assert!(events(&out).is_empty(), "Ctrl+Z reached the wrapper: {:?}", events(&out));
+    // Out of the field, the same handler hears everything again.
+    focus_on(&mut d, 2);
+    let out = press(&mut d, "ArrowUp");
+    assert_eq!(events(&out), vec![(EventKind::KeyDown, 2)], "{:?}", events(&out));
+}
+
 /// A printable character is never withheld, and cannot be: the text does not
 /// arrive as a key at all. This is why comma cannot be a delimiter, and it is
 /// worth a vector so nobody tries again.

@@ -2275,7 +2275,8 @@ def erp_catalogue_section(state, lay)
       erp_data_card(state, lay),
       erp_feedback_card(state, lay),
       erp_catalogue2_card(state, lay),
-      erp_shapes_card(state, lay)
+      erp_shapes_card(state, lay),
+      erp_notation_card(state, lay)
     ]
   )
 end
@@ -3392,6 +3393,22 @@ def erp_shapes_card(state, lay)
   ])
 end
 
+# `score()`: LilyPond's input, engraved on the server into one canvas of
+# fills. Built when asked for, like the charts above it -- three systems of
+# notation are a few hundred paths, and the page rebuilds on every event.
+def erp_notation_card(state, lay)
+  nt_w = erp_inner_px(lay) - space_px(6, lay["density"]) * 2
+  erp_card("Notation", [badge("family", "info")], [
+    muted("A score from LilyPond's own input: noteheads, clefs, beams and slurs are canvas fills (03 §1.1, kind 5) cut from Emmentaler, LilyPond's own music font; spacing, stems, beam quanting and slur shapes follow LilyPond's rules."),
+    lazy("on", state["cat_score"] ?? [], secondary_button("Engrave the three excerpts", "cat_score"), fn() {
+    column({"gap": 5, "width": "100%"}, [
+      spec_wide("score -- chorale, slur, beams", score("\\relative c' { \\key g \\major \\time 4/4 g'4( a b c) | d2 b4 g | e'8[ d c b] a4 fis | g1 \\bar \"|.\" }", {"width": nt_w})),
+      spec_wide("score -- 6/8, sixteenths, a dotted pair", score("\\relative c'' { \\time 6/8 \\key d \\minor d8 e f g a bes | a16 g f e d cis d4. | bes'8. a16 g8 f4 e8 | d2. \\bar \"|.\" }", {"width": nt_w})),
+      spec_wide("score -- bass clef, a tied chord, a bar's rest", score("\\relative c { \\clef bass \\time 3/4 c4 e g | <c, e g c>2. ~ | <c e g c>4 r r | R2. | g'8 a b c d e | f2 r4 \\bar \"||\" }", {"width": nt_w}))
+    ]) })
+  ])
+end
+
 def erp_month_end(state, lay)
   erp_card(
     "Month end",
@@ -4349,6 +4366,7 @@ def erp_chrome_defaults
     "cat_select": "Any status",
     "cat_select_open": false,
     "cat_charts": [],
+    "cat_score": [],
     "cat_drawer": false,
     "cat_pick_sel": {"ids": [], "all": false, "scope": "cat"},
     "shortcuts": false,
@@ -4743,6 +4761,7 @@ def gallery(event_data)
     "cat_pick" => set_key(state, "cat_pick_sel", selection_toggle(erp_cat_pick(state), (props["id"] ?? "").to_s)),
     "cat_select_pick" => set_key(set_key(state, "cat_select", props["value"]), "cat_select_open", false),
     "cat_charts" => set_key(state, "cat_charts", (state["cat_charts"] ?? []).includes?("on") ? [] : ["on"]),
+    "cat_score" => set_key(state, "cat_score", (state["cat_score"] ?? []).includes?("on") ? [] : ["on"]),
     "cat_drawer" => set_key(state, "cat_drawer", !(state["cat_drawer"] ?? false)),
     "cat_menu_pick" => erp_say(set_key(state, "cat_menu", false), (props["item"] ?? "").to_s),
     "cat_say" => erp_say(state, (props["said"] ?? "Done").to_s),

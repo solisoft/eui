@@ -1,8 +1,8 @@
 # Components
 
 > Every function on this page exists. The library is
-> `examples/demo-app/app/controllers/eui_builders*.sl` — 550 functions over
-> six files, all of them plain Soli, none of them native, and what
+> `examples/demo-app/app/controllers/eui_builders*.sl` — 670 functions over
+> nine files, all of them plain Soli, none of them native, and what
 > `soli new <app> --eui` writes into a new application — and the server that reads what they
 > return is `lang/src/serve/eui/tree.rs`. The vocabulary tables below are that
 > file's own match arms, not a wish list.
@@ -121,7 +121,7 @@ price that keeps the catalogue below a library rather than a client release.
 | `textarea` | A multi-line editable field |
 | `scroll` | A clipping viewport |
 | `list` | A virtualised child list — only the visible window is laid out |
-| `canvas` | A retained path list in `paths`: polylines, rectangles, areas, circles, arcs |
+| `canvas` | A retained path list in `paths`: polylines, rectangles, areas, circles, arcs, filled outlines |
 | `spacer` | Flexible empty space. Leaf |
 | `divider` | A hairline rule. Leaf |
 | `overlay` | A layer above the flow: menus, tooltips, dialogs |
@@ -923,7 +923,16 @@ then numbers in logical pixels from the content box (`spec/03 §1.1`):
 [2, colour, base_y, x0, y0, x1, y1, …]  area between a polyline and base_y
 [3, colour, cx, cy, r]                  filled circle
 [4, colour, width, cx, cy, r, a0, a1]   arc, radians, clockwise from +x
+[5, colour, cmd, args…, …]              filled outline, non-zero rule (EUI 9):
+                                        0 move x y · 1 line x y · 2 quad cx cy x y
+                                        3 cubic c1x c1y c2x c2y x y · 4 close
 ```
+
+Kinds 0–4 are quads the rounded-rectangle shader draws. A fill is the one
+that is covered: the client rasterises it into the glyph atlas, a tile of
+at most 256 device px at a time, cut to what the canvas shows, and draws it
+the way it draws a glyph. An outline repeated at the same quarter-pixel
+phase — a row of noteheads — is rasterised once.
 
 | Signature | Notes |
 |---|---|
@@ -1060,6 +1069,176 @@ so it has to be an identifier and unique in the tree.
 An arc is not a box, so the donut has no bands. Its legend rows are what the
 pointer finds, and what they change is the reading in the hole — one
 `set_text` for the value and its share, one for the name.
+
+## Notation
+
+`score(src, opts)` engraves a piece of music written in LilyPond's own
+language into canvases — one for the titles and one for each system, so
+that an edit redraws and resends only the system it touches, each system's
+paths kept under a signature of what it draws, and a lit note recoloured in
+a copy of its own paths. Staff lines, stems and bar lines are rectangles;
+everything curved — noteheads, clefs, accidentals, flags, beams, ties and
+slurs that thicken towards the middle — is a fill (kind `5`) cut from the
+outlines of Emmentaler, LilyPond's own music font, which
+`eui_builders_smufl.sl` carries as data, keyed by SMuFL's glyph names and
+under the font's OFL. No font travels and no `text` node is involved, so a
+glyph lands at the size and the place the engraving wants.
+
+```soli
+score("\\relative c' { \\key g \\major \\time 3/4 g'4( a b) | d2. \\bar \"|.\" }",
+      {"width": 640})
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `width` | 600 | Logical px. Bars are broken into systems that fit it |
+| `staff_space` | 8 | Logical px between two staff lines |
+| `colour` | `text.default` | The ink, a role, so the score follows the theme |
+| `marks` | `{}` | Item number (notes and rests from 0, as a string) to the role it is drawn in: how an editor shows a selection |
+| `page` | absent | `"a4"` lays the music out on A4 sheets at LilyPond's staff size and answers a column of pages `width` px wide |
+
+It reads `\relative` and absolute pitches, `\clef` (treble, bass, alto),
+`\key … \major|\minor`, `\time`, `\tempo "Allegro" 4 = 120`, `\bar "|"`,
+`"||"`, `"|."`, notes with `is`/`es`, durations 1 to 32 with dots, `r` and a
+whole-bar `R`, chords `< >`, ties `~`, slurs `( )` and beams `[ ]`, repeats —
+`\repeat volta 2 { … }`, its `\alternative { { … } { … } }` drawn as the
+bracketed endings "1." and "2.", or the signs alone as `\bar ".|:"`,
+`":|."` and `":|.|:"` — and bars of rest: `R1*4` is four bars of rest, or,
+under `\compressEmptyMeasures`, one bar with "4" over it (church rests up
+to ten bars, LilyPond's wide bar past that), still counted as four in the
+bar numbers. A start repeat that falls on a line break moves to the start
+of the next line, after its clef and key, as LilyPond moves it. Tuplets:
+`\tuplet 3/2 { c8 d e }` is a triplet, `\tuplet 6/4 { … }` a sextuplet,
+`\tuplet 3/2 4 { … }` a group for each quarter's worth, and `\times 2/3`
+the older spelling; each is numbered in italic (TeX Gyre Schola's, as
+LilyPond's) on its stems' side, and bracketed unless one beam holds it. A
+tuplet inside a tuplet, or across a bar line, is refused. `\break` ends a
+line at its bar line and `\pageBreak` a page (on a screen, a line).
+Expression: `\pp` `\p` `\mp` `\mf` `\f` `\ff` (and `\ppp` … `\ffff`,
+`\sf`, `\sfz`, `\fp`, `\rfz`…) in the music font's own letters, centred
+under their note; hairpins `\<` and `\>` running to a `\!`, the next
+dynamic or the next hairpin, stopping at the bar line when they end on a
+bar's first note, and cut where a line breaks; dynamics and hairpins that
+touch share one line under the staff, 0.6 spaces clear of the stems, as
+LilyPond's `DynamicLineSpanner` puts them. Articulations — `-.` staccato,
+`->` accent, `--` tenuto, `-^` marcato, `-!` staccatissimo, `-_` portato,
+`\fermata` — stack away from the head opposite the stem (`^` and `_`
+choose a side), a staccato, tenuto or marcato kept in a space; and
+`^"dolce"` / `_"cresc."` set words over or under the note.
+
+`score_midi(src, opts)` writes the same source as a Standard MIDI File — a
+list of bytes, format 0, a quarter 6 720 ticks so a tuplet lands exactly —
+as LilyPond's `\midi` would: the time signatures, keys and tempos, one
+note per tie, the dynamics as loudness by LilyPond's own volumes, a hairpin
+moving it note by note, accents louder and staccatos shorter. On the
+gallery pieces and the five-movement suite its notes, times and lengths
+are LilyPond 2.24's, note for note. `opts` gives a tempo for a source with
+none (`"bpm"`, `"beat"`) and a General MIDI instrument (`"program"`).
+
+`score_pdf(src)` writes the A4 pages as a PDF: the same paths the screen
+draws, as vector paths at five points a staff space (LilyPond's 20-point
+staff), every letter an outline so no font is embedded, the title in the
+document's information. It is ASCII throughout and returned as a string,
+so a `file_save` handler can answer with it directly. The five-movement
+suite's page is 268 KB; rendered back with `pdftoppm`, it is the screen's
+page.
+
+**Several staves.** `\new PianoStaff << \new Staff { … } \new Staff { … } >>`
+(or `GrandStaff`) draws a brace — LilyPond's own, the nearest of its sizes,
+stretched the rest — with bar lines through both staves; `\new StaffGroup`
+a bracket with its curled ends, bar lines through; `\new ChoirStaff` a
+bracket, bar lines staff by staff; plain `<< … >>` only the line that joins
+the staves. Groups nest. `\new Staff \with { instrumentName = "Flûte"
+shortInstrumentName = "Fl." midiInstrument = "flute" }`, or `\set
+Staff.instrumentName = …` in the music, names a staff: the name stands left
+of the first line, the short name of the others, hanging into the margin on
+paper as LilyPond's do. `\score { … \layout { } \midi { } }` is read as
+LilyPond writes it. Each staff is measured and spaced on its own, then all
+share LilyPond's columns — every moment any staff starts a note on is one,
+spaced for the shortest note sounding across it — and are broken into
+lines together; clefs, keys and metres line up across the staves; staves
+stand nine spaces apart, or what their ink needs and a space more; bar
+numbers and repeat brackets go over the top staff. `score_midi` writes one
+track per staff, each on its own channel with its `midiInstrument` (General
+MIDI by LilyPond's names). Staves that do not have the same bars, and two
+voices in one staff, are refused. And a
+`\header { title = "…" subtitle = "…" composer = "…" … }` before the music,
+set as LilyPond's title page sets it: the title centred, huge and bold, the
+composer flush right, the poet left. Titles and tempo marks are drawn like
+the notes, from the letters of TeX Gyre Schola, the face LilyPond sets text
+in (`eui_builders_letters.sl`, under the GUST Font License). A key or a
+metre may change at any bar: the old key's accidentals are cancelled with
+naturals, and a change that opens a line is announced at the end of the
+line before it, after its bar line, as LilyPond does. Each line after the
+first opens with its bar number, set just left of the staff as LilyPond
+sets it; on a screen, where there is no margin, music that takes more than
+one line leaves room for the widest number.
+
+On A4 (`"page": "a4"`) the margins, the first system's indent, the 12
+spaces from staff to staff and the page breaks are LilyPond's defaults;
+full pages are spread to the bottom margin and the last is left as it
+falls; pages after the first carry their number at the outside top corner. Anything else — a tuplet, a
+second voice, a 64th, a note that runs past its bar line — is refused with
+the character it starts at, never dropped.
+
+The rules are LilyPond's, and so are the thicknesses (a staff line a tenth
+of a space, a stem 0.13, a beam 0.48): spacing from the most common shortest
+note, never longer than a dotted eighth, 1.2 spaces more for each doubling;
+stems of 3.5 spaces that reach the middle line; eighths beamed by the
+metre, a beam placed so its stems average their ideal length and quanted to
+sit, straddle or hang on a staff line; slurs that level their ends before
+they arch over a note in the way, at LilyPond's height. Set beside LilyPond
+2.24 at the same staff size, the gallery's three excerpts come out within
+two per cent of its widths.
+
+`examples/demo-app` serves a **score editor** built on it at `score`: A–G
+writes a note, 2–7 are the durations as MuseScore numbers them, the arrows
+move and select, a click selects a note and a second click moves it, and the
+LilyPond source beside the staff can be edited or pasted. A note written
+across a bar line is cut and tied for you. The title, subtitle, composer and
+arranger are fields; the tempo is a number of beats a minute, words to print
+over the staff, or both; the key, the metre and the tempo apply to the whole
+piece or, with **From the selected bar**, from the bar the selection is in;
+the metres are 2/2 to 12/8; and the view is the screen or A4 pages, each
+page answering clicks for its own systems. **Repeat from here** (`[`) and
+**Repeat to here** (`]`) put a repeat sign at the selected bar's start or
+end, and take it off when pressed again; the signs are bar lines, so they
+follow the bar when notes before it change. Bars of rest in a row are
+written as one, `R1*3`. An `\alternative`'s endings pasted into the source
+come back as their notes and repeat signs, without their brackets.
+**Triplet** (Ctrl+3) and **Sextuplet** (Ctrl+6) turn the selected note into
+three notes of the next shorter value, or six of the one after, as MuseScore
+does; deleting one of them or changing its value makes them plain notes
+again. **Line break after** and **Page break after** end a line or a page
+after the selected bar. The editor keeps writing in one toolbar — values,
+dot, rest, accidentals, tie, slur, tuplets, the pitches — and the rest in
+tabs that fold away: **Score** (titles, clef, key, metre, tempo) and **Bars**
+(repeats and breaks), and **Expression**: a dynamic, a hairpin (crescendo,
+diminuendo, its end), articulations and words over or under the selected
+note, each pressed again to take it off. **Download PDF** and **Download MIDI** offer the
+piece as a `.pdf` or a `.mid` file named after its title: the save
+dialog's answer is a `file_save` event, which the editor answers with
+`score_pdf`'s or `score_midi`'s bytes. 
+
+The editor has **tracks**: a row of buttons over the sheet, one per track
+(Alt+↑ / Alt+↓ from the keyboard), and **+ Add track**. One track is
+edited at a time, alone on the sheet, with every tool the editor has; the
+others wait. The **Tracks** tab names the one being edited (and its short
+name for later lines), picks its instrument, sets its volume (MIDI's
+0–127) and its pan, mutes it in Play, moves it up or down or removes it,
+and chooses how the full score groups the staves: a bracket, a piano's
+brace, or neither. Under the sheet, the **full score** shows every track
+together — the note each track is sounding lit while it plays, the
+selection lit otherwise — and a click on a staff edits that track, on the
+note under the pointer. What belongs to the bar — a change of key, metre
+or tempo from a bar, a repeat, a break — is set on the first track and
+every staff takes it; a shorter track is filled with rests. The source,
+the PDF and the MIDI are the whole piece: a `\new StaffGroup` (or
+`PianoStaff`) of staves, each `\with` its name, instrument,
+`midiMaximumVolume` and `midiPanPosition`; pasting such a source reads it
+back as tracks. Play mixes every track that is not muted, at its volume. The server mixes the tune into a
+`.wav` for Play, following its tempo changes, and each note written is
+played as it lands.
 
 ## The dev bar
 

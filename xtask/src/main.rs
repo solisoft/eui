@@ -7,6 +7,8 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+mod smufl;
+
 use std::time::{Duration, Instant};
 
 use eui_client::worker::Backend;
@@ -748,6 +750,52 @@ fn main() {
         conform();
         return;
     }
+    if task == "smufl-probe" {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        let Some((path, names)) = args.split_first() else {
+            eprintln!("usage: cargo run -p xtask -- smufl-probe <font.otf> <glyph name>…");
+            std::process::exit(2);
+        };
+        match smufl::probe(path, names) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if task == "letters" {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        let (Some(regular), Some(bold), Some(italic)) = (args.first(), args.get(1), args.get(2)) else {
+            eprintln!("usage: cargo run -p xtask -- letters <regular.otf> <bold.otf> <italic.otf> [licence] > examples/demo-app/app/controllers/eui_builders_letters.sl");
+            std::process::exit(2);
+        };
+        match smufl::letters(regular, bold, italic, args.get(3).map(String::as_str)) {
+            Ok(table) => print!("{table}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if task == "smufl" {
+        let Some(path) = std::env::args().nth(2) else {
+            eprintln!("usage: cargo run -p xtask -- smufl <font.otf> [OFL.txt] [brace.otf] > examples/demo-app/app/controllers/eui_builders_smufl.sl");
+            std::process::exit(2);
+        };
+        let licence = std::env::args().nth(3);
+        let braces = std::env::args().nth(4);
+        match smufl::run(&path, licence.as_deref(), braces.as_deref()) {
+            Ok(table) => print!("{table}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if task != "bench" {
         // `bench` wants the release build of itself, because it measures
         // this crate's own work. `conform` only shells out, and this crate
@@ -759,6 +807,7 @@ fn main() {
         // the top of `xtask-web/src/main.rs`.
         eprintln!("usage: cargo run --release -p xtask -- bench");
         eprintln!("       cargo run -p xtask -- conform");
+        eprintln!("       cargo run -p xtask -- smufl <font.otf> [OFL.txt]   (the glyph table score() engraves with)");
         eprintln!("       cargo run -p xtask-web            (the browser client)");
         std::process::exit(2);
     }

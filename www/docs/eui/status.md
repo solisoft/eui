@@ -225,7 +225,15 @@ scissor region.
   then its blur, the corner radius following the spread; a negative spread
   tucks the layer under the box, and a pixel test reads back that the row
   above a `shadow.lg` card is the bare surface and the row below is not.
-- 87 tests (17 unit, 70 in `tests/render.rs`). Shadows, images and canvas paths each have one now; what is
+- A canvas **fill** (03 §1.1, kind `5`, 2026-10-12) is the one thing not
+  built from quads: the painter rasterises the outline with `zeno` — the
+  scaler swash already brought into the client for glyphs, so it adds no
+  crate to the binary — into the glyph atlas, cut to the canvas's clip and
+  into tiles of at most 256 device px, each drawn as a textured quad like a
+  glyph. Points are placed to the quarter device pixel relative to the
+  mask's corner, so a row of noteheads is one rasterisation per phase rather
+  than one per note. The binary's size was not measured before and after.
+- 91 tests (17 unit, 74 in `tests/render.rs`). Shadows, images, canvas paths and canvas fills each have one now; what is
   still not covered is a scene's pixels, deliberately — `spec/09-conformance.md`
   §11 pins the verifier's verdicts and the frame's structure, and says in as
   many words that a scene's pixels are not a conformance surface.
@@ -2227,6 +2235,174 @@ view is 584 lines. Measured with `snapshot` on 2026-10-12, it is 477 nodes
 and 2,135 quads at 1 280×800 and 352 nodes and 475 quads at 420 px. No
 literal colour: the reference it was built from was a dark screen, and the
 light one came free.
+
+**And a score** (2026-10-12). The catalogue has a notation family:
+`score(src, opts)` engraves LilyPond's own input — `\relative`, clefs, keys,
+metres, notes, rests, chords, ties, slurs and beams — into one `canvas`.
+Lines, stems and bar lines are rectangles; noteheads, clefs, accidentals,
+flags, beams and the slurs that thicken in the middle are fills, the new
+path kind `5` (03 §1.1), cut from Emmentaler, LilyPond's own music font
+(it began with Bravura's, the SMuFL reference, and changed on 2026-10-13
+because side by side LilyPond's page simply looked better — rounder, heavier
+heads). The 36 glyphs it needs live in `eui_builders_smufl.sl` (152 lines,
+keyed by SMuFL's names, the font's OFL carried as comments); the engraver
+is `eui_builders_score.sl`, 1 657 lines of Soli. Its spacing, stem,
+beam and slur rules and its line thicknesses are LilyPond's, and set
+beside LilyPond 2.24 at the same staff size the gallery's three excerpts
+come out within two per cent of its widths. Measured 2026-10-13 at 640 px:
+42, 75 and 66 paths, of which 19, 36 and 34 are fills, and **12 963,
+21 663 and 21 789 bytes** on the wire (`eui_render`), engraved in 3.3, 6.8
+and 4.8 ms. The bytes are
+the outlines: a path is not a define-once table, so every notehead carries
+its own thirty-odd numbers, and that is the first thing to change if a
+score's size ever matters. `tests/score_spec.sl` holds the engraver and the
+editor below to 23 tests (34 since the title page, below).
+
+The demo application's twenty-first component, `score`, is an editor on
+it. A–G write a note in the key's spelling and in the octave nearest the
+last one, 2–7 are the durations as MuseScore numbers them, `.` `+` `-` `=`
+`T` `S` dot, alter, tie and slur, the arrows step and select, and Ctrl+Z
+undoes sixty edits; as in MuseScore, a duration pressed straight after a
+note is for the next one, and pressed after choosing a note changes it.
+The mouse does the same: a click selects the nearest note, a second click
+moves it to the line or space under the pointer, a click past the end
+writes a note there, and a palette of buttons drawn from the same outlines
+does what the keys do. A note written across a bar line is cut and tied.
+The LilyPond source sits under the staff and reads back when edited or
+pasted; what the engraver refuses is said there and changes nothing. Play
+mixes the tune into an eight-bit, 8 kHz `.wav` in Soli and hands it to
+`eui_asset` (Frère Jacques, fourteen notes: 164 ms), and each note written
+is played on its own. At 1 200×760 the editor is 152 nodes and 689 quads;
+driven by `snapshot` through typing, clicking, pasting and narrowing to 420
+px. Not checked without a sound card: the playhead lighting the note that
+sounds, which rides `time_update`.
+
+**And a title page** (2026-10-13). `score()` reads `\header` and sets it
+as LilyPond's `bookTitleMarkup` does — title centred, huge and bold,
+subtitle, poet left, composer and arranger right — and prints `\tempo`
+marks over the staff, all from the letters of TeX Gyre Schola, LilyPond's
+text face, kept as `eui_builders_letters.sl` (140 characters in a regular
+and a bold weight, and since the tuplets ten italic digits: 343 lines,
+129 KB, the catalogue's heaviest file, which
+is why its numbers are whole thousandths of an em). A key or a metre may
+change at any bar, with the old key's naturals; a change that opens a line
+is announced at the end of the one before, after its bar line; each line
+carries its bar number. `{"page": "a4"}` lays the music on A4 at LilyPond's
+staff size with its margins, first-system indent, staff spacing and page
+breaks, numbering pages after the first. A five-movement suite engraved
+both ways (2026-10-13) comes out on one page in nine or ten systems against
+LilyPond's nine, its line breaks mostly LilyPond's. Its page is **994
+paths, 370 605 bytes** on the wire, engraved in 103 ms: every coordinate a
+float and every glyph its own outline, so a page of music is the one thing
+in the catalogue that would gain most from paths that are defined once and
+placed many times. The editor gained title fields, a free tempo with printed
+words, metres from 2/2 to 12/8, key, metre and tempo changes "from the
+selected bar", and an A4 view whose pages each take their own clicks;
+`tests/score_spec.sl` is 34 tests.
+
+**And repeats** (2026-10-13). `score()` reads `\repeat volta` with its
+`\alternative` endings and the `\bar` repeat signs, splits a start repeat
+across a line break as LilyPond does, and reads `R1*4` as four bars of rest
+— gathered into one bar with its count under `\compressEmptyMeasures`,
+drawn as church rests up to ten bars and as LilyPond's wide bar beyond, and
+counted in the bar numbers. Set beside LilyPond 2.24, a sixteen-bar test
+with both endings and two runs of rest draws the same signs, brackets and
+rests; the line breaks differ by a bar. The editor sets and clears repeat
+signs at the selected bar and writes bars of rest in a row as one;
+`tests/score_spec.sl` is 43 tests.
+
+**And tuplets and breaks** (2026-10-13). `score()` reads `\tuplet`
+(triplets, sextuplets, spans) and `\times`, beams their notes by the beat,
+and numbers them in TeX Gyre Schola's italic — ten digits added to
+`eui_builders_letters.sl`, whose generator (`xtask letters`) now takes
+the italic face — with a bracket where no single beam holds
+them. A whole note is 26 880 ticks (256 × 105) so that every tuplet of 3, 5,
+6 or 7 lasts a whole number of them. `\break` and `\pageBreak` force a
+line and a page. The editor makes triplets and sextuplets (Ctrl+3, Ctrl+6)
+and sets breaks after the selected bar, and was reorganised: one writing
+toolbar, and the score's settings and its bars in tabs that fold away.
+`tests/score_spec.sl` is 53 tests.
+
+**And a cache** (2026-10-13). Each worker keeps the last eight engravings,
+by source, width and layout, and the last sixteen drawings of them, plain,
+with where each note's paths are; lighting a note — a click, an arrow, the
+playhead — copies only that note's paths in the accent. Measured on the
+five-movement suite's A4 page (980 paths): engraving and drawing it is
+110 ms; the same page with another note lit, 0.1 ms; the whole editor view
+after a click on a note, 118 ms before and 8.3 ms after. The page's canvas
+is still sent whole when a note is lit: one canvas per system is what
+would send only the system that changed.
+
+**And expression** (2026-10-13). `score()` draws dynamics in Emmentaler's
+letters, hairpins, seven articulations and words over and under notes,
+placed by LilyPond's rules and within a tenth of a space of LilyPond 2.24
+on a test page; `eui_builders_smufl.sl` gained the seven dynamic letters
+and eleven articulation glyphs. Both tables are `xtask`'s own output
+(2026-10-13, Emmentaler and TeX Gyre Schola from LilyPond 2.24.4), and
+`eui-render`'s fill and hairline tests pass. The editor has an Expression tab for them.
+`tests/score_spec.sl` is 58 tests.
+
+**And a canvas for each system** (2026-10-13). A page is a column of
+canvases — its titles, then one per system — each system drawn in its own
+frame, its paths cached under a signature of everything the drawing reads;
+an edited note redraws one band, and the tree's diff sends only that one:
+on the suite's page, about 36 KB (≈ 4 000 values) instead of about 420 KB
+(47 783 values). Line breaking was made cheaper — each line's width is a
+constant plus `max(ideal × k, least)` terms worked out once, so the
+stretch that fills a line is arithmetic, and the courtesy widths are
+taken once per bar — from 30 ms to 10 ms, and its result is kept for the
+same widths. Changing a note in the five-movement suite, measured in the
+editor: 140 ms on A4 and 180 ms on screen before, about 75 ms now (12 ms of
+it the edit and the note's sound, 35 ms the engraving, the rest the
+signatures, the one system redrawn and the view); a 14-note piece, about
+20 ms. `tests/score_spec.sl` is 60 tests.
+
+**And MIDI** (2026-10-13). `score_midi(src)` writes a Standard MIDI File
+from the same source; on the dynamics test page, the five-movement suite
+and the tuplets page its 24, 253 and 51 notes are LilyPond 2.24's — onset,
+pitch and length — once its staccatissimo was cut to an eighth as
+LilyPond's is. The editor's **Download MIDI** button was the first save in
+the demo that writes anything: lang now answers a `file_save` handler's
+`{"state": …, "save": bytes}` with `Blob` frames, and the snapshot tool's
+`save:<name>` drive step answers the dialog and writes what arrives — a
+201-byte `Frère-Jacques.mid` decoded with its title, its tempo of 100 and
+its 14 notes. `tests/score_spec.sl` is 62 tests.
+
+**And several staves** (2026-10-13). A piano staff (brace, bar lines
+through), a staff group (bracket), a choir staff and plain `<< >>`, nested
+or not, named with `instrumentName` / `shortInstrumentName`, inside
+`\score { }` or not. Each staff is measured and spaced alone and all share
+one row of columns for breaking and placing; the staves of a line stack
+nine spaces apart or as their ink needs. The braces are LilyPond's, 36 of
+`emmentaler-brace`'s 576 sizes, and the bracket's ends Emmentaler's —
+`xtask smufl` takes the brace face as a third argument. A piano piece and
+a three-instrument chorale engraved beside LilyPond 2.24 on A4: the same
+lines, braces, brackets, names and spacing within a fraction of a space.
+`score_midi` writes one track per staff, a channel each, with the staff's
+`midiInstrument`: on both pieces every track's notes and program are
+LilyPond's own MIDI's. `tests/score_spec.sl` is 65 tests.
+
+**And a PDF** (2026-10-13). `score_pdf(src)` writes the A4 pages as a
+vector PDF from the same paths (five points a space, quadratics turned
+cubic, no fonts: every letter is an outline). `qpdf --check` passes on the
+suite (268 KB), the three-instrument chorale (65 KB) and the piano piece
+(53 KB); `pdftoppm` draws them as the screen does. The editor's
+**Download PDF** writes a 30 866-byte `Frère-Jacques.pdf` through the same
+`file_save` path as the MIDI. `tests/score_spec.sl` is 67 tests.
+
+**And tracks in the editor** (2026-10-13). One track edited at a time —
+its notes and clef are the state's, so every tool works unchanged — the
+others kept aside; a row of buttons and Alt+↑/↓ switch; a Tracks tab sets
+each one's name, instrument, volume, pan and mute; the full score under the
+sheet lights each track's sounding note while Play runs and switches track
+on a click. Bar-level marks come from the first track into every staff and
+shorter tracks are filled with rests, so the staff group always engraves.
+Play mixes the tracks: a three-instrument chorale of 19 seconds takes
+1.1 s to mix, once, until the next edit. `score()` reads
+`midiMaximumVolume` and `midiPanPosition`, and `score_midi` writes them as
+controllers 7 and 10. Not seen on a screen: the playhead lighting the full
+score, for want of an audio device in the headless snapshot — the tests
+drive it. `tests/score_spec.sl` is 73 tests.
 
 ## Not started
 

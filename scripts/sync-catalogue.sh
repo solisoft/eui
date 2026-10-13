@@ -12,9 +12,11 @@
 # this script should edit one, and every file is byte for byte identical
 # on every side.
 #
-# It is six files because one was eight thousand lines, and the sixth —
+# It is nine files because one was eight thousand lines, the sixth —
 # `tw()`, Tailwind-style classes as EUI styles — is a thing a new
-# application reaches for on its own. They load into the same namespace
+# application reaches for on its own, and the last three are `score()`, the
+# music glyphs it engraves with and the letters it sets its titles in, the
+# two generated. They load into the same namespace
 # and none depends on which loads first, so adding one is a matter of
 # naming it here and in `templates/eui.rs` next door.
 #
@@ -35,6 +37,9 @@ files=(
   eui_builders_feed.sl
   eui_builders_markdown.sl
   eui_builders_tw.sl
+  eui_builders_score.sl
+  eui_builders_smufl.sl
+  eui_builders_letters.sl
 )
 
 [ -d "$lang" ] || { echo "no language repository at $lang (set SOLI_LANG)" >&2; exit 1; }

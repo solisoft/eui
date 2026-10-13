@@ -15,6 +15,7 @@ read in the order named and searched as one text.
 """
 
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -26,7 +27,36 @@ SOURCES = [
     CONTROLLERS / "eui_builders_feed.sl",
     CONTROLLERS / "eui_builders_markdown.sl",
     CONTROLLERS / "eui_builders_tw.sl",
+    CONTROLLERS / "eui_builders_smufl.sl",
+    CONTROLLERS / "eui_builders_letters.sl",
+    CONTROLLERS / "eui_builders_score.sl",
+    # Not catalogue: the score editor's model, which `score_spec.sl` tests
+    # beside the engraver it writes for. Searched the same way, by name.
+    CONTROLLERS / "score_editor_controller.sl",
 ]
+
+# The score editor's model, keys and sound — everything but its view. Read
+# from the file rather than listed: a def added there and missing here made
+# the spec call a function it did not have, and Soli hung on the call
+# instead of saying so.
+SCORE_ED_VIEW = {
+    "score_editor_view", "score_ed_header", "score_ed_settings_bar",
+    "score_ed_labelled", "score_ed_palette", "score_ed_play_button", "score_ed_tool",
+    "score_ed_text_button", "score_ed_glyph_button", "score_ed_note_icon", "score_ed_dot_icon",
+    "score_ed_glyph_icon", "score_ed_sheet", "score_ed_sheets", "score_ed_status",
+    "score_ed_pitch_name", "score_ed_source", "score_ed_help", "score_ed_titles",
+}
+
+
+def defs_in(path: pathlib.Path) -> list[str]:
+    return re.findall(r"^def ([a-z_?0-9]+)\(", path.read_text(), re.M)
+
+
+SCORE_ED_DEFS = [n for n in defs_in(CONTROLLERS / "score_editor_controller.sl") if n not in SCORE_ED_VIEW]
+
+# `score()` and the engraver under it, every def in the file. Its module
+# constants are not copied, so `score_spec.sl` declares them above its marker.
+SCORE_DEFS = defs_in(CONTROLLERS / "eui_builders_score.sl")
 
 # `tw()` and everything under it. `node()` calls `tw_node`, so a spec that
 # copies `node` copies these too, and declares the `TW_MEMO` constant above
@@ -266,6 +296,13 @@ SPECS = {
         "row",
         "text",
         *TW_DEFS,
+    ],
+    ROOT / "tests" / "score_spec.sl": [
+        "canvas",
+        "smufl_glyph_table",
+        "letter_glyph_table",
+        *SCORE_DEFS,
+        *SCORE_ED_DEFS,
     ],
     ROOT / "tests" / "drag_spec.sl": [
         "split_span",

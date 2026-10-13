@@ -1847,7 +1847,17 @@ impl Painter<'_, '_> {
                     }
                 }
                 1 => {
-                    let q = self.device(Rect::new(cx0 + at(0), cy0 + at(1), at(2), at(3)));
+                    // Snapped like a box, but a rectangle with any size at
+                    // all keeps a device pixel each way (03 §1.1): a staff
+                    // line or a stem thinner than a pixel otherwise rounds
+                    // to nothing at some positions and not at others.
+                    let mut q = self.device(Rect::new(cx0 + at(0), cy0 + at(1), at(2), at(3)));
+                    if at(2) > 0.0 && q[2] < 1.0 {
+                        q[2] = 1.0;
+                    }
+                    if at(3) > 0.0 && q[3] < 1.0 {
+                        q[3] = 1.0;
+                    }
                     self.push(Quad { rect: q, params: [at(4) * scale, 0.0, 0.0, opacity], fill: color, stroke: [0.0; 4], uv: [0.0; 4], extra: [0.0; 4], spin: [0.0; 4], ..Quad::default() });
                 }
                 2 => {
@@ -1902,10 +1912,64 @@ impl Painter<'_, '_> {
                         self.segment(on(a), on(a + step), w, color, opacity);
                     }
                 }
+                5 => self.fill(&n, (ox, oy), scale, color, opacity),
                 _ => {}
             }
         }
         self.set_clip(saved);
+    }
+
+    /// Spec 03 §1.1, kind `5`: a filled outline, rasterised here into
+    /// coverage and drawn from the glyph atlas like a glyph.
+    ///
+    /// The mask is cut to the clip the canvas just set, so a fill is never
+    /// larger than what can be seen of it, and into [`FILL_TILE`] tiles so
+    /// any of it fits a sheet. Every point is placed to the quarter device
+    /// pixel relative to the mask's own corner: an outline repeated along a
+    /// line hashes the same at the same phase, and is rasterised once.
+    fn fill(&mut self, n: &[f32], (ox, oy): (f32, f32), scale: f32, color: [f32; 4], opacity: f32) {
+        let Some(cmds) = fill_commands(n, |x, y| (ox + x * scale, oy + y * scale)) else {
+            return;
+        };
+        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        for c in &cmds {
+            for p in command_points(c) {
+                b = [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)];
+            }
+        }
+        let clip = self.list.clips.get(self.clip as usize).copied().unwrap_or([0; 4]);
+        let x0 = b[0].floor().max(clip[0] as f32);
+        let y0 = b[1].floor().max(clip[1] as f32);
+        let x1 = b[2].ceil().min(clip[0].saturating_add(clip[2]) as f32);
+        let y1 = b[3].ceil().min(clip[1].saturating_add(clip[3]) as f32);
+        if !(x1 > x0 && y1 > y0) {
+            return;
+        }
+        let quarter = |v: f32| (v * 4.0).round() / 4.0;
+        let local: Vec<zeno::Command> = cmds.iter().map(|c| map_command(c, |p| zeno::Point::new(quarter(p.x - x0), quarter(p.y - y0)))).collect();
+        let shape = hash_commands(&local);
+        let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        for ty in 0..h.div_ceil(FILL_TILE) {
+            for tx in 0..w.div_ceil(FILL_TILE) {
+                let (left, top) = (tx.saturating_mul(FILL_TILE), ty.saturating_mul(FILL_TILE));
+                let (tw, th) = (w.saturating_sub(left).min(FILL_TILE), h.saturating_sub(top).min(FILL_TILE));
+                let key = fnv(shape, &[left, top, tw, th]);
+                let region = self.scene.atlas.get_shape(key, || {
+                    let (data, _) = zeno::Mask::new(local.as_slice()).size(tw, th).offset(zeno::Vector::new(-(left as f32), -(top as f32))).render();
+                    Some((tw, th, data))
+                });
+                let Some(region) = region else { continue };
+                let size = self.scene.atlas.size() as f32;
+                let (rx, ry, rw, rh) = (region.x as f32, region.y as f32, region.w as f32, region.h as f32);
+                self.push(Quad {
+                    rect: [x0 + left as f32, y0 + top as f32, rw, rh],
+                    params: [0.0, 0.0, TEXTURED as f32, opacity],
+                    fill: color,
+                    uv: [rx / size, ry / size, (rx + rw) / size, (ry + rh) / size],
+                    ..Quad::default()
+                });
+            }
+        }
     }
 
     /// A capsule from `a` to `b`: a quad `width` tall, rotated about its
@@ -1986,6 +2050,97 @@ impl Painter<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// 10 §1: the most commands one canvas fill (03 §1.1) may carry. Past it
+/// the path is skipped, like any other bad path.
+pub const MAX_FILL_COMMANDS: usize = 4096;
+
+/// 03 §1.1: a fill is packed in tiles of at most this many device px a side.
+pub const FILL_TILE: u32 = 256;
+
+/// A fill's flat numbers as commands, each point mapped by `at`. `None` —
+/// the path is skipped — for a command this client does not know, one
+/// short of its numbers, more than [`MAX_FILL_COMMANDS`], a number that is
+/// not finite, or nothing to fill.
+fn fill_commands(n: &[f32], at: impl Fn(f32, f32) -> (f32, f32)) -> Option<Vec<zeno::Command>> {
+    use zeno::Command as C;
+    let pt = |i: usize| -> Option<zeno::Point> {
+        let (x, y) = (*n.get(i)?, *n.get(i.checked_add(1)?)?);
+        let (x, y) = at(x, y);
+        (x.is_finite() && y.is_finite()).then(|| zeno::Point::new(x, y))
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n.len() {
+        if out.len() >= MAX_FILL_COMMANDS {
+            return None;
+        }
+        let cmd = n.get(i).copied()?;
+        let arg = |k: usize| i.checked_add(k);
+        let (c, used) = match cmd as i64 {
+            _ if cmd.fract() != 0.0 => return None,
+            0 => (C::MoveTo(pt(arg(1)?)?), 2),
+            1 => (C::LineTo(pt(arg(1)?)?), 2),
+            2 => (C::QuadTo(pt(arg(1)?)?, pt(arg(3)?)?), 4),
+            3 => (C::CurveTo(pt(arg(1)?)?, pt(arg(3)?)?, pt(arg(5)?)?), 6),
+            4 => (C::Close, 0),
+            _ => return None,
+        };
+        // A first command that is not a move begins at the content box's
+        // origin, as 03 §1.1 says.
+        if out.is_empty() && !matches!(c, C::MoveTo(_)) {
+            let (x, y) = at(0.0, 0.0);
+            out.push(C::MoveTo(zeno::Point::new(x, y)));
+        }
+        out.push(c);
+        i = i.saturating_add(1).saturating_add(used);
+    }
+    out.iter().any(|c| !matches!(c, C::MoveTo(_) | C::Close)).then_some(out)
+}
+
+fn command_points(c: &zeno::Command) -> impl Iterator<Item = zeno::Point> {
+    use zeno::Command as C;
+    let pts: [Option<zeno::Point>; 3] = match *c {
+        C::MoveTo(p) | C::LineTo(p) => [Some(p), None, None],
+        C::QuadTo(a, p) => [Some(a), Some(p), None],
+        C::CurveTo(a, b, p) => [Some(a), Some(b), Some(p)],
+        C::Close => [None, None, None],
+    };
+    pts.into_iter().flatten()
+}
+
+fn map_command(c: &zeno::Command, f: impl Fn(zeno::Point) -> zeno::Point) -> zeno::Command {
+    use zeno::Command as C;
+    match *c {
+        C::MoveTo(p) => C::MoveTo(f(p)),
+        C::LineTo(p) => C::LineTo(f(p)),
+        C::QuadTo(a, p) => C::QuadTo(f(a), f(p)),
+        C::CurveTo(a, b, p) => C::CurveTo(f(a), f(b), f(p)),
+        C::Close => C::Close,
+    }
+}
+
+/// The outline as it lands on the mask, to the quarter pixel it was placed
+/// at: what a tile's coverage is a function of.
+fn hash_commands(cmds: &[zeno::Command]) -> u64 {
+    let mut words: Vec<u32> = Vec::with_capacity(cmds.len().saturating_mul(7));
+    for c in cmds {
+        words.push(match c {
+            zeno::Command::MoveTo(_) => 0,
+            zeno::Command::LineTo(_) => 1,
+            zeno::Command::QuadTo(..) => 2,
+            zeno::Command::CurveTo(..) => 3,
+            zeno::Command::Close => 4,
+        });
+        words.extend(command_points(c).flat_map(|p| [(p.x * 4.0) as i32 as u32, (p.y * 4.0) as i32 as u32]));
+    }
+    fnv(0xcbf2_9ce4_8422_2325, &words)
+}
+
+/// FNV-1a over words, continuing from `seed`.
+fn fnv(seed: u64, words: &[u32]) -> u64 {
+    words.iter().flat_map(|w| w.to_le_bytes()).fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
 fn num(v: &Value) -> Option<f32> {

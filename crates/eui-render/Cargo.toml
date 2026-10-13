@@ -17,6 +17,9 @@ eui-text = { path = "../eui-text", version = "0.8.0" }
 # crate itself stays forbid(unsafe_code).
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
+# Canvas fills (03 §1.1): the scaler swash already rasterises glyphs with,
+# reached directly so a filled outline costs no second rasteriser.
+zeno = { version = "0.2.3", default-features = false, features = ["eval"] }
 
 # The blocking front door on `with_adapter_async`. A page has no thread to
 # block, and none of the three callers that want one.

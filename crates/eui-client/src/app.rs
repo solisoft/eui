@@ -677,6 +677,12 @@ struct Shell {
     /// OR-ed into every reading. Cleared when the window loses focus,
     /// since the release then goes to somebody else.
     held: u32,
+    /// Which physical key set each bit of `held`. A key is released under
+    /// the name the keymap gives it *then*, which need not be the one it
+    /// was pressed under: with `shift:both_capslock_cancel` a Shift goes
+    /// down as `Shift` and comes up as `CapsLock`, and a bit cleared by
+    /// name stayed held for every key after — a Shift nobody was pressing.
+    held_by: Vec<(winit::keyboard::PhysicalKey, u32)>,
     /// A size the compositor asked for and this window has not drawn yet.
     /// Only the last one matters: see the `Resized` arm.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -2188,6 +2194,7 @@ impl Shell {
             active: 0,
             modifiers: 0,
             held: 0,
+            held_by: Vec::new(),
             pending_resize: None,
             pointer_at: None,
             hovering: false,
@@ -4101,15 +4108,35 @@ impl Shell {
                         NamedKey::Super | NamedKey::Meta => 0b1000,
                         _ => 0,
                     };
-                    if bit != 0 {
-                        if down {
-                            self.held |= bit;
-                            self.modifiers |= bit;
-                        } else {
-                            self.held &= !bit;
-                            self.modifiers &= !bit;
+                    if bit != 0 && down {
+                        self.held |= bit;
+                        self.modifiers |= bit;
+                        if !self.held_by.contains(&(event.physical_key, bit)) {
+                            self.held_by.push((event.physical_key, bit));
                         }
                     }
+                }
+                // A release clears what *that key* set when it went down,
+                // whatever it is called now; and a modifier released under
+                // its own name clears its bit, as before.
+                if !down {
+                    let mut gone = match &event.logical_key {
+                        Key::Named(NamedKey::Shift) => 0b0001,
+                        Key::Named(NamedKey::Control) => 0b0010,
+                        Key::Named(NamedKey::Alt | NamedKey::AltGraph) => 0b0100,
+                        Key::Named(NamedKey::Super | NamedKey::Meta) => 0b1000,
+                        _ => 0,
+                    };
+                    for (_, bit) in self.held_by.iter().filter(|(k, _)| *k == event.physical_key) {
+                        gone |= bit;
+                    }
+                    self.held_by.retain(|(k, _)| *k != event.physical_key);
+                    // Another key still holding the same bit (both Shifts
+                    // down) keeps it.
+                    let still: u32 = self.held_by.iter().fold(0, |acc, (_, b)| acc | b);
+                    gone &= !still;
+                    self.held &= !gone;
+                    self.modifiers &= !gone;
                 }
                 // What the key types, from the keyboard state this window
                 // keeps itself (`eui-wayland`'s `Keys`, on Wayland; `None`
@@ -4175,7 +4202,23 @@ impl Shell {
                 // or a repeat the backend never stopped, and from the
                 // server's log the two are the same line; this one says
                 // which, and whether the release ever arrived.
-                crate::driver::trace(|| format!("key {name} · down {down} · repeat {} · mods {} · xkb {}", event.repeat, self.modifiers, typed.as_deref().unwrap_or("-")));
+                // `state`: the modifiers this window's own keyboard state has
+                // in force, xkbcommon's mask — 1 Shift, 2 Caps Lock, 4
+                // Control, 8 Alt — so a capital that came out small says
+                // whether it was the Shift or a lock.
+                #[cfg(target_os = "linux")]
+                let state = self.keys.as_mut().and_then(|k| k.mods());
+                #[cfg(not(target_os = "linux"))]
+                let state: Option<u32> = None;
+                crate::driver::trace(|| {
+                    format!(
+                        "key {name} · down {down} · repeat {} · mods {} · xkb {} · state {}",
+                        event.repeat,
+                        self.modifiers,
+                        typed.as_deref().unwrap_or("-"),
+                        state.map_or("-".to_owned(), |m| m.to_string())
+                    )
+                });
                 // Going back (06 §1.3). The window takes it before the
                 // application hears a keystroke, because 08 §7 says an
                 // application never sees one it did not ask for, and
@@ -4313,6 +4356,7 @@ impl Shell {
             WindowEvent::Focused(false) => {
                 // Whatever was held, its release goes to somebody else now.
                 self.held = 0;
+                self.held_by.clear();
                 self.send_to_tab(Input::Unfocused)
             }
             // Its twin was ignored until `location` arrived: nothing the

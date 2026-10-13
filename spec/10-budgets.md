@@ -20,6 +20,8 @@ it says that instead. A budget that was never measured is a slogan.
 | 10 000-row virtualised table, drag | 60 fps, < 2 ms CPU per frame |
 | Client binary, stripped, 2 variable fonts included | < 12 MB |
 | `MAX_ISLANDS` — sessions one page may open (01 §2.7) | **8** |
+| `MAX_FILL_COMMANDS` — commands in one canvas fill (03 §1.1) | **4 096** |
+| Canvas fill tile edge — one atlas region (03 §1.1) | **256** device px |
 
 `MAX_ISLANDS` is a ceiling and not a target: most pages want none and a page
 that wants one wants one. It is here because a tree is data — a view that
@@ -473,6 +475,9 @@ Pinned in `crates/eui-client/tests/assets.rs`:
 | CPU with nothing loaded | 0 — the device is closed |
 | Decoded samples a sound | 128 MiB — 5 min 50 s of stereo at 48 kHz |
 | Decoded samples held, every sound together, per session | 256 MiB |
+| A MIDI sound, synthesized | the same 128 MiB, at 44 100 Hz stereo: 6 min 20 s |
+| Commands in one `notes` list | 512 (`MAX_NOTE_EVENTS`); delays up to 60 s |
+| A `soundfont`, its parts together | 64 MiB (`MAX_SOUNDFONT_BYTES`), four assets |
 
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once
@@ -495,6 +500,14 @@ them past it is refused like one past its own ceiling
 (`decoded_media_goes_when_no_node_names_it`,
 `decoded_media_past_the_sessions_room_is_refused`, both in
 `crates/eui-client/tests/driver.rs`).
+
+A MIDI sound is synthesized once, to the same samples a recording decodes
+to, and held under the same ceilings: a piece longer than six minutes
+twenty is refused like any sound past 128 MiB (`a_midi_past_its_budget_is_refused`).
+A bank is parsed once per session into the samples it holds (GeneralUser GS,
+32 MB, is two assets); one past 64 MiB is not loaded, and its MIDI plays on
+the client's own voices (`a_bank_too_large_falls_back_to_the_clients_voices`,
+both in `crates/eui-audio/tests/midi.rs`).
 
 ## Moving pictures
 

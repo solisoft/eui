@@ -1,4 +1,4 @@
-# Twenty EUI components. Needs a `soli` built with `--features eui`.
+# Twenty-one EUI components. Needs a `soli` built with `--features eui`.
 #
 # router_eui(component, handler, view, options?):
 #   handler — a LiveView handler: {event, params, state} -> state
@@ -6,7 +6,7 @@
 #   options — {"session": "required"}
 #
 # **The first one is the default.** The EUI manifest carries a single `entry`
-# (01 §2.1) and this server carries twenty components, so one of them has to
+# (01 §2.1) and this server carries twenty-one components, so one of them has to
 # be what `wss://host` means, and it is this one — which is why the gallery
 # leads rather than the counter. A newer soli also takes `{"default": true}`
 # to say so explicitly, and this file does not use it: the deploy installs a
@@ -30,6 +30,9 @@ router_eui("music", "music#music", "music#music_view")
 router_eui("tracker", "tracker#tracker", "tracker#tracker_view")
 # A code editor whose buffer is its own source, highlighted by the server.
 router_eui("editor", "editor#editor", "editor#editor_view")
+# A score editor: notes typed or clicked, engraved by the catalogue's
+# `score()` at every keystroke, played back as MIDI by the window itself.
+router_eui("score", "score_editor#score_editor", "score_editor#score_editor_view")
 # Spec 06 §1.1, in ten lines: a node that asks to be woken.
 router_eui("clock", "live#clock", "live#clock_view")
 # Spec 01 §4: a view the server cannot encode, so the suite can watch a
@@ -81,8 +84,10 @@ get("/x/callback", "x#callback")
 
 # What the manifest asks the client for; the person still has to allow it.
 # `fs.pick` is Atrium's: without it the attach button opens no dialog at all,
-# and there is no diagnostic the application can see (03 §3.2).
-eui_capabilities("clipboard.read", "fs.pick", "camera", "microphone", "location", "nfc", "scene")
+# and there is no diagnostic the application can see (03 §3.2). `fs.save` is
+# the score editor's PDF and MIDI export and the ERP's file downloads: a `save`
+# button without it opens no sheet either.
+eui_capabilities("clipboard.read", "fs.pick", "fs.save", "camera", "microphone", "location", "nfc", "scene")
 
 # Two faces from Google Fonts, fetched *here* — by the server, at boot, once
 # per deploy — and served from this application's own origin by content hash.

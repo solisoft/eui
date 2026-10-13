@@ -24,12 +24,72 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- **Canvas fills** (spec 03 §1.1, path kind `5`): a filled outline of moves,
+  lines, quadratic and cubic Béziers and closes, filled by the non-zero
+  rule and anti-aliased. The client rasterises it into the glyph atlas;
+  a client from before it skips the path, as it skips any unknown kind.
+  It is what a notehead, a clef or a slur is drawn with.
+- **`score(src, opts)`** in the catalogue: a piece written in LilyPond's
+  own input — `\relative`, clefs, keys, metres, notes, rests, chords, ties,
+  slurs, beams — engraved into one canvas with LilyPond's spacing, stem,
+  beam and slur rules and line weights, from the outlines of Emmentaler,
+  LilyPond's own music font. What it cannot draw is refused with its
+  position. `xtask smufl` regenerates the outlines from the font.
+- `score()` prints a title page and tempo marks: `\header { title = …
+  composer = … }` set as LilyPond sets it, `\tempo "Allegro" 4 = 120` over
+  the staff, in the letters LilyPond uses. A key or a metre may change at any
+  bar, with the old key cancelled and the change announced at the end of the
+  line before; lines carry their bar numbers; and `{"page": "a4"}` lays the
+  music out on A4 pages with LilyPond's margins and spacing.
+- `score()` draws repeats and bars of rest: `\repeat volta 2 { … }` with
+  its `\alternative` endings in brackets, the `\bar` signs `.|:`, `:|.`
+  and `:|.|:`, and `R1*4` — four bars, or one bar with its count under
+  `\compressEmptyMeasures`. The score editor sets a repeat at the selected
+  bar (`[` and `]`) and gathers bars of rest.
+- `score()` draws tuplets — `\tuplet 3/2 { … }`, `\tuplet 6/4`, spans,
+  `\times 2/3` — numbered and bracketed as LilyPond does them, and obeys
+  `\break` and `\pageBreak`. The score editor makes triplets and
+  sextuplets (Ctrl+3, Ctrl+6), sets line and page breaks, and keeps its
+  settings in tabs under one writing toolbar.
+- `score()` draws expression: dynamics (`\p`, `\mf`, `\sfz`…), hairpins
+  (`\<` `\>` `\!`), articulations (`-.` `->` `--` `-^` `-!` `-_`,
+  `\fermata`) and words (`^"dolce"`), placed as LilyPond places them. The
+  score editor has an Expression tab for them, and keeps the last
+  engravings of a score so that a click on a note redraws in milliseconds.
+- `score()` is a column of canvases, one per system: editing a note
+  redraws and resends only its system (≈ 36 KB instead of ≈ 420 KB for an
+  A4 page), and an edit in a long piece takes about half the time it did.
+- `score_midi(src)` writes a score as a MIDI file — notes, ties, tempos,
+  dynamics and hairpins as loudness, articulations — matching LilyPond's
+  own MIDI note for note; the score editor has a **Download MIDI** button.
+- `score()` draws several staves: a piano's (`\new PianoStaff`, a brace,
+  bar lines through), an orchestra's (`\new StaffGroup`, a bracket), a
+  choir's, and plain `<< >>`, with instrument names; `score_midi` writes
+  them as a multi-track file, one instrument per staff.
+- `score_pdf(src)` writes a score's A4 pages as a vector PDF; the score
+  editor has a **Download PDF** button beside **Download MIDI**.
+- The score editor has tracks: add them, switch with a click or Alt+↑/↓,
+  edit one at a time, name them and give each an instrument, a volume, a
+  pan and a mute; the full score under the sheet shows every track and
+  lights the notes as they play. The PDF and the MIDI hold every track.
+- The snapshot tool's `SNAPSHOT_DRIVE` takes `save:<name>`: it answers the
+  save dialog the last click opened and writes what the server sends; a
+  `click:<label>` now stops at a node that opens a file dialog.
+- `score`, a twenty-first demo component: a score editor. Type A–G and the
+  MuseScore duration numbers, or click on the staff; a note across a bar
+  line is cut and tied for you; the LilyPond source beside it can be edited
+  or pasted; Play mixes the tune into a sound on the server, and each note
+  written is heard as it lands. It has fields for the title and composer, a
+  free tempo with printed words, every common metre, key, metre and tempo
+  changes from the selected bar, and an A4 page view. The gallery's catalogue gains a Notation
+  card.
 - `campaigns`, a twentieth demo component: a campaign-performance table with
   summary figures, search, a status filter, sortable headers, sparklines and
   target meters drawn as `canvas` paths, ticking with bulk pause and resume,
   a column picker, compact rows and paging. Columns drop out as the window
   narrows, and on a phone it becomes a list of cards. `/live/campaigns` opens
   it in a browser.
+
 - A tutorial in the documentation (`/docs/tutorial`): a shopping list built in
   six steps, each a component of the demo application (`pantry_1` …
   `pantry_6`) and each running in the page beside its code. A line reading

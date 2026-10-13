@@ -809,11 +809,71 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
         // filled in at all. A step is `key:<k>` (the `$^~#` modifier
         // prefixes work as everywhere else, and the `key:` is optional),
         // `text:<what>`, `paste:<what>`, `click:<label>` / `click:<x>,<y>`,
-        // `drag:<x1>,<y1>><x2>,<y2>`, or `wait:<ms>`.
+        // `drag:<x1>,<y1>><x2>,<y2>`, `wait:<ms>`, or `save:<name>`.
         // Each waits for the server's answer,
         // the way a click does.
         if let Ok(script) = std::env::var("SNAPSHOT_DRIVE") {
             for step in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                // `save:<name>` — answers the save dialog the last click
+                // opened (a node with `save`, and `SNAPSHOT_ALLOW=fs.save`)
+                // as if the person had chosen `<name>`, and writes what the
+                // server sends for it into the output directory. The whole
+                // of a save, through the server, with no window: the only
+                // way to check that a `file_save` handler's bytes arrive.
+                if let Some(name) = step.strip_prefix("save:") {
+                    let ask = driver.take_file_asks().into_iter().find(|a| matches!(a.want, eui_client::FileWant::Save { .. }));
+                    let Some(ask) = ask else {
+                        eprintln!("snapshot: save: no save dialog is open — click a node with `save` first, with SNAPSHOT_ALLOW=fs.save");
+                        continue;
+                    };
+                    for f in driver.saving(ask.token, name.to_owned()) {
+                        conn.tx.send(f.encode()).unwrap();
+                    }
+                    let path = std::path::Path::new(&out).join(name);
+                    let mut written: Vec<u8> = Vec::new();
+                    let until = Instant::now() + Duration::from_secs(5);
+                    let mut done = false;
+                    while !done && Instant::now() < until {
+                        let _ = wake_rx.recv_timeout(Duration::from_millis(16));
+                        while let Ok(msg) = conn.rx.try_recv() {
+                            match msg {
+                                Incoming::Message(b) => {
+                                    if let Ok(frame) = Frame::decode(&b) {
+                                        for o in driver.handle_frame(frame) {
+                                            conn.tx.send(o.encode()).unwrap();
+                                        }
+                                    }
+                                }
+                                Incoming::Asset(hash, Ok(bytes)) => driver.asset_ready(hash, bytes),
+                                Incoming::Asset(hash, Err(e)) => driver.asset_failed(hash, e),
+                                Incoming::Closed(e) => panic!("closed: {e}"),
+                            }
+                        }
+                        driver.tick(Instant::now());
+                        for f in driver.take_pending() {
+                            conn.tx.send(f.encode()).unwrap();
+                        }
+                        for w in driver.take_writes() {
+                            match w.flag {
+                                eui_proto::Chunked::Abort => {
+                                    eprintln!("snapshot: save {name} aborted: {}", String::from_utf8_lossy(&w.bytes));
+                                    done = true;
+                                }
+                                eui_proto::Chunked::More => written.extend(w.bytes),
+                                eui_proto::Chunked::Last => {
+                                    written.extend(w.bytes);
+                                    std::fs::write(&path, &written).expect("write the saved file");
+                                    println!("saved {} ({} bytes)", path.display(), written.len());
+                                    done = true;
+                                }
+                            }
+                        }
+                    }
+                    if !done {
+                        eprintln!("snapshot: save {name}: nothing arrived in 5 s");
+                    }
+                    continue;
+                }
                 if let Some(ms) = step.strip_prefix("wait:").and_then(|v| v.trim().parse::<u64>().ok()) {
                     let until = Instant::now() + Duration::from_millis(ms);
                     while Instant::now() < until {
@@ -919,7 +979,13 @@ fn snapshot_soli(out: &str, url: &str, name: &str, w: f32, h: f32, scale: f32) {
                                 let found = driver.session().root().and_then(|root| driver.session().preorder(root).find(|ix| driver.session().text_of(*ix) == Some(what)));
                                 match found {
                                     Some(mut ix) => {
-                                        while driver.session().handler(ix, eui_proto::EventKind::Click).is_none() {
+                                        // Up to what answers the press: a click, or a node that
+                                        // opens a file dialog (`save`, `pick`), which may carry
+                                        // no click handler at all.
+                                        let answers = |ix| {
+                                            [eui_proto::EventKind::Click, eui_proto::EventKind::FileSave, eui_proto::EventKind::FilePick].iter().any(|k| driver.session().handler(ix, *k).is_some())
+                                        };
+                                        while !answers(ix) {
                                             let Some(up) = driver.session().node(ix).map(|n| n.parent) else { break };
                                             if up == ix {
                                                 break;

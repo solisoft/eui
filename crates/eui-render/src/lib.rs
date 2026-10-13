@@ -45,8 +45,8 @@ pub use gpu::{Offscreen, RenderError, RenderStats, Renderer, SessionTextures, Ta
 pub use paint::SceneDraw;
 pub use paint::{
     bounce_lift, colors_of, linear, pack4, paint, pulse_factor, resolve_color, resolve_gradient, scrollbar_thumb, unpack4, Backdrop, Colors, Departure, DrawList, Editing, Glide, GpuAnim,
-    GradientPaint, Mover, Quad, Run, Scene, Scroller, Xform, ANIMATED, BLURRED, CURVE_HELD, DECELERATE, GRADIENT, MAX_SCROLLERS, MAX_XFORMS, PULSING, SCENE, SCENE_ANIMATED, SCENE_DEPTH, SCENE_MSAA,
-    SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA, XFORM_MASK, XFORM_SHIFT,
+    GradientPaint, Mover, Quad, Run, Scene, Scroller, Xform, ANIMATED, BLURRED, CURVE_HELD, DECELERATE, FILL_TILE, GRADIENT, MAX_FILL_COMMANDS, MAX_SCROLLERS, MAX_XFORMS, PULSING, SCENE,
+    SCENE_ANIMATED, SCENE_DEPTH, SCENE_MSAA, SCROLLBAR_WIDTH, SCROLLER_MASK, SCROLLER_SHIFT, SPINNING, TEXTURED, TEXTURED_RGBA, XFORM_MASK, XFORM_SHIFT,
 };
 pub use retained::{PaintCache, PaintStats};
 pub use scene::SceneUniforms;

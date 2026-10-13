@@ -418,13 +418,46 @@ role id and, for hand-written trees, a `Str` role name or hex literal.
 | `2` | `[2, colour, base_y, x0, y0, x1, y1, …]` | The area between a polyline and the horizontal `base_y` |
 | `3` | `[3, colour, cx, cy, r]` | A filled circle |
 | `4` | `[4, colour, width, cx, cy, r, a0, a1]` | An arc of radius `r` from angle `a0` to `a1`, radians, `0` along +x, increasing clockwise on screen |
+| `5` | `[5, colour, cmd, args…, cmd, args…, …]` | A filled outline: the commands below, filled by the **non-zero** rule, anti-aliased. Since EUI 9 |
+
+A fill's commands follow one another flat, each an `Int` and then its
+numbers:
+
+| cmd | Arguments | Meaning |
+|---:|---|---|
+| `0` | `x y` | Begin a subpath at the point |
+| `1` | `x y` | A line to the point |
+| `2` | `cx cy x y` | A quadratic Bézier through the control point to the point |
+| `3` | `c1x c1y c2x c2y x y` | A cubic Bézier through two control points to the point |
+| `4` | — | Close the subpath |
+
+A subpath left open is closed for the fill, as a font's contour is. A first
+command other than `0` begins at the content box's origin. A command the
+client does not know, a command short of its numbers, or more than
+`MAX_FILL_COMMANDS` (4 096, 10 §1) commands in one path skips **that path**,
+like any other bad path. A fill is the one kind that is covered rather than
+built from quads: it is what draws a notehead, a clef or a slur that thickens
+in the middle, and none of those is a capsule or a strip.
+
+A rectangle (kind `1`) is snapped to device pixels as a box is, and one
+with a positive width or height keeps at least one device pixel of it: a
+hairline drawn small — a staff line on a page scaled to a screen — must not
+round to nothing at some positions and not at others.
 
 Paths paint in order. A path with an unknown kind, a colour that does not
 resolve, or too few numbers is skipped, never an error: a chart with a bad
-series still shows its grid. The reference client draws every kind with its
+series still shows its grid. The reference client draws kinds `0`–`4` with its
 rounded-rectangle pipeline — a segment is a rotated capsule, an area a strip
-per device column, an arc a fan of chords at most 6° apart — so a canvas adds
-no shader, no tessellator and no allocation beyond its quads.
+per device column, an arc a fan of chords at most 6° apart — so they add
+no shader, no tessellator and no allocation beyond their quads. It draws a
+fill as a coverage mask, rasterised on the CPU by the scaler its text engine
+already carries and packed into the glyph atlas: a fill costs a glyph's
+pipeline and no other. The mask is cut to the canvas's visible clip and into
+tiles of at most 256 device px a side, a tile with no coverage is not packed,
+and every point is placed to the quarter device pixel, so one outline repeated
+along a line — a row of noteheads — is rasterised once per phase rather than
+once per copy. Enforced in `eui-render` (`paint.rs`, `fill`) and pinned by
+`crates/eui-render/tests/render.rs` (09 §8).
 
 ### 1.2 `scene`
 
@@ -664,7 +697,16 @@ does not own them. §3.2 to §3.4 are the rest of that family.
   without hearing every letter typed into the field inside it. A node with a
   handler and no `keys` prop hears everything — but only **for itself**: a
   dialog that merely listens must not swallow the `Enter` that presses a
-  button inside it.
+  button inside it. **And it hears nothing typed into a field below it**
+  (protocol 9): while an `input` or a `textarea` has focus, a key the field
+  has no use for (the third case below) reaches a handler *above* the field
+  only if that handler names the key in `keys`. A page's shortcuts live on
+  its root, and a person typing a title is exactly when a shortcut on an
+  arrow, `Backspace` or `Ctrl+Z` would do damage somewhere they are not
+  looking — a note deleted by a `Backspace` at the start of the field. A
+  widget wrapped around a field (a combobox, a tag list) names what it wants,
+  as it already must to withhold anything. Enforced in `eui-client`
+  (`driver.rs`, `key_claim`).
 
   **Inside an editable node**, "withheld from the client's own meaning" needs
   saying in three parts, because the obvious reading makes a field nothing can
@@ -1058,7 +1100,7 @@ accepted class through `eui_render` and pins the refusals.
 
 The reference catalogue ships with `examples/demo-app` as
 `app/controllers/eui_builders.sl` and its `_forms`, `_charts`, `_feed`,
-`_markdown` and `_tw` companions, and `soli new <app> --eui` writes those same files
+`_markdown`, `_tw`, `_score` and `_smufl` companions, and `soli new <app> --eui` writes those same files
 into a new application beside a component that uses them. Its
 families: actions (button variants,
 split button, segmented control, toggle group, menu, context menu, command palette,
@@ -1069,7 +1111,29 @@ dialog, drawer, popover, tooltip, tabs, accordion, split pane, stepper, shortcut
 navigation (navbar, sidebar, breadcrumb, pagination, tree), data (table,
 expandable row, tree table, grid, multi-select list, list item, chart, stat, code block,
 diff, filter builder), markdown (document, document rows for a windowed
-list, block editor and its model), feedback (toast,
+list, block editor and its model), notation (`score`: LilyPond's input —
+a `\header`, `\relative`, clefs, keys, metres and tempo marks that may
+change at any bar, notes, rests, chords, ties, slurs and beams, repeats
+(`\repeat volta` with an `\alternative`'s bracketed endings, or the
+`\bar` signs `.|:`, `:|.`, `:|.|:`), bars of rest (`R1*4`, gathered
+into one bar with its count under `\compressEmptyMeasures`), tuplets
+(`\tuplet 3/2 { … }`, `\tuplet 6/4`, a span `\tuplet 3/2 4 { … }`,
+`\times 2/3`: numbered in italic, bracketed unless one beam holds them)
+the forced breaks `\break` and `\pageBreak`, and expression: dynamics
+(`\pp` … `\ff`, `\sfz`, `\fp` and their kin), hairpins (`\<`, `\>`,
+`\!`), articulations (`-.` `->` `--` `-^` `-!` `-_`, `\fermata`, with `^`
+and `_` for a side) and words over or under a note (`^"dolce"`), and as
+a Standard MIDI File (`score_midi`), as a vector PDF of its A4 pages
+(`score_pdf`), and several staves (`\new PianoStaff`
+and `\new GrandStaff` under a brace, `\new StaffGroup` and `\new
+ChoirStaff` under a bracket, `<< … >>`, each `\new Staff \with {
+instrumentName … }`, inside `\score { … }` or not; one MIDI track per
+staff) — engraved
+into `canvas` rectangles and fills (§1.1, kind `5`), one canvas for each
+system so that an edit redraws and resends only the system it is in, cut from the
+outlines of a music font and a text face, with LilyPond's spacing, stem,
+beam and slur rules, on a screen or on A4 pages; a construct it cannot draw
+is refused with its position, as `tw()` refuses a class), feedback (toast,
 banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip),
 style (`tw`: Tailwind-style class strings, with `hover:`, `active:`, `focus:` and
 `disabled:` as local states, `sm:` … `2xl:` resolved on the server against the
@@ -1095,6 +1159,38 @@ what, and what it should be doing.
 | `volume` | int `0..=100` | The application's own gain. Absent is `100` |
 | `loop` | bool | Start again at the end instead of stopping |
 | `position` | int ms | Where to play from. The client seeks **when this value changes**, not on every render, so a server that re-sends the same number does not stutter the sound |
+| `soundfont` | list of asset | A SoundFont 2 bank, in order — a bank larger than one asset ([`10-budgets.md`](10-budgets.md) §5) comes in parts, concatenated by the client. The instruments a MIDI `src` or `notes` are played with (protocol 9) |
+| `notes` | list of `[int ms, int, int, int]` | MIDI commands to play **now**, each `[delay_ms, status, data1, data2]`: note on and off, program and controller changes, on any channel (protocol 9) |
+| `notes_seq` | int | The client plays `notes` **when this value changes**, as it seeks on `position`: a server re-rendering the tree does not replay them |
+
+**A MIDI sound** (protocol 9). An `src` whose bytes are a Standard MIDI
+File (format 0 or 1, starting `MThd`) is synthesized by the client into a
+sound, and from then on it is a sound like any other: `playing`, `volume`,
+`loop`, `position`, `ended`, `time_update` and `level` mean what they mean
+for a recording. The client plays General MIDI: program changes, channel
+10 as percussion, controllers 7 (volume) and 10 (pan) in stereo, tempo
+changes. With a `soundfont`, it plays that bank's instruments; without one,
+or until the bank has arrived, or when the bank will not load, it plays
+voices of its own — one for each of General MIDI's sixteen families and a
+drum kit — so a MIDI sound is never silent for want of a bank. A
+`soundfont` is fetched and parsed once per session, cached like any asset,
+and parsed in the sandboxed worker, where every other decoder runs.
+
+**MIDI commands** (protocol 9). `notes` is how an application plays a note
+without sending a sound: the server sends what to play, the client plays
+it, at once. Each time `notes_seq` changes the client synthesizes the
+list — from its first command, each `delay_ms` after it — with the node's
+`soundfont`, or its own voices, and plays it on the node; a later list
+replaces one still sounding. A list is at most `MAX_NOTE_EVENTS` commands
+and its delays at most a minute. A note on with no note off is ended a
+second after the last command. `notes` and `src` on one node are refused
+together: a node is a sound, or a player of commands.
+
+A client that settled on a protocol below 9 decodes a MIDI `src` as it
+decodes any bytes it has no decoder for — it drops it, silent — and has no
+props called `soundfont`, `notes` or `notes_seq`. A server that knows the
+version (lang passes it to `connect` as `protocol`) sends such a client a
+recording instead.
 
 Decoding runs where every decoder runs — the sandboxed worker of
 [`08-security.md`](08-security.md) §10 — and the mixed frames are handed

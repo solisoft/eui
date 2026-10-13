@@ -1521,6 +1521,12 @@ pub struct WellKnown {
     pub position: Option<u32>,
     /// How loud.
     pub volume: Option<u32>,
+    /// An `audio` node's SoundFont bank, a list of assets (03 §7).
+    pub soundfont: Option<u32>,
+    /// MIDI commands an `audio` node plays (03 §7).
+    pub notes: Option<u32>,
+    /// What makes it play them again.
+    pub notes_seq: Option<u32>,
     /// An `input` that hides what was typed (03 §3).
     pub secret: Option<u32>,
     /// The hint an empty `input` or `textarea` shows (03 §3).
@@ -1569,6 +1575,9 @@ impl WellKnown {
             "loop" => &mut self.loop_,
             "position" => &mut self.position,
             "volume" => &mut self.volume,
+            "soundfont" => &mut self.soundfont,
+            "notes" => &mut self.notes,
+            "notes_seq" => &mut self.notes_seq,
             "secret" => &mut self.secret,
             "placeholder" => &mut self.placeholder,
             "shader" => &mut self.shader,

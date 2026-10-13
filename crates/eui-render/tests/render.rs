@@ -527,6 +527,133 @@ fn a_canvas_line_lands_on_its_pixels() {
     assert!(close(pixel(&px, 100, 60, 10), ground, 2));
 }
 
+/// A fill's flat command list: `[5, colour, cmd, args…]`.
+fn fill(colour: &str, cmds: &[f64]) -> Value {
+    let mut v = vec![Value::Int(5), Value::Str(colour.into())];
+    v.extend(cmds.iter().map(|&c| if c.fract() == 0.0 { Value::Int(c as i64) } else { Value::Float(c) }));
+    Value::List(v)
+}
+
+/// A square from `(x, y)`, `s` a side, wound clockwise on screen — or
+/// against it.
+fn square(x: f64, y: f64, s: f64, clockwise: bool) -> Vec<f64> {
+    let mut v = vec![0.0, x, y];
+    let corners = if clockwise { [(x + s, y), (x + s, y + s), (x, y + s)] } else { [(x, y + s), (x + s, y + s), (x + s, y)] };
+    for (cx, cy) in corners {
+        v.extend([1.0, cx, cy]);
+    }
+    v.push(4.0);
+    v
+}
+
+#[test]
+fn a_canvas_fill_is_one_textured_quad_per_tile_from_the_glyph_atlas() {
+    let paths = Value::List(vec![
+        fill("#ff0000", &square(10.0, 10.0, 20.0, true)),
+        // The same outline a whole pixel along: the same phase, so the
+        // same coverage, rasterised once.
+        fill("#ff0000", &square(40.0, 10.0, 20.0, true)),
+        // An unknown command skips its own path and nothing after it.
+        fill("#ff0000", &[0.0, 0.0, 0.0, 9.0, 1.0, 1.0]),
+        // A command short of its numbers, likewise.
+        fill("#ff0000", &[0.0, 0.0, 0.0, 3.0, 1.0, 1.0]),
+        // Nothing to fill.
+        fill("#ff0000", &[0.0, 5.0, 5.0, 4.0]),
+        fill("info.base", &square(70.0, 10.0, 10.0, true)),
+    ]);
+    let mut fx = canvas_fixture(paths, 200.0, 100.0);
+    let list = draw(&mut fx, 200, 100, 1.0);
+    let textured: Vec<&Quad> = list.quads.iter().filter(|q| q.params[2] == TEXTURED as f32).collect();
+    assert_eq!(textured.len(), 3, "{textured:#?}");
+    assert_eq!(textured[0].rect, [10.0, 10.0, 20.0, 20.0]);
+    assert_eq!(textured[1].rect, [40.0, 10.0, 20.0, 20.0]);
+    assert_eq!(textured[0].uv, textured[1].uv, "one region for both copies");
+    assert_eq!(textured[0].fill, linear(0xFF00_00FF));
+    assert_eq!(textured[2].fill, linear(fx.theme.color(Role::InfoBase)));
+    assert_eq!(fx.atlas.len(), 2, "two outlines, two regions");
+
+    // Past MAX_FILL_COMMANDS the path is skipped whole.
+    let mut long = vec![0.0, 0.0, 0.0];
+    for k in 0..MAX_FILL_COMMANDS {
+        long.extend([1.0, (k % 40) as f64, 20.0]);
+    }
+    let mut fx = canvas_fixture(Value::List(vec![fill("#ff0000", &long)]), 200.0, 100.0);
+    assert!(draw(&mut fx, 200, 100, 1.0).quads.iter().all(|q| q.params[2] != TEXTURED as f32));
+}
+
+#[test]
+fn a_canvas_hairline_keeps_a_device_pixel() {
+    // 0.4 px wide at x = 10.6 rounds both edges to 11: without the floor it
+    // would be a quad of no width, drawn as nothing.
+    let i = Value::Int;
+    let paths = Value::List(vec![
+        Value::List(vec![i(1), Value::Str("#ff0000".into()), Value::Float(10.6), i(5), Value::Float(0.4), i(20), i(0)]),
+        Value::List(vec![i(1), Value::Str("#00ff00".into()), i(5), Value::Float(30.6), i(40), Value::Float(0.3), i(0)]),
+    ]);
+    let mut fx = canvas_fixture(paths, 200.0, 100.0);
+    let list = draw(&mut fx, 200, 100, 1.0);
+    assert!(list.quads.iter().any(|q| q.fill == linear(0xFF00_00FF) && q.rect[2] == 1.0 && q.rect[3] == 20.0), "{:#?}", list.quads);
+    assert!(list.quads.iter().any(|q| q.fill == linear(0x00FF_00FF) && q.rect[3] == 1.0 && q.rect[2] == 40.0));
+}
+
+#[test]
+fn a_canvas_fill_is_cut_to_its_clip_and_tiled() {
+    // The whole 100 × 50 canvas and a good deal past it, at 3×: 300 × 150
+    // device px of coverage after the clip, which is two tiles across.
+    let paths = Value::List(vec![fill("#ff0000", &square(-50.0, -50.0, 400.0, true))]);
+    let mut fx = canvas_fixture(paths, 400.0, 200.0);
+    let list = draw(&mut fx, 1200, 600, 3.0);
+    let tiles: Vec<[f32; 4]> = list.quads.iter().filter(|q| q.params[2] == TEXTURED as f32).map(|q| q.rect).collect();
+    assert_eq!(tiles, vec![[0.0, 0.0, 256.0, 150.0], [256.0, 0.0, 44.0, 150.0]]);
+}
+
+#[test]
+fn a_canvas_fill_covers_by_the_non_zero_rule() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    // Left: a square with a square inside it wound the same way — no
+    // hole. Right: the inner one wound the other way — a hole.
+    let mut same = square(5.0, 5.0, 40.0, true);
+    same.extend(square(15.0, 15.0, 20.0, true));
+    let mut opposite = square(55.0, 5.0, 40.0, true);
+    opposite.extend(square(65.0, 15.0, 20.0, false));
+    let paths = Value::List(vec![fill("accent.base", &same), fill("accent.base", &opposite)]);
+    let mut fx = canvas_fixture(paths, 100.0, 50.0);
+    let list = draw(&mut fx, 100, 50, 1.0);
+    let target = r.offscreen(100, 50);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
+    assert!(close(pixel(&px, 100, 8, 8), accent, 2), "{:?}", pixel(&px, 100, 8, 8));
+    assert!(close(pixel(&px, 100, 25, 25), accent, 2), "same winding: no hole {:?}", pixel(&px, 100, 25, 25));
+    assert!(close(pixel(&px, 100, 58, 8), accent, 2));
+    assert!(close(pixel(&px, 100, 75, 25), ground, 2), "opposite winding: a hole {:?}", pixel(&px, 100, 75, 25));
+    assert!(close(pixel(&px, 100, 50, 25), ground, 2), "between the two {:?}", pixel(&px, 100, 50, 25));
+}
+
+#[test]
+fn a_canvas_cubic_stays_inside_its_hull() {
+    let Some(mut r) = gpu() else { return };
+    let mut st = r.session();
+    // A lens: out along a cubic from (10, 25) to (90, 25) bulging up to
+    // y ≈ 10, and back along the chord.
+    let paths = Value::List(vec![fill("accent.base", &[0.0, 10.0, 25.0, 3.0, 30.0, 5.0, 70.0, 5.0, 90.0, 25.0, 4.0])]);
+    let mut fx = canvas_fixture(paths, 100.0, 50.0);
+    let list = draw(&mut fx, 100, 50, 1.0);
+    let target = r.offscreen(100, 50);
+    r.render_offscreen(&mut st, &target, 0.0, &list, &mut fx.atlas, &mut fx.images);
+    let px = r.read_back(&target).unwrap();
+    let accent = rgba_of(fx.theme.color(Role::AccentBase));
+    let ground = rgba_of(fx.theme.color(Role::SurfaceBase));
+    // The curve's peak is at y = 10 (3/4 of the way to the control points'
+    // 5, from 25): inside below it, the surface above it and past the chord.
+    assert!(close(pixel(&px, 100, 50, 18), accent, 2), "{:?}", pixel(&px, 100, 50, 18));
+    assert!(close(pixel(&px, 100, 50, 6), ground, 2), "{:?}", pixel(&px, 100, 50, 6));
+    assert!(close(pixel(&px, 100, 50, 30), ground, 2), "{:?}", pixel(&px, 100, 50, 30));
+    assert!(close(pixel(&px, 100, 12, 12), ground, 2), "{:?}", pixel(&px, 100, 12, 12));
+}
+
 #[test]
 fn a_shadow_is_a_grown_black_quad_per_layer_painted_before_its_box() {
     let col = StyleRecord { display: Display::Column, align_items: AlignItems::Start, padding: [6; 4], ..Default::default() };

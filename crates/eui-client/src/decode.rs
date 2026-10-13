@@ -108,6 +108,8 @@ pub(crate) enum Work {
     Sound { max: usize },
     /// A moving picture, under what is left of the room for pictures.
     Movie { max: usize },
+    /// A SoundFont bank: its parts, concatenated (03 §7).
+    Bank,
 }
 
 impl Work {
@@ -118,6 +120,7 @@ impl Work {
             Self::Image => 0,
             Self::Sound { .. } => 1,
             Self::Movie { .. } => 2,
+            Self::Bank => 3,
         }
     }
 }
@@ -128,9 +131,10 @@ pub(crate) enum Done {
     Image(Result<Decoded, AssetError>),
     Sound(Result<eui_audio::Sound, String>),
     Movie(Result<eui_video::Movie, String>),
+    Bank(Result<eui_audio::midi::Bank, String>),
 }
 
-fn run(bytes: &[u8], work: Work) -> Done {
+fn run(bytes: &[u8], work: Work, bank: Option<&eui_audio::midi::Bank>) -> Done {
     // A decoder that panics on bytes a server chose must not take a pool
     // thread with it: the result would never come back, and the hash would
     // be "decoding" for the rest of the session. (A release build aborts on
@@ -139,13 +143,18 @@ fn run(bytes: &[u8], work: Work) -> Done {
     // unwind: tests, and `release-checked`.)
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match work {
         Work::Image => Done::Image(crate::assets::prepare_image(bytes)),
+        // A MIDI file is played with the node's bank when it has one; the
+        // decoder alone knows only the client's own voices.
+        Work::Sound { max } if bank.is_some() && eui_audio::midi::is_midi(bytes) => Done::Sound(eui_audio::midi::render(bytes, bank, max.min(eui_audio::MAX_BYTES)).map_err(|e| e.to_string())),
         Work::Sound { max } => Done::Sound(eui_audio::decode_within(bytes, None, max).map_err(|e| e.to_string())),
         Work::Movie { max } => Done::Movie(eui_video::decode_within(bytes, None, max).map_err(|e| e.to_string())),
+        Work::Bank => Done::Bank(eui_audio::midi::load_bank(bytes).map_err(|e| e.to_string())),
     }));
     caught.unwrap_or_else(|_| match work {
         Work::Image => Done::Image(Err(AssetError::Decode("the decoder panicked".into()))),
         Work::Sound { .. } => Done::Sound(Err("the decoder panicked".into())),
         Work::Movie { .. } => Done::Movie(Err("the decoder panicked".into())),
+        Work::Bank => Done::Bank(Err("the decoder panicked".into())),
     })
 }
 
@@ -179,13 +188,19 @@ impl Decoder {
     /// Hand `bytes` over to be decoded. Nothing happens if the same hash is
     /// already being decoded the same way.
     pub(crate) fn submit(&mut self, hash: Hash, bytes: Arc<Vec<u8>>, work: Work) {
+        self.submit_with(hash, bytes, work, None);
+    }
+
+    /// [`Self::submit`], a MIDI sound to be played with `bank`'s
+    /// instruments. `hash` then names the pair, not the file alone.
+    pub(crate) fn submit_with(&mut self, hash: Hash, bytes: Arc<Vec<u8>>, work: Work, bank: Option<Arc<eui_audio::midi::Bank>>) {
         let kind = work.kind();
         if !self.in_flight.insert((hash, kind)) {
             return;
         }
         let tx = self.tx.clone();
         let task: Task = Box::new(move || {
-            let _ = tx.send((hash, kind, run(&bytes, work)));
+            let _ = tx.send((hash, kind, run(&bytes, work, bank.as_deref())));
         });
         match pool() {
             Some(pool) => {
