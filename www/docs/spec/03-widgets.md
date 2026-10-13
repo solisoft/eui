@@ -1116,7 +1116,11 @@ a `\header`, `\relative`, clefs, keys, metres and tempo marks that may
 change at any bar, notes, rests, chords, ties, slurs and beams, repeats
 (`\repeat volta` with an `\alternative`'s bracketed endings, or the
 `\bar` signs `.|:`, `:|.`, `:|.|:`, and `.|:` before the first note,
-drawn after the clef, key and time as LilyPond draws it), bars of rest (`R1*4`, gathered
+drawn after the clef, key and time as LilyPond draws it), two voices on a
+staff (`<< { … } \\ { … } >>`: the first's stems up, the second's down,
+sharing columns, rests moved out of each other's way, a head a step from
+the other voice's set beside it; the second's silences as spacers `s`, the
+staff's clef, key, metre and bar lines in the first), bars of rest (`R1*4`, gathered
 into one bar with its count under `\compressEmptyMeasures`), tuplets
 (`\tuplet 3/2 { … }`, `\tuplet 6/4`, a span `\tuplet 3/2 4 { … }`,
 `\times 2/3`: numbered in italic, bracketed unless one beam holds them)

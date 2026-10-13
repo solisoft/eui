@@ -328,7 +328,8 @@ def score_master_bar(staff_bars, shortest)
   first = staff_bars[0]
   mb = {}
   for key in first.keys
-    mb[key] = first[key] unless key == "items"
+    # Spaced by its own columns, every staff's, not the first staff's voices'.
+    mb[key] = first[key] unless ["items", "cols", "poly"].includes?(key)
   end
   mb["staff_bars"] = staff_bars
   starts = []
@@ -378,7 +379,7 @@ def score_spread(sys)
     end
     for col in mb["items"]
       for ev in col["members"]
-        ev["x"] = col["x"]
+        ev["x"] = col["x"] + (ev["shift"] ?? 0.0)
       end
     end
     for sb in mb["staff_bars"]
@@ -588,6 +589,10 @@ def score_tokens(src)
       while i < n && cs[i] != "\n"
         i += 1
       end
+    elsif ch == "\\" && i + 1 < n && cs[i + 1] == "\\"
+      # `\\` between the voices of `<< { … } \\ { … } >>`.
+      out.push({"t": "\\\\", "v": "\\\\", "at": i})
+      i += 2
     elsif ch == "\\" && i + 1 < n && "<>!".contains(cs[i + 1])
       # The hairpins: `\<`, `\>`, and `\!` that ends one.
       out.push({"t": "cmd", "v": cs[i + 1], "at": i})
@@ -891,6 +896,8 @@ def score_music(toks, i, st)
 
     if kind == "cmd"
       i = score_command(toks, i, st)
+    elsif kind == "<" && score_twin?(toks, i, "<")
+      i = score_voices(toks, i, st)
     elsif kind == "word" || kind == "<"
       i = score_note(toks, i, st)
     elsif kind == "|"
@@ -910,6 +917,51 @@ def score_music(toks, i, st)
       score_refuse("'#{tk["v"]}' is not expected here", tk["at"])
     end
   end
+  i
+end
+
+# `<<` or `>>`: two of the sign written together.
+def score_twin?(toks, i, sign)
+  i + 1 < toks.length && toks[i]["t"] == sign && toks[i + 1]["t"] == sign && toks[i + 1]["at"] == toks[i]["at"] + 1
+end
+
+# Two voices on one staff, LilyPond's `<< { … } \\ { … } >>`: the first
+# with its stems up, the second with its stems down, sounding together.
+# Each starts from the pitch before `<<` under `\relative`, and what
+# follows goes on from the first voice's last, as LilyPond reads it. Inside,
+# notes and rests and what goes on them; a clef, a key, a metre, a bar line
+# or a repeat belongs to the staff, and is written outside.
+def score_voices(toks, i, st)
+  open_at = toks[i]["at"]
+  i += 2
+  start_ref = st["ref"]
+  after_ref = nil
+  voice = 1
+  st["events"].push({"k": "voices", "at": open_at})
+  while true
+    score_refuse("<< wants { music } \\\\ { music } >>", open_at) unless i < toks.length && toks[i]["t"] == "{"
+    st["ref"] = start_ref
+    st["voice"] = voice
+    i = score_music(toks, i + 1, st)
+    score_refuse("a voice that is never closed", open_at) if i >= toks.length
+    i += 1
+    after_ref = st["ref"] if voice == 1
+    if i < toks.length && toks[i]["t"] == "\\\\"
+      score_refuse("two voices on a staff are what this draws", toks[i]["at"]) if voice == 2
+      st["events"].push({"k": "voice_next", "at": toks[i]["at"]})
+      voice += 1
+      i += 1
+    elsif score_twin?(toks, i, ">")
+      i += 2
+      break
+    else
+      score_refuse("<< { … } \\\\ { … } >> is not closed with >>", open_at)
+    end
+  end
+  score_refuse("<< { … } >> with one voice: write the voices apart with \\\\", open_at) if voice < 2
+  st["voice"] = nil
+  st["ref"] = after_ref
+  st["events"].push({"k": "voices_end", "at": open_at})
   i
 end
 
@@ -960,6 +1012,11 @@ end
 def score_command(toks, i, st)
   tk = toks[i]
   word = tk["v"]
+  # The first voice carries the staff's changes, as the bars are its; the
+  # second only fills them.
+  if st["voice"] == 2 && ["clef", "key", "time", "bar", "tempo", "break", "pageBreak", "repeat", "alternative", "compressEmptyMeasures"].includes?(word)
+    score_refuse("\\#{word} belongs to the staff: write it in the first voice", tk["at"])
+  end
   arg = i + 1 < toks.length ? toks[i + 1] : nil
   evs = st["events"]
   if word == "clef"
@@ -1188,7 +1245,9 @@ def score_note(toks, i, st)
     i += 1
   else
     word = tk["v"]
-    if word == "r" || word == "R"
+    if word == "r" || word == "R" || word == "s"
+      # `s`, a spacer: time and nothing drawn, where a second voice is silent.
+      score_refuse("a spacer s is for the second voice of << \\\\ >>", tk["at"]) if word == "s" && st["voice"] != 2
       rest = word
     else
       name = score_pitch_name(word)
@@ -1228,6 +1287,10 @@ def score_note(toks, i, st)
     ticks += add
   end
   ev = {"k": "note", "pitches": pitches, "base": base, "dots": dots, "ticks": ticks, "at": tk["at"], "i": st["items"]}
+  unless st["voice"].nil?
+    score_refuse("a run of bars' rest is the staff's: write it outside << \\\\ >>", tk["at"]) if count > 1
+    ev["voice"] = st["voice"]
+  end
   tup = st["tuplet"]
   unless tup.nil?
     # In a tuplet a note lasts d/n of what it says. A span starts a new
@@ -1251,6 +1314,7 @@ def score_note(toks, i, st)
     ev["k"] = "rest"
     ev["full"] = rest == "R"
     ev["count"] = count
+    ev["spacer"] = true if rest == "s"
   end
   st["events"].push(ev)
   i
@@ -1293,6 +1357,10 @@ def score_measures(events)
   tempo = nil
   volta_open = nil
   tuplet_bar = {}
+  # Ticks from the start of the piece, and where each bar starts: what the
+  # second voice of `<< \\\\ >>` finds its bars by (`score_voice_two`).
+  tick_at = 0
+  poly = nil
   # A run of whole-bar rests, R1*4, is one bar with a count when the music
   # asked to compress them, and that many bars of a rest each when not —
   # LilyPond's default.
@@ -1316,8 +1384,30 @@ def score_measures(events)
     end
     next if kind == "compress"
 
+    if kind == "voices"
+      poly = {"from": tick_at, "voice": 1}
+      next
+    end
+    if kind == "voice_next"
+      poly["voice"] = 2
+      poly["to"] = tick_at
+      poly["at"] = poly["from"]
+      poly["seen"] = {}
+      poly["seen_bar"] = -1
+      poly["tied"] = {}
+      next
+    end
+    if kind == "voices_end"
+      score_refuse("the voices of << \\\\ >> are not as long as each other", ev["at"]) unless poly["at"] == poly["to"]
+      poly = nil
+      next
+    end
+    if !poly.nil? && poly["voice"] == 2
+      score_voice_two(bars, ev, poly)
+      next
+    end
     if cur.nil?
-      cur = {"clef": clef, "fifths": fifths, "time": [tn, td], "items": [], "bar": "|", "changes": {}, "length": tn * score_whole() / td}
+      cur = {"clef": clef, "fifths": fifths, "time": [tn, td], "items": [], "bar": "|", "changes": {}, "length": tn * score_whole() / td, "tick0": tick_at}
       cur["volta_in"] = volta_open unless volta_open.nil?
       bars.push(cur)
       pos = 0
@@ -1443,7 +1533,18 @@ def score_measures(events)
     end
     cur["items"].push(ev)
     pos += ev["ticks"]
+    tick_at += ev["ticks"] * (ev["mm"] ?? 1)
     cur = nil if pos == cur["length"]
+  end
+  # A bar with two voices lists its notes by when they start, the first
+  # voice's first: the order the columns and the drawing read them in.
+  for b in bars
+    # Not `if items.any? { … }`: a block in an `if`'s condition does not parse.
+    two = b["items"].any? { |ev| ev["voice"] == 2 }
+    if two
+      b["poly"] = true
+      b["items"] = b["items"].sort_by { |ev| ev["start"] * 4 + (ev["voice"] ?? 1) }
+    end
   end
   bars = bars.filter { |b| b["items"].length > 0 || b["changes"].keys.length > 0 }
   score_refuse("there is no music", 0) if bars.length == 0
@@ -1461,6 +1562,62 @@ def score_measures(events)
     end
   end
   bars
+end
+
+# A note or a rest of the second voice, put in the bar the first voice made
+# at the same moment. Its accidentals are its own voice's to remember, from
+# the key at each bar line; its ties too.
+def score_voice_two(bars, ev, poly)
+  at = poly["at"]
+  bar = nil
+  bi = -1
+  for b, k in bars
+    if b["tick0"] <= at && at < b["tick0"] + b["length"]
+      bar = b
+      bi = k
+    end
+  end
+  score_refuse("the second voice runs past the first", ev["at"]) if bar.nil?
+  pos = at - bar["tick0"]
+  score_refuse("a note runs past the bar line (bar #{bi + 1})", ev["at"]) if pos + ev["ticks"] > bar["length"]
+  if ev["spacer"] == true
+    poly["at"] = at + ev["ticks"]
+    return nil
+  end
+  ev["start"] = pos
+  ev["bar"] = bi
+  # Under the clef and the key of the bar it lands in.
+  alters = score_key_alters(bar["fifths"])
+  clef = bar["clef"]
+  if poly["seen_bar"] != bi
+    poly["seen"] = {}
+    poly["seen_bar"] = bi
+  end
+  seen = poly["seen"]
+  if ev["k"] == "note"
+    mid = score_clef_mid(clef)
+    heads = []
+    for p in ev["pitches"]
+      d = p["d"]
+      key = str(d)
+      now = seen.has_key(key) ? seen[key] : alters[score_mod(d, 7)]
+      show = p["alter"] != now
+      show = false if poly["tied"].has_key(key) && poly["tied"][key] == p["alter"]
+      seen[key] = p["alter"]
+      heads.push({"pos": d - mid, "d": d, "alter": p["alter"], "acc": show ? p["alter"] : nil})
+    end
+    ev["heads"] = heads.sort_by { |hd| hd["pos"] }
+    poly["tied"] = {}
+    if ev["tie"] == true
+      for p in ev["pitches"]
+        poly["tied"][str(p["d"])] = p["alter"]
+      end
+    end
+  else
+    poly["tied"] = {}
+  end
+  bar["items"].push(ev)
+  poly["at"] = at + ev["ticks"]
 end
 
 # ---- Stems and beams -------------------------------------------------------
@@ -1496,11 +1653,32 @@ end
 def score_beams(bars)
   for bar in bars
     wins = score_beam_windows(bar["time"])
-    groups = []
-    cur = []
-    manual = false
-    win = -1
+    for evs in score_voice_lists(bar)
+      score_beam_voice(evs, wins)
+    end
     for ev in bar["items"]
+      ev["up"] = score_stem_up?(ev["heads"]) if ev["k"] == "note" && ev["beam"].nil? && ev["voice"].nil?
+      ev["up"] = ev["voice"] == 1 if ev["k"] == "note" && !ev["voice"].nil?
+    end
+  end
+end
+
+# A bar's notes and rests a voice at a time: everything but the second
+# voice, then the second — one list for a bar of one voice.
+def score_voice_lists(bar)
+  return [bar["items"]] unless bar["poly"] == true
+
+  [bar["items"].filter { |ev| ev["voice"] != 2 }, bar["items"].filter { |ev| ev["voice"] == 2 }]
+end
+
+# One voice's beams in a bar: by the metre's windows, `[ ]` first; a
+# voice of two stems the way its voice points, the first up.
+def score_beam_voice(evs, wins)
+  groups = []
+  cur = []
+  manual = false
+  win = -1
+  for ev in evs
       flags = ev["k"] == "note" ? score_flags(ev["base"]) : 0
       if manual
         score_refuse("a beam over a note that has no flag", ev["at"]) if flags == 0 && ev["k"] == "note"
@@ -1567,16 +1745,13 @@ def score_beams(bars)
         highest = ev["heads"][-1]["pos"] if ev["heads"][-1]["pos"] > highest
       end
       up = -lowest > highest
+      up = g[0]["voice"] == 1 unless g[0]["voice"].nil?
       group = {"notes": g, "up": up}
       for ev in g
         ev["beam"] = group
         ev["up"] = up
       end
     end
-    for ev in bar["items"]
-      ev["up"] = score_stem_up?(ev["heads"]) if ev["k"] == "note" && ev["beam"].nil?
-    end
-  end
 end
 
 # ---- Columns: what each note occupies, and how far it wants the next -------
@@ -1689,7 +1864,66 @@ def score_columns(bars, shortest)
       lefts = shifted ? hw - SCORE_RULE["stem"] : 0.0
       ev["left"] = lefts + score_place_accidentals(ev)
     end
+    score_poly_cols(bar, shortest) if bar["poly"] == true
   end
+end
+
+# What a bar is spaced by: its notes and rests one after another, or, with
+# two voices, its columns — what starts at each moment, both voices'.
+def score_spacers(bar)
+  bar["cols"] ?? bar["items"]
+end
+
+# A bar of two voices in columns, as the staves of a system share theirs
+# (`score_master_bar`), each voice read on its own for what follows a note.
+# Where the two voices' heads meet — a unison or a second — the first
+# voice's note stands a head to the right, its stem clear of the other's,
+# as LilyPond moves the stem-up voice.
+def score_poly_cols(bar, shortest)
+  starts = []
+  for ev in bar["items"]
+    starts.push(ev["start"]) unless starts.includes?(ev["start"])
+  end
+  starts = starts.sort()
+  length = bar["length"]
+  voices = score_voice_lists(bar)
+  cols = []
+  for at, ci in starts
+    upto = ci + 1 < starts.length ? starts[ci + 1] : length
+    col = {"k": "col", "start": at, "ticks": upto - at, "ideal": nil, "left": 0.0, "right": 0.0, "members": []}
+    for evs in voices
+      for ev, j in evs
+        next unless ev["start"] == at
+
+        col["members"].push(ev)
+        want = ev["ticks"] <= upto - at ? ev["ideal"] : score_duration_space(upto - at, shortest)
+        col["ideal"] = col["ideal"].nil? ? want : score_min(col["ideal"], want)
+        col["left"] = score_max(col["left"], ev["left"])
+        after = j + 1 < evs.length ? evs[j + 1]["start"] : length
+        col["right"] = score_max(col["right"], ev["right"]) if after == upto
+      end
+    end
+    ones = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] != 2 }
+    twos = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] == 2 }
+    meet = false
+    for a in ones
+      for b in twos
+        for ha in a["heads"]
+          for hb in b["heads"]
+            meet = true if (ha["pos"] - hb["pos"]).abs <= 1
+          end
+        end
+      end
+    end
+    if meet
+      for a in ones
+        a["shift"] = a["head_w"]
+        col["right"] = score_max(col["right"], a["right"] + a["head_w"])
+      end
+    end
+    cols.push(col)
+  end
+  bar["cols"] = cols
 end
 
 # A second in a chord cannot share the stem's side: walking from the end
@@ -1824,7 +2058,7 @@ end
 # The gaps of a bar at a stretch `k`: from its start to the first head,
 # between heads, and from the last to the bar line.
 def score_gaps(bar, k)
-  items = bar["items"]
+  items = score_spacers(bar)
   out = []
   return [score_max(6.0 * k, 4.0)] if items.length == 0
 
@@ -1844,9 +2078,10 @@ end
 # The springs of a bar: the room its notes ask for by their durations,
 # which is what stretches when a line is justified.
 def score_bar_springs(bar)
-  return 6.0 if bar["items"].length == 0
+  spacers = score_spacers(bar)
+  return 6.0 if spacers.length == 0
 
-  bar["items"].reduce(fn(acc, ev) acc + ev["ideal"], 0.0)
+  spacers.reduce(fn(acc, ev) acc + ev["ideal"], 0.0)
 end
 
 # A flat summary of a bar's opening changes — a bar itself is cyclic (its
@@ -2060,7 +2295,7 @@ def score_line_terms(bars)
   ideals = []
   leasts = []
   for bar, i in bars
-    items = bar["items"]
+    items = score_spacers(bar)
     if items.length == 0
       ideals.push(6.0)
       leasts.push(4.0)
@@ -2130,8 +2365,12 @@ def score_place(systems, width, left, indent, rest = 0.0)
         x += span
       else
         x += gaps[0]
-        for ev, i in items
+        for ev, i in score_spacers(bar)
           ev["x"] = x
+          # A column's notes, both voices', at its place.
+          for m in ev["members"] ?? []
+            m["x"] = x + (m["shift"] ?? 0.0)
+          end
           x += gaps[i + 1]
         end
       end
@@ -2351,11 +2590,21 @@ def score_tuplet_place(tg)
   {"x0": x0, "x1": x1, "ya": ya, "yb": yb, "up": up, "bracket": !beamed, "label": str(tg["n"])}
 end
 
+# Where a rest of two voices stands: the first voice's two spaces up, the
+# second's two down, out of each other's way; a rest of one voice on the
+# staff's middle.
+def score_rest_lift(ev)
+  return -2.0 if ev["voice"] == 1
+  return 2.0 if ev["voice"] == 2
+
+  0.0
+end
+
 # How far a note or a rest reaches on one side, in staff y: its stem's end
 # or the outside of its heads; a rest, the middle of the staff and a space.
 def score_tuplet_edge(ev, up)
   if ev["k"] != "note"
-    return up ? 1.0 : 3.0
+    return (up ? 1.0 : 3.0) + score_rest_lift(ev)
   end
 
   y_top = score_y(ev["heads"][-1]["pos"]) - 0.5
@@ -2370,7 +2619,7 @@ end
 # How far a note or a rest reaches up and down before anything is put on
 # it: its heads and its stem, or a rest's middle space and a half.
 def score_item_extent(ev)
-  return [1.0, 3.0] if ev["k"] != "note"
+  return [1.0 + score_rest_lift(ev), 3.0 + score_rest_lift(ev)] if ev["k"] != "note"
 
   [score_tuplet_edge(ev, true), score_tuplet_edge(ev, false)]
 end
@@ -2398,8 +2647,8 @@ def score_scripts(sys)
       next if ev["scripts"].nil?
 
       xc = ev["x"] + score_item_w(ev) / 2.0
-      heads_top = ev["k"] == "note" ? score_y(ev["heads"][-1]["pos"]) - 0.5 : 1.0
-      heads_bottom = ev["k"] == "note" ? score_y(ev["heads"][0]["pos"]) + 0.5 : 3.0
+      heads_top = ev["k"] == "note" ? score_y(ev["heads"][-1]["pos"]) - 0.5 : 1.0 + score_rest_lift(ev)
+      heads_bottom = ev["k"] == "note" ? score_y(ev["heads"][0]["pos"]) + 0.5 : 3.0 + score_rest_lift(ev)
       up_cursor = heads_top
       down_cursor = heads_bottom
       # A side the stem is on starts past the stem's end.
@@ -2987,9 +3236,16 @@ def score_curves(parsed, systems)
   end
   # Ties: each head of a tied note to the same pitch in the next.
   for ev, i in notes
-    next unless ev["tie"] == true && i + 1 < notes.length
+    next unless ev["tie"] == true
 
-    nxt = notes[i + 1]
+    nxt = nil
+    jj = i + 1
+    while jj < notes.length && nxt.nil?
+      nxt = notes[jj] if score_voice_of(notes[jj]) == score_voice_of(ev)
+      jj += 1
+    end
+    next if nxt.nil?
+
     count = ev["heads"].length
     for hd, hi in ev["heads"]
       other = nxt["heads"].find { |o| o["d"] == hd["d"] }
@@ -2998,18 +3254,28 @@ def score_curves(parsed, systems)
       # Upper half of a chord over, lower half under; a single note away
       # from its stem.
       over = count == 1 ? !ev["up"] : hi >= count / 2
+      # Two voices: the first's ties over, the second's under.
+      over = ev["voice"] == 1 unless ev["voice"].nil?
       score_tie(systems, ev, hd, nxt, other, over)
     end
   end
   # Slurs: from the note that opens one to the note that closes it.
-  open = []
+  # Each voice's slurs close on its own notes.
+  open = {"1": [], "2": []}
   for ev in notes
-    open.push(ev) if ev["slur_on"] == true
-    if ev["slur_off"] == true && open.length > 0
-      first = open.pop()
+    mine = open[str(score_voice_of(ev))]
+    mine.push(ev) if ev["slur_on"] == true
+    if ev["slur_off"] == true && mine.length > 0
+      first = mine.pop()
       score_slur(systems, notes, first, ev)
     end
   end
+end
+
+# The voice a note sings in: the second, or the first — which a note
+# outside `<< \\\\ >>` goes on as.
+def score_voice_of(ev)
+  ev["voice"] == 2 ? 2 : 1
 end
 
 def score_tie(systems, ev, hd, nxt, other, over)
@@ -3029,10 +3295,12 @@ def score_tie(systems, ev, hd, nxt, other, over)
 end
 
 def score_slur(systems, notes, first, last)
-  ups = notes.filter { |ev| ev["n"] >= first["n"] && ev["n"] <= last["n"] }
+  ups = notes.filter { |ev| ev["n"] >= first["n"] && ev["n"] <= last["n"] && score_voice_of(ev) == score_voice_of(first) }
   all_up = ups.all? { |ev| ev["up"] }
-  # On the heads' side when the stems agree, above when they do not.
+  # On the heads' side when the stems agree, above when they do not; of
+  # two voices, the first's above and the second's below.
   over = all_up ? false : true
+  over = first["voice"] == 1 unless first["voice"].nil?
   dir = over ? -1.0 : 1.0
   ends = [first, last].map { |ev| score_slur_end(ev, over) }
   inner = ups.filter { |ev| ev["n"] != first["n"] && ev["n"] != last["n"] }
@@ -4310,16 +4578,16 @@ def score_draw_rest(paths, ink, ev, top, sp)
     return nil
   end
   if ev["whole_bar"] == true
-    score_draw_glyph(paths, ink, "restWhole", ev["x"], top + 1.0, sp)
+    score_draw_glyph(paths, ink, "restWhole", ev["x"], top + 1.0 + score_rest_lift(ev), sp)
     return nil
   end
   name = score_rest_name(ev["base"])
-  y = ev["base"] == 1 ? 1.0 : 2.0
+  y = (ev["base"] == 1 ? 1.0 : 2.0) + score_rest_lift(ev)
   score_draw_glyph(paths, ink, name, ev["x"], top + y, sp)
   if ev["dots"] > 0
     dx = ev["x"] + score_glyph(name)["advance"] + 0.3
     for _ in 0..ev["dots"]
-      score_draw_glyph(paths, ink, "augmentationDot", dx, top + 1.5, sp)
+      score_draw_glyph(paths, ink, "augmentationDot", dx, top + 1.5 + score_rest_lift(ev), sp)
       dx += 0.6
     end
   end

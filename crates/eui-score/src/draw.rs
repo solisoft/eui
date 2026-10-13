@@ -10,7 +10,7 @@ use crate::engrave::{
     Engraved, Line, System,
 };
 use crate::glyphs::{glyph, letters, Weight};
-use crate::marks::{dyn_letters, DynEl, TempoMark, TupletPlace, Volta};
+use crate::marks::{dyn_letters, rest_lift, DynEl, TempoMark, TupletPlace, Volta};
 use crate::measure::{Bar, Beam, Opening};
 use crate::parse::{Clef, Ev, GroupKind, Kind};
 use crate::text::{args_of, em, text_box, text_width};
@@ -692,16 +692,16 @@ fn draw_rest(pen: &mut Pen, ev: &Ev, top: f64) {
         return;
     }
     if ev.whole_bar {
-        pen.glyph("restWhole", ev.x, top + 1.0);
+        pen.glyph("restWhole", ev.x, top + 1.0 + rest_lift(ev));
         return;
     }
     let name = rest_name(ev.base);
-    let y = if ev.base == 1 { 1.0 } else { 2.0 };
+    let y = if ev.base == 1 { 1.0 } else { 2.0 } + rest_lift(ev);
     pen.glyph(name, ev.x, top + y);
     if ev.dots > 0 {
         let mut dx = ev.x + glyph(name).advance + 0.3;
         for _ in 0..ev.dots {
-            pen.glyph("augmentationDot", dx, top + 1.5);
+            pen.glyph("augmentationDot", dx, top + 1.5 + rest_lift(ev));
             dx += 0.6;
         }
     }

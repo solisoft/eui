@@ -446,16 +446,16 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 5 654 lines; `serde_json` its one dependency, for the font data.
+writers. 6 079 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 4.3 MB) are what the Soli engraver drew for the 20
-  pieces of `tests/corpus/` — 4 749 paths on a 900 px screen, 23 A4 pages
-  and 4 756 paths on them, a MIDI file and a PDF each — and
+  (`tests/golden/`, 4.4 MB) are what the Soli engraver drew for the 23
+  pieces of `tests/corpus/` — 4 968 paths on a 900 px screen, 26 A4 pages
+  and 4 975 paths on them, a MIDI file and a PDF each — and
   `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
   agree to the hundredth of a pixel and the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
-  30 refusals to theirs, character position included. Both pass. The last
+  38 refusals to theirs, character position included. Both pass. The last
   difference to go was rounding: Soli's `round(2)` rounds the shortest
   decimal that reads back as the number, so 22.884999… is 22.88 there and
   22.89 under `(v * 100).round()`, and two PDFs differed by that digit.
@@ -2496,6 +2496,20 @@ that costs 2 ms against the 100 ms they cost to write. A part's own staff
 gathers its bars of rest (the flute's three pages become two).
 `tests/score_spec.sl` is 96 tests.
 
+**And two voices** (2026-10-13). A staff takes LilyPond's
+`<< { … } \\ { … } >>`: the first voice's stems up and the second's down,
+notes that start together in one column, each voice's beams, ties and slurs
+its own, rests two spaces up or down, and a head a step from the other
+voice's set a head to the right. The second voice is placed in the bars the
+first made, under each bar's clef and key; its silences are spacers (`s`).
+Both engravers do it, held together by three new golden pieces and eight
+refusals (`eui-score`, 23 pieces, 38 refusals, all passing). In the editor a
+track has a second voice: Voice 1 / Voice 2 beside the tools (Ctrl+Alt+1,
+Ctrl+Alt+2), every key and click working on the voice chosen, an
+insert-mode press in the second writing at the moment pressed; the source
+gives the part `<< { first } \\ { second } >>`, the second filled with
+spacers to the first's end. `tests/score_spec.sl` is 107 tests.
+
 **And MIDI instruments** (2026-10-13, protocol 9, built and not yet heard
 end to end). A node holding a `midi` handler hears the person's keyboard
 (06 §1.4) through the new `midi` capability; the window opens the
@@ -2520,6 +2534,22 @@ music's own stream unchanged to within 4 bytes. The goldens were drawn
 again by the Soli engraver — the same script draws the old ones back byte
 for byte from the previous catalogue — and the Rust engraver agrees with
 every path and every PDF byte. `tests/score_spec.sl` is 107 tests.
+
+**And an editor that keeps its frame** (2026-10-13). An insert-mode press
+in another value on a note no longer writes over it: the note stays, and
+the new one goes into the track's second voice from the moment the note
+starts — an eighth on a quarter sounds with it, stem down — and editing
+carries on in that voice. A rest is still written over. The window is a
+frame now: a bar across the top holds Play, Undo and the four title-page
+fields side by side; the toolbar runs down the left in named groups (mode,
+voice, value, accidental, join, add a note, change the note); and only the
+score beside it scrolls. EUI has no `position: fixed`, so the toolbar and
+the score are each exactly the window's height less the bar's 132 px, each
+its own `scroll`. On the full score, where a click picks and writes
+nothing, the toolbar drops the insert tool and the voices, and N and
+Ctrl+Alt+1/2 do nothing there. The sheet is the window less the 212 px
+toolbar: at 1 400 px it is 1 091 px wide, still 12 px a staff space.
+`tests/score_spec.sl` is 113 tests.
 
 ## Not started
 

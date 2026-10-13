@@ -51,6 +51,13 @@ release. A wire change lands here first, is released, and then the pin moves.
   calls it as `eui_score_layout`, `eui_score_bands`, `eui_score_midi` and
   `eui_score_pdf`; `score()` and the score editor use them when the server
   has them.
+- In the score editor's Insert mode, a note written in another value onto
+  a note no longer replaces it: it goes into the second voice, from where
+  that note starts, and both sound.
+- The score editor keeps its frame: Play, Undo and the title, subtitle,
+  composer and arranger fields stay in a bar on top, the toolbar stays down
+  the left, and only the score scrolls. On the full score the toolbar
+  leaves out the insert tool and the voices.
 - The score's PDF has a footer on every page — the title at the left, the
   page's number out of how many at the right — and the titles stand clear
   of the top margin and of the first system, on a screen and on paper.
@@ -63,6 +70,11 @@ release. A wire change lands here first, is released, and then the pin moves.
   writes a new one there, in the value the palette shows — which in that
   mode is the next note's, never the selected one's — while the pointer
   goes on picking notes up to move them.
+- **Two voices on a staff**: `score()` and `eui-score` read LilyPond's
+  `<< { … } \\ { … } >>` — stems up and down, shared columns, rests out
+  of the way, spacers `s` — and the score editor writes them: Voice 1 /
+  Voice 2 beside the tools (Ctrl+Alt+1, Ctrl+Alt+2), every key and click
+  working on the voice chosen.
 - In Insert mode a value other than the note's writes over it: an eighth
   on a quarter takes its first half and leaves an eighth rest, a half on a
   quarter covers the next one too; nothing after moves.

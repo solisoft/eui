@@ -50,6 +50,8 @@ const SCORE_ED_SCOPES = ["Whole piece", "From the selected bar"]
 # What a press on the staff does: pick a note up to move it, or write a new
 # one where it lands (`score_ed_insert_at`). N switches, Escape goes back.
 const SCORE_ED_TOOLS = ["Pointer", "Insert"]
+# Which voice the keys and clicks write in (Ctrl+Alt+1, Ctrl+Alt+2).
+const SCORE_ED_VOICES = ["Voice 1", "Voice 2"]
 const SCORE_ED_VIEWS = ["Screen", "A4 page"]
 # The height of a row of track chips, gap included, in px.
 const SCORE_ED_CHIP_ROW = 28
@@ -90,7 +92,7 @@ end
 def score_ed_answer(state, ed_event, params, props)
   match ed_event {
     "track" => score_ed_switch(score_ed_flag(state, "full_view", false), int(props["track"] ?? 0)),
-    "full_view" => score_ed_flag(state, "full_view", true),
+    "full_view" => score_ed_full_on(state),
     "track_add" => score_ed_track_add(state),
     "track_remove" => score_ed_track_remove(state),
     "track_up" => score_ed_track_move(state, -1),
@@ -129,7 +131,8 @@ def score_ed_answer(state, ed_event, params, props)
     "time_open" => score_ed_flag(state, "time_open", !(state["time_open"] == true)),
     "time_pick" => score_ed_settings(score_ed_flag(state, "time_open", false), "time", props["value"]),
     "scope" => SCORE_ED_SCOPES.includes?(props["option"]) ? score_ed_flag(state, "scope", props["option"]) : state,
-    "tool" => SCORE_ED_TOOLS.includes?(props["option"]) ? score_ed_flag(state, "tool", props["option"]) : state,
+    "tool" => SCORE_ED_TOOLS.includes?(props["option"]) && !score_ed_full_view(state) ? score_ed_flag(state, "tool", props["option"]) : state,
+    "voice" => SCORE_ED_VOICES.includes?(props["option"]) && !score_ed_full_view(state) ? score_ed_set_voice(state, SCORE_ED_VOICES.index_of(props["option"]) + 1) : state,
     "view" => SCORE_ED_VIEWS.includes?(props["option"]) ? score_ed_flag(state, "view", props["option"]) : state,
     "panel" => SCORE_ED_PANELS.includes?(props["tab"]) ? score_ed_flag(state, "panel", (state["panel"] ?? SCORE_ED_PANELS[0]) == props["tab"] ? "none" : props["tab"]) : state,
     "bpm" => score_ed_tempo(state, score_ed_int(params["payload"] ?? ""), state["tempo_text"], state["mark_tempo"]),
@@ -228,7 +231,7 @@ end
 # Every edit goes through here: what it is about to change is copied onto
 # the undo stack first, and the redo stack is dropped, as every editor does.
 def score_ed_remember(state)
-  snap = score_ed_copy({"notes": state["notes"], "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0, "tracks": score_ed_tracks(state)})
+  snap = score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0, "tracks": score_ed_tracks(state)})
   undo = state["undo"] ?? []
   undo.push(snap)
   if undo.length > SCORE_ED_UNDO
@@ -259,6 +262,8 @@ def score_ed_restore(state, snap)
   state["tracks"] = snap["tracks"] if snap.has_key("tracks")
   state["track"] = snap["track"] if snap.has_key("track")
   state["notes"] = snap["notes"]
+  state["notes2"] = snap["notes2"] if snap.has_key("notes2")
+  state["voice"] = snap["voice"] if snap.has_key("voice")
   state["clef"] = snap["clef"]
   state["key"] = snap["key"]
   state["time"] = snap["time"]
@@ -272,7 +277,7 @@ def score_ed_undo(state)
 
   snap = undo.pop()
   redo = state["redo"] ?? []
-  redo.push(score_ed_copy({"notes": state["notes"], "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  redo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
@@ -284,7 +289,7 @@ def score_ed_redo(state)
 
   snap = redo.pop()
   undo = state["undo"] ?? []
-  undo.push(score_ed_copy({"notes": state["notes"], "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
+  undo.push(score_ed_copy({"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"]}))
   state["undo"] = undo
   state["redo"] = redo
   score_ed_restore(state, snap)
@@ -681,6 +686,7 @@ end
 # `rep_end` on the note that closes it. Pressed again, it comes off. The
 # signs are bar lines, so they follow the bar when notes before it change.
 def score_ed_repeat(state, which)
+  return score_ed_flag(state, "error", "Repeats and breaks are the first voice's: switch to Voice 1 (Ctrl+Alt+1).") if state["voice"] == 2
   return score_ed_flag(state, "error", "Repeats and breaks are set on the first track: they are the bars', and every staff has them.") if score_ed_tracks(state).length > 1 && (state["track"] ?? 0) != 0
   sel = state["sel"] ?? -1
   return state if sel < 0 || sel >= state["notes"].length
@@ -879,15 +885,53 @@ end
 # Every track with its notes and clef, the active one's from the state.
 def score_ed_all(state)
   active = state["track"] ?? 0
+  mine = score_ed_v1(state)
   out = []
   for trk, k in score_ed_tracks(state)
     if k == active
-      out.push(trk.merge({"notes": state["notes"], "clef": state["clef"]}))
+      out.push(trk.merge({"notes": mine["notes"], "notes2": mine["notes2"] ?? [], "clef": state["clef"]}))
     else
-      out.push(trk.merge({"notes": trk["notes"] ?? [], "clef": trk["clef"] ?? "Treble"}))
+      out.push(trk.merge({"notes": trk["notes"] ?? [], "notes2": trk["notes2"] ?? [], "clef": trk["clef"] ?? "Treble"}))
     end
   end
   out
+end
+
+# ---- Two voices -------------------------------------------------------------
+#
+# A track has a second voice beside its first (`notes2`), written as
+# `<< { first } \\\\ { second } >>`: stems up and down, sounding together.
+# The voice being edited is the one in `state["notes"]` — every key, click
+# and value works on it as on a single voice — and the other waits in
+# `state["notes2"]`; `state["voice"]` says which is which.
+
+# The state as the first voice sees it: what the writers and the bars read.
+def score_ed_v1(state)
+  return state unless state["voice"] == 2
+
+  state.merge({"notes": state["notes2"] ?? [], "notes2": state["notes"], "voice": 1})
+end
+
+# Edit voice `v`: the other one waits.
+def score_ed_set_voice(state, v)
+  current = state["voice"] ?? 1
+  return state if v == current || (v != 1 && v != 2)
+
+  other = state["notes2"] ?? []
+  state["notes2"] = state["notes"]
+  state["notes"] = other
+  state["voice"] = v
+  state["sel"] = -1
+  state["typing"] = false
+  state["slur_from"] = -1
+  state["pin_from"] = -1
+  state
+end
+
+# Whether a second voice has anything in it to write: a note, or a rest
+# someone wrote.
+def score_ed_voiced?(notes2)
+  (notes2 ?? []).any? { |nt| !nt["rest"] || nt["spacer"] != true }
 end
 
 # Another track to edit: the active one's notes go back to its entry, the
@@ -897,6 +941,10 @@ def score_ed_switch(state, k)
   active = state["track"] ?? 0
   return state if k == active || k < 0 || k >= tracks.length
 
+  state = score_ed_set_voice(state, 1)
+  tracks[active]["notes2"] = state["notes2"] ?? []
+  state["notes2"] = tracks[k]["notes2"] ?? []
+  tracks[k]["notes2"] = nil
   tracks[active]["notes"] = state["notes"]
   tracks[active]["clef"] = state["clef"]
   state["notes"] = tracks[k]["notes"] ?? []
@@ -1131,6 +1179,7 @@ def score_ed_layout_track(state, k, info, opts)
     words.push(titles) if titles != ""
   end
   words.push("\\clef " + {"Treble": "treble", "Bass": "bass", "Alto": "alto"}[trk["clef"]] + " \\key " + SCORE_ED_KEY_LY[fifths + 7] + " \\major \\time " + state["time"])
+  head = words.length
   if opts["tempo"] == true
     tempo_ly = score_ed_tempo_ly(state["tempo_text"] ?? "", state["tempo"], state["mark_tempo"] != false, state["tempo_base"] ?? 4)
     words.push(tempo_ly) if tempo_ly != ""
@@ -1201,7 +1250,7 @@ def score_ed_layout_track(state, k, info, opts)
   elsif notes.length > 0
     words.push("\\bar \"|.\"")
   end
-  {"words": words, "map": owners}
+  {"words": words, "map": owners, "head": head}
 end
 
 # A bar's marks, written where it starts: its changes (the tempo only on a
@@ -1253,7 +1302,7 @@ def score_ed_write_full(state, muting)
   info = score_ed_bar_marks(state)
   staves = []
   for trk, k in tracks
-    music = score_ed_layout_track(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
+    music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
     heard = muting && trk["mute"] == true ? trk.merge({"volume": 0}) : trk
     staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }")
   end
@@ -1300,6 +1349,10 @@ def score_ed_settings(state, which, value)
   allowed = {"clef": SCORE_ED_CLEFS, "time": SCORE_ED_TIMES, "key": SCORE_ED_KEYS}[which]
   return state unless allowed.includes?(value)
 
+  if state["voice"] == 2 && state["scope"] == SCORE_ED_SCOPES[1] && which != "clef"
+    state["error"] = "A change from a bar is the first voice's: switch to Voice 1 (Ctrl+Alt+1)."
+    return state
+  end
   at = score_ed_scope_at(state, which)
   if at > 0 && score_ed_tracks(state).length > 1 && (state["track"] ?? 0) != 0
     return score_ed_settings_first(state, which, value, at)
@@ -1730,6 +1783,15 @@ def score_ed_full_view(state)
   state["full_view"] == true && score_ed_tracks(state).length > 1
 end
 
+# The full score shown: a click there picks a staff and a note, so the
+# pointer is the tool and the first voice the one edited — the full score
+# is drawn from, and picked in, each staff's first voice.
+def score_ed_full_on(state)
+  state = score_ed_set_voice(state, 1)
+  state["tool"] = SCORE_ED_TOOLS[0]
+  score_ed_flag(state, "full_view", true)
+end
+
 # Staves times notes past what engraves in a blink.
 def score_ed_conductor_big(state)
   count = 0
@@ -1835,7 +1897,7 @@ def score_ed_lay_conductor(state)
   firsts = []
   count = 0
   for trk, k in score_ed_all(state)
-    laid = score_ed_layout_track(state, k, info, {"header": false, "tempo": k == 0})
+    laid = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})
     firsts.push(count)
     maps.push(laid["map"])
     count += laid["map"].length
@@ -1930,6 +1992,8 @@ def score_ed_key(state, key, mods)
   return score_ed_switch(state, (state["track"] ?? 0) + 1) if alt && key == "ArrowDown"
 
   if ctrl
+    return score_ed_set_voice(state, 1) if alt && key == "1" && !score_ed_full_view(state)
+    return score_ed_set_voice(state, 2) if alt && key == "2" && !score_ed_full_view(state)
     return score_ed_tuplet(state, 3) if key == "3"
     return score_ed_tuplet(state, 6) if key == "6"
     return score_ed_redo(state) if lower == "y" || (lower == "z" && shift)
@@ -1939,7 +2003,7 @@ def score_ed_key(state, key, mods)
 
     return state
   end
-  return score_ed_flag(state, "tool", score_ed_inserting(state) ? SCORE_ED_TOOLS[0] : SCORE_ED_TOOLS[1]) if lower == "n"
+  return score_ed_flag(state, "tool", score_ed_inserting(state) ? SCORE_ED_TOOLS[0] : SCORE_ED_TOOLS[1]) if lower == "n" && !score_ed_full_view(state)
   step = "cdefgab".index_of(lower)
   return score_ed_insert(state, step, shift) if key.length == 1 && step >= 0
   return score_ed_insert_rest(state) if lower == "r" || key == "0"
@@ -2064,7 +2128,7 @@ def score_ed_pick(state, point, page)
   is_last_sys = best_sys["bars"][-1]["number"] == every[-1]["bars"][-1]["number"]
   # Past the last note of the score: a new note at the pitch under the
   # pointer.
-  if is_last_sys && (hit.nil? || xs > last_x + 2.5)
+  if is_last_sys && (hit.nil? || xs > last_x + 2.5) && state["voice"] != 2
     state["sel"] = -1
     state = score_ed_insert(state, pitch["step"], false)
     current = score_ed_selected(state)
@@ -2152,6 +2216,7 @@ def score_ed_insert_at(state, point, page)
   end
   notes = state["notes"]
   return score_ed_insert_onto(state, on, pitch) if on >= 0 && on < notes.length
+  return score_ed_write_at_tick(state, score_ed_tick_at(state, drawn, best_sys, xs), pitch) if state["voice"] == 2
 
   at = last + 1 if at < 0
   at = notes.length if at > notes.length
@@ -2163,17 +2228,77 @@ def score_ed_insert_at(state, point, page)
   score_ed_blip(state, fresh)
 end
 
+# The moment under a press: the start of the first voice's note nearest it
+# on that line — the second voice is written against the first.
+def score_ed_tick_at(state, drawn, sys, xs)
+  map1 = drawn["map1"] ?? drawn["map"]
+  first = score_ed_v1(state)["notes"]
+  best = -1
+  gap = 0.0
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      next if ev["i"] >= map1.length
+
+      owner = map1[ev["i"]]
+      next if owner < 0
+
+      d = (xs - ev["x"] - (ev["head_w"] ?? 1.18) / 2.0).abs
+      if best < 0 || d < gap
+        best = owner
+        gap = d
+      end
+    end
+  end
+  return 0 if best < 0
+
+  first.take(best).reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+end
+
+# A note written into the second voice at `tick`, over what is there: the
+# silence it lands in is cut to make room, a note it lands in is written
+# over from its start. Past the voice's end, silence up to it first.
+def score_ed_write_at_tick(state, tick, pitch)
+  notes = state["notes"]
+  start = 0
+  k = 0
+  while k < notes.length && start + score_ed_ticks(notes[k]) <= tick
+    start += score_ed_ticks(notes[k])
+    k += 1
+  end
+  value = {"base": state["dur"], "dots": state["dot"] ? 1 : 0}
+  if k >= notes.length && tick > start
+    state["notes"] = notes + score_ed_chunks(tick - start).map { |c| {"rest": true, "spacer": true, "pitches": [], "base": c[0], "dots": c[1], "tie": false} }
+    k = state["notes"].length
+  elsif k < notes.length && start < tick && notes[k]["rest"] && notes[k]["tup"].nil?
+    was = notes[k]
+    piece = fn(t) { score_ed_chunks(t).map { |c| {"rest": true, "spacer": was["spacer"] == true, "pitches": [], "base": c[0], "dots": c[1], "tie": false} } }
+    before = piece(tick - start)
+    after = piece(start + score_ed_ticks(was) - tick)
+    state["notes"] = notes.take(k) + before + after + range(k + 1, notes.length).map { |j| notes[j] }
+    k += before.length
+  end
+  score_ed_write_over(state, k, pitch, value)
+end
+
 # The pitch written onto note `k`. In the value the note has: a rest is
 # filled, a note made a chord (a pitch it already has only selects it). In
-# another value it is written over, as an engraver writes over: an eighth
-# on a quarter takes the quarter's first half and a rest the second; a
-# half on a quarter takes it and the next quarter. What it covers goes,
-# what it leaves of the last note it reaches is a rest, and nothing after
-# moves in time.
+# another value, a note of the first voice stays: the new one goes into the
+# second voice from the moment the note starts, and editing carries on
+# there — an eighth on a quarter sounds with it, stem down. Anything else
+# in another value is written over, as an engraver writes over: an eighth
+# on a quarter rest takes its first half and a rest the second; a half on
+# a quarter takes it and the next quarter. What it covers goes, what it
+# leaves of the last note it reaches is a rest, and nothing after moves in
+# time.
 def score_ed_insert_onto(state, k, pitch)
   target = state["notes"][k]
   value = {"base": state["dur"], "dots": state["dot"] ? 1 : 0}
-  return score_ed_write_over(state, k, pitch, value) if score_ed_ticks(value) != score_ed_ticks(target)
+  if score_ed_ticks(value) != score_ed_ticks(target)
+    return score_ed_write_over(state, k, pitch, value) if target["rest"] || (state["voice"] ?? 1) == 2
+
+    tick = state["notes"].take(k).reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+    return score_ed_write_at_tick(score_ed_set_voice(state, 2), tick, pitch)
+  end
 
   want = pitch["oct"] * 7 + pitch["step"]
   had = !target["rest"] && target["pitches"].any? { |pt| pt["oct"] * 7 + pt["step"] == want }
@@ -2210,15 +2335,18 @@ def score_ed_write_over(state, k, pitch, value)
   end
   state = score_ed_remember(state)
   notes = state["notes"]
-  first = notes[k]
-  last = notes[stop - 1]
+  # Past the end (a second voice written further than it went) there is
+  # nothing under the note to carry over.
+  first = k < notes.length ? notes[k] : {}
+  last = stop > k ? notes[stop - 1] : {}
   fresh = score_ed_note(pitch["step"], pitch["oct"], pitch["alter"], value["base"], value["dots"])
   # What belongs to the moment the note starts stays with it: a change of
   # key or metre, a repeat, a dynamic, words.
   for field in ["set", "rep_start", "dyn", "texts"]
     fresh[field] = first[field] if first.has_key(field) && !first[field].nil?
   end
-  rests = score_ed_chunks(score_max(0, covered - need)).map { |c| {"rest": true, "pitches": [], "base": c[0], "dots": c[1], "tie": false} }
+  quiet = range(k, stop).all? { |j| notes[j]["spacer"] == true }
+  rests = score_ed_chunks(score_max(0, covered - need)).map { |c| {"rest": true, "spacer": quiet && stop > k, "pitches": [], "base": c[0], "dots": c[1], "tie": false} }
   written = [fresh] + rests
   # And what belongs to where the last one ended: a repeat's end, a break.
   for field in ["rep_end", "brk"]
@@ -2350,10 +2478,95 @@ end
 # The source the sheet engraves: the piece, or with several tracks the one
 # being edited, alone on its staff with the bars' marks of the first.
 def score_ed_layout(state)
-  return score_ed_layout_one(state) if score_ed_tracks(state).length < 2
+  base = score_ed_v1(state)
+  voiced = score_ed_voiced?(base["notes2"])
+  base = base.merge({"no_gather": true}) if voiced
+  info = score_ed_bar_marks(base)
+  laid = nil
+  if score_ed_tracks(state).length < 2
+    laid = score_ed_layout_one(base)
+  else
+    laid = score_ed_layout_track(base, state["track"] ?? 0, info, {"header": true, "tempo": true, "gather": !voiced})
+  end
+  both = score_ed_with_voice_two(base, laid, base["notes2"], info, score_ed_tracks(state).length > 1)
+  # `map` is the voice being edited's — what a click picks — and `map1`
+  # the first voice's, what the playhead lights.
+  {"src": both["words"].join(" "), "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+end
 
-  laid = score_ed_layout_track(state, state["track"] ?? 0, score_ed_bar_marks(state), {"header": true, "tempo": true, "gather": true})
-  {"src": laid["words"].join(" "), "map": laid["map"]}
+# A part's music with its second voice, when it has one: the head (titles,
+# clef, key, time) and then `<< { first } \\\\ { second } >>`. `map` is
+# the first voice's notes item by item and `map2` the second's, each -1
+# where the other voice's are.
+def score_ed_with_voice_two(base, laid, notes2, info, ensemble)
+  map1 = laid["map"]
+  unless score_ed_voiced?(notes2)
+    return {"words": laid["words"], "map": map1, "map2": map1.map { |o| -1 }}
+  end
+  total = base["notes"].reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+  total = score_max(total, score_ed_ensemble_end(base, info)) if ensemble
+  two = score_ed_voice_two_ly(notes2, info, total)
+  words = laid["words"]
+  head = laid["head"]
+  out = words.take(head) + ["<< {"] + range(head, words.length).map { |k| words[k] } + ["} \\\\ {"] + two["words"] + ["} >>"]
+  {"words": out, "map": map1 + two["map"].map { |o| -1 }, "map2": map1.map { |o| -1 } + two["map"]}
+end
+
+# The second voice as LilyPond: cut at the first voice's bar lines and
+# tied over them, its silences spacers (`s`), filled with them to the
+# first voice's end and cut there. `map`: the note behind each item.
+def score_ed_voice_two_ly(notes2, info, total)
+  words = []
+  owners = []
+  have = notes2.reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+  notes = notes2
+  notes = notes + [ {"rest": true, "spacer": true, "pitches": [], "base": 1, "dots": 0, "pad": total - have} ] if have < total
+  tick = 0
+  bar = 0
+  for nt, ni in notes
+    break if tick >= total
+
+    left = score_min(nt["pad"] ?? score_ed_ticks(nt), total - tick)
+    full = left
+    tup = nt["tup"]
+    tup_opens = !tup.nil? && (ni == 0 || notes[ni - 1]["tup"].nil? || notes[ni - 1]["tup"]["g"] != tup["g"])
+    tup_closes = !tup.nil? && (ni + 1 >= notes.length || notes[ni + 1]["tup"].nil? || notes[ni + 1]["tup"]["g"] != tup["g"])
+    words.push("\\tuplet " + str(tup["n"]) + "/" + str(tup["d"]) + " {") if tup_opens
+    while left > 0
+      room = score_ed_bar_tick(info, bar + 1) - tick
+      take = tup.nil? ? score_min(left, room) : left
+      chunks = tup.nil? ? score_ed_chunks(take) : [ [nt["base"], nt["dots"]] ]
+      for ch, ci in chunks
+        last_piece = left - take == 0 && ci == chunks.length - 1
+        word = nt["spacer"] == true ? "s" : (nt["rest"] ? "r" : score_ed_chord_ly(nt))
+        word += str(ch[0]) + (ch[1] > 0 ? "." : "")
+        word += " ~" if !nt["rest"] && (!last_piece || nt["tie"] == true)
+        word += "(" if nt["slur_on"] == true && left == full && ci == 0
+        word += ")" if nt["slur_off"] == true && last_piece
+        word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad") || nt["spacer"] == true
+        words.push(word)
+        owners.push(nt.has_key("pad") ? -1 : ni)
+      end
+      words.push("}") if tup_closes
+      tick += take
+      left -= take
+      while tick >= score_ed_bar_tick(info, bar + 1)
+        bar += 1
+        words.push("|")
+      end
+    end
+  end
+  {"words": words, "map": owners}
+end
+
+# A track's music for the full score and the files, its second voice with it.
+def score_ed_track_music(state, k, info, opts)
+  base = score_ed_v1(state)
+  trk = score_ed_all(base)[k]
+  voiced = score_ed_voiced?(trk["notes2"])
+  laid = score_ed_layout_track(base, k, info, voiced ? opts.merge({"gather": false}) : opts)
+  both = score_ed_with_voice_two(base.merge({"notes": trk["notes"]}), laid, trk["notes2"], info, true)
+  {"words": both["words"], "map": both["map"]}
 end
 
 def score_ed_layout_one(state)
@@ -2471,7 +2684,7 @@ def score_ed_layout_one(state)
     words.push(closing ? "\\bar \":|.\"" : "\\bar \"|.\"")
   end
   words = range(0, head_at).map { |k| words[k] } + ["\\compressEmptyMeasures"] + range(head_at, words.length).map { |k| words[k] } if gathered
-  {"src": words.join(" "), "map": owners}
+  {"src": words.join(" "), "map": owners, "words": words, "head": head_at}
 end
 
 # A bar line with a repeat sign added to it: `|:` opens one after it.
@@ -2486,7 +2699,7 @@ end
 # repeat sign — so that one bar can stand for them all. One that LilyPond
 # could not write as a single value (a bar of 5/4) is never gathered.
 def score_ed_rest_run(state, ni, pos, measure)
-  return 0 if pos != 0 || score_ed_chunks(measure).length != 1
+  return 0 if pos != 0 || score_ed_chunks(measure).length != 1 || state["no_gather"] == true
 
   run = 0
   k = ni
@@ -2708,9 +2921,30 @@ end
 
 # ---- The view --------------------------------------------------------------
 
+# The sheet's width: the window's, less the toolbar on the left, the main
+# column's padding and a card's, and a scroll bar's room.
 def score_ed_width(state)
   vw = (state["viewport"] ?? {})["width"] ?? 1100
-  score_max(score_min(vw - 2 * 20 - 2 * 20 - 2, 1180), 300)
+  score_max(score_min(vw - score_ed_rail_w() - 1 - 2 * 24 - 2 * 16 - 2 - 14, 1180), 300)
+end
+
+# The toolbar down the left side, px wide.
+def score_ed_rail_w()
+  212
+end
+
+# The bar across the top — the editor's name, Play, Undo, and the title
+# page's fields — px tall, its rule included.
+def score_ed_top_h()
+  132
+end
+
+# What is left of the window under the top bar: the toolbar and the score
+# are each that tall and scroll on their own, so neither the bar nor the
+# toolbar ever scrolls away.
+def score_ed_body_h(state)
+  vh = (state["viewport"] ?? {})["height"] ?? 860
+  score_max(vh - score_ed_top_h(), 240)
 end
 
 # A staff space of 12 px on a desk: big enough to aim a click at a line or
@@ -2748,7 +2982,7 @@ def score_ed_engrave(state)
   catch e
     problem = str(e)
   end
-  {"engraved": engraved, "map": laid["map"], "src": laid["src"], "problem": problem, "sp": sp, "a4": a4}
+  {"engraved": engraved, "map": laid["map"], "map1": laid["map1"] ?? laid["map"], "src": laid["src"], "problem": problem, "sp": sp, "a4": a4}
 end
 
 def score_ed_page_width(state)
@@ -2758,9 +2992,9 @@ end
 def score_editor_view(raw_state)
   state = score_ed_defaults(raw_state ?? {})
   drawn = score_ed_engrave(state)
+  vw = (state["viewport"] ?? {})["width"] ?? 1100
+  body_h = score_ed_body_h(state)
   inner = column({"pad": 7, "gap": 5, "width": "100%"}, [
-    score_ed_header(state),
-    score_ed_palette(state),
     score_ed_panels(state),
     score_ed_doc_bar(state),
     score_ed_track_bar(state),
@@ -2769,10 +3003,18 @@ def score_editor_view(raw_state)
     score_ed_source(state, drawn),
     score_ed_help(state)
   ] + score_ed_sounds(state))
-  # The page scrolls: the palette, the panels, a page of score and the
-  # cards under it are taller than a window.
-  page = scroll({"height": "100%", "width": "100%", "bg": "surface.base"}, [inner])
-  page["key"] = "score_page"
+  # Only the score scrolls: the bar over it and the toolbar beside it stay
+  # where they are. EUI has no `position: fixed` — the frame is a column of
+  # the bar and a row of exactly the height left, its two halves scrolling
+  # each on its own.
+  main = scroll({"height": body_h, "width": score_max(vw - score_ed_rail_w() - 1, 300), "bg": "surface.base"}, [inner])
+  main["key"] = "score_page"
+  body = row({"width": "100%", "height": body_h}, [
+    score_ed_palette(state, body_h),
+    {"k": "box", "s": {"width": 1, "height": body_h, "bg": "border.subtle"}},
+    main
+  ])
+  page = column({"width": "100%", "height": "100%", "bg": "surface.base"}, [score_ed_header(state), body])
   # The keys reach the editor wherever focus is — on the staff, or on a
   # palette button just pressed — but never from inside a field, whose own
   # typing the client keeps (03 §3.1).
@@ -2782,24 +3024,24 @@ def score_editor_view(raw_state)
   page
 end
 
+# The bar across the top, which never scrolls: the editor's name, Play and
+# Undo on one line, and under them the title page's fields.
 def score_ed_header(state)
   undo_count = (state["undo"] ?? []).length
   redo_count = (state["redo"] ?? []).length
-  row({"gap": 3, "align": "center", "width": "100%", "wrap": "wrap"}, [
-    column({"gap": 1, "grow": 1}, [
-      text("Score editor", {"size": 5, "weight": "semibold"}),
-      muted("Type A–G to write notes, or click on the staff. The engraving follows LilyPond's rules.")
-    ]),
-    row({"gap": 2, "align": "center"}, [
+  bar = column({"gap": 3, "pad": [4, 7, 4, 7], "width": "100%", "height": score_ed_top_h() - 1, "bg": "surface.raised"}, [
+    row({"gap": 3, "align": "center", "width": "100%"}, [
+      text("Score editor", {"size": 4, "weight": "semibold"}),
+      {"k": "box", "s": {"grow": 1}},
       score_ed_play_button(state),
-      score_ed_tool(state["sound"] == true ? "Hear notes: on" : "Hear notes: off", "sound", {}, false, nil)
-    ]),
-    score_ed_rule(),
-    row({"gap": 2, "align": "center"}, [
+      score_ed_tool(state["sound"] == true ? "Hear notes: on" : "Hear notes: off", "sound", {}, false, nil),
+      score_ed_rule(),
       score_ed_tool("Undo", "undo", {}, undo_count == 0, "Ctrl+Z"),
       score_ed_tool("Redo", "redo", {}, redo_count == 0, "Ctrl+Y")
     ]),
+    score_ed_titles(state)
   ])
+  column({"width": "100%"}, [bar, {"k": "box", "s": {"width": "100%", "height": 1, "bg": "border.subtle"}}])
 end
 
 # Over the score: how it is shown, and the whole-piece actions.
@@ -2850,7 +3092,7 @@ def score_ed_panels(state)
   panel = state["panel"] ?? SCORE_ED_PANELS[0]
   body = []
   if panel == SCORE_ED_PANELS[0]
-    body = [score_ed_titles(state), score_ed_settings_bar(state)]
+    body = [score_ed_settings_bar(state)]
   elsif panel == SCORE_ED_PANELS[1]
     body = [score_ed_bars_panel(state)]
   elsif panel == SCORE_ED_PANELS[2]
@@ -3116,7 +3358,7 @@ end
 def score_ed_titles(state)
   hdr = state["header"] ?? {}
   labels = {"title": "Title", "subtitle": "Subtitle", "composer": "Composer", "arranger": "Arranger"}
-  row({"gap": 4, "wrap": "wrap", "width": "100%"}, SCORE_ED_HEADER.map { |name| column({"gap": 1, "width": 220}, [text(labels[name], {"size": 1, "weight": "medium", "fg": "text.muted"}), input(hdr[name] ?? "", "hdr_" + name, {"key": "score_hdr_" + name, "placeholder": name == "title" ? "Untitled" : "", "style": {"width": 220}})]) })
+  row({"gap": 4, "width": "100%"}, SCORE_ED_HEADER.map { |name| column({"gap": 1, "grow": 1, "basis": 0}, [text(labels[name], {"size": 1, "weight": "medium", "fg": "text.muted"}), input(hdr[name] ?? "", "hdr_" + name, {"key": "score_hdr_" + name, "placeholder": name == "title" ? "Untitled" : "", "style": {"width": "100%"}})]) })
 end
 
 def score_ed_labelled(label, control_node)
@@ -3126,8 +3368,11 @@ end
 # The palette: writing notes, as MuseScore's note-input toolbar has it —
 # values, dot, rest and accidentals, then what joins notes (tie, slur,
 # tuplets), then the pitches for whoever does not type them. Each button
-# shows its key.
-def score_ed_palette(state)
+# shows its key. It runs down the left of the window, `body_h` tall, and
+# scrolls on its own when the window is short. On the full score, where a
+# click picks a note and writes none, the mode and the voice go: the
+# insert tool and the second voice are the single staff's.
+def score_ed_palette(state, body_h)
   current = score_ed_selected(state)
   writing = current.nil? || state["typing"] == true || score_ed_inserting(state)
   shown_base = writing ? state["dur"] : current["base"]
@@ -3136,35 +3381,51 @@ def score_ed_palette(state)
   durations = values.map { |b| score_ed_glyph_button("dur:" + str(b), "dur", {"base": b}, score_ed_note_icon(b), shown_base == b, str(7 - values.index_of(b)), score_ed_duration_name(b)) }
   pitches = range(0, 7).map { |k| score_ed_text_button("note:" + str(k), "note", {"step": k}, "CDEFGAB".chars()[k], ["do", "ré", "mi", "fa", "sol", "la", "si"][k]) }
   no_note = current.nil? || current["rest"]
-  card({"gap": 3, "pad": [4, 5, 4, 5], "width": "100%"}, [
-    row({"gap": 3, "align": "center", "wrap": "wrap"}, [
-      row({"gap": 2, "align": "center"}, [segmented(SCORE_ED_TOOLS, state["tool"] ?? SCORE_ED_TOOLS[0], "tool"), kbd("N")]),
-      row({"gap": 1, "align": "center"}, durations),
-      score_ed_glyph_button("dot", "dot", {}, score_ed_dot_icon(), shown_dot, ".", "Dotted"),
-      score_ed_glyph_button("rest", "rest", {}, score_ed_glyph_icon("restQuarter", 2.0), false, "R", "Rest"),
-      score_ed_rule(),
-      row({"gap": 1, "align": "center"}, [
-        score_ed_glyph_button("flat", "acc", {"by": -1}, score_ed_glyph_icon("accidentalFlat", 2.6), false, "−", "Flatten"),
-        score_ed_glyph_button("natural", "natural", {}, score_ed_glyph_icon("accidentalNatural", 2.0), false, "=", "Natural"),
-        score_ed_glyph_button("sharp", "acc", {"by": 1}, score_ed_glyph_icon("accidentalSharp", 2.0), false, "+", "Sharpen")
-      ]),
-      score_ed_rule(),
-      score_ed_tool("Tie", "tie", {}, no_note, "T"),
-      score_ed_slur_button(state, no_note),
-      score_ed_tool("Triplet", "tuplet", {"n": 3}, current.nil?, "Ctrl+3"),
-      score_ed_tool("Sextuplet", "tuplet", {"n": 6}, current.nil?, "Ctrl+6")
-    ]),
-    row({"gap": 3, "align": "center", "wrap": "wrap"}, [
-      text("Add a note", {"size": 1, "weight": "medium", "fg": "text.muted"}),
-      row({"gap": 1, "align": "center"}, pitches),
-      score_ed_rule(),
-      score_ed_tool("Step ↑", "step", {"by": 1}, no_note, "↑"),
-      score_ed_tool("Step ↓", "step", {"by": -1}, no_note, "↓"),
-      score_ed_tool("Semitone ↑", "semitone", {"by": 1}, no_note, "⇧↑"),
-      score_ed_tool("Semitone ↓", "semitone", {"by": -1}, no_note, "⇧↓"),
-      score_ed_rule(),
-      score_ed_tool("Delete", "delete", {}, current.nil?, "⌫")
-    ])
+  inner_w = score_ed_rail_w() - 2 * 12 - 10
+  full = score_ed_full_view(state)
+  groups = []
+  if full
+    groups.push(score_ed_rail_group("Full score", inner_w, [muted("A click picks a note on its staff. Writing by click, and the second voice, are on a single track: pick it above the score.")]))
+  else
+    groups.push(score_ed_rail_group("Mode", inner_w, [segmented(SCORE_ED_TOOLS, state["tool"] ?? SCORE_ED_TOOLS[0], "tool"), kbd("N")]))
+    groups.push(score_ed_rail_group("Voice", inner_w, [segmented(SCORE_ED_VOICES, SCORE_ED_VOICES[(state["voice"] ?? 1) - 1], "voice"), kbd("Ctrl+Alt+1/2")]))
+  end
+  groups.push(score_ed_rail_group("Value", inner_w, durations + [
+    score_ed_glyph_button("dot", "dot", {}, score_ed_dot_icon(), shown_dot, ".", "Dotted"),
+    score_ed_glyph_button("rest", "rest", {}, score_ed_glyph_icon("restQuarter", 2.0), false, "R", "Rest")
+  ]))
+  groups.push(score_ed_rail_group("Accidental", inner_w, [
+    score_ed_glyph_button("flat", "acc", {"by": -1}, score_ed_glyph_icon("accidentalFlat", 2.6), false, "−", "Flatten"),
+    score_ed_glyph_button("natural", "natural", {}, score_ed_glyph_icon("accidentalNatural", 2.0), false, "=", "Natural"),
+    score_ed_glyph_button("sharp", "acc", {"by": 1}, score_ed_glyph_icon("accidentalSharp", 2.0), false, "+", "Sharpen")
+  ]))
+  groups.push(score_ed_rail_group("Join", inner_w, [
+    score_ed_tool("Tie", "tie", {}, no_note, "T"),
+    score_ed_slur_button(state, no_note),
+    score_ed_tool("Triplet", "tuplet", {"n": 3}, current.nil?, "Ctrl+3"),
+    score_ed_tool("Sextuplet", "tuplet", {"n": 6}, current.nil?, "Ctrl+6")
+  ]))
+  groups.push(score_ed_rail_group("Add a note", inner_w, pitches))
+  groups.push(score_ed_rail_group("Change the note", inner_w, [
+    score_ed_tool("Step ↑", "step", {"by": 1}, no_note, "↑"),
+    score_ed_tool("Step ↓", "step", {"by": -1}, no_note, "↓"),
+    score_ed_tool("Semitone ↑", "semitone", {"by": 1}, no_note, "⇧↑"),
+    score_ed_tool("Semitone ↓", "semitone", {"by": -1}, no_note, "⇧↓"),
+    score_ed_tool("Delete", "delete", {}, current.nil?, "⌫")
+  ]))
+  rail = scroll({"width": score_ed_rail_w(), "height": body_h, "bg": "surface.raised"}, [
+    column({"gap": 5, "pad": [5, 4, 5, 4], "width": score_ed_rail_w() - 10}, groups)
+  ])
+  rail["key"] = "score_rail"
+  rail
+end
+
+# One of the toolbar's groups: its name, then its controls wrapping within
+# the toolbar's width.
+def score_ed_rail_group(label, width, kids)
+  column({"gap": 2, "width": width}, [
+    text(label, {"size": 0, "weight": "semibold", "fg": "text.muted"}),
+    row({"gap": 1, "align": "center", "wrap": "wrap", "width": width}, kids)
   ])
 end
 
@@ -3297,8 +3558,12 @@ def score_ed_sheet(state, drawn)
     lit_set = playing ? ((state["play_lit"] ?? [])[state["track"] ?? 0] ?? []) : []
     armed = playing ? -1 : ((state["slur_from"] ?? -1) >= 0 ? state["slur_from"] : (state["pin_from"] ?? -1))
     for owner, k in drawn["map"]
-      marks[str(k)] = "accent.base" if owner >= 0 && (owner == lit || lit_set.includes?(owner))
+      marks[str(k)] = "accent.base" if owner >= 0 && owner == lit
       marks[str(k)] = "info.base" if owner == armed && owner != lit
+    end
+    # What plays is lit on the first voice, whichever is being edited.
+    for owner, k in drawn["map1"] ?? drawn["map"]
+      marks[str(k)] = "accent.base" if owner >= 0 && lit_set.includes?(owner)
     end
     if drawn["a4"]
       return score_ed_sheets(state, drawn, marks)
@@ -3429,7 +3694,8 @@ def score_ed_help(state)
     [ ["A", "…", "G"], "Add a note after the selection" ],
     [ ["Shift", "A…G"], "Add a note to the selected chord" ],
     [ ["R"], "Add a rest" ],
-    [ ["N"], "Insert mode: a click writes a note — onto a note as a chord, into a rest, or between notes (Esc: back to the pointer)" ],
+    [ ["N"], "Insert mode: a click writes a note — onto a note as a chord (in another value, as a second voice), into a rest, or between notes (Esc: back to the pointer)" ],
+    [ ["Ctrl", "Alt", "1 / 2"], "Write in the first voice (stems up) or the second (stems down)" ],
     [ ["2", "…", "7"], "32nd, 16th, 8th, quarter, half, whole" ],
     [ ["."], "Dot the note" ],
     [ ["+"], "Sharpen" ],

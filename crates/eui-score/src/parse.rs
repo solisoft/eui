@@ -53,6 +53,10 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
             while i < n && cs[i] != '\n' {
                 i += 1;
             }
+        } else if ch == '\\' && i + 1 < n && cs[i + 1] == '\\' {
+            // `\\` between the voices of `<< { … } \\ { … } >>`.
+            out.push(Tok { t: T::Sym('\\'), v: "\\\\".into(), marks: 0, at: i });
+            i += 2;
         } else if ch == '\\' && i + 1 < n && "<>!".contains(cs[i + 1]) {
             out.push(Tok { t: T::Cmd, v: cs[i + 1].to_string(), marks: 0, at: i });
             i += 2;
@@ -193,6 +197,12 @@ pub enum Kind {
     VoltaEnd,
     /// `\compressEmptyMeasures`.
     Compress,
+    /// `<<` opening two voices.
+    Voices,
+    /// `\\` between them.
+    VoiceNext,
+    /// `>>` closing them.
+    VoicesEnd,
     /// A column of a shared bar: every staff's note or rest at one moment.
     Col,
 }
@@ -364,6 +374,13 @@ pub struct Ev {
     pub sys: usize,
     /// A column's notes and rests: (staff, index in that staff's bar).
     pub members: Vec<(usize, usize)>,
+    /// Of `<< { … } \\ { … } >>`, the voice: 1 stems up, 2 stems down.
+    pub voice: Option<u8>,
+    /// `s`: a rest that takes time and is not drawn.
+    pub spacer: bool,
+    /// How far a first voice's note stands right of its column, clear of
+    /// the second's heads a step away.
+    pub shift: Option<f64>,
 }
 
 /// A staff's settings, from `\with` or `\set Staff.…`.
@@ -448,6 +465,7 @@ struct St {
     alts: i64,
     tuplets: i64,
     tuplet: Option<TupletState>,
+    voice: Option<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -669,7 +687,7 @@ fn staff_prop(toks: &[Tok], mut i: usize, props: &mut Props, what: &str) -> Resu
 }
 
 fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, props: Props) -> Result<usize, ScoreError> {
-    let mut st = St { reference: None, base: 4, dots: 0, events: Vec::new(), notes: base.notes, items: base.counter, props, alts: 0, tuplets: 0, tuplet: None };
+    let mut st = St { reference: None, base: 4, dots: 0, events: Vec::new(), notes: base.notes, items: base.counter, props, alts: 0, tuplets: 0, tuplet: None, voice: None };
     if is_cmd(toks, i, "relative") {
         let pitch = toks.get(i + 1);
         let name = pitch.and_then(|p| pitch_name(&p.v));
@@ -730,6 +748,7 @@ fn music(toks: &[Tok], mut i: usize, st: &mut St, header_fields: &mut HashMap<St
         match tk.t {
             T::Sym('}') => break,
             T::Cmd => i = command(toks, i, st, header_fields)?,
+            T::Sym('<') if twin(toks, i, '<') => i = voices(toks, i, st, header_fields)?,
             T::Word | T::Sym('<') => i = note(toks, i, st)?,
             T::Sym('|') => i += 1,
             T::Sym('~') => {
@@ -750,6 +769,57 @@ fn music(toks: &[Tok], mut i: usize, st: &mut St, header_fields: &mut HashMap<St
             _ => return refuse(format!("'{}' is not expected here", tk.v), tk.at),
         }
     }
+    Ok(i)
+}
+
+/// `<<` or `>>`: two of the sign written together.
+fn twin(toks: &[Tok], i: usize, sign: char) -> bool {
+    matches!((toks.get(i), toks.get(i + 1)), (Some(a), Some(b)) if a.t == T::Sym(sign) && b.t == T::Sym(sign) && b.at == a.at + 1)
+}
+
+/// Two voices on one staff, `<< { … } \\ { … } >>`: each from the pitch
+/// before `<<` under `\relative`, what follows from the first voice's last.
+fn voices(toks: &[Tok], mut i: usize, st: &mut St, header_fields: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let open_at = toks[i].at;
+    i += 2;
+    let start_ref = st.reference;
+    let mut after_ref = None;
+    let mut voice = 1u8;
+    st.events.push(Ev { k: Kind::Voices, at: open_at, ..Ev::default() });
+    loop {
+        if !is(toks, i, T::Sym('{')) {
+            return refuse("<< wants { music } \\\\ { music } >>", open_at);
+        }
+        st.reference = start_ref;
+        st.voice = Some(voice);
+        i = music(toks, i + 1, st, header_fields)?;
+        if i >= toks.len() {
+            return refuse("a voice that is never closed", open_at);
+        }
+        i += 1;
+        if voice == 1 {
+            after_ref = st.reference;
+        }
+        if is(toks, i, T::Sym('\\')) {
+            if voice == 2 {
+                return refuse("two voices on a staff are what this draws", toks[i].at);
+            }
+            st.events.push(Ev { k: Kind::VoiceNext, at: toks[i].at, ..Ev::default() });
+            voice += 1;
+            i += 1;
+        } else if twin(toks, i, '>') {
+            i += 2;
+            break;
+        } else {
+            return refuse("<< { … } \\\\ { … } >> is not closed with >>", open_at);
+        }
+    }
+    if voice < 2 {
+        return refuse("<< { … } >> with one voice: write the voices apart with \\\\", open_at);
+    }
+    st.voice = None;
+    st.reference = after_ref;
+    st.events.push(Ev { k: Kind::VoicesEnd, at: open_at, ..Ev::default() });
     Ok(i)
 }
 
@@ -809,6 +879,10 @@ fn command(toks: &[Tok], i: usize, st: &mut St, header_fields: &mut HashMap<Stri
     let tk = toks[i].clone();
     let word = tk.v.as_str();
     let arg = toks.get(i + 1).cloned();
+    // The first voice carries the staff's changes, as the bars are its.
+    if st.voice == Some(2) && ["clef", "key", "time", "bar", "tempo", "break", "pageBreak", "repeat", "alternative", "compressEmptyMeasures"].contains(&word) {
+        return refuse(format!("\\{word} belongs to the staff: write it in the first voice"), tk.at);
+    }
     match word {
         "clef" => {
             let Some(arg) = arg else { return refuse("\\clef wants a name", tk.at) };
@@ -1088,7 +1162,11 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         i += 1;
     } else {
         let word = tk.v.clone();
-        if word == "r" || word == "R" {
+        if word == "r" || word == "R" || word == "s" {
+            // `s`, a spacer: time and nothing drawn, where a second voice is silent.
+            if word == "s" && st.voice != Some(2) {
+                return refuse("a spacer s is for the second voice of << \\\\ >>", tk.at);
+            }
             rest = Some(word);
         } else {
             let Some((step, alter)) = pitch_name(&word) else { return refuse(format!("'{word}' is not a note name"), tk.at) };
@@ -1139,6 +1217,12 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         ticks += add;
     }
     let mut ev = Ev { k: Kind::Note, pitches, base, dots, ticks, at: tk.at, i: st.items, ..Ev::default() };
+    if let Some(v) = st.voice {
+        if count > 1 {
+            return refuse("a run of bars' rest is the staff's: write it outside << \\\\ >>", tk.at);
+        }
+        ev.voice = Some(v);
+    }
     if let Some(mut tup) = st.tuplet {
         if rest.as_deref() == Some("R") {
             return refuse("a whole-bar rest cannot be in a tuplet", tk.at);
@@ -1165,6 +1249,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         Some(r) => {
             ev.k = Kind::Rest;
             ev.full = r == "R";
+            ev.spacer = r == "s";
             ev.count = count;
         }
     }

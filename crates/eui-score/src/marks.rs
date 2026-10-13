@@ -190,25 +190,32 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
     let ev_at = |at: At| -> &Ev { &bars[at.0].items[at.1] };
     for (i, &at) in notes.iter().enumerate() {
         let ev = ev_at(at);
-        if !ev.tie || i + 1 >= notes.len() {
+        if !ev.tie {
             continue;
         }
-        let nxt = ev_at(notes[i + 1]);
+        // The next note of the same voice.
+        let Some(nxt) = notes.iter().skip(i + 1).map(|&a| ev_at(a)).find(|n| voice_of(n) == voice_of(ev)) else { continue };
         let count = ev.heads.len();
         for (hi, hd) in ev.heads.iter().enumerate() {
             let Some(other) = nxt.heads.iter().find(|o| o.d == hd.d) else { continue };
-            let over = if count == 1 { !ev.up } else { hi >= count / 2 };
+            let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
+            // Two voices: the first's ties over, the second's under.
+            if let Some(v) = ev.voice {
+                over = v == 1;
+            }
             tie(lines, ev, hd.pos, nxt, other.pos, over);
         }
     }
-    let mut open: Vec<At> = Vec::new();
+    // Each voice's slurs close on its own notes.
+    let mut open: [Vec<At>; 2] = [Vec::new(), Vec::new()];
     for &at in &notes {
         let ev = ev_at(at);
+        let mine = &mut open[usize::from(voice_of(ev) - 1)];
         if ev.slur_on {
-            open.push(at);
+            mine.push(at);
         }
         if ev.slur_off {
-            if let Some(first) = open.pop() {
+            if let Some(first) = mine.pop() {
                 slur(lines, bars, &notes, first, at);
             }
         }
@@ -236,9 +243,13 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At) {
     let ev_at = |at: At| -> &Ev { &bars[at.0].items[at.1] };
     let (f, l) = (ev_at(first), ev_at(last));
     let (fnum, lnum) = (f.n.unwrap_or(0), l.n.unwrap_or(0));
-    let ups: Vec<&Ev> = notes.iter().map(|&a| ev_at(a)).filter(|ev| ev.n.unwrap_or(0) >= fnum && ev.n.unwrap_or(0) <= lnum).collect();
+    let ups: Vec<&Ev> = notes.iter().map(|&a| ev_at(a)).filter(|ev| ev.n.unwrap_or(0) >= fnum && ev.n.unwrap_or(0) <= lnum && voice_of(ev) == voice_of(f)).collect();
     let all_up = ups.iter().all(|ev| ev.up);
-    let over = !all_up;
+    let mut over = !all_up;
+    // Of two voices, the first's slurs above and the second's below.
+    if let Some(v) = f.voice {
+        over = v == 1;
+    }
     let dir = if over { -1.0 } else { 1.0 };
     let e0 = slur_end(f, over);
     let e1 = slur_end(l, over);
@@ -502,7 +513,7 @@ fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64) -> TupletPlace {
 /// or the outside of its heads; a rest, the middle of the staff and a space.
 fn tuplet_edge(ev: &Ev, up: bool) -> f64 {
     if ev.k != Kind::Note {
-        return if up { 1.0 } else { 3.0 };
+        return if up { 1.0 } else { 3.0 } + rest_lift(ev);
     }
     let y_top = y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.5;
     let y_bottom = y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.5;
@@ -512,9 +523,29 @@ fn tuplet_edge(ev: &Ev, up: bool) -> f64 {
     y_bottom.max(if !ev.up && ev.base > 1 { ev.stem_end } else { y_bottom })
 }
 
+/// Where a rest of two voices stands: the first voice's two spaces up, the
+/// second's two down; a rest of one voice on the middle of the staff.
+pub(crate) fn rest_lift(ev: &Ev) -> f64 {
+    match ev.voice {
+        Some(1) => -2.0,
+        Some(2) => 2.0,
+        _ => 0.0,
+    }
+}
+
+/// The voice a note sings in: the second, or the first, which a note
+/// outside `<< \\\\ >>` goes on as.
+pub(crate) fn voice_of(ev: &Ev) -> u8 {
+    if ev.voice == Some(2) {
+        2
+    } else {
+        1
+    }
+}
+
 fn item_extent(ev: &Ev) -> (f64, f64) {
     if ev.k != Kind::Note {
-        return (1.0, 3.0);
+        return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
     (tuplet_edge(ev, true), tuplet_edge(ev, false))
 }
@@ -541,8 +572,8 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
             }
             let xc = ev.x + item_w(ev) / 2.0;
             let note = ev.k == Kind::Note;
-            let heads_top = if note { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.5 } else { 1.0 };
-            let heads_bottom = if note { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { 3.0 };
+            let heads_top = if note { y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.5 } else { 1.0 + rest_lift(ev) };
+            let heads_bottom = if note { y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.5 } else { 3.0 + rest_lift(ev) };
             let mut up_cursor = heads_top;
             let mut down_cursor = heads_bottom;
             if note && ev.up {

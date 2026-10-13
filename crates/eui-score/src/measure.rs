@@ -109,6 +109,13 @@ pub struct Bar {
     pub beams: Vec<Beam>,
     /// In a shared bar, each staff's opening.
     pub staff_openings: Vec<Opening>,
+    /// Ticks from the piece's start to the bar's.
+    pub tick0: i64,
+    /// It has a second voice.
+    pub poly: bool,
+    /// With two voices, its columns: what starts at each moment, both
+    /// voices' (`Kind::Col`, members `(0, index in items)`).
+    pub cols: Vec<Ev>,
 }
 
 impl Bar {
@@ -153,6 +160,73 @@ fn kind_name(k: &Kind) -> &'static str {
     }
 }
 
+/// Where the second voice of `<< \\\\ >>` is.
+struct Poly {
+    from: i64,
+    to: i64,
+    at: i64,
+    two: bool,
+    seen: HashMap<i64, i64>,
+    seen_bar: Option<usize>,
+    tied: HashMap<i64, i64>,
+}
+
+/// A note or a rest of the second voice, in the bar the first voice made at
+/// the same moment; its accidentals and ties its own voice's.
+fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreError> {
+    let at = p.at;
+    let Some(bi) = bars.iter().rposition(|b| b.tick0 <= at && at < b.tick0 + b.length) else {
+        return refuse("the second voice runs past the first", ev.at);
+    };
+    let bar = &mut bars[bi];
+    let pos = at - bar.tick0;
+    if pos + ev.ticks > bar.length {
+        return refuse(format!("a note runs past the bar line (bar {})", bi + 1), ev.at);
+    }
+    if ev.spacer {
+        p.at = at + ev.ticks;
+        return Ok(());
+    }
+    ev.start = pos;
+    ev.bar = bi;
+    // Under the clef and the key of the bar it lands in.
+    let alters = key_alters(bar.fifths);
+    let clef = bar.clef;
+    if p.seen_bar != Some(bi) {
+        p.seen.clear();
+        p.seen_bar = Some(bi);
+    }
+    if ev.k == Kind::Note {
+        let mid = clef_mid(clef);
+        let mut heads = Vec::new();
+        for pt in &ev.pitches {
+            let now = match p.seen.get(&pt.d) {
+                Some(v) => *v,
+                None => alters[modulo(pt.d, 7) as usize],
+            };
+            let mut show = pt.alter != now;
+            if p.tied.get(&pt.d) == Some(&pt.alter) {
+                show = false;
+            }
+            p.seen.insert(pt.d, pt.alter);
+            heads.push(Head { pos: pt.d - mid, d: pt.d, alter: pt.alter, acc: if show { Some(pt.alter) } else { None }, side: 0, acc_x: None });
+        }
+        heads.sort_by_key(|h| h.pos);
+        ev.heads = heads;
+        p.tied.clear();
+        if ev.tie {
+            for pt in &ev.pitches {
+                p.tied.insert(pt.d, pt.alter);
+            }
+        }
+    } else {
+        p.tied.clear();
+    }
+    p.at = at + ev.ticks;
+    bar.items.push(ev);
+    Ok(())
+}
+
 /// The bars of a staff.
 pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     let mut clef = Clef::Treble;
@@ -167,6 +241,10 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     let mut tempo = None;
     let mut volta_open: Option<String> = None;
     let mut tuplet_bar: HashMap<i64, usize> = HashMap::new();
+    // Ticks from the start, and the second voice of `<< \\\\ >>` placed by
+    // them in the bars the first made (`voice_two`).
+    let mut tick_at = 0;
+    let mut poly: Option<Poly> = None;
     let compress = events.iter().any(|ev| ev.k == Kind::Compress);
     let mut flat: Vec<Ev> = Vec::new();
     for ev in events {
@@ -186,10 +264,36 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         if ev.k == Kind::Compress {
             continue;
         }
+        match ev.k {
+            Kind::Voices => {
+                poly = Some(Poly { from: tick_at, to: 0, at: 0, two: false, seen: HashMap::new(), seen_bar: None, tied: HashMap::new() });
+                continue;
+            }
+            Kind::VoiceNext => {
+                if let Some(p) = &mut poly {
+                    p.two = true;
+                    p.to = tick_at;
+                    p.at = p.from;
+                }
+                continue;
+            }
+            Kind::VoicesEnd => {
+                if poly.as_ref().is_some_and(|p| p.at != p.to) {
+                    return refuse("the voices of << \\\\ >> are not as long as each other", ev.at);
+                }
+                poly = None;
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(p) = poly.as_mut().filter(|p| p.two) {
+            voice_two(&mut bars, ev, p)?;
+            continue;
+        }
         let ci = match cur {
             Some(ci) => ci,
             None => {
-                let b = Bar { clef, fifths, time: (tn, td), bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), ..Bar::default() };
+                let b = Bar { clef, fifths, time: (tn, td), bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
                 bars.push(b);
                 pos = 0;
                 seen.clear();
@@ -348,10 +452,19 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             tied.clear();
         }
         let ticks = ev.ticks;
+        tick_at += ticks * ev.mm.unwrap_or(1);
         bars[ci].items.push(ev);
         pos += ticks;
         if pos == bars[ci].length {
             cur = None;
+        }
+    }
+    // A bar with two voices lists its notes by when they start, the first
+    // voice's first.
+    for b in &mut bars {
+        if b.items.iter().any(|ev| ev.voice == Some(2)) {
+            b.poly = true;
+            b.items.sort_by_key(|ev| ev.start * 4 + i64::from(ev.voice.unwrap_or(1)));
         }
     }
     let mut bars: Vec<Bar> = bars.into_iter().filter(|b| !b.items.is_empty() || b.changes.any()).collect();

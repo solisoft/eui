@@ -781,10 +781,11 @@ the source read back to the same model with its titles, tempo and changes,
 a key or metre from the selected bar written where that bar starts (and
 moved to the next bar line when the bar moves under it), a click resolved
 to a note and a pitch on screen and on an A4 page, and in insert mode
-(N) to the pitch pressed — added to a note as a chord, filling a rest,
-written over notes of another value with a rest for what is left, or a
-new note between two — nothing picked up and, but for the last, nothing
-moved, a repeat opened on the first bar written and drawn after the clef, repeats set and taken
+(N) to the pitch pressed — added to a note as a chord, in another value
+on a note of the first voice written into the second voice from that
+note's start (the note kept), filling a rest, written over rests of another
+value with a rest for what is left, or a new note between two — nothing
+picked up and, but for the last, nothing moved, a repeat opened on the first bar written and drawn after the clef, repeats set and taken
 off at the selected bar, bars of rest in a row written as one and read back
 as bars, triplets and sextuplets made with Ctrl+3 and Ctrl+6 and broken by
 a deletion, breaks set after the selected bar, a dynamic, a hairpin,
@@ -794,8 +795,11 @@ with Alt+↑/↓ between them, written as a staff group with the shorter
 filled, a change from a bar the first track's and every staff's — chosen
 on any track, the full score's included — staves
 read back as tracks with their names and MIDI settings, a click on the full
-score editing that staff's note, and each track's sounding note lit there
-while it plays.
+score editing that staff's note — the insert tool and the voices,
+which only a single staff has, neither offered nor reachable by their keys
+there — and each track's sounding note lit there while it plays; and the
+frame: the toolbar and the score each exactly the height under the top bar
+that holds the titles, the score as wide as the window less the toolbar.
 
 The native engraver lang calls in its place (`eui-score`) is held to that
 one rather than to a second description:
@@ -804,7 +808,12 @@ one rather than to a second description:
 `tests/corpus/` on a 900 px screen and on A4 and requires every path to be
 the Soli engraver's to the hundredth of a pixel, and its MIDI file and its
 PDF to be the same bytes; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
-requires its refusals word for word, character position included.
+requires its refusals word for word, character position included. Two
+voices are among the pieces (`voices.ly`, `voices_spacers.ly`,
+`piano_voices.ly`), and among the refusals; `score_spec.sl` holds their
+stems, shared columns and rests, and the editor's second voice — written
+beside the first, chosen with Ctrl+Alt+2, an insert-mode press writing at
+the moment pressed with the silence around it kept.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

@@ -177,14 +177,77 @@ fn beam_windows(time: (i64, i64)) -> (i64, i64) {
     (beat, beat)
 }
 
+/// A bar's notes and rests a voice at a time, by index: everything but the
+/// second voice, then the second — one list for a bar of one voice.
+pub(crate) fn voice_lists(bar: &Bar) -> Vec<Vec<usize>> {
+    let all = 0..bar.items.len();
+    if !bar.poly {
+        return vec![all.collect()];
+    }
+    let (two, one): (Vec<usize>, Vec<usize>) = all.partition(|&j| bar.items[j].voice == Some(2));
+    vec![one, two]
+}
+
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
     for bar in bars.iter_mut() {
         let wins = beam_windows(bar.time);
+        let mut all: Vec<Vec<usize>> = Vec::new();
+        for list in voice_lists(bar) {
+            all.extend(beam_voice(bar, &list, wins)?);
+        }
+        // In the order of their first notes, as the drawing meets them.
+        all.sort_by_key(|g| g[0]);
+        for g in all {
+            let mut lowest = 0;
+            let mut highest = 0;
+            for &j in &g {
+                let ev = &bar.items[j];
+                if let Some(h) = ev.heads.first() {
+                    if h.pos < lowest {
+                        lowest = h.pos;
+                    }
+                }
+                if let Some(h) = ev.heads.last() {
+                    if h.pos > highest {
+                        highest = h.pos;
+                    }
+                }
+            }
+            let mut up = -lowest > highest;
+            if let Some(v) = bar.items[g[0]].voice {
+                up = v == 1;
+            }
+            let gi = bar.beams.len();
+            for &j in &g {
+                bar.items[j].beam = Some(gi);
+                bar.items[j].up = up;
+            }
+            bar.beams.push(Beam { notes: g, up, ..Beam::default() });
+        }
+        for ev in &mut bar.items {
+            if ev.k != Kind::Note {
+                continue;
+            }
+            match ev.voice {
+                Some(v) => ev.up = v == 1,
+                None if ev.beam.is_none() => ev.up = stem_up(ev),
+                None => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One voice's beam groups in a bar, by the metre's windows, `[ ]` first:
+/// the groups of two notes or more, by index into the bar's items.
+fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
+    {
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
         let mut manual = false;
         let mut win = -1;
-        for (j, ev) in bar.items.iter().enumerate() {
+        for &j in list {
+            let ev = &bar.items[j];
             let fl = if ev.k == Kind::Note { flags(ev.base) } else { 0 };
             if manual {
                 if fl == 0 && ev.k == Kind::Note {
@@ -242,40 +305,8 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
                 by_beat.push(g);
             }
         }
-        for g in by_beat {
-            if g.len() < 2 {
-                continue;
-            }
-            let mut lowest = 0;
-            let mut highest = 0;
-            for &j in &g {
-                let ev = &bar.items[j];
-                if let Some(h) = ev.heads.first() {
-                    if h.pos < lowest {
-                        lowest = h.pos;
-                    }
-                }
-                if let Some(h) = ev.heads.last() {
-                    if h.pos > highest {
-                        highest = h.pos;
-                    }
-                }
-            }
-            let up = -lowest > highest;
-            let gi = bar.beams.len();
-            for &j in &g {
-                bar.items[j].beam = Some(gi);
-                bar.items[j].up = up;
-            }
-            bar.beams.push(Beam { notes: g, up, ..Beam::default() });
-        }
-        for ev in &mut bar.items {
-            if ev.k == Kind::Note && ev.beam.is_none() {
-                ev.up = stem_up(ev);
-            }
-        }
+        Ok(by_beat.into_iter().filter(|g| g.len() >= 2).collect())
     }
-    Ok(())
 }
 
 // ---- Columns -----------------------------------------------------------
@@ -401,7 +432,72 @@ fn columns(bars: &mut [Bar], shortest: i64) {
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);
         }
+        if bar.poly {
+            poly_cols(bar, shortest);
+        }
     }
+}
+
+/// What a bar is spaced by: its notes and rests, or, with two voices, its
+/// columns.
+pub(crate) fn spacers(bar: &Bar) -> &[Ev] {
+    if bar.cols.is_empty() {
+        &bar.items
+    } else {
+        &bar.cols
+    }
+}
+
+/// A bar of two voices in columns, each voice read on its own for what
+/// follows a note; where the voices' heads meet — a unison or a second —
+/// the first voice's note stands a head to the right.
+fn poly_cols(bar: &mut Bar, shortest: i64) {
+    let mut starts: Vec<i64> = Vec::new();
+    for ev in &bar.items {
+        if !starts.contains(&ev.start) {
+            starts.push(ev.start);
+        }
+    }
+    starts.sort_unstable();
+    let length = bar.length;
+    let voices = voice_lists(bar);
+    let mut cols = Vec::new();
+    for (ci, &at) in starts.iter().enumerate() {
+        let upto = starts.get(ci + 1).copied().unwrap_or(length);
+        let mut col = Ev { k: Kind::Col, start: at, ticks: upto - at, ..Ev::default() };
+        let mut ideal: Option<f64> = None;
+        for list in &voices {
+            for (jj, &j) in list.iter().enumerate() {
+                let ev = &bar.items[j];
+                if ev.start != at {
+                    continue;
+                }
+                col.members.push((0, j));
+                let want = if ev.ticks <= upto - at { ev.ideal } else { duration_space(upto - at, shortest) };
+                ideal = Some(ideal.map_or(want, |v| v.min(want)));
+                col.left = col.left.max(ev.left);
+                let after = list.get(jj + 1).map_or(length, |&n| bar.items[n].start);
+                if after == upto {
+                    col.right = col.right.max(ev.right);
+                }
+            }
+        }
+        col.ideal = ideal.unwrap_or(0.0);
+        let note = |j: usize, two: bool| bar.items[j].k == Kind::Note && (bar.items[j].voice == Some(2)) == two;
+        let ones: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, false)).collect();
+        let twos: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, true)).collect();
+        let meet = ones.iter().any(|&a| twos.iter().any(|&b| bar.items[a].heads.iter().any(|ha| bar.items[b].heads.iter().any(|hb| (ha.pos - hb.pos).abs() <= 1))));
+        if meet {
+            for &a in &ones {
+                let ev = &mut bar.items[a];
+                let hw = ev.head_w.unwrap_or(0.0);
+                ev.shift = Some(hw);
+                col.right = col.right.max(ev.right + hw);
+            }
+        }
+        cols.push(col);
+    }
+    bar.cols = cols;
 }
 
 fn displace(ev: &mut Ev) {
@@ -601,7 +697,7 @@ fn change_width(bar: &Bar) -> f64 {
 }
 
 fn gaps(bar: &Bar, k: f64) -> Vec<f64> {
-    let items = &bar.items;
+    let items = spacers(bar);
     if items.is_empty() {
         return vec![(6.0 * k).max(4.0)];
     }
@@ -618,10 +714,11 @@ fn gaps(bar: &Bar, k: f64) -> Vec<f64> {
 }
 
 fn bar_springs(bar: &Bar) -> f64 {
-    if bar.items.is_empty() {
+    let spacers = spacers(bar);
+    if spacers.is_empty() {
         return 6.0;
     }
-    bar.items.iter().fold(0.0, |acc, ev| acc + ev.ideal)
+    spacers.iter().fold(0.0, |acc, ev| acc + ev.ideal)
 }
 
 pub(crate) fn courtesy_of(bar: &Bar) -> Courtesy {
@@ -823,7 +920,7 @@ fn line_terms(bars: &[Bar]) -> (f64, Vec<f64>, Vec<f64>) {
     let mut ideals = Vec::new();
     let mut leasts = Vec::new();
     for (i, bar) in bars.iter().enumerate() {
-        let items = &bar.items;
+        let items = spacers(bar);
         if items.is_empty() {
             ideals.push(6.0);
             leasts.push(4.0);
@@ -899,6 +996,18 @@ fn place(bars: &mut [Bar], lines: &mut [Line], left: f64, indent: f64, rest: f64
                 it.span0 = x;
                 it.span1 = x + span;
                 x += span;
+            } else if !bar.cols.is_empty() {
+                // Two voices: a column's notes, both voices', at its place.
+                x += gs[0];
+                for i in 0..bar.cols.len() {
+                    bar.cols[i].x = x;
+                    for m in 0..bar.cols[i].members.len() {
+                        let j = bar.cols[i].members[m].1;
+                        let shift = bar.items[j].shift.unwrap_or(0.0);
+                        bar.items[j].x = x + shift;
+                    }
+                    x += gs[i + 1];
+                }
             } else {
                 x += gs[0];
                 for (i, ev) in bar.items.iter_mut().enumerate() {
@@ -1196,6 +1305,9 @@ fn master_bar(all: &[Vec<Bar>], k: usize, shortest: i64) -> Bar {
     let mut mb = first.clone();
     mb.items = Vec::new();
     mb.beams = Vec::new();
+    // Spaced by its own columns, every staff's, not the first staff's voices'.
+    mb.cols = Vec::new();
+    mb.poly = false;
     mb.staff_openings = all.iter().map(|bars| bars[k].opening()).collect();
     let mut starts: Vec<i64> = Vec::new();
     for bars in all {
@@ -1259,7 +1371,8 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
         }
         for col in &mb.items {
             for &(s, j) in &col.members {
-                staves[s][b].items[j].x = col.x;
+                let shift = staves[s][b].items[j].shift.unwrap_or(0.0);
+                staves[s][b].items[j].x = col.x + shift;
             }
         }
         for bars in staves.iter_mut() {
