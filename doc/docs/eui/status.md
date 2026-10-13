@@ -2667,6 +2667,23 @@ import now gives the second voice its own notes, silent up to each of its
 blocks, and what the editor writes reads back the same. `tests/score_spec.sl`
 is 126 tests.
 
+**And the Mac's own instruments** (2026-10-13). A MIDI sound sent without
+a SoundFont played on the client's own voices, one a General MIDI family,
+so a score's strings or winds all sounded alike — and the production demo
+has no bank: `deploy-data.yml` rsyncs a checkout, which has none, and
+would delete one put there. macOS ships a General MIDI set, Apple's DLS
+synth, so the macOS client now renders such a sound with it: `eui-dls`, a
+crate of one function because every AudioToolbox call is `unsafe` and
+`eui-audio` and `eui-client` forbid it, drives the `MusicDevice` unit
+offline — the file's channel messages at their sample offsets, 512 frames
+pulled a call — and answers `None` on any error or a silent render, and
+the family voices play it. `eui-audio`'s `render_with` takes the platform's
+synthesizer as a plain function, keeps the budget, and uses its answer only
+at exactly the length asked. Tested: on macOS a note sounds and dies away
+and a flute is not a piano (`eui-dls`, macOS CI only); everywhere, the
+hook's answer is used and its refusal or a wrong length falls back
+(`eui-audio/tests/midi.rs`).
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

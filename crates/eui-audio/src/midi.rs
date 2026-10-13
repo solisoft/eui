@@ -4,8 +4,10 @@
 //! once, offline, to stereo `f32` at [`RATE`], then played, sought, looped
 //! and metered by the mixer that plays everything else. With a SoundFont
 //! [`Bank`] the notes are that bank's instruments, through `rustysynth`;
-//! without one they are this module's own voices — one for each of General
-//! MIDI's sixteen families and a drum kit — so a MIDI sound always sounds.
+//! without one, the platform's own General MIDI synthesizer when the caller
+//! hands one over ([`SystemSynth`], macOS's in `eui-dls`), and otherwise
+//! this module's own voices — one for each of General MIDI's sixteen
+//! families and a drum kit — so a MIDI sound always sounds.
 //!
 //! A list of commands (`notes`) is written as a MIDI file of its own and
 //! takes the same road, so there is one synthesizer and not two.
@@ -71,9 +73,23 @@ pub fn load_bank(bytes: &[u8]) -> Result<Bank, AudioError> {
     Ok(Bank { font: Arc::new(font) })
 }
 
+/// A General MIDI synthesizer the platform has, tried for a file with no
+/// bank: the song's channel messages as `(seconds, status, data1, data2)`,
+/// the frames to render and the rate, answering the left and the right
+/// channel — or `None`, and the client's own voices play it. This crate
+/// calls it and keeps no platform code: the one there is, macOS's, is
+/// `eui_dls::render`.
+pub type SystemSynth = fn(&[(f64, u8, u8, u8)], usize, u32) -> Option<(Vec<f32>, Vec<f32>)>;
+
 /// Synthesize a Standard MIDI File, with `bank`'s instruments or the
 /// client's own voices, held to `max_bytes` of samples.
 pub fn render(bytes: &[u8], bank: Option<&Bank>, max_bytes: usize) -> Result<Sound, AudioError> {
+    render_with(bytes, bank, max_bytes, None)
+}
+
+/// [`render`], with the platform's synthesizer for a file with no bank.
+/// What it answers is used only when it is exactly the frames asked for.
+pub fn render_with(bytes: &[u8], bank: Option<&Bank>, max_bytes: usize, system: Option<SystemSynth>) -> Result<Sound, AudioError> {
     let song = parse(bytes)?;
     let seconds = song.length + TAIL;
     let frames = (seconds * f64::from(RATE)).ceil() as usize;
@@ -82,7 +98,10 @@ pub fn render(bytes: &[u8], bank: Option<&Bank>, max_bytes: usize) -> Result<Sou
     }
     let (left, right) = match bank {
         Some(bank) => render_bank(bytes, bank, frames)?,
-        None => render_voices(&song, frames),
+        None => {
+            let events: Vec<(f64, u8, u8, u8)> = song.events.iter().map(|e| (e.time, e.status, e.data1, e.data2)).collect();
+            system.and_then(|synth| synth(&events, frames, RATE)).filter(|(l, r)| l.len() == frames && r.len() == frames).unwrap_or_else(|| render_voices(&song, frames))
+        }
     };
     let mut samples = Vec::with_capacity(frames.saturating_mul(2));
     for (l, r) in left.iter().zip(right.iter()) {

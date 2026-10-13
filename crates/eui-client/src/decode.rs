@@ -147,6 +147,11 @@ pub(crate) enum Done {
     Bank(Result<eui_audio::midi::Bank, String>),
 }
 
+/// The platform's General MIDI synthesizer, where it has one.
+fn system_synth() -> Option<eui_audio::midi::SystemSynth> {
+    eui_dls::available().then_some(eui_dls::render as eui_audio::midi::SystemSynth)
+}
+
 fn run(bytes: &[u8], work: Work, bank: Option<&eui_audio::midi::Bank>) -> Done {
     // A decoder that panics on bytes a server chose must not take a pool
     // thread with it: the result would never come back, and the hash would
@@ -156,9 +161,10 @@ fn run(bytes: &[u8], work: Work, bank: Option<&eui_audio::midi::Bank>) -> Done {
     // unwind: tests, and `release-checked`.)
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match work {
         Work::Image => Done::Image(crate::assets::prepare_image(bytes)),
-        // A MIDI file is played with the node's bank when it has one; the
-        // decoder alone knows only the client's own voices.
-        Work::Sound { max } if bank.is_some() && eui_audio::midi::is_midi(bytes) => Done::Sound(eui_audio::midi::render(bytes, bank, max.min(eui_audio::MAX_BYTES)).map_err(|e| e.to_string())),
+        // A MIDI file is played with the node's bank when it has one, and
+        // without one on the platform's General MIDI synthesizer where
+        // there is one (macOS: `eui-dls`), else the client's own voices.
+        Work::Sound { max } if eui_audio::midi::is_midi(bytes) => Done::Sound(eui_audio::midi::render_with(bytes, bank, max.min(eui_audio::MAX_BYTES), system_synth()).map_err(|e| e.to_string())),
         Work::Sound { max } => Done::Sound(eui_audio::decode_within(bytes, None, max).map_err(|e| e.to_string())),
         Work::Movie { max } => Done::Movie(eui_video::decode_within(bytes, None, max).map_err(|e| e.to_string())),
         Work::Bank => Done::Bank(eui_audio::midi::load_bank(bytes).map_err(|e| e.to_string())),

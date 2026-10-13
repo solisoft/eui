@@ -1190,9 +1190,12 @@ sound, and from then on it is a sound like any other: `playing`, `volume`,
 for a recording. The client plays General MIDI: program changes, channel
 10 as percussion, controllers 7 (volume) and 10 (pan) in stereo, tempo
 changes. With a `soundfont`, it plays that bank's instruments; without one,
-or until the bank has arrived, or when the bank will not load, it plays
-voices of its own — one for each of General MIDI's sixteen families and a
-drum kit — so a MIDI sound is never silent for want of a bank. A
+or until the bank has arrived, or when the bank will not load, it MAY play
+the platform's own General MIDI synthesizer — the macOS client does, with
+Apple's DLS synth, so each of the 128 programs is its own instrument — and
+otherwise, or when that one fails, it plays voices of its own — one for
+each of General MIDI's sixteen families and a drum kit — so a MIDI sound
+is never silent for want of a bank. A
 `soundfont` is fetched and parsed once per session, cached like any asset,
 and parsed in the sandboxed worker, where every other decoder runs.
 

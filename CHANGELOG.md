@@ -70,6 +70,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A second voice's notes either side of a spacer are no longer beamed
   together, and crossed voices stand apart instead of running their stems
   through each other's heads.
+- On macOS a MIDI sound sent without a SoundFont plays on Apple's own
+  General MIDI synthesizer — 128 instruments — instead of the client's
+  sixteen family voices, which made a violin, a viola and a cello sound
+  alike. Other platforms are unchanged.
 - **Lyrics** in `score()` and `eui-score`: `\addlyrics { Frè -- re Jac -- ques }`
   after a staff's music sets a syllable under each note, with hyphens,
   extenders and melismata on ties and slurs, the notes spread to make room;

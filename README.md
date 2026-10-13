@@ -36,6 +36,8 @@ crates/
   eui-score  LilyPond input engraved into canvas paths, MIDI and PDF:
              the catalogue's score() engraver, native for lang     [built]
   eui-cursor where the pointer is during a drag, which no backend says [built]
+  eui-dls    macOS's own General MIDI synthesizer (Apple's DLS synth)
+             for a MIDI sound sent without a SoundFont             [built]
   eui-wayland the drop half of 03 §3.2 and the keymap, which winit
               does not report and does not share                       [built]
   eui-client driver, WSS transport and a pipe (eui --pipe), manifest check, assets, winit,

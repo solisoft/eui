@@ -1121,6 +1121,7 @@ dependencies = [
  "cpal",
  "eui-audio",
  "eui-cursor",
+ "eui-dls",
  "eui-layout",
  "eui-package",
  "eui-proto",
@@ -1174,6 +1175,10 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "eui-dls"
+version = "0.8.0"
 
 [[package]]
 name = "eui-ios"

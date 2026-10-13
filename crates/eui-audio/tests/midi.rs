@@ -39,6 +39,34 @@ fn energy(samples: &[f32], channel: usize, from_s: f32, to_s: f32) -> f32 {
     samples[a..b].iter().skip(channel).step_by(2).map(|s| s * s).sum()
 }
 
+/// A platform synthesizer that says how many messages it was given: every
+/// sample a hundredth of their count, left positive and right negative.
+fn counting(events: &[(f64, u8, u8, u8)], frames: usize, _rate: u32) -> Option<(Vec<f32>, Vec<f32>)> {
+    let v = events.len() as f32 / 100.0;
+    Some((vec![v; frames], vec![-v; frames]))
+}
+
+fn declining(_: &[(f64, u8, u8, u8)], _: usize, _: u32) -> Option<(Vec<f32>, Vec<f32>)> {
+    None
+}
+
+fn short(_: &[(f64, u8, u8, u8)], frames: usize, _: u32) -> Option<(Vec<f32>, Vec<f32>)> {
+    Some((vec![0.5; frames / 2], vec![0.5; frames / 2]))
+}
+
+#[test]
+fn without_a_bank_the_platforms_synthesizer_plays_and_its_refusal_falls_back() {
+    let bytes = smf(&[(0, 0xC0, 73, 0), (0, 0x90, 60, 100), (480, 0x80, 60, 0)]);
+    let ours = midi::render(&bytes, None, eui_audio::MAX_BYTES).unwrap();
+    let theirs = midi::render_with(&bytes, None, eui_audio::MAX_BYTES, Some(counting)).unwrap();
+    assert_eq!(theirs.samples().len(), ours.samples().len(), "the same length either way");
+    assert_eq!(&theirs.samples()[..4], &[0.03, -0.03, 0.03, -0.03], "the platform's samples, given the file's three messages");
+    let declined = midi::render_with(&bytes, None, eui_audio::MAX_BYTES, Some(declining)).unwrap();
+    assert_eq!(declined.samples(), ours.samples(), "a synthesizer that answers None leaves the client's own voices");
+    let wrong = midi::render_with(&bytes, None, eui_audio::MAX_BYTES, Some(short)).unwrap();
+    assert_eq!(wrong.samples(), ours.samples(), "and so does one that renders the wrong length");
+}
+
 #[test]
 fn a_midi_file_lasts_what_its_tempo_says() {
     // Two quarters at sixty: two seconds, and a second of tail.

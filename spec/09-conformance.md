@@ -723,7 +723,14 @@ Standard MIDI File synthesizes to as long as its tempo map says
 (`a_midi_note_sounds_at_its_time_and_not_before`), on the client's own
 voices without a bank and on a SoundFont's with one
 (`a_soundfont_plays_its_own_instruments`), panned by controller 10
-(`a_pan_moves_the_sound_to_one_side`); a `notes` list becomes the same
+(`a_pan_moves_the_sound_to_one_side`), and without a bank on the
+platform's synthesizer when it renders, falling back to the client's
+voices when it answers nothing or the wrong length
+(`without_a_bank_the_platforms_synthesizer_plays_and_its_refusal_falls_back`);
+on macOS that synthesizer is Apple's DLS synth (`crates/eui-dls`, macOS CI):
+a note sounds and dies away (`the_system_synth_sounds_a_note`), two
+programs are two instruments (`a_flute_is_not_a_piano`), and a silent
+render is none (`nothing_to_play_is_none`); a `notes` list becomes the same
 file (`notes_are_a_midi_file_of_their_own`) and is held to its ceiling
 (`a_notes_list_past_its_ceiling_is_refused`). In the driver
 (`crates/eui-client/tests/driver.rs`): `notes` play when `notes_seq` moves

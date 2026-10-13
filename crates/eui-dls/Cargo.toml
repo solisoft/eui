@@ -1,0 +1,15 @@
+[package]
+name = "eui-dls"
+description = "The General MIDI synthesizer macOS ships (Apple's DLS synth, AudioToolbox), rendering a MIDI sound offline when the server sent no SoundFont."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# No dependencies: AudioToolbox is linked as a framework by the few
+# declarations in src/lib.rs, which exist on macOS only. Elsewhere the crate
+# is one function that answers `None`.
+
+[lints]
+workspace = true

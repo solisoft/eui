@@ -13,6 +13,7 @@ members = [
     "crates/eui-render",
     "crates/eui-vm",
     "crates/eui-cursor",
+    "crates/eui-dls",
     "crates/eui-uikit",
     "crates/eui-wayland",
     "crates/eui-client",
