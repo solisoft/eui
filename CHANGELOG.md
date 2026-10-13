@@ -51,6 +51,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   calls it as `eui_score_layout`, `eui_score_bands`, `eui_score_midi` and
   `eui_score_pdf`; `score()` and the score editor use them when the server
   has them.
+- The score's PDF has a footer on every page — the title at the left, the
+  page's number out of how many at the right — and the titles stand clear
+  of the top margin and of the first system, on a screen and on paper.
 - A dragged note follows the hand: a server behind on its events handles a
   run of moves once, with the last position (06 §2) — the note no longer
   goes on moving for a second after the release.

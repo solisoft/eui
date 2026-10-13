@@ -187,20 +187,64 @@ pub fn head_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut paths = Vec::new();
     let mut pen = Pen { paths: &mut paths, sp };
     let left = eng.left;
-    if page == 0 {
-        let margin = if !eng.pages.is_empty() && eng.paper.is_some() { 2.83 } else { 1.0 };
-        for line in &eng.header.lines {
-            for cell in &line.cells {
-                pen.text(&cell.text, cell.weight, left + cell.x, margin + line.y, cell.em);
-            }
-        }
-    }
+    draw_titles(&mut pen, eng, page);
     if page > 0 && eng.numbered {
         let number = (page + 1).to_string();
         let e = em(0.0);
         let nx = if (page + 1) % 2 == 1 { left + eng.width - text_width(&number, Weight::Regular, e) } else { left };
         pen.text(&number, Weight::Regular, nx, 2.83 + 0.72 * e, e);
     }
+    paths
+}
+
+fn draw_titles(pen: &mut Pen, eng: &Engraved, page: usize) {
+    if page != 0 {
+        return;
+    }
+    let margin = if !eng.pages.is_empty() && eng.paper.is_some() { 2.83 } else { 1.0 };
+    for line in &eng.header.lines {
+        for cell in &line.cells {
+            pen.text(&cell.text, cell.weight, eng.left + cell.x, margin + line.y, cell.em);
+        }
+    }
+}
+
+/// Page `page` as the PDF prints it: its titles if it is the first and its
+/// systems, with no number at the top — the footer carries it.
+pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
+    let mut paths = Vec::new();
+    draw_titles(&mut Pen { paths: &mut paths, sp }, eng, page);
+    for sys in &eng.systems {
+        if sys.page == page {
+            draw_system(&mut paths, eng, sys, sys.top, sp, &mut Vec::new());
+        }
+    }
+    paths
+}
+
+/// The footer of page `page` of `count`, its baseline at `y`: `title` at the
+/// left, cut short with an ellipsis where it would reach the number, and
+/// `n / count` at the right, two steps smaller than the music's words.
+pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &str, y: f64) -> Vec<Path> {
+    let mut paths = Vec::new();
+    let mut pen = Pen { paths: &mut paths, sp };
+    let e = em(-2.0);
+    let number = format!("{} / {count}", page + 1);
+    let number_w = text_width(&number, Weight::Regular, e);
+    pen.text(&number, Weight::Regular, eng.left + eng.width - number_w, y, e);
+    let room = eng.width - number_w - e;
+    let mut words = title.to_string();
+    if text_width(&words, Weight::Regular, e) > room {
+        let mut kept: Vec<char> = title.chars().collect();
+        loop {
+            kept.pop();
+            words = kept.iter().collect::<String>() + "\u{2026}";
+            if kept.is_empty() || text_width(&words, Weight::Regular, e) <= room {
+                break;
+            }
+        }
+    }
+    pen.text(&words, Weight::Regular, eng.left, y, e);
     paths
 }
 

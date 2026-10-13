@@ -87,11 +87,13 @@ def score(src, opts)
 end
 
 # A4 at LilyPond's default staff size, 20 pt — a staff space of 5 pt, 1.764
-# mm — and its default margins: 10 mm at the sides, 5 at the top, 6 at the
-# bottom, the first system indented 15. In staff spaces.
+# mm — and its default margins: 10 mm at the sides, 5 at the top, the
+# first system indented 15. In staff spaces. The bottom one is 12, not
+# LilyPond's 6: the PDF's footer sits on the 6 mm line (`foot`, up from the
+# paper's edge), and the music stops above it.
 def score_a4()
   space = 25.4 * 5.0 / 72.0
-  {"w": 210.0 / space, "h": 297.0 / space, "left": 10.0 / space, "right": 10.0 / space, "top": 5.0 / space, "bottom": 6.0 / space, "indent": 15.0 / space}
+  {"w": 210.0 / space, "h": 297.0 / space, "left": 10.0 / space, "right": 10.0 / space, "top": 5.0 / space, "bottom": 12.0 / space, "indent": 15.0 / space, "foot": 6.0 / space}
 end
 
 # The music on A4: the engraving, the px per staff space that makes a
@@ -484,7 +486,9 @@ end
 # title, a large bold subtitle, a smaller one, then poet left, instrument
 # centre and composer right, then meter left and arranger right — each line
 # a `fill-line` across the width, baselines 3.5 spaces apart unless a line
-# is taller. Answers the lines with their baselines, and where they end.
+# is taller, and the block `score_title_pad()` clear above and below so the
+# title is not set flush against the top margin, nor the first system
+# against it. Answers the lines with their baselines, and where they end.
 def score_header_lines(header, width)
   rows = [
     [ ["", "regular", 0.0], [header["dedication"] ?? "", "regular", 0.0], ["", "regular", 0.0] ],
@@ -505,7 +509,7 @@ def score_header_lines(header, width)
     next if tallest == 0.0
 
     ascent = 0.72 * tallest
-    y = out.length == 0 ? ascent : score_max(y + 3.5, y + prev_descent + ascent + 0.3)
+    y = out.length == 0 ? score_title_pad() + ascent : score_max(y + 3.5, y + prev_descent + ascent + 0.3)
     cells = []
     for cell, ci in row
       next if cell[0] == ""
@@ -520,7 +524,12 @@ def score_header_lines(header, width)
     out.push({"y": y, "cells": cells})
     prev_descent = 0.25 * tallest
   end
-  {"lines": out, "bottom": out.length == 0 ? 0.0 : y + prev_descent}
+  {"lines": out, "bottom": out.length == 0 ? 0.0 : y + prev_descent + score_title_pad()}
+end
+
+# The room above the titles and below them, in staff spaces.
+def score_title_pad()
+  2.0
 end
 
 # A fill in its own units scaled by `k`, then moved and scaled to px: how a
@@ -3432,8 +3441,10 @@ end
 # a staff space is five points on LilyPond's 20-point staff, so the page is
 # drawn at five units a space and needs no scaling. Every letter is an
 # outline already, so no font is embedded; a quadratic piece becomes the
-# cubic PDF draws. The file is ASCII from end to end, so it travels as a
-# string: `{"state": state, "save": score_pdf(src)}` answers a save.
+# cubic PDF draws. Every page has a footer in grey: the title, and the
+# page's number out of how many — so the number is not also set at the top.
+# The file is ASCII from end to end, so it travels as a string:
+# `{"state": state, "save": score_pdf(src)}` answers a save.
 def score_pdf(src, opts = {})
   return eui_score_pdf(src, opts["title"] ?? "") if defined("eui_score_pdf")
 
@@ -3452,7 +3463,8 @@ def score_pdf(src, opts = {})
   bodies.push("<< /Title " + score_pdf_text(title) + " /Producer (EUI score) >>")
   for pg in engraved["pages"]
     k = pg["index"]
-    data = score_pdf_page(score_paths(engraved, sp, {"page_index": k}), page_h)
+    foot = score_foot_paths(engraved, sp, k, count, title, paper["h"] - paper["foot"])
+    data = "0 g\n" + score_pdf_page(score_print_paths(engraved, sp, k), page_h) + "\n0.4 g\n" + score_pdf_page(foot, page_h)
     bodies.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + score_pdf_num(page_w) + " " + score_pdf_num(page_h) + "] /Contents " + str(5 + 2 * k) + " 0 R /Resources << >> >>")
     bodies.push("<< /Length " + str(data.length) + " >>\nstream\n" + data + "\nendstream")
   end
@@ -3474,7 +3486,7 @@ end
 # A page's content stream: every path filled in black by the non-zero
 # rule, y turned up as PDF has it.
 def score_pdf_page(paths, page_h)
-  ops = ["0 g"]
+  ops = []
   for pa in paths
     if pa[0] == 1
       ops.push(score_pdf_num(pa[2]) + " " + score_pdf_num(page_h - pa[3] - pa[5]) + " " + score_pdf_num(pa[4]) + " " + score_pdf_num(pa[5]) + " re f")
@@ -3763,14 +3775,7 @@ end
 def score_paths_head(engraved, sp, ink, page)
   paths = []
   left = engraved["left"] ?? 0.0
-  if page == 0
-    margin = engraved["pages"].length > 0 && !engraved["paper"].nil? ? 2.83 : 1.0
-    for line in engraved["header"]["lines"]
-      for cell in line["cells"]
-        score_draw_text(paths, ink, cell["text"], cell["weight"], left + cell["x"], margin + line["y"], cell["em"], sp)
-      end
-    end
-  end
+  score_draw_titles(paths, engraved, sp, ink, page)
   if page > 0 && engraved["numbered"] == true
     # LilyPond's page numbers: from the second page, at the top, on the
     # outside edge — right on odd pages, left on even ones.
@@ -3779,6 +3784,55 @@ def score_paths_head(engraved, sp, ink, page)
     nx = (page + 1) % 2 == 1 ? left + engraved["width"] - score_text_width(number, "regular", em) : left
     score_draw_text(paths, ink, number, "regular", nx, 2.83 + 0.72 * em, em, sp)
   end
+  paths
+end
+
+def score_draw_titles(paths, engraved, sp, ink, page)
+  return nil if page != 0
+
+  left = engraved["left"] ?? 0.0
+  margin = engraved["pages"].length > 0 && !engraved["paper"].nil? ? 2.83 : 1.0
+  for line in engraved["header"]["lines"]
+    for cell in line["cells"]
+      score_draw_text(paths, ink, cell["text"], cell["weight"], left + cell["x"], margin + line["y"], cell["em"], sp)
+    end
+  end
+  nil
+end
+
+# Page `page` as the PDF prints it: its titles if it is the first and its
+# systems, with no number at the top — the footer carries it.
+def score_print_paths(engraved, sp, page)
+  paths = []
+  score_draw_titles(paths, engraved, sp, "text.default", page)
+  for sys in engraved["systems"]
+    score_draw_system(paths, sys, sp, "text.default", {}) if (sys["page"] ?? 0) == page
+  end
+  paths
+end
+
+# The footer of page `page` of `count`, its baseline at `y`: `title` at the
+# left, cut short with an ellipsis where it would reach the number, and
+# `n / count` at the right, two steps smaller than the music's words.
+def score_foot_paths(engraved, sp, page, count, title, y)
+  paths = []
+  left = engraved["left"] ?? 0.0
+  em = score_em(-2.0)
+  number = str(page + 1) + " / " + str(count)
+  number_w = score_text_width(number, "regular", em)
+  score_draw_text(paths, "text.default", number, "regular", left + engraved["width"] - number_w, y, em, sp)
+  room = engraved["width"] - number_w - em
+  words = title
+  if score_text_width(words, "regular", em) > room
+    kept = title.chars()
+    done = false
+    while !done
+      kept = kept.length > 0 ? kept.take(kept.length - 1) : kept
+      words = kept.join("") + "…"
+      done = kept.length == 0 || score_text_width(words, "regular", em) <= room
+    end
+  end
+  score_draw_text(paths, "text.default", words, "regular", left, y, em, sp)
   paths
 end
 

@@ -87,7 +87,12 @@ pub struct HeadBlock {
     pub bottom: f64,
 }
 
-/// LilyPond's `bookTitleMarkup`, line by line.
+/// Room above the titles and below them, in staff spaces: the title is not
+/// set flush against the top margin, nor the first system against it.
+pub const TITLE_PAD: f64 = 2.0;
+
+/// LilyPond's `bookTitleMarkup`, line by line, `TITLE_PAD` clear above and
+/// below.
 pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
     let get = |k: &str| header.get(k).cloned().unwrap_or_default();
     let rows: Vec<[(String, Weight, f64); 3]> = vec![
@@ -112,7 +117,7 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
             continue;
         }
         let ascent = 0.72 * tallest;
-        y = if out.is_empty() { ascent } else { (y + 3.5_f64).max(y + prev_descent + ascent + 0.3) };
+        y = if out.is_empty() { TITLE_PAD + ascent } else { (y + 3.5_f64).max(y + prev_descent + ascent + 0.3) };
         let mut cells = Vec::new();
         for (ci, cell) in row.iter().enumerate() {
             if cell.0.is_empty() {
@@ -132,6 +137,6 @@ pub fn header_lines(header: &HashMap<String, String>, width: f64) -> HeadBlock {
         out.push(HeadLine { y, cells });
         prev_descent = 0.25 * tallest;
     }
-    let bottom = if out.is_empty() { 0.0 } else { y + prev_descent };
+    let bottom = if out.is_empty() { 0.0 } else { y + prev_descent + TITLE_PAD };
     HeadBlock { lines: out, bottom }
 }

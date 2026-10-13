@@ -494,7 +494,7 @@ end
 
 def score_a4()
   space = 25.4 * 5.0 / 72.0
-  {"w": 210.0 / space, "h": 297.0 / space, "left": 10.0 / space, "right": 10.0 / space, "top": 5.0 / space, "bottom": 6.0 / space, "indent": 15.0 / space}
+  {"w": 210.0 / space, "h": 297.0 / space, "left": 10.0 / space, "right": 10.0 / space, "top": 5.0 / space, "bottom": 12.0 / space, "indent": 15.0 / space, "foot": 6.0 / space}
 end
 
 def score_pages(src, opts)
@@ -841,7 +841,7 @@ def score_header_lines(header, width)
     next if tallest == 0.0
 
     ascent = 0.72 * tallest
-    y = out.length == 0 ? ascent : score_max(y + 3.5, y + prev_descent + ascent + 0.3)
+    y = out.length == 0 ? score_title_pad() + ascent : score_max(y + 3.5, y + prev_descent + ascent + 0.3)
     cells = []
     for cell, ci in row
       next if cell[0] == ""
@@ -856,7 +856,11 @@ def score_header_lines(header, width)
     out.push({"y": y, "cells": cells})
     prev_descent = 0.25 * tallest
   end
-  {"lines": out, "bottom": out.length == 0 ? 0.0 : y + prev_descent}
+  {"lines": out, "bottom": out.length == 0 ? 0.0 : y + prev_descent + score_title_pad()}
+end
+
+def score_title_pad()
+  2.0
 end
 
 def score_fill_k(ink, cmds, ox, oy, k, sp)
@@ -3535,7 +3539,8 @@ def score_pdf(src, opts = {})
   bodies.push("<< /Title " + score_pdf_text(title) + " /Producer (EUI score) >>")
   for pg in engraved["pages"]
     k = pg["index"]
-    data = score_pdf_page(score_paths(engraved, sp, {"page_index": k}), page_h)
+    foot = score_foot_paths(engraved, sp, k, count, title, paper["h"] - paper["foot"])
+    data = "0 g\n" + score_pdf_page(score_print_paths(engraved, sp, k), page_h) + "\n0.4 g\n" + score_pdf_page(foot, page_h)
     bodies.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + score_pdf_num(page_w) + " " + score_pdf_num(page_h) + "] /Contents " + str(5 + 2 * k) + " 0 R /Resources << >> >>")
     bodies.push("<< /Length " + str(data.length) + " >>\nstream\n" + data + "\nendstream")
   end
@@ -3555,7 +3560,7 @@ def score_pdf(src, opts = {})
 end
 
 def score_pdf_page(paths, page_h)
-  ops = ["0 g"]
+  ops = []
   for pa in paths
     if pa[0] == 1
       ops.push(score_pdf_num(pa[2]) + " " + score_pdf_num(page_h - pa[3] - pa[5]) + " " + score_pdf_num(pa[4]) + " " + score_pdf_num(pa[5]) + " re f")
@@ -3802,14 +3807,7 @@ end
 def score_paths_head(engraved, sp, ink, page)
   paths = []
   left = engraved["left"] ?? 0.0
-  if page == 0
-    margin = engraved["pages"].length > 0 && !engraved["paper"].nil? ? 2.83 : 1.0
-    for line in engraved["header"]["lines"]
-      for cell in line["cells"]
-        score_draw_text(paths, ink, cell["text"], cell["weight"], left + cell["x"], margin + line["y"], cell["em"], sp)
-      end
-    end
-  end
+  score_draw_titles(paths, engraved, sp, ink, page)
   if page > 0 && engraved["numbered"] == true
     # LilyPond's page numbers: from the second page, at the top, on the
     # outside edge — right on odd pages, left on even ones.
@@ -3818,6 +3816,50 @@ def score_paths_head(engraved, sp, ink, page)
     nx = (page + 1) % 2 == 1 ? left + engraved["width"] - score_text_width(number, "regular", em) : left
     score_draw_text(paths, ink, number, "regular", nx, 2.83 + 0.72 * em, em, sp)
   end
+  paths
+end
+
+def score_draw_titles(paths, engraved, sp, ink, page)
+  return nil if page != 0
+
+  left = engraved["left"] ?? 0.0
+  margin = engraved["pages"].length > 0 && !engraved["paper"].nil? ? 2.83 : 1.0
+  for line in engraved["header"]["lines"]
+    for cell in line["cells"]
+      score_draw_text(paths, ink, cell["text"], cell["weight"], left + cell["x"], margin + line["y"], cell["em"], sp)
+    end
+  end
+  nil
+end
+
+def score_print_paths(engraved, sp, page)
+  paths = []
+  score_draw_titles(paths, engraved, sp, "text.default", page)
+  for sys in engraved["systems"]
+    score_draw_system(paths, sys, sp, "text.default", {}) if (sys["page"] ?? 0) == page
+  end
+  paths
+end
+
+def score_foot_paths(engraved, sp, page, count, title, y)
+  paths = []
+  left = engraved["left"] ?? 0.0
+  em = score_em(-2.0)
+  number = str(page + 1) + " / " + str(count)
+  number_w = score_text_width(number, "regular", em)
+  score_draw_text(paths, "text.default", number, "regular", left + engraved["width"] - number_w, y, em, sp)
+  room = engraved["width"] - number_w - em
+  words = title
+  if score_text_width(words, "regular", em) > room
+    kept = title.chars()
+    done = false
+    while !done
+      kept = kept.length > 0 ? kept.take(kept.length - 1) : kept
+      words = kept.join("") + "…"
+      done = kept.length == 0 || score_text_width(words, "regular", em) <= room
+    end
+  end
+  score_draw_text(paths, "text.default", words, "regular", left, y, em, sp)
   paths
 end
 
@@ -7532,6 +7574,14 @@ describe("titles, tempo and changes", fn() {
     assert(head["lines"][1]["y"] - head["lines"][0]["y"] >= 3.49)
   })
 
+  test("the titles stand clear of the margin above and of the music below", fn() {
+    head = score_header_lines({"title": "Suite"}, 100.0)
+    title = head["lines"][0]
+    check("the title's top a pad under the margin", (title["y"] - 0.72 * score_em(4.0)).round(2), score_title_pad())
+    check("the block a pad past the title's descent", (head["bottom"] - title["y"] - 0.25 * score_em(4.0)).round(2), score_title_pad())
+    check("no titles, no room", score_header_lines({}, 100.0)["bottom"], 0.0)
+  })
+
   test("a tempo mark lands on the note after it, over the staff", fn() {
     engraved = score_engrave(SPEC_SUITE, 100.0)
     marks = engraved["systems"].map { |sys| sys["marks"].length }.reduce(fn(acc, n) acc + n, 0)
@@ -7964,6 +8014,31 @@ describe("PDF", fn() {
     at = int(tail.split("\n")[0])
     check("startxref points at the xref", pdf.bytes().drop(at).take(4), [120, 114, 101, 102])
     assert(pdf.includes?("/Title <FEFF00C90074007500640065>"))
+  })
+
+  test("every page's footer: the title at the left, the page out of how many at the right", fn() {
+    paper = score_a4()
+    line_w = paper["w"] - paper["left"] - paper["right"]
+    engraved = score_engrave_page("{ c''1 }", line_w, {"page_h": paper["h"], "top": paper["top"], "bottom": paper["bottom"], "left": paper["left"], "indent": paper["indent"], "gap": 12.0})
+    foot = score_foot_paths(engraved, 1.0, 1, 3, "Etude", paper["h"] - paper["foot"])
+    check("a fill for each of 2, /, 3 and E, t, u, d, e", foot.length, 8)
+    number_x = foot[0][3]
+    assert(number_x > paper["left"] + line_w - 5.0 && number_x < paper["left"] + line_w)
+    assert(foot[3][3] < paper["left"] + score_em(-2.0))
+    check("its baseline 6 mm up from the paper's edge", (paper["foot"] * 25.4 * 5.0 / 72.0).round(2), 6.0)
+  })
+
+  test("a title too long for the footer is cut short with an ellipsis, clear of the number", fn() {
+    paper = score_a4()
+    line_w = paper["w"] - paper["left"] - paper["right"]
+    engraved = score_engrave_page("{ c''1 }", line_w, {"page_h": paper["h"], "top": paper["top"], "bottom": paper["bottom"], "left": paper["left"], "indent": paper["indent"], "gap": 12.0})
+    foot = score_foot_paths(engraved, 1.0, 0, 1, "Variations " * 40, paper["h"] - paper["foot"])
+    em = score_em(-2.0)
+    number_w = score_text_width("1 / 1", "regular", em)
+    assert(foot.length > 3)
+    assert(foot.length < 3 + 400)
+    last = foot[foot.length - 1]
+    assert(last[3] < paper["left"] + line_w - number_w - em)
   })
 
   test("a long piece gives as many pages as its A4 layout", fn() {

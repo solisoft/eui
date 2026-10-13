@@ -127,11 +127,17 @@ pub struct Paper {
 
 impl Paper {
     /// A4 at LilyPond's default staff size, 20 pt — a staff space of 5 pt —
-    /// and its default margins: 10 mm at the sides, 5 at the top, 6 at the
-    /// bottom, the first system indented 15.
+    /// and its default margins: 10 mm at the sides, 5 at the top, the first
+    /// system indented 15. The bottom one is 12, not LilyPond's 6: the
+    /// PDF's footer sits on the 6 mm line, and the music stops above it.
     pub fn a4() -> Self {
         let space = 25.4 * 5.0 / 72.0;
-        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 6.0 / space, indent: 15.0 / space }
+        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space }
+    }
+
+    /// The footer's baseline, up from the paper's bottom edge.
+    pub fn foot(&self) -> f64 {
+        6.0 / (25.4 * 5.0 / 72.0)
     }
 
     /// The line width.
@@ -186,13 +192,14 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     guarded(|| midi::midi(src, opts))
 }
 
-/// The source on A4 as a PDF; `title` for one its header does not give.
+/// The source on A4 as a PDF, each page's footer its title and number;
+/// `title` for one its header does not give.
 pub fn pdf(src: &str, title: &str) -> Result<String, ScoreError> {
     guarded(|| {
         let parsed = parse::parse(src)?;
         let paper = Paper::a4();
         let eng = engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
-        Ok(pdf::pdf(&eng, title, paper.w, paper.h))
+        Ok(pdf::pdf(&eng, title, &paper))
     })
 }

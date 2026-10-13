@@ -754,9 +754,12 @@ accidentals a key and a bar imply; the spacing's increment; stem
 directions; beams grouped by metre, held to a space of slope and quanted;
 LilyPond's slur height; every path a kind `1` or `5` the encoder takes
 (`eui_render`); systems inside the width; a `\header` read and set as
-LilyPond's title page sets it, `\tempo` marks over the staff, the
+LilyPond's title page sets it, two spaces clear of the margin above and
+of the music below, `\tempo` marks over the staff, the
 naturals a key change cancels with, and A4 pages that break and stay inside
-their margins; repeat signs and endings, a start repeat moved past a
+their margins; the PDF's footer, the title at the left and the page out of
+how many at the right, a title too long for it cut with an ellipsis clear of
+the number; repeat signs and endings, a start repeat moved past a
 line break, bars of rest counted in the bar numbers and gathered when
 asked; tuplets' durations, their beams by the beat, their brackets and
 refusals; `\break` and `\pageBreak` ending a line and a page; dynamics,

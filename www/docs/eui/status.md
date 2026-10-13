@@ -449,7 +449,7 @@ stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
 writers. 5 654 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 4.2 MB) are what the Soli engraver drew for the 20
+  (`tests/golden/`, 4.3 MB) are what the Soli engraver drew for the 20
   pieces of `tests/corpus/` — 4 749 paths on a 900 px screen, 23 A4 pages
   and 4 756 paths on them, a MIDI file and a PDF each — and
   `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
@@ -474,8 +474,8 @@ writers. 5 654 lines; `serde_json` its one dependency, for the font data.
   what is lit: a tick sends **3.5–8.9 KB** and the system none
   (measured 2026-10-13, Beethoven, full score). Screen pages are no longer
   numbered in the music — the pager says which page it is, and the text
-  face's 4 lost its hairline diagonal at that size; A4 pages and the PDF
-  are numbered as LilyPond numbers them.
+  face's 4 lost its hairline diagonal at that size; A4 pages are
+  numbered as LilyPond numbers them, and the PDF in its footer.
 - What a drag costs. A note dragged on the first violins is an event per
   frame — one every 30 ms — and handling one is about 60 ms on the server
   (13 ms the handler, 25 ms the editor's view, the rest the state's 674 KB
@@ -2505,6 +2505,21 @@ and passes channel messages only. The driver's rules are tested
 not wired into the editor's view yet: soli has to speak EUI 9 first, and
 soli builds against an eui revision from before the `Fetch` and `Asset`
 frames, which lang does not handle.
+
+**And a footer on the PDF** (2026-10-13). Every page of `score_pdf` ends
+with a footer in grey on the 6 mm line: the title at the left — cut short
+with an ellipsis before it reaches the number — and `2 / 3` at the right,
+two steps smaller than the music's words; the PDF no longer sets the number
+at the top. The A4 bottom margin is 12 mm rather than LilyPond's 6 so the
+music stops above it; no corpus piece changed its page count. The titles
+stand two spaces clear of the top margin and of the first system, on a
+screen and on paper alike. A footer is outlines like every letter: 845
+bytes for an untitled page's `1 / 1`, 7.6 KB for "Frère Jacques" (its PDF
+30 840 → 38 432 bytes; Beethoven's three pages 556 312 → 582 174), the
+music's own stream unchanged to within 4 bytes. The goldens were drawn
+again by the Soli engraver — the same script draws the old ones back byte
+for byte from the previous catalogue — and the Rust engraver agrees with
+every path and every PDF byte. `tests/score_spec.sl` is 107 tests.
 
 ## Not started
 

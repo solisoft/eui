@@ -1125,7 +1125,11 @@ the forced breaks `\break` and `\pageBreak`, and expression: dynamics
 `\!`), articulations (`-.` `->` `--` `-^` `-!` `-_`, `\fermata`, with `^`
 and `_` for a side) and words over or under a note (`^"dolce"`), and as
 a Standard MIDI File (`score_midi`), as a vector PDF of its A4 pages
-(`score_pdf`), and several staves (`\new PianoStaff`
+(`score_pdf`: each page with a footer on the line 6 mm above the paper's
+edge — the title at the left, cut short with an ellipsis before it reaches
+the number, and the page's number out of how many at the right — so the
+bottom margin is 12 mm and the PDF sets no number at the top), and several
+staves (`\new PianoStaff`
 and `\new GrandStaff` under a brace, `\new StaffGroup` and `\new
 ChoirStaff` under a bracket, `<< … >>`, each `\new Staff \with {
 instrumentName … }`, inside `\score { … }` or not; one MIDI track per

@@ -1,16 +1,18 @@
 //! The A4 pages as a PDF (`eui_builders_score.sl`, "PDF"): the paths the
 //! screen draws, as vector paths at five points a staff space — LilyPond's
-//! 20-point staff — so nothing is scaled and no font is embedded. ASCII
-//! from end to end.
+//! 20-point staff — so nothing is scaled and no font is embedded, and on
+//! every page a footer in grey: the title, and the page's number out of
+//! how many. ASCII from end to end.
 
-use crate::draw::{page_paths, Path};
+use crate::draw::{foot_paths, print_paths, Path};
 use crate::engrave::Engraved;
+use crate::Paper;
 
-/// The file, from an engraving laid out on A4 (`Layout::a4`).
-pub(crate) fn pdf(eng: &Engraved, title: &str, page_w: f64, page_h: f64) -> String {
+/// The file, from an engraving laid out on `paper` (`Paper::layout`).
+pub(crate) fn pdf(eng: &Engraved, title: &str, paper: &Paper) -> String {
     let sp = 5.0;
-    let page_w = page_w * sp;
-    let page_h = page_h * sp;
+    let page_w = paper.w * sp;
+    let page_h = paper.h * sp;
     let mut bodies: Vec<String> = Vec::new();
     bodies.push("<< /Type /Catalog /Pages 2 0 R >>".into());
     let count = eng.pages.len();
@@ -19,7 +21,8 @@ pub(crate) fn pdf(eng: &Engraved, title: &str, page_w: f64, page_h: f64) -> Stri
     bodies.push(format!("<< /Title {} /Producer (EUI score) >>", text(title)));
     for pg in &eng.pages {
         let k = pg.index;
-        let data = page(&page_paths(eng, sp, k, &mut Vec::new()), page_h);
+        let foot = foot_paths(eng, sp, k, count, title, paper.h - paper.foot());
+        let data = format!("0 g\n{}\n0.4 g\n{}", page(&print_paths(eng, sp, k), page_h), page(&foot, page_h));
         bodies.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Contents {} 0 R /Resources << >> >>", num(page_w), num(page_h), 5 + 2 * k));
         bodies.push(format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len()));
     }
@@ -38,10 +41,10 @@ pub(crate) fn pdf(eng: &Engraved, title: &str, page_w: f64, page_h: f64) -> Stri
     out
 }
 
-/// A page's content stream: every path filled in black by the non-zero
-/// rule, y turned up as PDF has it.
+/// Paths as content-stream operators: each filled in the current colour
+/// by the non-zero rule, y turned up as PDF has it.
 fn page(paths: &[Path], page_h: f64) -> String {
-    let mut ops: Vec<String> = vec!["0 g".into()];
+    let mut ops: Vec<String> = Vec::new();
     for pa in paths {
         let pa = match pa {
             Path::Rect([x, y, w, h]) => {
