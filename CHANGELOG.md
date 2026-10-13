@@ -79,6 +79,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- Resizing a window on Linux (Wayland) follows the hand again. The client
+  presented frames faster than the compositor took them, and Vulkan's FIFO
+  held it back by blocking for a swapchain image — 9.4 s of a 12.5 s drag —
+  while the compositor's configures queued. It now waits for the
+  compositor's frame callback instead: resized frames went from every
+  27.5 ms (median; 199 ms at the 90th percentile) to every 17 ms (31 ms).
+  `EUI_TRACE=1` times the resize and the image wait on each `frame:` line.
 - The tutorial (`/docs/tutorial`) shows every helper its excerpts call. Ten
   were used and never defined on the page — `pantry_heading` from step 2 on,
   then `pantry_bump`, `pantry_defaults`, `pantry_add`, `pantry_toggle`,

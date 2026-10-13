@@ -3596,7 +3596,13 @@ impl Shell {
             self.announce_first_frame();
         }
         self.settle_chrome_mode(renderer);
+        // Timed apart from the frame, for `EUI_TRACE`: reconfiguring a
+        // surface rebuilds its swapchain, and during a drag that is every
+        // frame.
+        let resizing = crate::time::Instant::now();
+        let resized = self.pending_resize.is_some();
         self.apply_resize(renderer);
+        let resize_ms = resizing.elapsed().as_secs_f64() * 1e3;
         let (w, h) = (self.config.width, self.config.height);
         if w == 0 || h == 0 {
             return;
@@ -3624,6 +3630,7 @@ impl Shell {
         // because the paint is what settles hover and hands the driver its
         // clock. Only the picture has nowhere to go.
         let Some(surface) = &self.surface else { return };
+        let acquiring = crate::time::Instant::now();
         // A suboptimal frame is still drawn, as it always was: skipping it
         // to reconfigure is a window that never paints wherever the
         // compositor keeps saying so.
@@ -3640,6 +3647,7 @@ impl Shell {
                 return;
             }
         };
+        let acquire_ms = acquiring.elapsed().as_secs_f64() * 1e3;
         // The sRGB sibling where the surface itself is not sRGB, so the
         // hardware encodes what the shader wrote; the surface's own format
         // when it already is. `view_formats` above declared this.
@@ -3728,6 +3736,13 @@ impl Shell {
                 stats.gpu_ms = st.gpu_ms.or(stats.gpu_ms);
             }
         }
+        // Told before the present, so the compositor's frame callback is
+        // what paces the next redraw. Without it a Wayland window presented
+        // faster than the compositor took frames, and FIFO paced it instead
+        // by blocking `get_current_texture`: 419 frames of 1043 waited over
+        // 5 ms there, 9.4 s of a 12.5 s window drag (2026-10-13), with the
+        // configures of the drag queued behind them.
+        self.window.pre_present_notify();
         renderer.queue().present(frame);
         // Still moving? Ask for the next frame here, not on a timer.
         //
@@ -3751,9 +3766,11 @@ impl Shell {
         }
         crate::driver::trace(|| {
             format!(
-                "frame: layout+paint {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}{}",
+                "frame: {}layout+paint {:.1} ms, acquire {:.1} ms, render+present {:.1} ms, {} quads in {} runs, {} passes, {} submits, uploaded {} B instances + {} B atlas{}{}",
+                if resized { format!("resize {resize_ms:.1} ms, ") } else { String::new() },
                 painted.as_secs_f64() * 1e3,
-                t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3,
+                acquire_ms,
+                t0.elapsed().as_secs_f64() * 1e3 - painted.as_secs_f64() * 1e3 - acquire_ms,
                 stats.quads,
                 stats.runs,
                 stats.passes,

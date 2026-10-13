@@ -1990,6 +1990,7 @@ impl Driver {
                 // back for that answer goes as soon as the period allows,
                 // not when the fallback wait runs out (01 §3).
                 if let Some(sent) = self.viewport_unanswered.take() {
+                    trace(|| format!("viewport answered after {:.1} ms", self.now.saturating_duration_since(sent).as_secs_f64() * 1e3));
                     if let Some(due) = self.viewport_due {
                         let sooner = (sent + VIEWPORT_EVERY).max(self.now);
                         if sooner < due {
@@ -8009,6 +8010,7 @@ impl Driver {
                     self.viewport_unanswered = Some(now);
                     self.viewport_sent = Some(now);
                     self.pending.push(Frame::Viewport(self.viewport()));
+                    trace(|| format!("viewport sent: {:.0}x{:.0}", self.size.w, self.size.h));
                 }
             }
         }
