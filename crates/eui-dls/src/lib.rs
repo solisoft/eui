@@ -167,7 +167,14 @@ mod mac {
         }
     }
 
+    /// One render at a time in the process. Two DLS synths playing notes at
+    /// once — two decodes on two of the worker's threads, or two tests —
+    /// crashed the process (SIGBUS) on macOS 14 when the instruments were
+    /// fetched, while one alone rendered; the bank is the system's, shared.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     pub(super) fn render(events: &[Event], frames: usize, rate: u32) -> Option<(Vec<f32>, Vec<f32>)> {
+        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let unit = open(rate)?;
         let mut left = vec![0.0f32; frames];
         let mut right = vec![0.0f32; frames];
