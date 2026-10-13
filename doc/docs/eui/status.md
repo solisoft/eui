@@ -2568,6 +2568,19 @@ staves (a single track's sheet: 130 KB), since a band is a system — a band
 per staff would need `eui-score`'s and the catalogue's band cutters and
 lang's pin to move. `tests/score_spec.sl` is 114 tests.
 
+**And words that say what they are** (2026-10-13). The Score tab's
+"Words" was the tempo's text: it is a **Tempo mark** now — the words, the
+beat and its speed together, Printed / Not printed, and beside them what
+the score will print over the first bar ("Moderato (♩ = 100)"). Words on a
+note are one field with an Above / Below switch, Clear, and thirteen marks
+a press each (dolce, espress., cantabile, legato, rit., rall., a tempo,
+cresc., dim., poco a poco, sub., pizz., arco). The field sends what it
+holds at every keystroke, and each used to be a step to undo — "dolce" was
+five; a run of typing on one note's one side is one step now, a mark or
+Clear pressed is a step of its own, and the field is keyed by the note, so
+another note selected shows its own words. `tests/score_spec.sl` is 116
+tests.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

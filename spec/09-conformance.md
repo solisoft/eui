@@ -789,7 +789,9 @@ picked up and, but for the last, nothing moved, a repeat opened on the first bar
 off at the selected bar, bars of rest in a row written as one and read back
 as bars, triplets and sextuplets made with Ctrl+3 and Ctrl+6 and broken by
 a deletion, breaks set after the selected bar, a dynamic, a hairpin,
-articulations and words written after their note and read back, and the
+articulations and words written after their note and read back — a run
+of typing words one step to undo, a mark or Clear a step of its own, on
+the side chosen — the tempo mark shown as it prints, and the
 tune mixed into a `.wav`; and its tracks — added and edited one at a time
 with Alt+↑/↓ between them, written as a staff group with the shorter
 filled, a change from a bar the first track's and every staff's — chosen

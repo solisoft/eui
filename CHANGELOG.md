@@ -54,6 +54,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- The score editor's words: the tempo's text is a "Tempo mark" with what
+  it prints shown beside it; words on a note are one field with Above /
+  Below, Clear and common marks (dolce, cresc., rit., pizz. …) a press
+  each; typing them is one step to undo, not one per letter.
 - Moving notes in a large score no longer slows down as you go: an undo
   step keeps only the track edited (28 KB on Beethoven's Fifth, not 390 KB),
   and is undone on that track.

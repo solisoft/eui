@@ -4765,6 +4765,9 @@ def score_ed_answer(state, ed_event, params, props)
     "midi_save" => {"state": state, "save": score_midi(score_ed_full_source(state), {"bpm": state["tempo"], "beat": state["tempo_base"] ?? 4})},
     "pdf_save" => {"state": state, "save": score_pdf(score_ed_full_source(state))},
     "words" => score_ed_words(state, params["payload"] ?? "", props["dir"] == "down" ? 1 : -1),
+    "words_clear" => score_ed_words_pressed(state, ""),
+    "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
+    "words_dir" => ["Above", "Below"].includes?(props["option"]) ? score_ed_flag(state, "words_dir", props["option"]) : state,
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
     "playhead" => score_ed_playhead(state, params["payload"] ?? [0, 0]),
@@ -4843,6 +4846,8 @@ def score_ed_snap(state, all)
 end
 
 def score_ed_push_undo(state, snap)
+  # Any other edit ends a run of typing words.
+  state["words_at"] = ""
   undo = state["undo"] ?? []
   undo.push(snap)
   if undo.length > SCORE_ED_UNDO
@@ -4885,6 +4890,7 @@ def score_ed_undo(state)
   return state if undo.length == 0
 
   snap = undo.pop()
+  state["words_at"] = ""
   state = score_ed_onto_track(state, snap)
   redo = state["redo"] ?? []
   redo.push(score_ed_snap(state, snap.has_key("tracks")))
@@ -4904,6 +4910,7 @@ def score_ed_redo(state)
   return state if redo.length == 0
 
   snap = redo.pop()
+  state["words_at"] = ""
   state = score_ed_onto_track(state, snap)
   undo = state["undo"] ?? []
   undo.push(score_ed_snap(state, snap.has_key("tracks")))
@@ -5348,11 +5355,30 @@ def score_ed_words(state, words, dir)
   current = score_ed_selected(state)
   return state if current.nil?
 
-  state = score_ed_remember(state)
+  at = str(state["track"] ?? 0) + "|" + str(state["voice"] ?? 1) + "|" + str(state["sel"]) + "|" + str(dir)
+  if state["words_at"] != at
+    state = score_ed_remember(state)
+    state["words_at"] = at
+  end
   current = score_ed_selected(state)
   kept = (current["texts"] ?? []).filter { |tx| tx["dir"] != dir }
   current["texts"] = words.trim == "" ? kept : kept + [ {"text": words, "dir": dir} ]
   state
+end
+
+def score_ed_words_pressed(state, words)
+  state["words_at"] = ""
+  state = score_ed_words(state, words, score_ed_words_side(state))
+  state["words_at"] = ""
+  state
+end
+
+def score_ed_words_side(state)
+  state["words_dir"] == "Below" ? 1 : -1
+end
+
+def score_ed_word_marks()
+  ["dolce", "espress.", "cantabile", "legato", "rit.", "rall.", "a tempo", "cresc.", "dim.", "poco a poco", "sub.", "pizz.", "arco"]
 end
 
 def score_ed_expression_ly(nt, first_piece, last_piece)
@@ -7350,18 +7376,25 @@ def score_ed_expression_panel(state)
   names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata"}
   glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove"}
   artics = SCORE_ED_ARTICS.map { |name| score_ed_glyph_button("artic:" + name, "artic", {"name": name}, score_ed_centred_icon(glyphs[name]), !none && (current["scripts"] ?? []).any? { |sc| sc["name"] == name }, "", names[name]) }
-  above = ""
-  below = ""
+  side = score_ed_words_side(state)
+  side_name = side < 0 ? "Above" : "Below"
+  said = ""
   for tx in none ? [] : (current["texts"] ?? [])
-    above = tx["text"] if tx["dir"] < 0
-    below = tx["text"] if tx["dir"] > 0
+    said = tx["text"] if tx["dir"] == side
   end
+  # Keyed by the note and the side: another note selected is another field,
+  # holding that note's words, never the last one's typing.
+  field_key = "score_words:" + str(state["track"] ?? 0) + ":" + str(state["voice"] ?? 1) + ":" + str(state["sel"] ?? -1) + ":" + side_name
+  marks = score_ed_word_marks().map { |mark| score_ed_tool(mark, "words_mark", {"text": mark}, none, nil) }
   column({"gap": 3}, [
     row({"gap": 3, "align": "center", "wrap": "wrap"}, [row({"gap": 1, "align": "center"}, dyns), score_ed_rule()] + pins),
-    row({"gap": 3, "align": "center", "wrap": "wrap"}, [row({"gap": 1, "align": "center"}, artics), score_ed_rule(),
-      score_ed_labelled("Words above", input(above, "words", {"key": "score_words_up", "placeholder": "dolce", "props": {"dir": "up"}, "style": {"width": 150}})),
-      score_ed_labelled("below", input(below, "words", {"key": "score_words_down", "placeholder": "cresc.", "props": {"dir": "down"}, "style": {"width": 150}}))
+    row({"gap": 3, "align": "center", "wrap": "wrap"}, [row({"gap": 1, "align": "center"}, artics)]),
+    row({"gap": 3, "align": "center", "wrap": "wrap"}, [
+      score_ed_labelled("Text", segmented(["Above", "Below"], side_name, "words_dir")),
+      input(said, "words", {"key": field_key, "placeholder": none ? "Select a note first" : (side < 0 ? "dolce" : "cresc."), "props": {"dir": side < 0 ? "up" : "down"}, "style": {"width": 200}}),
+      score_ed_tool("Clear", "words_clear", {}, none || said == "", nil)
     ]),
+    row({"gap": 1, "align": "center", "wrap": "wrap"}, marks),
     muted(none ? "Select a note to give it a dynamic, a hairpin, an articulation or words." : (armed ? "A hairpin is armed: select the note it ends on and press it again." : "On the selected note; pressed again, each comes off. A hairpin, like a slur: once here, once on the note it ends on."))
   ])
 end
@@ -7519,6 +7552,12 @@ def score_ed_bars_panel(state)
     ]),
     muted("At the bar the selected note is in: a repeat starts there or ends after it, and a line or a page can be made to end after it. Press again to take it off.")
   ])
+end
+
+def score_ed_tempo_shown(state, beat)
+  words = (state["tempo_text"] ?? "").trim
+  speed = beat + " = " + str(state["tempo"])
+  words == "" ? speed : words + " (" + speed + ")"
 end
 
 def score_ed_time_at(state, idx)
@@ -8058,6 +8097,37 @@ describe("the editor", fn() {
     check("a track added: every track copied", st["undo"][-1].has_key("tracks"), true)
     st = score_ed_undo(st)
     check("and undone whole", score_ed_tracks(st).length, 2)
+  })
+
+  test("words on a note: a run of typing is one step, a mark goes on the side chosen, Clear takes it off", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }")
+    st["sel"] = 1
+    before = st["undo"].length
+    for typed in ["d", "do", "dol", "dolc", "dolce"]
+      st = score_editor({"event": "words", "params": {"payload": typed, "props": {"dir": "up"}}, "state": st})
+    end
+    check("five keystrokes, one step to undo", st["undo"].length - before, 1)
+    check("dolce over the D", st["notes"][1]["texts"], [ {"text": "dolce", "dir": -1} ])
+    st = score_editor({"event": "words_dir", "params": {"props": {"option": "Below"}}, "state": st})
+    st = score_editor({"event": "words_mark", "params": {"props": {"text": "cresc."}}, "state": st})
+    check("cresc. under it, dolce kept", st["notes"][1]["texts"].map { |tx| [tx["text"], tx["dir"]] }, [ ["dolce", -1], ["cresc.", 1] ])
+    check("both in the source", [score_ed_layout(st)["src"].includes?("^\"dolce\""), score_ed_layout(st)["src"].includes?("_\"cresc.\"")], [true, true])
+    st = score_editor({"event": "words_clear", "params": {}, "state": st})
+    check("Clear takes off the side chosen", st["notes"][1]["texts"].map { |tx| tx["text"] }, ["dolce"])
+    st["sel"] = 2
+    st = score_editor({"event": "words", "params": {"payload": "p", "props": {"dir": "down"}}, "state": st})
+    check("another note: another step", st["undo"].length - before, 4)
+    st = score_ed_undo(st)
+    check("undone, the E has no words", st["notes"][2]["texts"] ?? [], [])
+  })
+
+  test("the tempo mark says what the score prints over the first bar", fn() {
+    st = spec_state()
+    st["tempo_text"] = "Moderato"
+    st["tempo"] = 100
+    check("words, then the speed", score_ed_tempo_shown(st, "♩"), "Moderato (♩ = 100)")
+    st["tempo_text"] = "  "
+    check("the speed alone", score_ed_tempo_shown(st, "♩"), "♩ = 100")
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {
