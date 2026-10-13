@@ -47,6 +47,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x1E` | `file_drag` | `List[Bool over]`, a file is over a node carrying `drop`, or has left it (spec 03 §3.2) | **only when the node under the file changes** |
 | `0x1F` | `back` | `Null`, the person asked to go back (§1.3) | |
 | `0x20` | `level` | `List[Int peak_left, Int peak_right]`, `0..=100`, how loud a sound has been since the last one (spec 03 §7) | on `time_update`'s clock, and only when it changes |
+| `0x21` | `midi` | `List[List[Int t_ms, Int status, Int data1, Int data2]]`, what the person's MIDI instruments sent since the last one (§1.4, protocol 9) | per frame, **batched and never coalesced**: every message, in order |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -116,6 +117,52 @@ client MUST NOT offer a way to ask for more.
 
 The count has a ceiling as `wake` does: a page wants one fix, and a server
 that asks for a hundred gets two.
+
+### 1.4 Playing
+
+The third event an application asks for (protocol 9). A node holding a
+**`midi` handler** hears the person's MIDI instruments — a keyboard, a pad,
+anything the platform lists as a MIDI input — for as long as it holds it.
+
+Three things must hold, and a client MUST check every one:
+
+1. the `midi` capability was granted ([`01-transport.md`](01-transport.md)
+   §2.1). Without it the client opens no device at all, and the tree is not
+   read for the handler;
+2. the window has the input. A person playing into one window is not
+   playing into the others, and an application in the background does not
+   get to listen;
+3. a node holds the handler. The client opens the instruments when the
+   first handler arrives and lets go of them when the last one goes, as
+   `locate` runs the radio only while it is asked for.
+
+**What is reported is what was played:** channel messages, status `0x80`
+to `0xEF` — note off and on, key pressure, control change, program change,
+channel pressure, pitch bend — each as four integers, the time and the
+status and its two data bytes (`0` where the message has one). System
+messages are not reported: clock and active sensing say nothing a person
+did and arrive dozens of times a second, and a SysEx can carry a device's
+serial number, which is a way to recognise the person and not music.
+
+**Every message, in order.** The messages are batched and not coalesced —
+a chord is four note ons a millisecond apart and every one of them is the
+music. An event carries the messages that arrived since the last, at most
+`MAX_MIDI_PER_EVENT` ([`10-budgets.md`](10-budgets.md)); more wait for the
+next frame. A backlog past `MAX_MIDI_QUEUE` lets go of its oldest and says
+so on the console: a server that falls behind loses what was played first,
+never what is being played.
+
+**`t_ms` is the node's clock.** On an `audio` node whose sound is playing it
+is **where that sound is**, in milliseconds, at the moment the message
+arrived — so a recording made against a metronome or a backing track gets
+the note and the beat on one clock, measured where they are heard rather
+than where they were sent. On any other node it is milliseconds on the
+client's own clock from an origin of its choosing, and only the differences
+between messages mean anything. The arrival is the platform's timestamp
+where it gives one, else the moment the client read the message.
+
+Every node holding the handler hears every message; a page wants one.
+Enforced in `eui-client` (`Driver::midi`, and the window's `midi_in`).
 
 ### 1.3 Going back
 

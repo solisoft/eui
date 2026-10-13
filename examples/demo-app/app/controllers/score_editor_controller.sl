@@ -104,6 +104,7 @@ def score_ed_answer(state, ed_event, params, props)
     "connect" => state,
     "viewport" => state,
     "key" => score_ed_key(state, params["payload"][0], params["payload"][1]),
+    "midi" => score_ed_midi_in(state, params["payload"] ?? []),
     "pick" => score_ed_pick(state, params["payload"] ?? [0, 0], int(props["page"] ?? 0)),
     "press" => score_ed_press(state, params["payload"] ?? [0, 0], int(props["page"] ?? 0)),
     "drag" => score_ed_drag(state, params["payload"] ?? [0, 0]),
@@ -1003,6 +1004,64 @@ def score_ed_ensemble_end(state, info)
   ends
 end
 
+# A part's notes with its bars of rest gathered (`opts["gather"]`): what a
+# player reads, as LilyPond's \\compressEmptyMeasures prints it. The full
+# score keeps every bar, its staves lining up bar by bar. A run is whole-bar
+# rests from a bar line on, the padding that fills a short part to the end
+# split into bars, and it stops where a bar carries a mark — a change, a
+# repeat, a break — so what is written there is still written. Every item
+# keeps the index of the note it came from (`src`); a gathered one is
+# `{"mm": bars}`, owned by its first rest.
+def score_ed_gathered(notes, measure, marks)
+  # A metre that changes makes a bar's length a question of where it is;
+  # such a part is written bar by bar.
+  return notes if marks.values.any? { |mk| (mk["set"] ?? {}).has_key("time") }
+
+  bars = []
+  tick = 0
+  for nt, ni in notes
+    left = nt["pad"] ?? score_ed_ticks(nt)
+    if nt.has_key("pad")
+      head = tick % measure == 0 ? 0 : score_min(left, measure - tick % measure)
+      bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": head, "bar": tick / measure}) if head > 0
+      left -= head
+      tick += head
+      while left >= measure
+        bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": measure, "whole": true, "bar": tick / measure})
+        left -= measure
+        tick += measure
+      end
+      bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": left, "bar": tick / measure}) if left > 0
+      tick += left
+      next
+    end
+    plain = nt["rest"] && nt["tup"].nil? && nt["dyn"].nil? && nt["hairpin"].nil? && nt["hairpin_end"] != true && (nt["texts"] ?? []).length == 0 && (nt["scripts"] ?? []).length == 0
+    bars.push(nt.merge({"src": ni, "whole": plain && tick % measure == 0 && left == measure, "bar": tick / measure}))
+    tick += left
+  end
+  out = []
+  k = 0
+  while k < bars.length
+    nt = bars[k]
+    run = 0
+    while nt["whole"] == true && k + run < bars.length && bars[k + run]["whole"] == true
+      here = marks[str(nt["bar"] + run)] ?? {}
+      break if run > 0 && (((here["set"] ?? {}).keys.length > 0) || here["rep_start"] == true)
+
+      run += 1
+      break if here["rep_end"] == true || !here["brk"].nil?
+    end
+    if run > 1
+      out.push({"rest": true, "mm": run, "src": nt["src"]})
+      k += run
+      next
+    end
+    out.push(nt)
+    k += 1
+  end
+  out
+end
+
 # One track written out, the bars' marks (from the first track) put on
 # every staff and the track filled with rests to the ensemble's end. The
 # header and the tempo only where `opts` asks: a staff of the full score
@@ -1030,8 +1089,27 @@ def score_ed_layout_track(state, k, info, opts)
   bar = 0
   bar_at = -1
   marks = info["marks"]
+  gathering = opts["gather"] == true && score_ed_chunks(measure).length == 1
+  if gathering
+    notes = score_ed_gathered(notes, measure, marks)
+    words.push("\\compressEmptyMeasures") if notes.any? { |nt| !nt["mm"].nil? }
+  end
   measure = score_ed_track_marks(words, marks, 0, measure, opts, -1)
   for nt, ni in notes
+    # Bars of rest gathered: one word, its count over it.
+    unless nt["mm"].nil?
+      words.push("R" + score_ed_chunks(measure).map { |ch| str(ch[0]) + (ch[1] > 0 ? "." : "") }.join("") + "*" + str(nt["mm"]))
+      owners.push(nt["src"] ?? -1)
+      bar += nt["mm"] - 1
+      here = marks[str(bar)] ?? {}
+      words.push(here["rep_end"] == true ? "\\bar \":|.\"" : "|")
+      bar_at = words.length - 1
+      bar += 1
+      more = ni + 1 < notes.length
+      words.push(here["brk"] == "page" ? "\\pageBreak" : "\\break") if !here["brk"].nil? && more
+      measure = score_ed_track_marks(words, marks, bar, measure, opts, bar_at) if more
+      next
+    end
     left = nt["pad"] ?? score_ed_ticks(nt)
     tup = nt["tup"]
     tup_opens = !tup.nil? && (ni == 0 || notes[ni - 1]["tup"].nil? || notes[ni - 1]["tup"]["g"] != tup["g"])
@@ -1050,7 +1128,7 @@ def score_ed_layout_track(state, k, info, opts)
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad")
         words.push(word)
-        owners.push(nt.has_key("pad") ? -1 : ni)
+        owners.push(nt.has_key("pad") ? -1 : (nt["src"] ?? ni))
       end
       words.push("}") if tup_closes
       pos += take
@@ -1529,17 +1607,28 @@ def score_ed_conductor_engraved(state, full)
   score_engrave_page(full["src"], float(score_ed_width(state)) / sp, {"page_h": score_ed_screen_page() / sp})
 end
 
-# The page note `owner` of the edited track is on, or nil.
+# The page note `owner` of the edited track is on, or nil: the page of the
+# item drawn for it, or for the nearest note before it that has one — a
+# rest gathered into a bar count is drawn by the run's first.
 def score_ed_page_of(engraved, map, owner)
+  best = nil
+  best_owner = -1
   for sys in engraved["systems"]
     for bar in sys["bars"]
       for ev in bar["items"]
         k = ev["i"]
-        return sys["page"] ?? 0 if !k.nil? && k < map.length && map[k] == owner
+        next if k.nil? || k >= map.length
+
+        here = map[k]
+        return sys["page"] ?? 0 if here == owner
+        if here >= 0 && here < owner && here > best_owner
+          best_owner = here
+          best = sys["page"] ?? 0
+        end
       end
     end
   end
-  nil
+  best
 end
 
 # The note lit — the one playing, else the selection — decides the page,
@@ -1742,6 +1831,59 @@ def score_ed_key(state, key, mods)
   state
 end
 
+# ---- A MIDI keyboard --------------------------------------------------------
+#
+# Step input (EUI 06 §1.4): every key pressed on the instrument writes a note
+# of the duration chosen in the palette, at the pitch played, spelled as the
+# key of the piece spells it; keys pressed together — within 30 ms of each
+# other — write one chord. Note offs, pedals and controllers write nothing:
+# in this mode a note lasts what the palette says, not what the hand held.
+
+# Note ons this close together are one chord.
+def score_ed_chord_ms()
+  30
+end
+
+def score_ed_midi_in(state, messages)
+  chords = []
+  last_t = -1000000
+  for m in messages
+    next unless m.is_a?("array") && m.length == 4
+
+    status = m[1]
+    on = status >= 144 && status < 160 && m[3] > 0
+    next unless on
+
+    if chords.length == 0 || m[0] - last_t > score_ed_chord_ms()
+      chords.push([m[2]])
+    else
+      chords[-1].push(m[2])
+    end
+    last_t = m[0]
+  end
+  for keys in chords
+    state = score_ed_play_chord(state, keys)
+  end
+  state
+end
+
+# One chord played: a new note after the selection, its pitches spelled in
+# the key, the ones out of the staff's reach left out.
+def score_ed_play_chord(state, keys)
+  pitches = []
+  for key in keys.sort()
+    spelled = score_ed_spell(state, key, 1)
+    pt = {"step": spelled[0], "alter": spelled[1], "oct": spelled[2]}
+    pitches.push(pt) if score_ed_fits(state, pt) && !pitches.any? { |p| p["step"] == pt["step"] && p["oct"] == pt["oct"] }
+  end
+  return state if pitches.length == 0
+
+  state = score_ed_remember(state)
+  fresh = score_ed_note(pitches[0]["step"], pitches[0]["oct"], pitches[0]["alter"], state["dur"], state["dot"] ? 1 : 0)
+  fresh["pitches"] = pitches
+  score_ed_place(state, fresh)
+end
+
 # ---- The pointer -----------------------------------------------------------
 
 # A click lands in the score's own box, in logical px. Find the system by
@@ -1938,7 +2080,7 @@ end
 def score_ed_layout(state)
   return score_ed_layout_one(state) if score_ed_tracks(state).length < 2
 
-  laid = score_ed_layout_track(state, state["track"] ?? 0, score_ed_bar_marks(state), {"header": true, "tempo": true})
+  laid = score_ed_layout_track(state, state["track"] ?? 0, score_ed_bar_marks(state), {"header": true, "tempo": true, "gather": true})
   {"src": laid["words"].join(" "), "map": laid["map"]}
 end
 
@@ -2359,6 +2501,8 @@ def score_editor_view(raw_state)
   # The keys reach the editor wherever focus is — on the staff, or on a
   # palette button just pressed — but never from inside a field, whose own
   # typing the client keeps (03 §3.1).
+  # A `midi` handler joins these once soli speaks EUI 9 (06 §1.4): a
+  # server that does not know the event refuses the whole view.
   page["on"] = {"key_down": "key"}
   page
 end

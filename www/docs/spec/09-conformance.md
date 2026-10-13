@@ -723,7 +723,27 @@ voices without a bank and on a SoundFont's with one
 (`a_soundfont_plays_its_own_instruments`), panned by controller 10
 (`a_pan_moves_the_sound_to_one_side`); a `notes` list becomes the same
 file (`notes_are_a_midi_file_of_their_own`) and is held to its ceiling
-(`a_notes_list_past_its_ceiling_is_refused`).
+(`a_notes_list_past_its_ceiling_is_refused`). In the driver
+(`crates/eui-client/tests/driver.rs`): `notes` play when `notes_seq` moves
+and not on a render that leaves it alone
+(`notes_play_when_their_seq_changes_and_not_on_a_re_render`); a MIDI `src`
+asks for its `soundfont` parts and plays on the client's voices when they
+are no bank (`a_midi_src_asks_for_its_soundfont_parts_and_plays_without_a_bank`),
+and a real bank in two parts plays its own instruments
+(`a_soundfont_in_parts_plays_its_own_instruments`, given
+`EUI_TEST_SOUNDFONT`).
+
+MIDI instruments (06 §1.4) are pinned in the driver: nothing is heard
+without the `midi` grant or with the window behind, and granted, in front
+and asked for, a chord arrives as one event in order with the clock byte
+gone and the payload the shape §1 declares
+(`midi_is_heard_only_granted_in_front_and_asked`); a burst past
+`MAX_MIDI_PER_EVENT` is several events with none dropped
+(`a_burst_of_midi_is_split_and_nothing_is_dropped`). The window keeps
+channel messages and nothing else — clock, active sensing, a SysEx identity
+reply — (`only_what_was_played_is_kept`, `crates/eui-client/src/midi_in.rs`),
+and `Input::Midi` crosses the worker's pipe intact
+(`requests_round_trip`, `worker.rs`).
 
 The catalogue's `score()` (03 §4) is pinned by
 `examples/demo-app/tests/score_spec.sl` (`soli test`): `\relative` octaves,

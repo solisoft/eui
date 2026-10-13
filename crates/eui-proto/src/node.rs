@@ -197,6 +197,11 @@ pub enum EventKind {
     /// the viewer's own volume, so it carries nothing about the machine —
     /// only the server's own bytes at the gain the server asked for.
     Level = 0x20,
+    /// What the person's MIDI instruments sent since the last one:
+    /// `List[List[Int t_ms, Int status, Int data1, Int data2]]`, channel
+    /// messages only, every one in order (06 §1.4). Gated by the `midi`
+    /// capability; protocol 9.
+    Midi = 0x21,
 }
 
 impl EventKind {
@@ -290,6 +295,21 @@ impl EventKind {
                 }
                 _ => false,
             },
+
+            // `List[List[Int t_ms, Int status, Int data1, Int data2]]`: at
+            // least one message, at most `MAX_MIDI_PER_EVENT`, each a
+            // channel message (status `0x80..=0xEF`, data bytes 7 bits).
+            Self::Midi => {
+                !items.is_empty()
+                    && items.len() <= crate::limits::MAX_MIDI_PER_EVENT
+                    && items.iter().all(|m| match m {
+                        Value::List(fields) => match fields.as_slice() {
+                            [Value::Int(_), Value::Int(status), Value::Int(d1), Value::Int(d2)] => (0x80..=0xEF).contains(status) && (0..=127).contains(d1) && (0..=127).contains(d2),
+                            _ => false,
+                        },
+                        _ => false,
+                    })
+            }
         }
     }
 
@@ -328,6 +348,7 @@ impl EventKind {
             0x1E => Ok(Self::FileDrag),
             0x1F => Ok(Self::Back),
             0x20 => Ok(Self::Level),
+            0x21 => Ok(Self::Midi),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

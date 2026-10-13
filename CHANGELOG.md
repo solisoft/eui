@@ -24,6 +24,42 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- **Protocol 9: MIDI sounds** (spec 03 §7). An `audio` node's `src` may be
+  a Standard MIDI File, which the client synthesizes — with the SoundFont 2
+  bank its `soundfont` prop names (a list of assets, the parts of a bank
+  larger than one asset) or, without one, voices of its own for General
+  MIDI's sixteen families and a drum kit. `notes` plays a list of MIDI
+  commands at once, again each time `notes_seq` changes: a note played as it
+  is written, with no sound file sent. lang passes the negotiated version
+  to `connect` as `protocol`.
+- **Protocol 9: MIDI instruments** (spec 06 §1.4, 01 §2.1). A node holding a
+  `midi` handler hears the person's MIDI keyboard — every channel message,
+  in order, stamped with the node's clock (a playing sound's position, for
+  recording against it) — while the new `midi` capability is granted and
+  the window is in front. System messages, SysEx included, never leave the
+  client. The window opens the platform's inputs (ALSA, CoreMIDI, Windows
+  MM) only while a node asks.
+- The score editor plays in the window: Play sends the score as a MIDI file
+  and each note written goes as MIDI commands, with GeneralUser GS
+  (`tools/fetch_soundfont.sh`) or the client's own voices; the server mixes
+  nothing. A fermata holds its note twice its length, on every staff, in
+  the MIDI file and the playhead alike.
+- The score editor's **Examples** menu loads Frère Jacques or the exposition
+  of Beethoven's Fifth (Mutopia's public-domain engraving, reduced to what
+  the editor reads by `tools/mutopia_beethoven5.py`), a whole score at once.
+- The score editor shows a long score a page at a time — only the page on
+  screen is drawn and sent — with the page following the selection and the
+  playhead. **Full score** heads the track strip and shows every staff, at
+  65 % size, instead of the edited one; a part's own staff gathers its bars
+  of rest into one with its count, as `\compressEmptyMeasures` prints a part.
+- The score editor: ↑/↓ step along the key's scale and Shift+↑/↓ by
+  semitones; a note can be dragged up and down its staff, redrawn and heard
+  at each line; a deleted note leaves a rest of its length, and a last bar
+  emptied that way goes; S arms a slur and S again closes it; notes stay
+  within five ledger lines of the staff and a piano's keys. A keyboard's
+  step input (a key, a note; keys together, a chord) is written and waits
+  for EUI 9 on the server side.
+
 - **Canvas fills** (spec 03 §1.1, path kind `5`): a filled outline of moves,
   lines, quadratic and cubic Béziers and closes, filled by the non-zero
   rule and anti-aliased. The client rasterises it into the glyph atlas;
@@ -78,8 +114,8 @@ release. A wire change lands here first, is released, and then the pin moves.
 - `score`, a twenty-first demo component: a score editor. Type A–G and the
   MuseScore duration numbers, or click on the staff; a note across a bar
   line is cut and tied for you; the LilyPond source beside it can be edited
-  or pasted; Play mixes the tune into a sound on the server, and each note
-  written is heard as it lands. It has fields for the title and composer, a
+  or pasted; Play plays the tune, and each note written is heard as it
+  lands. It has fields for the title and composer, a
   free tempo with printed words, every common metre, key, metre and tempo
   changes from the selected bar, and an A4 page view. The gallery's catalogue gains a Notation
   card.
@@ -113,6 +149,12 @@ release. A wire change lands here first, is released, and then the pin moves.
   bundle and makes an `.ipa`. See `/docs/packaging`.
 
 ### Changed
+
+- A key typed into a text field reaches a `key_down` handler above the
+  field only if that handler names it in `keys` (spec 03 §3.1): a page's
+  shortcuts on its root no longer fire while someone types — a `Backspace`
+  at the start of a title deleted a note in the score editor. A widget
+  wrapped around a field (a combobox, a tag list) already names its keys.
 
 - The client draws through **wgpu 30** (was 23), and the shader verifier
   parses with naga 30. The renderer's pixel tests pass unchanged, the

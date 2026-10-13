@@ -161,6 +161,9 @@ pub struct Session {
     /// a clock rather than in response to anything, so both have to be
     /// found without a search per tick.
     locators: Vec<NodeIx>,
+    /// Nodes carrying a `midi` handler (06 §1.4): who hears the instruments,
+    /// found without a search per message.
+    players: Vec<NodeIx>,
     /// The atom ids of the names the client reads per node — `spans`,
     /// `paths`, `row` — so a painter asks a struct rather than hashes a
     /// string per node per frame.
@@ -210,6 +213,7 @@ impl Session {
             media: Vec::new(),
             wakers: Vec::new(),
             locators: Vec::new(),
+            players: Vec::new(),
             known: WellKnown::default(),
             style_changes: Vec::new(),
             local_styles: FastMap::default(),
@@ -375,12 +379,18 @@ impl Session {
         &self.locators
     }
 
+    /// The nodes that hear MIDI instruments (06 §1.4).
+    pub fn players(&self) -> &[NodeIx] {
+        &self.players
+    }
+
     /// Forget the nodes that were released.
     fn prune_sets(&mut self) {
         let arena = &self.arena;
         self.media.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.wakers.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.locators.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+        self.players.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         // An island whose host went — a page `Mount`, a `Replace`, a
         // `RemoveChild` — went with it: its content was below the host and
         // was released in the same walk. Its tables and its slot go now,
@@ -1111,6 +1121,9 @@ impl Session {
                 if !had && event == EventKind::Location {
                     self.locators.push(ix);
                 }
+                if !had && event == EventKind::Midi {
+                    self.players.push(ix);
+                }
                 Ok(())
             }
             Op::ClearHandler { node, event } => {
@@ -1123,6 +1136,9 @@ impl Session {
                 }
                 if had && event == EventKind::Location {
                     self.locators.retain(|w| *w != ix);
+                }
+                if had && event == EventKind::Midi {
+                    self.players.retain(|w| *w != ix);
                 }
                 Ok(())
             }
@@ -1320,6 +1336,7 @@ impl Session {
             let handlers = all_handlers.get(start as usize..(start as usize).saturating_add(len as usize)).unwrap_or(&[]).to_vec();
             let wakes = handlers.iter().any(|(e, _)| *e == EventKind::Wake);
             let locates = handlers.iter().any(|(e, _)| *e == EventKind::Location);
+            let plays = handlers.iter().any(|(e, _)| *e == EventKind::Midi);
             let ix = self.arena.alloc(Node {
                 id: flat.id,
                 kind: flat.kind,
@@ -1351,6 +1368,9 @@ impl Session {
             }
             if locates {
                 self.locators.push(ix);
+            }
+            if plays {
+                self.players.push(ix);
             }
             if let Some(top) = open.last_mut() {
                 self.arena.require_mut(top.0)?.children.push(ix);

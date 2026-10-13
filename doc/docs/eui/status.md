@@ -2404,6 +2404,41 @@ controllers 7 and 10. Not seen on a screen: the playhead lighting the full
 score, for want of an audio device in the headless snapshot — the tests
 drive it. `tests/score_spec.sl` is 73 tests.
 
+**And sound in the window** (2026-10-13, protocol 9). The client synthesizes
+MIDI: an `audio` node's `src` may be a MIDI file and `notes` a list of
+commands, played with the `soundfont` the node names or with the client's
+own sixteen voices and a drum kit (`crates/eui-audio/src/midi.rs`,
+`rustysynth` for banks). GeneralUser GS — 32,319,396 bytes, fetched by
+`tools/fetch_soundfont.sh` and cut into three parts under the 16 MiB an
+asset may weigh — parses in the decode pool in about 30 ms into 287 presets.
+The editor's Play now sends the score's MIDI file (a few kilobytes; the
+Beethoven exposition's is 18 KB) instead of mixing a `.wav` on the server,
+and a note written goes as three commands. A fermata holds its note twice
+its length, on every staff, in the file and in the playhead's timing.
+
+**And an orchestra** (2026-10-13). The Examples menu loads the exposition of
+Beethoven's Fifth: 12 staves, 124 bars, a 19,918-byte source that LilyPond
+2.24 accepts without a warning and the editor reads back to the same bytes.
+Measured with it loaded: moving the selection, about 50 ms; changing a note,
+140–200 ms from the key to the view; the server worker peaks at 135 MB. What
+made that possible: a long score is drawn a page at a time (only the page on
+screen is engraved into canvases and sent), the full score is a track-strip
+entry rather than a card under every edit, drawn at 65 % size (9 pages), and
+the full source and the conductor's layout are memoised on a fingerprint
+that costs 2 ms against the 100 ms they cost to write. A part's own staff
+gathers its bars of rest (the flute's three pages become two).
+`tests/score_spec.sl` is 96 tests.
+
+**And MIDI instruments** (2026-10-13, protocol 9, built and not yet heard
+end to end). A node holding a `midi` handler hears the person's keyboard
+(06 §1.4) through the new `midi` capability; the window opens the
+platform's inputs (`midir`: ALSA, CoreMIDI, Windows MM) only while one asks,
+and passes channel messages only. The driver's rules are tested
+(`tests/driver.rs`); the editor's step input is written and specced. It is
+not wired into the editor's view yet: soli has to speak EUI 9 first, and
+soli builds against an eui revision from before the `Fetch` and `Asset`
+frames, which lang does not handle.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

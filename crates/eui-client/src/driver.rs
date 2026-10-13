@@ -291,6 +291,11 @@ pub enum Input {
     /// as well here, and 00 refuses the fingerprinting surface that telling
     /// them apart would be.
     Back,
+    /// What the person's MIDI instruments sent (06 §1.4), as the window read
+    /// it: each message as `[age_ms, status, data1, data2]`, the age being
+    /// how long before this input it arrived. The window filters and caps;
+    /// the driver stamps each with the clock of the node that hears it.
+    Midi(Vec<[u32; 4]>),
     /// The window is now `w × h` logical px at `scale` device px per logical.
     ///
     /// `scale` is what the *page* is drawn at, which is the display's own
@@ -1511,6 +1516,12 @@ pub struct Driver {
     locators: Vec<(u32, Duration, Instant)>,
     /// The freshest fix the window handed over, if any.
     fix: Option<Fix>,
+    /// The origin of the clock a `midi` message is stamped with on a node
+    /// that is not a playing sound (06 §1.4): only differences mean anything.
+    midi_epoch: Instant,
+    /// How far behind the mixer the device is, in ms: what a sound's
+    /// position is *heard* at. The window measures it; 0 until it says.
+    audio_latency_ms: u32,
     /// Whether the window has the input. A location is not reported while
     /// it does not (06 §3): an application does not get to follow someone
     /// around because its window is open behind something else.
@@ -1711,6 +1722,8 @@ impl Driver {
             wakes: Vec::new(),
             locators: Vec::new(),
             fix: None,
+            midi_epoch: Instant::now(),
+            audio_latency_ms: 0,
             in_front: true,
             wake_dirty: false,
             locate_dirty: false,
@@ -1769,6 +1782,56 @@ impl Driver {
     /// for the life of the session.
     pub fn wants_location(&self) -> bool {
         self.granted & caps::LOCATION != 0 && self.in_front && !self.locators.is_empty()
+    }
+
+    /// 06 §1.4: the `midi` capability granted, the window in front, and a
+    /// node holding a `midi` handler — the window opens the instruments
+    /// while this is true and not a moment longer.
+    pub fn wants_midi(&self) -> bool {
+        self.granted & caps::MIDI != 0 && self.in_front && !self.session.players().is_empty()
+    }
+
+    /// How far behind what the mixer has made the device plays, in ms. The
+    /// window's to say; a `midi` message on a playing sound is stamped with
+    /// the position heard, not the position mixed.
+    pub fn set_audio_latency(&mut self, ms: u32) {
+        self.audio_latency_ms = ms;
+    }
+
+    /// 06 §1.4: what the person played, to every node that hears it, every
+    /// message in order, at most `MAX_MIDI_PER_EVENT` to an event.
+    fn midi(&mut self, messages: &[[u32; 4]]) -> Vec<Frame> {
+        if !self.wants_midi() {
+            return Vec::new();
+        }
+        // Channel messages only, and data bytes of seven bits: the window
+        // filtered already, and a worker trusts nothing it is handed.
+        let played: Vec<[u32; 4]> = messages.iter().copied().filter(|m| (0x80..=0xEF).contains(&m[1]) && m[2] <= 127 && m[3] <= 127).collect();
+        if played.is_empty() {
+            return Vec::new();
+        }
+        let since_epoch = i64::try_from(self.now.saturating_duration_since(self.midi_epoch).as_millis()).unwrap_or(i64::MAX);
+        let mut out = Vec::new();
+        for ix in self.session.players().to_vec() {
+            let Some(node) = self.session.node(ix) else { continue };
+            if node.handler(EventKind::Midi).is_none() {
+                continue;
+            }
+            // The node's clock: where its sound is heard, when it is a
+            // sound that is playing; the client's own otherwise.
+            let heard = if node.kind == NodeKind::Audio && self.mixer.playing(node.id) { self.mixer.position_ms(node.id).map(|at| at as i64 - i64::from(self.audio_latency_ms)) } else { None };
+            let stamped: Vec<Value> = played
+                .iter()
+                .map(|m| {
+                    let t = heard.unwrap_or(since_epoch) - i64::from(m[0]);
+                    Value::List(vec![Value::Int(t.max(0)), Value::Int(i64::from(m[1])), Value::Int(i64::from(m[2])), Value::Int(i64::from(m[3]))])
+                })
+                .collect();
+            for chunk in stamped.chunks(eui_proto::limits::MAX_MIDI_PER_EVENT) {
+                out.extend(self.emit(ix, EventKind::Midi, Value::List(chunk.to_vec())));
+            }
+        }
+        out
     }
 
     /// The fix the driver is holding, for a window that wants to show one.
@@ -3146,6 +3209,7 @@ impl Driver {
                 Vec::new()
             }
             Input::Covered(px) => self.set_covered(px),
+            Input::Midi(messages) => self.midi(&messages),
             Input::Mode(mode) => self.set_mode(mode),
             // Handled above, where it can decide whether it touched anything.
             Input::PointerMove(x, y) => self.pointer_move(x, y),
@@ -9410,6 +9474,7 @@ fn cap_in_words(name: &str) -> &'static str {
         "fs.save" => "Save files where you say",
         "nfc" => "Read a tag you hold against the machine",
         "scene" => "Draw with a graphics program of its own",
+        "midi" => "Hear the MIDI keyboard you play, while its window is in front",
         // Every name in `caps::NAMES` is above, and the sheet only ever
         // shows rows for those. A row rather than none all the same: a
         // capability this build cannot name is still one nobody should be

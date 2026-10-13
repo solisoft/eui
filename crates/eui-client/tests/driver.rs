@@ -4942,3 +4942,68 @@ fn a_soundfont_in_parts_plays_its_own_instruments() {
     assert!(loud(&violin) && loud(&ours));
     assert_ne!(violin, ours, "the bank's violin is not the client's");
 }
+
+/// A box that hears MIDI instruments (06 §1.4): node 2, under a column.
+fn midi_listener(d: &mut Driver) {
+    const A_HEARD: u32 = 50;
+    let mut tree = Subtree::default();
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 10, key: 0, text: None, props: (0, 0), handlers: (0, 0), child_count: 1 });
+    tree.nodes.push(FlatNode { kind: NodeKind::Box, id: 2, style: 0, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 0 });
+    tree.handlers.push((EventKind::Midi, Handler::Server(A_HEARD)));
+    let ops = vec![Op::DefAtom { id: A_HEARD, value: "played".into() }, Op::DefStyle { id: 10, record: StyleRecord { display: Display::Column, ..Default::default() } }, Op::Mount(tree)];
+    assert_eq!(d.handle_frame(Frame::Batch(Batch { seq: 2, ops })), vec![Frame::Ack { seq: 2 }]);
+}
+
+fn midi_events(out: &[Frame]) -> Vec<Value> {
+    out.iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) if e.event == EventKind::Midi => Some(e.payload.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Spec 06 §1.4: granted, in front and asked for, every message is heard in
+/// order, system ones never; a grant withheld or a window behind hears none.
+#[test]
+fn midi_is_heard_only_granted_in_front_and_asked() {
+    let mut d = welcomed();
+    midi_listener(&mut d);
+    let chord = vec![[2, 0x90, 60, 100], [1, 0x90, 64, 100], [0, 0x90, 67, 100], [0, 0xF8, 0, 0]];
+    assert!(!d.wants_midi(), "no grant, no instruments");
+    assert!(midi_events(&d.input(Input::Midi(chord.clone()))).is_empty(), "and nothing is heard");
+
+    d.grant(caps::MIDI);
+    assert!(d.wants_midi(), "granted, in front, and a node asks");
+    let heard = midi_events(&d.input(Input::Midi(chord.clone())));
+    assert_eq!(heard.len(), 1, "one event for the batch: {heard:?}");
+    let Value::List(messages) = &heard[0] else { panic!("{heard:?}") };
+    let keys: Vec<(i64, i64)> = messages
+        .iter()
+        .map(|m| match m {
+            Value::List(f) => match f.as_slice() {
+                [_, Value::Int(s), Value::Int(k), _] => (*s, *k),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(keys, vec![(0x90, 60), (0x90, 64), (0x90, 67)], "the chord, in order, and no clock byte");
+    assert!(EventKind::Midi.payload_fits(&heard[0]), "the shape 06 §1 declares");
+
+    d.input(Input::Unfocused);
+    assert!(!d.wants_midi(), "a window behind does not listen");
+    assert!(midi_events(&d.input(Input::Midi(chord))).is_empty());
+}
+
+/// More than `MAX_MIDI_PER_EVENT` in one go is several events, none lost.
+#[test]
+fn a_burst_of_midi_is_split_and_nothing_is_dropped() {
+    let mut d = welcomed();
+    midi_listener(&mut d);
+    d.grant(caps::MIDI);
+    let many: Vec<[u32; 4]> = (0..600).map(|k| [0, 0xB0, 1, k % 128]).collect();
+    let heard = midi_events(&d.input(Input::Midi(many)));
+    let sizes: Vec<usize> = heard.iter().map(|v| if let Value::List(l) = v { l.len() } else { 0 }).collect();
+    assert_eq!(sizes, vec![256, 256, 88]);
+}

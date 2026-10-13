@@ -478,6 +478,8 @@ Pinned in `crates/eui-client/tests/assets.rs`:
 | A MIDI sound, synthesized | the same 128 MiB, at 44 100 Hz stereo: 6 min 20 s |
 | Commands in one `notes` list | 512 (`MAX_NOTE_EVENTS`); delays up to 60 s |
 | A `soundfont`, its parts together | 64 MiB (`MAX_SOUNDFONT_BYTES`), four assets |
+| MIDI messages in one `midi` event | 256 (`MAX_MIDI_PER_EVENT`); more go in the next frame's |
+| MIDI messages waiting to be sent | 4 096 (`MAX_MIDI_QUEUE`); past it the oldest go, with a console line |
 
 Mixing is a multiply and an add per sample per source, with one linear
 interpolation for the rate; the cost is in the decode, which happens once

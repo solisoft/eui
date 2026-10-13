@@ -121,7 +121,7 @@ encoded with the signed fields only (`field_count` 10, or 11 with an icon),
 which a decoder can rebuild exactly because the order is fixed. Capability names and bits: `camera` 1,
 `microphone` 2, `clipboard.read` 4, `clipboard.write` 8, `notifications`
 16, `location` 32, `fs.pick` 64, `fs.save` 128, `nfc` 256, `scene` 512,
-`net.open` 1024.
+`net.open` 1024, `midi` 2048.
 
 `scene` is named for what the person agrees to and not for the hardware it
 uses: that this application may run **a graphics program of its own** on their
@@ -137,6 +137,14 @@ however the scene is drawn; the **grant** is about running somebody's code. An a
 advertise `protocol_min` of at least 2, because a client that cannot decode
 `0x11` cannot be shown it at all; the refusal then happens at the handshake,
 with a reason, rather than mid-session on a batch.
+
+`midi` (protocol 9) lets the application hear the person's MIDI
+instruments while its window has the input and a node asks
+([`06-events.md`](06-events.md) §1.4): what they play, never what the
+device says about itself. An application that asks for it MUST advertise
+`protocol_min` of at least 9, for the reason `scene` gives above: a client
+that does not know bit 2048 refuses the manifest, and should, at the
+handshake.
 
 `notifications` is a capability with no node behind it. Everything else in
 this list is asked for by something in the tree — a `camera` node, a `pick`

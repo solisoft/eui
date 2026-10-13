@@ -644,6 +644,10 @@ struct Shell {
     /// Whether the platform's positioning is running, so it is started and
     /// stopped on the edge rather than told again every frame.
     locating: bool,
+    /// The person's MIDI instruments, open while the active tab wants them
+    /// (06 §1.4) and dropped — every port closed — when it stops.
+    #[cfg(has_midi_in)]
+    midi: Option<crate::midi_in::MidiIn>,
     /// The tab strip and address bar, and the textures they draw into.
     /// `None` for a window opened on a URL: `eui <url>` is one application
     /// in one chromeless window, which is what an embedding host gets.
@@ -2214,6 +2218,8 @@ impl Shell {
             chrome_mode: mode,
             platform_mode: mode,
             locating: false,
+            #[cfg(has_midi_in)]
+            midi: None,
             theme_watch: None,
             #[cfg(has_desktop_theme)]
             desktop_theme: None,
@@ -2939,6 +2945,36 @@ impl Shell {
             // the window's whole part is to run the platform while it is
             // wanted and to hand over what arrives.
             self.serve_location(i);
+        }
+    }
+
+    /// 06 §1.4: open the MIDI instruments while the active tab wants them,
+    /// hand what they played to its driver, and close them when it stops.
+    ///
+    /// Every pass, and two comparisons when nothing is playing. A message
+    /// wakes the loop from the platform's thread, so it is delivered on the
+    /// pass right after it arrived rather than at the next frame.
+    #[cfg(has_midi_in)]
+    fn serve_midi(&mut self) {
+        let wanted = self.tabs.get(self.active).is_some_and(|t| t.backend.wants_midi());
+        if !wanted {
+            if self.midi.take().is_some() {
+                eprintln!("eui: MIDI inputs closed");
+            }
+            return;
+        }
+        let now = std::time::Instant::now();
+        let proxy = Arc::clone(&self.proxy);
+        let midi = self.midi.get_or_insert_with(|| {
+            crate::midi_in::MidiIn::new(Arc::new(move || {
+                let _ = proxy.send_event(Wake::Frame);
+            }))
+        });
+        midi.scan(now);
+        let played = midi.take(now);
+        if !played.is_empty() {
+            crate::driver::trace(|| format!("midi: {} message(s) to the tab", played.len()));
+            self.deliver(Input::Midi(played));
         }
     }
 
@@ -5242,6 +5278,9 @@ impl ApplicationHandler<Wake> for App {
             // are no more of them behind it.
             s.flush_move();
             s.serve_files();
+            // What the person's MIDI instruments played, if a tab hears them.
+            #[cfg(has_midi_in)]
+            s.serve_midi();
             // Where a file being dragged has got to. Nothing at all
             // unless one is over that window right now.
             s.serve_hover();

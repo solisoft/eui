@@ -108,8 +108,13 @@ pub mod caps {
     /// allowed to link to itself.
     pub const NET_OPEN: u32 = 1 << 10;
 
+    /// Hear the person's MIDI instruments while the window has the input
+    /// and a node asks (06 §1.4): channel messages, never system ones.
+    /// Protocol 9.
+    pub const MIDI: u32 = 1 << 11;
+
     /// The names of 01 §2.1, in bit order.
-    pub const NAMES: [(&str, u32); 11] = [
+    pub const NAMES: [(&str, u32); 12] = [
         ("camera", CAMERA),
         ("microphone", MICROPHONE),
         ("clipboard.read", CLIPBOARD_READ),
@@ -121,6 +126,7 @@ pub mod caps {
         ("nfc", NFC),
         ("scene", SCENE),
         ("net.open", NET_OPEN),
+        ("midi", MIDI),
     ];
 
     /// A capability by its name, `clipboard.read`.
@@ -137,7 +143,7 @@ pub mod caps {
     /// It grows from the top as capabilities are added, and a bit outside
     /// it is a decode error (08 §3) — which is the point: a client that
     /// does not know what bit 256 means must not quietly agree to it.
-    pub const ALL: u32 = 0x7FF;
+    pub const ALL: u32 = 0xFFF;
 }
 
 /// The viewer's presentation state.

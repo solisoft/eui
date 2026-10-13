@@ -4393,6 +4393,7 @@ def score_ed_answer(state, ed_event, params, props)
     "connect" => state,
     "viewport" => state,
     "key" => score_ed_key(state, params["payload"][0], params["payload"][1]),
+    "midi" => score_ed_midi_in(state, params["payload"] ?? []),
     "pick" => score_ed_pick(state, params["payload"] ?? [0, 0], int(props["page"] ?? 0)),
     "press" => score_ed_press(state, params["payload"] ?? [0, 0], int(props["page"] ?? 0)),
     "drag" => score_ed_drag(state, params["payload"] ?? [0, 0]),
@@ -5194,6 +5195,56 @@ def score_ed_ensemble_end(state, info)
   ends
 end
 
+def score_ed_gathered(notes, measure, marks)
+  # A metre that changes makes a bar's length a question of where it is;
+  # such a part is written bar by bar.
+  return notes if marks.values.any? { |mk| (mk["set"] ?? {}).has_key("time") }
+
+  bars = []
+  tick = 0
+  for nt, ni in notes
+    left = nt["pad"] ?? score_ed_ticks(nt)
+    if nt.has_key("pad")
+      head = tick % measure == 0 ? 0 : score_min(left, measure - tick % measure)
+      bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": head, "bar": tick / measure}) if head > 0
+      left -= head
+      tick += head
+      while left >= measure
+        bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": measure, "whole": true, "bar": tick / measure})
+        left -= measure
+        tick += measure
+      end
+      bars.push({"rest": true, "pitches": [], "base": 1, "dots": 0, "pad": left, "bar": tick / measure}) if left > 0
+      tick += left
+      next
+    end
+    plain = nt["rest"] && nt["tup"].nil? && nt["dyn"].nil? && nt["hairpin"].nil? && nt["hairpin_end"] != true && (nt["texts"] ?? []).length == 0 && (nt["scripts"] ?? []).length == 0
+    bars.push(nt.merge({"src": ni, "whole": plain && tick % measure == 0 && left == measure, "bar": tick / measure}))
+    tick += left
+  end
+  out = []
+  k = 0
+  while k < bars.length
+    nt = bars[k]
+    run = 0
+    while nt["whole"] == true && k + run < bars.length && bars[k + run]["whole"] == true
+      here = marks[str(nt["bar"] + run)] ?? {}
+      break if run > 0 && (((here["set"] ?? {}).keys.length > 0) || here["rep_start"] == true)
+
+      run += 1
+      break if here["rep_end"] == true || !here["brk"].nil?
+    end
+    if run > 1
+      out.push({"rest": true, "mm": run, "src": nt["src"]})
+      k += run
+      next
+    end
+    out.push(nt)
+    k += 1
+  end
+  out
+end
+
 def score_ed_layout_track(state, k, info, opts)
   trk = score_ed_all(state)[k]
   notes = trk["notes"]
@@ -5217,8 +5268,27 @@ def score_ed_layout_track(state, k, info, opts)
   bar = 0
   bar_at = -1
   marks = info["marks"]
+  gathering = opts["gather"] == true && score_ed_chunks(measure).length == 1
+  if gathering
+    notes = score_ed_gathered(notes, measure, marks)
+    words.push("\\compressEmptyMeasures") if notes.any? { |nt| !nt["mm"].nil? }
+  end
   measure = score_ed_track_marks(words, marks, 0, measure, opts, -1)
   for nt, ni in notes
+    # Bars of rest gathered: one word, its count over it.
+    unless nt["mm"].nil?
+      words.push("R" + score_ed_chunks(measure).map { |ch| str(ch[0]) + (ch[1] > 0 ? "." : "") }.join("") + "*" + str(nt["mm"]))
+      owners.push(nt["src"] ?? -1)
+      bar += nt["mm"] - 1
+      here = marks[str(bar)] ?? {}
+      words.push(here["rep_end"] == true ? "\\bar \":|.\"" : "|")
+      bar_at = words.length - 1
+      bar += 1
+      more = ni + 1 < notes.length
+      words.push(here["brk"] == "page" ? "\\pageBreak" : "\\break") if !here["brk"].nil? && more
+      measure = score_ed_track_marks(words, marks, bar, measure, opts, bar_at) if more
+      next
+    end
     left = nt["pad"] ?? score_ed_ticks(nt)
     tup = nt["tup"]
     tup_opens = !tup.nil? && (ni == 0 || notes[ni - 1]["tup"].nil? || notes[ni - 1]["tup"]["g"] != tup["g"])
@@ -5237,7 +5307,7 @@ def score_ed_layout_track(state, k, info, opts)
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad")
         words.push(word)
-        owners.push(nt.has_key("pad") ? -1 : ni)
+        owners.push(nt.has_key("pad") ? -1 : (nt["src"] ?? ni))
       end
       words.push("}") if tup_closes
       pos += take
@@ -5648,15 +5718,24 @@ def score_ed_conductor_engraved(state, full)
 end
 
 def score_ed_page_of(engraved, map, owner)
+  best = nil
+  best_owner = -1
   for sys in engraved["systems"]
     for bar in sys["bars"]
       for ev in bar["items"]
         k = ev["i"]
-        return sys["page"] ?? 0 if !k.nil? && k < map.length && map[k] == owner
+        next if k.nil? || k >= map.length
+
+        here = map[k]
+        return sys["page"] ?? 0 if here == owner
+        if here >= 0 && here < owner && here > best_owner
+          best_owner = here
+          best = sys["page"] ?? 0
+        end
       end
     end
   end
-  nil
+  best
 end
 
 def score_ed_follow(state)
@@ -5841,6 +5920,48 @@ def score_ed_key(state, key, mods)
   state
 end
 
+def score_ed_chord_ms()
+  30
+end
+
+def score_ed_midi_in(state, messages)
+  chords = []
+  last_t = -1000000
+  for m in messages
+    next unless m.is_a?("array") && m.length == 4
+
+    status = m[1]
+    on = status >= 144 && status < 160 && m[3] > 0
+    next unless on
+
+    if chords.length == 0 || m[0] - last_t > score_ed_chord_ms()
+      chords.push([m[2]])
+    else
+      chords[-1].push(m[2])
+    end
+    last_t = m[0]
+  end
+  for keys in chords
+    state = score_ed_play_chord(state, keys)
+  end
+  state
+end
+
+def score_ed_play_chord(state, keys)
+  pitches = []
+  for key in keys.sort()
+    spelled = score_ed_spell(state, key, 1)
+    pt = {"step": spelled[0], "alter": spelled[1], "oct": spelled[2]}
+    pitches.push(pt) if score_ed_fits(state, pt) && !pitches.any? { |p| p["step"] == pt["step"] && p["oct"] == pt["oct"] }
+  end
+  return state if pitches.length == 0
+
+  state = score_ed_remember(state)
+  fresh = score_ed_note(pitches[0]["step"], pitches[0]["oct"], pitches[0]["alter"], state["dur"], state["dot"] ? 1 : 0)
+  fresh["pitches"] = pitches
+  score_ed_place(state, fresh)
+end
+
 def score_ed_pick(state, point, page)
   drawn = score_ed_engrave(state)
   return state if drawn["engraved"].nil?
@@ -6006,7 +6127,7 @@ end
 def score_ed_layout(state)
   return score_ed_layout_one(state) if score_ed_tracks(state).length < 2
 
-  laid = score_ed_layout_track(state, state["track"] ?? 0, score_ed_bar_marks(state), {"header": true, "tempo": true})
+  laid = score_ed_layout_track(state, state["track"] ?? 0, score_ed_bar_marks(state), {"header": true, "tempo": true, "gather": true})
   {"src": laid["words"].join(" "), "map": laid["map"]}
 end
 
@@ -7807,5 +7928,46 @@ describe("the full score entry", fn() {
     check("the full score", score_ed_full_view(st), true)
     st = score_editor({"event": "track", "params": {"props": {"track": 1}}, "state": st})
     check("back to the second track's staff", [score_ed_full_view(st), st["track"]], [false, 1])
+  })
+})
+
+describe("a MIDI keyboard", fn() {
+  test("each key writes a note at the palette's duration; keys together a chord", fn() {
+    st = score_ed_from_source(spec_state(), "{ c'4 }")
+    st["sel"] = 0
+    st["dur"] = 8
+    played = [ [1000, 144, 67, 90], [1300, 128, 67, 0], [2000, 144, 60, 90], [2010, 144, 64, 80], [2015, 144, 72, 0], [2400, 176, 64, 127] ]
+    st = score_ed_midi_in(st, played)
+    check("two notes after the first", st["notes"].length, 3)
+    check("G, an eighth", [st["notes"][1]["pitches"][0]["step"], st["notes"][1]["base"]], [4, 8])
+    check("then C and E together; the velocity-0 on is an off", st["notes"][2]["pitches"].map { |p| p["step"] }, [0, 2])
+  })
+
+  test("a black key is spelled as the key of the piece has it", fn() {
+    st = spec_state()
+    st["key"] = "F"
+    st = score_ed_midi_in(st, [ [0, 144, 70, 90] ])
+    check("B flat in F major", score_ed_selected(st)["pitches"][0], {"step": 6, "alter": -1, "oct": 4})
+  })
+})
+
+describe("a part's bars of rest", fn() {
+  test("an instrument's own staff gathers its empty bars; the full score keeps them", fn() {
+    st = score_ed_from_source(spec_state(), "\\new StaffGroup << \\new Staff { c''1 | d''1 | e''1 | f''1 | g''1 } \\new Staff { c'1 | R1*3 | c'1 } >>")
+    st = score_ed_switch(st, 1)
+    part = score_ed_layout(st)["src"]
+    check("one multi-bar rest of three", part.includes?("R1*3"), true)
+    check("compressed", part.includes?("\\compressEmptyMeasures"), true)
+    full = score_ed_full_source(st)
+    check("the full score writes every bar", full.includes?("R1*3"), false)
+    engraved = score_engrave(part, 100.0)
+    check("three bars drawn as one", engraved["systems"].map { |sys| sys["bars"].length }.reduce(fn(acc, n) acc + n, 0), 3)
+  })
+
+  test("a run stops where a bar carries a mark", fn() {
+    st = score_ed_from_source(spec_state(), "\\new StaffGroup << \\new Staff { c''1 | d''1 | \\key g \\major e''1 | f''1 } \\new Staff { c'1 | R1*3 } >>")
+    st = score_ed_switch(st, 1)
+    part = score_ed_layout(st)["src"]
+    check("not over the key change", part.includes?("R1*3"), false)
   })
 })

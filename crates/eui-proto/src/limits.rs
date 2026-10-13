@@ -129,3 +129,13 @@ pub const MAX_VIEW_BYTES: usize = 4 * 1024 * 1024;
 /// rendered, which is the same degradation as an island whose session never
 /// answers: content that is out of date rather than missing.
 pub const MAX_ISLANDS: usize = 8;
+
+/// Most MIDI messages one `midi` event carries (06 §1.4, 10 *Sound*). A
+/// chord is a few, a glissando a few dozen; more wait for the next frame's
+/// event rather than being merged, because every message is the music.
+pub const MAX_MIDI_PER_EVENT: usize = 256;
+
+/// Most MIDI messages a client keeps waiting to be sent (06 §1.4). Past it
+/// the oldest go: a server that falls behind loses what was played first,
+/// never what is being played.
+pub const MAX_MIDI_QUEUE: usize = 4096;

@@ -622,6 +622,15 @@ fn put_input(w: &mut W, i: &Input) {
             w.u8(20);
             w.f32(*px);
         }
+        Input::Midi(messages) => {
+            w.u8(21);
+            w.u32(messages.len() as u32);
+            for m in messages {
+                for v in m {
+                    w.u32(*v);
+                }
+            }
+        }
         Input::Unfocused => w.u8(12),
         Input::Refocused => w.u8(18),
         Input::Back => w.u8(19),
@@ -674,6 +683,17 @@ fn get_input(r: &mut R<'_>) -> Wire<Input> {
         18 => Input::Refocused,
         19 => Input::Back,
         20 => Input::Covered(r.f32()?),
+        21 => {
+            let n = r.u32()? as usize;
+            if n > eui_proto::limits::MAX_MIDI_QUEUE {
+                return Err("too many MIDI messages");
+            }
+            let mut messages = Vec::with_capacity(n);
+            for _ in 0..n {
+                messages.push([r.u32()?, r.u32()?, r.u32()?, r.u32()?]);
+            }
+            Input::Midi(messages)
+        }
         _ => return Err("unknown input"),
     })
 }
@@ -735,6 +755,8 @@ pub struct Status {
     /// the window has the input — so the platform's positioning should be
     /// running, and should not be a moment longer than this stays true.
     pub wants_location: bool,
+    /// The same for MIDI instruments (06 §1.4).
+    pub wants_midi: bool,
     /// Spec 01 §2.1: the person answered the consent sheet, and this is
     /// the mask they settled on. `None` while there is nothing to report —
     /// which is every pass but the one.
@@ -877,6 +899,7 @@ impl Reply {
         w.bool(s.audio);
         w.bool(s.video);
         w.bool(s.wants_location);
+        w.bool(s.wants_midi);
         w.bool(s.takes_back);
         w.bool(s.claims_left);
         match s.consent {
@@ -1029,6 +1052,7 @@ impl Reply {
         let audio = r.bool()?;
         let video = r.bool()?;
         let wants_location = r.bool()?;
+        let wants_midi = r.bool()?;
         let takes_back = r.bool()?;
         let claims_left = r.bool()?;
         let consent = if r.bool()? { Some(r.u32()?) } else { None };
@@ -1075,6 +1099,7 @@ impl Reply {
             audio,
             video,
             wants_location,
+            wants_midi,
             takes_back,
             claims_left,
             consent,
@@ -1848,6 +1873,7 @@ fn status_of(d: &mut Driver) -> Status {
         audio: d.audio_playing(),
         video: d.video_playing(),
         wants_location: d.wants_location(),
+        wants_midi: d.wants_midi(),
         takes_back: d.takes_back(),
         claims_left: d.claims("ArrowLeft"),
         consent: d.take_consent(),
@@ -2059,6 +2085,7 @@ impl Repeat {
                 audio: reply.status.audio,
                 video: reply.status.video,
                 wants_location: reply.status.wants_location,
+                wants_midi: reply.status.wants_midi,
                 ..Status::default()
             },
             // No atlas rows and no scene assets: both were delivered on the
@@ -3146,6 +3173,11 @@ impl Backend {
         self.with_local(|d| d.wants_location()).or_else(|| self.with_worker(|w| w.status.wants_location)).unwrap_or(false)
     }
 
+    /// True while the person's MIDI instruments should be open (06 §1.4).
+    pub fn wants_midi(&self) -> bool {
+        self.with_local(|d| d.wants_midi()).or_else(|| self.with_worker(|w| w.status.wants_midi)).unwrap_or(false)
+    }
+
     /// Hand the driver where the machine is. The radio is the window's; the
     /// rounding and the rate are the driver's.
     pub fn located(&mut self, latitude: f64, longitude: f64, accuracy_m: f64) {
@@ -3198,6 +3230,7 @@ mod tests {
             Request::Input(Input::Key { key: "Enter".into(), modifiers: 2, down: true }),
             Request::Input(Input::Mode(ThemeMode::Dark)),
             Request::Input(Input::Unfocused),
+            Request::Input(Input::Midi(vec![[3, 0x90, 60, 100], [0, 0x80, 60, 0]])),
             Request::AssetReady([7; 32], vec![9; 10]),
             Request::AssetFailed([8; 32], "gone".into()),
             Request::PendingAssets,
@@ -3358,6 +3391,7 @@ mod tests {
             audio: true,
             video: false,
             wants_location: true,
+            wants_midi: true,
             takes_back: true,
             claims_left: true,
             consent: Some(eui_proto::caps::FS_PICK | eui_proto::caps::CLIPBOARD_READ),

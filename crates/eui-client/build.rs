@@ -92,6 +92,13 @@ fn platform_parts() {
     if !phone && !page {
         println!("cargo:rustc-cfg=has_launchers");
     }
+    // The person's MIDI instruments (06 §1.4): the platform's own MIDI
+    // service — the ALSA sequencer, CoreMIDI, Windows MM — which a phone
+    // does not offer this process and a page reaches through Web MIDI.
+    println!("cargo:rustc-check-cfg=cfg(has_midi_in)");
+    if !phone && !page {
+        println!("cargo:rustc-cfg=has_midi_in");
+    }
     // One process for every window rather than for every launch: a Unix
     // socket a later `eui` hands its addresses to (`instance.rs`). A phone
     // and a page launch nothing twice; Windows has no `UnixListener`, and

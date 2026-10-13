@@ -126,6 +126,12 @@ exhaust itself. *Enforced: `eui-proto::limits`, `eui-tree::Limits`, `eui-vm`.*
 - An application never sees a keystroke outside a focused editable node or
   a node that holds focus and a `key_down` handler. There is no global key
   capture. *Enforced: `Driver::key`.*
+- A MIDI instrument is heard only with `midi` granted, only while the
+  window has the input, and only by a node holding a `midi` handler; the
+  device is not even opened otherwise. What reaches the application is
+  channel messages — what was played — never a system message, so a SysEx
+  identity reply cannot name the person's hardware (06 §1.4).
+  *Enforced: `Driver::wants_midi`, the window's `midi_in`.*
 - Clipboard reads require `clipboard.read`; pointer position is reported
   only inside the window. A person's own `Ctrl+V` into a field is not an
   application read: the window inserts the text and the application sees
