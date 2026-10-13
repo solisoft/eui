@@ -2016,7 +2016,10 @@ def score_beam_voice(evs, wins)
   cur = []
   manual = false
   win = -1
+  last_end = -1
   for ev in evs
+      gap = last_end >= 0 && ev["start"] != last_end
+      last_end = ev["start"] + ev["ticks"]
       flags = ev["k"] == "note" ? score_flags(ev["base"]) : 0
       if manual
         score_refuse("a beam over a note that has no flag", ev["at"]) if flags == 0 && ev["k"] == "note"
@@ -2035,7 +2038,7 @@ def score_beam_voice(evs, wins)
         next
       end
       w = ev["start"] / wins[0]
-      if flags == 0 || w != win
+      if flags == 0 || w != win || gap
         groups.push(cur) if cur.length > 0
         cur = []
       end
@@ -2310,14 +2313,14 @@ def score_poly_cols(bar, shortest)
     end
     ones = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] != 2 }
     twos = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] == 2 }
+    # They meet when the first voice's lowest head comes within a step of
+    # the second's highest: a second, a unison, or voices that cross, the
+    # stem-up one under the stem-down one — their stems would run through
+    # each other's heads.
     meet = false
     for a in ones
       for b in twos
-        for ha in a["heads"]
-          for hb in b["heads"]
-            meet = true if (ha["pos"] - hb["pos"]).abs <= 1
-          end
-        end
+        meet = true if a["heads"][0]["pos"] - b["heads"][-1]["pos"] <= 1
       end
     end
     if meet
@@ -8287,7 +8290,10 @@ describe("the editor", fn() {
     src = score_ed_layout(st)["src"]
     check("written as two voices", src.includes?("<< {") && src.includes?("\\\\"), true)
     bar = score_engrave(src, 100.0)["systems"][0]["bars"][0]
-    check("the eighth stands with the D", bar["items"].filter { |ev| ev["voice"] == 2 && ev["k"] == "note" }[0]["x"], bar["items"].filter { |ev| ev["voice"] == 1 }[1]["x"])
+    eighth = bar["items"].filter { |ev| ev["voice"] == 2 && ev["k"] == "note" }[0]
+    d_note = bar["items"].filter { |ev| ev["voice"] == 1 }[1]
+    check("the eighth sounds with the D", eighth["start"], d_note["start"])
+    check("over it, so the D stands a head to the right", d_note["x"] > eighth["x"], true)
     st = score_ed_undo(st)
     check("undone, the second voice is empty again", score_ed_voiced?(score_ed_v1(st)["notes2"]), false)
   })
@@ -8447,6 +8453,18 @@ describe("the editor", fn() {
     check("both staves sing", [full.includes?("\\addlyrics { Ky -- ri -- e }"), full.includes?("\\addlyrics { e -- lei -- son }")], [true, true])
     check("and it engraves", score_engrave(full, 100.0)["systems"][0]["staves"].map { |ss| ss.has_key("lyric_y") }, [true, true])
     check("each staff's words read back", score_parse(full)["staves"].map { |stf| score_ed_lyrics_text(stf["lyrics"]) }, ["Ky -- ri -- e", "e -- lei -- son"])
+  })
+
+  test("a beam stops at a spacer, and voices that cross stand apart", fn() {
+    bar = score_engrave("{ << { c'4 d'4 e'4 c'4 } \\\\ { c''8 s8 c''8 s8 s2 } >> }", 100.0)["systems"][0]["bars"][0]
+    twos = bar["items"].filter { |ev| ev["voice"] == 2 }
+    check("two eighths a beat apart, each its own flag", twos.map { |ev| ev["beam"].nil? }, [true, true])
+    ones = bar["items"].filter { |ev| ev["voice"] != 2 }
+    check("the stem-up voice under the stem-down one: a head to the right", [ones[0]["x"] > twos[0]["x"], ones[1]["x"] > twos[1]["x"]], [true, true])
+    still = score_engrave("{ << { c'4 d'4 e'4 c'4 } \\\\ { c''8 d''8 s2. } >> }", 100.0)["systems"][0]["bars"][0]
+    check("neighbours still share a beam", still["items"].filter { |ev| ev["voice"] == 2 }.map { |ev| ev["beam"].nil? }, [false, false])
+    apart = score_engrave("{ << { e''4 f''4 g''2 } \\\\ { c'4 d'4 e'2 } >> }", 100.0)["systems"][0]["bars"][0]
+    check("voices well apart share their column", apart["items"][0]["x"], apart["items"][1]["x"])
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {

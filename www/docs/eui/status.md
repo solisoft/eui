@@ -446,12 +446,12 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 6 346 lines; `serde_json` its one dependency, for the font data.
+writers. 6 358 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 4.9 MB) are what the Soli engraver drew for the 25
-  pieces of `tests/corpus/` — 5 366 paths on a 900 px screen, 28 A4 pages
-  and 5 373 paths on them, a MIDI file and a PDF each — and
+  (`tests/golden/`, 5.0 MB) are what the Soli engraver drew for the 26
+  pieces of `tests/corpus/` — 5 455 paths on a 900 px screen, 29 A4 pages
+  and 5 462 paths on them, a MIDI file and a PDF each — and
   `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
   agree to the hundredth of a pixel and the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
@@ -2601,6 +2601,20 @@ source, counted against the notes that take one, a run of typing one step
 to undo. A server whose native engraver predates this refuses `\addlyrics`
 until lang is built against this `eui-score`. `tests/score_spec.sl` is 121
 tests.
+
+**And a second voice that keeps out of the first's way** (2026-10-13). An
+eighth written into the second voice on beat 1 and another on beat 2 —
+`c''8 s8 c''8`, what Insert mode writes — were beamed together across the
+spacer, the beam running through the first voice's notes: the beamer saw
+the second voice's notes only, and a spacer is no item. A beam now stops
+where a voice is silent between two notes. And voices that cross — the
+stem-up voice under the stem-down one, as an added higher note in the
+second voice makes them — stood in one column with their stems through
+each other's heads: the first voice now stands a head to the right
+whenever its lowest head comes within a step of the second's highest, a
+unison and a second as before, a crossing too. In both engravers; the
+source that showed it is a golden piece (`voices_crossed.ly`): 26 pieces,
+no earlier one changed. `tests/score_spec.sl` is 122 tests.
 
 ## Not started
 

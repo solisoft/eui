@@ -814,7 +814,9 @@ the Soli engraver's to the hundredth of a pixel, and its MIDI file and its
 PDF to be the same bytes; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
 requires its refusals word for word, character position included. Two
 voices are among the pieces (`voices.ly`, `voices_spacers.ly`,
-`piano_voices.ly`), and among the refusals; so are lyrics (`lyrics.ly`,
+`piano_voices.ly`, and `voices_crossed.ly`: two eighths of the second voice
+a spacer apart, not beamed, and the voices crossing, the first a head to
+the right), and among the refusals; so are lyrics (`lyrics.ly`,
 `lyrics_choir.ly`, and six refusals: a missing or unclosed block, an empty
 one, `--` with nothing before it, a command inside, a second verse), and
 `score_spec.sl` holds a syllable a note with ties and slurs holding one,

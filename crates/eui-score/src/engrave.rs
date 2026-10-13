@@ -241,15 +241,21 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
 }
 
 /// One voice's beam groups in a bar, by the metre's windows, `[ ]` first:
-/// the groups of two notes or more, by index into the bar's items.
+/// the groups of two notes or more, by index into the bar's items. A beam
+/// stops where the voice is silent between two notes — a second voice's
+/// spacer (`s`) is no item, and two eighths either side of one are not
+/// neighbours.
 fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
     {
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
         let mut manual = false;
         let mut win = -1;
+        let mut last_end = -1;
         for &j in list {
             let ev = &bar.items[j];
+            let gap = last_end >= 0 && ev.start != last_end;
+            last_end = ev.start + ev.ticks;
             let fl = if ev.k == Kind::Note { flags(ev.base) } else { 0 };
             if manual {
                 if fl == 0 && ev.k == Kind::Note {
@@ -273,7 +279,7 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
                 continue;
             }
             let w = ev.start / wins.0;
-            if (fl == 0 || w != win) && !cur.is_empty() {
+            if (fl == 0 || w != win || gap) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
             }
             if fl > 0 {
@@ -501,8 +507,8 @@ pub(crate) fn spacers(bar: &Bar) -> &[Ev] {
 }
 
 /// A bar of two voices in columns, each voice read on its own for what
-/// follows a note; where the voices' heads meet — a unison or a second —
-/// the first voice's note stands a head to the right.
+/// follows a note; where the voices' heads meet — a unison, a second, or
+/// voices that cross — the first voice's note stands a head to the right.
 fn poly_cols(bar: &mut Bar, shortest: i64) {
     let mut starts: Vec<i64> = Vec::new();
     for ev in &bar.items {
@@ -538,7 +544,13 @@ fn poly_cols(bar: &mut Bar, shortest: i64) {
         let note = |j: usize, two: bool| bar.items[j].k == Kind::Note && (bar.items[j].voice == Some(2)) == two;
         let ones: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, false)).collect();
         let twos: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, true)).collect();
-        let meet = ones.iter().any(|&a| twos.iter().any(|&b| bar.items[a].heads.iter().any(|ha| bar.items[b].heads.iter().any(|hb| (ha.pos - hb.pos).abs() <= 1))));
+        // They meet when the first voice's lowest head comes within a step
+        // of the second's highest: a second, a unison, or voices that cross,
+        // the stem-up one under the stem-down one — their stems would run
+        // through each other's heads.
+        let low = |j: usize| bar.items[j].heads.first().map_or(0, |h| h.pos);
+        let high = |j: usize| bar.items[j].heads.last().map_or(0, |h| h.pos);
+        let meet = ones.iter().any(|&a| twos.iter().any(|&b| low(a) - high(b) <= 1));
         if meet {
             for &a in &ones {
                 let ev = &mut bar.items[a];

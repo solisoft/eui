@@ -1760,13 +1760,18 @@ def score_voice_lists(bar)
 end
 
 # One voice's beams in a bar: by the metre's windows, `[ ]` first; a
-# voice of two stems the way its voice points, the first up.
+# voice of two stems the way its voice points, the first up. A beam stops
+# where the voice is silent between two notes — a second voice's spacer
+# (`s`) is no item, and two eighths either side of one are not neighbours.
 def score_beam_voice(evs, wins)
   groups = []
   cur = []
   manual = false
   win = -1
+  last_end = -1
   for ev in evs
+      gap = last_end >= 0 && ev["start"] != last_end
+      last_end = ev["start"] + ev["ticks"]
       flags = ev["k"] == "note" ? score_flags(ev["base"]) : 0
       if manual
         score_refuse("a beam over a note that has no flag", ev["at"]) if flags == 0 && ev["k"] == "note"
@@ -1785,7 +1790,7 @@ def score_beam_voice(evs, wins)
         next
       end
       w = ev["start"] / wins[0]
-      if flags == 0 || w != win
+      if flags == 0 || w != win || gap
         groups.push(cur) if cur.length > 0
         cur = []
       end
@@ -2080,7 +2085,7 @@ end
 
 # A bar of two voices in columns, as the staves of a system share theirs
 # (`score_master_bar`), each voice read on its own for what follows a note.
-# Where the two voices' heads meet — a unison or a second — the first
+# Where the two voices' heads meet — a unison, a second, or voices that cross — the first
 # voice's note stands a head to the right, its stem clear of the other's,
 # as LilyPond moves the stem-up voice.
 def score_poly_cols(bar, shortest)
@@ -2109,14 +2114,14 @@ def score_poly_cols(bar, shortest)
     end
     ones = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] != 2 }
     twos = col["members"].filter { |ev| ev["k"] == "note" && ev["voice"] == 2 }
+    # They meet when the first voice's lowest head comes within a step of
+    # the second's highest: a second, a unison, or voices that cross, the
+    # stem-up one under the stem-down one — their stems would run through
+    # each other's heads.
     meet = false
     for a in ones
       for b in twos
-        for ha in a["heads"]
-          for hb in b["heads"]
-            meet = true if (ha["pos"] - hb["pos"]).abs <= 1
-          end
-        end
+        meet = true if a["heads"][0]["pos"] - b["heads"][-1]["pos"] <= 1
       end
     end
     if meet

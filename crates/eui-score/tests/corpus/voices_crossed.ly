@@ -1,0 +1,1 @@
+\header { title = "Frère Jacques" composer = "Traditional" } \clef treble \key c \major \time 4/4 << { \tempo "Moderato" 4 = 100 c'4 d'4 e'4 c'4 | c'4 d'4 e'4 c'4 | e'4 f'4 g'2 | e'4 f'4 g'2 \bar "|." } \\ { c''8 s8 c''8 s2 s8 | s1 | s1 | s1 | } >>
