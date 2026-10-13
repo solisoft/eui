@@ -92,6 +92,11 @@ class LivePageController < Controller
         "title": "Help desk",
         "lead": "A support inbox drawn the way Tailwind UI draws an application: filters, a thread with internal notes, properties that change, charts. Class strings and theme roles, no colour written down.",
         "source": "app/controllers/helpdesk_controller.sl"
+      },
+      "campaigns": {
+        "title": "Campaign performance",
+        "lead": "A dense, sortable table: figures over what they mean, a sparkline and two meters in every row, each one canvas of a few paths. Columns leave as the window narrows.",
+        "source": "app/controllers/campaigns_controller.sl"
       }
     }
   end

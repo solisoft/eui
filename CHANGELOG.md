@@ -24,6 +24,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `campaigns`, a twentieth demo component: a campaign-performance table with
+  summary figures, search, a status filter, sortable headers, sparklines and
+  target meters drawn as `canvas` paths, ticking with bulk pause and resume,
+  a column picker, compact rows and paging. Columns drop out as the window
+  narrows, and on a phone it becomes a list of cards. `/live/campaigns` opens
+  it in a browser.
 - A tutorial in the documentation (`/docs/tutorial`): a shopping list built in
   six steps, each a component of the demo application (`pantry_1` …
   `pantry_6`) and each running in the page beside its code. A line reading

@@ -2200,6 +2200,34 @@ corner badges from a `justify-end` stack instead of `right-6` — the same
 picture; checked by opening it on Soli 2.3.3 and 2.4.2. The deploy pins
 2.5.5 since, which is what the server runs.
 
+**And a dense table** (2026-10-12). `campaigns`, the twentieth component,
+is the screen an analytics product is built around: thirty ad campaigns for
+an invented outdoor brand under six figures for what is in view (spend
+against budget, impressions and CTR, conversions, blended CPA and ROAS,
+how many sit below the 4.3x target), then a search, a status filter, a
+column picker and a density setting, and a table sorted by any header.
+Each row is a channel mark, the name over its market and audience, a
+status badge, a figure over what it means ("$75.2K" over "94% of $80K",
+a count over its change, coloured by whether the change is good news for
+that figure), a 16-day sparkline, and two meters — ROAS with a tick at the
+target, grey until the bar crosses it, and the share of new buyers. The
+sparkline and the meters are one `canvas` each: an `area` in `info.subtle`
+under a `series.1` line with a dot on today, and two or three filled
+rectangles. Rows tick, the header box ticks the page (half-ticked when some
+are), and what is ticked can be paused or resumed together; a row's ⋯ menu
+does the same for one, the badge and the figures following. Columns leave
+in a fixed order as the window narrows — trend, new buyers, ROAS, CPA,
+conversions — whenever the name would get less than 248 px, and below that
+the table becomes a list of cards. The book is generated from a seed on every
+call rather than kept in the session, so the state is only what the person
+changed. The reducer is `app/services/campaigns_book.sl` (379 lines) and
+`tests/campaigns_spec.sl` holds it to 16 tests and 120 assertions — one of
+them caught "pause the ticked" reading the ticks after clearing them; the
+view is 584 lines. Measured with `snapshot` on 2026-10-12, it is 477 nodes
+and 2,135 quads at 1 280×800 and 352 nodes and 475 quads at 420 px. No
+literal colour: the reference it was built from was a dark screen, and the
+light one came free.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):
