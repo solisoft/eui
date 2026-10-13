@@ -77,14 +77,14 @@ pub mod assets;
 #[cfg(has_audio)]
 pub mod audio;
 pub mod chrome;
-/// The person's MIDI instruments, opened by the window while a tab asks
-/// (06 §1.4).
-#[cfg(has_midi_in)]
-pub mod midi_in;
 /// Where an iOS process starts, and the one thing UIKit will only tell an
 /// application about itself: the container it may write in.
 #[cfg(target_os = "ios")]
 pub mod ios;
+/// The person's MIDI instruments, opened by the window while a tab asks
+/// (06 §1.4).
+#[cfg(has_midi_in)]
+pub mod midi_in;
 pub mod recent;
 /// Where a page's client starts: the canvas the embedding script handed
 /// over, kept until the event loop is ready to take it.

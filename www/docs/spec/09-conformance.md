@@ -103,7 +103,9 @@ found to be two rules that contradicted each other.
    `crates/eui-client/tests/worker.rs`'s
    `every_thread_has_started_before_the_sandbox_closes`: 128 confined
    workers lock down at once, and none is killed for a call one of its own
-   threads made on the way in (08 §10).
+   threads made on the way in (08 §10). Nor on the way out:
+   `a_decode_thread_gives_memory_back_without_being_killed` has a decode
+   thread grow its heap and free it, which glibc follows with a trim.
 
 ### 1.3 A session over a pipe — `crates/eui-client/tests/pipe.rs`, `crates/eui-proto/tests/frames.rs`
 
@@ -760,7 +762,8 @@ asked; tuplets' durations, their beams by the beat, their brackets and
 refusals; `\break` and `\pageBreak` ending a line and a page; dynamics,
 hairpins, articulations and words read onto their notes, dynamics clear of
 the stems on one line where they touch, a staccato opposite its stem and in
-a space; the cache recolouring a copy of a lit note's paths; one band
+a space; the cache recolouring a copy of a lit note's paths, and a lit
+note laid over its band with the band's own paths unchanged; one band
 canvas per system adding up to the page, an edited note changing one
 band, and the line search not run again for the same widths; a MIDI file's
 header, division and notes, a tie held as one note and dynamics as its
@@ -774,17 +777,31 @@ a note across a bar cut and tied, the keys its help lists, undo, slurs,
 the source read back to the same model with its titles, tempo and changes,
 a key or metre from the selected bar written where that bar starts (and
 moved to the next bar line when the bar moves under it), a click resolved
-to a note and a pitch on screen and on an A4 page, repeats set and taken
+to a note and a pitch on screen and on an A4 page, and in insert mode
+(N) to the pitch pressed — added to a note as a chord, filling a rest,
+written over notes of another value with a rest for what is left, or a
+new note between two — nothing picked up and, but for the last, nothing
+moved, a repeat opened on the first bar written and drawn after the clef, repeats set and taken
 off at the selected bar, bars of rest in a row written as one and read back
 as bars, triplets and sextuplets made with Ctrl+3 and Ctrl+6 and broken by
 a deletion, breaks set after the selected bar, a dynamic, a hairpin,
 articulations and words written after their note and read back, and the
 tune mixed into a `.wav`; and its tracks — added and edited one at a time
 with Alt+↑/↓ between them, written as a staff group with the shorter
-filled, a change from a bar the first track's and every staff's, staves
+filled, a change from a bar the first track's and every staff's — chosen
+on any track, the full score's included — staves
 read back as tracks with their names and MIDI settings, a click on the full
 score editing that staff's note, and each track's sounding note lit there
 while it plays.
+
+The native engraver lang calls in its place (`eui-score`) is held to that
+one rather than to a second description:
+`the_corpus_draws_as_the_soli_engraver_drew_it`
+(`crates/eui-score/tests/golden.rs`) engraves each piece of
+`tests/corpus/` on a 900 px screen and on A4 and requires every path to be
+the Soli engraver's to the hundredth of a pixel, and its MIDI file and its
+PDF to be the same bytes; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
+requires its refusals word for word, character position included.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

@@ -64,7 +64,8 @@ pub fn lock_down() -> Result<String, String> {
     Ok(report.join("; "))
 }
 
-/// The glibc tunable the worker runs under: at most four malloc arenas.
+/// The glibc tunables the worker runs under: at most four malloc arenas,
+/// and heaps that are never trimmed.
 ///
 /// glibc gives each thread an arena at its first allocation, and while the
 /// process has no limit set it works one out from the processor count —
@@ -79,11 +80,22 @@ pub fn lock_down() -> Result<String, String> {
 /// before the door closes, and shares. Fewer arenas is also less memory held
 /// per session, which is a worker's to spend (08 §10).
 ///
+/// The trim threshold is the same kind of question asked later. When a
+/// thread's arena has grown and is freed back — a decode thread's, when a
+/// long sound stops — glibc shrinks the heap, and the first time it does,
+/// it reads `/proc/sys/vm/overcommit_memory` to learn whether it may: an
+/// `openat`, and the worker killed for stopping a symphony. With the
+/// threshold past any heap, no heap is shrunk and nothing is asked. Setting
+/// it also fixes the mmap threshold at its 128 KiB default rather than
+/// letting it climb, so a sound's buffer is a mapping of its own, given
+/// back whole with `munmap` when the sound goes; what a heap keeps is the
+/// small allocations', bounded by the four arenas.
+///
 /// The window sets it on the worker it spawns, into an environment it has
 /// cleared, so nothing inherited can unset it; [`crate::worker::entry`] also
 /// re-executes a worker started without it.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-pub const ARENA_TUNABLE: &str = "glibc.malloc.arena_max=4";
+pub const ARENA_TUNABLE: &str = "glibc.malloc.arena_max=4:glibc.malloc.trim_threshold=1099511627776";
 
 /// Confine the calling process. Nothing to do yet off Linux; the error
 /// says so.

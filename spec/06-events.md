@@ -224,7 +224,15 @@ for anything provisional — it has to be able to put it back.
   per frame per node, carrying the latest value. `drag_over` is coalesced
   **twice**: per frame as the others are, and again against the last one sent,
   so a drag that crosses no boundary reports nothing at all. Six hundred
-  samples down a list of forty is forty events (§6).
+  samples down a list of forty is forty events (§6). A server that handles
+  a session's events one at a time SHOULD coalesce them again against what
+  has already arrived and not yet been handled: an unbroken run of the same
+  coalesced kind on the same node, for the same handler, is handled once,
+  with the last value; nothing else is folded or reordered. Per-frame
+  coalescing cannot see that the server is behind — a handler slower than
+  a frame otherwise leaves the moves queued, and what they move follows the
+  hand by as long as the queue is. lang does this where it reads the socket
+  (`serve/eui/session.rs`).
 - A gesture that became a drag reports **no `pointer_up` and no `click`**: the
   lift is the `drop`. Without this, putting a card down also activates it.
 - `change` fires when an editable node's value settles — on blur, on `Enter`

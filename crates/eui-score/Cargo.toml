@@ -1,0 +1,16 @@
+[package]
+name = "eui-score"
+description = "EUI score: LilyPond input engraved into canvas fills, played as MIDI, printed as PDF — the engraver behind the catalogue's score()."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The glyph outlines and the letters, read once from the JSON the font
+# tools wrote (`data/`), as the Soli engraver reads the same numbers.
+serde_json = "1"
+
+[lints]
+workspace = true

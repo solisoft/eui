@@ -1976,6 +1976,24 @@ fn selftest(what: &str) -> i32 {
         "fs" => std::fs::read("/etc/hostname").map(|_| ()).map_err(|e| e.to_string()),
         "net" => std::net::TcpStream::connect("127.0.0.1:9").map(|_| ()).map_err(|e| e.to_string()),
         "exec" => Command::new("/bin/true").status().map(|_| ()).map_err(|e| e.to_string()),
+        // Not a refusal but a survival: what a sound does when it stops.
+        // A decode thread grows its arena and frees it all, and glibc
+        // trims the heap — which, the first time, it does only after
+        // asking `/proc/sys/vm/overcommit_memory` whether it may, unless
+        // `sandbox::ARENA_TUNABLE` has told it never to.
+        "shrink" => {
+            let grown = crate::decode::on_pool(|| {
+                let blocks: Vec<Vec<u8>> = (0..256).map(|_| vec![1u8; 64 * 1024]).collect();
+                drop(std::hint::black_box(blocks));
+            });
+            return if grown {
+                eprintln!("freed and still here");
+                0
+            } else {
+                eprintln!("no decode thread to grow");
+                4
+            };
+        }
         other => {
             eprintln!("unknown self-test {other:?}");
             return 2;

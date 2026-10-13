@@ -440,6 +440,67 @@ ship with, per `spec/07-bytecode.md`, now normative.
   silent when a chunk fails verification; the Soli end-to-end counter uses
   one.
 
+**`eui-score` — the score engraver, native.** The catalogue's `score()`
+engraver (`eui_builders_score.sl`, below) ported to Rust function for
+function, so lang can call it instead of interpreting it: the same
+Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
+same JSON the Soli tables were written from), the same spacing, breaking,
+stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
+writers. 5 654 lines; `serde_json` its one dependency, for the font data.
+
+- Held to the Soli engraver, not to a description of it: the golden files
+  (`tests/golden/`, 4.2 MB) are what the Soli engraver drew for the 20
+  pieces of `tests/corpus/` — 4 749 paths on a 900 px screen, 23 A4 pages
+  and 4 756 paths on them, a MIDI file and a PDF each — and
+  `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
+  agree to the hundredth of a pixel and the MIDI and the PDF to the byte;
+  `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
+  30 refusals to theirs, character position included. Both pass. The last
+  difference to go was rounding: Soli's `round(2)` rounds the shortest
+  decimal that reads back as the number, so 22.884999… is 22.88 there and
+  22.89 under `(v * 100).round()`, and two PDFs differed by that digit.
+- Measured 2026-10-13 on one machine, on the exposition of Beethoven's
+  Fifth (12 systems, 10 518 paths at 900 px), best of ten
+  (`examples/timing.rs`) against one run of the Soli engraver under the
+  same `soli`: engraving **1.9 ms** against 338, drawing **2.4 ms**
+  against 639, the MIDI file **1.4 ms** against 182, and the PDF of its
+  A4 pages in 47 ms.
+- What the playhead costs. A system of the full score is one canvas,
+  **267 KB** of paths as JSON, and lighting a note used to recolour its
+  paths inside it — so every tick that lit a new note (seven in eleven, at
+  ten a second) sent the system again, and the window rasterized it again;
+  the picture fell behind the sound and a Stop waited behind the ticks.
+  Now a band is a stack of its plain canvas and, laid over it, a canvas of
+  what is lit: a tick sends **3.5–8.9 KB** and the system none
+  (measured 2026-10-13, Beethoven, full score). Screen pages are no longer
+  numbered in the music — the pager says which page it is, and the text
+  face's 4 lost its hairline diagonal at that size; A4 pages and the PDF
+  are numbered as LilyPond numbers them.
+- What a drag costs. A note dragged on the first violins is an event per
+  frame — one every 30 ms — and handling one is about 60 ms on the server
+  (13 ms the handler, 25 ms the editor's view, the rest the state's 674 KB
+  and the encoding). The socket is read one event at a time, so the moves
+  queued: the note was still moving 1.1 s after the hand let go. lang now
+  folds the moves already waiting into the last one (06 §2), and the last
+  answer arrives **12–24 ms** after the release (measured 2026-10-13
+  through a confined worker, a move every 8 ms for a second).
+- In the score editor, on the same piece's flute part (handler, then view,
+  in `soli` with and without the builtins, 2026-10-13): a drag step's view
+  **13 ms** against 59–65 — the Soli engraver's band cache already spared
+  it most systems — and a note written 42 + 18 ms against 101 + 63. What
+  is left is the editor's own model in Soli: the drag's first step spends
+  42 ms keeping an undo copy, with either engraver.
+- Every public function runs under `catch_unwind`: the engraver indexes
+  structures it has just built, and the workspace's no-panic lints are
+  allowed at its root with that reason written there, so a fault is a
+  refusal and not a dead worker.
+- lang calls it through `eui_score_layout`, `eui_score_bands`,
+  `eui_score_midi` and `eui_score_pdf` (lang's `serve/eui/score.rs`), and
+  the catalogue takes that road when the builtins are there and engraves
+  in Soli when they are not. That half is written and builds against this
+  checkout through the local `[patch]`; lang's pin (`5bf0354`) predates the
+  crate, so it is not in a released `soli` until the pin moves.
+
 **A render with no session, and what a session costs.** `GET
 /_eui/view/<component>` on the Soli side answers
 `application/vnd.eui.frames` — the exact frames a fresh socket would have
@@ -1108,7 +1169,13 @@ the build server under parallel load, 1 gallery session in 300 on a loaded
 desktop, and desktop sessions at start-up (the audit log named `openat`
 from glibc's `get_nprocs`). Since: 0 in 1 000 on the build server, 0
 gallery sessions in 300 on the loaded desktop, and 128 at once in the
-test. The
+test. The same audit line came back on 2026-10-13 with Play and Stop on
+Beethoven's Fifth: freeing the synthesized symphony, glibc trimmed the
+decode thread's heap and first opened `/proc/sys/vm/overcommit_memory`.
+The worker now also runs under `glibc.malloc.trim_threshold` set past any
+heap, so nothing is trimmed and nothing asked; the self-test that grows a
+decode thread's heap and frees it was killed in two runs of three before,
+and in none of 40 after. The
 self-tests show a file read, a TCP
 connect and an exec each end the worker with `SIGSYS`; the counter runs
 end to end through a confined worker and paints the same quads as an

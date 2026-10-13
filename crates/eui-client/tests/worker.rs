@@ -273,6 +273,25 @@ fn the_sandbox_refuses_files_sockets_and_processes() {
     }
 }
 
+/// A decode thread that frees what it grew is not killed for it.
+///
+/// Stopping a long sound frees its buffer on the decode thread that made
+/// it, and glibc trims that thread's heap — the first time only after
+/// opening `/proc/sys/vm/overcommit_memory` to ask whether it may. Behind
+/// the filter that `openat` killed the worker: Play, Stop, on Beethoven's
+/// Fifth, and the window had lost its application (two runs in three of
+/// this test, before `sandbox::ARENA_TUNABLE` set the trim threshold).
+/// The self-test does what the stop did, many times over.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_decode_thread_gives_memory_back_without_being_killed() {
+    use std::process::Command;
+    for _ in 0..20 {
+        let out = Command::new(eui_binary()).arg(eui_client::worker::SELFTEST_ARG).arg("shrink").output().unwrap();
+        assert!(out.status.success(), "{:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 /// Every thread the worker started before the door closed has finished
 /// starting when it closes.
 ///

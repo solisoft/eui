@@ -99,6 +99,19 @@ pub(crate) fn start() {
     let _ = pool();
 }
 
+/// Run `f` on one of the decode threads and wait for it to finish; false
+/// when there is no pool. The worker's self-test of what a decode thread
+/// may do once the filter is on (`worker::selftest`).
+pub(crate) fn on_pool(f: impl FnOnce() + Send + 'static) -> bool {
+    let Some(pool) = pool() else { return false };
+    let (done, finished) = mpsc::channel::<()>();
+    let task: Task = Box::new(move || {
+        f();
+        let _ = done.send(());
+    });
+    pool.send(task).is_ok() && finished.recv().is_ok()
+}
+
 /// What to make of the bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Work {

@@ -57,6 +57,7 @@ const SCORE_RULE = {
 const SCORE_ED_CLEFS = ["Treble", "Bass", "Alto"]
 const SCORE_ED_TIMES = ["2/2", "2/4", "3/4", "4/4", "5/4", "6/4", "3/8", "6/8", "9/8", "12/8"]
 const SCORE_ED_SCOPES = ["Whole piece", "From the selected bar"]
+const SCORE_ED_TOOLS = ["Pointer", "Insert"]
 const SCORE_ED_VIEWS = ["Screen", "A4 page"]
 const SCORE_ED_CHIP_ROW = 28
 const SCORE_ED_EXAMPLES = ["Frère Jacques", "Beethoven, Symphony No. 5 (exposition)"]
@@ -487,7 +488,7 @@ def score(src, opts)
     return column({"gap": 6, "width": width}, sheets.map { |sheet| score_sheet(sheet, width) })
   end
   sp = opts["staff_space"] ?? 8
-  engraved = score_engrave(src, float(width) / sp)
+  engraved = score_layout(src, float(width) / sp, {})
   score_band_column(engraved, sp, opts, width, int(Math.ceil(engraved["height"] * sp)))
 end
 
@@ -501,7 +502,7 @@ def score_pages(src, opts)
   width = opts["width"] ?? 600
   sp = float(width) / paper["w"]
   line_w = paper["w"] - paper["left"] - paper["right"]
-  engraved = score_engrave_page(src, line_w, {"page_h": paper["h"], "top": paper["top"], "bottom": paper["bottom"], "left": paper["left"], "indent": paper["indent"], "gap": 12.0})
+  engraved = score_layout(src, line_w, {"page_h": paper["h"], "top": paper["top"], "bottom": paper["bottom"], "left": paper["left"], "indent": paper["indent"], "gap": 12.0})
   height = int(paper["h"] * sp)
   sheets = engraved["pages"].map { |pg| score_band_column(engraved, sp, opts.merge({"page_index": pg["index"]}), width, height) }
   {"engraved": engraved, "sp": sp, "pages": sheets, "height": height}
@@ -509,6 +510,14 @@ end
 
 def score_sheet(sheet, width)
   {"k": "box", "s": {"bg": "surface.raised", "shadow": 2, "width": width, "border": 1, "border_color": "border.subtle"}, "c": [sheet]}
+end
+
+def score_layout(src, width_ss, layout)
+  return score_engrave_page(src, width_ss, layout) unless defined("eui_score_layout")
+
+  laid = eui_score_layout(src, width_ss, layout)
+  throw laid["error"] unless laid["error"].nil?
+  laid
 end
 
 def score_engrave(src, width_ss)
@@ -582,7 +591,7 @@ def score_engrave_fresh(src, width_ss, layout)
   for sys in systems
     bottom = sys["bottom"] if sys["bottom"] > bottom
   end
-  {"systems": systems, "height": bottom + 1.0, "width": width_ss, "left": left, "header": head, "pages": pages, "paper": layout["page_h"]}
+  {"systems": systems, "height": bottom + 1.0, "width": width_ss, "left": left, "header": head, "pages": pages, "paper": layout["page_h"], "numbered": score_numbered(layout)}
 end
 
 def score_whole()
@@ -671,7 +680,7 @@ def score_engrave_many(parsed, width_ss, layout)
     end
     bottom = o["bottom"] if o["bottom"] > bottom
   end
-  {"systems": outer, "height": bottom + 1.0, "width": width_ss, "left": left, "header": head, "pages": pages, "paper": layout["page_h"]}
+  {"systems": outer, "height": bottom + 1.0, "width": width_ss, "left": left, "header": head, "pages": pages, "paper": layout["page_h"], "numbered": score_numbered(layout)}
 end
 
 def score_master_bar(staff_bars, shortest)
@@ -1657,6 +1666,11 @@ def score_measures(events)
         cur["bar"] = ev["v"]
         cur["length"] = pos
         cur = nil
+      elsif ev["v"] == ".|:"
+        # A start repeat before the first note: LilyPond draws it at the
+        # start of the first line, after the clef, key and time — where
+        # `\repeat volta` from the very start draws nothing.
+        cur["open_bar"] = true
       else
         score_refuse("a bar line before any music", ev["at"])
       end
@@ -2117,6 +2131,7 @@ end
 
 def score_break(bars, width, indent, rest = 0.0)
   bars[0]["first"] = true
+  bars[0]["open_repeat"] = ".|:" if bars[0]["open_bar"] == true
   count = bars.length
   opening_w = bars.map { |b| score_bar_width(b, 1.0, true) }
   inner_w = bars.map { |b| score_bar_width(b, 1.0, false) }
@@ -3307,6 +3322,8 @@ def score_paths(engraved, sp, opts)
 end
 
 def score_midi(src, opts = {})
+  return eui_score_midi(src, opts) if defined("eui_score_midi")
+
   parsed = score_parse(src)
   title = (parsed["header"] ?? {})["title"] ?? ""
   staves = parsed["staves"]
@@ -3501,6 +3518,8 @@ def score_midi_text(words)
 end
 
 def score_pdf(src, opts = {})
+  return eui_score_pdf(src, opts["title"] ?? "") if defined("eui_score_pdf")
+
   paper = score_a4()
   line_w = paper["w"] - paper["left"] - paper["right"]
   engraved = score_engrave_page(src, line_w, {"page_h": paper["h"], "top": paper["top"], "bottom": paper["bottom"], "left": paper["left"], "indent": paper["indent"], "gap": 12.0})
@@ -3628,6 +3647,8 @@ def score_pdf_hex4(u)
 end
 
 def score_bands(engraved, sp, opts, total)
+  return eui_score_bands(engraved, sp, opts, total) if engraved["native"] == true
+
   ink = opts["colour"] ?? "text.default"
   marks = opts["marks"] ?? {}
   page = opts["page_index"] ?? 0
@@ -3639,7 +3660,7 @@ def score_bands(engraved, sp, opts, total)
     starts.push([sys, pad, int(Math.floor(sys["top"] * sp + 0.5)) - pad])
   end
   first_y = starts.length > 0 ? score_max(starts[0][2], 0) : total
-  head_key = str(sp) + "|" + ink + "|" + str(page) + "|" + str(engraved["left"]) + "|" + str(engraved["width"]) + "|" + str(engraved["paper"]) + "|" + score_sig_value(engraved["header"])
+  head_key = str(sp) + "|" + ink + "|" + str(page) + "|" + str(engraved["left"]) + "|" + str(engraved["width"]) + "|" + str(engraved["paper"]) + "|" + str(engraved["numbered"]) + "|" + score_sig_value(engraved["header"])
   head = score_memo_get("heads", head_key)
   head = score_memo_put("heads", head_key, {"paths": score_paths_head(engraved, sp, ink, page), "ranges": {}}, 16) if head.nil?
   bands.push({"y": 0, "h": first_y, "drawn": head, "items": []})
@@ -3649,7 +3670,7 @@ def score_bands(engraved, sp, opts, total)
     bands.push({"y": y, "h": 0, "drawn": score_band_drawn(st[0], st[1], sp, ink), "items": score_band_items(st[0])})
   end
   bands[-1]["h"] = score_max(total - bands[-1]["y"], 0)
-  bands.map { |bd| {"y": bd["y"], "h": bd["h"], "paths": score_band_lit(bd, marks)} }
+  bands.map { |bd| {"y": bd["y"], "h": bd["h"], "paths": bd["drawn"]["paths"], "lit": score_band_lit(bd, marks)} }
 end
 
 def score_band_items(sys)
@@ -3666,11 +3687,20 @@ end
 
 def score_band_lit(bd, marks)
   drawn = bd["drawn"]
-  lit = {}
+  out = []
   for item, k in bd["items"]
-    lit[str(k)] = marks[item] if marks.has_key(item)
+    next unless marks.has_key(item)
+
+    span = drawn["ranges"][str(k)]
+    next if span.nil?
+
+    for j in range(span[0], span[1])
+      lit = drawn["paths"][j].map { |v| v }
+      lit[1] = marks[item]
+      out.push(lit)
+    end
   end
-  score_recolour(drawn, lit)
+  out
 end
 
 def score_band_drawn(sys, pad, sp, ink)
@@ -3765,6 +3795,10 @@ def score_paths_plain(engraved, sp, ink, page, ranges)
   paths
 end
 
+def score_numbered(layout)
+  !layout["page_h"].nil? && !layout["top"].nil?
+end
+
 def score_paths_head(engraved, sp, ink, page)
   paths = []
   left = engraved["left"] ?? 0.0
@@ -3776,7 +3810,7 @@ def score_paths_head(engraved, sp, ink, page)
       end
     end
   end
-  if page > 0 && !engraved["paper"].nil?
+  if page > 0 && engraved["numbered"] == true
     # LilyPond's page numbers: from the second page, at the top, on the
     # outside edge — right on odd pages, left on even ones.
     number = str(page + 1)
@@ -3790,7 +3824,9 @@ end
 def score_band_column(engraved, sp, opts, width, total)
   bands = score_bands(engraved, sp, opts, total)
   # A plain box, not `column()`: the bands stack with no gap and nothing else.
-  {"k": "box", "s": {"display": "column", "width": width}, "c": bands.filter { |bd| bd["h"] > 0 }.map { |bd| canvas(width, bd["h"], bd["paths"]) }}
+  {"k": "box", "s": {"display": "column", "width": width}, "c": bands.filter { |bd| bd["h"] > 0 }.map { |bd|
+    {"k": "box", "s": {"display": "stack", "width": width, "height": bd["h"]}, "c": [canvas(width, bd["h"], bd["paths"]), canvas(width, bd["h"], bd["lit"] ?? [])]}
+  }}
 end
 
 def score_draw_tempo(paths, ink, mk, top, sp)
@@ -4415,6 +4451,7 @@ def score_ed_answer(state, ed_event, params, props)
     "time_open" => score_ed_flag(state, "time_open", !(state["time_open"] == true)),
     "time_pick" => score_ed_settings(score_ed_flag(state, "time_open", false), "time", props["value"]),
     "scope" => SCORE_ED_SCOPES.includes?(props["option"]) ? score_ed_flag(state, "scope", props["option"]) : state,
+    "tool" => SCORE_ED_TOOLS.includes?(props["option"]) ? score_ed_flag(state, "tool", props["option"]) : state,
     "view" => SCORE_ED_VIEWS.includes?(props["option"]) ? score_ed_flag(state, "view", props["option"]) : state,
     "panel" => SCORE_ED_PANELS.includes?(props["tab"]) ? score_ed_flag(state, "panel", (state["panel"] ?? SCORE_ED_PANELS[0]) == props["tab"] ? "none" : props["tab"]) : state,
     "bpm" => score_ed_tempo(state, score_ed_int(params["payload"] ?? ""), state["tempo_text"], state["mark_tempo"]),
@@ -4754,7 +4791,9 @@ def score_ed_duration(state, base)
   state["dur"] = base
   state["dot"] = false if base == 32
   current = score_ed_selected(state)
-  return state if current.nil? || state["typing"] == true
+  # In insert mode a value is the next note's, never the selected one's:
+  # the selection is only where the last press wrote.
+  return state if current.nil? || state["typing"] == true || score_ed_inserting(state)
 
   state = score_ed_remember(state)
   current = score_ed_selected(state)
@@ -4794,7 +4833,7 @@ end
 
 def score_ed_dot(state)
   current = score_ed_selected(state)
-  if current.nil? || state["typing"] == true
+  if current.nil? || state["typing"] == true || score_ed_inserting(state)
     state["dot"] = !state["dot"] && state["dur"] != 32
     return state
   end
@@ -5454,8 +5493,7 @@ def score_ed_settings(state, which, value)
 
   at = score_ed_scope_at(state, which)
   if at > 0 && score_ed_tracks(state).length > 1 && (state["track"] ?? 0) != 0
-    state["error"] = "A change from a bar is set on the first track; every staff takes it."
-    return state
+    return score_ed_settings_first(state, which, value, at)
   end
   if at <= 0
     return state if state[which] == value
@@ -5469,6 +5507,38 @@ def score_ed_settings(state, which, value)
   changes = opener["set"] ?? {}
   changes[which] = value
   opener["set"] = changes
+  state
+end
+
+def score_ed_settings_first(state, which, value, at)
+  tick = 0
+  for nt, k in state["notes"]
+    break if k >= at
+
+    tick += score_ed_ticks(nt)
+  end
+  first = score_ed_tracks(state)[0]["notes"] ?? []
+  pos = 0
+  hit = -1
+  for nt, k in first
+    if pos == tick
+      hit = k
+      break
+    end
+    break if pos > tick
+
+    pos += score_ed_ticks(nt)
+  end
+  if hit < 0
+    state["error"] = "The first track has no note starting at that bar to carry the change."
+    return state
+  end
+  state = score_ed_remember(state)
+  opener = first[hit]
+  changes = opener["set"] ?? {}
+  changes[which] = value
+  opener["set"] = changes
+  state["error"] = ""
   state
 end
 
@@ -5572,9 +5642,17 @@ def score_ed_play(state)
   state["plays"] = (state["plays"] ?? 0) + 1
   state["play_at"] = 0
   state["play_ms"] = 0
-  state["play_wall"] = clock()
+  # Not yet: the window has a MIDI file to fetch and synthesize before the
+  # first note sounds — three quarters of a second for a symphony — and a
+  # playhead started now ran that far ahead of the music. It starts at the
+  # window's first report of where the sound is (`score_ed_playhead`).
+  state["play_wall"] = nil
   state["play_shown_ms"] = -1
   score_ed_light_to(state, 0)
+end
+
+def score_ed_now()
+  DateTime.microtime() / 1000000.0
 end
 
 def score_ed_stop(state)
@@ -5587,7 +5665,7 @@ def score_ed_playhead(state, payload)
   return state unless state["playing"] == true
 
   state["play_ms"] = payload[0] ?? 0
-  state["play_wall"] = clock()
+  state["play_wall"] = score_ed_now()
   score_ed_light_to(state, state["play_ms"])
 end
 
@@ -5596,7 +5674,7 @@ def score_ed_play_tick(state)
 
   # Carried on from the last report, never more than 600 ms past it: a
   # window that stopped reporting has stopped playing too.
-  ahead = score_min(600.0, (clock() - state["play_wall"]) * 1000.0)
+  ahead = score_min(600.0, (score_ed_now() - state["play_wall"]) * 1000.0)
   score_ed_light_to(state, state["play_ms"] + int(ahead))
 end
 
@@ -5783,7 +5861,7 @@ end
 
 def score_ed_conductor_engraved(state, full)
   sp = score_ed_full_space(state)
-  score_engrave_page(full["src"], float(score_ed_width(state)) / sp, {"page_h": score_ed_screen_page() / sp})
+  score_layout(full["src"], float(score_ed_width(state)) / sp, {"page_h": score_ed_screen_page() / sp})
 end
 
 def score_ed_page_of(engraved, map, owner)
@@ -5959,6 +6037,7 @@ def score_ed_key(state, key, mods)
 
     return state
   end
+  return score_ed_flag(state, "tool", score_ed_inserting(state) ? SCORE_ED_TOOLS[0] : SCORE_ED_TOOLS[1]) if lower == "n"
   step = "cdefgab".index_of(lower)
   return score_ed_insert(state, step, shift) if key.length == 1 && step >= 0
   return score_ed_insert_rest(state) if lower == "r" || key == "0"
@@ -5985,6 +6064,7 @@ def score_ed_key(state, key, mods)
   return score_ed_select(state, state["notes"].length - 1) if key == "End"
   return score_ed_delete(state, true) if key == "Backspace"
   return score_ed_delete(state, false) if key == "Delete"
+  return score_ed_flag(state, "tool", SCORE_ED_TOOLS[0]) if key == "Escape" && score_ed_inserting(state)
   return score_ed_flag(score_ed_flag(state, "sel", -1), "typing", false) if key == "Escape"
 
   state
@@ -6088,11 +6168,127 @@ def score_ed_pos_at(ys, top)
 end
 
 def score_ed_press(state, point, page)
+  return score_ed_insert_at(state, point, page) if score_ed_inserting(state)
+
   state = score_ed_pick(state, point, page)
   current = score_ed_selected(state)
   state["dragging"] = !current.nil?
   state["drag_saved"] = false
   state
+end
+
+def score_ed_inserting(state)
+  state["tool"] == SCORE_ED_TOOLS[1]
+end
+
+def score_ed_insert_at(state, point, page)
+  state["dragging"] = false
+  drawn = score_ed_engrave(state)
+  return state if drawn["engraved"].nil?
+
+  sp = drawn["sp"]
+  xs = float(point[0]) / sp
+  ys = float(point[1]) / sp
+  systems = drawn["engraved"]["systems"].filter { |sy| (sy["page"] ?? 0) == page }
+  return state if systems.length == 0
+
+  best_sys = systems[0]
+  for sys in systems
+    best_sys = sys if (ys - sys["top"] - 2.0).abs < (ys - best_sys["top"] - 2.0).abs
+  end
+  pitch = score_ed_within(state, score_ed_pitch_at(state, score_ed_pos_at(ys, best_sys["top"])))
+  map = drawn["map"]
+  at = -1
+  last = -1
+  on = -1
+  on_gap = 1.0
+  for bar in best_sys["bars"]
+    for ev in bar["items"]
+      next if ev["i"] >= map.length
+
+      owner = map[ev["i"]]
+      next if owner < 0
+
+      last = owner if owner > last
+      mid = ev["x"] + (ev["head_w"] ?? 1.18) / 2.0
+      at = owner if at < 0 && mid > xs
+      if (xs - mid).abs <= on_gap
+        on_gap = (xs - mid).abs
+        on = owner
+      end
+    end
+  end
+  notes = state["notes"]
+  return score_ed_insert_onto(state, on, pitch) if on >= 0 && on < notes.length
+
+  at = last + 1 if at < 0
+  at = notes.length if at > notes.length
+  state = score_ed_remember(state)
+  fresh = score_ed_note(pitch["step"], pitch["oct"], pitch["alter"], state["dur"], state["dot"] ? 1 : 0)
+  state["notes"] = notes.take(at) + [fresh] + range(at, notes.length).map { |k| notes[k] }
+  state["sel"] = at
+  state["typing"] = true
+  score_ed_blip(state, fresh)
+end
+
+def score_ed_insert_onto(state, k, pitch)
+  target = state["notes"][k]
+  value = {"base": state["dur"], "dots": state["dot"] ? 1 : 0}
+  return score_ed_write_over(state, k, pitch, value) if score_ed_ticks(value) != score_ed_ticks(target)
+
+  want = pitch["oct"] * 7 + pitch["step"]
+  had = !target["rest"] && target["pitches"].any? { |pt| pt["oct"] * 7 + pt["step"] == want }
+  state["sel"] = k
+  state["typing"] = false
+  return state if had
+
+  state = score_ed_remember(state)
+  target = state["notes"][k]
+  if target["rest"]
+    target["rest"] = false
+    target["pitches"] = [pitch]
+    # A rest the editor put there to fill a bar is the person's note now,
+    # and no longer one a trim may take away.
+    target.delete("auto") if target.has_key("auto")
+  else
+    target["pitches"] = (target["pitches"] + [pitch]).sort_by { |pt| pt["oct"] * 7 + pt["step"] }
+  end
+  score_ed_blip(state, target)
+end
+
+def score_ed_write_over(state, k, pitch, value)
+  notes = state["notes"]
+  need = score_ed_ticks(value)
+  covered = 0
+  stop = k
+  while stop < notes.length && covered < need
+    if !notes[stop]["tup"].nil?
+      state["error"] = "A note written over a tuplet would break it: change the tuplet's notes one by one."
+      return state
+    end
+    covered += score_ed_ticks(notes[stop])
+    stop += 1
+  end
+  state = score_ed_remember(state)
+  notes = state["notes"]
+  first = notes[k]
+  last = notes[stop - 1]
+  fresh = score_ed_note(pitch["step"], pitch["oct"], pitch["alter"], value["base"], value["dots"])
+  # What belongs to the moment the note starts stays with it: a change of
+  # key or metre, a repeat, a dynamic, words.
+  for field in ["set", "rep_start", "dyn", "texts"]
+    fresh[field] = first[field] if first.has_key(field) && !first[field].nil?
+  end
+  rests = score_ed_chunks(score_max(0, covered - need)).map { |c| {"rest": true, "pitches": [], "base": c[0], "dots": c[1], "tie": false} }
+  written = [fresh] + rests
+  # And what belongs to where the last one ended: a repeat's end, a break.
+  for field in ["rep_end", "brk"]
+    written[-1][field] = last[field] if last.has_key(field) && !last[field].nil?
+  end
+  state["notes"] = notes.take(k) + written + range(stop, notes.length).map { |j| notes[j] }
+  state["sel"] = k
+  state["typing"] = false
+  score_ed_blip(state, fresh)
 end
 
 def score_ed_drag(state, point)
@@ -6236,7 +6432,10 @@ def score_ed_layout_one(state)
       words[bar_at] = score_ed_bar_ly(words[bar_at], "|:")
       opening = false
     elsif opening && pos == 0 && owners.length == 0
-      # A repeat from the very start has no sign: LilyPond draws none.
+      # A repeat from the very start: no bar line comes before it to carry
+      # the sign, so it is written on its own, and drawn after the clef,
+      # key and time as LilyPond draws it.
+      words.push("\\bar \".|:\"")
       opening = false
     end
     if changes["words"].length > 0
@@ -6397,7 +6596,7 @@ def score_ed_from_source(state, src)
   end
   if problem == "" && parsed["staves"].length > 1
     try
-      score_engrave(src, 100.0)
+      score_layout(src, 100.0, {})
     catch e
       problem = str(e)
     end
@@ -6563,7 +6762,7 @@ def score_ed_engrave(state)
       engraved = sheets["engraved"]
       sp = sheets["sp"]
     else
-      engraved = score_engrave_page(laid["src"], float(score_ed_width(state)) / sp, {"page_h": score_ed_screen_page() / sp})
+      engraved = score_layout(laid["src"], float(score_ed_width(state)) / sp, {"page_h": score_ed_screen_page() / sp})
     end
   catch e
     problem = str(e)
@@ -7098,8 +7297,10 @@ describe("engraving", fn() {
   test("marks draw an item in another role", fn() {
     plain = spec_tree_paths(score(SPEC_CHORALE, {"width": 640}))
     lit = spec_tree_paths(score(SPEC_CHORALE, {"width": 640, "marks": {"0": "accent.base"}}))
-    check("the same paths", lit.length, plain.length)
-    assert(lit.any? { |p| p[1] == "accent.base" })
+    # Laid over the plain drawing, which stays as it was: lighting a note
+    # changes the overlay, never the system under it.
+    check("the plain paths as they were", lit.filter { |p| p[1] != "accent.base" }, plain)
+    check("and the item's laid over them", lit.filter { |p| p[1] == "accent.base" }.length > 0, true)
     assert(!plain.any? { |p| p[1] == "accent.base" })
   })
 })
@@ -7215,6 +7416,89 @@ describe("the editor", fn() {
     higher = [at[0], (sys["top"] + score_y(third["heads"][0]["pos"] + 2)) * sp]
     st = score_ed_pick(st, higher, 0)
     check("moved a third up: E to G", score_ed_selected(st)["pitches"][0]["step"], 4)
+  })
+
+  test("in insert mode a press writes a note where it lands, and moves none", fn() {
+    st = spec_state()
+    count = st["notes"].length
+    st = score_ed_key(st, "n", 0)
+    check("N: insert mode", st["tool"], SCORE_ED_TOOLS[1])
+    drawn = score_ed_engrave(st)
+    sp = score_ed_space(st)
+    sys = drawn["engraved"]["systems"][0]
+    second = sys["bars"][0]["items"][1]
+    third = sys["bars"][0]["items"][2]
+    # Between the second and the third note, on the staff's top line (F).
+    between = [((second["x"] + third["x"]) / 2.0 + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": between, "props": {"page": 0}}, "state": st})
+    check("one note more", st["notes"].length, count + 1)
+    check("written third, and selected", st["sel"], 2)
+    check("at the pitch under the press", score_ed_selected(st)["pitches"][0]["step"], 3)
+    check("nothing picked up", st["dragging"], false)
+    st = score_ed_key(st, "Escape", 0)
+    check("Escape: the pointer again", st["tool"], SCORE_ED_TOOLS[0])
+  })
+
+  test("in insert mode a press on a note makes a chord, and on a rest fills it, moving nothing", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 r4 e''4 f''4 }")
+    st = score_ed_flag(st, "tool", SCORE_ED_TOOLS[1])
+    count = st["notes"].length
+    drawn = score_ed_engrave(st)
+    sp = score_ed_space(st)
+    sys = drawn["engraved"]["systems"][0]
+    items = sys["bars"][0]["items"]
+    on_c = [(items[0]["x"] + 0.6) * sp, (sys["top"] + score_y(items[0]["heads"][0]["pos"] + 2)) * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_c, "props": {"page": 0}}, "state": st})
+    check("no note more", st["notes"].length, count)
+    check("C and E together", st["notes"][0]["pitches"].map { |pt| pt["step"] }, [0, 2])
+    on_rest = [(items[1]["x"] + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_rest, "props": {"page": 0}}, "state": st})
+    check("still no note more", st["notes"].length, count)
+    check("the rest a note, F on the top line", [st["notes"][1]["rest"], st["notes"][1]["pitches"][0]["step"]], [false, 3])
+    check("as long as the rest was", st["notes"][1]["base"], 4)
+    check("selected", st["sel"], 1)
+    again = score_editor({"event": "press", "params": {"payload": on_c, "props": {"page": 0}}, "state": st})
+    check("a pitch it has only selects", again["notes"][0]["pitches"].length, 2)
+    # A value chosen now is the next note's: the selected one keeps its own.
+    st = score_ed_duration(st, 8)
+    st = score_ed_dot(st)
+    check("the selection unchanged", [st["notes"][1]["base"], st["notes"][1]["dots"]], [4, 0])
+    check("the next note's value", [st["dur"], st["dot"]], [8, true])
+  })
+
+  test("in insert mode another value writes over: an eighth on a quarter leaves a rest, a half covers two", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }")
+    st = score_ed_flag(st, "tool", SCORE_ED_TOOLS[1])
+    st = score_ed_duration(st, 8)
+    drawn = score_ed_engrave(st)
+    sp = score_ed_space(st)
+    sys = drawn["engraved"]["systems"][0]
+    items = sys["bars"][0]["items"]
+    on_d = [(items[1]["x"] + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_d, "props": {"page": 0}}, "state": st})
+    check("an F eighth, then an eighth rest, where the D was", st["notes"].map { |nt| [nt["rest"], nt["base"]] }, [ [false, 4], [false, 8], [true, 8], [false, 4], [false, 4] ])
+    check("the F", st["notes"][1]["pitches"][0]["step"], 3)
+    check("E still on the third beat", st["notes"].take(3).map { |nt| score_ed_ticks(nt) }.reduce(fn(acc, t) acc + t, 0), score_whole() / 2)
+    st = score_ed_duration(st, 2)
+    drawn = score_ed_engrave(st)
+    sys = drawn["engraved"]["systems"][0]
+    last = sys["bars"][0]["items"][-2]
+    on_e = [(last["x"] + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_e, "props": {"page": 0}}, "state": st})
+    check("a half over E and F", st["notes"].map { |nt| nt["base"] }, [4, 8, 8, 2])
+  })
+
+  test("a repeat from the first bar is written and drawn after the clef", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 | g''1 }")
+    st["sel"] = 0
+    st = score_ed_key(st, "[", 0)
+    src = score_ed_full_source(st)
+    check("written before the first note", src.includes?("\\bar \".|:\" c''4"), true)
+    first = score_engrave(src, 100.0)["systems"][0]["bars"][0]
+    check("drawn at the start of the line", first["open_repeat_x"].nil?, false)
+    check("past the time signature", first["open_repeat_x"] > first["x0"], true)
+    plain = score_engrave("{ \\repeat volta 2 { c''4 d''4 e''4 f''4 } g''1 }", 100.0)["systems"][0]["bars"][0]
+    check("a volta from the start still draws none, as LilyPond", plain["open_repeat_x"].nil?, true)
   })
 
   test("the tune is a MIDI file the window plays", fn() {
@@ -7723,12 +8007,17 @@ describe("the editor's tracks", fn() {
     ed = score_ed_key(ed, "c", 0)
     ed["scope"] = SCORE_ED_SCOPES[1]
     ed["sel"] = 1
+    # Chosen on the second track — a note picked in the full score — it
+    # lands on the first track's note that starts the same bar.
     ed = score_ed_settings(ed, "key", "G")
-    assert(ed["error"].includes?("first track"))
+    check("no refusal", ed["error"], "")
+    check("in both staves", score_ed_full_source(ed).split("\\key g \\major").length - 1, 2)
+    ed = score_ed_undo(ed)
+    check("one undo takes it back", score_ed_full_source(ed).includes?("\\key g"), false)
     ed = score_ed_switch(ed, 0)
     ed["sel"] = 1
     ed = score_ed_settings(ed, "key", "G")
-    check("in both staves", score_ed_full_source(ed).split("\\key g \\major").length - 1, 2)
+    check("and from the first track as before", score_ed_full_source(ed).split("\\key g \\major").length - 1, 2)
   })
 
   test("staves read back as tracks, names and MIDI settings with them", fn() {
@@ -8078,12 +8367,23 @@ describe("the playhead", fn() {
     st = score_ed_play(st)
     st["starts_tracks"] = [ [0, 600] ]
     st = score_ed_playhead(st, [100, 1200])
-    st["play_wall"] = clock() - 0.55
+    st["play_wall"] = score_ed_now() - 0.55
     st = score_ed_play_tick(st)
     check("d lit 550 ms on", st["play_lit"][0], [1])
-    st["play_wall"] = clock() - 5.0
+    st["play_wall"] = score_ed_now() - 5.0
     st = score_ed_play_tick(st)
     check("never past 700 ms with no report", st["play_shown_ms"] <= 700, true)
+  })
+
+  test("the playhead waits for the sound: nothing moves before the window's first report", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 }")
+    st = score_ed_play(st)
+    st["starts_tracks"] = [ [0, 600] ]
+    st = score_ed_play_tick(st)
+    st = score_ed_play_tick(st)
+    check("still on the first note while the window synthesizes", st["play_at"], 0)
+    st = score_ed_playhead(st, [650, 1200])
+    check("then where the sound is", st["play_at"], 1)
   })
 })
 

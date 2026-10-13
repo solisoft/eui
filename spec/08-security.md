@@ -417,6 +417,17 @@ neither is something the worker needs
 `crates/eui-client/tests/worker.rs`: 128 workers locking down at once,
 none killed).
 
+Giving memory back asks a question too. When a thread's arena has grown and
+is freed — a decode thread's, when a long sound stops — glibc trims the
+heap, and before the first trim it opens `/proc/sys/vm/overcommit_memory`
+to learn whether it may. The tunables therefore also set
+`glibc.malloc.trim_threshold` past any heap, so no heap is trimmed and
+nothing is asked; with it the mmap threshold stays at 128 KiB, so a large
+buffer is a mapping of its own and goes back whole with `munmap`
+(`a_decode_thread_gives_memory_back_without_being_killed`: a decode thread
+grows its heap and frees it, twenty times; before the threshold was set,
+two runs in three were killed).
+
 **The `scene` capability moves one thing across this line, and it is the
 largest thing on either side of it.** A shader is verified in the worker —
 that is where the parse meeting bytes a server chose belongs — but it must

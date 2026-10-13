@@ -1,0 +1,30 @@
+{ c'4 # }
+{ c'4 \foo }
+{ \clef tenor c'4 }
+{ \key c \dorian c'4 }
+{ \time 3/5 c'4 }
+{ \bar "/" c'4 }
+{ c'4 d'4 e'4 f'4 g'4 a'4 b'4 c''4 d''2 e''2 f''1 g''1 a''1 b''1 c'''1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'2 c'1 }
+{ c'4 c'4 c'4 c'4 c'2. c'2 }
+{ <c' e' g' }
+{ <> }
+{ c'7 }
+{ c'4 * 2 }
+{ R1*0 }
+{ c'1 \repeat unfold 2 { c'4 } }
+{ \tuplet 3/2 { \tuplet 3/2 { c'8 d' e' } } }
+{ \tuplet 7/7 { c'4 } }
+{ \tempo 4 = 1000 c'4 }
+{ \tempo }
+{ c'4 \break }
+{ c'2 \clef bass c2 }
+"unclosed string
+{ c'4 \new Voice }
+\new PianoStaff << \new Staff { c'1 } \new Staff { c1 c1 } >>
+\new PianoStaff << \new Staff { c'1 } \new Staff { c2 } >>
+\new Foo { c'4 }
+{ -. }
+{ c'4 -x }
+\header { colour = "red" } { c'4 }
+\score { { c'4 }
+{ c'4 } }

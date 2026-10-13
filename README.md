@@ -33,6 +33,8 @@ crates/
   eui-vm     local-handler bytecode: verifier and metered interpreter [built]
   eui-audio  the mixer and the device thread behind a `sound` node     [built]
   eui-video  frames for a `video` node: GIF and animated WebP          [built]
+  eui-score  LilyPond input engraved into canvas paths, MIDI and PDF:
+             the catalogue's score() engraver, native for lang     [built]
   eui-cursor where the pointer is during a drag, which no backend says [built]
   eui-wayland the drop half of 03 §3.2 and the keymap, which winit
               does not report and does not share                       [built]

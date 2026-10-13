@@ -1,0 +1,1 @@
+\relative c' { \clef treble \key c \major \time 4/4 c4 d e f | \key d \major g1 | \time 3/4 a2. | \clef bass c,,2. \break | d2. | \key bes \major es2. | \clef alto c'2 d4 \pageBreak | f2. | \time 2/2 g1 \bar "|." }

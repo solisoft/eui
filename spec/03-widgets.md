@@ -1115,7 +1115,8 @@ list, block editor and its model), notation (`score`: LilyPond's input —
 a `\header`, `\relative`, clefs, keys, metres and tempo marks that may
 change at any bar, notes, rests, chords, ties, slurs and beams, repeats
 (`\repeat volta` with an `\alternative`'s bracketed endings, or the
-`\bar` signs `.|:`, `:|.`, `:|.|:`), bars of rest (`R1*4`, gathered
+`\bar` signs `.|:`, `:|.`, `:|.|:`, and `.|:` before the first note,
+drawn after the clef, key and time as LilyPond draws it), bars of rest (`R1*4`, gathered
 into one bar with its count under `\compressEmptyMeasures`), tuplets
 (`\tuplet 3/2 { … }`, `\tuplet 6/4`, a span `\tuplet 3/2 4 { … }`,
 `\times 2/3`: numbered in italic, bracketed unless one beam holds them)
@@ -1133,7 +1134,9 @@ into `canvas` rectangles and fills (§1.1, kind `5`), one canvas for each
 system so that an edit redraws and resends only the system it is in, cut from the
 outlines of a music font and a text face, with LilyPond's spacing, stem,
 beam and slur rules, on a screen or on A4 pages; a construct it cannot draw
-is refused with its position, as `tw()` refuses a class), feedback (toast,
+is refused with its position, as `tw()` refuses a class; a server that has
+the native engraver — lang's `eui_score_*` builtins over the `eui-score`
+crate — engraves with it, and draws the same paths, 09), feedback (toast,
 banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip),
 style (`tw`: Tailwind-style class strings, with `hover:`, `active:`, `focus:` and
 `disabled:` as local states, `sm:` … `2xl:` resolved on the server against the

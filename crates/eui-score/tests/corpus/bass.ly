@@ -1,0 +1,1 @@
+\relative c { \clef bass \time 3/4 c4 e g | <c, e g c>2. ~ | <c e g c>4 r r | R2. | g'8 a b c d e | f2 r4 \bar "||" }

@@ -44,6 +44,35 @@ release. A wire change lands here first, is released, and then the pin moves.
   (`tools/fetch_soundfont.sh`) or the client's own voices; the server mixes
   nothing. A fermata holds its note twice its length, on every staff, in
   the MIDI file and the playhead alike.
+- **`eui-score`**, the catalogue's score engraver in Rust: LilyPond input
+  laid out and drawn as canvas paths, played as MIDI and printed as PDF,
+  path for path and byte for byte what the Soli engraver makes (its golden
+  tests hold the two together) and about two hundred times faster. lang
+  calls it as `eui_score_layout`, `eui_score_bands`, `eui_score_midi` and
+  `eui_score_pdf`; `score()` and the score editor use them when the server
+  has them.
+- A dragged note follows the hand: a server behind on its events handles a
+  run of moves once, with the last position (06 §2) — the note no longer
+  goes on moving for a second after the release.
+- The score editor has an **Insert** mode beside the pointer (N, Escape to
+  leave it): a click on a note adds the pitch to it as a chord, a click on
+  a rest turns it into a note of its length, and a click between notes
+  writes a new one there, in the value the palette shows — which in that
+  mode is the next note's, never the selected one's — while the pointer
+  goes on picking notes up to move them.
+- In Insert mode a value other than the note's writes over it: an eighth
+  on a quarter takes its first half and leaves an eighth rest, a half on a
+  quarter covers the next one too; nothing after moves.
+- A start repeat (`[`) on the first bar is written (`\bar ".|:"` before the
+  first note) and drawn after the clef, key and time, as LilyPond draws it;
+  `score()` and `eui-score` read that bar line.
+- A key or metre change "From the selected bar" works from any track,
+  the full score included: it is set on the first track at that bar.
+- The score's playhead and selection are laid over the music instead of
+  recolouring it: lighting a note sends its few paths, not its system's
+  (267 KB for a system of the full score), so the picture keeps up with the
+  sound and Stop stops at once. Screen pages are no longer numbered in the
+  music; A4 pages and the PDF are.
 - The score editor's **Examples** menu loads Frère Jacques or the exposition
   of Beethoven's Fifth (Mutopia's public-domain engraving, reduced to what
   the editor reads by `tools/mutopia_beethoven5.py`), a whole score at once.
@@ -192,6 +221,12 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- Stopping a long sound no longer kills the window's worker on Linux
+  (`the worker exited: signal: 31 (SIGSYS)`): glibc, trimming the heap
+  the sound had been decoded into, opened a file behind the sandbox. The
+  worker now runs with heap trimming off.
+- The score editor's playhead starts with the sound, not three quarters of
+  a second before it while the window synthesizes the MIDI file.
 - Resizing a window on Linux (Wayland) follows the hand again. The client
   presented frames faster than the compositor took them, and Vulkan's FIFO
   held it back by blocking for a swapchain image — 9.4 s of a 12.5 s drag —

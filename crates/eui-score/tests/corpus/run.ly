@@ -1,0 +1,1 @@
+\relative c'' { \time 6/8 \key d \minor d8 e f g a bes | a16 g f e d cis d4. | bes'8. a16 g8 f4 e8 | d2. \bar "|." }
