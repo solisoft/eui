@@ -826,7 +826,9 @@ lyrics — typed for a track, written after its music in braces, read back,
 counted against the notes that take one, one step to undo a run of typing; `score_spec.sl` holds their
 stems, shared columns and rests, and the editor's second voice — written
 beside the first, chosen with Ctrl+Alt+2, an insert-mode press writing at
-the moment pressed with the silence around it kept.
+the moment pressed with the silence around it kept — between two heads of
+the first voice, that much of the time between them rounded to the value
+chosen, so two eighths go under one quarter.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

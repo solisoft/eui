@@ -2616,6 +2616,15 @@ unison and a second as before, a crossing too. In both engravers; the
 source that showed it is a golden piece (`voices_crossed.ly`): 26 pieces,
 no earlier one changed. `tests/score_spec.sl` is 122 tests.
 
+**And two eighths under one quarter** (2026-10-13). In the second voice an
+insert-mode press off a note wrote at the start of the first voice's note
+nearest it, so the second of two eighths under a quarter — a press past
+its middle — landed back on the first, or on the next beat. The press now
+falls where it is between two of the first voice's heads, as that much of
+the time between them rounded to the value chosen: on a head, its note's
+start; half way along a quarter with an eighth chosen, the off-beat.
+`tests/score_spec.sl` is 123 tests.
+
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

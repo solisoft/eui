@@ -54,6 +54,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- Insert mode writes two eighths under one quarter: in the second voice a
+  click falls at the moment under the pointer, rounded to the value
+  chosen, not at the nearest note's start.
 - A second voice's notes either side of a spacer are no longer beamed
   together, and crossed voices stand apart instead of running their stems
   through each other's heads.

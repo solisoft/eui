@@ -6846,25 +6846,53 @@ end
 def score_ed_tick_at(state, drawn, sys, xs)
   map1 = drawn["map1"] ?? drawn["map"]
   first = score_ed_v1(state)["notes"]
-  best = -1
-  gap = 0.0
+  starts = []
+  t = 0
+  for nt in first
+    starts.push(t)
+    t += score_ed_ticks(nt)
+  end
+  marks = []
+  seen = {}
   for bar in sys["bars"]
     for ev in bar["items"]
       next if ev["i"] >= map1.length
 
       owner = map1[ev["i"]]
-      next if owner < 0
+      next if owner < 0 || owner >= starts.length || seen.has_key(str(owner))
 
-      d = (xs - ev["x"] - (ev["head_w"] ?? 1.18) / 2.0).abs
-      if best < 0 || d < gap
-        best = owner
-        gap = d
-      end
+      seen[str(owner)] = true
+      marks.push({"x": ev["x"] + (ev["head_w"] ?? 1.18) / 2.0, "tick": starts[owner], "owner": owner})
     end
   end
-  return 0 if best < 0
+  return 0 if marks.length == 0
 
-  first.take(best).reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+  k = 0
+  for mk, j in marks
+    k = j if mk["x"] <= xs
+  end
+  here = marks[k]
+  return here["tick"] if xs <= here["x"]
+
+  t0 = here["tick"]
+  x0 = here["x"]
+  grid = score_ed_ticks({"base": state["dur"], "dots": state["dot"] ? 1 : 0})
+  t1 = t0
+  x1 = x0
+  top = t0
+  if k + 1 < marks.length
+    t1 = marks[k + 1]["tick"]
+    x1 = marks[k + 1]["x"]
+    top = t1
+  else
+    t1 = t0 + score_ed_ticks(first[here["owner"]])
+    x1 = x0 + 4.0
+    top = score_max(t0, t1 - grid)
+  end
+  return t0 if t1 <= t0 || x1 <= x0 || grid <= 0
+
+  steps = int(Math.floor((xs - x0) / (x1 - x0) * (t1 - t0) / grid + 0.5))
+  score_min(t0 + steps * grid, top)
 end
 
 def score_ed_write_at_tick(state, tick, pitch)
@@ -8296,6 +8324,36 @@ describe("the editor", fn() {
     check("over it, so the D stands a head to the right", d_note["x"] > eighth["x"], true)
     st = score_ed_undo(st)
     check("undone, the second voice is empty again", score_ed_voiced?(score_ed_v1(st)["notes2"]), false)
+  })
+
+  test("in insert mode two eighths go under one quarter: on it, then past the middle of it", fn() {
+    st = score_ed_from_source(spec_state(), "{ c'4 d'4 e'4 f'4 }")
+    st = score_ed_flag(st, "tool", SCORE_ED_TOOLS[1])
+    st = score_ed_duration(st, 8)
+    drawn = score_ed_engrave(st)
+    sp = score_ed_space(st)
+    sys = drawn["engraved"]["systems"][0]
+    items = sys["bars"][0]["items"]
+    on_c = [(items[0]["x"] + 0.6) * sp, sys["top"] * sp]
+    st = score_editor({"event": "press", "params": {"payload": on_c, "props": {"page": 0}}, "state": st})
+    check("the first eighth, in the second voice", [st["voice"], st["notes"].filter { |nt| !nt["rest"] }.length], [2, 1])
+    drawn = score_ed_engrave(st)
+    sys = drawn["engraved"]["systems"][0]
+    # The first voice's items by `map1`, as the editor picks them: the native
+    # engraver's items carry no voice.
+    ones = sys["bars"][0]["items"].filter { |ev| ev["i"] < drawn["map1"].length && drawn["map1"][ev["i"]] >= 0 }
+    mid = ((ones[0]["x"] + ones[1]["x"]) / 2.0 + 0.6) * sp
+    st = score_editor({"event": "press", "params": {"payload": [mid, (sys["top"] + 0.5) * sp], "props": {"page": 0}}, "state": st})
+    sung = st["notes"].filter { |nt| !nt["rest"] }
+    check("two eighths now", sung.map { |nt| nt["base"] }, [8, 8])
+    starts = []
+    t = 0
+    for nt in st["notes"]
+      starts.push(t) unless nt["rest"]
+      t += score_ed_ticks(nt)
+    end
+    check("on the beat and half a beat after it", starts, [0, score_whole() / 8])
+    check("the quarter kept", score_ed_v1(st)["notes"][0]["base"], 4)
   })
 
   test("in insert mode another value on a rest writes over it: an eighth leaves a rest, a half covers two", fn() {

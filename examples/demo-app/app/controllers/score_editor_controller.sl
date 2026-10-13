@@ -2360,30 +2360,61 @@ def score_ed_insert_at(state, point, page)
   score_ed_blip(state, fresh)
 end
 
-# The moment under a press: the start of the first voice's note nearest it
-# on that line — the second voice is written against the first.
+# The moment under a press, for the second voice: where it falls between
+# two of the first voice's heads on that line, as that much of the time
+# between them, rounded to the value chosen — so two eighths go under one
+# quarter, the second a click past the middle of it. On a head, its note's
+# start; past the line's last head, within its note.
 def score_ed_tick_at(state, drawn, sys, xs)
   map1 = drawn["map1"] ?? drawn["map"]
   first = score_ed_v1(state)["notes"]
-  best = -1
-  gap = 0.0
+  starts = []
+  t = 0
+  for nt in first
+    starts.push(t)
+    t += score_ed_ticks(nt)
+  end
+  marks = []
+  seen = {}
   for bar in sys["bars"]
     for ev in bar["items"]
       next if ev["i"] >= map1.length
 
       owner = map1[ev["i"]]
-      next if owner < 0
+      next if owner < 0 || owner >= starts.length || seen.has_key(str(owner))
 
-      d = (xs - ev["x"] - (ev["head_w"] ?? 1.18) / 2.0).abs
-      if best < 0 || d < gap
-        best = owner
-        gap = d
-      end
+      seen[str(owner)] = true
+      marks.push({"x": ev["x"] + (ev["head_w"] ?? 1.18) / 2.0, "tick": starts[owner], "owner": owner})
     end
   end
-  return 0 if best < 0
+  return 0 if marks.length == 0
 
-  first.take(best).reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
+  k = 0
+  for mk, j in marks
+    k = j if mk["x"] <= xs
+  end
+  here = marks[k]
+  return here["tick"] if xs <= here["x"]
+
+  t0 = here["tick"]
+  x0 = here["x"]
+  grid = score_ed_ticks({"base": state["dur"], "dots": state["dot"] ? 1 : 0})
+  t1 = t0
+  x1 = x0
+  top = t0
+  if k + 1 < marks.length
+    t1 = marks[k + 1]["tick"]
+    x1 = marks[k + 1]["x"]
+    top = t1
+  else
+    t1 = t0 + score_ed_ticks(first[here["owner"]])
+    x1 = x0 + 4.0
+    top = score_max(t0, t1 - grid)
+  end
+  return t0 if t1 <= t0 || x1 <= x0 || grid <= 0
+
+  steps = int(Math.floor((xs - x0) / (x1 - x0) * (t1 - t0) / grid + 0.5))
+  score_min(t0 + steps * grid, top)
 end
 
 # A note written into the second voice at `tick`, over what is there: the
