@@ -58,7 +58,7 @@ const SCORE_ED_CHIP_ROW = 28
 # What the Examples menu loads.
 const SCORE_ED_EXAMPLES = ["Frère Jacques", "Beethoven, Symphony No. 5 (exposition)"]
 # The tabs under the palette.
-const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Tracks"]
+const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Lyrics", "Tracks"]
 # Where a track sits, left to right, and its MIDI pan for each.
 const SCORE_ED_PANS = ["Left", "Half left", "Centre", "Half right", "Right"]
 # The dynamics and the articulations the Expression tab offers.
@@ -162,6 +162,7 @@ def score_ed_answer(state, ed_event, params, props)
     "words" => score_ed_words(state, params["payload"] ?? "", props["dir"] == "down" ? 1 : -1),
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
+    "lyrics" => score_ed_lyrics_set(state, params["payload"] ?? ""),
     "words_dir" => ["Above", "Below"].includes?(props["option"]) ? score_ed_flag(state, "words_dir", props["option"]) : state,
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
@@ -250,6 +251,8 @@ end
 
 def score_ed_snap(state, all)
   snap = {"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0}
+  # The edited track's lyrics are its settings' only words an edit changes.
+  snap["lyrics"] = score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] ?? ""
   snap["tracks"] = score_ed_tracks(state) if all
   score_ed_copy(snap)
 end
@@ -286,6 +289,7 @@ end
 def score_ed_restore(state, snap)
   state["tracks"] = snap["tracks"] if snap.has_key("tracks")
   state["track"] = snap["track"] if snap.has_key("track")
+  score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] = snap["lyrics"] if snap.has_key("lyrics")
   state["notes"] = snap["notes"]
   state["notes2"] = snap["notes2"] if snap.has_key("notes2")
   state["voice"] = snap["voice"] if snap.has_key("voice")
@@ -1369,11 +1373,74 @@ def score_ed_write_full(state, muting)
   for trk, k in tracks
     music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
     heard = muting && trk["mute"] == true ? trk.merge({"volume": 0}) : trk
-    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }")
+    lyrics = score_ed_lyrics_ly(trk["lyrics"] ?? "")
+    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
   end
   opener = {"Bracket": "\\new StaffGroup ", "Brace": "\\new PianoStaff ", "None": ""}[state["group"] ?? "Bracket"] ?? ""
   titles = score_ed_header_ly(state["header"] ?? {})
   (titles == "" ? "" : titles + " ") + opener + "<< " + staves.join(" ") + " >>"
+end
+
+# ---- Lyrics ----------------------------------------------------------------
+#
+# A track's words, as LilyPond's `\\addlyrics` takes them: a syllable a
+# note, `--` between a word's syllables, `__` to hold one over the notes
+# after it, `_` for a note that takes none. Kept with the track's name and
+# instrument as typed, and written after its music.
+
+# The words as they go into the source: one line, nothing that would end
+# the block or start a command, a straight quote made a curly one.
+def score_ed_lyrics_ly(text)
+  out = text.replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("{", "").replace("}", "").replace("\\", "").replace("\"", "”")
+  out.split(" ").filter { |w| w != "" }.join(" ")
+end
+
+# A staff's syllables read back as the words to edit.
+def score_ed_lyrics_text(sylls)
+  return "" if sylls.nil?
+
+  words = []
+  for sy in sylls
+    words.push(sy["text"] == "" ? "_" : sy["text"])
+    words.push("--") if sy["hyphen"] == true
+    words.push("__") if sy["extend"] == true
+  end
+  words.join(" ")
+end
+
+# The lyrics typed: a run of typing is one step to undo, as words on a note
+# are.
+def score_ed_lyrics_set(state, text)
+  trk = score_ed_tracks(state)[state["track"] ?? 0]
+  return state if (trk["lyrics"] ?? "") == text
+
+  at = "lyrics|" + str(state["track"] ?? 0)
+  if state["words_at"] != at
+    state = score_ed_remember(state)
+    state["words_at"] = at
+  end
+  score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] = text
+  state
+end
+
+# How many syllables the words have, and how many of the first voice's
+# notes take one: a note tied from the one before, or under a slur after
+# its first, holds the syllable before; a rest takes none.
+def score_ed_lyrics_count(state)
+  trk = score_ed_tracks(state)[state["track"] ?? 0]
+  sylls = score_ed_lyrics_ly(trk["lyrics"] ?? "").split(" ").filter { |w| w != "" && w != "--" && w != "__" }.length
+  notes = score_ed_v1(state)["notes"]
+  takers = 0
+  tied = false
+  slurred = false
+  for nt in notes
+    next if nt["rest"]
+
+    takers += 1 unless tied || slurred
+    tied = nt["tie"] == true
+    slurred = (slurred || nt["slur_on"] == true) && nt["slur_off"] != true
+  end
+  {"syllables": sylls, "notes": takers}
 end
 
 def score_ed_track_with(trk)
@@ -2556,7 +2623,19 @@ def score_ed_layout(state)
   both = score_ed_with_voice_two(base, laid, base["notes2"], info, score_ed_tracks(state).length > 1)
   # `map` is the voice being edited's — what a click picks — and `map1`
   # the first voice's, what the playhead lights.
-  {"src": both["words"].join(" "), "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+  src = score_ed_with_lyrics(both["words"], score_ed_lyrics_ly(score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] ?? ""))
+  {"src": src, "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+end
+
+# A part with lyrics: its music in braces, the titles before them, and
+# `\\addlyrics { … }` after — LilyPond reads lyrics only after a block.
+def score_ed_with_lyrics(words, lyrics)
+  return words.join(" ") if lyrics == ""
+
+  titled = words.length > 0 && words[0].starts_with?("\\header")
+  head = titled ? [words[0]] : []
+  body = titled ? words.drop(1) : words
+  (head + ["{"] + body + ["}", "\\addlyrics {", lyrics, "}"]).join(" ")
 end
 
 # A part's music with its second voice, when it has one: the head (titles,
@@ -2875,6 +2954,7 @@ def score_ed_from_source(state, src)
       trk["pan"] = int(pan * 100.0 + (pan < 0.0 ? -0.5 : 0.5))
       trk["notes"] = got["notes"]
       trk["clef"] = got["clef"]
+      trk["lyrics"] = score_ed_lyrics_text(stf["lyrics"])
       tracks.push(trk)
     end
     kind = parsed["groups"].length > 0 ? parsed["groups"][0]["kind"] : "none"
@@ -2890,6 +2970,7 @@ def score_ed_from_source(state, src)
   end
   got = score_ed_import(state, parsed["events"], true)
   state["tracks"] = [score_ed_track_new("")]
+  state["tracks"][0]["lyrics"] = score_ed_lyrics_text(parsed["staves"][0]["lyrics"])
   state["track"] = 0
   state["clef"] = got["clef"]
   state["notes"] = got["notes"]
@@ -3163,6 +3244,8 @@ def score_ed_panels(state)
   elsif panel == SCORE_ED_PANELS[2]
     body = [score_ed_expression_panel(state)]
   elsif panel == SCORE_ED_PANELS[3]
+    body = [score_ed_lyrics_panel(state)]
+  elsif panel == SCORE_ED_PANELS[4]
     body = [score_ed_tracks_panel(state)]
   end
   card({"gap": 4, "pad": [2, 5, body.length > 0 ? 5 : 2, 5], "width": "100%"}, [tabs(SCORE_ED_PANELS, panel, "panel", {"key": "score_panels", "size": "sm"})] + body)
@@ -3242,6 +3325,20 @@ def score_ed_centred_icon(name)
   bb = g["bbox"]
   sp = 6.0
   canvas(int((bb[2] - bb[0] + 0.6) * sp) + 1, 29, [score_fill("text.default", g["fill"], 0.3 - bb[0], 2.4 - (bb[1] + bb[3]) / 2.0, sp)])
+end
+
+# The lyrics tab: the edited track's words, and how they meet its notes.
+def score_ed_lyrics_panel(state)
+  k = state["track"] ?? 0
+  trk = score_ed_tracks(state)[k]
+  count = score_ed_lyrics_count(state)
+  tally = str(count["syllables"]) + " syllables for " + str(count["notes"]) + " notes that take one"
+  tally += count["syllables"] > count["notes"] ? " — the last " + str(count["syllables"] - count["notes"]) + " are left out" : (count["syllables"] < count["notes"] && count["syllables"] > 0 ? " — the last " + str(count["notes"] - count["syllables"]) + " notes have none" : "")
+  column({"gap": 2, "width": "100%"}, [
+    textarea(trk["lyrics"] ?? "", "lyrics", {"key": "score_lyrics:" + str(k), "placeholder": "Frè -- re Jac -- ques, Frè -- re Jac -- ques", "rows": 3, "style": {"width": "100%"}}),
+    muted(tally),
+    muted("A syllable a note, in order, under the first voice: -- joins a word's syllables (Frè -- re), __ holds a syllable over the notes after it, _ skips a note. Tied and slurred notes hold the syllable before them.")
+  ])
 end
 
 # The tracks, one button each — the one being edited lit — and a button

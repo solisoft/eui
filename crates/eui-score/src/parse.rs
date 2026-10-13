@@ -22,6 +22,8 @@ pub(crate) enum T {
     Num,
     Word,
     Sym(char),
+    /// The `{ … }` block after `\addlyrics`, read whole.
+    Lyrics,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,16 @@ pub(crate) struct Tok {
     pub t: T,
     pub v: String,
     pub marks: i64,
+    pub at: usize,
+    /// A lyrics token's words.
+    pub lyrics: Vec<LyricItem>,
+}
+
+/// One item of a lyric block: a word, `--`, `__`, `_`, or a quoted string.
+#[derive(Debug, Clone)]
+pub(crate) struct LyricItem {
+    pub s: String,
+    pub quoted: bool,
     pub at: usize,
 }
 
@@ -55,10 +67,10 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
             }
         } else if ch == '\\' && i + 1 < n && cs[i + 1] == '\\' {
             // `\\` between the voices of `<< { … } \\ { … } >>`.
-            out.push(Tok { t: T::Sym('\\'), v: "\\\\".into(), marks: 0, at: i });
+            out.push(Tok { t: T::Sym('\\'), v: "\\\\".into(), marks: 0, at: i, lyrics: Vec::new() });
             i += 2;
         } else if ch == '\\' && i + 1 < n && "<>!".contains(cs[i + 1]) {
-            out.push(Tok { t: T::Cmd, v: cs[i + 1].to_string(), marks: 0, at: i });
+            out.push(Tok { t: T::Cmd, v: cs[i + 1].to_string(), marks: 0, at: i, lyrics: Vec::new() });
             i += 2;
         } else if ch == '\\' {
             let mut jj = i + 1;
@@ -70,8 +82,15 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
             if word.is_empty() {
                 return refuse("a backslash with no command after it", i);
             }
-            out.push(Tok { t: T::Cmd, v: word, marks: 0, at: i });
+            let addlyrics = word == "addlyrics";
+            out.push(Tok { t: T::Cmd, v: word, marks: 0, at: i, lyrics: Vec::new() });
+            let at = i;
             i = jj;
+            if addlyrics {
+                let (items, next) = lyric_tokens(&cs, i, at)?;
+                out.push(Tok { t: T::Lyrics, v: String::new(), marks: 0, at, lyrics: items });
+                i = next;
+            }
         } else if ch == '"' {
             let mut jj = i + 1;
             let mut word = String::new();
@@ -82,10 +101,10 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
             if jj >= n {
                 return refuse("a string that is never closed", i);
             }
-            out.push(Tok { t: T::Str, v: word, marks: 0, at: i });
+            out.push(Tok { t: T::Str, v: word, marks: 0, at: i, lyrics: Vec::new() });
             i = jj + 1;
         } else if "{}<>[]()~|.=*-^_!#".contains(ch) {
-            out.push(Tok { t: T::Sym(ch), v: ch.to_string(), marks: 0, at: i });
+            out.push(Tok { t: T::Sym(ch), v: ch.to_string(), marks: 0, at: i, lyrics: Vec::new() });
             i += 1;
         } else if digit(ch) {
             let mut jj = i;
@@ -94,7 +113,7 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
                 word.push(cs[jj]);
                 jj += 1;
             }
-            out.push(Tok { t: T::Num, v: word, marks: 0, at: i });
+            out.push(Tok { t: T::Num, v: word, marks: 0, at: i, lyrics: Vec::new() });
             i = jj;
         } else if letter(ch) {
             let mut jj = i;
@@ -108,13 +127,119 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
                 marks += if cs[jj] == '\'' { 1 } else { -1 };
                 jj += 1;
             }
-            out.push(Tok { t: T::Word, v: word, marks, at: i });
+            out.push(Tok { t: T::Word, v: word, marks, at: i, lyrics: Vec::new() });
             i = jj;
         } else {
             return refuse(format!("'{ch}' is not part of the notation this reads"), i);
         }
     }
     Ok(out)
+}
+
+fn blank(ch: char) -> bool {
+    ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r'
+}
+
+/// The block after `\addlyrics`, read as LilyPond reads lyrics: words split
+/// on spaces, any letter in them — "Frè", "l'eau" — a quoted string as one,
+/// `--` joining a word's syllables, `__` holding one over the notes after it,
+/// `_` a note that takes none. Answers the items and where the block ends.
+fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>, usize), ScoreError> {
+    let n = cs.len();
+    while i < n && blank(cs[i]) {
+        i += 1;
+    }
+    if !(i < n && cs[i] == '{') {
+        return refuse("\\addlyrics wants a { block } of words", at);
+    }
+    i += 1;
+    let mut items = Vec::new();
+    loop {
+        while i < n && blank(cs[i]) {
+            i += 1;
+        }
+        if i >= n {
+            return refuse("a block of lyrics that is never closed", at);
+        }
+        if cs[i] == '}' {
+            break;
+        }
+        if cs[i] == '%' {
+            while i < n && cs[i] != '\n' {
+                i += 1;
+            }
+        } else if cs[i] == '"' {
+            let mut jj = i + 1;
+            let mut word = String::new();
+            while jj < n && cs[jj] != '"' {
+                word.push(cs[jj]);
+                jj += 1;
+            }
+            if jj >= n {
+                return refuse("a string that is never closed", i);
+            }
+            items.push(LyricItem { s: word, quoted: true, at: i });
+            i = jj + 1;
+        } else {
+            if cs[i] == '{' {
+                return refuse("a { inside lyrics is not read: they are words, -- and __", i);
+            }
+            if cs[i] == '\\' {
+                return refuse("'\\' inside lyrics is not read: they are words, -- and __", i);
+            }
+            let mut jj = i;
+            let mut word = String::new();
+            while jj < n && !" \n\t\r{}\"".contains(cs[jj]) {
+                word.push(cs[jj]);
+                jj += 1;
+            }
+            items.push(LyricItem { s: word, quoted: false, at: i });
+            i = jj;
+        }
+    }
+    Ok((items, i + 1))
+}
+
+/// The syllables of a lyric block: each word one, `--` and `__` marking the
+/// one before them, `_` a syllable with no words.
+fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError> {
+    let mut out: Vec<Syllable> = Vec::new();
+    for it in items {
+        if !it.quoted && (it.s == "--" || it.s == "__") {
+            let Some(last) = out.last_mut() else {
+                return refuse(format!("{} wants a syllable before it", it.s), it.at);
+            };
+            if it.s == "--" {
+                last.hyphen = true;
+            } else {
+                last.extend = true;
+            }
+            continue;
+        }
+        let skip = !it.quoted && it.s == "_";
+        out.push(Syllable { text: if skip { String::new() } else { it.s.clone() }, hyphen: false, extend: false });
+    }
+    if out.is_empty() {
+        return refuse("\\addlyrics with no words in it", at);
+    }
+    Ok(out)
+}
+
+/// `\addlyrics { … }` after a staff's music: its words, one syllable a
+/// note. One verse a staff is what this sets.
+fn attach_lyrics(toks: &[Tok], mut i: usize, staves: &mut [Staff]) -> Result<usize, ScoreError> {
+    while is_cmd(toks, i, "addlyrics") {
+        let at = toks[i].at;
+        let Some(last) = staves.last_mut() else {
+            return refuse("\\addlyrics follows a staff's music", at);
+        };
+        if last.lyrics.is_some() {
+            return refuse("one verse of lyrics a staff is what this sets", at);
+        }
+        last.lyrics = Some(syllables(&toks[i + 1].lyrics, at)?);
+        i += 2;
+    }
+    Ok(i)
 }
 
 /// A note name, Dutch as LilyPond's default: `(step, alter)`.
@@ -381,6 +506,21 @@ pub struct Ev {
     /// How far a first voice's note stands right of its column, clear of
     /// the second's heads a step away.
     pub shift: Option<f64>,
+    /// Its syllable, centred under its head.
+    pub lyric: Option<Syllable>,
+    /// It holds the syllable of a note before it: a melisma.
+    pub lyric_held: bool,
+}
+
+/// A syllable of `\addlyrics`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Syllable {
+    /// Its words; none for `_`, a note that takes no syllable.
+    pub text: String,
+    /// `--`: the word goes on in the next syllable.
+    pub hyphen: bool,
+    /// `__`: held over the notes after it.
+    pub extend: bool,
 }
 
 /// A staff's settings, from `\with` or `\set Staff.…`.
@@ -405,6 +545,8 @@ pub struct Staff {
     pub events: Vec<Ev>,
     /// Its settings.
     pub props: Props,
+    /// Its `\addlyrics`, a syllable a note.
+    pub lyrics: Option<Vec<Syllable>>,
 }
 
 /// How a group of staves is marked.
@@ -504,6 +646,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     let mut staves = Vec::new();
     let mut groups = Vec::new();
     i = part(&toks, i, &mut st, &mut staves, &mut groups, 0)?;
+    i = attach_lyrics(&toks, i, &mut staves)?;
     if in_score {
         while i < toks.len() && toks[i].t == T::Cmd && ["layout", "midi", "header"].contains(&toks[i].v.as_str()) {
             if toks[i].v == "header" {
@@ -610,6 +753,7 @@ fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, gro
             return refuse("two voices in one staff are not drawn: give each its own \\new Staff", toks[i].at);
         }
         i = part(toks, i, st, staves, groups, depth + 1)?;
+        i = attach_lyrics(toks, i, staves)?;
     }
     if i >= toks.len() {
         return refuse("a << that is never closed by >>", at);
@@ -712,7 +856,7 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
     }
     base.counter = st.items;
     base.notes = st.notes;
-    staves.push(Staff { events: st.events, props: st.props });
+    staves.push(Staff { events: st.events, props: st.props, lyrics: None });
     Ok(i)
 }
 

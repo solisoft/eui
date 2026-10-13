@@ -54,6 +54,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 - In the score editor's Insert mode, a note written in another value onto
   a note no longer replaces it: it goes into the second voice, from where
   that note starts, and both sound.
+- **Lyrics** in `score()` and `eui-score`: `\addlyrics { Frè -- re Jac -- ques }`
+  after a staff's music sets a syllable under each note, with hyphens,
+  extenders and melismata on ties and slurs, the notes spread to make room;
+  the score editor has a Lyrics tab for each track.
 - The score editor's words: the tempo's text is a "Tempo mark" with what
   it prints shown beside it; words on a note are one field with Above /
   Below, Clear and common marks (dolce, cresc., rit., pizz. …) a press

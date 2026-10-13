@@ -62,7 +62,7 @@ const SCORE_ED_VOICES = ["Voice 1", "Voice 2"]
 const SCORE_ED_VIEWS = ["Screen", "A4 page"]
 const SCORE_ED_CHIP_ROW = 28
 const SCORE_ED_EXAMPLES = ["Frère Jacques", "Beethoven, Symphony No. 5 (exposition)"]
-const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Tracks"]
+const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Lyrics", "Tracks"]
 const SCORE_ED_GROUPS = ["Bracket", "Brace", "None"]
 const SCORE_ED_INSTRUMENTS = ["acoustic grand", "electric piano 1", "harpsichord", "celesta", "vibraphone", "marimba", "church organ", "accordion", "acoustic guitar (nylon)", "acoustic bass", "violin", "viola", "cello", "contrabass", "string ensemble 1", "harp", "choir aahs", "trumpet", "trombone", "tuba", "french horn", "soprano sax", "alto sax", "oboe", "english horn", "bassoon", "clarinet", "piccolo", "flute", "recorder", "timpani"]
 const SCORE_ED_PANS = ["Left", "Half left", "Centre", "Half right", "Right"]
@@ -565,6 +565,7 @@ def score_engrave_fresh(src, width_ss, layout)
   return score_engrave_many(parsed, width_ss, layout) if parsed["staves"].length > 1
 
   bars = score_measures(parsed["events"])
+  score_lyrics_assign(bars, parsed["staves"][0]["lyrics"])
   score_beams(bars)
   score_columns(bars, score_shortest(bars))
   left = layout["left"] ?? 0.0
@@ -610,7 +611,8 @@ def score_engrave_many(parsed, width_ss, layout)
     end
   end
   flat = []
-  for bars in all_bars
+  for bars, si in all_bars
+    score_lyrics_assign(bars, staves[si]["lyrics"])
     score_beams(bars)
     flat = flat + bars
   end
@@ -933,6 +935,11 @@ def score_tokens(src)
       score_refuse("a backslash with no command after it", i) if word == ""
       out.push({"t": "cmd", "v": word, "at": i})
       i = jj
+      if word == "addlyrics"
+        lyr = score_lyric_tokens(cs, i, out[-1]["at"])
+        out.push({"t": "lyrics", "v": lyr["items"], "at": out[-1]["at"]})
+        i = lyr["i"]
+      end
     elsif ch == "\""
       jj = i + 1
       word = ""
@@ -974,6 +981,77 @@ def score_tokens(src)
     end
   end
   out
+end
+
+def score_lyric_tokens(cs, i, at)
+  n = cs.length
+  while i < n && (cs[i] == " " || cs[i] == "\n" || cs[i] == "\t" || cs[i] == "\r")
+    i += 1
+  end
+  score_refuse("\\addlyrics wants a { block } of words", at) unless i < n && cs[i] == "{"
+  i += 1
+  items = []
+  while true
+    while i < n && (cs[i] == " " || cs[i] == "\n" || cs[i] == "\t" || cs[i] == "\r")
+      i += 1
+    end
+    score_refuse("a block of lyrics that is never closed", at) if i >= n
+    break if cs[i] == "}"
+
+    if cs[i] == "%"
+      while i < n && cs[i] != "\n"
+        i += 1
+      end
+    elsif cs[i] == "\""
+      jj = i + 1
+      word = ""
+      while jj < n && cs[jj] != "\""
+        word += cs[jj]
+        jj += 1
+      end
+      score_refuse("a string that is never closed", i) if jj >= n
+      items.push({"s": word, "quoted": true, "at": i})
+      i = jj + 1
+    else
+      score_refuse("a { inside lyrics is not read: they are words, -- and __", i) if cs[i] == "{"
+      score_refuse("'\\' inside lyrics is not read: they are words, -- and __", i) if cs[i] == "\\"
+      jj = i
+      word = ""
+      while jj < n && !" \n\t\r{}\"".contains(cs[jj])
+        word += cs[jj]
+        jj += 1
+      end
+      items.push({"s": word, "quoted": false, "at": i})
+      i = jj
+    end
+  end
+  {"items": items, "i": i + 1}
+end
+
+def score_syllables(items, at)
+  out = []
+  for it in items
+    if !it["quoted"] && (it["s"] == "--" || it["s"] == "__")
+      score_refuse("#{it["s"]} wants a syllable before it", it["at"]) if out.length == 0
+      out[-1][it["s"] == "--" ? "hyphen" : "extend"] = true
+      next
+    end
+    skip = !it["quoted"] && it["s"] == "_"
+    out.push({"text": skip ? "" : it["s"], "hyphen": false, "extend": false})
+  end
+  score_refuse("\\addlyrics with no words in it", at) if out.length == 0
+  out
+end
+
+def score_attach_lyrics(toks, i, staves)
+  while i < toks.length && toks[i]["t"] == "cmd" && toks[i]["v"] == "addlyrics"
+    at = toks[i]["at"]
+    score_refuse("\\addlyrics follows a staff's music", at) if staves.length == 0
+    score_refuse("one verse of lyrics a staff is what this sets", at) if staves[-1].has_key("lyrics")
+    staves[-1]["lyrics"] = score_syllables(toks[i + 1]["v"], at)
+    i += 2
+  end
+  i
 end
 
 def score_letter?(ch)
@@ -1029,6 +1107,7 @@ def score_parse(src)
   staves = []
   groups = []
   i = score_part(toks, i, st, staves, groups, 0)
+  i = score_attach_lyrics(toks, i, staves)
   if in_score
     while i < toks.length && toks[i]["t"] == "cmd" && ["layout", "midi", "header"].includes?(toks[i]["v"])
       if toks[i]["v"] == "header"
@@ -1098,6 +1177,7 @@ def score_group(toks, i, st, staves, groups, depth, kind, props)
   while i < toks.length && !score_double?(toks, i, ">")
     score_refuse("two voices in one staff are not drawn: give each its own \\new Staff", toks[i]["at"]) unless toks[i]["t"] == "cmd" && toks[i]["v"] == "new"
     i = score_part(toks, i, st, staves, groups, depth + 1)
+    i = score_attach_lyrics(toks, i, staves)
   end
   score_refuse("a << that is never closed by >>", at) if i >= toks.length
   score_refuse("<< >> with no staff in it", at) if staves.length == first
@@ -2101,9 +2181,103 @@ def score_columns(bars, shortest)
       shifted = ev["heads"].any? { |hd| hd["side"] == -1 }
       lefts = shifted ? hw - SCORE_RULE["stem"] : 0.0
       ev["left"] = lefts + score_place_accidentals(ev)
+      score_lyric_room(ev)
     end
     score_poly_cols(bar, shortest) if bar["poly"] == true
   end
+end
+
+def score_lyrics_assign(bars, sylls)
+  return nil if sylls.nil?
+
+  k = 0
+  tied = false
+  slurred = false
+  for bar in bars
+    for ev in bar["items"]
+      next if ev["voice"] == 2 || ev["k"] != "note"
+
+      if tied || slurred
+        ev["lyric_held"] = true
+      elsif k < sylls.length
+        ev["lyric"] = sylls[k]
+        k += 1
+      end
+      tied = ev["tie"] == true
+      slurred = (slurred || ev["slur_on"] == true) && ev["slur_off"] != true
+    end
+  end
+  nil
+end
+
+def score_lyric_room(ev)
+  lyr = ev["lyric"]
+  return nil if lyr.nil? || lyr["text"] == ""
+
+  w = score_text_width(lyr["text"], "regular", score_em(0.0))
+  c = ev["head_w"] / 2.0
+  ev["right"] = score_max(ev["right"], c + w / 2.0 + (lyr["hyphen"] ? 0.9 : 0.35))
+  ev["left"] = score_max(ev["left"], w / 2.0 - c + 0.35)
+  nil
+end
+
+def score_lyric_line(sys)
+  has = false
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      has = true unless ev["lyric"].nil?
+    end
+  end
+  return nil unless has
+
+  em = score_em(0.0)
+  sys["lyric_y"] = score_max(score_reach(sys)[1] + 0.6, 5.2) + 0.72 * em
+  nil
+end
+
+def score_draw_lyrics(paths, ink, sys, top, sp)
+  em = score_em(0.0)
+  y = top + sys["lyric_y"]
+  notes = []
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      notes.push(ev) if ev["k"] == "note" && ev["voice"] != 2
+    end
+  end
+  for ev, k in notes
+    lyr = ev["lyric"]
+    next if lyr.nil?
+
+    w = lyr["text"] == "" ? 0.0 : score_text_width(lyr["text"], "regular", em)
+    x0 = ev["x"] + ev["head_w"] / 2.0 - w / 2.0
+    x1 = x0 + w
+    score_draw_text(paths, ink, lyr["text"], "regular", x0, y, em, sp) if w > 0.0
+    nxt = nil
+    held = nil
+    j = k + 1
+    while j < notes.length && nxt.nil?
+      if notes[j]["lyric"].nil?
+        held = notes[j] if notes[j]["lyric_held"] == true
+      else
+        nxt = notes[j]
+      end
+      j += 1
+    end
+    if lyr["hyphen"] && w > 0.0
+      n0 = sys["right"]
+      n0 = nxt["x"] + nxt["head_w"] / 2.0 - score_text_width(nxt["lyric"]["text"], "regular", em) / 2.0 unless nxt.nil?
+      len = score_min(0.66, n0 - x1 - 0.3)
+      if len > 0.15
+        mid = nxt.nil? ? x1 + 0.3 + len / 2.0 : (x1 + n0) / 2.0
+        paths.push(score_rect(ink, mid - len / 2.0, y - 0.51, len, 0.12, sp))
+      end
+    end
+    if lyr["extend"] && w > 0.0 && !held.nil?
+      end_x = held["x"] + held["head_w"]
+      paths.push(score_rect(ink, x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1, sp)) if end_x > x1 + 0.6
+    end
+  end
+  nil
 end
 
 def score_spacers(bar)
@@ -2641,6 +2815,7 @@ def score_marks(systems)
     score_scripts(sys)
     score_dynamics(sys)
     score_texts(sys)
+    score_lyric_line(sys)
     sys["marks"] = []
     for bar, bi in sys["bars"]
       for ev, ii in bar["items"]
@@ -3151,6 +3326,7 @@ def score_reach(sys)
   for bar in sys["bars"]
     hi = score_min(hi, -2.6) if bar["items"].length > 0 && !bar["items"][0]["mm"].nil?
   end
+  lo = score_max(lo, sys["lyric_y"] + 0.25 * score_em(0.0) + 0.6) if sys.has_key("lyric_y")
   for c in sys["curves"]
     i = 0
     while i < c.length
@@ -4230,6 +4406,7 @@ def score_draw_system(paths, sys, sp, ink, ranges)
   for tx in sys["texts"] ?? []
     score_draw_text(paths, ink, tx["text"], "regular", tx["x0"], top + tx["y"], score_em(0.0), sp)
   end
+  score_draw_lyrics(paths, ink, sys, top, sp) if sys.has_key("lyric_y")
   score_draw_courtesy(paths, ink, sys, top, sp) if (sys["courtesy"] ?? 0.0) > 0.0
 end
 
@@ -4767,6 +4944,7 @@ def score_ed_answer(state, ed_event, params, props)
     "words" => score_ed_words(state, params["payload"] ?? "", props["dir"] == "down" ? 1 : -1),
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
+    "lyrics" => score_ed_lyrics_set(state, params["payload"] ?? ""),
     "words_dir" => ["Above", "Below"].includes?(props["option"]) ? score_ed_flag(state, "words_dir", props["option"]) : state,
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
@@ -4841,6 +5019,8 @@ end
 
 def score_ed_snap(state, all)
   snap = {"notes": state["notes"], "notes2": state["notes2"] ?? [], "voice": state["voice"] ?? 1, "clef": state["clef"], "key": state["key"], "time": state["time"], "sel": state["sel"], "track": state["track"] ?? 0}
+  # The edited track's lyrics are its settings' only words an edit changes.
+  snap["lyrics"] = score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] ?? ""
   snap["tracks"] = score_ed_tracks(state) if all
   score_ed_copy(snap)
 end
@@ -4875,6 +5055,7 @@ end
 def score_ed_restore(state, snap)
   state["tracks"] = snap["tracks"] if snap.has_key("tracks")
   state["track"] = snap["track"] if snap.has_key("track")
+  score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] = snap["lyrics"] if snap.has_key("lyrics")
   state["notes"] = snap["notes"]
   state["notes2"] = snap["notes2"] if snap.has_key("notes2")
   state["voice"] = snap["voice"] if snap.has_key("voice")
@@ -5818,11 +5999,59 @@ def score_ed_write_full(state, muting)
   for trk, k in tracks
     music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
     heard = muting && trk["mute"] == true ? trk.merge({"volume": 0}) : trk
-    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }")
+    lyrics = score_ed_lyrics_ly(trk["lyrics"] ?? "")
+    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
   end
   opener = {"Bracket": "\\new StaffGroup ", "Brace": "\\new PianoStaff ", "None": ""}[state["group"] ?? "Bracket"] ?? ""
   titles = score_ed_header_ly(state["header"] ?? {})
   (titles == "" ? "" : titles + " ") + opener + "<< " + staves.join(" ") + " >>"
+end
+
+def score_ed_lyrics_ly(text)
+  out = text.replace("\n", " ").replace("\r", " ").replace("\t", " ").replace("{", "").replace("}", "").replace("\\", "").replace("\"", "”")
+  out.split(" ").filter { |w| w != "" }.join(" ")
+end
+
+def score_ed_lyrics_text(sylls)
+  return "" if sylls.nil?
+
+  words = []
+  for sy in sylls
+    words.push(sy["text"] == "" ? "_" : sy["text"])
+    words.push("--") if sy["hyphen"] == true
+    words.push("__") if sy["extend"] == true
+  end
+  words.join(" ")
+end
+
+def score_ed_lyrics_set(state, text)
+  trk = score_ed_tracks(state)[state["track"] ?? 0]
+  return state if (trk["lyrics"] ?? "") == text
+
+  at = "lyrics|" + str(state["track"] ?? 0)
+  if state["words_at"] != at
+    state = score_ed_remember(state)
+    state["words_at"] = at
+  end
+  score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] = text
+  state
+end
+
+def score_ed_lyrics_count(state)
+  trk = score_ed_tracks(state)[state["track"] ?? 0]
+  sylls = score_ed_lyrics_ly(trk["lyrics"] ?? "").split(" ").filter { |w| w != "" && w != "--" && w != "__" }.length
+  notes = score_ed_v1(state)["notes"]
+  takers = 0
+  tied = false
+  slurred = false
+  for nt in notes
+    next if nt["rest"]
+
+    takers += 1 unless tied || slurred
+    tied = nt["tie"] == true
+    slurred = (slurred || nt["slur_on"] == true) && nt["slur_off"] != true
+  end
+  {"syllables": sylls, "notes": takers}
 end
 
 def score_ed_track_with(trk)
@@ -6839,7 +7068,17 @@ def score_ed_layout(state)
   both = score_ed_with_voice_two(base, laid, base["notes2"], info, score_ed_tracks(state).length > 1)
   # `map` is the voice being edited's — what a click picks — and `map1`
   # the first voice's, what the playhead lights.
-  {"src": both["words"].join(" "), "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+  src = score_ed_with_lyrics(both["words"], score_ed_lyrics_ly(score_ed_tracks(state)[state["track"] ?? 0]["lyrics"] ?? ""))
+  {"src": src, "map": state["voice"] == 2 ? both["map2"] : both["map"], "map1": both["map"]}
+end
+
+def score_ed_with_lyrics(words, lyrics)
+  return words.join(" ") if lyrics == ""
+
+  titled = words.length > 0 && words[0].starts_with?("\\header")
+  head = titled ? [words[0]] : []
+  body = titled ? words.drop(1) : words
+  (head + ["{"] + body + ["}", "\\addlyrics {", lyrics, "}"]).join(" ")
 end
 
 def score_ed_with_voice_two(base, laid, notes2, info, ensemble)
@@ -7139,6 +7378,7 @@ def score_ed_from_source(state, src)
       trk["pan"] = int(pan * 100.0 + (pan < 0.0 ? -0.5 : 0.5))
       trk["notes"] = got["notes"]
       trk["clef"] = got["clef"]
+      trk["lyrics"] = score_ed_lyrics_text(stf["lyrics"])
       tracks.push(trk)
     end
     kind = parsed["groups"].length > 0 ? parsed["groups"][0]["kind"] : "none"
@@ -7154,6 +7394,7 @@ def score_ed_from_source(state, src)
   end
   got = score_ed_import(state, parsed["events"], true)
   state["tracks"] = [score_ed_track_new("")]
+  state["tracks"][0]["lyrics"] = score_ed_lyrics_text(parsed["staves"][0]["lyrics"])
   state["track"] = 0
   state["clef"] = got["clef"]
   state["notes"] = got["notes"]
@@ -7343,6 +7584,8 @@ def score_ed_panels(state)
   elsif panel == SCORE_ED_PANELS[2]
     body = [score_ed_expression_panel(state)]
   elsif panel == SCORE_ED_PANELS[3]
+    body = [score_ed_lyrics_panel(state)]
+  elsif panel == SCORE_ED_PANELS[4]
     body = [score_ed_tracks_panel(state)]
   end
   card({"gap": 4, "pad": [2, 5, body.length > 0 ? 5 : 2, 5], "width": "100%"}, [tabs(SCORE_ED_PANELS, panel, "panel", {"key": "score_panels", "size": "sm"})] + body)
@@ -7416,6 +7659,19 @@ def score_ed_centred_icon(name)
   bb = g["bbox"]
   sp = 6.0
   canvas(int((bb[2] - bb[0] + 0.6) * sp) + 1, 29, [score_fill("text.default", g["fill"], 0.3 - bb[0], 2.4 - (bb[1] + bb[3]) / 2.0, sp)])
+end
+
+def score_ed_lyrics_panel(state)
+  k = state["track"] ?? 0
+  trk = score_ed_tracks(state)[k]
+  count = score_ed_lyrics_count(state)
+  tally = str(count["syllables"]) + " syllables for " + str(count["notes"]) + " notes that take one"
+  tally += count["syllables"] > count["notes"] ? " — the last " + str(count["syllables"] - count["notes"]) + " are left out" : (count["syllables"] < count["notes"] && count["syllables"] > 0 ? " — the last " + str(count["notes"] - count["syllables"]) + " notes have none" : "")
+  column({"gap": 2, "width": "100%"}, [
+    textarea(trk["lyrics"] ?? "", "lyrics", {"key": "score_lyrics:" + str(k), "placeholder": "Frè -- re Jac -- ques, Frè -- re Jac -- ques", "rows": 3, "style": {"width": "100%"}}),
+    muted(tally),
+    muted("A syllable a note, in order, under the first voice: -- joins a word's syllables (Frè -- re), __ holds a syllable over the notes after it, _ skips a note. Tied and slurred notes hold the syllable before them.")
+  ])
 end
 
 def score_ed_track_bar(state)
@@ -8128,6 +8384,69 @@ describe("the editor", fn() {
     check("words, then the speed", score_ed_tempo_shown(st, "♩"), "Moderato (♩ = 100)")
     st["tempo_text"] = "  "
     check("the speed alone", score_ed_tempo_shown(st, "♩"), "♩ = 100")
+  })
+
+  test("lyrics: a syllable a note, a tie or a slur holding one, -- and __ kept", fn() {
+    staff = score_parse("{ c'4( d'4) e'4 ~ e'4 | f'4 g'4 a'4 b'4 } \\addlyrics { Frè -- re __ l'eau, _ \"a b\" ici }")["staves"][0]
+    check("six syllables", staff["lyrics"].map { |sy| sy["text"] }, ["Frè", "re", "l'eau,", "", "a b", "ici"])
+    check("the hyphen and the extender", [staff["lyrics"][0]["hyphen"], staff["lyrics"][1]["extend"]], [true, true])
+    bar = score_engrave("{ c'4( d'4) e'4 ~ e'4 | f'4 g'4 a'4 b'4 } \\addlyrics { Frè -- re __ l'eau, _ \"a b\" ici }", 100.0)["systems"][0]["bars"][0]
+    check("the slur and the tie hold the syllable before", bar["items"].map { |ev| ev["lyric"].nil? ? (ev["lyric_held"] == true ? "held" : "-") : ev["lyric"]["text"] }, ["Frè", "held", "re", "held"])
+  })
+
+  test("lyrics: notes make room for their syllables, on a line under the staff and everything below it", fn() {
+    plain = score_engrave("{ c''4 d''4 e''4 f''4 }", 100.0)["systems"][0]
+    sung = score_engrave("{ c''4 d''4 e''4 f''4 } \\addlyrics { Wonderfully extraordinarily long words }", 100.0)["systems"][0]
+    gap = fn(sys) { sys["bars"][0]["items"][1]["x"] - sys["bars"][0]["items"][0]["x"] }
+    check("a long syllable pushes the next note away", gap(sung) > gap(plain) + 2.0, true)
+    check("no line where nothing is sung", plain.has_key("lyric_y"), false)
+    check("the line under the staff", sung["lyric_y"] > 5.2, true)
+    low = score_engrave("{ c'4 d'4 a4 g4 } \\addlyrics { la la la la }", 100.0)["systems"][0]
+    check("and under low notes too", low["lyric_y"] > sung["lyric_y"], true)
+    check("the system reaches past it", score_reach(sung)[1] > sung["lyric_y"], true)
+  })
+
+  test("lyrics: each staff of a choir its own, and one verse a staff", fn() {
+    src = "\\new ChoirStaff << \\new Staff { c''4 d''4 e''2 } \\addlyrics { Ky -- ri -- e } \\new Staff { a'4 b'4 c''2 } \\addlyrics { e -- lei -- son } >>"
+    parsed = score_parse(src)
+    check("each staff's words", parsed["staves"].map { |stf| stf["lyrics"].map { |sy| sy["text"] }.join(" ") }, ["Ky ri e", "e lei son"])
+    sys = score_engrave(src, 100.0)["systems"][0]
+    check("a line under each staff", sys["staves"].map { |ss| ss.has_key("lyric_y") }, [true, true])
+    check("one verse", (spec_refusal("{ c'4 } \\addlyrics { la } \\addlyrics { lo }") ?? "").includes?("one verse"), true)
+    check("a lyric's letters are its own", spec_refusal("{ c'4 } \\addlyrics { Frère! }") ?? "", "")
+  })
+
+  test("lyrics in the editor: typed for a track, written after its music, read back, one step to undo", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }")
+    before = st["undo"].length
+    for typed in ["Frè", "Frè --", "Frè -- re Jac -- ques"]
+      st = score_editor({"event": "lyrics", "params": {"payload": typed}, "state": st})
+    end
+    check("a run of typing, one step", st["undo"].length - before, 1)
+    src = score_ed_layout(st)["src"]
+    check("the music braced, the words after it", src.includes?("} \\addlyrics { Frè -- re Jac -- ques }"), true)
+    check("the engraving sings them", score_engrave(src, 100.0)["systems"][0]["bars"][0]["items"].map { |ev| ev["lyric"]["text"] }, ["Frè", "re", "Jac", "ques"])
+    check("the count", score_ed_lyrics_count(st), {"syllables": 4, "notes": 4})
+    back = score_ed_from_source(spec_state(), src)
+    check("read back", score_ed_tracks(back)[0]["lyrics"], "Frè -- re Jac -- ques")
+    st = score_ed_undo(st)
+    check("undone", score_ed_tracks(st)[0]["lyrics"] ?? "", "")
+    check("what would close the block or start a command is not written", score_ed_lyrics_ly("la {li} \\lo"), "la li lo")
+  })
+
+  test("lyrics in a full score: each track's after its staff, and each staff's read back as its track's", fn() {
+    # Built track by track: reading a source of several staves checks it
+    # with the server's native engraver, which knows lyrics only once lang
+    # is built against this eui-score.
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''2 }")
+    st = score_editor({"event": "lyrics", "params": {"payload": "Ky -- ri -- e"}, "state": st})
+    st = score_ed_track_add(st)
+    st = score_ed_key(score_ed_key(score_ed_key(st, "a", 0), "b", 0), "c", 0)
+    st = score_editor({"event": "lyrics", "params": {"payload": "e -- lei -- son"}, "state": st})
+    full = score_ed_full_source(st)
+    check("both staves sing", [full.includes?("\\addlyrics { Ky -- ri -- e }"), full.includes?("\\addlyrics { e -- lei -- son }")], [true, true])
+    check("and it engraves", score_engrave(full, 100.0)["systems"][0]["staves"].map { |ss| ss.has_key("lyric_y") }, [true, true])
+    check("each staff's words read back", score_parse(full)["staves"].map { |stf| score_ed_lyrics_text(stf["lyrics"]) }, ["Ky -- ri -- e", "e -- lei -- son"])
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {

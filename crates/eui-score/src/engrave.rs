@@ -8,7 +8,7 @@ use std::ops::Range;
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{measures, Bar, Beam, Changes, Opening};
-use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Tempo};
+use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Syllable, Tempo};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
 
@@ -62,6 +62,8 @@ pub struct Line {
     pub dynamics: Vec<DynEl>,
     /// Words.
     pub texts: Vec<TextPlace>,
+    /// The baseline its syllables stand on, when it has any.
+    pub lyric_y: Option<f64>,
     /// Hairpins, before they are placed.
     pub hairpins: Vec<HairpinPiece>,
     /// In a score of several staves, which.
@@ -431,11 +433,61 @@ fn columns(bars: &mut [Bar], shortest: i64) {
             let shifted = ev.heads.iter().any(|h| h.side == -1);
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);
+            lyric_room(ev);
         }
         if bar.poly {
             poly_cols(bar, shortest);
         }
     }
+}
+
+// ---- Lyrics -----------------------------------------------------------------
+//
+// `\addlyrics { … }` after a staff's music, as LilyPond sets it: a syllable
+// a note of the first voice, centred on the note's head, on one line under
+// the staff and all its marks; `--` a hyphen centred between a word's
+// syllables, `__` a line under the notes a syllable is held over. The
+// notes make room for their syllables, as LilyPond's spacing does.
+
+/// The syllables onto the notes. A note tied from the one before, or under
+/// a slur after its first, holds the syllable before — a melisma — and
+/// takes none; rests take none; syllables past the last note are dropped,
+/// as LilyPond drops them.
+fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>) {
+    let Some(sylls) = sylls else { return };
+    let mut k = 0;
+    let mut tied = false;
+    let mut slurred = false;
+    for bar in bars.iter_mut() {
+        for ev in &mut bar.items {
+            if ev.voice == Some(2) || ev.k != Kind::Note {
+                continue;
+            }
+            if tied || slurred {
+                ev.lyric_held = true;
+            } else if let Some(s) = sylls.get(k) {
+                ev.lyric = Some(s.clone());
+                k += 1;
+            }
+            tied = ev.tie;
+            slurred = (slurred || ev.slur_on) && !ev.slur_off;
+        }
+    }
+}
+
+/// A syllable's room: half its width either side of the head's middle and
+/// LilyPond's 0.35 of word space beyond, more after it when a hyphen
+/// follows.
+fn lyric_room(ev: &mut Ev) {
+    let Some(lyr) = &ev.lyric else { return };
+    if lyr.text.is_empty() {
+        return;
+    }
+    let w = text_width(&lyr.text, Weight::Regular, em(0.0));
+    let c = ev.head_w.unwrap_or(0.0) / 2.0;
+    let after = if lyr.hyphen { 0.9 } else { 0.35 };
+    ev.right = ev.right.max(c + w / 2.0 + after);
+    ev.left = ev.left.max(w / 2.0 - c + 0.35);
 }
 
 /// What a bar is spaced by: its notes and rests, or, with two voices, its
@@ -1273,6 +1325,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         return engrave_many(parsed, width, layout);
     }
     let mut bars = measures(&parsed.staves[0].events)?;
+    lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref());
     beams(&mut bars)?;
     let sh = shortest(bars.iter());
     columns(&mut bars, sh);
@@ -1409,7 +1462,8 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             }
         }
     }
-    for bars in &mut all {
+    for (si, bars) in all.iter_mut().enumerate() {
+        lyrics_assign(bars, staves_src[si].lyrics.as_deref());
         beams(bars)?;
     }
     let sh = shortest(all.iter().flatten());

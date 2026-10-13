@@ -345,9 +345,62 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     for tx in &line.texts {
         pen.text(&tx.text, Weight::Regular, tx.x0, top + tx.y, em(0.0));
     }
+    if let Some(ly) = line.lyric_y {
+        draw_lyrics(&mut pen, bars, line, top + ly);
+    }
     if line.courtesy > 0.0 {
         if let Some(Courtesy::Single(o)) = &line.courtesy_bar {
             draw_courtesy(&mut pen, o, line.bar_end, top);
+        }
+    }
+}
+
+/// The syllables on the baseline `y`, each centred on its note's head; a
+/// hyphen centred in the gap to the next syllable, 0.66 long, shorter where
+/// they stand close and none where they touch, after the last syllable of a
+/// line whose word goes on; an extender at the foot of the letters from a
+/// held syllable's end to the last head it is held over.
+fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
+    let e = em(0.0);
+    let notes: Vec<&Ev> = line.bars.clone().flat_map(|b| bars[b].items.iter()).filter(|ev| ev.k == Kind::Note && ev.voice != Some(2)).collect();
+    for (k, ev) in notes.iter().enumerate() {
+        let Some(lyr) = &ev.lyric else { continue };
+        let w = if lyr.text.is_empty() { 0.0 } else { text_width(&lyr.text, Weight::Regular, e) };
+        let x0 = ev.x + ev.head_w.unwrap_or(0.0) / 2.0 - w / 2.0;
+        let x1 = x0 + w;
+        if w > 0.0 {
+            pen.text(&lyr.text, Weight::Regular, x0, y, e);
+        }
+        let mut nxt: Option<&Ev> = None;
+        let mut held: Option<&Ev> = None;
+        let mut j = k + 1;
+        while j < notes.len() && nxt.is_none() {
+            let other = notes[j];
+            if other.lyric.is_none() {
+                if other.lyric_held {
+                    held = Some(other);
+                }
+            } else {
+                nxt = Some(other);
+            }
+            j += 1;
+        }
+        if lyr.hyphen && w > 0.0 {
+            let n0 = match nxt {
+                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - nx.lyric.as_ref().map_or(0.0, |l| text_width(&l.text, Weight::Regular, e)) / 2.0,
+                None => line.right,
+            };
+            let len = 0.66_f64.min(n0 - x1 - 0.3);
+            if len > 0.15 {
+                let mid = if nxt.is_none() { x1 + 0.3 + len / 2.0 } else { (x1 + n0) / 2.0 };
+                pen.rect(mid - len / 2.0, y - 0.51, len, 0.12);
+            }
+        }
+        if let Some(h) = held.filter(|_| lyr.extend && w > 0.0) {
+            let end_x = h.x + h.head_w.unwrap_or(0.0);
+            if end_x > x1 + 0.6 {
+                pen.rect(x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1);
+            }
         }
     }
 }

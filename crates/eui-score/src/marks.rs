@@ -406,6 +406,7 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
         scripts(bars, line);
         dynamics(bars, line);
         texts(bars, line);
+        lyric_line(bars, line);
         line.marks = Vec::new();
         let range = line.bars.clone();
         for (bi, b) in range.clone().enumerate() {
@@ -846,6 +847,18 @@ fn texts(bars: &[Bar], line: &mut Line) {
     }
 }
 
+/// The line the syllables stand on: 0.6 under everything the staff has
+/// below it — notes, stems, slurs, dynamics, words — and never nearer the
+/// staff than 1.2 spaces from its bottom line to the top of the letters.
+fn lyric_line(bars: &[Bar], line: &mut Line) {
+    let has = line.bars.clone().any(|b| bars[b].items.iter().any(|ev| ev.lyric.is_some()));
+    if !has {
+        return;
+    }
+    let e = em(0.0);
+    line.lyric_y = Some((reach(bars, line).1 + 0.6).max(5.2) + 0.72 * e);
+}
+
 fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
     let mut out: Vec<Volta> = Vec::new();
     let mut run: Option<Volta> = None;
@@ -951,6 +964,9 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
         if bars[b].items.first().is_some_and(|ev| ev.mm.is_some()) {
             hi = hi.min(-2.6);
         }
+    }
+    if let Some(ly) = line.lyric_y {
+        lo = lo.max(ly + 0.25 * em(0.0) + 0.6);
     }
     for c in &line.curves {
         for (_, y) in points(c) {

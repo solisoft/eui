@@ -25,8 +25,8 @@
 # and reach the middle line, beam ends are quanted so they sit, straddle or
 # hang on a staff line, and a slur's height is `height-limit · 2/π ·
 # atan(π/2 · ratio / height-limit · width)`. What LilyPond does that this
-# does not: several staves, lyrics, dynamics, tuplets, grace notes, cross-
-# staff anything, and a page breaker better than greedy.
+# does not: grace notes, cross-staff anything, more than one verse of
+# lyrics, and a page breaker better than greedy.
 #
 # Every length below is in staff spaces, y down, the top staff line at 0
 # and the bottom one at 4. A staff position counts half spaces up from the
@@ -186,6 +186,7 @@ def score_engrave_fresh(src, width_ss, layout)
   return score_engrave_many(parsed, width_ss, layout) if parsed["staves"].length > 1
 
   bars = score_measures(parsed["events"])
+  score_lyrics_assign(bars, parsed["staves"][0]["lyrics"])
   score_beams(bars)
   score_columns(bars, score_shortest(bars))
   left = layout["left"] ?? 0.0
@@ -247,7 +248,8 @@ def score_engrave_many(parsed, width_ss, layout)
     end
   end
   flat = []
-  for bars in all_bars
+  for bars, si in all_bars
+    score_lyrics_assign(bars, staves[si]["lyrics"])
     score_beams(bars)
     flat = flat + bars
   end
@@ -607,6 +609,11 @@ def score_tokens(src)
       score_refuse("a backslash with no command after it", i) if word == ""
       out.push({"t": "cmd", "v": word, "at": i})
       i = jj
+      if word == "addlyrics"
+        lyr = score_lyric_tokens(cs, i, out[-1]["at"])
+        out.push({"t": "lyrics", "v": lyr["items"], "at": out[-1]["at"]})
+        i = lyr["i"]
+      end
     elsif ch == "\""
       jj = i + 1
       word = ""
@@ -648,6 +655,85 @@ def score_tokens(src)
     end
   end
   out
+end
+
+# The block after `\addlyrics`, read as LilyPond reads lyrics: words split
+# on spaces, any letter in them — "Frè", "l'eau" — a quoted string as one,
+# `--` joining a word's syllables, `__` holding one over the notes after it,
+# `_` a note that takes none.
+def score_lyric_tokens(cs, i, at)
+  n = cs.length
+  while i < n && (cs[i] == " " || cs[i] == "\n" || cs[i] == "\t" || cs[i] == "\r")
+    i += 1
+  end
+  score_refuse("\\addlyrics wants a { block } of words", at) unless i < n && cs[i] == "{"
+  i += 1
+  items = []
+  while true
+    while i < n && (cs[i] == " " || cs[i] == "\n" || cs[i] == "\t" || cs[i] == "\r")
+      i += 1
+    end
+    score_refuse("a block of lyrics that is never closed", at) if i >= n
+    break if cs[i] == "}"
+
+    if cs[i] == "%"
+      while i < n && cs[i] != "\n"
+        i += 1
+      end
+    elsif cs[i] == "\""
+      jj = i + 1
+      word = ""
+      while jj < n && cs[jj] != "\""
+        word += cs[jj]
+        jj += 1
+      end
+      score_refuse("a string that is never closed", i) if jj >= n
+      items.push({"s": word, "quoted": true, "at": i})
+      i = jj + 1
+    else
+      score_refuse("a { inside lyrics is not read: they are words, -- and __", i) if cs[i] == "{"
+      score_refuse("'\\' inside lyrics is not read: they are words, -- and __", i) if cs[i] == "\\"
+      jj = i
+      word = ""
+      while jj < n && !" \n\t\r{}\"".contains(cs[jj])
+        word += cs[jj]
+        jj += 1
+      end
+      items.push({"s": word, "quoted": false, "at": i})
+      i = jj
+    end
+  end
+  {"items": items, "i": i + 1}
+end
+
+# The syllables of a lyric block: each word one, `--` and `__` marking the
+# one before them, `_` a syllable with no words.
+def score_syllables(items, at)
+  out = []
+  for it in items
+    if !it["quoted"] && (it["s"] == "--" || it["s"] == "__")
+      score_refuse("#{it["s"]} wants a syllable before it", it["at"]) if out.length == 0
+      out[-1][it["s"] == "--" ? "hyphen" : "extend"] = true
+      next
+    end
+    skip = !it["quoted"] && it["s"] == "_"
+    out.push({"text": skip ? "" : it["s"], "hyphen": false, "extend": false})
+  end
+  score_refuse("\\addlyrics with no words in it", at) if out.length == 0
+  out
+end
+
+# `\addlyrics { … }` after a staff's music: its words, one syllable a
+# note. One verse a staff is what this sets.
+def score_attach_lyrics(toks, i, staves)
+  while i < toks.length && toks[i]["t"] == "cmd" && toks[i]["v"] == "addlyrics"
+    at = toks[i]["at"]
+    score_refuse("\\addlyrics follows a staff's music", at) if staves.length == 0
+    score_refuse("one verse of lyrics a staff is what this sets", at) if staves[-1].has_key("lyrics")
+    staves[-1]["lyrics"] = score_syllables(toks[i + 1]["v"], at)
+    i += 2
+  end
+  i
 end
 
 def score_letter?(ch)
@@ -708,6 +794,7 @@ def score_parse(src)
   staves = []
   groups = []
   i = score_part(toks, i, st, staves, groups, 0)
+  i = score_attach_lyrics(toks, i, staves)
   if in_score
     while i < toks.length && toks[i]["t"] == "cmd" && ["layout", "midi", "header"].includes?(toks[i]["v"])
       if toks[i]["v"] == "header"
@@ -789,6 +876,7 @@ def score_group(toks, i, st, staves, groups, depth, kind, props)
   while i < toks.length && !score_double?(toks, i, ">")
     score_refuse("two voices in one staff are not drawn: give each its own \\new Staff", toks[i]["at"]) unless toks[i]["t"] == "cmd" && toks[i]["v"] == "new"
     i = score_part(toks, i, st, staves, groups, depth + 1)
+    i = score_attach_lyrics(toks, i, staves)
   end
   score_refuse("a << that is never closed by >>", at) if i >= toks.length
   score_refuse("<< >> with no staff in it", at) if staves.length == first
@@ -1863,9 +1951,125 @@ def score_columns(bars, shortest)
       shifted = ev["heads"].any? { |hd| hd["side"] == -1 }
       lefts = shifted ? hw - SCORE_RULE["stem"] : 0.0
       ev["left"] = lefts + score_place_accidentals(ev)
+      score_lyric_room(ev)
     end
     score_poly_cols(bar, shortest) if bar["poly"] == true
   end
+end
+
+# ---- Lyrics ----------------------------------------------------------------
+#
+# `\addlyrics { … }` after a staff's music, as LilyPond sets it: a syllable
+# a note of the first voice, centred on the note's head, on one line under
+# the staff and all its marks; `--` a hyphen centred between a word's
+# syllables, `__` a line under the notes a syllable is held over. The
+# notes make room for their syllables, as LilyPond's spacing does.
+
+# The syllables onto the notes. A note tied from the one before, or under
+# a slur after its first, holds the syllable before — a melisma — and takes
+# none; rests take none; syllables past the last note are dropped, as
+# LilyPond drops them.
+def score_lyrics_assign(bars, sylls)
+  return nil if sylls.nil?
+
+  k = 0
+  tied = false
+  slurred = false
+  for bar in bars
+    for ev in bar["items"]
+      next if ev["voice"] == 2 || ev["k"] != "note"
+
+      if tied || slurred
+        ev["lyric_held"] = true
+      elsif k < sylls.length
+        ev["lyric"] = sylls[k]
+        k += 1
+      end
+      tied = ev["tie"] == true
+      slurred = (slurred || ev["slur_on"] == true) && ev["slur_off"] != true
+    end
+  end
+  nil
+end
+
+# A syllable's room: half its width either side of the head's middle and
+# LilyPond's 0.35 of word space beyond, more after it when a hyphen follows.
+def score_lyric_room(ev)
+  lyr = ev["lyric"]
+  return nil if lyr.nil? || lyr["text"] == ""
+
+  w = score_text_width(lyr["text"], "regular", score_em(0.0))
+  c = ev["head_w"] / 2.0
+  ev["right"] = score_max(ev["right"], c + w / 2.0 + (lyr["hyphen"] ? 0.9 : 0.35))
+  ev["left"] = score_max(ev["left"], w / 2.0 - c + 0.35)
+  nil
+end
+
+# The line the syllables stand on: 0.6 under everything the staff has below
+# it — notes, stems, slurs, dynamics, words — and never nearer the staff
+# than 1.2 spaces from its bottom line to the top of the letters.
+def score_lyric_line(sys)
+  has = false
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      has = true unless ev["lyric"].nil?
+    end
+  end
+  return nil unless has
+
+  em = score_em(0.0)
+  sys["lyric_y"] = score_max(score_reach(sys)[1] + 0.6, 5.2) + 0.72 * em
+  nil
+end
+
+# The syllables, each centred on its note's head; a hyphen centred in the
+# gap to the next syllable, 0.66 long, shorter where they stand close and
+# none where they touch, after the last syllable of a line whose word goes
+# on; an extender at the foot of the letters from a held syllable's end to
+# the last head it is held over.
+def score_draw_lyrics(paths, ink, sys, top, sp)
+  em = score_em(0.0)
+  y = top + sys["lyric_y"]
+  notes = []
+  for bar in sys["bars"]
+    for ev in bar["items"]
+      notes.push(ev) if ev["k"] == "note" && ev["voice"] != 2
+    end
+  end
+  for ev, k in notes
+    lyr = ev["lyric"]
+    next if lyr.nil?
+
+    w = lyr["text"] == "" ? 0.0 : score_text_width(lyr["text"], "regular", em)
+    x0 = ev["x"] + ev["head_w"] / 2.0 - w / 2.0
+    x1 = x0 + w
+    score_draw_text(paths, ink, lyr["text"], "regular", x0, y, em, sp) if w > 0.0
+    nxt = nil
+    held = nil
+    j = k + 1
+    while j < notes.length && nxt.nil?
+      if notes[j]["lyric"].nil?
+        held = notes[j] if notes[j]["lyric_held"] == true
+      else
+        nxt = notes[j]
+      end
+      j += 1
+    end
+    if lyr["hyphen"] && w > 0.0
+      n0 = sys["right"]
+      n0 = nxt["x"] + nxt["head_w"] / 2.0 - score_text_width(nxt["lyric"]["text"], "regular", em) / 2.0 unless nxt.nil?
+      len = score_min(0.66, n0 - x1 - 0.3)
+      if len > 0.15
+        mid = nxt.nil? ? x1 + 0.3 + len / 2.0 : (x1 + n0) / 2.0
+        paths.push(score_rect(ink, mid - len / 2.0, y - 0.51, len, 0.12, sp))
+      end
+    end
+    if lyr["extend"] && w > 0.0 && !held.nil?
+      end_x = held["x"] + held["head_w"]
+      paths.push(score_rect(ink, x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1, sp)) if end_x > x1 + 0.6
+    end
+  end
+  nil
 end
 
 # What a bar is spaced by: its notes and rests one after another, or, with
@@ -2466,6 +2670,7 @@ def score_marks(systems)
     score_scripts(sys)
     score_dynamics(sys)
     score_texts(sys)
+    score_lyric_line(sys)
     sys["marks"] = []
     for bar, bi in sys["bars"]
       for ev, ii in bar["items"]
@@ -3020,6 +3225,7 @@ def score_reach(sys)
   for bar in sys["bars"]
     hi = score_min(hi, -2.6) if bar["items"].length > 0 && !bar["items"][0]["mm"].nil?
   end
+  lo = score_max(lo, sys["lyric_y"] + 0.25 * score_em(0.0) + 0.6) if sys.has_key("lyric_y")
   for c in sys["curves"]
     i = 0
     while i < c.length
@@ -4233,6 +4439,7 @@ def score_draw_system(paths, sys, sp, ink, ranges)
   for tx in sys["texts"] ?? []
     score_draw_text(paths, ink, tx["text"], "regular", tx["x0"], top + tx["y"], score_em(0.0), sp)
   end
+  score_draw_lyrics(paths, ink, sys, top, sp) if sys.has_key("lyric_y")
   score_draw_courtesy(paths, ink, sys, top, sp) if (sys["courtesy"] ?? 0.0) > 0.0
 end
 

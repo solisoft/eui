@@ -36,3 +36,9 @@
 { << { c'4 } \\ { d'4 } }
 { << { c'4 } \\ { R1*2 } >> }
 { \time 2/4 << { c'4 d'4 } \\ { e'2 f'4 } >> }
+{ c'4 } \addlyrics la
+{ c'4 } \addlyrics { la
+{ c'4 } \addlyrics { }
+{ c'4 } \addlyrics { -- la }
+{ c'4 } \addlyrics { la \skip }
+{ c'4 } \addlyrics { la } \addlyrics { lo }

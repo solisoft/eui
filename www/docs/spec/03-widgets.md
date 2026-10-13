@@ -1127,7 +1127,14 @@ into one bar with its count under `\compressEmptyMeasures`), tuplets
 the forced breaks `\break` and `\pageBreak`, and expression: dynamics
 (`\pp` … `\ff`, `\sfz`, `\fp` and their kin), hairpins (`\<`, `\>`,
 `\!`), articulations (`-.` `->` `--` `-^` `-!` `-_`, `\fermata`, with `^`
-and `_` for a side) and words over or under a note (`^"dolce"`), and as
+and `_` for a side) and words over or under a note (`^"dolce"`); lyrics,
+`\addlyrics { … }` after a staff's music, one verse a staff — a syllable a
+note of the first voice, centred under its head on one line beneath the
+staff and its marks, a note tied from the one before or under a slur after
+its first holding the syllable before, `--` a hyphen between a word's
+syllables, `__` an extender under the notes a syllable is held over, `_` a
+note that takes none, any letter in a word ("Frè", "l'eau"), and the notes
+spread to make room for their syllables — and as
 a Standard MIDI File (`score_midi`), as a vector PDF of its A4 pages
 (`score_pdf`: each page with a footer on the line 6 mm above the paper's
 edge — the title at the left, cut short with an ellipsis before it reaches

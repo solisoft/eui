@@ -446,16 +446,16 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 6 079 lines; `serde_json` its one dependency, for the font data.
+writers. 6 346 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 4.4 MB) are what the Soli engraver drew for the 23
-  pieces of `tests/corpus/` — 4 968 paths on a 900 px screen, 26 A4 pages
-  and 4 975 paths on them, a MIDI file and a PDF each — and
+  (`tests/golden/`, 4.9 MB) are what the Soli engraver drew for the 25
+  pieces of `tests/corpus/` — 5 366 paths on a 900 px screen, 28 A4 pages
+  and 5 373 paths on them, a MIDI file and a PDF each — and
   `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path to
   agree to the hundredth of a pixel and the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
-  38 refusals to theirs, character position included. Both pass. The last
+  44 refusals to theirs, character position included. Both pass. The last
   difference to go was rounding: Soli's `round(2)` rounds the shortest
   decimal that reads back as the number, so 22.884999… is 22.88 there and
   22.89 under `(v * 100).round()`, and two PDFs differed by that digit.
@@ -2579,6 +2579,27 @@ holds at every keystroke, and each used to be a step to undo — "dolce" was
 five; a run of typing on one note's one side is one step now, a mark or
 Clear pressed is a step of its own, and the field is keyed by the note, so
 another note selected shows its own words. `tests/score_spec.sl` is 116
+tests.
+
+**And lyrics** (2026-10-13). `\addlyrics { Frè -- re Jac -- ques }` after a
+staff's music, one verse a staff, in both engravers: a syllable a note of
+the first voice, centred under its head; a note tied from the one before,
+or under a slur after its first, holds the syllable before; `--` a hyphen
+0.66 long centred in the gap (shorter where the syllables stand close, none
+where they touch), `__` an extender to the last head held over, `_` a note
+with none, and any letter a word has — the tokenizer reads the block as
+words, not notation. A syllable claims half its width each side of its
+head and 0.35 beyond (0.9 after it when a hyphen follows), so the columns
+spread; the line stands 0.6 under everything the staff has below it and
+never nearer the staff than 1.2, and the line's reach goes 0.6 past the
+letters, which keeps a choir's next staff clear. Two new golden pieces
+(`lyrics.ly`, `lyrics_choir.ly`) and six refusals: 25 pieces, 44 refusals,
+the Rust engraver agreeing with every path and PDF byte; the 23 pieces
+without lyrics draw exactly as before. The editor has a Lyrics tab: a
+track's words, written after its music in braces, read back from a pasted
+source, counted against the notes that take one, a run of typing one step
+to undo. A server whose native engraver predates this refuses `\addlyrics`
+until lang is built against this `eui-score`. `tests/score_spec.sl` is 121
 tests.
 
 ## Not started
