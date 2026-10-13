@@ -9,7 +9,7 @@ use crate::{ScoreError, WHOLE};
 pub const DYNAMICS: [&str; 21] = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "ffff", "fp", "sf", "sff", "sp", "spp", "sfz", "sfp", "rfz", "rf", "fz", "n"];
 
 /// The articulations a score prints, by their LilyPond names.
-pub const SCRIPTS: [&str; 7] = ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato", "fermata"];
+pub const SCRIPTS: [&str; 8] = ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato", "fermata", "trill"];
 
 pub(crate) fn refuse<T>(what: impl Into<String>, at: usize) -> Result<T, ScoreError> {
     Err(ScoreError { message: format!("score: {} (at character {at})", what.into()) })
@@ -510,6 +510,60 @@ pub struct Ev {
     pub lyric: Option<Syllable>,
     /// It holds the syllable of a note before it: a melisma.
     pub lyric_held: bool,
+    /// The grace notes before it.
+    pub graces: Option<Graces>,
+    /// `\startTrillSpan`: a trill's wavy line starts on it.
+    pub trill_start: bool,
+    /// `\stopTrillSpan`: … and stops at its end.
+    pub trill_stop: bool,
+    /// `\glissando`: a line from it to the next note.
+    pub gliss: bool,
+}
+
+/// How grace notes are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraceKind {
+    /// `\grace`: no slash, no slur.
+    Grace,
+    /// `\acciaccatura`: a slashed stem, slurred to the note.
+    Acciaccatura,
+    /// `\appoggiatura`: slurred to the note.
+    Appoggiatura,
+}
+
+/// The grace notes before a note: drawn small to its left, taking no time
+/// in the bar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Graces {
+    /// How they are written.
+    pub kind: GraceKind,
+    /// The command's character in the source.
+    pub at: usize,
+    /// The notes, in order.
+    pub notes: Vec<Grace>,
+    /// How far up their stems reach, for the note's extent.
+    pub top: f64,
+    /// How far down they and their slur reach.
+    pub bottom: f64,
+}
+
+/// One grace note.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grace {
+    /// Its pitches.
+    pub pitches: Vec<Pitch>,
+    /// Its written value.
+    pub base: i64,
+    /// Its dots.
+    pub dots: i64,
+    /// What it would last, in ticks.
+    pub ticks: i64,
+    /// Its heads, low to high, under the bar's clef and key.
+    pub heads: Vec<Head>,
+    /// Where it stands, from its note's x.
+    pub dx: f64,
+    /// Its head's width.
+    pub hw: f64,
 }
 
 /// A syllable of `\addlyrics`.
@@ -608,6 +662,7 @@ struct St {
     tuplets: i64,
     tuplet: Option<TupletState>,
     voice: Option<u8>,
+    grace: Option<Graces>,
 }
 
 #[derive(Clone, Copy)]
@@ -831,7 +886,7 @@ fn staff_prop(toks: &[Tok], mut i: usize, props: &mut Props, what: &str) -> Resu
 }
 
 fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, props: Props) -> Result<usize, ScoreError> {
-    let mut st = St { reference: None, base: 4, dots: 0, events: Vec::new(), notes: base.notes, items: base.counter, props, alts: 0, tuplets: 0, tuplet: None, voice: None };
+    let mut st = St { reference: None, base: 4, dots: 0, events: Vec::new(), notes: base.notes, items: base.counter, props, alts: 0, tuplets: 0, tuplet: None, voice: None, grace: None };
     if is_cmd(toks, i, "relative") {
         let pitch = toks.get(i + 1);
         let name = pitch.and_then(|p| pitch_name(&p.v));
@@ -848,6 +903,9 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
         i += 1;
     }
     i = music(toks, i, &mut st, &mut base.header)?;
+    if let Some(g) = &st.grace {
+        return refuse("grace notes with no note after them", g.at);
+    }
     if braced {
         if i >= toks.len() || toks[i].t != T::Sym('}') {
             return refuse("a '{' that is never closed", 0);
@@ -1100,6 +1158,20 @@ fn command(toks: &[Tok], i: usize, st: &mut St, header_fields: &mut HashMap<Stri
         last_note(&mut st.events, &tk)?.scripts.push(Script { name: word.to_owned(), dir: 0 });
         return Ok(i + 1);
     }
+    // A trill with a wavy line to where it stops, and a glissando to the
+    // next note: on the note they follow.
+    if word == "startTrillSpan" {
+        last_note(&mut st.events, &tk)?.trill_start = true;
+        return Ok(i + 1);
+    }
+    if word == "stopTrillSpan" {
+        last_item(&mut st.events, &tk)?.trill_stop = true;
+        return Ok(i + 1);
+    }
+    if word == "glissando" {
+        last_note(&mut st.events, &tk)?.gliss = true;
+        return Ok(i + 1);
+    }
     if word == "break" || word == "pageBreak" {
         st.events.push(Ev { k: Kind::Break, page: word == "pageBreak", at: tk.at, ..Ev::default() });
         return Ok(i + 1);
@@ -1135,7 +1207,65 @@ fn command(toks: &[Tok], i: usize, st: &mut St, header_fields: &mut HashMap<Stri
         }
         return Ok(j + 1);
     }
+    let grace = match word {
+        "grace" => Some(GraceKind::Grace),
+        "acciaccatura" => Some(GraceKind::Acciaccatura),
+        "appoggiatura" => Some(GraceKind::Appoggiatura),
+        _ => None,
+    };
+    if let Some(kind) = grace {
+        return graces(toks, i, st, kind, header_fields);
+    }
     refuse(format!("\\{word} is not a command this reads"), tk.at)
+}
+
+// ---- Grace notes -------------------------------------------------------------
+//
+// `\grace`, `\acciaccatura` and `\appoggiatura`, before a note: a note or a
+// `{ … }` of them, read as notes are — `\relative`'s octave and the duration
+// go on through them, as LilyPond reads them — that take no time in the bar
+// and no number among the items. They belong to the note after them and are
+// drawn small (0.7) to its left, stems up, several under one beam; an
+// acciaccatura's stem is slashed, and both it and an appoggiatura are
+// slurred to the note. Played, they take their time from the note.
+
+fn graces(toks: &[Tok], i: usize, st: &mut St, kind: GraceKind, header_fields: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    let word = toks[i].v.clone();
+    if st.voice == Some(2) {
+        return refuse("grace notes in a second voice are not drawn", at);
+    }
+    if st.grace.is_some() {
+        return refuse("a grace note before a grace note: write them in one { block }", at);
+    }
+    let mut i = i + 1;
+    if i >= toks.len() {
+        return refuse(format!("\\{word} wants a note or a {{ block }} of notes"), at);
+    }
+    let saved_events = std::mem::take(&mut st.events);
+    let (saved_items, saved_notes, saved_tuplet) = (st.items, st.notes, st.tuplet);
+    st.tuplet = None;
+    match toks[i].t {
+        T::Sym('{') => {
+            i = music(toks, i + 1, st, header_fields)?;
+            if i >= toks.len() || toks[i].t != T::Sym('}') {
+                return refuse("a { block } of grace notes that is never closed", at);
+            }
+            i += 1;
+        }
+        T::Word | T::Sym('<') => i = note(toks, i, st)?,
+        _ => return refuse(format!("\\{word} wants a note or a {{ block }} of notes"), at),
+    }
+    let got = std::mem::replace(&mut st.events, saved_events);
+    st.items = saved_items;
+    st.notes = saved_notes;
+    st.tuplet = saved_tuplet;
+    if got.is_empty() || got.iter().any(|ev| ev.k != Kind::Note) {
+        return refuse("a grace is notes: no rest, no command in it", at);
+    }
+    let notes = got.into_iter().map(|ev| Grace { pitches: ev.pitches, base: ev.base, dots: ev.dots, ticks: ev.ticks, heads: Vec::new(), dx: 0.0, hw: 0.0 }).collect();
+    st.grace = Some(Graces { kind, at, notes, top: 0.0, bottom: 0.0 });
+    Ok(i)
 }
 
 fn repeat(toks: &[Tok], i: usize, st: &mut St, header_fields: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
@@ -1385,6 +1515,12 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         st.tuplet = Some(tup);
     }
     st.items += 1;
+    if let Some(g) = st.grace.take() {
+        if rest.is_some() {
+            return refuse("grace notes go before a note, not a rest", g.at);
+        }
+        ev.graces = Some(g);
+    }
     match rest {
         None => {
             ev.n = Some(st.notes);

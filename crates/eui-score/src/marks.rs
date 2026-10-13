@@ -127,6 +127,33 @@ pub struct HairpinPiece {
     pub to: f64,
 }
 
+/// One system's piece of a trill span: a wavy line, with "tr" before it on
+/// the system it starts on.
+#[derive(Debug, Clone)]
+pub struct TrillPiece {
+    /// Its left.
+    pub x0: f64,
+    /// Its right.
+    pub x1: f64,
+    /// It starts here: the "tr" is drawn.
+    pub tr: bool,
+    /// Its line.
+    pub y: f64,
+}
+
+/// A glissando's line, from a head to the next note's.
+#[derive(Debug, Clone)]
+pub struct Gliss {
+    /// Its start.
+    pub x0: f64,
+    /// …
+    pub y0: f64,
+    /// Its end.
+    pub x1: f64,
+    /// …
+    pub y1: f64,
+}
+
 struct ScriptRule {
     up: &'static str,
     down: &'static str,
@@ -145,6 +172,7 @@ fn script_rule(name: &str) -> ScriptRule {
         "marcato" => r("articMarcatoAbove", "articMarcatoBelow", 0.2, 0, 0, true),
         "staccatissimo" => r("articStaccatissimoAbove", "articStaccatissimoBelow", 0.2, 0, 0, false),
         "portato" => r("articTenutoStaccatoAbove", "articTenutoStaccatoBelow", 0.45, 0, 0, false),
+        "trill" => r("ornamentTrill", "ornamentTrill", 0.4, 2000, -1, false),
         _ => r("fermataAbove", "fermataBelow", 0.4, 4000, -1, false),
     }
 }
@@ -400,10 +428,13 @@ pub(crate) fn points(cmds: &[f64]) -> Vec<(f64, f64)> {
 /// Everything around a staff's notes, line by line.
 pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
     hairpins(bars, lines);
+    trill_spans(bars, lines);
+    glissandi(bars, lines);
     for line in lines.iter_mut() {
         line.voltas = if line.staff_index.unwrap_or(0) == 0 { voltas(bars, line) } else { Vec::new() };
         line.tuplets = tuplets(bars, line);
         scripts(bars, line);
+        trill_place(bars, line);
         dynamics(bars, line);
         texts(bars, line);
         lyric_line(bars, line);
@@ -548,7 +579,12 @@ fn item_extent(ev: &Ev) -> (f64, f64) {
     if ev.k != Kind::Note {
         return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
-    (tuplet_edge(ev, true), tuplet_edge(ev, false))
+    let hi = tuplet_edge(ev, true);
+    let lo = tuplet_edge(ev, false);
+    match &ev.graces {
+        None => (hi, lo),
+        Some(gr) => (hi.min(gr.top), lo.max(gr.bottom)),
+    }
 }
 
 pub(crate) fn item_w(ev: &Ev) -> f64 {
@@ -692,6 +728,107 @@ fn hairpins(bars: &[Bar], lines: &mut [Line]) {
             let ka = (si - first) as f64 / parts;
             let kb = (si - first + 1) as f64 / parts;
             line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb });
+        }
+    }
+}
+
+// ---- Trills and glissandi ---------------------------------------------------
+//
+// `\startTrillSpan` … `\stopTrillSpan`: a "tr" over the note it starts on,
+// and a wavy line from it to the end of the note it stops on — to the end
+// of the line where it goes on, and from the start of the next without the
+// "tr", as LilyPond breaks it. One with no stop runs to the piece's end.
+// `\glissando`: a straight line from a note's head to the next note's, at
+// their heads' heights; to the end of the line when the next note is on
+// the next one.
+
+fn trill_spans(bars: &[Bar], lines: &mut [Line]) {
+    let mut flat: Vec<(usize, usize, usize)> = Vec::new();
+    for (si, line) in lines.iter_mut().enumerate() {
+        line.trills = Vec::new();
+        for b in line.bars.clone() {
+            for (j, ev) in bars[b].items.iter().enumerate() {
+                if ev.voice != Some(2) {
+                    flat.push((si, b, j));
+                }
+            }
+        }
+    }
+    let ev_of = |f: (usize, usize, usize)| -> &Ev { &bars[f.1].items[f.2] };
+    for (k, &at) in flat.iter().enumerate() {
+        let start_ev = ev_of(at);
+        if !start_ev.trill_start {
+            continue;
+        }
+        let mut stop = flat.len() - 1;
+        for (jj, &f) in flat.iter().enumerate().skip(k + 1) {
+            if ev_of(f).trill_stop {
+                stop = jj;
+                break;
+            }
+        }
+        let end_ev = ev_of(flat[stop]);
+        let xc = start_ev.x + item_w(start_ev) / 2.0;
+        let x1 = end_ev.x + item_w(end_ev);
+        let first = at.0;
+        let last = flat[stop].0;
+        for (si, line) in lines.iter_mut().enumerate().take(last + 1).skip(first) {
+            let a = if si == first { xc } else { line.prefix };
+            let b = if si == last { x1 } else { line.right - 0.3 };
+            line.trills.push(TrillPiece { x0: a, x1: b.max(a + 1.0), tr: si == first, y: 0.0 });
+        }
+    }
+}
+
+/// A trill span's line over what the notes under it reach, scripts
+/// included, and never nearer the staff than a space over its top line.
+fn trill_place(bars: &[Bar], line: &mut Line) {
+    let range = line.bars.clone();
+    for tr in &mut line.trills {
+        let lo = if tr.tr { tr.x0 - 1.3 } else { tr.x0 };
+        let mut edge: f64 = -1.0;
+        for b in range.clone() {
+            for ev in &bars[b].items {
+                if ev.x + item_w(ev) < lo || ev.x > tr.x1 {
+                    continue;
+                }
+                edge = edge.min(ev.reach_up.unwrap_or(0.0));
+            }
+        }
+        tr.y = edge - 0.45;
+    }
+}
+
+fn glissandi(bars: &[Bar], lines: &mut [Line]) {
+    let mut flat: Vec<(usize, usize, usize)> = Vec::new();
+    for (si, line) in lines.iter_mut().enumerate() {
+        line.glisses = Vec::new();
+        for b in line.bars.clone() {
+            for (j, ev) in bars[b].items.iter().enumerate() {
+                if ev.k == Kind::Note && ev.voice != Some(2) {
+                    flat.push((si, b, j));
+                }
+            }
+        }
+    }
+    let ev_of = |f: (usize, usize, usize)| -> &Ev { &bars[f.1].items[f.2] };
+    for (k, &at) in flat.iter().enumerate() {
+        let ev = ev_of(at);
+        let Some(&nf) = flat.get(k + 1) else { continue };
+        if !ev.gliss {
+            continue;
+        }
+        let nxt = ev_of(nf);
+        let line = &mut lines[at.0];
+        let x0 = ev.x + item_w(ev) + 0.3;
+        let y0 = y_of(ev.heads.first().map_or(0, |h| h.pos));
+        let y_next = y_of(nxt.heads.first().map_or(0, |h| h.pos));
+        if nf.0 == at.0 {
+            let lefts = if nxt.heads.iter().any(|hd| hd.acc.is_some()) { 1.0 } else { 0.0 };
+            let x1 = nxt.x - 0.3 - lefts;
+            line.glisses.push(Gliss { x0, y0, x1: x1.max(x0 + 0.5), y1: y_next });
+        } else {
+            line.glisses.push(Gliss { x0, y0, x1: (line.right - 0.5).max(x0 + 0.5), y1: (y0 + y_next) / 2.0 });
         }
     }
 }
@@ -967,6 +1104,13 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     }
     if let Some(ly) = line.lyric_y {
         lo = lo.max(ly + 0.25 * em(0.0) + 0.6);
+    }
+    for tr in &line.trills {
+        hi = hi.min(tr.y - if tr.tr { 2.4 } else { 1.1 });
+    }
+    for gl in &line.glisses {
+        hi = hi.min(gl.y0.min(gl.y1) - 0.2);
+        lo = lo.max(gl.y0.max(gl.y1) + 0.2);
     }
     for c in &line.curves {
         for (_, y) in points(c) {

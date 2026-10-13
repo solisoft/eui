@@ -70,6 +70,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A second voice's notes either side of a spacer are no longer beamed
   together, and crossed voices stand apart instead of running their stems
   through each other's heads.
+- **Ornaments** in `score()`, `eui-score` and the score editor: grace notes
+  (`\grace`, `\acciaccatura` slashed, `\appoggiatura`), trills (`\trill`
+  and a trill's wavy line) and glissandi, drawn and played.
 - On macOS a MIDI sound sent without a SoundFont plays on Apple's own
   General MIDI synthesizer — 128 instruments — instead of the client's
   sixteen family voices, which made a violin, a viola and a cello sound

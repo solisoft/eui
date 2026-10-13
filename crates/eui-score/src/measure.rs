@@ -227,6 +227,26 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     Ok(())
 }
 
+/// A note's grace notes' heads, under the clef and key it is under; their
+/// accidentals count in the bar, before the note's.
+fn grace_heads(ev: &mut Ev, mid: i64, alters: &[i64; 7], seen: &mut HashMap<i64, i64>) {
+    let Some(gr) = &mut ev.graces else { return };
+    for g in &mut gr.notes {
+        let mut heads = Vec::new();
+        for p in &g.pitches {
+            let now = match seen.get(&p.d) {
+                Some(v) => *v,
+                None => alters[modulo(p.d, 7) as usize],
+            };
+            let show = p.alter != now;
+            seen.insert(p.d, p.alter);
+            heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None });
+        }
+        heads.sort_by_key(|h| h.pos);
+        g.heads = heads;
+    }
+}
+
 /// The bars of a staff.
 pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     let mut clef = Clef::Treble;
@@ -427,6 +447,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         }
         if ev.k == Kind::Note {
             let mid = clef_mid(clef);
+            grace_heads(&mut ev, mid, &alters, &mut seen);
             let mut heads = Vec::new();
             for p in &ev.pitches {
                 let now = match seen.get(&p.d) {

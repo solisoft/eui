@@ -86,6 +86,8 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     ("articTenutoStaccatoBelow", '\u{E4B3}', &[]),
     ("fermataAbove", '\u{E4C0}', &[]),
     ("fermataBelow", '\u{E4C1}', &[]),
+    ("ornamentTrill", '\u{E566}', &[]),
+    ("wiggleTrill", '\u{EAA4}', &[]),
     // The ends of a staff group's bracket.
     ("bracketTop", '\u{E003}', &[]),
     ("bracketBottom", '\u{E004}', &[]),
@@ -149,6 +151,9 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("articTenutoStaccatoBelow", "scripts.uportato", 0.0),
     ("fermataAbove", "scripts.ufermata", 0.0),
     ("fermataBelow", "scripts.dfermata", 0.0),
+    // Ornaments: a trill's "tr", and the element its wavy line repeats.
+    ("ornamentTrill", "scripts.trill", 0.0),
+    ("wiggleTrill", "scripts.trill_element", 0.0),
     ("bracketTop", "brackettips.up", 0.0),
     ("bracketBottom", "brackettips.down", 0.0),
 ];

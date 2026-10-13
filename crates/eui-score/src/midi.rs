@@ -3,8 +3,8 @@
 //! quarter is 6 720 ticks, the engraver's own, so a tuplet lands exactly
 //! where it is drawn. Several staves are a format-1 file, a track each.
 
-use crate::measure::{measures, Bar};
-use crate::parse::{modulo, parse, Kind, Props};
+use crate::measure::{key_alters, measures, Bar};
+use crate::parse::{modulo, parse, GraceKind, Kind, Props};
 use crate::{ScoreError, WHOLE};
 
 /// What a source has not said.
@@ -98,7 +98,7 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             ev_out.push((at, 0, vec![255, 89, 2, modulo(bar.fifths, 256) as u8, 0]));
         }
         for ev in &bar.items {
-            let t0 = at + ev.start;
+            let mut t0 = at + ev.start;
             let span = ev.ticks * ev.mm.unwrap_or(1);
             if let Some(mark) = &ev.tempo {
                 if mark.bpm > 0 && first_track {
@@ -145,7 +145,46 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             if has("portato") {
                 length = span * 3 / 4;
             }
-            for hd in &ev.heads {
+            // Grace notes take their time from the note: an appoggiatura
+            // half of it, an acciaccatura or a grace a quarter at most, each
+            // its own share and no longer than it is written.
+            if let Some(gr) = &ev.graces {
+                let n = gr.notes.len() as i64;
+                let appoggiatura = gr.kind == GraceKind::Appoggiatura;
+                let share = if appoggiatura { span / (2 * n) } else { span / (4 * n) };
+                for g in &gr.notes {
+                    let piece = if appoggiatura { share } else { share.min(g.ticks) };
+                    for hd in &g.heads {
+                        let gkey = key_of(hd.d, hd.alter);
+                        ev_out.push((t0, 1, vec![(144 + channel) as u8, gkey as u8, vel]));
+                        ev_out.push((t0 + piece, 0, vec![(128 + channel) as u8, gkey as u8, 64]));
+                    }
+                    t0 += piece;
+                    length = (length - piece).max(1);
+                }
+            }
+            // A trill — `\trill`, or a trill span's first note — alternates
+            // its top head with the step above it in the key, a
+            // thirty-second each, as `articulate.ly` plays one.
+            let step = WHOLE / 32;
+            let trilled = (ev.trill_start || has("trill")) && length >= 2 * step;
+            if let (true, Some(top_hd)) = (trilled, ev.heads.last()) {
+                let upper_d = top_hd.d + 1;
+                let upper = key_of(upper_d, key_alters(bar.fifths)[modulo(upper_d, 7) as usize]);
+                let main_key = key_of(top_hd.d, top_hd.alter);
+                let count = length / step;
+                for q in 0..count {
+                    let qkey = if q % 2 == 0 { main_key } else { upper };
+                    let q_end = if q + 1 == count { t0 + length } else { t0 + (q + 1) * step };
+                    ev_out.push((t0 + q * step, 1, vec![(144 + channel) as u8, qkey as u8, vel]));
+                    ev_out.push((q_end, 0, vec![(128 + channel) as u8, qkey as u8, 64]));
+                }
+            }
+            let top_index = ev.heads.len().saturating_sub(1);
+            for (hi, hd) in ev.heads.iter().enumerate() {
+                if trilled && hi == top_index {
+                    continue;
+                }
                 let key = key_of(hd.d, hd.alter);
                 if let Some((_, held)) = sounding.iter_mut().find(|(k, _)| *k == key) {
                     if held.until == t0 && held.tied {

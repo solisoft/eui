@@ -63,7 +63,7 @@ const SCORE_ED_PANELS = ["Score", "Bars", "Expression", "Lyrics", "Tracks"]
 const SCORE_ED_PANS = ["Left", "Half left", "Centre", "Half right", "Right"]
 # The dynamics and the articulations the Expression tab offers.
 const SCORE_ED_DYNAMICS = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz", "fp"]
-const SCORE_ED_ARTICS = ["staccato", "accent", "tenuto", "marcato", "staccatissimo", "portato", "fermata"]
+const SCORE_ED_ARTICS = ["staccato", "accent", "tenuto", "marcato", "staccatissimo", "portato", "fermata", "trill"]
 # The title-page fields the editor asks for, in LilyPond's names.
 const SCORE_ED_HEADER = ["title", "subtitle", "composer", "arranger"]
 # Major keys by the number of sharps (positive) or flats (negative).
@@ -163,6 +163,9 @@ def score_ed_answer(state, ed_event, params, props)
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
     "lyrics" => score_ed_lyrics_set(state, params["payload"] ?? ""),
+    "grace" => score_ed_grace(state, props["kind"] ?? ""),
+    "trill_line" => score_ed_trill_line(state),
+    "glissando" => score_ed_glissando(state),
     "words_dir" => ["Above", "Below"].includes?(props["option"]) ? score_ed_flag(state, "words_dir", props["option"]) : state,
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
@@ -724,6 +727,85 @@ def score_ed_slur(state)
   state
 end
 
+# ---- Ornaments ---------------------------------------------------------------
+
+# A grace note before the selected note, of `kind` ("acciaccatura",
+# "appoggiatura"): an eighth a step above its top pitch, in the key. Pressed
+# again with the kind it has, it comes off; the other kind replaces it.
+def score_ed_grace(state, kind)
+  current = score_ed_selected(state)
+  return state if current.nil? || current["rest"] || !["acciaccatura", "appoggiatura"].includes?(kind)
+  return score_ed_flag(state, "error", "Grace notes are the first voice's: switch to Voice 1 (Ctrl+Alt+1).") if state["voice"] == 2
+
+  state = score_ed_remember(state)
+  current = score_ed_selected(state)
+  had = current["graces"]
+  if !had.nil? && had["kind"] == kind
+    current.delete("graces")
+    return state
+  end
+  top = current["pitches"][-1]
+  step = (top["step"] + 1) % 7
+  oct = top["oct"] + (top["step"] == 6 ? 1 : 0)
+  current["graces"] = {"kind": kind, "notes": [ {"pitches": [ {"step": step, "oct": oct, "alter": score_ed_key_alter(state, step)} ], "base": 8, "dots": 0} ]}
+  state
+end
+
+# A trill's wavy line, as a slur is made: pressed on the note it starts on,
+# then on the one it ends on; pressed on a note that starts one, it comes
+# off with its end.
+def score_ed_trill_line(state)
+  current = score_ed_selected(state)
+  start = state["trill_from"] ?? -1
+  start = -1 if start >= state["notes"].length
+  if start >= 0
+    state["trill_from"] = -1
+    # It ends on a later note: the engraver looks for its end after its start.
+    return state if current.nil? || state["sel"] <= start
+
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    notes[start]["trill_start"] = true
+    notes[state["sel"]]["trill_stop"] = true
+    return state
+  end
+  return state if current.nil? || current["rest"]
+
+  if current["trill_start"] == true
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    k = state["sel"]
+    current = notes[k]
+    current.delete("trill_start")
+    j = k
+    while j < notes.length
+      if notes[j]["trill_stop"] == true
+        notes[j].delete("trill_stop")
+        break
+      end
+      j += 1
+    end
+    return state
+  end
+  state["trill_from"] = state["sel"]
+  state
+end
+
+# A glissando from the selected note to the next; pressed again, it comes off.
+def score_ed_glissando(state)
+  current = score_ed_selected(state)
+  return state if current.nil? || current["rest"]
+
+  state = score_ed_remember(state)
+  current = score_ed_selected(state)
+  if current["gliss"] == true
+    current.delete("gliss")
+  else
+    current["gliss"] = true
+  end
+  state
+end
+
 # A repeat sign at the selected bar: `rep_start` on the note that opens it,
 # `rep_end` on the note that closes it. Pressed again, it comes off. The
 # signs are bar lines, so they follow the bar when notes before it change.
@@ -879,15 +961,29 @@ def score_ed_expression_ly(nt, first_piece, last_piece)
     out += "\\" + nt["dyn"] unless nt["dyn"].nil?
     for sc in nt["scripts"] ?? []
       side = {"-1": "^", "0": "-", "1": "_"}[str(sc["dir"] ?? 0)]
-      out += sc["name"] == "fermata" ? side + "\\fermata" : side + {"staccato": ".", "accent": ">", "tenuto": "-", "marcato": "^", "staccatissimo": "!", "portato": "_"}[sc["name"]]
+      out += sc["name"] == "fermata" || sc["name"] == "trill" ? side + "\\" + sc["name"] : side + {"staccato": ".", "accent": ">", "tenuto": "-", "marcato": "^", "staccatissimo": "!", "portato": "_"}[sc["name"]]
     end
     for tx in nt["texts"] ?? []
       out += (tx["dir"] < 0 ? "^" : "_") + "\"" + score_ed_clean(tx["text"]) + "\"" if score_ed_clean(tx["text"]) != ""
     end
     out += "\\" + nt["hairpin"] unless nt["hairpin"].nil?
+    out += "\\startTrillSpan" if nt["trill_start"] == true
   end
   out += "\\!" if last_piece && nt["hairpin_end"] == true
+  out += "\\stopTrillSpan" if last_piece && nt["trill_stop"] == true
+  out += "\\glissando" if last_piece && nt["gliss"] == true
   out
+end
+
+# A note's grace notes as they are written before it: `\\acciaccatura d''8 `,
+# `\\grace { d''16 e''16 } `; nothing when it has none.
+def score_ed_grace_ly(nt)
+  gr = nt["graces"]
+  return "" if gr.nil? || gr["notes"].length == 0
+
+  parts = gr["notes"].map { |g| score_ed_chord_ly(g) + str(g["base"]) + (g["dots"] > 0 ? "." : "") }
+  body = parts.length == 1 ? parts[0] : "{ " + parts.join(" ") + " }"
+  "\\" + gr["kind"] + " " + body + " "
 end
 
 # A line or a page that ends after the selected bar: `brk` on the note that
@@ -1296,6 +1392,7 @@ def score_ed_layout_track(state, k, info, opts)
         word += "(" if nt["slur_on"] == true && left == full && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad")
+        word = score_ed_grace_ly(nt) + word if left == full && ci == 0 && !nt["rest"]
         words.push(word)
         owners.push(nt.has_key("pad") ? -1 : (nt["src"] ?? ni))
       end
@@ -2770,6 +2867,7 @@ def score_ed_voice_two_ly(notes2, info, total)
         word += "(" if nt["slur_on"] == true && left == full && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad") || nt["spacer"] == true
+        word = score_ed_grace_ly(nt) + word if left == full && ci == 0 && !nt["rest"] && !nt.has_key("pad")
         words.push(word)
         owners.push(nt.has_key("pad") ? -1 : ni)
       end
@@ -2877,6 +2975,7 @@ def score_ed_layout_one(state)
         word += "(" if nt["slur_on"] == true && left == score_ed_ticks(nt) && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == score_ed_ticks(nt) && ci == 0, last_piece)
+        word = score_ed_grace_ly(nt) + word if left == score_ed_ticks(nt) && ci == 0 && !nt["rest"]
         words.push(word)
         owners.push(ni)
       end
@@ -3173,6 +3272,12 @@ def score_ed_imported(ev, state)
   fresh["hairpin_end"] = true if ev["hairpin_end"] == true
   fresh["scripts"] = (ev["scripts"] ?? []).map { |sc| {"name": sc["name"], "dir": sc["dir"]} } unless ev["scripts"].nil?
   fresh["texts"] = ev["texts"] unless ev["texts"].nil?
+  fresh["trill_start"] = true if ev["trill_start"] == true
+  fresh["trill_stop"] = true if ev["trill_stop"] == true
+  fresh["gliss"] = true if ev["gliss"] == true
+  unless ev["graces"].nil?
+    fresh["graces"] = {"kind": ev["graces"]["kind"], "notes": ev["graces"]["notes"].map { |g| {"pitches": g["pitches"].map { |pt| {"step": score_mod(pt["d"], 7), "oct": (pt["d"] - score_mod(pt["d"], 7)) / 7 + 3, "alter": pt["alter"]} }, "base": g["base"], "dots": score_min(g["dots"], 1)} }}
+  end
   unless ev["tuplet"].nil?
     fresh["tup"] = {"g": ev["tuplet"]["id"], "n": ev["tuplet"]["n"], "d": ev["tuplet"]["d"]}
     state["tup_seq"] = score_max(state["tup_seq"] ?? 0, ev["tuplet"]["id"])
@@ -3395,8 +3500,8 @@ def score_ed_expression_panel(state)
     score_ed_pin_button(state, "<", "Crescendo", none),
     score_ed_pin_button(state, ">", "Diminuendo", none)
   ]
-  names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata"}
-  glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove"}
+  names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata", "trill": "Trill"}
+  glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove", "trill": "ornamentTrill"}
   artics = SCORE_ED_ARTICS.map { |name| score_ed_glyph_button("artic:" + name, "artic", {"name": name}, score_ed_centred_icon(glyphs[name]), !none && (current["scripts"] ?? []).any? { |sc| sc["name"] == name }, "", names[name]) }
   side = score_ed_words_side(state)
   side_name = side < 0 ? "Above" : "Below"
@@ -3701,6 +3806,13 @@ def score_ed_palette(state, body_h)
     score_ed_slur_button(state, no_note),
     score_ed_tool("Triplet", "tuplet", {"n": 3}, current.nil?, "Ctrl+3"),
     score_ed_tool("Sextuplet", "tuplet", {"n": 6}, current.nil?, "Ctrl+6")
+  ]))
+  armed_trill = (state["trill_from"] ?? -1) >= 0
+  groups.push(score_ed_rail_group("Ornaments", inner_w, [
+    score_ed_tool("Acciaccatura", "grace", {"kind": "acciaccatura"}, no_note, nil),
+    score_ed_tool("Appoggiatura", "grace", {"kind": "appoggiatura"}, no_note, nil),
+    score_ed_tool(armed_trill ? "Trill line ●" : "Trill line", "trill_line", {}, no_note && !armed_trill, nil),
+    score_ed_tool("Glissando", "glissando", {}, no_note, nil)
   ]))
   groups.push(score_ed_rail_group("Add a note", inner_w, pitches))
   groups.push(score_ed_rail_group("Change the note", inner_w, [

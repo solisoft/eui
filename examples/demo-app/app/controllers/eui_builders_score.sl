@@ -25,8 +25,8 @@
 # and reach the middle line, beam ends are quanted so they sit, straddle or
 # hang on a staff line, and a slur's height is `height-limit · 2/π ·
 # atan(π/2 · ratio / height-limit · width)`. What LilyPond does that this
-# does not: grace notes, cross-staff anything, more than one verse of
-# lyrics, and a page breaker better than greedy.
+# does not: cross-staff anything, more than one verse of lyrics, grace
+# notes in a second voice, and a page breaker better than greedy.
 #
 # Every length below is in staff spaces, y down, the top staff line at 0
 # and the bottom one at 4. A staff position counts half spaces up from the
@@ -45,7 +45,8 @@ const SCORE_SCRIPTS = {
   "marcato": {"up": "articMarcatoAbove", "down": "articMarcatoBelow", "pad": 0.2, "prio": 0, "side": 0, "quant": true},
   "staccatissimo": {"up": "articStaccatissimoAbove", "down": "articStaccatissimoBelow", "pad": 0.2, "prio": 0, "side": 0, "quant": false},
   "portato": {"up": "articTenutoStaccatoAbove", "down": "articTenutoStaccatoBelow", "pad": 0.45, "prio": 0, "side": 0, "quant": false},
-  "fermata": {"up": "fermataAbove", "down": "fermataBelow", "pad": 0.4, "prio": 4000, "side": -1, "quant": false}
+  "fermata": {"up": "fermataAbove", "down": "fermataBelow", "pad": 0.4, "prio": 4000, "side": -1, "quant": false},
+  "trill": {"up": "ornamentTrill", "down": "ornamentTrill", "pad": 0.4, "prio": 2000, "side": -1, "quant": false}
 }
 
 # The thicknesses, LilyPond's defaults at its staff size 20, in staff
@@ -945,6 +946,7 @@ def score_staff(toks, i, base, staves, props)
   braced = i < toks.length && toks[i]["t"] == "{"
   i += 1 if braced
   i = score_music(toks, i, st)
+  score_refuse("grace notes with no note after them", st["grace"]["at"]) unless st["grace"].nil?
   if braced
     score_refuse("a '{' that is never closed", 0) if i >= toks.length || toks[i]["t"] != "}"
     i += 1
@@ -1161,6 +1163,20 @@ def score_command(toks, i, st)
     score_add_script(score_last_note(evs, tk), word, 0)
     return i + 1
   end
+  # A trill with a wavy line to where it stops, and a glissando to the next
+  # note: on the note they follow.
+  if word == "startTrillSpan"
+    score_last_note(evs, tk)["trill_start"] = true
+    return i + 1
+  end
+  if word == "stopTrillSpan"
+    score_last_item(evs, tk)["trill_stop"] = true
+    return i + 1
+  end
+  if word == "glissando"
+    score_last_note(evs, tk)["gliss"] = true
+    return i + 1
+  end
   # A line or a page that must end at the next bar line, as the engraver
   # would not have ended it.
   if word == "break" || word == "pageBreak"
@@ -1196,7 +1212,53 @@ def score_command(toks, i, st)
     score_refuse("a \\compressMMRests block that is never closed", tk["at"]) if i >= toks.length || toks[i]["t"] != "}"
     return i + 1
   end
+  return score_graces(toks, i, st, word) if ["grace", "acciaccatura", "appoggiatura"].includes?(word)
+
   score_refuse("\\#{word} is not a command this reads", tk["at"])
+end
+
+# ---- Grace notes -------------------------------------------------------------
+#
+# `\\grace`, `\\acciaccatura` and `\\appoggiatura`, before a note: a note or
+# a `{ … }` of them, read as notes are — `\\relative`'s octave and the
+# duration go on through them, as LilyPond reads them — that take no time
+# in the bar and no number among the items. They belong to the note after
+# them and are drawn small (font size -3, 0.7) to its left, stems up,
+# several under one beam; an acciaccatura's stem is slashed, and both it
+# and an appoggiatura are slurred to the note. Played, they take their time
+# from the note: an acciaccatura or a grace a quarter of it at most, an
+# appoggiatura half.
+
+def score_grace_k()
+  0.7
+end
+
+def score_graces(toks, i, st, kind)
+  at = toks[i]["at"]
+  score_refuse("grace notes in a second voice are not drawn", at) if st["voice"] == 2
+  score_refuse("a grace note before a grace note: write them in one { block }", at) unless st["grace"].nil?
+  i += 1
+  score_refuse("\\#{kind} wants a note or a { block } of notes", at) if i >= toks.length
+  saved = {"events": st["events"], "items": st["items"], "notes": st["notes"], "tuplet": st["tuplet"]}
+  st["events"] = []
+  st["tuplet"] = nil
+  if toks[i]["t"] == "{"
+    i = score_music(toks, i + 1, st)
+    score_refuse("a { block } of grace notes that is never closed", at) if i >= toks.length || toks[i]["t"] != "}"
+    i += 1
+  elsif toks[i]["t"] == "word" || toks[i]["t"] == "<"
+    i = score_note(toks, i, st)
+  else
+    score_refuse("\\#{kind} wants a note or a { block } of notes", at)
+  end
+  got = st["events"]
+  st["events"] = saved["events"]
+  st["items"] = saved["items"]
+  st["notes"] = saved["notes"]
+  st["tuplet"] = saved["tuplet"]
+  score_refuse("a grace is notes: no rest, no command in it", at) if got.length == 0 || got.any? { |ev| ev["k"] != "note" }
+  st["grace"] = {"kind": kind, "at": at, "notes": got.map { |ev| {"pitches": ev["pitches"], "base": ev["base"], "dots": ev["dots"], "ticks": ev["ticks"]} }}
+  i
 end
 
 # `\repeat volta 2 { … }`: a start repeat, the music, and an end repeat —
@@ -1395,6 +1457,11 @@ def score_note(toks, i, st)
     tup["used"] = tup["used"] + ev["ticks"]
   end
   st["items"] = st["items"] + 1
+  unless st["grace"].nil?
+    score_refuse("grace notes go before a note, not a rest", st["grace"]["at"]) unless rest.nil?
+    ev["graces"] = st["grace"]
+    st["grace"] = nil
+  end
   if rest.nil?
     ev["n"] = st["notes"]
     st["notes"] = st["notes"] + 1
@@ -1599,6 +1666,7 @@ def score_measures(events)
     end
     if kind == "note"
       mid = score_clef_mid(clef)
+      score_grace_heads(ev, mid, alters, seen)
       heads = []
       for p in ev["pitches"]
         d = p["d"]
@@ -1706,6 +1774,26 @@ def score_voice_two(bars, ev, poly)
   end
   bar["items"].push(ev)
   poly["at"] = at + ev["ticks"]
+end
+
+# A note's grace notes' heads, under the clef and key it is under; their
+# accidentals count in the bar, before the note's.
+def score_grace_heads(ev, mid, alters, seen)
+  return nil if ev["graces"].nil?
+
+  for g in ev["graces"]["notes"]
+    heads = []
+    for p in g["pitches"]
+      d = p["d"]
+      key = str(d)
+      now = seen.has_key(key) ? seen[key] : alters[score_mod(d, 7)]
+      show = p["alter"] != now
+      seen[key] = p["alter"]
+      heads.push({"pos": d - mid, "d": d, "alter": p["alter"], "acc": show ? p["alter"] : nil})
+    end
+    g["heads"] = heads.sort_by { |hd| hd["pos"] }
+  end
+  nil
 end
 
 # ---- Stems and beams -------------------------------------------------------
@@ -1956,10 +2044,56 @@ def score_columns(bars, shortest)
       shifted = ev["heads"].any? { |hd| hd["side"] == -1 }
       lefts = shifted ? hw - SCORE_RULE["stem"] : 0.0
       ev["left"] = lefts + score_place_accidentals(ev)
+      score_grace_room(ev)
       score_lyric_room(ev)
     end
     score_poly_cols(bar, shortest) if bar["poly"] == true
   end
+end
+
+# Where a note's grace notes stand: left to right, each its accidental's
+# room then its head, half a space apart, the last's flag beside it when it
+# is alone, and 0.3 more before what the note itself reaches left. Each one's
+# `dx` is from the note's head; the note reaches left past them all. Their
+# top (the stems' ends) and bottom (the slur under them) are kept for the
+# note's extent.
+def score_grace_room(ev)
+  gr = ev["graces"]
+  return nil if gr.nil?
+
+  k = score_grace_k()
+  notes = gr["notes"]
+  beamed = notes.length > 1 && notes.all? { |g| score_flags(g["base"]) > 0 }
+  x = 0.0
+  places = []
+  for g in notes
+    hw = score_glyph(score_head_name(g["base"]))["advance"] * k
+    acc_w = 0.0
+    for hd in g["heads"]
+      acc_w = score_max(acc_w, score_glyph(score_acc_name(hd["acc"]))["advance"] * k + 0.15) unless hd["acc"].nil?
+    end
+    x += acc_w
+    places.push([x, hw])
+    x += hw + 0.5
+  end
+  last = notes[-1]
+  if !beamed && score_flags(last["base"]) > 0
+    x += score_glyph(score_flag_name(last["base"], true))["advance"] * k - SCORE_RULE["stem"] * k
+  end
+  x += 0.3
+  offset = ev["left"] + x
+  top = 0.0
+  bottom = 4.0
+  for g, j in notes
+    g["dx"] = places[j][0] - offset
+    g["hw"] = places[j][1]
+    top = score_min(top, score_y(g["heads"][-1]["pos"]) - 2.5)
+    bottom = score_max(bottom, score_y(g["heads"][0]["pos"]) + (gr["kind"] == "grace" ? 0.5 : 1.3))
+  end
+  ev["grace_top"] = top - (beamed ? 0.34 : 0.0)
+  ev["grace_bottom"] = bottom
+  ev["left"] = offset
+  nil
 end
 
 # ---- Lyrics ----------------------------------------------------------------
@@ -2668,11 +2802,14 @@ end
 # start of a system they stand where the key and time do.
 def score_marks(systems)
   score_hairpins(systems)
+  score_trill_spans(systems)
+  score_glissandi(systems)
   for sys in systems
     # Brackets over repeat endings go over the top staff only.
     sys["voltas"] = (sys["staff_index"] ?? 0) == 0 ? score_voltas(sys) : []
     sys["tuplets"] = score_tuplets(sys)
     score_scripts(sys)
+    score_trill_place(sys)
     score_dynamics(sys)
     score_texts(sys)
     score_lyric_line(sys)
@@ -2831,7 +2968,11 @@ end
 def score_item_extent(ev)
   return [1.0 + score_rest_lift(ev), 3.0 + score_rest_lift(ev)] if ev["k"] != "note"
 
-  [score_tuplet_edge(ev, true), score_tuplet_edge(ev, false)]
+  hi = score_tuplet_edge(ev, true)
+  lo = score_tuplet_edge(ev, false)
+  return [hi, lo] if ev["graces"].nil?
+
+  [score_min(hi, ev["grace_top"]), score_max(lo, ev["grace_bottom"])]
 end
 
 def score_item_w(ev)
@@ -2971,6 +3112,127 @@ def score_hairpins(systems)
       sys["hairpins"].push({"x0": a, "x1": score_max(b, a + 2.0), "grow": grow, "from": ka, "to": kb})
     end
   end
+end
+
+# ---- Trills and glissandi ---------------------------------------------------
+#
+# `\\startTrillSpan` … `\\stopTrillSpan`: a "tr" over the note it starts on,
+# and a wavy line from it to the end of the note it stops on — to the end
+# of the line where it goes on, and from the start of the next without the
+# "tr", as LilyPond breaks it. One with no stop runs to the piece's end.
+# `\\glissando`: a straight line from a note's head to the next note's, at
+# their heads' heights; to the end of the line when the next note is on
+# the next one.
+
+def score_trill_spans(systems)
+  flat = []
+  for sys, si in systems
+    sys["trills"] = []
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        flat.push({"ev": ev, "sys": si}) if ev["voice"] != 2
+      end
+    end
+  end
+  for at, k in flat
+    next unless at["ev"]["trill_start"] == true
+
+    stop = flat.length - 1
+    jj = k + 1
+    while jj < flat.length
+      if flat[jj]["ev"]["trill_stop"] == true
+        stop = jj
+        break
+      end
+      jj += 1
+    end
+    start_ev = at["ev"]
+    end_ev = flat[stop]["ev"]
+    xc = start_ev["x"] + score_item_w(start_ev) / 2.0
+    x1 = end_ev["x"] + score_item_w(end_ev)
+    first = at["sys"]
+    last = flat[stop]["sys"]
+    for si in range(first, last + 1)
+      sys = systems[si]
+      a = si == first ? xc : sys["prefix"]
+      b = si == last ? x1 : sys["right"] - 0.3
+      sys["trills"].push({"x0": a, "x1": score_max(b, a + 1.0), "tr": si == first, "y": 0.0})
+    end
+  end
+  nil
+end
+
+# A trill span's line over what the notes under it reach, scripts included,
+# and never nearer the staff than a space over its top line.
+def score_trill_place(sys)
+  for tr in sys["trills"]
+    lo = tr["tr"] ? tr["x0"] - 1.3 : tr["x0"]
+    edge = -1.0
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        next if ev["x"] + score_item_w(ev) < lo || ev["x"] > tr["x1"]
+
+        edge = score_min(edge, ev["reach_up"] ?? 0.0)
+      end
+    end
+    tr["y"] = edge - 0.45
+  end
+  nil
+end
+
+def score_glissandi(systems)
+  flat = []
+  for sys, si in systems
+    sys["glisses"] = []
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        flat.push({"ev": ev, "sys": si}) if ev["k"] == "note" && ev["voice"] != 2
+      end
+    end
+  end
+  for at, k in flat
+    ev = at["ev"]
+    next unless ev["gliss"] == true && k + 1 < flat.length
+
+    nxt = flat[k + 1]["ev"]
+    sys = systems[at["sys"]]
+    x0 = ev["x"] + score_item_w(ev) + 0.3
+    y0 = score_y(ev["heads"][0]["pos"])
+    y_next = score_y(nxt["heads"][0]["pos"])
+    if flat[k + 1]["sys"] == at["sys"]
+      lefts = nxt["heads"].any? { |hd| !hd["acc"].nil? } ? 1.0 : 0.0
+      x1 = nxt["x"] - 0.3 - lefts
+      sys["glisses"].push({"x0": x0, "y0": y0, "x1": score_max(x1, x0 + 0.5), "y1": y_next})
+    else
+      sys["glisses"].push({"x0": x0, "y0": y0, "x1": score_max(sys["right"] - 0.5, x0 + 0.5), "y1": (y0 + y_next) / 2.0})
+    end
+  end
+  nil
+end
+
+def score_draw_trills(paths, ink, sys, top, sp)
+  wig = score_glyph("wiggleTrill")
+  for tr in sys["trills"] ?? []
+    y = top + tr["y"]
+    x = tr["x0"]
+    if tr["tr"]
+      score_draw_glyph(paths, ink, "ornamentTrill", x, y, sp)
+      x += score_glyph("ornamentTrill")["bbox"][2] + 0.25
+    end
+    while x + wig["advance"] <= tr["x1"]
+      score_draw_glyph(paths, ink, "wiggleTrill", x, y - 0.66, sp)
+      x += wig["advance"]
+    end
+  end
+  nil
+end
+
+def score_draw_glisses(paths, ink, sys, top, sp)
+  for gl in sys["glisses"] ?? []
+    t = 0.06
+    paths.push(score_fill(ink, [0, gl["x0"], top + gl["y0"] - t, 1, gl["x1"], top + gl["y1"] - t, 1, gl["x1"], top + gl["y1"] + t, 1, gl["x0"], top + gl["y0"] + t, 4], 0.0, 0.0, sp))
+  end
+  nil
 end
 
 def score_dyn_letters(dyn)
@@ -3231,6 +3493,13 @@ def score_reach(sys)
     hi = score_min(hi, -2.6) if bar["items"].length > 0 && !bar["items"][0]["mm"].nil?
   end
   lo = score_max(lo, sys["lyric_y"] + 0.25 * score_em(0.0) + 0.6) if sys.has_key("lyric_y")
+  for tr in sys["trills"] ?? []
+    hi = score_min(hi, tr["y"] - (tr["tr"] ? 2.4 : 1.1))
+  end
+  for gl in sys["glisses"] ?? []
+    hi = score_min(hi, score_min(gl["y0"], gl["y1"]) - 0.2)
+    lo = score_max(lo, score_max(gl["y0"], gl["y1"]) + 0.2)
+  end
   for c in sys["curves"]
     i = 0
     while i < c.length
@@ -3775,7 +4044,46 @@ def score_midi_track(bars, opts, program, name, channel, first_track)
       length = span / 2 if names.includes?("staccato")
       length = span / 8 if names.includes?("staccatissimo")
       length = span * 3 / 4 if names.includes?("portato")
-      for hd in ev["heads"]
+      # Grace notes take their time from the note: an appoggiatura half of
+      # it, an acciaccatura or a grace a quarter at most, each its own share
+      # and no longer than it is written.
+      unless ev["graces"].nil?
+        gr = ev["graces"]
+        n = gr["notes"].length
+        share = gr["kind"] == "appoggiatura" ? span / (2 * n) : span / (4 * n)
+        for g in gr["notes"]
+          piece = score_min(share, g["ticks"])
+          piece = share if gr["kind"] == "appoggiatura"
+          for hd in g["heads"]
+            gkey = score_midi_key(hd["d"], hd["alter"])
+            ev_out.push([t0, 1, [144 + channel, gkey, vel]])
+            ev_out.push([t0 + piece, 0, [128 + channel, gkey, 64]])
+          end
+          t0 += piece
+          length = score_max(length - piece, 1)
+        end
+      end
+      # A trill — `\\trill`, or a trill span's first note — alternates its
+      # top head with the step above it in the key, a thirty-second each,
+      # as `articulate.ly` plays one.
+      trilled = ev["trill_start"] == true || names.includes?("trill")
+      if trilled && length >= 2 * (score_whole() / 32)
+        top_hd = ev["heads"][-1]
+        step = score_whole() / 32
+        upper_d = top_hd["d"] + 1
+        upper = score_midi_key(upper_d, score_key_alters(bar["fifths"])[score_mod(upper_d, 7)])
+        main_key = score_midi_key(top_hd["d"], top_hd["alter"])
+        count = length / step
+        for q in range(0, count)
+          qkey = q % 2 == 0 ? main_key : upper
+          q_end = q + 1 == count ? t0 + length : t0 + (q + 1) * step
+          ev_out.push([t0 + q * step, 1, [144 + channel, qkey, vel]])
+          ev_out.push([q_end, 0, [128 + channel, qkey, 64]])
+        end
+      end
+      for hd, hi in ev["heads"]
+        next if trilled && length >= 2 * (score_whole() / 32) && hi == ev["heads"].length - 1
+
         key = score_midi_key(hd["d"], hd["alter"])
         held = sounding[str(key)]
         # A tie carries the sounding note on: no new attack, a later end.
@@ -4565,6 +4873,8 @@ def score_draw_system(paths, sys, sp, ink, ranges)
   for tx in sys["texts"] ?? []
     score_draw_text(paths, ink, tx["text"], "regular", tx["x0"], top + tx["y"], score_em(0.0), sp)
   end
+  score_draw_trills(paths, ink, sys, top, sp)
+  score_draw_glisses(paths, ink, sys, top, sp)
   score_draw_lyrics(paths, ink, sys, top, sp) if sys.has_key("lyric_y")
   score_draw_courtesy(paths, ink, sys, top, sp) if (sys["courtesy"] ?? 0.0) > 0.0
 end
@@ -4927,6 +5237,7 @@ def score_draw_rest(paths, ink, ev, top, sp)
 end
 
 def score_draw_note(paths, ink, ev, top, sp)
+  score_draw_graces(paths, ink, ev, top, sp) unless ev["graces"].nil?
   head_name = score_head_name(ev["base"])
   hw = ev["head_w"]
   # Ledger lines, a little wider than the heads they carry.
@@ -4997,6 +5308,98 @@ def score_draw_note(paths, ink, ev, top, sp)
     anchor = score_glyph(flag)["anchors"][ev["up"] ? "stemUpNW" : "stemDownSW"]
     score_draw_glyph(paths, ink, flag, sx - anchor[0], tip - anchor[1], sp)
   end
+end
+
+# A note's grace notes, at 0.7: ledger lines, heads and accidentals; stems
+# up, 2.5 spaces from the top head, a flag on one alone and a flat beam over
+# several; an acciaccatura's first stem slashed; and an acciaccatura's or an
+# appoggiatura's slur, under the heads, from the last of them to the note.
+def score_draw_graces(paths, ink, ev, top, sp)
+  gr = ev["graces"]
+  k = score_grace_k()
+  notes = gr["notes"]
+  beamed = notes.length > 1 && notes.all? { |g| score_flags(g["base"]) > 0 }
+  stem_w = SCORE_RULE["stem"] * k
+  lt = SCORE_RULE["ledger"] * k
+  flat = 0.0
+  for g in notes
+    flat = score_min(flat, score_y(g["heads"][-1]["pos"]) - 2.5)
+  end
+  stems = []
+  for g in notes
+    gx = ev["x"] + g["dx"]
+    hw = g["hw"]
+    head = score_glyph(score_head_name(g["base"]))
+    hi = g["heads"][-1]["pos"]
+    lo = g["heads"][0]["pos"]
+    pos = 6
+    while pos <= hi
+      paths.push(score_rect(ink, gx - hw * 0.25, top + score_y(pos) - lt / 2.0, hw * 1.5, lt, sp))
+      pos += 2
+    end
+    pos = -6
+    while pos >= lo
+      paths.push(score_rect(ink, gx - hw * 0.25, top + score_y(pos) - lt / 2.0, hw * 1.5, lt, sp))
+      pos -= 2
+    end
+    for hd in g["heads"]
+      y = top + score_y(hd["pos"])
+      paths.push(score_fill_k(ink, head["fill"], gx, y, k, sp))
+      unless hd["acc"].nil?
+        acc = score_glyph(score_acc_name(hd["acc"]))
+        paths.push(score_fill_k(ink, acc["fill"], gx - acc["advance"] * k - 0.15, y, k, sp))
+      end
+    end
+    next if g["base"] == 1
+
+    sx = gx + hw - stem_w
+    root = top + score_y(lo) + head["anchors"]["stemUpSE"][1] * k
+    tip = top + (beamed ? flat : score_y(hi) - 2.5)
+    paths.push(score_rect(ink, sx, tip, stem_w, root - tip, sp))
+    stems.push([sx, tip])
+    if !beamed && score_flags(g["base"]) > 0
+      flag = score_glyph(score_flag_name(g["base"], true))
+      anchor = flag["anchors"]["stemUpNW"]
+      paths.push(score_fill_k(ink, flag["fill"], sx - anchor[0] * k, tip - anchor[1] * k, k, sp))
+    end
+  end
+  if beamed && stems.length > 1
+    levels = notes.map { |g| score_flags(g["base"]) }.reduce(fn(acc, n) score_min(acc, n), 9)
+    x0 = stems[0][0]
+    x1 = stems[-1][0] + stem_w
+    for level in 0..levels
+      paths.push(score_rect(ink, x0, top + flat + level * SCORE_RULE["beam_step"] * k, x1 - x0, SCORE_RULE["beam"] * k, sp))
+    end
+  end
+  if gr["kind"] == "acciaccatura" && stems.length > 0
+    sx = stems[0][0]
+    tip = stems[0][1]
+    ax = sx - 0.55
+    ay = tip + 1.5
+    bx = sx + 0.75
+    by = tip + 0.45
+    paths.push(score_fill(ink, [0, ax, ay, 1, bx, by, 1, bx, by + 0.12, 1, ax, ay + 0.12, 4], 0.0, 0.0, sp))
+  end
+  return nil if gr["kind"] == "grace"
+
+  last = notes[-1]
+  xa = ev["x"] + last["dx"] + last["hw"] * 0.5
+  ya = top + score_y(last["heads"][0]["pos"]) + 0.55
+  xb = ev["x"] + ev["head_w"] * 0.4
+  yb = top + score_y(ev["heads"][0]["pos"]) + 0.55
+  w = xb - xa
+  return nil if w <= 0.0
+
+  hgt = 0.35
+  inset = w * 0.25
+  c_out = (hgt + 0.07) * 4.0 / 3.0
+  c_in = (hgt - 0.07) * 4.0 / 3.0
+  paths.push(score_fill(ink, [0, xa, ya + 0.03,
+    3, xa + inset, ya + c_out, xb - inset, yb + c_out, xb, yb + 0.03,
+    1, xb, yb - 0.03,
+    3, xb - inset, yb + c_in, xa + inset, ya + c_in, xa, ya - 0.03,
+    4], 0.0, 0.0, sp))
+  nil
 end
 
 # The beams of a group: the outermost through every stem, each inner one

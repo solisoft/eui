@@ -39,7 +39,8 @@ const SCORE_SCRIPTS = {
   "marcato": {"up": "articMarcatoAbove", "down": "articMarcatoBelow", "pad": 0.2, "prio": 0, "side": 0, "quant": true},
   "staccatissimo": {"up": "articStaccatissimoAbove", "down": "articStaccatissimoBelow", "pad": 0.2, "prio": 0, "side": 0, "quant": false},
   "portato": {"up": "articTenutoStaccatoAbove", "down": "articTenutoStaccatoBelow", "pad": 0.45, "prio": 0, "side": 0, "quant": false},
-  "fermata": {"up": "fermataAbove", "down": "fermataBelow", "pad": 0.4, "prio": 4000, "side": -1, "quant": false}
+  "fermata": {"up": "fermataAbove", "down": "fermataBelow", "pad": 0.4, "prio": 4000, "side": -1, "quant": false},
+  "trill": {"up": "ornamentTrill", "down": "ornamentTrill", "pad": 0.4, "prio": 2000, "side": -1, "quant": false}
 }
 const SCORE_RULE = {
   "staff": 0.1,
@@ -67,7 +68,7 @@ const SCORE_ED_GROUPS = ["Bracket", "Brace", "None"]
 const SCORE_ED_INSTRUMENTS = ["acoustic grand", "electric piano 1", "harpsichord", "celesta", "vibraphone", "marimba", "church organ", "accordion", "acoustic guitar (nylon)", "acoustic bass", "violin", "viola", "cello", "contrabass", "string ensemble 1", "harp", "choir aahs", "trumpet", "trombone", "tuba", "french horn", "soprano sax", "alto sax", "oboe", "english horn", "bassoon", "clarinet", "piccolo", "flute", "recorder", "timpani"]
 const SCORE_ED_PANS = ["Left", "Half left", "Centre", "Half right", "Right"]
 const SCORE_ED_DYNAMICS = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz", "fp"]
-const SCORE_ED_ARTICS = ["staccato", "accent", "tenuto", "marcato", "staccatissimo", "portato", "fermata"]
+const SCORE_ED_ARTICS = ["staccato", "accent", "tenuto", "marcato", "staccatissimo", "portato", "fermata", "trill"]
 const SCORE_ED_HEADER = ["title", "subtitle", "composer", "arranger"]
 const SCORE_ED_KEYS = ["C♭", "G♭", "D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯"]
 const SCORE_ED_KEY_LY = ["ces", "ges", "des", "as", "es", "bes", "f", "c", "g", "d", "a", "e", "b", "fis", "cis"]
@@ -140,6 +141,8 @@ def smufl_glyph_table()
     "articTenutoStaccatoBelow": {"advance": 0.6, "bbox": [-0.6, -0.82, 0.6, 0.072], "anchors": {}, "fill": [0, -0.16, -0.66, 3, -0.16, -0.572, -0.088, -0.5, 0, -0.5, 3, 0.088, -0.5, 0.16, -0.572, 0.16, -0.66, 3, 0.16, -0.748, 0.088, -0.82, 0, -0.82, 3, -0.088, -0.82, -0.16, -0.748, -0.16, -0.66, 4, 0, 0.528, 0.072, 3, 0.568, 0.072, 0.6, 0.04, 0.6, 0, 3, 0.6, -0.04, 0.568, -0.072, 0.528, -0.072, 1, -0.528, -0.072, 3, -0.568, -0.072, -0.6, -0.04, -0.6, 0, 3, -0.6, 0.04, -0.568, 0.072, -0.528, 0.072, 4]},
     "fermataAbove": {"advance": 1.324, "bbox": [-1.328, -1.452, 1.328, 0.076], "anchors": {}, "fill": [0, -0.268, -0.192, 3, -0.268, -0.044, -0.148, 0.076, 0, 0.076, 3, 0.148, 0.076, 0.268, -0.044, 0.268, -0.192, 3, 0.268, -0.34, 0.148, -0.46, 0, -0.46, 3, -0.148, -0.46, -0.268, -0.34, -0.268, -0.192, 4, 0, 0, -1.452, 3, -0.628, -1.452, -1.328, -0.748, -1.328, 0.012, 3, -1.328, 0.048, -1.288, 0.072, -1.252, 0.072, 3, -1.216, 0.072, -1.184, 0.052, -1.176, 0, 3, -1.072, -0.592, -0.592, -1.048, 0, -1.048, 3, 0.592, -1.048, 1.072, -0.592, 1.176, 0, 3, 1.184, 0.052, 1.216, 0.072, 1.252, 0.072, 3, 1.288, 0.072, 1.328, 0.048, 1.328, 0.012, 3, 1.328, -0.748, 0.628, -1.452, 0, -1.452, 4]},
     "fermataBelow": {"advance": 1.324, "bbox": [-1.328, -0.076, 1.328, 1.452], "anchors": {}, "fill": [0, -0.268, 0.192, 3, -0.268, 0.34, -0.148, 0.46, 0, 0.46, 3, 0.148, 0.46, 0.268, 0.34, 0.268, 0.192, 3, 0.268, 0.044, 0.148, -0.076, 0, -0.076, 3, -0.148, -0.076, -0.268, 0.044, -0.268, 0.192, 4, 0, 0, 1.452, 3, 0.628, 1.452, 1.328, 0.748, 1.328, -0.012, 3, 1.328, -0.048, 1.288, -0.072, 1.252, -0.072, 3, 1.216, -0.072, 1.184, -0.052, 1.176, 0, 3, 1.072, 0.592, 0.592, 1.048, 0, 1.048, 3, -0.592, 1.048, -1.072, 0.592, -1.176, 0, 3, -1.184, -0.052, -1.216, -0.072, -1.252, -0.072, 3, -1.288, -0.072, -1.328, -0.048, -1.328, -0.012, 3, -1.328, 0.748, -0.628, 1.452, 0, 1.452, 4]},
+    "ornamentTrill": {"advance": 0.848, "bbox": [-1.288, -2.16, 1.108, 0.044], "anchors": {}, "fill": [0, -1.188, -0.908, 3, -1.188, -1.048, -1.052, -1.112, -0.924, -1.112, 3, -0.8, -1.112, -0.692, -1.064, -0.6, -0.996, 1, -0.62, -0.9, 3, -0.744, -0.844, -0.876, -0.788, -1.032, -0.788, 3, -1.12, -0.788, -1.188, -0.82, -1.188, -0.908, 4, 0, -0.104, -0.416, 3, -0.104, -0.584, -0.196, -0.728, -0.304, -0.852, 1, -0.276, -0.976, 1, 0.04, -1.152, 3, 0.072, -1.168, 0.108, -1.18, 0.136, -1.18, 3, 0.204, -1.18, 0.252, -1.14, 0.252, -1.076, 1, 0.252, -1.048, 1, 0.036, 0.032, 3, 0.092, 0.004, 0.152, -0.012, 0.208, -0.012, 3, 0.264, -0.012, 0.316, 0.004, 0.36, 0.032, 1, 0.576, -1.048, 3, 0.596, -1.156, 0.7, -1.22, 0.796, -1.22, 3, 0.856, -1.22, 0.916, -1.196, 0.948, -1.14, 1, 0.936, -1.14, 3, 0.812, -1.14, 0.696, -1.048, 0.696, -0.884, 3, 0.696, -0.78, 0.748, -0.692, 0.848, -0.692, 3, 1, -0.692, 1.108, -0.872, 1.108, -1.052, 3, 1.108, -1.24, 0.976, -1.328, 0.832, -1.328, 3, 0.732, -1.328, 0.628, -1.288, 0.556, -1.208, 3, 0.512, -1.28, 0.416, -1.32, 0.3, -1.32, 3, 0.208, -1.32, 0.108, -1.296, 0.004, -1.24, 1, -0.252, -1.096, 1, -0.04, -2.16, 3, -0.12, -2.084, -0.224, -2.02, -0.312, -2.02, 3, -0.34, -2.02, -0.368, -2.028, -0.392, -2.04, 1, -0.576, -1.112, 3, -0.672, -1.172, -0.78, -1.212, -0.904, -1.212, 3, -1.092, -1.212, -1.288, -1.096, -1.288, -0.892, 3, -1.288, -0.76, -1.188, -0.688, -1.048, -0.688, 3, -0.892, -0.688, -0.768, -0.736, -0.644, -0.788, 1, -0.704, -0.484, 3, -0.716, -0.432, -0.72, -0.376, -0.72, -0.32, 3, -0.72, -0.132, -0.652, 0.044, -0.496, 0.044, 3, -0.292, 0.044, -0.104, -0.172, -0.104, -0.416, 4, 0, -0.344, -0.156, 3, -0.388, -0.156, -0.404, -0.204, -0.404, -0.272, 3, -0.404, -0.38, -0.368, -0.532, -0.352, -0.604, 1, -0.332, -0.712, 3, -0.26, -0.62, -0.204, -0.52, -0.204, -0.4, 3, -0.204, -0.292, -0.252, -0.156, -0.344, -0.156, 4]},
+    "wiggleTrill": {"advance": 1, "bbox": [-0.224, -0.804, 1.224, 0.004], "anchors": {}, "fill": [0, -0.112, -0.168, 1, -0.012, -0.292, 3, 0.044, -0.34, 0.108, -0.36, 0.176, -0.36, 3, 0.252, -0.36, 0.332, -0.328, 0.388, -0.268, 3, 0.496, -0.152, 0.604, 0.004, 0.7, 0.004, 3, 0.728, 0.004, 0.756, -0.008, 0.78, -0.04, 1, 1.208, -0.552, 3, 1.22, -0.564, 1.224, -0.58, 1.224, -0.592, 3, 1.224, -0.628, 1.192, -0.656, 1.16, -0.656, 3, 1.144, -0.656, 1.124, -0.648, 1.112, -0.632, 1, 1.012, -0.508, 3, 0.956, -0.46, 0.892, -0.44, 0.824, -0.44, 3, 0.748, -0.44, 0.668, -0.472, 0.612, -0.532, 3, 0.504, -0.648, 0.396, -0.804, 0.3, -0.804, 3, 0.272, -0.804, 0.244, -0.792, 0.22, -0.76, 1, -0.208, -0.248, 3, -0.22, -0.236, -0.224, -0.22, -0.224, -0.208, 3, -0.224, -0.172, -0.192, -0.144, -0.16, -0.144, 3, -0.144, -0.144, -0.124, -0.152, -0.112, -0.168, 4]},
     "bracketTop": {"advance": 1.896, "bbox": [0, -1.332, 1.864, 0.224], "anchors": {}, "fill": [0, 1.8, -1.332, 3, 1.78, -1.332, 1.76, -1.32, 1.748, -1.304, 3, 1.384, -0.768, 0.936, -0.224, 0.3, -0.224, 1, 0.1, -0.224, 3, 0.044, -0.224, 0, -0.18, 0, -0.124, 1, 0, 0.224, 1, 0.3, 0.224, 3, 0.992, 0.224, 1.456, -0.656, 1.852, -1.232, 3, 1.86, -1.244, 1.864, -1.256, 1.864, -1.268, 3, 1.864, -1.3, 1.836, -1.332, 1.8, -1.332, 4]},
     "bracketBottom": {"advance": 1.896, "bbox": [0, -0.224, 1.864, 1.332], "anchors": {}, "fill": [0, 1.864, 1.268, 3, 1.864, 1.256, 1.86, 1.244, 1.852, 1.232, 3, 1.456, 0.656, 0.992, -0.224, 0.3, -0.224, 1, 0, -0.224, 1, 0, 0.124, 3, 0, 0.18, 0.044, 0.224, 0.1, 0.224, 1, 0.3, 0.224, 3, 0.936, 0.224, 1.384, 0.768, 1.748, 1.304, 3, 1.76, 1.32, 1.78, 1.332, 1.8, 1.332, 3, 1.836, 1.332, 1.864, 1.3, 1.864, 1.268, 4]},
     "brace100": {"advance": 0, "bbox": [-0.672, -3.792, 0.056, 3.792], "anchors": {}, "fill": [0, -0.552, 2.56, 3, -0.552, 3.04, -0.416, 3.496, -0.032, 3.776, 3, -0.024, 3.784, -0.008, 3.792, 0, 3.792, 3, 0.032, 3.792, 0.056, 3.768, 0.056, 3.736, 3, 0.056, 3.72, 0.048, 3.704, 0.032, 3.696, 3, -0.24, 3.496, -0.32, 3.208, -0.32, 2.88, 3, -0.32, 2.344, -0.088, 1.776, -0.088, 1.2, 3, -0.088, 0.728, -0.216, 0.288, -0.576, 0, 3, -0.216, -0.288, -0.088, -0.728, -0.088, -1.2, 3, -0.088, -1.776, -0.32, -2.344, -0.32, -2.88, 3, -0.32, -3.208, -0.24, -3.496, 0.032, -3.696, 3, 0.048, -3.704, 0.056, -3.72, 0.056, -3.736, 3, 0.056, -3.768, 0.032, -3.792, 0, -3.792, 3, -0.008, -3.792, -0.024, -3.784, -0.032, -3.776, 3, -0.416, -3.496, -0.552, -3.04, -0.552, -2.56, 3, -0.552, -1.968, -0.304, -1.392, -0.304, -0.84, 3, -0.304, -0.52, -0.392, -0.232, -0.656, -0.032, 3, -0.664, -0.024, -0.672, -0.008, -0.672, 0, 3, -0.672, 0.008, -0.664, 0.024, -0.656, 0.032, 3, -0.392, 0.232, -0.304, 0.52, -0.304, 0.84, 3, -0.304, 1.392, -0.552, 1.968, -0.552, 2.56, 4]},
@@ -1241,6 +1244,7 @@ def score_staff(toks, i, base, staves, props)
   braced = i < toks.length && toks[i]["t"] == "{"
   i += 1 if braced
   i = score_music(toks, i, st)
+  score_refuse("grace notes with no note after them", st["grace"]["at"]) unless st["grace"].nil?
   if braced
     score_refuse("a '{' that is never closed", 0) if i >= toks.length || toks[i]["t"] != "}"
     i += 1
@@ -1442,6 +1446,20 @@ def score_command(toks, i, st)
     score_add_script(score_last_note(evs, tk), word, 0)
     return i + 1
   end
+  # A trill with a wavy line to where it stops, and a glissando to the next
+  # note: on the note they follow.
+  if word == "startTrillSpan"
+    score_last_note(evs, tk)["trill_start"] = true
+    return i + 1
+  end
+  if word == "stopTrillSpan"
+    score_last_item(evs, tk)["trill_stop"] = true
+    return i + 1
+  end
+  if word == "glissando"
+    score_last_note(evs, tk)["gliss"] = true
+    return i + 1
+  end
   # A line or a page that must end at the next bar line, as the engraver
   # would not have ended it.
   if word == "break" || word == "pageBreak"
@@ -1477,7 +1495,41 @@ def score_command(toks, i, st)
     score_refuse("a \\compressMMRests block that is never closed", tk["at"]) if i >= toks.length || toks[i]["t"] != "}"
     return i + 1
   end
+  return score_graces(toks, i, st, word) if ["grace", "acciaccatura", "appoggiatura"].includes?(word)
+
   score_refuse("\\#{word} is not a command this reads", tk["at"])
+end
+
+def score_grace_k()
+  0.7
+end
+
+def score_graces(toks, i, st, kind)
+  at = toks[i]["at"]
+  score_refuse("grace notes in a second voice are not drawn", at) if st["voice"] == 2
+  score_refuse("a grace note before a grace note: write them in one { block }", at) unless st["grace"].nil?
+  i += 1
+  score_refuse("\\#{kind} wants a note or a { block } of notes", at) if i >= toks.length
+  saved = {"events": st["events"], "items": st["items"], "notes": st["notes"], "tuplet": st["tuplet"]}
+  st["events"] = []
+  st["tuplet"] = nil
+  if toks[i]["t"] == "{"
+    i = score_music(toks, i + 1, st)
+    score_refuse("a { block } of grace notes that is never closed", at) if i >= toks.length || toks[i]["t"] != "}"
+    i += 1
+  elsif toks[i]["t"] == "word" || toks[i]["t"] == "<"
+    i = score_note(toks, i, st)
+  else
+    score_refuse("\\#{kind} wants a note or a { block } of notes", at)
+  end
+  got = st["events"]
+  st["events"] = saved["events"]
+  st["items"] = saved["items"]
+  st["notes"] = saved["notes"]
+  st["tuplet"] = saved["tuplet"]
+  score_refuse("a grace is notes: no rest, no command in it", at) if got.length == 0 || got.any? { |ev| ev["k"] != "note" }
+  st["grace"] = {"kind": kind, "at": at, "notes": got.map { |ev| {"pitches": ev["pitches"], "base": ev["base"], "dots": ev["dots"], "ticks": ev["ticks"]} }}
+  i
 end
 
 def score_repeat(toks, i, st)
@@ -1664,6 +1716,11 @@ def score_note(toks, i, st)
     tup["used"] = tup["used"] + ev["ticks"]
   end
   st["items"] = st["items"] + 1
+  unless st["grace"].nil?
+    score_refuse("grace notes go before a note, not a rest", st["grace"]["at"]) unless rest.nil?
+    ev["graces"] = st["grace"]
+    st["grace"] = nil
+  end
   if rest.nil?
     ev["n"] = st["notes"]
     st["notes"] = st["notes"] + 1
@@ -1863,6 +1920,7 @@ def score_measures(events)
     end
     if kind == "note"
       mid = score_clef_mid(clef)
+      score_grace_heads(ev, mid, alters, seen)
       heads = []
       for p in ev["pitches"]
         d = p["d"]
@@ -1967,6 +2025,24 @@ def score_voice_two(bars, ev, poly)
   end
   bar["items"].push(ev)
   poly["at"] = at + ev["ticks"]
+end
+
+def score_grace_heads(ev, mid, alters, seen)
+  return nil if ev["graces"].nil?
+
+  for g in ev["graces"]["notes"]
+    heads = []
+    for p in g["pitches"]
+      d = p["d"]
+      key = str(d)
+      now = seen.has_key(key) ? seen[key] : alters[score_mod(d, 7)]
+      show = p["alter"] != now
+      seen[key] = p["alter"]
+      heads.push({"pos": d - mid, "d": d, "alter": p["alter"], "acc": show ? p["alter"] : nil})
+    end
+    g["heads"] = heads.sort_by { |hd| hd["pos"] }
+  end
+  nil
 end
 
 def score_flags(base)
@@ -2184,10 +2260,50 @@ def score_columns(bars, shortest)
       shifted = ev["heads"].any? { |hd| hd["side"] == -1 }
       lefts = shifted ? hw - SCORE_RULE["stem"] : 0.0
       ev["left"] = lefts + score_place_accidentals(ev)
+      score_grace_room(ev)
       score_lyric_room(ev)
     end
     score_poly_cols(bar, shortest) if bar["poly"] == true
   end
+end
+
+def score_grace_room(ev)
+  gr = ev["graces"]
+  return nil if gr.nil?
+
+  k = score_grace_k()
+  notes = gr["notes"]
+  beamed = notes.length > 1 && notes.all? { |g| score_flags(g["base"]) > 0 }
+  x = 0.0
+  places = []
+  for g in notes
+    hw = score_glyph(score_head_name(g["base"]))["advance"] * k
+    acc_w = 0.0
+    for hd in g["heads"]
+      acc_w = score_max(acc_w, score_glyph(score_acc_name(hd["acc"]))["advance"] * k + 0.15) unless hd["acc"].nil?
+    end
+    x += acc_w
+    places.push([x, hw])
+    x += hw + 0.5
+  end
+  last = notes[-1]
+  if !beamed && score_flags(last["base"]) > 0
+    x += score_glyph(score_flag_name(last["base"], true))["advance"] * k - SCORE_RULE["stem"] * k
+  end
+  x += 0.3
+  offset = ev["left"] + x
+  top = 0.0
+  bottom = 4.0
+  for g, j in notes
+    g["dx"] = places[j][0] - offset
+    g["hw"] = places[j][1]
+    top = score_min(top, score_y(g["heads"][-1]["pos"]) - 2.5)
+    bottom = score_max(bottom, score_y(g["heads"][0]["pos"]) + (gr["kind"] == "grace" ? 0.5 : 1.3))
+  end
+  ev["grace_top"] = top - (beamed ? 0.34 : 0.0)
+  ev["grace_bottom"] = bottom
+  ev["left"] = offset
+  nil
 end
 
 def score_lyrics_assign(bars, sylls)
@@ -2811,11 +2927,14 @@ end
 
 def score_marks(systems)
   score_hairpins(systems)
+  score_trill_spans(systems)
+  score_glissandi(systems)
   for sys in systems
     # Brackets over repeat endings go over the top staff only.
     sys["voltas"] = (sys["staff_index"] ?? 0) == 0 ? score_voltas(sys) : []
     sys["tuplets"] = score_tuplets(sys)
     score_scripts(sys)
+    score_trill_place(sys)
     score_dynamics(sys)
     score_texts(sys)
     score_lyric_line(sys)
@@ -2956,7 +3075,11 @@ end
 def score_item_extent(ev)
   return [1.0 + score_rest_lift(ev), 3.0 + score_rest_lift(ev)] if ev["k"] != "note"
 
-  [score_tuplet_edge(ev, true), score_tuplet_edge(ev, false)]
+  hi = score_tuplet_edge(ev, true)
+  lo = score_tuplet_edge(ev, false)
+  return [hi, lo] if ev["graces"].nil?
+
+  [score_min(hi, ev["grace_top"]), score_max(lo, ev["grace_bottom"])]
 end
 
 def score_item_w(ev)
@@ -3086,6 +3209,115 @@ def score_hairpins(systems)
       sys["hairpins"].push({"x0": a, "x1": score_max(b, a + 2.0), "grow": grow, "from": ka, "to": kb})
     end
   end
+end
+
+def score_trill_spans(systems)
+  flat = []
+  for sys, si in systems
+    sys["trills"] = []
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        flat.push({"ev": ev, "sys": si}) if ev["voice"] != 2
+      end
+    end
+  end
+  for at, k in flat
+    next unless at["ev"]["trill_start"] == true
+
+    stop = flat.length - 1
+    jj = k + 1
+    while jj < flat.length
+      if flat[jj]["ev"]["trill_stop"] == true
+        stop = jj
+        break
+      end
+      jj += 1
+    end
+    start_ev = at["ev"]
+    end_ev = flat[stop]["ev"]
+    xc = start_ev["x"] + score_item_w(start_ev) / 2.0
+    x1 = end_ev["x"] + score_item_w(end_ev)
+    first = at["sys"]
+    last = flat[stop]["sys"]
+    for si in range(first, last + 1)
+      sys = systems[si]
+      a = si == first ? xc : sys["prefix"]
+      b = si == last ? x1 : sys["right"] - 0.3
+      sys["trills"].push({"x0": a, "x1": score_max(b, a + 1.0), "tr": si == first, "y": 0.0})
+    end
+  end
+  nil
+end
+
+def score_trill_place(sys)
+  for tr in sys["trills"]
+    lo = tr["tr"] ? tr["x0"] - 1.3 : tr["x0"]
+    edge = -1.0
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        next if ev["x"] + score_item_w(ev) < lo || ev["x"] > tr["x1"]
+
+        edge = score_min(edge, ev["reach_up"] ?? 0.0)
+      end
+    end
+    tr["y"] = edge - 0.45
+  end
+  nil
+end
+
+def score_glissandi(systems)
+  flat = []
+  for sys, si in systems
+    sys["glisses"] = []
+    for bar in sys["bars"]
+      for ev in bar["items"]
+        flat.push({"ev": ev, "sys": si}) if ev["k"] == "note" && ev["voice"] != 2
+      end
+    end
+  end
+  for at, k in flat
+    ev = at["ev"]
+    next unless ev["gliss"] == true && k + 1 < flat.length
+
+    nxt = flat[k + 1]["ev"]
+    sys = systems[at["sys"]]
+    x0 = ev["x"] + score_item_w(ev) + 0.3
+    y0 = score_y(ev["heads"][0]["pos"])
+    y_next = score_y(nxt["heads"][0]["pos"])
+    if flat[k + 1]["sys"] == at["sys"]
+      lefts = nxt["heads"].any? { |hd| !hd["acc"].nil? } ? 1.0 : 0.0
+      x1 = nxt["x"] - 0.3 - lefts
+      sys["glisses"].push({"x0": x0, "y0": y0, "x1": score_max(x1, x0 + 0.5), "y1": y_next})
+    else
+      sys["glisses"].push({"x0": x0, "y0": y0, "x1": score_max(sys["right"] - 0.5, x0 + 0.5), "y1": (y0 + y_next) / 2.0})
+    end
+  end
+  nil
+end
+
+def score_draw_trills(paths, ink, sys, top, sp)
+  wig = score_glyph("wiggleTrill")
+  for tr in sys["trills"] ?? []
+    y = top + tr["y"]
+    x = tr["x0"]
+    if tr["tr"]
+      score_draw_glyph(paths, ink, "ornamentTrill", x, y, sp)
+      x += score_glyph("ornamentTrill")["bbox"][2] + 0.25
+    end
+    while x + wig["advance"] <= tr["x1"]
+      score_draw_glyph(paths, ink, "wiggleTrill", x, y - 0.66, sp)
+      x += wig["advance"]
+    end
+  end
+  nil
+end
+
+def score_draw_glisses(paths, ink, sys, top, sp)
+  for gl in sys["glisses"] ?? []
+    t = 0.06
+    paths.push(score_fill(ink, [0, gl["x0"], top + gl["y0"] - t, 1, gl["x1"], top + gl["y1"] - t, 1, gl["x1"], top + gl["y1"] + t, 1, gl["x0"], top + gl["y0"] + t, 4], 0.0, 0.0, sp))
+  end
+  nil
 end
 
 def score_dyn_letters(dyn)
@@ -3330,6 +3562,13 @@ def score_reach(sys)
     hi = score_min(hi, -2.6) if bar["items"].length > 0 && !bar["items"][0]["mm"].nil?
   end
   lo = score_max(lo, sys["lyric_y"] + 0.25 * score_em(0.0) + 0.6) if sys.has_key("lyric_y")
+  for tr in sys["trills"] ?? []
+    hi = score_min(hi, tr["y"] - (tr["tr"] ? 2.4 : 1.1))
+  end
+  for gl in sys["glisses"] ?? []
+    hi = score_min(hi, score_min(gl["y0"], gl["y1"]) - 0.2)
+    lo = score_max(lo, score_max(gl["y0"], gl["y1"]) + 0.2)
+  end
   for c in sys["curves"]
     i = 0
     while i < c.length
@@ -3821,7 +4060,46 @@ def score_midi_track(bars, opts, program, name, channel, first_track)
       length = span / 2 if names.includes?("staccato")
       length = span / 8 if names.includes?("staccatissimo")
       length = span * 3 / 4 if names.includes?("portato")
-      for hd in ev["heads"]
+      # Grace notes take their time from the note: an appoggiatura half of
+      # it, an acciaccatura or a grace a quarter at most, each its own share
+      # and no longer than it is written.
+      unless ev["graces"].nil?
+        gr = ev["graces"]
+        n = gr["notes"].length
+        share = gr["kind"] == "appoggiatura" ? span / (2 * n) : span / (4 * n)
+        for g in gr["notes"]
+          piece = score_min(share, g["ticks"])
+          piece = share if gr["kind"] == "appoggiatura"
+          for hd in g["heads"]
+            gkey = score_midi_key(hd["d"], hd["alter"])
+            ev_out.push([t0, 1, [144 + channel, gkey, vel]])
+            ev_out.push([t0 + piece, 0, [128 + channel, gkey, 64]])
+          end
+          t0 += piece
+          length = score_max(length - piece, 1)
+        end
+      end
+      # A trill — `\\trill`, or a trill span's first note — alternates its
+      # top head with the step above it in the key, a thirty-second each,
+      # as `articulate.ly` plays one.
+      trilled = ev["trill_start"] == true || names.includes?("trill")
+      if trilled && length >= 2 * (score_whole() / 32)
+        top_hd = ev["heads"][-1]
+        step = score_whole() / 32
+        upper_d = top_hd["d"] + 1
+        upper = score_midi_key(upper_d, score_key_alters(bar["fifths"])[score_mod(upper_d, 7)])
+        main_key = score_midi_key(top_hd["d"], top_hd["alter"])
+        count = length / step
+        for q in range(0, count)
+          qkey = q % 2 == 0 ? main_key : upper
+          q_end = q + 1 == count ? t0 + length : t0 + (q + 1) * step
+          ev_out.push([t0 + q * step, 1, [144 + channel, qkey, vel]])
+          ev_out.push([q_end, 0, [128 + channel, qkey, 64]])
+        end
+      end
+      for hd, hi in ev["heads"]
+        next if trilled && length >= 2 * (score_whole() / 32) && hi == ev["heads"].length - 1
+
         key = score_midi_key(hd["d"], hd["alter"])
         held = sounding[str(key)]
         # A tie carries the sounding note on: no new attack, a later end.
@@ -4516,6 +4794,8 @@ def score_draw_system(paths, sys, sp, ink, ranges)
   for tx in sys["texts"] ?? []
     score_draw_text(paths, ink, tx["text"], "regular", tx["x0"], top + tx["y"], score_em(0.0), sp)
   end
+  score_draw_trills(paths, ink, sys, top, sp)
+  score_draw_glisses(paths, ink, sys, top, sp)
   score_draw_lyrics(paths, ink, sys, top, sp) if sys.has_key("lyric_y")
   score_draw_courtesy(paths, ink, sys, top, sp) if (sys["courtesy"] ?? 0.0) > 0.0
 end
@@ -4854,6 +5134,7 @@ def score_draw_rest(paths, ink, ev, top, sp)
 end
 
 def score_draw_note(paths, ink, ev, top, sp)
+  score_draw_graces(paths, ink, ev, top, sp) unless ev["graces"].nil?
   head_name = score_head_name(ev["base"])
   hw = ev["head_w"]
   # Ledger lines, a little wider than the heads they carry.
@@ -4924,6 +5205,94 @@ def score_draw_note(paths, ink, ev, top, sp)
     anchor = score_glyph(flag)["anchors"][ev["up"] ? "stemUpNW" : "stemDownSW"]
     score_draw_glyph(paths, ink, flag, sx - anchor[0], tip - anchor[1], sp)
   end
+end
+
+def score_draw_graces(paths, ink, ev, top, sp)
+  gr = ev["graces"]
+  k = score_grace_k()
+  notes = gr["notes"]
+  beamed = notes.length > 1 && notes.all? { |g| score_flags(g["base"]) > 0 }
+  stem_w = SCORE_RULE["stem"] * k
+  lt = SCORE_RULE["ledger"] * k
+  flat = 0.0
+  for g in notes
+    flat = score_min(flat, score_y(g["heads"][-1]["pos"]) - 2.5)
+  end
+  stems = []
+  for g in notes
+    gx = ev["x"] + g["dx"]
+    hw = g["hw"]
+    head = score_glyph(score_head_name(g["base"]))
+    hi = g["heads"][-1]["pos"]
+    lo = g["heads"][0]["pos"]
+    pos = 6
+    while pos <= hi
+      paths.push(score_rect(ink, gx - hw * 0.25, top + score_y(pos) - lt / 2.0, hw * 1.5, lt, sp))
+      pos += 2
+    end
+    pos = -6
+    while pos >= lo
+      paths.push(score_rect(ink, gx - hw * 0.25, top + score_y(pos) - lt / 2.0, hw * 1.5, lt, sp))
+      pos -= 2
+    end
+    for hd in g["heads"]
+      y = top + score_y(hd["pos"])
+      paths.push(score_fill_k(ink, head["fill"], gx, y, k, sp))
+      unless hd["acc"].nil?
+        acc = score_glyph(score_acc_name(hd["acc"]))
+        paths.push(score_fill_k(ink, acc["fill"], gx - acc["advance"] * k - 0.15, y, k, sp))
+      end
+    end
+    next if g["base"] == 1
+
+    sx = gx + hw - stem_w
+    root = top + score_y(lo) + head["anchors"]["stemUpSE"][1] * k
+    tip = top + (beamed ? flat : score_y(hi) - 2.5)
+    paths.push(score_rect(ink, sx, tip, stem_w, root - tip, sp))
+    stems.push([sx, tip])
+    if !beamed && score_flags(g["base"]) > 0
+      flag = score_glyph(score_flag_name(g["base"], true))
+      anchor = flag["anchors"]["stemUpNW"]
+      paths.push(score_fill_k(ink, flag["fill"], sx - anchor[0] * k, tip - anchor[1] * k, k, sp))
+    end
+  end
+  if beamed && stems.length > 1
+    levels = notes.map { |g| score_flags(g["base"]) }.reduce(fn(acc, n) score_min(acc, n), 9)
+    x0 = stems[0][0]
+    x1 = stems[-1][0] + stem_w
+    for level in 0..levels
+      paths.push(score_rect(ink, x0, top + flat + level * SCORE_RULE["beam_step"] * k, x1 - x0, SCORE_RULE["beam"] * k, sp))
+    end
+  end
+  if gr["kind"] == "acciaccatura" && stems.length > 0
+    sx = stems[0][0]
+    tip = stems[0][1]
+    ax = sx - 0.55
+    ay = tip + 1.5
+    bx = sx + 0.75
+    by = tip + 0.45
+    paths.push(score_fill(ink, [0, ax, ay, 1, bx, by, 1, bx, by + 0.12, 1, ax, ay + 0.12, 4], 0.0, 0.0, sp))
+  end
+  return nil if gr["kind"] == "grace"
+
+  last = notes[-1]
+  xa = ev["x"] + last["dx"] + last["hw"] * 0.5
+  ya = top + score_y(last["heads"][0]["pos"]) + 0.55
+  xb = ev["x"] + ev["head_w"] * 0.4
+  yb = top + score_y(ev["heads"][0]["pos"]) + 0.55
+  w = xb - xa
+  return nil if w <= 0.0
+
+  hgt = 0.35
+  inset = w * 0.25
+  c_out = (hgt + 0.07) * 4.0 / 3.0
+  c_in = (hgt - 0.07) * 4.0 / 3.0
+  paths.push(score_fill(ink, [0, xa, ya + 0.03,
+    3, xa + inset, ya + c_out, xb - inset, yb + c_out, xb, yb + 0.03,
+    1, xb, yb - 0.03,
+    3, xb - inset, yb + c_in, xa + inset, ya + c_in, xa, ya - 0.03,
+    4], 0.0, 0.0, sp))
+  nil
 end
 
 def score_draw_beam(paths, ink, g, top, sp)
@@ -5055,6 +5424,9 @@ def score_ed_answer(state, ed_event, params, props)
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
     "lyrics" => score_ed_lyrics_set(state, params["payload"] ?? ""),
+    "grace" => score_ed_grace(state, props["kind"] ?? ""),
+    "trill_line" => score_ed_trill_line(state),
+    "glissando" => score_ed_glissando(state),
     "words_dir" => ["Above", "Below"].includes?(props["option"]) ? score_ed_flag(state, "words_dir", props["option"]) : state,
     "page_break" => score_ed_break(state, "page"),
     "play" => score_ed_play(state),
@@ -5551,6 +5923,76 @@ def score_ed_slur(state)
   state
 end
 
+def score_ed_grace(state, kind)
+  current = score_ed_selected(state)
+  return state if current.nil? || current["rest"] || !["acciaccatura", "appoggiatura"].includes?(kind)
+  return score_ed_flag(state, "error", "Grace notes are the first voice's: switch to Voice 1 (Ctrl+Alt+1).") if state["voice"] == 2
+
+  state = score_ed_remember(state)
+  current = score_ed_selected(state)
+  had = current["graces"]
+  if !had.nil? && had["kind"] == kind
+    current.delete("graces")
+    return state
+  end
+  top = current["pitches"][-1]
+  step = (top["step"] + 1) % 7
+  oct = top["oct"] + (top["step"] == 6 ? 1 : 0)
+  current["graces"] = {"kind": kind, "notes": [ {"pitches": [ {"step": step, "oct": oct, "alter": score_ed_key_alter(state, step)} ], "base": 8, "dots": 0} ]}
+  state
+end
+
+def score_ed_trill_line(state)
+  current = score_ed_selected(state)
+  start = state["trill_from"] ?? -1
+  start = -1 if start >= state["notes"].length
+  if start >= 0
+    state["trill_from"] = -1
+    # It ends on a later note: the engraver looks for its end after its start.
+    return state if current.nil? || state["sel"] <= start
+
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    notes[start]["trill_start"] = true
+    notes[state["sel"]]["trill_stop"] = true
+    return state
+  end
+  return state if current.nil? || current["rest"]
+
+  if current["trill_start"] == true
+    state = score_ed_remember(state)
+    notes = state["notes"]
+    k = state["sel"]
+    current = notes[k]
+    current.delete("trill_start")
+    j = k
+    while j < notes.length
+      if notes[j]["trill_stop"] == true
+        notes[j].delete("trill_stop")
+        break
+      end
+      j += 1
+    end
+    return state
+  end
+  state["trill_from"] = state["sel"]
+  state
+end
+
+def score_ed_glissando(state)
+  current = score_ed_selected(state)
+  return state if current.nil? || current["rest"]
+
+  state = score_ed_remember(state)
+  current = score_ed_selected(state)
+  if current["gliss"] == true
+    current.delete("gliss")
+  else
+    current["gliss"] = true
+  end
+  state
+end
+
 def score_ed_repeat(state, which)
   return score_ed_flag(state, "error", "Repeats and breaks are the first voice's: switch to Voice 1 (Ctrl+Alt+1).") if state["voice"] == 2
   return score_ed_flag(state, "error", "Repeats and breaks are set on the first track: they are the bars', and every staff has them.") if score_ed_tracks(state).length > 1 && (state["track"] ?? 0) != 0
@@ -5678,15 +6120,27 @@ def score_ed_expression_ly(nt, first_piece, last_piece)
     out += "\\" + nt["dyn"] unless nt["dyn"].nil?
     for sc in nt["scripts"] ?? []
       side = {"-1": "^", "0": "-", "1": "_"}[str(sc["dir"] ?? 0)]
-      out += sc["name"] == "fermata" ? side + "\\fermata" : side + {"staccato": ".", "accent": ">", "tenuto": "-", "marcato": "^", "staccatissimo": "!", "portato": "_"}[sc["name"]]
+      out += sc["name"] == "fermata" || sc["name"] == "trill" ? side + "\\" + sc["name"] : side + {"staccato": ".", "accent": ">", "tenuto": "-", "marcato": "^", "staccatissimo": "!", "portato": "_"}[sc["name"]]
     end
     for tx in nt["texts"] ?? []
       out += (tx["dir"] < 0 ? "^" : "_") + "\"" + score_ed_clean(tx["text"]) + "\"" if score_ed_clean(tx["text"]) != ""
     end
     out += "\\" + nt["hairpin"] unless nt["hairpin"].nil?
+    out += "\\startTrillSpan" if nt["trill_start"] == true
   end
   out += "\\!" if last_piece && nt["hairpin_end"] == true
+  out += "\\stopTrillSpan" if last_piece && nt["trill_stop"] == true
+  out += "\\glissando" if last_piece && nt["gliss"] == true
   out
+end
+
+def score_ed_grace_ly(nt)
+  gr = nt["graces"]
+  return "" if gr.nil? || gr["notes"].length == 0
+
+  parts = gr["notes"].map { |g| score_ed_chord_ly(g) + str(g["base"]) + (g["dots"] > 0 ? "." : "") }
+  body = parts.length == 1 ? parts[0] : "{ " + parts.join(" ") + " }"
+  "\\" + gr["kind"] + " " + body + " "
 end
 
 def score_ed_break(state, kind)
@@ -6040,6 +6494,7 @@ def score_ed_layout_track(state, k, info, opts)
         word += "(" if nt["slur_on"] == true && left == full && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad")
+        word = score_ed_grace_ly(nt) + word if left == full && ci == 0 && !nt["rest"]
         words.push(word)
         owners.push(nt.has_key("pad") ? -1 : (nt["src"] ?? ni))
       end
@@ -7307,6 +7762,7 @@ def score_ed_voice_two_ly(notes2, info, total)
         word += "(" if nt["slur_on"] == true && left == full && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == full && ci == 0, last_piece) unless nt.has_key("pad") || nt["spacer"] == true
+        word = score_ed_grace_ly(nt) + word if left == full && ci == 0 && !nt["rest"] && !nt.has_key("pad")
         words.push(word)
         owners.push(nt.has_key("pad") ? -1 : ni)
       end
@@ -7413,6 +7869,7 @@ def score_ed_layout_one(state)
         word += "(" if nt["slur_on"] == true && left == score_ed_ticks(nt) && ci == 0
         word += ")" if nt["slur_off"] == true && last_piece
         word += score_ed_expression_ly(nt, left == score_ed_ticks(nt) && ci == 0, last_piece)
+        word = score_ed_grace_ly(nt) + word if left == score_ed_ticks(nt) && ci == 0 && !nt["rest"]
         words.push(word)
         owners.push(ni)
       end
@@ -7691,6 +8148,12 @@ def score_ed_imported(ev, state)
   fresh["hairpin_end"] = true if ev["hairpin_end"] == true
   fresh["scripts"] = (ev["scripts"] ?? []).map { |sc| {"name": sc["name"], "dir": sc["dir"]} } unless ev["scripts"].nil?
   fresh["texts"] = ev["texts"] unless ev["texts"].nil?
+  fresh["trill_start"] = true if ev["trill_start"] == true
+  fresh["trill_stop"] = true if ev["trill_stop"] == true
+  fresh["gliss"] = true if ev["gliss"] == true
+  unless ev["graces"].nil?
+    fresh["graces"] = {"kind": ev["graces"]["kind"], "notes": ev["graces"]["notes"].map { |g| {"pitches": g["pitches"].map { |pt| {"step": score_mod(pt["d"], 7), "oct": (pt["d"] - score_mod(pt["d"], 7)) / 7 + 3, "alter": pt["alter"]} }, "base": g["base"], "dots": score_min(g["dots"], 1)} }}
+  end
   unless ev["tuplet"].nil?
     fresh["tup"] = {"g": ev["tuplet"]["id"], "n": ev["tuplet"]["n"], "d": ev["tuplet"]["d"]}
     state["tup_seq"] = score_max(state["tup_seq"] ?? 0, ev["tuplet"]["id"])
@@ -7828,8 +8291,8 @@ def score_ed_expression_panel(state)
     score_ed_pin_button(state, "<", "Crescendo", none),
     score_ed_pin_button(state, ">", "Diminuendo", none)
   ]
-  names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata"}
-  glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove"}
+  names = {"staccato": "Staccato", "accent": "Accent", "tenuto": "Tenuto", "marcato": "Marcato", "staccatissimo": "Staccatissimo", "portato": "Portato", "fermata": "Fermata", "trill": "Trill"}
+  glyphs = {"staccato": "articStaccatoAbove", "accent": "articAccentAbove", "tenuto": "articTenutoAbove", "marcato": "articMarcatoAbove", "staccatissimo": "articStaccatissimoAbove", "portato": "articTenutoStaccatoAbove", "fermata": "fermataAbove", "trill": "ornamentTrill"}
   artics = SCORE_ED_ARTICS.map { |name| score_ed_glyph_button("artic:" + name, "artic", {"name": name}, score_ed_centred_icon(glyphs[name]), !none && (current["scripts"] ?? []).any? { |sc| sc["name"] == name }, "", names[name]) }
   side = score_ed_words_side(state)
   side_name = side < 0 ? "Above" : "Below"
@@ -8745,6 +9208,51 @@ describe("the editor", fn() {
     check("the upper staff's band, the brace's share in it, unchanged", b[1]["paths"], a[1]["paths"])
     check("the lower staff's, changed", b[2]["paths"] == a[2]["paths"], false)
     check("the brace is in both", [a[1]["paths"].length > 0, a[2]["paths"].length > 0], [true, true])
+  })
+
+  test("grace notes: before their note, no time and no number of their own, \\relative going on through them", fn() {
+    plain = score_engrave("{ c''4 c''4 c''2 }", 100.0)["systems"][0]["bars"][0]["items"]
+    bar = score_engrave("{ c''4 \\acciaccatura d''8 c''4 c''2 }", 100.0)["systems"][0]["bars"][0]
+    items = bar["items"]
+    check("three items, as before", items.length, 3)
+    check("the grace on the second note", [items[1]["graces"]["kind"], items[1]["graces"]["notes"].length], ["acciaccatura", 1])
+    check("which stands further right for it", items[1]["x"] > plain[1]["x"] + 1.0, true)
+    check("its number its own, the grace's none", items.map { |ev| ev["i"] }, [0, 1, 2])
+    rel = score_engrave("\\relative c'' { c4 \\grace { d16 e } f4 g2 }", 100.0)["systems"][0]["bars"][0]["items"]
+    check("relative goes on through them: e'' then f''", [rel[1]["graces"]["notes"][1]["heads"][0]["d"], rel[1]["heads"][0]["d"]], [16, 17])
+    check("before a rest, refused", (spec_refusal("{ c'4 \\appoggiatura d'8 r4 }") ?? "").includes?("not a rest"), true)
+  })
+
+  test("a trill's wavy line to where it stops, and a glissando to the next note", fn() {
+    sys = score_engrave("{ c''2\\startTrillSpan d''4 e''4\\stopTrillSpan | c'4\\glissando c''4 g'2 }", 100.0)["systems"][0]
+    check("one trill line, its tr", sys["trills"].map { |tr| tr["tr"] }, [true])
+    check("over the staff", sys["trills"][0]["y"] < -1.0, true)
+    check("one glissando, rising", [sys["glisses"].length, sys["glisses"][0]["y1"] < sys["glisses"][0]["y0"]], [1, true])
+    check("the trill in the scripts", score_engrave("{ c''1\\trill }", 100.0)["systems"][0]["bars"][0]["items"][0]["scripts"].map { |sc| sc["name"] }, ["trill"])
+  })
+
+  test("the editor's ornaments: a grace, a trill line, a glissando, a trill, written and read back", fn() {
+    st = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }")
+    st["sel"] = 1
+    st = score_editor({"event": "grace", "params": {"props": {"kind": "acciaccatura"}}, "state": st})
+    src = score_ed_layout(st)["src"]
+    check("an acciaccatura a step above, written before its note", src.includes?("\\acciaccatura e''8 d''4"), true)
+    st = score_editor({"event": "grace", "params": {"props": {"kind": "acciaccatura"}}, "state": st})
+    check("pressed again, it comes off", score_ed_layout(st)["src"].includes?("acciaccatura"), false)
+    st = score_editor({"event": "grace", "params": {"props": {"kind": "appoggiatura"}}, "state": st})
+    st["sel"] = 0
+    st = score_editor({"event": "trill_line", "params": {}, "state": st})
+    st["sel"] = 2
+    st = score_editor({"event": "trill_line", "params": {}, "state": st})
+    st["sel"] = 2
+    st = score_editor({"event": "glissando", "params": {}, "state": st})
+    st["sel"] = 3
+    st = score_ed_artic(st, "trill")
+    src = score_ed_layout(st)["src"]
+    check("all of them in the source", ["\\appoggiatura e''8", "\\startTrillSpan", "\\stopTrillSpan", "\\glissando", "-\\trill"].map { |w| src.includes?(w) }, [true, true, true, true, true])
+    back = score_ed_from_source(spec_state(), src)
+    check("read back the same", [back["notes"][1]["graces"]["kind"], back["notes"][0]["trill_start"], back["notes"][2]["trill_stop"], back["notes"][2]["gliss"], back["notes"][3]["scripts"][0]["name"]], ["appoggiatura", true, true, true, "trill"])
+    check("and it engraves", score_engrave(src, 100.0)["systems"][0]["trills"].length, 1)
   })
 
   test("two voices on a staff: stems up and down, columns shared, rests out of the way", fn() {

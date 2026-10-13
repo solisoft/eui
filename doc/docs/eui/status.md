@@ -446,18 +446,18 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 6 482 lines; `serde_json` its one dependency, for the font data.
+writers. 7 006 lines; `serde_json` its one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
-  (`tests/golden/`, 6.6 MB) are what the Soli engraver drew for the 26
-  pieces of `tests/corpus/` — 5 455 paths on a 900 px screen and the 108
-  bands they are cut into, 29 A4 pages and 5 462 paths on them, a MIDI
+  (`tests/golden/`, 6.8 MB) are what the Soli engraver drew for the 28
+  pieces of `tests/corpus/` — 5 604 paths on a 900 px screen and the 112
+  bands they are cut into, 31 A4 pages and 5 611 paths on them, a MIDI
   file and a PDF each — and
   `the_corpus_draws_as_the_soli_engraver_drew_it` requires every path, and
   every band's top and height, to agree to the hundredth of a pixel and
   the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
-  44 refusals to theirs, character position included. Both pass. The last
+  52 refusals to theirs, character position included. Both pass. The last
   difference to go was rounding: Soli's `round(2)` rounds the shortest
   decimal that reads back as the number, so 22.884999… is 22.88 there and
   22.89 under `(v * 100).round()`, and two PDFs differed by that digit.
@@ -2683,6 +2683,29 @@ at exactly the length asked. Tested: on macOS a note sounds and dies away
 and a flute is not a piano (`eui-dls`, macOS CI only); everywhere, the
 hook's answer is used and its refusal or a wrong length falls back
 (`eui-audio/tests/midi.rs`).
+
+**And ornaments** (2026-10-13). Grace notes (`\grace`, `\acciaccatura`,
+`\appoggiatura`), trills (`\trill`, and `\startTrillSpan` … `\stopTrillSpan`
+with LilyPond's wavy line) and glissandi (`\glissando`), in both engravers.
+A grace group belongs to the note after it: read with the octave and the
+duration going on through it, but no time and no item number, so the
+editor's map of notes is untouched; its heads take their accidentals from
+the bar before the note's; it stands to the note's left at 0.7 — its own
+accidentals, heads half a space apart, a flag on one alone and one flat
+beam over several — the acciaccatura's first stem slashed, and a slur
+under the heads from the last to the note. Played, it takes its time from
+the note: `graces.ly` sounds 14 notes, its 9 and its 5 graces. A trill is
+`ornamentTrill`, a script above everything; a trill line repeats
+`wiggleTrill` to the end of the note it stops on, the next line taking it
+up without its "tr"; both glyphs were added to `xtask smufl`'s list and the
+tables written again — the generator gives back the old table byte for
+byte, and `smufl.json` gains only the two. A trill plays the top head and
+the step above it in the key, a thirty-second each (`ornaments.ly`: 78
+notes). The editor's toolbar has an Ornaments group: Acciaccatura and
+Appoggiatura a step above the selected note, a Trill line made as a slur
+is (its note, then a later one), Glissando; `\trill` is an articulation
+beside the fermata. 28 golden pieces and 52 refusals; `tests/score_spec.sl`
+is 129 tests.
 
 ## Not started
 

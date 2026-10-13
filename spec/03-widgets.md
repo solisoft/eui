@@ -1127,7 +1127,18 @@ into one bar with its count under `\compressEmptyMeasures`), tuplets
 the forced breaks `\break` and `\pageBreak`, and expression: dynamics
 (`\pp` … `\ff`, `\sfz`, `\fp` and their kin), hairpins (`\<`, `\>`,
 `\!`), articulations (`-.` `->` `--` `-^` `-!` `-_`, `\fermata`, with `^`
-and `_` for a side) and words over or under a note (`^"dolce"`); lyrics,
+and `_` for a side) and words over or under a note (`^"dolce"`); ornaments:
+a trill (`\trill`, a "tr" over the note) and a trill with its wavy line
+(`\startTrillSpan` … `\stopTrillSpan`, broken at a line's end as LilyPond
+breaks it), a glissando (`\glissando`, a line from a note's head to the
+next one's), and grace notes before a note (`\grace`, `\acciaccatura`,
+`\appoggiatura`, a note or a `{ … }` of them, read on with `\relative`'s
+octave and the duration): drawn at 0.7 to the note's left, stems up and
+beamed when several, the acciaccatura's stem slashed and it and the
+appoggiatura slurred to the note, taking no time in the bar and no number
+among the items, and played in the note's time — an appoggiatura half of
+it, the others a quarter at most — while a trill is played as the note
+and the step above it in the key, a thirty-second each; lyrics,
 `\addlyrics { … }` after a staff's music, one verse a staff — a syllable a
 note of the first voice, centred under its head on one line beneath the
 staff and its marks, a note tied from the one before or under a slur after

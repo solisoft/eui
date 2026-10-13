@@ -42,3 +42,11 @@
 { c'4 } \addlyrics { -- la }
 { c'4 } \addlyrics { la \skip }
 { c'4 } \addlyrics { la } \addlyrics { lo }
+{ c'4 \acciaccatura d'8 r4 }
+{ c'4 \grace d'8 }
+{ << { c''4 d''4 } \\ { \grace e'8 c'4 c'4 } >> }
+{ \grace { d'8 r8 } c'4 }
+{ c'4 \appoggiatura | d'4 }
+{ \grace { d'8 c'4 }
+{ \startTrillSpan c'4 }
+{ \glissando c'4 }

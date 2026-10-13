@@ -6,13 +6,13 @@
 use std::ops::Range;
 
 use crate::engrave::{
-    acc_name, barline_parts, barline_width, beam_y, church_width, clef_glyph, digits, flag_name, flags, head_name, key_cancel, part_width, rest_name, stem_x, time_glyph, time_width, y_of, Courtesy,
-    Engraved, Line, System,
+    acc_name, barline_parts, barline_width, beam_y, church_width, clef_glyph, digits, flag_name, flags, grace_k, head_name, key_cancel, part_width, rest_name, stem_x, time_glyph, time_width, y_of,
+    Courtesy, Engraved, Line, System,
 };
 use crate::glyphs::{glyph, letters, Weight};
 use crate::marks::{dyn_letters, reach, rest_lift, DynEl, TempoMark, TupletPlace, Volta};
 use crate::measure::{Bar, Beam, Opening};
-use crate::parse::{Clef, Ev, GroupKind, Kind};
+use crate::parse::{Clef, Ev, GraceKind, Graces, GroupKind, Kind};
 use crate::text::{args_of, em, text_box, text_width};
 use crate::RULE;
 
@@ -469,6 +469,8 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     for tx in &line.texts {
         pen.text(&tx.text, Weight::Regular, tx.x0, top + tx.y, em(0.0));
     }
+    draw_trills(&mut pen, line, top);
+    draw_glisses(&mut pen, line, top);
     if let Some(ly) = line.lyric_y {
         draw_lyrics(&mut pen, bars, line, top + ly);
     }
@@ -526,6 +528,33 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
                 pen.rect(x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1);
             }
         }
+    }
+}
+
+fn draw_trills(pen: &mut Pen, line: &Line, top: f64) {
+    let wig = glyph("wiggleTrill");
+    for tr in &line.trills {
+        let y = top + tr.y;
+        let mut x = tr.x0;
+        if tr.tr {
+            pen.glyph("ornamentTrill", x, y);
+            x += glyph("ornamentTrill").bbox[2] + 0.25;
+        }
+        // A wiggle with no width would never reach the end.
+        if wig.advance <= 0.0 {
+            continue;
+        }
+        while x + wig.advance <= tr.x1 {
+            pen.glyph("wiggleTrill", x, y - 0.66);
+            x += wig.advance;
+        }
+    }
+}
+
+fn draw_glisses(pen: &mut Pen, line: &Line, top: f64) {
+    for gl in &line.glisses {
+        let t = 0.06;
+        pen.fill(&[0.0, gl.x0, top + gl.y0 - t, 1.0, gl.x1, top + gl.y1 - t, 1.0, gl.x1, top + gl.y1 + t, 1.0, gl.x0, top + gl.y0 + t, 4.0], 0.0, 0.0);
     }
 }
 
@@ -885,6 +914,9 @@ fn draw_rest(pen: &mut Pen, ev: &Ev, top: f64) {
 }
 
 fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
+    if let Some(gr) = &ev.graces {
+        draw_graces(pen, ev, gr, top);
+    }
     let hname = head_name(ev.base);
     let hw = ev.head_w.unwrap_or(0.0);
     let hi = ev.heads.last().map_or(0, |h| h.pos);
@@ -951,6 +983,102 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let anchor = glyph(&flag).anchors.get(if ev.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
         pen.glyph(&flag, sx - anchor[0], tip - anchor[1]);
     }
+}
+
+/// A note's grace notes, at 0.7: ledger lines, heads and accidentals; stems
+/// up, 2.5 spaces from the top head, a flag on one alone and a flat beam
+/// over several; an acciaccatura's first stem slashed; and an
+/// acciaccatura's or an appoggiatura's slur, under the heads, from the last
+/// of them to the note.
+fn draw_graces(pen: &mut Pen, ev: &Ev, gr: &Graces, top: f64) {
+    let sp = pen.sp;
+    let k = grace_k();
+    let notes = &gr.notes;
+    let beamed = notes.len() > 1 && notes.iter().all(|g| flags(g.base) > 0);
+    let stem_w = RULE.stem * k;
+    let lt = RULE.ledger * k;
+    let mut flat: f64 = 0.0;
+    for g in notes {
+        flat = flat.min(y_of(g.heads.last().map_or(0, |h| h.pos)) - 2.5);
+    }
+    let mut stems: Vec<(f64, f64)> = Vec::new();
+    for g in notes {
+        let gx = ev.x + g.dx;
+        let hw = g.hw;
+        let head = glyph(head_name(g.base));
+        let hi = g.heads.last().map_or(0, |h| h.pos);
+        let lo = g.heads.first().map_or(0, |h| h.pos);
+        let mut pos = 6;
+        while pos <= hi {
+            pen.rect(gx - hw * 0.25, top + y_of(pos) - lt / 2.0, hw * 1.5, lt);
+            pos += 2;
+        }
+        pos = -6;
+        while pos >= lo {
+            pen.rect(gx - hw * 0.25, top + y_of(pos) - lt / 2.0, hw * 1.5, lt);
+            pos -= 2;
+        }
+        for hd in &g.heads {
+            let y = top + y_of(hd.pos);
+            pen.push(fill_k(&head.fill, gx, y, k, sp));
+            if let Some(a) = hd.acc {
+                let acc = glyph(acc_name(a));
+                pen.push(fill_k(&acc.fill, gx - acc.advance * k - 0.15, y, k, sp));
+            }
+        }
+        if g.base == 1 {
+            continue;
+        }
+        let sx = gx + hw - stem_w;
+        let root = top + y_of(lo) + head.anchors.get("stemUpSE").map_or(0.0, |a| a[1]) * k;
+        let tip = top + if beamed { flat } else { y_of(hi) - 2.5 };
+        pen.rect(sx, tip, stem_w, root - tip);
+        stems.push((sx, tip));
+        if !beamed && flags(g.base) > 0 {
+            let flag = glyph(&flag_name(g.base, true));
+            let anchor = flag.anchors.get("stemUpNW").copied().unwrap_or([0.0, 0.0]);
+            pen.push(fill_k(&flag.fill, sx - anchor[0] * k, tip - anchor[1] * k, k, sp));
+        }
+    }
+    match (stems.first(), stems.last()) {
+        (Some(first), Some(last)) if beamed && stems.len() > 1 => {
+            let levels = notes.iter().fold(9, |acc, g| acc.min(flags(g.base)));
+            let x0 = first.0;
+            let x1 = last.0 + stem_w;
+            for level in 0..levels {
+                pen.rect(x0, top + flat + level as f64 * RULE.beam_step * k, x1 - x0, RULE.beam * k);
+            }
+        }
+        _ => {}
+    }
+    if let (GraceKind::Acciaccatura, Some(&(sx, tip))) = (gr.kind, stems.first()) {
+        let ax = sx - 0.55;
+        let ay = tip + 1.5;
+        let bx = sx + 0.75;
+        let by = tip + 0.45;
+        pen.fill(&[0.0, ax, ay, 1.0, bx, by, 1.0, bx, by + 0.12, 1.0, ax, ay + 0.12, 4.0], 0.0, 0.0);
+    }
+    if gr.kind == GraceKind::Grace {
+        return;
+    }
+    let Some(last) = notes.last() else { return };
+    let xa = ev.x + last.dx + last.hw * 0.5;
+    let ya = top + y_of(last.heads.first().map_or(0, |h| h.pos)) + 0.55;
+    let xb = ev.x + ev.head_w.unwrap_or(0.0) * 0.4;
+    let yb = top + y_of(ev.heads.first().map_or(0, |h| h.pos)) + 0.55;
+    let w = xb - xa;
+    if w <= 0.0 {
+        return;
+    }
+    let hgt = 0.35;
+    let inset = w * 0.25;
+    let c_out = (hgt + 0.07) * 4.0 / 3.0;
+    let c_in = (hgt - 0.07) * 4.0 / 3.0;
+    pen.fill(
+        &[0.0, xa, ya + 0.03, 3.0, xa + inset, ya + c_out, xb - inset, yb + c_out, xb, yb + 0.03, 1.0, xb, yb - 0.03, 3.0, xb - inset, yb + c_in, xa + inset, ya + c_in, xa, ya - 0.03, 4.0],
+        0.0,
+        0.0,
+    );
 }
 
 fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {

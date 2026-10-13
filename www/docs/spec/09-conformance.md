@@ -827,7 +827,13 @@ voices are among the pieces (`voices.ly`, `voices_spacers.ly`,
 a spacer apart, not beamed, and the voices crossing, the first a head to
 the right), and among the refusals; so are lyrics (`lyrics.ly`,
 `lyrics_choir.ly`, and six refusals: a missing or unclosed block, an empty
-one, `--` with nothing before it, a command inside, a second verse), and
+one, `--` with nothing before it, a command inside, a second verse), and so
+are ornaments (`graces.ly` — every kind of grace, a beamed pair, one with
+its accidental — `ornaments.ly` — trills, trill lines across a bar and a
+line, glissandi — eight refusals: a grace before a rest, with no note
+after it, in a second voice, with a rest inside, with nothing to it, never
+closed; a trill line or a glissando before any note), its MIDI the bytes
+the Soli engraver writes, graces sounding and trills alternating; and
 `score_spec.sl` holds a syllable a note with ties and slurs holding one,
 the room notes make for long syllables, the line under the staff and
 under low notes, a choir's staves each with its own, and the editor's
@@ -840,7 +846,13 @@ the first voice, that much of the time between them rounded to the value
 chosen, so two eighths go under one quarter — and the pointer picking a
 note of either voice and going to that voice; a source's second voice
 read back as the second voice, written and read again the same; and every
-example in the menu loading as what it is there to show.
+example in the menu loading as what it is there to show; grace notes
+before their note, taking no time and no number, `\relative` going on
+through them, and refused before a rest; a trill line over the staff to
+where it stops, a glissando rising to the next note, `\trill` among the
+scripts; and the editor's ornaments — an acciaccatura or an appoggiatura a
+step above the note (pressed again, it comes off), a trill line from one
+note to a later one, a glissando, a trill — written and read back.
 
 02 §5.3's **gradients**. `a_gradient_background_carries_its_stops_in_the_quad`
 pins the instance a gradient `bg` becomes — the first stop as the fill, the

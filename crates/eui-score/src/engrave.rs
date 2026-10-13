@@ -6,9 +6,9 @@
 use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
-use crate::marks::{self, curves, reach, DynEl, HairpinPiece, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
+use crate::marks::{self, curves, reach, DynEl, Gliss, HairpinPiece, ScriptPlace, TempoMark, TextPlace, TrillPiece, TupletPlace, Volta};
 use crate::measure::{measures, Bar, Beam, Changes, Opening};
-use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Syllable, Tempo};
+use crate::parse::{refuse, Clef, Ev, GraceKind, Group, GroupKind, Kind, Parsed, Syllable, Tempo};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
 
@@ -66,6 +66,10 @@ pub struct Line {
     pub lyric_y: Option<f64>,
     /// Hairpins, before they are placed.
     pub hairpins: Vec<HairpinPiece>,
+    /// Trill spans' pieces.
+    pub trills: Vec<TrillPiece>,
+    /// Glissandi.
+    pub glisses: Vec<Gliss>,
     /// In a score of several staves, which.
     pub staff_index: Option<usize>,
     /// The widest clef of the line's staves.
@@ -439,12 +443,64 @@ fn columns(bars: &mut [Bar], shortest: i64) {
             let shifted = ev.heads.iter().any(|h| h.side == -1);
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);
+            grace_room(ev);
             lyric_room(ev);
         }
         if bar.poly {
             poly_cols(bar, shortest);
         }
     }
+}
+
+/// How small grace notes are drawn: LilyPond's font size -3.
+pub(crate) fn grace_k() -> f64 {
+    0.7
+}
+
+/// Where a note's grace notes stand: left to right, each its accidental's
+/// room then its head, half a space apart, the last's flag beside it when it
+/// is alone, and 0.3 more before what the note itself reaches left. Each
+/// one's `dx` is from the note's head; the note reaches left past them all.
+/// Their top (the stems' ends) and bottom (the slur under them) are kept for
+/// the note's extent.
+fn grace_room(ev: &mut Ev) {
+    let left = ev.left;
+    let Some(gr) = &mut ev.graces else { return };
+    let k = grace_k();
+    let beamed = gr.notes.len() > 1 && gr.notes.iter().all(|g| flags(g.base) > 0);
+    let mut x = 0.0;
+    let mut places: Vec<(f64, f64)> = Vec::new();
+    for g in &gr.notes {
+        let hw = glyph(head_name(g.base)).advance * k;
+        let mut acc_w: f64 = 0.0;
+        for hd in &g.heads {
+            if let Some(acc) = hd.acc {
+                acc_w = acc_w.max(glyph(acc_name(acc)).advance * k + 0.15);
+            }
+        }
+        x += acc_w;
+        places.push((x, hw));
+        x += hw + 0.5;
+    }
+    if let Some(last) = gr.notes.last() {
+        if !beamed && flags(last.base) > 0 {
+            x += glyph(&flag_name(last.base, true)).advance * k - RULE.stem * k;
+        }
+    }
+    x += 0.3;
+    let offset = left + x;
+    let mut top: f64 = 0.0;
+    let mut bottom: f64 = 4.0;
+    let below = if gr.kind == GraceKind::Grace { 0.5 } else { 1.3 };
+    for (g, place) in gr.notes.iter_mut().zip(&places) {
+        g.dx = place.0 - offset;
+        g.hw = place.1;
+        top = top.min(y_of(g.heads.last().map_or(0, |h| h.pos)) - 2.5);
+        bottom = bottom.max(y_of(g.heads.first().map_or(0, |h| h.pos)) + below);
+    }
+    gr.top = top - if beamed { 0.34 } else { 0.0 };
+    gr.bottom = bottom;
+    ev.left = offset;
 }
 
 // ---- Lyrics -----------------------------------------------------------------
