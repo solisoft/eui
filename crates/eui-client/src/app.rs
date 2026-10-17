@@ -3679,11 +3679,17 @@ impl Shell {
         // compositor keeps saying so.
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            // Reconfigured, and asked again: a frame given up here with
+            // nothing behind it is a window that waits for the next event to
+            // show what it already has.
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 surface.configure(renderer.device(), &self.config);
+                self.window.request_redraw();
                 return;
             }
             // Minimised or covered: nothing to draw into, and nothing wrong.
+            // Not asked again here, which would spin while it stays covered;
+            // `WindowEvent::Occluded(false)` asks when it is uncovered.
             wgpu::CurrentSurfaceTexture::Occluded => return,
             other => {
                 eprintln!("eui: surface: {other:?}");
@@ -3940,6 +3946,15 @@ impl Shell {
         match event {
             WindowEvent::CloseRequested => return false,
             WindowEvent::RedrawRequested => self.redraw(renderer),
+            // Uncovered: draw what the window has, because the frames asked
+            // for while it was covered were never drawn. wgpu's Metal backend
+            // hands out no texture while macOS calls the window occluded
+            // (`CurrentSurfaceTexture::Occluded` below), and macOS still calls
+            // it that for a moment after `set_visible(true)` — so the first
+            // frame of every window was thrown away there, and with nothing
+            // else asking, the window stayed empty until it was clicked or
+            // resized. The same for one brought back from the Dock.
+            WindowEvent::Occluded(false) => self.window.request_redraw(),
             // Kept, not acted on. A compositor sends a configure for every
             // step of a drag — 73 a second, measured on Hyprland — and each
             // one that is laid out before the next arrives is a whole tree
