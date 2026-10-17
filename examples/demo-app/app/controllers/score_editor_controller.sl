@@ -24,10 +24,10 @@
 #   Space        play from the start, or stop
 #   Backspace    a note becomes a rest; Ctrl+Z / Ctrl+Y  undo, redo
 #
-# With the mouse: a click on a note selects it, a second click on it moves
-# it to the line or space under the pointer, dragging it up or down moves it
-# line by line — redrawn and heard at each one — and a click past the last
-# note writes a new one there. The palette above the staff does everything the
+# With the mouse: a click on a note selects it — and only selects it, a
+# second click included — dragging it up or down moves it line by line,
+# redrawn and heard at each one, and a click past the last note writes a
+# new one there. From protocol 10 the window moves it itself (below). The palette above the staff does everything the
 # keys do, for whoever does not know them.
 #
 # A note may be written across a bar line: it is cut at the bar and tied,
@@ -110,6 +110,7 @@ def score_ed_answer(state, ed_event, params, props)
     # itself, and the editor sends the source alone (eui 03 §1.4).
     "connect" => score_ed_flag(state, "protocol", int(params["protocol"] ?? 8)),
     "score_pick" => score_ed_score_pick(state, params["payload"] ?? [], props),
+    "score_edit" => score_ed_score_edit(state, params["payload"] ?? [], props),
     "score_info" => score_ed_score_info(state, params["payload"] ?? [], props["which"] ?? "sheet"),
     "viewport" => state,
     "key" => score_ed_key(state, params["payload"][0], params["payload"][1]),
@@ -2306,9 +2307,6 @@ def score_ed_pick(state, point, page)
     state["typing"] = false
     return state
   end
-  if state["sel"] == model
-    return score_ed_set_pitch(state, pitch)
-  end
   state["sel"] = model
   state["typing"] = false
   state
@@ -4008,8 +4006,8 @@ def score_ed_sheet_node(state, drawn)
   {
     "k": "score",
     "s": {"width": sn_a4 ? score_ed_page_width(state) : score_ed_width(state)},
-    "p": {"src": drawn["src"], "staff_space": drawn["sp"], "page": sn_a4 ? "a4" : "screen", "page_height": sn_a4 ? 0 : score_ed_screen_page(), "page_index": score_max(0, score_min(sn_pages - 1, state["page"] ?? 0)), "marks": score_ed_marks_list(score_ed_sheet_marks(state, drawn)), "which": "sheet"},
-    "on": {"score_pick": "score_pick", "score_info": "score_info"}
+    "p": {"src": drawn["src"], "staff_space": drawn["sp"], "page": sn_a4 ? "a4" : "screen", "page_height": sn_a4 ? 0 : score_ed_screen_page(), "page_index": score_max(0, score_min(sn_pages - 1, state["page"] ?? 0)), "marks": score_ed_marks_list(score_ed_sheet_marks(state, drawn)), "which": "sheet"}.merge(score_ed_edit_props(state, score_ed_sel_item(state, drawn["map"]))),
+    "on": {"score_pick": "score_pick", "score_info": "score_info", "score_edit": "score_edit"}
   }
 end
 
@@ -4041,8 +4039,8 @@ def score_ed_conductor_client(state)
   cc_node = {
     "k": "score",
     "s": {"width": cc_width},
-    "p": {"src": cc_full["src"], "staff_space": score_ed_full_space(state), "page_height": score_ed_screen_page(), "page_index": cc_shown, "marks": score_ed_marks_list(score_ed_conductor_marks(state, cc_full)), "which": "cond"},
-    "on": {"score_pick": "score_pick", "score_info": "score_info"}
+    "p": {"src": cc_full["src"], "staff_space": score_ed_full_space(state), "page_height": score_ed_screen_page(), "page_index": cc_shown, "marks": score_ed_marks_list(score_ed_conductor_marks(state, cc_full)), "which": "cond"}.merge(score_ed_edit_props(state, score_ed_cond_sel_item(state, cc_full))),
+    "on": {"score_pick": "score_pick", "score_info": "score_info", "score_edit": "score_edit"}
   }
   cc_heading = [text("Full score", {"size": 2, "weight": "semibold"}), muted("Every track, as the PDF and the MIDI have them. Click a note to edit it; a track's name above goes back to its staff.")]
   cc_pager = score_ed_pager(state, "cond_page", cc_pages)
@@ -4091,6 +4089,101 @@ end
 # A press, a move while pressed and a release on a score the client drew:
 # the work of `press`, `drag` and `release`, from where the client says the
 # pointer is in the music.
+# ---- Moved by the window (eui 03 §1.4, protocol 10) ------------------------
+#
+# The selected note's pitch is the window's to move: a drag on it and the
+# arrows rewrite the source there, sound the note and draw it, and the
+# server hears the pitches once they settle, in `score_edit`. Not while the
+# tune plays, and not in Insert mode, where a press writes a note.
+
+# The props that hand the selected note to the window, or none.
+def score_ed_edit_props(state, ep_item)
+  return {} if ep_item < 0 || state["playing"] == true || score_ed_inserting(state)
+
+  ep_out = {"edit": ["pitch"], "selected": ep_item, "edit_after": 2000}
+  if state["sound"] == true
+    ep_trk = score_ed_tracks(state)[state["track"] ?? 0]
+    ep_out["voice"] = ["notes", SCORE_MIDI_PROGRAMS[ep_trk["instrument"] ?? "acoustic grand"] ?? 0]
+  end
+  ep_out
+end
+
+# The item the selected note is drawn as on the edited staff: the first, for
+# a note cut at a bar line.
+def score_ed_sel_item(state, si_map)
+  si_sel = state["sel"] ?? -1
+  return -1 if si_sel < 0
+
+  for si_owner, si_k in si_map
+    return si_k if si_owner == si_sel
+  end
+  -1
+end
+
+# The same in the full score, on the active track's staff.
+def score_ed_cond_sel_item(state, ci_full)
+  ci_sel = state["sel"] ?? -1
+  ci_active = state["track"] ?? 0
+  return -1 if ci_sel < 0 || ci_active >= ci_full["maps"].length
+
+  for ci_owner, ci_j in ci_full["maps"][ci_active]
+    return ci_full["firsts"][ci_active] + ci_j if ci_owner == ci_sel
+  end
+  -1
+end
+
+# The note of the edited voice an item of a score is drawn from, or -1.
+def score_ed_edit_owner(state, eo_props, eo_item)
+  if (eo_props["which"] ?? "") == "cond"
+    eo_full = score_ed_conductor(state)
+    eo_active = state["track"] ?? 0
+    return -1 if eo_active >= eo_full["maps"].length
+
+    eo_owners = eo_full["maps"][eo_active]
+    eo_j = eo_item - eo_full["firsts"][eo_active]
+    return eo_j >= 0 && eo_j < eo_owners.length ? eo_owners[eo_j] : -1
+  end
+  eo_map = score_ed_layout(state)["map"]
+  eo_item >= 0 && eo_item < eo_map.length ? eo_map[eo_item] : -1
+end
+
+# What the window moved: `[item, head, step, alter, octave]` a head. Each is
+# checked before it is applied — a note of the edited voice, a head it has,
+# a pitch in reach (eui 06 §4) — and the rest go in all the same. One step
+# of undo for the lot.
+def score_ed_score_edit(state, se_entries, se_props)
+  se_ok = []
+  for se_e in se_entries
+    next unless se_e.is_a?("array") && se_e.length == 5
+
+    se_model = score_ed_edit_owner(state, se_props, int(se_e[0]))
+    next if se_model < 0 || se_model >= state["notes"].length
+
+    se_note = state["notes"][se_model]
+    se_head = int(se_e[1])
+    next if se_note["rest"] || se_head < 0 || se_head >= se_note["pitches"].length
+
+    se_pt = {"step": int(se_e[2]), "alter": int(se_e[3]), "oct": int(se_e[4])}
+    next if se_pt["step"] < 0 || se_pt["step"] > 6 || se_pt["alter"] < -2 || se_pt["alter"] > 2 || !score_ed_fits(state, se_pt)
+
+    se_ok.push([se_model, se_head, se_pt])
+  end
+  return state if se_ok.length == 0
+
+  state = score_ed_remember(state)
+  for se_one in se_ok
+    se_moved = state["notes"][se_one[0]]
+    se_list = se_moved["pitches"].map { |pt| pt }
+    se_list[se_one[1]] = se_one[2]
+    se_moved["pitches"] = se_list
+  end
+  for se_one in se_ok
+    se_sorted = state["notes"][se_one[0]]
+    se_sorted["pitches"] = se_sorted["pitches"].sort_by { |pt| pt["oct"] * 7 + pt["step"] }
+  end
+  state
+end
+
 def score_ed_score_pick(state, sp_payload, sp_props)
   sp_pick = score_ed_pick_of(sp_payload)
   return score_ed_flag(state, "dragging", false) if sp_pick["phase"] == 2
@@ -4138,8 +4231,6 @@ def score_ed_pick_at(state, pa_pick)
     state["typing"] = false
     return state
   end
-  return score_ed_set_pitch(state, pa_pitch) if state["sel"] == pa_model
-
   state["sel"] = pa_model
   state["typing"] = false
   state

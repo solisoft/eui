@@ -2659,10 +2659,9 @@ travelled — and the arrows, plays the note on the `voice` node, holds back
 `score_info` while edits are unreported, and reports them after
 `edit_after`, on blur, before any other event, or at once when the server's
 own `src` overtakes them (`tests/score.rs`, seven new tests, 09 §13). lang
-sends `score_edit` to sessions of 10 only, from Soli 2.28.1; the demo's
-editor takes it up once that release serves it — it applies each entry it
-can check, with one step of undo, and stops moving a note on a second
-click. A `\relative` source is not edited. Not done: the note keys
+sends `score_edit` to sessions of 10 only, from Soli 2.28.1, and the
+demo's editor declares it: it applies each entry it can check, with one
+step of undo, and no longer moves a note on a second click. A `\relative` source is not edited. Not done: the note keys
 (A–G, durations, rests), the palette and undo are still the server's —
 steps 2 and 3.
 

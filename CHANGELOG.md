@@ -28,6 +28,10 @@ release. A wire change lands here first, is released, and then the pin moves.
   at each deploy, instead of a version written in its workflow: it sat on
   2.27.2 after 2.28.0 shipped. The deploy boots the application on that
   release before installing the same one beside the site.
+- The score editor moves its selected note in the window (protocol 10,
+  Soli 2.28.1): dragged or with the arrows, drawn and heard at once, and
+  sent to the server once it settles. A click selects a note and never
+  moves it, the second click included; a drag moves it.
 
 ## [0.10.0] - 2026-10-17
 
