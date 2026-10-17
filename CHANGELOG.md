@@ -263,6 +263,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- The demo at eui-data.solisoft.net runs on a Soli of its own, 2.27.2,
+  installed beside the site by its deploy, instead of the server's 2.5.5:
+  the score editor engraves natively there, and Beethoven's exposition opens
+  in a fraction of a second instead of about thirty.
 - The score editor's full score answers an edit about seven times faster:
   on Beethoven's exposition a note moved went from 258 ms of server time to
   37 ms. Each track's music is laid out once and remembered, instead of

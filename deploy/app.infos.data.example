@@ -26,7 +26,13 @@ domain = "eui-data.solisoft.net"
 # for Atrium is around 190 MB, so the count costs memory as well as
 # threads. One carries a couple of hundred windows; four is already far
 # more than a demonstration needs.
-start_script = "soli serve . --port $PORT --workers $WORKERS --strict-port"
+#
+# The program is the site's own Soli, not the server's: the deploy installs
+# the pinned release into .soli/<version>/ beside this file and points
+# .soli/current at it, and a `start_script` that still begins with a bare
+# `soli` is rewritten to this on the first deploy (the original is kept as
+# app.infos.before-own-soli). Other sites on the box keep the server's.
+start_script = "/home/rocky/sites/eui-data.solisoft.net/.soli/current/soli serve . --port $PORT --workers $WORKERS --strict-port"
 workers = 8
 
 # /up, not /health: /up is Soli's own readiness probe (503 until the server

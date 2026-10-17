@@ -53,6 +53,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # The demo runs on a Soli of its own, installed by the deploy below into
+  # <site>/.soli/<version>/ and named by app.infos — not the server's `soli`,
+  # which the other sites on the box share and which stays where it is
+  # (2.5.5 on 2026-10-17). 2.26.0 is the first release with `eui_score_layout`,
+  # the native engraver: on 2.5.5 the score editor engraves in Soli, and
+  # Beethoven's exposition took about 30 s to open, against 0.115 s on
+  # 2.27.2 (every component but `broken` opens on 2.27.2; `pantry_5` fails
+  # now and then on both, a pre-existing fault). Before 2026-10-17 this
+  # pinned what the server's `soli` was:
+  #
   # 2.5.5 is what eui-data.solisoft.net runs (the deploy of d66c4bc printed
   # "server: 2.5.5 — pinned: 2.3.3"), so it is what the checks below must
   # boot: 2.3.3 could no longer open the gallery at all, which does not know
@@ -67,7 +77,7 @@ env:
   # capability 'scene'`. Which is why the version is checked before the
   # switch rather than hoped for. 2.2.1 before that, for `nfc` and the
   # `location` and `nfc_tag` event kinds, for the same reason.
-  SOLI_VERSION: "2.5.5"
+  SOLI_VERSION: "2.27.2"
   APP_DIR: examples/demo-app
 
 jobs:
@@ -203,35 +213,50 @@ jobs:
           ssh "$USER@$HOST" "test -f '$SITES_DIR/$DOMAIN/app.infos' && test -f '$SITES_DIR/$DOMAIN/.env'" \
             || { echo "$SITES_DIR/$DOMAIN must hold app.infos and .env — see deploy/README.md" >&2; exit 1; }
 
-      # Before anything is sent, not after: a server one release behind
-      # refuses this application at boot over a capability it does not know,
-      # and finding that out *after* the tree has been replaced means the old
-      # code is gone too.
-      # A server *ahead* of the pin is not a reason to hold a deployment: it
-      # is a file that has not caught up, and it costs a warning. A server
-      # *behind* it still stops here, because the consequence is written
-      # above and is not a warning's worth: the tree would be replaced and
-      # the application would not boot on the other side.
-      - name: Check the server is not behind the pinned version
+      # The site's own Soli, before anything is sent: the version the verify
+      # job just booted, in <site>/.soli/<version>/, with `current` pointing
+      # at it. Fetched once a version — a second deploy of the same pin finds
+      # it and moves on — and from the same release tarball the runner used.
+      # The server's own `soli` is not touched: other sites run on it.
+      - name: Install the pinned Soli beside the site
         run: |
           set -euo pipefail
-          installed="$(ssh "$USER@$HOST" 'soli --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-          echo "server: $installed — pinned: $SOLI_VERSION"
-          oldest="$(printf '%s\n%s\n' "$installed" "$SOLI_VERSION" | sort -V | head -1)"
-          if [ "$installed" != "$SOLI_VERSION" ] && [ "$oldest" = "$installed" ]; then
-            echo "" >&2
-            echo "The server runs Soli $installed; this application needs $SOLI_VERSION." >&2
-            echo "It asks for the 'scene' capability and draws a 'scene' node," >&2
-            echo "and an older soli refuses the first at boot -- eui_capabilities:" >&2
-            echo "unknown capability 'scene' -- and the second at render, because" >&2
-            echo "its kind_of does not know the kind either." >&2
-            echo "Upgrade the server, or align SOLI_VERSION in this file." >&2
-            exit 1
+          ssh "$USER@$HOST" "bash -s" <<SH
+          set -euo pipefail
+          [ "\$(uname -m)" = x86_64 ] || { echo "the release tarball is linux-amd64; this server is \$(uname -m)" >&2; exit 1; }
+          home='$SITES_DIR/$DOMAIN/.soli'
+          dir="\$home/$SOLI_VERSION"
+          if ! "\$dir/soli" --version 2>/dev/null | grep -qx "Soli $SOLI_VERSION"; then
+            tmp="\$(mktemp -d)"
+            curl -fsSL "https://github.com/solisoft/soli_lang/releases/download/v$SOLI_VERSION/soli-linux-amd64.tar.gz" -o "\$tmp/pkg.tar.gz"
+            tar -xzf "\$tmp/pkg.tar.gz" -C "\$tmp"
+            install -D -m 0755 "\$(find "\$tmp" -type f -name soli -perm -u+x | head -1)" "\$dir/soli"
+            rm -rf "\$tmp"
           fi
-          if [ "$installed" != "$SOLI_VERSION" ]; then
-            echo "::warning::the server runs Soli $installed; this run tested $SOLI_VERSION — align SOLI_VERSION in this file, or the server"
-            echo "⚠️ The server runs Soli \`$installed\`; this run tested \`$SOLI_VERSION\`." >> "$GITHUB_STEP_SUMMARY"
+          "\$dir/soli" --version
+          ln -sfn "$SOLI_VERSION" "\$home/current"
+          SH
+
+      # app.infos is the server's file and this workflow never sends it, but
+      # its `start_script` decides which `soli` the proxy runs. One that
+      # still names the bare `soli` of the PATH is pointed at the site's own,
+      # once, with the original kept beside it; one already pointing there is
+      # left alone. The proxy watches the sites directory and reads it again.
+      - name: Point app.infos at the site's Soli
+        run: |
+          set -euo pipefail
+          ssh "$USER@$HOST" "bash -s" <<SH
+          set -euo pipefail
+          infos='$SITES_DIR/$DOMAIN/app.infos'
+          own='$SITES_DIR/$DOMAIN/.soli/current/soli'
+          if grep -q '^start_script = "soli ' "\$infos"; then
+            cp -n "\$infos" "\$infos.before-own-soli"
+            sed -i "s|^start_script = \"soli |start_script = \"\$own |" "\$infos"
+            echo "app.infos now starts \$own (the original is app.infos.before-own-soli)"
           fi
+          grep '^start_script' "\$infos"
+          grep -q "^start_script = \"\$own " "\$infos" || { echo "app.infos does not start \$own; see deploy/README.md" >&2; exit 1; }
+          SH
 
       # The browser client, built here because it is not committed.
       #
@@ -298,6 +323,7 @@ jobs:
             --exclude='.env.*' \
             --exclude='app.infos' \
             --exclude='restart.txt' \
+            --exclude='.soli/' \
             --exclude='config/eui_publisher.pkcs8' \
             --exclude='public/chat/' \
             --exclude='public/covers/' \
@@ -313,7 +339,7 @@ jobs:
       - name: Migrate
         run: |
           set -euo pipefail
-          ssh "$USER@$HOST" "cd '$SITES_DIR/$DOMAIN' && soli db:migrate up"
+          ssh "$USER@$HOST" "cd '$SITES_DIR/$DOMAIN' && .soli/current/soli db:migrate up"
 
       # `soli-proxy deploy` rather than `touch restart.txt`: the trigger file
       # is ignored in silence when the proxy cannot start the slot — an
@@ -348,7 +374,16 @@ jobs:
             if [ -n "$fresh" ]; then
               code="$(ssh "$USER@$HOST" "$PROBE" 2>/dev/null | tail -1 || echo 000)"
               echo "attempt $i: new process $fresh, /up -> $code"
-              [ "$code" = "200" ] && { echo "The new slot answers."; exit 0; }
+              if [ "$code" = "200" ]; then
+                # Which binary the slot really is: the point of the site's own
+                # Soli is lost if the proxy still started the PATH's.
+                exe="$(ssh "$USER@$HOST" "for p in $fresh; do readlink /proc/\$p/exe; done" | sort -u)"
+                echo "the new slot runs: $exe"
+                case "$exe" in
+                  *"/.soli/$SOLI_VERSION/soli") echo "The new slot answers, on Soli $SOLI_VERSION."; exit 0 ;;
+                  *) echo "The new slot is not the site's Soli $SOLI_VERSION: $exe" >&2; exit 1 ;;
+                esac
+              fi
             else
               echo "attempt $i: no fresh process"
             fi
