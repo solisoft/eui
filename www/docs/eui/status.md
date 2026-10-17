@@ -2580,6 +2580,25 @@ staves (a single track's sheet: 130 KB), since a band is a system — a band
 per staff would need `eui-score`'s and the catalogue's band cutters and
 lang's pin to move. `tests/score_spec.sl` is 114 tests.
 
+**And a full score that re-lays only the part edited** (2026-10-17). On
+`main`, Beethoven's exposition in the full score spent **258 ms** of view
+on every ↑ (`EUI_TRACE`, `soli` 2.27.2, native engraver): the engraving was
+6 ms and the drawing 2, and 230 ms was the editor writing the full score's
+LilyPond in Soli — every one of the twelve parts laid out twice a render,
+once for the note map and once for the source, and each part asking
+`score_ed_ensemble_end`, which walked all 2 637 notes of all twelve tracks,
+4 ms a question. Each part's music is now remembered on what its layout
+reads — that part, the bar marks, the options, the piece's settings and the
+ensemble's end — so an edit re-lays the part it touched and finds the other
+eleven; the ensemble's end is asked once a pass and kept on the bar marks,
+which are built fresh for each; and the full score no longer engraves the
+single track it does not show. A ↑ is **37 ms** of view, a click that picks
+a note 10 ms (was 22), the first full score 100–109 ms (was 244). The
+picture after three edits is the baseline's byte for byte. Production does
+not see this yet: `eui-data.solisoft.net` runs Soli 2.5.5, which predates
+`eui_score_layout`, so it engraves in Soli — the exposition takes **about
+30 s** to open there against 0.115 s on the 2.27.2 release.
+
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the
 beat and its speed together, Printed / Not printed, and beside them what

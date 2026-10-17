@@ -263,6 +263,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- The score editor's full score answers an edit about seven times faster:
+  on Beethoven's exposition a note moved went from 258 ms of server time to
+  37 ms. Each track's music is laid out once and remembered, instead of
+  every track twice per edit.
 - A window on macOS draws as soon as it opens, instead of staying empty
   until it was clicked or resized. Since wgpu 30 the Metal surface gives
   no texture while macOS reports the window occluded, which it still does

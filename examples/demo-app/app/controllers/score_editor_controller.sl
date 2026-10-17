@@ -1159,7 +1159,14 @@ end
 
 # The tick every track is filled to: the longest one's end, rounded up to
 # its bar line.
+#
+# Kept on `info`, which `score_ed_bar_marks` builds fresh for each pass over
+# the tracks: every track's layout asks for it, and walking every note of
+# every track each time cost 4 ms a question on the Beethoven example —
+# twelve parts asking, twice a render, was most of a full score's 240 ms.
 def score_ed_ensemble_end(state, info)
+  return info["ensemble_end"] unless info["ensemble_end"].nil?
+
   ends = 0
   for trk in score_ed_all(state)
     total = trk["notes"].reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
@@ -1169,6 +1176,7 @@ def score_ed_ensemble_end(state, info)
     end
     ends = score_max(ends, score_ed_bar_tick(info, b))
   end
+  info["ensemble_end"] = ends
   ends
 end
 
@@ -2786,13 +2794,26 @@ def score_ed_voice_two_ly(notes2, info, total)
 end
 
 # A track's music for the full score and the files, its second voice with it.
+#
+# Remembered a track at a time. Laying one out is 7 to 12 ms for a part of
+# the Beethoven example, and the full score asks for every track twice in a
+# render — once for the note map, once for the source — so before this an
+# edit to one note of twelve parts cost about 230 ms of Soli. The key is what
+# the layout reads (traced from `score_ed_layout_track` down): the track
+# itself, the bar marks, the options, the piece's settings, and where the
+# longest track ends, which every part is filled up to. Not the other
+# tracks: an edit re-lays the part it touched and finds the rest here.
 def score_ed_track_music(state, k, info, opts)
   base = score_ed_v1(state)
   trk = score_ed_all(base)[k]
+  print_of = str([k, trk, info, opts, score_ed_ensemble_end(base, info), base["voice"], base["key"], base["time"], base["clef"], base["header"], base["tempo"], base["tempo_base"], base["tempo_text"], base["mark_tempo"]])
+  known = score_memo_get("ed_track", print_of)
+  return known unless known.nil?
+
   voiced = score_ed_voiced?(trk["notes2"])
   laid = score_ed_layout_track(base, k, info, voiced ? opts.merge({"gather": false}) : opts)
   both = score_ed_with_voice_two(base.merge({"notes": trk["notes"]}), laid, trk["notes2"], info, true)
-  {"words": both["words"], "map": both["map"]}
+  score_memo_put("ed_track", print_of, {"words": both["words"], "map": both["map"]}, 64)
 end
 
 def score_ed_layout_one(state)
@@ -3252,7 +3273,11 @@ end
 
 def score_editor_view(raw_state)
   state = score_ed_defaults(raw_state ?? {})
-  drawn = score_ed_engrave(state)
+  # The full score shows every track and writes its own source, so the one
+  # track being edited is neither shown nor read there: engraving it anyway
+  # was 10 ms of every edit on the Beethoven example for a picture nobody
+  # saw. The handlers that hit-test a click engrave it themselves.
+  drawn = score_ed_full_view(state) ? {"src": "", "engraved": nil} : score_ed_engrave(state)
   vw = (state["viewport"] ?? {})["width"] ?? 1100
   body_h = score_ed_body_h(state)
   inner = column({"pad": 7, "gap": 5, "width": "100%"}, [
