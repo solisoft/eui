@@ -263,6 +263,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- A window on macOS draws as soon as it opens, instead of staying empty
+  until it was clicked or resized. Since wgpu 30 the Metal surface gives
+  no texture while macOS reports the window occluded, which it still does
+  for a moment after the window is shown, and that first frame was dropped
+  with nothing asking for another. The client now redraws when the window
+  is uncovered (also after a restore from the Dock), and asks again after
+  reconfiguring a lost or outdated surface.
 - Stopping a long sound no longer kills the window's worker on Linux
   (`the worker exited: signal: 31 (SIGSYS)`): glibc, trimming the heap
   the sound had been decoded into, opened a file behind the sandbox. The
