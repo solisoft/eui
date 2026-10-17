@@ -2,7 +2,7 @@
 # eui-data.solisoft.net — the same server and the same contract as the
 # documentation site, which is `deploy-site.yml` beside this file.
 #
-# The two differ in four places, and all four are why this is its own
+# The two differ in five places, and all five are why this is its own
 # workflow rather than a matrix over that one:
 #
 #   1. This application has a **database**. `soli db:migrate up` runs on the
@@ -23,6 +23,9 @@
 #      Booting it warms every handler in the tree, which is what catches a
 #      parse error in a controller and a capability the server has never
 #      heard of — the two ways this application has actually failed.
+#   5. It runs on **a Soli of its own**, the latest soli_lang release,
+#      installed beside the site in .soli/<version>/ rather than the
+#      server's shared `soli`. See `env:` below.
 #
 # See deploy/README.md for the one-time server setup.
 name: verify & deploy the demo application
@@ -53,43 +56,45 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The demo runs on a Soli of its own, installed by the deploy below into
-  # <site>/.soli/<version>/ and named by app.infos — not the server's `soli`,
-  # which the other sites on the box share and which stays where it is
-  # (2.5.5 on 2026-10-17). 2.26.0 is the first release with `eui_score_layout`,
-  # the native engraver: on 2.5.5 the score editor engraves in Soli, and
-  # Beethoven's exposition took about 30 s to open, against 0.115 s on
-  # 2.27.2 (every component but `broken` opens on 2.27.2; `pantry_5` fails
-  # now and then on both, a pre-existing fault). Before 2026-10-17 this
-  # pinned what the server's `soli` was:
-  #
-  # 2.5.5 is what eui-data.solisoft.net runs (the deploy of d66c4bc printed
-  # "server: 2.5.5 — pinned: 2.3.3"), so it is what the checks below must
-  # boot: 2.3.3 could no longer open the gallery at all, which does not know
-  # the `level` event, and this job passed while testing a version nobody
-  # deployed. Every component but `broken` opens on 2.5.5 (checked with
-  # `snapshot` on 2026-09-27). Protocol 7 needs 2.6.1; until the server has
-  # it, the landing page draws its badges the older way.
-  #
-  # 2.3.3 held this line before, as the first release whose `eui-proto` knows
-  # the `scene` capability bit and node kind (EUI protocol 2): an older
-  # server refuses this application at boot — `eui_capabilities: unknown
-  # capability 'scene'`. Which is why the version is checked before the
-  # switch rather than hoped for. 2.2.1 before that, for `nfc` and the
-  # `location` and `nfc_tag` event kinds, for the same reason.
-  SOLI_VERSION: "2.27.2"
+  # No Soli version is written here. The demo runs on the latest release of
+  # soli_lang, read when the run starts: `verify` finds it, installs it and
+  # boots the application on it, and `deploy` installs that same version
+  # into <site>/.soli/<version>/ and points app.infos at it -- so what the
+  # checks booted is what goes live, even when a release lands between the
+  # two jobs. Not the server's `soli`, which the other sites on the box
+  # share and which stays where it is (2.5.5 on 2026-10-17): the score
+  # editor needs `eui_score_layout` (2.26.0 and later), and a pin let the
+  # demo sit on 2.27.2 after 2.28.0 shipped.
   APP_DIR: examples/demo-app
 
 jobs:
   verify:
     name: it boots
     runs-on: ubuntu-latest
+    outputs:
+      soli_version: ${{ steps.soli.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      # The official install.sh only knows `latest`; the release tarball is
-      # what a pinned version means.
-      - name: Install soli (pinned version)
+      # The latest release, by the redirect github.com answers for
+      # /releases/latest (drafts and prereleases are never "latest"), which
+      # needs no token and spends no API quota. Read once, here, and handed
+      # to `deploy` as an output.
+      - name: Find the latest Soli release
+        id: soli
+        run: |
+          set -euo pipefail
+          url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/solisoft/soli_lang/releases/latest)"
+          version="${url##*/tag/v}"
+          echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "no release version in '$url'" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "SOLI_VERSION=$version" >> "$GITHUB_ENV"
+          echo "latest Soli release: $version"
+          echo "Soli \`$version\` (the latest release)" >> "$GITHUB_STEP_SUMMARY"
+
+      # From the release tarball, the same file `deploy` installs on the
+      # server.
+      - name: Install that Soli
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -152,6 +157,8 @@ jobs:
       name: production
       url: https://${{ vars.DATA_DOMAIN || 'eui-data.solisoft.net' }}
     env:
+      # The release `verify` booted the application on, never read again.
+      SOLI_VERSION: ${{ needs.verify.outputs.soli_version }}
       HOST: ${{ secrets.DEPLOY_HOST }}
       USER: ${{ vars.DEPLOY_USER || 'rocky' }}
       SITES_DIR: ${{ vars.DEPLOY_SITES_DIR || '/home/rocky/sites' }}
@@ -215,10 +222,10 @@ jobs:
 
       # The site's own Soli, before anything is sent: the version the verify
       # job just booted, in <site>/.soli/<version>/, with `current` pointing
-      # at it. Fetched once a version — a second deploy of the same pin finds
+      # at it. Fetched once a version — a second deploy of the same release finds
       # it and moves on — and from the same release tarball the runner used.
       # The server's own `soli` is not touched: other sites run on it.
-      - name: Install the pinned Soli beside the site
+      - name: Install that Soli beside the site
         run: |
           set -euo pipefail
           ssh "$USER@$HOST" "bash -s" <<SH
@@ -235,6 +242,12 @@ jobs:
           fi
           "\$dir/soli" --version
           ln -sfn "$SOLI_VERSION" "\$home/current"
+          # Two kept: this one and the newest before it, which the slot still
+          # serving runs until the switch. With no pin, every release would
+          # otherwise leave one behind for good.
+          ls -1 "\$home" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\$' | sort -V | head -n -2 | while read -r old; do
+            echo "removing \$home/\$old"; rm -rf "\$home/\$old"
+          done
           SH
 
       # app.infos is the server's file and this workflow never sends it, but
