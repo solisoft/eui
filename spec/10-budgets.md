@@ -98,6 +98,19 @@ fewer of its own — but that is not a trade this version makes: the embedded
 faces are what makes an application that asks for nothing still draw, and
 what makes the same text shape the same way on every machine.
 
+### Scores — the engraving moved to the client
+
+A `score` (03 §1.4) is engraved where the decoder runs, never on the
+window's thread, and is kept until a prop that moves it changes: a press, a
+new `marks` or a moving `lit` redraws from the kept engraving and engraves
+nothing. Its `src` is refused past **512 KiB**, unread. The line held is
+a page of the catalogue's largest piece — the score editor's Beethoven
+exposition, thirteen staves — engraved and painted inside a frame at 30 Hz,
+33 ms: 13 ms paged at 700 px and 16 ms on A4 when measured
+(`the_largest_piece_is_engraved_inside_a_frame`, release build, 2026-10-17).
+One endless page of the whole piece is 77 ms and is not held to it: its
+14 371 paths are the size of the piece, not of what is on screen.
+
 ### Scenes — measured where it can be, named where it cannot
 
 A `scene` (03 §1.2) is the one node that can ask the client for an unbounded

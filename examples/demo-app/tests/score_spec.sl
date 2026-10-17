@@ -5000,7 +5000,11 @@ def score_ed_answer(state, ed_event, params, props)
     "track_mute" => score_ed_track_set(state, "mute", !(score_ed_tracks(state)[state["track"] ?? 0]["mute"] == true)),
     "group" => SCORE_ED_GROUPS.includes?(props["option"]) ? score_ed_flag(state, "group", props["option"]) : state,
     "conductor_pick" => score_ed_conductor_pick(state, params["payload"] ?? [0, 0]),
-    "connect" => state,
+    # The protocol the client settled on: from 9 it engraves a `score` node
+    # itself, and the editor sends the source alone (eui 03 §1.4).
+    "connect" => score_ed_flag(state, "protocol", int(params["protocol"] ?? 8)),
+    "score_pick" => score_ed_score_pick(state, params["payload"] ?? [], props),
+    "score_info" => score_ed_score_info(state, params["payload"] ?? [], props["which"] ?? "sheet"),
     "viewport" => state,
     "key" => score_ed_key(state, params["payload"][0], params["payload"][1]),
     "midi" => score_ed_midi_in(state, params["payload"] ?? []),
@@ -6617,6 +6621,8 @@ def score_ed_follow(state)
   return state if lit < 0 || key == state["page_lit"]
 
   state["page_lit"] = key
+  return score_ed_follow_client(state, lit) if score_ed_client_engraves?(state)
+
   drawn = score_ed_engrave(state)
   return state if drawn["engraved"].nil?
 
@@ -8026,6 +8032,7 @@ end
 
 def score_ed_conductor_card(state)
   return {"k": "box", "s": {"display": "column"}, "c": []} if score_ed_tracks(state).length < 2
+  return score_ed_conductor_client(state) if score_ed_client_engraves?(state)
 
   full = score_ed_conductor(state)
   width = score_ed_width(state)
@@ -8105,6 +8112,321 @@ def score_ed_slur_button(state, no_note)
     "a11y": {"role": "button", "label": "Slur: on — S on the last note ends it", "pressed": true},
     "c": [text("Slur ●", {"size": 1, "weight": "medium", "fg": "accent.on"}), kbd("S")]
   })
+end
+
+def score_ed_client_engraves?(state)
+  (state["protocol"] ?? 8) >= 9
+end
+
+def score_ed_unengraved(state)
+  ue_laid = score_ed_layout(state)
+  {"engraved": nil, "src": ue_laid["src"], "map": ue_laid["map"], "map1": ue_laid["map1"] ?? ue_laid["map"], "map2": ue_laid["map2"], "problem": state["score_refusal"] ?? "", "sp": score_ed_space(state), "a4": state["view"] == SCORE_ED_VIEWS[1]}
+end
+
+def score_ed_marks_list(ml_marks)
+  ml_marks.keys.map { |ml_k| [int(ml_k), ml_marks[ml_k]] }
+end
+
+def score_ed_sheet_marks(state, drawn)
+  sm_marks = {}
+  sm_playing = state["playing"] == true
+  sm_lit = sm_playing ? -1 : (state["sel"] ?? -1)
+  sm_lit_set = sm_playing ? ((state["play_lit"] ?? [])[state["track"] ?? 0] ?? []) : []
+  sm_armed = sm_playing ? -1 : ((state["slur_from"] ?? -1) >= 0 ? state["slur_from"] : (state["pin_from"] ?? -1))
+  for sm_owner, sm_k in drawn["map"]
+    sm_marks[str(sm_k)] = "accent.base" if sm_owner >= 0 && sm_owner == sm_lit
+    sm_marks[str(sm_k)] = "info.base" if sm_owner == sm_armed && sm_owner != sm_lit
+  end
+  for sm_owner, sm_k in drawn["map1"] ?? drawn["map"]
+    sm_marks[str(sm_k)] = "accent.base" if sm_owner >= 0 && sm_lit_set.includes?(sm_owner)
+  end
+  sm_marks
+end
+
+def score_ed_sheet_node(state, drawn)
+  sn_a4 = drawn["a4"] == true
+  sn_pages = score_max(1, state["score_pages"] ?? 1)
+  {
+    "k": "score",
+    "s": {"width": sn_a4 ? score_ed_page_width(state) : score_ed_width(state)},
+    "p": {"src": drawn["src"], "staff_space": drawn["sp"], "page": sn_a4 ? "a4" : "screen", "page_height": sn_a4 ? 0 : score_ed_screen_page(), "page_index": score_max(0, score_min(sn_pages - 1, state["page"] ?? 0)), "marks": score_ed_marks_list(score_ed_sheet_marks(state, drawn)), "which": "sheet"},
+    "on": {"score_pick": "score_pick", "score_info": "score_info"}
+  }
+end
+
+def score_ed_sheet_client(state, drawn)
+  sc_a4 = drawn["a4"] == true
+  sc_width = sc_a4 ? score_ed_page_width(state) : score_ed_width(state)
+  sc_pages = score_max(1, state["score_pages"] ?? 1)
+  sc_shown = score_max(0, score_min(sc_pages - 1, state["page"] ?? 0))
+  sc_node = score_ed_sheet_node(state, drawn)
+  sc_style = sc_a4 ? {"display": "column", "bg": "surface.raised", "shadow": 2, "border": 1, "border_color": "border.subtle", "width": sc_width} : {"display": "column", "width": sc_width}
+  sc_style["cursor"] = score_ed_inserting(state) ? "text" : "pointer"
+  sc_box = {"k": "box", "s": sc_style, "on": {"key_down": "key"}, "p": {"page": sc_shown, "typing": true, "autofocus": true, "role": "group", "label": "Score — type A to G to add notes"}, "c": [sc_node]}
+  sc_kids = [sc_box]
+  sc_problem = state["score_refusal"] ?? ""
+  sc_kids = sc_kids + [text(sc_problem, {"fg": "danger.base", "size": 1})] if sc_problem != ""
+  sc_pager = score_ed_pager(state, "page", sc_pages)
+  sc_kids = [sc_pager] + sc_kids unless sc_pager.nil?
+  return column({"gap": 6, "width": "100%", "align": "center", "pad": 5, "bg": "surface.sunken", "radius": 2}, sc_kids) if sc_a4
+
+  card({"pad": 5, "gap": 3, "width": "100%", "bg": "surface.raised"}, sc_kids)
+end
+
+def score_ed_conductor_client(state)
+  cc_full = score_ed_conductor(state)
+  cc_width = score_ed_width(state)
+  cc_pages = score_max(1, state["cond_pages"] ?? 1)
+  cc_shown = score_max(0, score_min(cc_pages - 1, state["cond_page"] ?? 0))
+  cc_node = {
+    "k": "score",
+    "s": {"width": cc_width},
+    "p": {"src": cc_full["src"], "staff_space": score_ed_full_space(state), "page_height": score_ed_screen_page(), "page_index": cc_shown, "marks": score_ed_marks_list(score_ed_conductor_marks(state, cc_full)), "which": "cond"},
+    "on": {"score_pick": "score_pick", "score_info": "score_info"}
+  }
+  cc_heading = [text("Full score", {"size": 2, "weight": "semibold"}), muted("Every track, as the PDF and the MIDI have them. Click a note to edit it; a track's name above goes back to its staff.")]
+  cc_pager = score_ed_pager(state, "cond_page", cc_pages)
+  cc_heading = cc_heading + [{"k": "box", "s": {"grow": 1}}, cc_pager] unless cc_pager.nil?
+  card({"gap": 3, "pad": 5, "width": "100%"}, [
+    row({"gap": 3, "align": "center", "wrap": "wrap", "width": "100%"}, cc_heading),
+    {"k": "box", "s": {"display": "column", "width": cc_width, "cursor": "pointer"}, "p": {"role": "group", "label": "Full score"}, "c": [cc_node]}
+  ])
+end
+
+def score_ed_score_info(state, si_payload, si_which)
+  si_pages = score_max(1, int(si_payload[0] ?? 1))
+  si_starts = si_payload[2] ?? []
+  if si_which == "cond"
+    state["cond_pages"] = si_pages
+    state["cond_starts"] = si_starts
+  else
+    state["score_pages"] = si_pages
+    state["score_starts"] = si_starts
+    state["score_refusal"] = si_payload[1] ?? ""
+  end
+  # New pages: the page the selection is on is worked out again.
+  state["page_lit"] = ""
+  state
+end
+
+def score_ed_pick_of(pk_raw)
+  {
+    "phase": pk_raw[0] ?? 0,
+    "page": pk_raw[2] ?? 0,
+    "staff": pk_raw[4] ?? 0,
+    "pos": 4 - (pk_raw[5] ?? 4),
+    "near": pk_raw[6] ?? -1,
+    "gap": float(pk_raw[7] ?? -1.0),
+    "before": pk_raw[8] ?? -1,
+    "after": pk_raw[9] ?? -1,
+    "frac": float(pk_raw[10] ?? -1.0)
+  }
+end
+
+def score_ed_score_pick(state, sp_payload, sp_props)
+  sp_pick = score_ed_pick_of(sp_payload)
+  return score_ed_flag(state, "dragging", false) if sp_pick["phase"] == 2
+  return score_ed_drag_to(state, sp_pick) if sp_pick["phase"] == 1
+  return score_ed_cond_pick_at(state, sp_pick) if (sp_props["which"] ?? "") == "cond"
+
+  if score_ed_inserting(state)
+    state["dragging"] = false
+    return score_ed_insert_pick(state, sp_pick)
+  end
+  state = score_ed_pick_at(state, sp_pick)
+  state["dragging"] = !score_ed_selected(state).nil?
+  state["drag_saved"] = false
+  state
+end
+
+def score_ed_pick_at(state, pa_pick)
+  pa_laid = score_ed_layout(state)
+  pa_map = pa_laid["map"]
+  pa_pitch = score_ed_pitch_at(state, pa_pick["pos"])
+  pa_near = pa_pick["near"]
+  # Past the last head of the piece: the old rule was two and a half spaces
+  # past the last item's left edge, which is 1.9 past its head's centre.
+  pa_at_end = pa_pick["after"] < 0 && pa_pick["before"] >= 0 && pa_pick["before"] == pa_map.length - 1
+  if pa_at_end && (pa_near < 0 || pa_pick["gap"] > 1.9) && state["voice"] != 2
+    state["sel"] = -1
+    state = score_ed_insert(state, pa_pitch["step"], false)
+    pa_current = score_ed_selected(state)
+    pa_current["pitches"] = [pa_pitch]
+    return state
+  end
+  return state if pa_near < 0 || pa_pick["gap"] > 2.0
+
+  pa_hit = score_ed_voice_by_model(state, pa_laid, pa_near, pa_pitch)
+  pa_model = pa_hit < pa_map.length ? pa_map[pa_hit] : -1
+  if pa_model < 0
+    pa_other_map = state["voice"] == 2 ? pa_laid["map1"] : (pa_laid["map2"] ?? [])
+    pa_other = pa_hit < pa_other_map.length ? pa_other_map[pa_hit] : -1
+    return state if pa_other < 0
+
+    state = score_ed_set_voice(state, state["voice"] == 2 ? 1 : 2)
+    state["sel"] = pa_other
+    state["typing"] = false
+    return state
+  end
+  return score_ed_set_pitch(state, pa_pitch) if state["sel"] == pa_model
+
+  state["sel"] = pa_model
+  state["typing"] = false
+  state
+end
+
+def score_ed_start_of(so_notes, so_k)
+  so_t = 0
+  for so_i in range(0, score_min(so_k, so_notes.length))
+    so_t += score_ed_ticks(so_notes[so_i])
+  end
+  so_t
+end
+
+def score_ed_note_at_start(ns_notes, ns_tick)
+  ns_t = 0
+  for ns_nt, ns_i in ns_notes
+    return ns_i if ns_t == ns_tick
+    return -1 if ns_t > ns_tick
+
+    ns_t += score_ed_ticks(ns_nt)
+  end
+  -1
+end
+
+def score_ed_pitch_gap(pg_nt, pg_want)
+  return 500 if pg_nt["rest"]
+
+  pg_nt["pitches"].map { |pt| (pt["oct"] * 7 + pt["step"] - pg_want).abs }.reduce(fn(acc, v) score_min(acc, v), 999)
+end
+
+def score_ed_voice_by_model(state, vm_laid, vm_item, vm_pitch)
+  vm_now = vm_laid["map"]
+  vm_other = state["voice"] == 2 ? vm_laid["map1"] : (vm_laid["map2"] ?? [])
+  return vm_item if vm_other.nil? || vm_other.length == 0
+
+  vm_in_now = vm_item < vm_now.length && vm_now[vm_item] >= 0
+  vm_owner = vm_in_now ? vm_now[vm_item] : (vm_item < vm_other.length ? vm_other[vm_item] : -1)
+  return vm_item if vm_owner < 0
+
+  vm_mine = vm_in_now ? state["notes"] : (state["notes2"] ?? [])
+  vm_theirs = vm_in_now ? (state["notes2"] ?? []) : state["notes"]
+  vm_their_map = vm_in_now ? vm_other : vm_now
+  vm_twin = score_ed_note_at_start(vm_theirs, score_ed_start_of(vm_mine, vm_owner))
+  return vm_item if vm_twin < 0 || vm_owner >= vm_mine.length
+
+  vm_twin_item = vm_their_map.index_of(vm_twin)
+  return vm_item if vm_twin_item < 0
+
+  vm_want = vm_pitch["oct"] * 7 + vm_pitch["step"]
+  score_ed_pitch_gap(vm_theirs[vm_twin], vm_want) < score_ed_pitch_gap(vm_mine[vm_owner], vm_want) ? vm_twin_item : vm_item
+end
+
+def score_ed_owner_from(of_map, of_start, of_dir)
+  of_k = of_start
+  while of_k >= 0 && of_k < of_map.length
+    return of_map[of_k] if of_map[of_k] >= 0
+
+    of_k += of_dir
+  end
+  -1
+end
+
+def score_ed_insert_pick(state, ip_pick)
+  ip_laid = score_ed_layout(state)
+  ip_map = ip_laid["map"]
+  ip_pitch = score_ed_within(state, score_ed_pitch_at(state, ip_pick["pos"]))
+  ip_notes = state["notes"]
+  ip_near = ip_pick["near"]
+  ip_on = ip_near >= 0 && ip_pick["gap"] <= 1.0 && ip_near < ip_map.length ? ip_map[ip_near] : -1
+  return score_ed_insert_onto(state, ip_on, ip_pitch) if ip_on >= 0 && ip_on < ip_notes.length
+  return score_ed_write_at_tick(state, score_ed_tick_from_pick(state, ip_laid, ip_pick), ip_pitch) if state["voice"] == 2
+
+  ip_at = score_ed_owner_from(ip_map, ip_pick["after"], 1)
+  ip_at = score_ed_owner_from(ip_map, ip_pick["before"], -1) + 1 if ip_at < 0
+  ip_at = score_max(0, score_min(ip_at, ip_notes.length))
+  state = score_ed_remember(state)
+  ip_fresh = score_ed_note(ip_pitch["step"], ip_pitch["oct"], ip_pitch["alter"], state["dur"], state["dot"] ? 1 : 0)
+  state["notes"] = ip_notes.take(ip_at) + [ip_fresh] + range(ip_at, ip_notes.length).map { |ip_k| ip_notes[ip_k] }
+  state["sel"] = ip_at
+  state["typing"] = true
+  score_ed_blip(state, ip_fresh)
+end
+
+def score_ed_tick_from_pick(state, tp_laid, tp_pick)
+  tp_map1 = tp_laid["map1"] ?? tp_laid["map"]
+  tp_first = score_ed_v1(state)["notes"]
+  tp_b = score_ed_owner_from(tp_map1, tp_pick["before"], -1)
+  tp_a = score_ed_owner_from(tp_map1, tp_pick["after"], 1)
+  return 0 if tp_b < 0 && tp_a < 0
+  return score_ed_start_of(tp_first, tp_a) if tp_b < 0 || tp_b >= tp_first.length
+
+  tp_t0 = score_ed_start_of(tp_first, tp_b)
+  tp_grid = score_ed_ticks({"base": state["dur"], "dots": state["dot"] ? 1 : 0})
+  tp_t1 = tp_a >= 0 ? score_ed_start_of(tp_first, tp_a) : tp_t0 + score_ed_ticks(tp_first[tp_b])
+  tp_top = tp_a >= 0 ? tp_t1 : score_max(tp_t0, tp_t1 - tp_grid)
+  return tp_t0 if tp_t1 <= tp_t0 || tp_grid <= 0
+
+  tp_frac = tp_pick["frac"] < 0 ? 0.0 : tp_pick["frac"]
+  tp_steps = int(Math.floor(tp_frac * (tp_t1 - tp_t0) / tp_grid + 0.5))
+  score_min(tp_t0 + tp_steps * tp_grid, tp_top)
+end
+
+def score_ed_drag_to(state, dt_pick)
+  return state unless state["dragging"] == true
+
+  dt_current = score_ed_selected(state)
+  return state if dt_current.nil?
+
+  dt_pitch = score_ed_pitch_at(state, dt_pick["pos"])
+  dt_want = dt_pitch["oct"] * 7 + dt_pitch["step"]
+  return state if !dt_current["rest"] && dt_current["pitches"].any? { |pt| pt["oct"] * 7 + pt["step"] == dt_want }
+
+  state = score_ed_remember(state) unless state["drag_saved"] == true
+  state["drag_saved"] = true
+  score_ed_place_pitch(state, dt_pitch)
+end
+
+def score_ed_cond_pick_at(state, cp_pick)
+  cp_full = score_ed_conductor(state)
+  cp_k = cp_pick["staff"]
+  return state if cp_k < 0 || cp_k >= cp_full["maps"].length
+
+  state = score_ed_switch(state, cp_k)
+  return state if cp_pick["near"] < 0
+
+  cp_j = cp_pick["near"] - cp_full["firsts"][cp_k]
+  cp_owners = cp_full["maps"][cp_k]
+  cp_note = cp_j >= 0 && cp_j < cp_owners.length ? cp_owners[cp_j] : -1
+  state["sel"] = cp_note if cp_note >= 0
+  state["typing"] = false
+  state
+end
+
+def score_ed_page_from_starts(ps_starts, ps_staff, ps_item)
+  return nil if ps_item < 0
+
+  ps_page = nil
+  for ps_row, ps_p in ps_starts
+    ps_first = ps_row[ps_staff] ?? -1
+    ps_page = ps_p if ps_first >= 0 && ps_first <= ps_item
+  end
+  ps_page
+end
+
+def score_ed_follow_client(state, fc_lit)
+  fc_page = score_ed_page_from_starts(state["score_starts"] ?? [], 0, score_ed_layout(state)["map"].index_of(fc_lit))
+  state["page"] = fc_page unless fc_page.nil?
+  return state unless score_ed_full_view(state)
+
+  fc_full = score_ed_conductor(state)
+  fc_k = state["track"] ?? 0
+  fc_j = (fc_full["maps"][fc_k] ?? []).index_of(fc_lit)
+  return state if fc_j < 0
+
+  fc_cpage = score_ed_page_from_starts(state["cond_starts"] ?? [], fc_k, fc_full["firsts"][fc_k] + fc_j)
+  state["cond_page"] = fc_cpage unless fc_cpage.nil?
+  state
 end
 
 def score_ed_field_bytes()
@@ -8202,6 +8524,28 @@ end
 # Every path an engraving draws, flattened to [kind, numbers…].
 def spec_paths(src, width)
   score_paths(score_engrave(src, float(width) / 8), 8, {})
+end
+
+# A `score_pick` payload (eui 06 §1.5) on staff 0 of page 0: the phase, the
+# line in the event's terms (half spaces down from the top line), the
+# nearest item and its gap, the items either side and the fraction between.
+def spec_pick(phase, pos, near, gap, before, after, frac)
+  [phase, 0, 0, 0, 0, pos, near, gap, before, after, frac, 0.0, 0.0]
+end
+
+def spec_pick_staff(phase, pos, staff, near, gap)
+  [phase, 0, 0, 0, staff, pos, near, gap, near, -1, -1.0, 0.0, 0.0]
+end
+
+# Every node of a view of kind `kind`, depth first.
+def spec_find_kind(node, kind)
+  return [] unless node.is_a?("hash")
+
+  out = node["k"] == kind ? [node] : []
+  for child in node["c"] ?? []
+    out = out + spec_find_kind(child, kind)
+  end
+  out
 end
 
 def spec_state()
@@ -9379,6 +9723,84 @@ describe("the editor's tracks", fn() {
     engraved = score_engrave(src, 100.0)
     check("two staves", engraved["systems"][0]["staves"].length, 2)
     check("three bars each", engraved["systems"].map { |sys| sys["staves"][1]["bars"].length }.reduce(fn(acc, n) acc + n, 0), 3)
+  })
+
+  test("protocol 9: the editor sends a score node with the source, and no paths", fn() {
+    ed = score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 | g''1 }")
+    ed = score_ed_flag(ed, "protocol", 9)
+    assert(score_ed_client_engraves?(ed))
+    sheet = score_ed_sheet_node(ed, score_ed_unengraved(ed))
+    found = spec_find_kind(sheet, "score")
+    check("a score node", found.length, 1)
+    assert(found[0]["p"]["src"].contains("c''4"))
+    check("it hears where a press lands", found[0]["on"]["score_pick"], "score_pick")
+    check("no canvas", spec_find_kind(sheet, "canvas").length, 0)
+    check("protocol 8: the server engraves, as before", score_ed_client_engraves?(score_ed_flag(ed, "protocol", 8)), false)
+  })
+
+  test("protocol 9: a press selects the note the client names, a second one moves it", fn() {
+    ed = score_ed_flag(score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 | g''1 }"), "protocol", 9)
+    ed = score_ed_score_pick(ed, spec_pick(0, 4, 2, 0.2, 2, 3, 0.1), {})
+    check("selected", ed["sel"], 2)
+    check("held for a drag", ed["dragging"], true)
+    ed = score_ed_score_pick(ed, spec_pick(2, 4, 2, 0.2, 2, 3, 0.1), {})
+    check("released", ed["dragging"], false)
+    # Pressed again on the middle line: B, under the treble clef.
+    ed = score_ed_score_pick(ed, spec_pick(0, 4, 2, 0.1, 2, 3, 0.0), {})
+    check("moved to the line pressed", ed["notes"][2]["pitches"][0]["step"], 6)
+    # Far from every head: nothing chosen.
+    ed = score_ed_score_pick(score_ed_flag(ed, "sel", -1), spec_pick(0, 4, 1, 2.6, 1, 2, 0.5), {})
+    check("nothing within two spaces", ed["sel"], -1)
+  })
+
+  test("protocol 9: past the last note a press writes a new one; a drag moves it", fn() {
+    ed = score_ed_flag(score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }"), "protocol", 9)
+    ed = score_ed_score_pick(ed, spec_pick(0, 2, 3, 3.0, 3, -1, -1.0), {})
+    check("a note more", ed["notes"].length, 5)
+    check("selected", ed["sel"], 4)
+    first = ed["notes"][4]["pitches"][0]["step"]
+    ed = score_ed_score_pick(ed, spec_pick(1, 0, 4, 0.1, 4, -1, -1.0), {})
+    assert(ed["notes"][4]["pitches"][0]["step"] != first)
+  })
+
+  test("protocol 9: Insert mode writes between notes, or onto one as a chord", fn() {
+    ed = score_ed_flag(score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 }"), "protocol", 9)
+    ed["tool"] = SCORE_ED_TOOLS[1]
+    ed = score_ed_score_pick(ed, spec_pick(0, 4, 0, 1.5, 0, 1, 0.5), {})
+    check("between: one more note", ed["notes"].length, 5)
+    check("before the first to the right", ed["sel"], 1)
+    # On note 3 (E5), pressed on the second line, G4: a chord.
+    ed = score_ed_score_pick(ed, spec_pick(0, 6, 3, 0.3, 3, 4, 0.0), {})
+    check("on a note: no new note", ed["notes"].length, 5)
+    check("a chord", ed["notes"][3]["pitches"].length, 2)
+  })
+
+  test("protocol 9: score_info's starts turn the page to the note selected", fn() {
+    ed = score_ed_flag(score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 | g''4 a''4 b''4 c'''4 }"), "protocol", 9)
+    ed = score_ed_score_info(ed, [2, "", [[0], [4]]], "sheet")
+    check("pages", ed["score_pages"], 2)
+    ed["sel"] = 5
+    ed = score_ed_follow(ed)
+    check("on the second page", ed["page"], 1)
+    ed["sel"] = 1
+    ed = score_ed_follow(ed)
+    check("back on the first", ed["page"], 0)
+    ed = score_ed_score_info(ed, [1, "score: '}' at 3", []], "sheet")
+    check("a refusal is kept to show", ed["score_refusal"], "score: '}' at 3")
+  })
+
+  test("protocol 9: a press on the full score picks the staff's track and its note", fn() {
+    ed = score_ed_from_source(spec_state(), "{ c''1 | d''1 }")
+    ed = score_ed_track_add(ed)
+    ed = spec_keys(ed, ["c", "d"])
+    ed = score_ed_flag(score_ed_flag(ed, "protocol", 9), "full_view", true)
+    full = score_ed_conductor(ed)
+    ed = score_ed_score_pick(ed, spec_pick_staff(0, 4, 0, full["firsts"][0] + 1, 0.2), {"which": "cond"})
+    check("the first track", ed["track"], 0)
+    check("its second note", ed["sel"], 1)
+    ed = score_ed_score_pick(ed, spec_pick_staff(0, 4, 1, full["firsts"][1], 0.2), {"which": "cond"})
+    check("the second track", ed["track"], 1)
+    check("its first note", ed["sel"], 0)
   })
 
   test("Download PDF prints the track's part from a track, and the full score from the full score", fn() {

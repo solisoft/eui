@@ -3,7 +3,7 @@
 Status: **normative** for §1–§3 (what the client implements); §4 is the
 catalogue contract for servers.
 
-## 1. The seventeen primitives
+## 1. The eighteen primitives
 
 The protocol can express exactly these node kinds. Every widget a person
 would name — button, dialog, table, date picker — is composed from them on
@@ -29,6 +29,7 @@ shipping a new client, and that price is deliberate.
 | `audio` | A sound, referenced by BLAKE3 hash in the `src` prop. Draws nothing | — | — | — |
 | `video` | A moving picture, referenced by BLAKE3 hash in the `src` prop | — | — | — |
 | `scene` | A 3D picture, drawn by a program the server names (§1.2) | — | — | yes |
+| `score` | Music, engraved by the client from the LilyPond source in the `src` prop (§1.4). Protocol 9 | — | — | yes |
 
 An inert kind MUST carry no text, props or handlers; a leaf kind MUST have
 no children. Both are decoder errors ([`02-wire-format.md`](02-wire-format.md)
@@ -513,6 +514,76 @@ that is `playing` is a window that asked to be woken, exactly as a `wake`
 prop is, and costs what it asked for. What a client MUST NOT do is wake the
 part of itself that reads the server's bytes: an animating scene is the same
 draw list redrawn with a later clock.
+
+### 1.4 `score`
+
+A `score` is music the **client** engraves. The server sends the source, in
+the subset of LilyPond's language the catalogue's `score()` reads (§4), and
+nothing else: no paths, no positions, no page breaks. The client lays it out
+with the same engraver the catalogue uses — the `eui-score` crate — and
+draws what it computes. An edit is a new `src`, a few bytes where the paths
+were most of a system; the server keeps the music, and only the music.
+
+| Prop | Value | Meaning |
+|---|---|---|
+| `src` | `Str`, or `List[Str]` read as their concatenation; at most 512 KiB | The music. Required: a `score` without it draws nothing and reports nothing. A source past 4 KiB has to be a list, because an inline string is at most 4 KiB and a list at most 1024 values (02 §4.4) |
+| `staff_space` | number, px | The distance between two staff lines. Absent is `8` |
+| `page` | `Str`: `"screen"` or `"a4"` | `"screen"` lays the music out to the node's width; `"a4"` on A4 sheets at LilyPond's staff size 20 and default margins, scaled to the node's width. Absent is `"screen"` |
+| `page_height` | number, px | On a screen, the height a page may take before the next system starts a new one. Absent or `0` is one page as tall as the music |
+| `page_index` | `Int` ≥ 0 | The page drawn, from 0. One past the last draws the last |
+| `marks` | `List[List[Int item, colour]]` | Items drawn in another colour: an item's number — its place among the notes and rests of the whole source, from 0, every staff counted in order — with the colour it is drawn in instead. How an editor shows what is selected. A list of pairs because a value is never a map (02 §4.4) |
+| `lit` | `List[Int]` | Item numbers drawn in `accent.base`: a playhead |
+| `colour` | colour | The ink. Absent is `text.default` |
+
+**Size.** A `score` has no intrinsic width: it takes the width its parent
+gives it, as a `text` does. Its height is intrinsic — the height of the page
+it draws at that width: on a screen, the systems on `page_index` from the
+first's highest ink to the last's lowest; on A4, the sheet, width × 297 / 210.
+A client MUST lay the music out again when the width, `src`, `staff_space`,
+`page` or `page_height` changes, and MUST NOT when only `marks`, `lit`,
+`page_index` or `colour` does: those choose what is drawn, not where.
+
+**What is drawn** is exactly what the catalogue's `score()` draws for the
+same source, width, staff space and page — the same rectangles and the same
+non-zero fills (§1.1, kinds `1` and `5`), cut from the same glyph outlines —
+so a server that falls back to paths for an older client (§4) and a client
+that engraves draw one picture. `eui-score`'s golden tests hold the two to a
+hundredth of a pixel.
+
+**A refusal draws nothing.** A source the engraver cannot set is refused with
+the character it stopped at; the node paints its own background and the
+client reports the refusal in `score_info` ([`06-events.md`](06-events.md)
+§1.5). Half a score is never drawn: an editor that keeps the last good
+source shows that one, which is the server's to send.
+
+**The pointer.** A `score` with a `score_pick` handler reports, for a press,
+a move while pressed and a release, *where in the music* the pointer is —
+the page, the system, the staff, the line or space, the nearest note and
+how far it is, and the notes either side (06 §1.5) — and not only the coordinates. A server
+that sent the source could compute the same answer, because the engraver is
+deterministic and the same on both sides, which is why this is not picking
+in the sense §1.2 refuses ([`08-security.md`](08-security.md) §8): it tells
+the server nothing about pixels, nothing it did not write, and nothing
+about the machine. It saves the server the engraving it would need to
+answer a click.
+
+**What a client reports back.** `score_info` (06 §1.5) carries the number of
+pages and the refusal, if any, each time the engraving of a node changes —
+the two facts about the music a server can no longer work out for itself,
+and the two an editor needs: a pager, and a message under a source that
+does not read.
+
+**Cost.** Engraving is the client's work now, and it is bounded: a source
+past 512 KiB is refused unread, the engraving of a node is kept until one of
+the props that move it changes (above), and it is done where the decoder
+runs, off the window's thread ([`10-budgets.md`](10-budgets.md)). A
+page is what it costs, more than a piece: the score editor's Beethoven
+exposition — thirteen staves, 16 KB of source — is engraved and painted in
+13 ms on a screen paged at 700 px and 16 ms on A4, and in 77 ms as one
+endless page of all 37 systems, 14 371 paths of which most are below the
+window (`the_largest_piece_is_engraved_inside_a_frame`, measured on the
+build machine, 2026-10-17). A page that long is a reason to set
+`page_height`.
 
 ## 3. Focus and keyboard
 
@@ -1153,7 +1224,12 @@ outlines of a music font and a text face, with LilyPond's spacing, stem,
 beam and slur rules, on a screen or on A4 pages; a construct it cannot draw
 is refused with its position, as `tw()` refuses a class; a server that has
 the native engraver — lang's `eui_score_*` builtins over the `eui-score`
-crate — engraves with it, and draws the same paths, 09), feedback (toast,
+crate — engraves with it, and draws the same paths. `score()` itself
+keeps drawing canvases, because it has to run on a server that has never
+heard of a `score` node; a view that writes one (§1.4) — the score editor
+does, for a session of protocol 9 — is sent as the source to such a
+session, and as these same canvases, engraved by the server, to an older
+one — 09), feedback (toast,
 banner, progress, spinner, skeleton, empty state, timeline, avatar, avatar group, badge, chip),
 style (`tw`: Tailwind-style class strings, with `hover:`, `active:`, `focus:` and
 `disabled:` as local states, `sm:` … `2xl:` resolved on the server against the

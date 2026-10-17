@@ -66,6 +66,7 @@ fn draw_ungranted(fx: &mut Fx, w: u32, h: u32) -> DrawList {
         editing: None,
         now: 0.0,
         scenes_allowed: false,
+        scores: &[],
         scrollbar_hot: None,
         scrollbars: &[],
     })
@@ -91,6 +92,7 @@ fn draw_bars(fx: &mut Fx, w: u32, h: u32, scale: f32, bars: &[(eui_tree::NodeIx,
         editing: None,
         now: 0.0,
         scenes_allowed: true,
+        scores: &[],
         scrollbar_hot: None,
         scrollbars: bars,
     })
@@ -932,6 +934,7 @@ fn a_transition_paints_both_ends_and_the_clock() {
             editing: None,
             now: 0.0,
             scenes_allowed: true,
+            scores: &[],
             scrollbar_hot: None,
             scrollbars: &[],
         })
@@ -1311,6 +1314,7 @@ fn retained_glyph_quads_are_replayed_until_the_node_changes() {
             editing: None,
             now: 0.0,
             scenes_allowed: true,
+            scores: &[],
             scrollbar_hot: None,
             scrollbars: &[],
         })
@@ -1438,6 +1442,7 @@ fn an_edited_field_paints_its_selection_and_caret_and_clips_scrolled_text() {
         editing,
         now: 0.0,
         scenes_allowed: true,
+        scores: &[],
         scrollbar_hot: None,
         scrollbars: &[],
     });
@@ -1544,6 +1549,7 @@ fn a_focused_empty_field_puts_its_caret_where_it_would_without_a_hint() {
             editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0, caret_on: true }),
             now: 0.0,
             scenes_allowed: true,
+            scores: &[],
             scrollbar_hot: None,
             scrollbars: &[],
         });
@@ -1597,6 +1603,7 @@ fn a_centred_fields_caret_sits_in_the_middle_not_on_the_left() {
         editing: Some(Editing { node: ix, start: 0, end: 0, caret: 0, scroll_x: 0.0, caret_on: true }),
         now: 0.0,
         scenes_allowed: true,
+        scores: &[],
         scrollbar_hot: None,
         scrollbars: &[],
     });
@@ -1667,6 +1674,7 @@ fn a_tall_field_centres_its_text_and_caret() {
             editing,
             now: 0.0,
             scenes_allowed: true,
+            scores: &[],
             scrollbar_hot: None,
             scrollbars: &[],
         });
@@ -1785,6 +1793,7 @@ fn a_spinning_node_paints_the_same_list_whatever_the_clock() {
             editing: None,
             now,
             scenes_allowed: true,
+            scores: &[],
             scrollbar_hot: None,
             scrollbars: &[],
         })

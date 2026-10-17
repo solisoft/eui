@@ -385,6 +385,9 @@ struct Pointer {
     /// drag stores the latest and flushes it at paint, so the server is not
     /// asked to re-render the page a hundred times a second.
     coalesced_move: Option<(NodeIx, Value)>,
+    /// Spec 06 §1.5: the latest move over a pressed `score`, sent as one
+    /// `score_pick` a frame like `pointer_move` above.
+    score_move: Option<(NodeIx, f32, f32)>,
     /// When the last drag move was sent, while the server has not answered
     /// it. One move is in flight at a time: a drag that outruns the server
     /// otherwise builds a queue, and the queue is what a hand feels when
@@ -1374,6 +1377,17 @@ pub struct Driver {
     /// Spec 04 §7.1: the row range last reported by each windowed list,
     /// by node id, so a range is reported once.
     windows: HashMap<u32, (u32, u32)>,
+    /// Spec 03 §1.4: the engravings of the session's scores, made here and
+    /// not on the server.
+    scores: crate::score::Scores,
+    /// Each score's page as the painter draws it, by node id.
+    score_paint: Vec<(u32, Arc<Vec<Value>>)>,
+    /// What each of those was built from — the engraving, the page and what
+    /// colours it — so a frame that changed none of it builds nothing.
+    score_painted: HashMap<u32, (u64, usize, u64)>,
+    /// Spec 06 §1.5: the engraving each score last reported in
+    /// `score_info`, by node id, so each is reported once.
+    score_infos: HashMap<u32, u64>,
     /// Spec 06 §2: the size last reported by each node that asked for
     /// `resize`, by node id, so a size is reported once and a node that only
     /// *moved* reports nothing.
@@ -1687,6 +1701,10 @@ impl Driver {
             desktop_colors: Vec::new(),
             desktop_mode: None,
             windows: HashMap::new(),
+            scores: crate::score::Scores::default(),
+            score_paint: Vec::new(),
+            score_painted: HashMap::new(),
+            score_infos: HashMap::new(),
             sizes: HashMap::new(),
             paired_boxes: HashMap::new(),
             departed_keys: Vec::new(),
@@ -1961,6 +1979,12 @@ impl Driver {
             density: self.viewer.density,
             font_scale: (self.viewer.font_scale * 100.0).round() as u16,
         }
+    }
+
+    /// Engravings made in this session (03 §1.4): how a test tells a score
+    /// that was redrawn from one that was engraved again.
+    pub fn scores_engraved(&self) -> u64 {
+        self.scores.engraved
     }
 
     /// The tree.
@@ -3315,7 +3339,7 @@ impl Driver {
 
     fn ensure_layout(&mut self) {
         if !self.layout_valid {
-            let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes };
+            let mut measurer = Measurer { text: &mut self.text, assets: &self.assets, videos: &self.video_sizes, scores: &mut self.scores };
             // The layout places a `position: pointer` panel where the hand is,
             // so it has to be told where that is before it walks — a chip shown
             // by the same hover that moved the pointer would otherwise land at
@@ -4736,6 +4760,15 @@ impl Driver {
         // thumb follows locally this frame; the event waits for paint so
         // the server sees one move, not one per OS sample.
         if let Some(pressed) = self.pointer.pressed_on {
+            // 06 §1.5: a pressed score with a `score_pick` handler hears
+            // where in the music the hand is, once a frame.
+            if self.session.node(pressed).is_some() && self.target(pressed, EventKind::ScorePick).is_some() {
+                self.pointer.score_move = Some((pressed, x, y));
+                self.redraw = true;
+                if self.target(pressed, EventKind::PointerMove).is_none() {
+                    return Vec::new();
+                }
+            }
             if self.session.node(pressed).is_some() && self.target(pressed, EventKind::PointerMove).is_some() {
                 let p = self.point_payload(pressed, EventKind::PointerMove, x, y);
                 trace(|| format!("drag: captured move {x},{y} for node {:?}", self.session.node(pressed).map(|n| n.id)));
@@ -4952,6 +4985,17 @@ impl Driver {
             self.redraw = true;
         }
         out
+    }
+
+    /// The move over a pressed score that waited for the frame (06 §1.5).
+    fn flush_score_move(&mut self) -> Vec<Frame> {
+        let Some((from, x, y)) = self.pointer.score_move.take() else {
+            return Vec::new();
+        };
+        if self.session.node(from).is_none() {
+            return Vec::new();
+        }
+        self.score_pick(from, 1, x, y, 0)
     }
 
     fn flush_coalesced_move(&mut self) -> Vec<Frame> {
@@ -5456,6 +5500,7 @@ impl Driver {
         }
         let payload = self.button_payload(ix, EventKind::PointerDown, x, y, button);
         out.extend(self.emit(ix, EventKind::PointerDown, payload));
+        out.extend(self.score_pick(ix, 0, x, y, button));
         out
     }
 
@@ -5473,6 +5518,7 @@ impl Driver {
         self.pointer.drag = None;
         let mut out = self.track_release();
         out.extend(self.flush_coalesced_move());
+        out.extend(self.flush_score_move());
         self.ensure_layout();
         let (x, y) = (self.pointer.x, self.pointer.y);
         let hit = self.hit_now(x, y);
@@ -5526,6 +5572,9 @@ impl Driver {
                 let payload = self.button_payload(pressed, EventKind::PointerUp, x, y, button);
                 out.extend(self.emit(pressed, EventKind::PointerUp, payload));
             }
+            // 06 §1.5: the release goes to the score that was pressed,
+            // wherever the hand now is, as `pointer_up` does.
+            out.extend(self.score_pick(pressed, 2, x, y, button));
         }
         out
     }
@@ -8092,6 +8141,8 @@ impl Driver {
         self.pending.extend(told);
         let dragged = self.flush_drag_move();
         self.pending.extend(dragged);
+        let scored = self.flush_score_move();
+        self.pending.extend(scored);
         // A scroll in flight moves the view before layout; what it emits when
         // it lands is picked up by the next input or frame turn.
         let landed = self.advance_scroll();
@@ -8153,6 +8204,10 @@ impl Driver {
         // 03 §5.3: after the layout, so a node that pairs leaves behind the
         // box it actually occupied on the frame it was last seen.
         self.note_paired_boxes();
+        // 03 §1.4: the scores' pages for the painter, and 06 §1.5: what each
+        // engraving came to, for the server.
+        let scored = self.settle_scores();
+        self.pending.extend(scored);
         if settled {
             let asked = self.window_events();
             self.pending.extend(asked);
@@ -8231,6 +8286,7 @@ impl Driver {
                 scenes_allowed: self.granted & caps::SCENE != 0,
                 scrollbar_hot: self.pointer.dragging_thumb.map(|(s, _)| s).or(self.pointer.over_scrollbar),
                 scrollbars: &bars,
+                scores: &self.score_paint,
             });
             tries += 1;
             if self.atlas.generation() == generation || tries > 1 {
@@ -9041,6 +9097,89 @@ impl Driver {
     /// Spec 04 §7.1: for every windowed list laid out this frame, the rows
     /// in view plus a viewport of margin; emitted as `window` when the
     /// range differs from the one last reported for that node.
+    /// A score's content box: its origin and its width, where the music is
+    /// laid out and where a press is measured from.
+    fn score_box(&self, ix: NodeIx) -> Option<(f32, f32, f32)> {
+        let rect = self.layout.rect(ix)?;
+        let node = self.session.node(ix)?;
+        let (l, t, r) = match self.layout.style_for(node.owner, node.style) {
+            Some(st) => (st.border.l + st.padding.l, st.border.t + st.padding.t, st.border.r + st.padding.r),
+            None => (0.0, 0.0, 0.0),
+        };
+        Some((rect.x + l, rect.y + t, (rect.w - l - r).max(0.0)))
+    }
+
+    /// Spec 03 §1.4 and 06 §1.5, after a layout: each score's page as the
+    /// painter draws it, rebuilt only when its engraving, its page or what
+    /// colours it changed; and a `score_info` for each engraving a score with
+    /// that handler has not reported yet.
+    fn settle_scores(&mut self) -> Vec<Frame> {
+        let mut out = Vec::new();
+        let known = *self.session.atoms();
+        let mut seen: Vec<u32> = Vec::with_capacity(self.session.scores().len());
+        for ix in self.session.scores().to_vec() {
+            let Some(id) = self.session.node(ix).map(|n| n.id) else { continue };
+            let Some((_, _, width)) = self.score_box(ix) else { continue };
+            let Some(props) = self.session.score_props(ix) else { continue };
+            let page_index = props.page_index;
+            let engraving = self.scores.engraving(&props, width);
+            drop(props);
+            seen.push(id);
+            let node = self.session.node(ix);
+            let prop = |a: Option<u32>| a.and_then(|a| node.and_then(|n| n.prop(a)));
+            let (ink, marks, lit) = (prop(known.colour).cloned().unwrap_or_else(|| Value::Str("text.default".into())), prop(known.marks).cloned(), prop(known.lit).cloned());
+            let looks = {
+                use std::hash::{Hash as _, Hasher as _};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                format!("{ink:?}{marks:?}{lit:?}").hash(&mut h);
+                h.finish()
+            };
+            let page = engraving.page_shown(page_index);
+            let built_from = (engraving.serial, page, looks);
+            if self.score_painted.get(&id) != Some(&built_from) {
+                let paths = Arc::new(crate::score::page_paths(&engraving, page_index, &ink, marks.as_ref(), lit.as_ref()));
+                self.score_paint.retain(|(n, _)| *n != id);
+                self.score_paint.push((id, paths));
+                self.score_painted.insert(id, built_from);
+            }
+            if self.score_infos.get(&id) != Some(&engraving.serial) && self.target(ix, EventKind::ScoreInfo).is_some() {
+                self.score_infos.insert(id, engraving.serial);
+                out.extend(self.emit(ix, EventKind::ScoreInfo, crate::score::info_payload(&engraving)));
+            }
+        }
+        self.score_paint.retain(|(n, _)| seen.contains(n));
+        self.score_painted.retain(|n, _| seen.contains(n));
+        self.score_infos.retain(|n, _| seen.contains(n));
+        out
+    }
+
+    /// Spec 06 §1.5: where in the music a press, a move while pressed or a
+    /// release on a score landed, for the nearest `score_pick` handler. A
+    /// score with no music — refused, or not engraved — sends nothing.
+    fn score_pick(&mut self, from: NodeIx, phase: i64, x: f32, y: f32, button: u8) -> Vec<Frame> {
+        let Some((target, _)) = self.target(from, EventKind::ScorePick) else {
+            return Vec::new();
+        };
+        if self.session.node(target).map(|n| n.kind) != Some(NodeKind::Score) {
+            return Vec::new();
+        }
+        let Some((bx, by, width)) = self.score_box(target) else {
+            return Vec::new();
+        };
+        let Some(props) = self.session.score_props(target) else {
+            return Vec::new();
+        };
+        let page_index = props.page_index;
+        let engraving = self.scores.engraving(&props, width);
+        drop(props);
+        let (lx, ly) = (x - bx, y - by);
+        let Some(p) = crate::score::pick(&engraving, page_index, lx, ly) else {
+            return Vec::new();
+        };
+        let payload = crate::score::pick_payload(phase, button, &p, lx, ly);
+        self.emit(target, EventKind::ScorePick, payload)
+    }
+
     fn window_events(&mut self) -> Vec<Frame> {
         let lists = self.layout.windowed_lists().to_vec();
         if lists.is_empty() && self.windows.is_empty() {
@@ -9396,6 +9535,7 @@ struct Measurer<'a> {
     text: &'a mut TextEngine,
     assets: &'a AssetStore,
     videos: &'a HashMap<Hash, (f32, f32)>,
+    scores: &'a mut crate::score::Scores,
 }
 
 impl TextMeasurer for Measurer<'_> {
@@ -9408,6 +9548,9 @@ impl TextMeasurer for Measurer<'_> {
             .map(|(w, h)| (w as f32, h as f32))
             // A video is measured by its frame, which no image store holds.
             .or_else(|| self.videos.get(hash).copied())
+    }
+    fn score_height(&mut self, score: &eui_tree::ScoreProps<'_>, width: f32) -> f32 {
+        self.scores.engraving(score, width).height(score.page_index)
     }
 }
 

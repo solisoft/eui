@@ -106,7 +106,12 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
+// 9 is music the client engraves: the `score` kind (03 §1.4) and its two
+// events, `score_pick` and `score_info` (06 §1.5), alongside what was
+// already written down for it — canvas fills (kind 5) and `midi` (06 §1.4).
+// A session below 9 is sent the catalogue's canvases where a view wrote a
+// `score`, and none of the three events: nothing is refused.
 // 8 is a session over a pipe (01 §7): an application on the same machine
 // starts the client and speaks over its standard input and output, and its
 // assets travel in the session as `Fetch` and `Asset` (`0x0D`, `0x0E`)

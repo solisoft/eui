@@ -247,6 +247,20 @@ A `scene` (03 §1.2) does not widen it, and is built so that it cannot:
   the driver and through it the machine;
 - no timestamp query is enabled on a device that will run one.
 
+Nor does a `score` (03 §1.4), although it does what a scene refuses — a press
+on it is answered with an object, the note under the pointer (06 §1.5). The
+difference is where the answer comes from. A scene's picture is the
+adapter's, and what it shows depends on the machine; a score's is computed
+from the source the server sent, by an engraver that is deterministic and
+the same on both sides, with font outlines that ship in the client and are
+not the system's. The note under a press is therefore a function of things
+the server already has — its source, the width it laid out, the
+coordinates — and `score_pick` tells it nothing a server with the engraver
+could not compute, nothing about pixels, and nothing about the device.
+`score_info`'s page count and refusal are the same kind of fact. A client
+MUST NOT engrave with the system's fonts for this reason: a glyph outline
+that differs between machines would make the answer to a click one.
+
 **One channel is not closed, and saying so is the point of this paragraph.**
 A server can already time a client: a `wake` arrives on the driver's clock
 while a sound's `time_update` arrives on the audio thread's, and the

@@ -40,6 +40,13 @@ pub trait TextMeasurer {
     fn asset_size(&mut self, _hash: &[u8; 32]) -> Option<(f32, f32)> {
         None
     }
+
+    /// The height of the page a `score` draws at `width` px (spec 03 §1.4):
+    /// the client engraves the music, so it is the one who knows. `0` — the
+    /// default — for a measurer with no engraver, which draws no score.
+    fn score_height(&mut self, _score: &eui_tree::ScoreProps<'_>, _width: f32) -> f32 {
+        0.0
+    }
 }
 
 /// A fixed-pitch measurer: every character is `0.6 × size` wide, wrapping is

@@ -55,6 +55,9 @@ pub enum NodeKind {
     /// Leaf, and the only kind whose picture the client does not compute
     /// from the tree alone.
     Scene = 0x11,
+    /// Music the client engraves from the LilyPond source in `src`
+    /// (spec 03 §1.4). Leaf; protocol 9.
+    Score = 0x12,
 }
 
 impl NodeKind {
@@ -78,6 +81,7 @@ impl NodeKind {
             0x0F => Ok(Self::Audio),
             0x10 => Ok(Self::Video),
             0x11 => Ok(Self::Scene),
+            0x12 => Ok(Self::Score),
             _ => Err(DecodeError::UnknownTag("node kind")),
         }
     }
@@ -89,7 +93,7 @@ impl NodeKind {
 
     /// True for kinds that MUST NOT have children.
     pub const fn is_leaf(self) -> bool {
-        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider | Self::Audio | Self::Video | Self::Scene)
+        matches!(self, Self::Text | Self::Icon | Self::Spacer | Self::Divider | Self::Audio | Self::Video | Self::Scene | Self::Score)
     }
 
     /// True for kinds that carry no text, props, or handlers.
@@ -202,6 +206,14 @@ pub enum EventKind {
     /// messages only, every one in order (06 §1.4). Gated by the `midi`
     /// capability; protocol 9.
     Midi = 0x21,
+    /// Where in the music the pointer is on a `score` (spec 06 §1.5): the
+    /// phase, the button, the page, system, staff and line, the nearest
+    /// note and how far, the notes either side, and the coordinates.
+    /// Protocol 9.
+    ScorePick = 0x22,
+    /// What the client's engraving of a `score` came to (spec 06 §1.5):
+    /// `List[Int pages, Str refusal, List[List[Int]] starts]`. Protocol 9.
+    ScoreInfo = 0x23,
 }
 
 impl EventKind {
@@ -296,6 +308,19 @@ impl EventKind {
                 _ => false,
             },
 
+            // `List[Int phase, Int button, Int page, Int system, Int staff,
+            // Int pos, Int near, Float gap, Int before, Int after, Float frac,
+            // Float x, Float y]`, the phase one of the three 06 §1.5 names.
+            Self::ScorePick => matches!(items,
+                [Value::Int(phase), button, page, system, staff, pos, near, gap, before, after, frac, x, y]
+                    if (0..=2).contains(phase) && [button, page, system, staff, pos, near, before, after].iter().all(|v| int(v)) && num(gap) && num(frac) && num(x) && num(y)),
+
+            // `List[Int pages, Str refusal, List[List[Int]] starts]`, at
+            // least one page, and an item number or -1 a staff of each.
+            Self::ScoreInfo => matches!(items,
+                [Value::Int(pages), refusal, Value::List(starts)]
+                    if *pages >= 1 && text(refusal) && starts.iter().all(|page| matches!(page, Value::List(staves) if staves.iter().all(int)))),
+
             // `List[List[Int t_ms, Int status, Int data1, Int data2]]`: at
             // least one message, at most `MAX_MIDI_PER_EVENT`, each a
             // channel message (status `0x80..=0xEF`, data bytes 7 bits).
@@ -349,6 +374,8 @@ impl EventKind {
             0x1F => Ok(Self::Back),
             0x20 => Ok(Self::Level),
             0x21 => Ok(Self::Midi),
+            0x22 => Ok(Self::ScorePick),
+            0x23 => Ok(Self::ScoreInfo),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

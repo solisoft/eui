@@ -210,9 +210,11 @@ fn a_client_only_frame_from_the_server_is_a_protocol_error() {
 #[test]
 fn an_unusable_version_is_refused() {
     let mut d = Driver::new(100.0, 100.0, 1.0, 0);
-    let out = d.handle_frame(Frame::Welcome(Welcome { version: 9, session: [0; 16], start: Start::Fresh }));
+    // One past what this client speaks, whatever that is today.
+    let past = PROTOCOL_VERSION + 1;
+    let out = d.handle_frame(Frame::Welcome(Welcome { version: past, session: [0; 16], start: Start::Fresh }));
     assert!(matches!(out.as_slice(), [Frame::Error { code: 100, .. }]));
-    assert_eq!(d.closed(), Some(&Close::Version(9)));
+    assert_eq!(d.closed(), Some(&Close::Version(past)));
 }
 
 #[test]

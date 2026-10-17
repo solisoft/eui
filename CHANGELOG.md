@@ -22,7 +22,24 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-17
+
 ### Added
+
+- Protocol 9 has a `score` node: music the client engraves from LilyPond
+  source (spec 03 §1.4). The server sends the source and nothing else; the
+  client lays it out with `eui-score`, the catalogue's engraver, and draws
+  exactly the paths the catalogue would have sent. Two events carry back
+  what only the client then knows: `score_pick` says where in the music a
+  press, a move while pressed or a release landed — page, system, staff,
+  line, the nearest note and how far, the notes either side — and
+  `score_info` says how many pages the music took, where each starts, and
+  why a source was refused. A client below 9 is sent the catalogue's
+  canvases by the server, so nothing breaks for it.
+- The score editor sends a protocol-9 client the source alone and answers
+  its presses from `score_pick`, so the server no longer engraves for the
+  screen; on Beethoven's exposition a note moved in the full score is about
+  30 ms of server time, none of it engraving.
 
 - The score editor's "Download PDF" prints the part of the track you are
   on when the piece has several — that staff alone, its name set as the

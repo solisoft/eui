@@ -681,6 +681,11 @@ pub struct Scene<'a> {
     pub scale: f32,
     /// Framebuffer size in device pixels.
     pub size: (u32, u32),
+    /// Each `score` the client engraved (03 §1.4), by node id: the page it
+    /// draws as canvas paths (§1.1, kinds `1` and `5`), already in their
+    /// colours. A score absent from it paints its background and nothing
+    /// else — one whose source was refused, or not yet engraved.
+    pub scores: &'a [(u32, std::sync::Arc<Vec<Value>>)],
 }
 
 /// Build the draw list for a scene.
@@ -1429,6 +1434,12 @@ impl Painter<'_, '_> {
                 self.push(q);
             }
             NodeKind::Canvas => self.canvas(node, rect, &style, opacity),
+            NodeKind::Score => {
+                if let Some((_, paths)) = self.scene.scores.iter().find(|(id, _)| *id == node.id) {
+                    let paths = std::sync::Arc::clone(paths);
+                    self.draw_paths(&paths, rect, &style, opacity);
+                }
+            }
             NodeKind::Icon if !virtual_ => self.icon(node, rect, &style, fg, opacity),
             NodeKind::Text | NodeKind::Input | NodeKind::TextArea if !virtual_ => {
                 self.text(ix, rect, &style, fg, opacity, record.text_decoration);
@@ -1820,6 +1831,12 @@ impl Painter<'_, '_> {
         let Some(Value::List(paths)) = node.prop(atom) else {
             return;
         };
+        self.draw_paths(paths, rect, style, opacity);
+    }
+
+    /// A canvas's paths (03 §1.1), in its content box: a `canvas` node's own,
+    /// or the page a `score` engraved (§1.4).
+    fn draw_paths(&mut self, paths: &[Value], rect: Rect, style: &Style, opacity: f32) {
         let scale = self.scene.scale;
         let dev = self.device(rect);
         let saved = self.clip;

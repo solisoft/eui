@@ -852,6 +852,14 @@ impl Layout {
             // both assets, and neither is a width. So the server says how
             // big a scene is, the way it does for a `spacer`.
             NodeKind::Scene | NodeKind::Spacer => (Size::default(), None),
+            // A score takes the width it is given, as a block of text does,
+            // and its height is the engraving's at that width — the client
+            // engraves (03 §1.4), so the measurer answers.
+            NodeKind::Score => {
+                let w = inner_w.bound().unwrap_or(0.0);
+                let h = f.session.score_props(ix).map_or(0.0, |p| f.text.score_height(&p, w));
+                (Size::new(w, h), None)
+            }
             NodeKind::Divider => (Size::new(1.0, 1.0), None),
             NodeKind::Scroll | NodeKind::List => {
                 let p = self.place_scroll(f, ix, st, inner_w, inner_h, true);

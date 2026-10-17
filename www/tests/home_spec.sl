@@ -44,12 +44,12 @@ describe("Components", fn() {
     # took it to 264, and the eighteen families on the page add to that.
     assert_contains(body, "All 264")
     # The counted claims, checked against what they count rather than against
-    # what they used to say: seventeen node kinds is `spec/03-widgets.md` §1
+    # what they used to say: eighteen node kinds is `spec/03-widgets.md` §1
     # and `NodeKind` beside it, thirty-three colour roles is
     # `spec/05-theme.md`, and the style record's keys are `spec/02` §3. The
     # page had been swept and this file had not, so it asserted a vocabulary
     # three sweeps old and the site could not deploy.
-    assert_contains(body, "The seventeen kinds")
+    assert_contains(body, "The eighteen kinds")
     assert_contains(body, "Thirty-nine keys")
     assert_contains(body, "The thirty-three roles")
     assert_contains(body, "time_update")

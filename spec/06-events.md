@@ -48,6 +48,8 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x1F` | `back` | `Null`, the person asked to go back (§1.3) | |
 | `0x20` | `level` | `List[Int peak_left, Int peak_right]`, `0..=100`, how loud a sound has been since the last one (spec 03 §7) | on `time_update`'s clock, and only when it changes |
 | `0x21` | `midi` | `List[List[Int t_ms, Int status, Int data1, Int data2]]`, what the person's MIDI instruments sent since the last one (§1.4, protocol 9) | per frame, **batched and never coalesced**: every message, in order |
+| `0x22` | `score_pick` | `List[Int phase, Int button, Int page, Int system, Int staff, Int pos, Int near, Float gap, Int before, Int after, Float frac, Float x, Float y]`, where in the music the pointer is on a `score` (§1.5, protocol 9) | on a press and its release; per frame while pressed |
+| `0x23` | `score_info` | `List[Int pages, Str refusal, List[List[Int]] starts]`, what the client's engraving of a `score` came to (§1.5, protocol 9) | when that engraving changes |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -163,6 +165,48 @@ where it gives one, else the moment the client read the message.
 
 Every node holding the handler hears every message; a page wants one.
 Enforced in `eui-client` (`Driver::midi`, and the window's `midi_in`).
+
+### 1.5 Scores
+
+A `score` (03 §1.4) is engraved by the client, so two facts about it exist
+only there: where in the music a press landed, and what the engraving came
+to. These two events carry them back, and nothing else does.
+
+**`score_pick`** is sent to a `score` with a `score_pick` handler when the
+primary or secondary button goes down on it (`phase` `0`), for each move
+while it is held (`phase` `1`, per frame and coalesced like `pointer_move`),
+and when it comes up (`phase` `2`), wherever the pointer then is. Every
+field is in the engraving of the page the node draws:
+
+| Field | Meaning |
+|---|---|
+| `phase` | `0` down, `1` moved, `2` up |
+| `button` | as `pointer_down` |
+| `page` | the page drawn (`page_index`, clamped as it was drawn) |
+| `system` | the system on that page whose staff is nearest the pointer, from 0 down the page |
+| `staff` | the staff of that system, from 0 at the top; `0` on a single staff |
+| `pos` | the line or space under the pointer: half staff spaces down from that staff's top line, `0` the top line, `8` the bottom one, negative above, rounded to the nearest |
+| `near` | the item — note or rest, numbered as `marks` numbers them — on that staff and system whose head's centre is nearest the pointer across; `-1` for a staff with none |
+| `gap` | how far that centre is from the pointer across, in staff spaces; `-1.0` with no `near`. Distances and not a verdict: what counts as *on* a note — a space for a chord, two to select, two and a half past the last — is the application's |
+| `before` | the item on that staff and system whose head's centre is the last left of the pointer; `-1` for none |
+| `after` | the first right of it; `-1` for none |
+| `frac` | where the pointer falls between `before`'s centre and `after`'s, `0.0` to `1.0`; `-1.0` unless both exist |
+| `x`, `y` | as `pointer_down`, in the node's box |
+
+A score that has refused its source, or has none, sends nothing: there is no
+music for a press to land in.
+
+**`score_info`** is sent to a `score` with a `score_info` handler once its
+engraving exists and again each time it changes — a new `src`, width,
+`staff_space`, `page` or `page_height` (03 §1.4) — and never for a change
+that only redraws. `pages` is how many pages the music takes, at least 1;
+`refusal` is the engraver's message for a source it cannot set, with the
+position it stopped at, and `""` when it set it; `starts` has a list for
+each page, and in it, for each staff from the top, the lowest item number
+on that page of that staff, or `-1` for a staff with none there — so a
+server can say which page a note is on, and turn to it, without engraving
+(empty for a refusal). A client MUST NOT send it twice for the same
+engraving.
 
 ### 1.3 Going back
 

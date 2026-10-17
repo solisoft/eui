@@ -145,6 +145,7 @@ pub mod sandbox;
 /// The evdev scancode behind a winit physical key: what the window's own
 /// keyboard state is asked about.
 pub mod scancode;
+pub mod score;
 #[cfg(has_native_net)]
 pub mod transport;
 /// The same socket over the one the host already opened. Selected here

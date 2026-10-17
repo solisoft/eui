@@ -191,9 +191,13 @@ been removed.
 | `0x0F` | `audio` |
 | `0x10` | `video` |
 | `0x11` | `scene` |
+| `0x12` | `score` (protocol 9) |
 
 This set is closed. Adding a kind is a protocol version bump, because it means
-shipping a new client. `0x11` took this protocol to version 2: a client
+shipping a new client. `0x12` `score` (03 §1.4) is protocol 9, and is paid
+for like a scale step rather than like `scene`: a session below 9 is sent the
+canvas paths the catalogue's `score()` draws for the same source (03 §4), so
+no floor rises and nothing is refused. `0x11` took this protocol to version 2: a client
 that knows only version 1 meets it as a decode error and ends the session,
 which is the deliberate price and the reason an application that asked for
 `scene` raises the floor its manifest advertises (01 §2.1). An event kind is

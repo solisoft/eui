@@ -16,7 +16,7 @@ shipping a new client.
 
 ## Tier 0 — primitives
 
-Implemented in the client. **Seventeen kinds, and the set is closed.** This is
+Implemented in the client. **Eighteen kinds, and the set is closed.** This is
 the entire vocabulary the protocol can express.
 
 | Kind | What it is |
@@ -38,6 +38,7 @@ the entire vocabulary the protocol can express.
 | `audio` | A sound. Draws nothing, plays |
 | `video` | A moving picture, decoded in the sandboxed worker |
 | `scene` | A 3D picture, drawn by a program the server names. Leaf, and behind a capability |
+| `score` | Music, engraved by the client from the LilyPond source the server sends. Leaf; protocol 9 |
 
 Adding a kind is a protocol version bump. That is a deliberately high price,
 and it is why the list has to be argued down to what genuinely cannot be
@@ -125,6 +126,26 @@ Three things a scene deliberately cannot do: its target is not readable, so
 nothing on screen goes back to the server; a press on it reports a position
 and never an object, because picking is readback under another name; and a
 scene that is not playing draws once and wakes nothing.
+
+## Music the client engraves
+
+`score` is the eighteenth kind (protocol 9). The server sends LilyPond
+source in `src` and nothing else; the client lays it out with `eui-score`,
+the engraver the catalogue's `score()` uses on a server, and draws the same
+rectangles and fills that would have arrived as a `canvas`. An edit is a new
+string. The node's height is the page it draws at the width it is given —
+`staff_space`, `page` (`"screen"` or `"a4"`), `page_height` and
+`page_index` decide which — and `marks` and `lit` recolour items without
+engraving again.
+
+Two facts exist only on the client now, so two events carry them back: a
+press, a move while pressed and a release on a score with a `score_pick`
+handler say where in the music they landed — the page, system, staff, line,
+the note under the pointer and the notes either side — and `score_info`
+says how many pages the music took and why a source was refused. A session
+below protocol 9 is sent the catalogue's paths instead, so nothing breaks
+for an older client. On the build machine, the score editor's Beethoven
+exposition is engraved and painted in 13 ms paged at 700 px and 16 ms on A4.
 
 ## Sound and moving pictures
 

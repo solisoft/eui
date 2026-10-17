@@ -105,9 +105,9 @@ Eight keys, all optional but `k`:
 | `key` | string | Identity for the diff. Keyed children are matched by key and **moved**, not rebuilt |
 | `intern` | bool | Put this text in the atom table instead of inline. Only for short strings that repeat — see *Interning* |
 
-### The seventeen kinds
+### The eighteen kinds
 
-Fourteen primitives, the two the media work added, and `scene`. The set is
+Fourteen primitives, the two the media work added, `scene`, and `score`. The set is
 closed: adding one is a protocol version bump, which is the deliberately high
 price that keeps the catalogue below a library rather than a client release.
 
@@ -130,6 +130,7 @@ price that keeps the catalogue below a library rather than a client release.
 | `audio` | A sound. Draws nothing, plays |
 | `video` | A moving picture. GIF and animated WebP, decoded in the sandboxed worker |
 | `scene` | A 3D pass into a target of its own, drawn by a WGSL module the server names. Leaf, and only where the `scene` capability was granted (03 §1.2, 11) |
+| `score` | Music the client engraves from the LilyPond source in `src`, and the server only sends. Leaf; protocol 9 (03 §1.4) |
 
 ## Style
 

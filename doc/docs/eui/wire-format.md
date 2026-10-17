@@ -102,9 +102,9 @@ Node := kind:u8  flags:u8  id:varint  style:varint
         child_count × Node
 ```
 
-There are seventeen kinds and the set is closed: `box`, `text`, `image`, `icon`,
+There are eighteen kinds and the set is closed: `box`, `text`, `image`, `icon`,
 `input`, `textarea`, `scroll`, `list`, `canvas`, `spacer`, `divider`, `overlay`,
-`slot`, `sizer`, `audio`, `video`, `scene`. Adding one is a protocol version
+`slot`, `sizer`, `audio`, `video`, `scene`, `score`. Adding one is a protocol version
 bump, because it means shipping a new client. See [the widget catalogue](/docs/widgets) for how a
 button gets built out of these.
 

@@ -184,6 +184,7 @@ fn bench() -> Vec<Row> {
                 scrollbar_hot: None,
                 scrollbars: &[],
                 scenes_allowed: true,
+                scores: &[],
             });
             s.elapsed()
         })

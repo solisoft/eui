@@ -85,7 +85,7 @@ class LivePageController < Controller
       },
       "feed": {
         "title": "Feed",
-        "lead": "A timeline built from the same seventeen primitives as everything else.",
+        "lead": "A timeline built from the same eighteen primitives as everything else.",
         "source": "app/controllers/eui_builders_feed.sl"
       },
       "helpdesk": {

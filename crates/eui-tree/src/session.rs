@@ -154,6 +154,9 @@ pub struct Session {
     /// §8), kept here so agreeing is a look at these rather than a walk of
     /// fifty thousand rows after every batch.
     media: Vec<NodeIx>,
+    /// The `score` nodes (03 §1.4), likewise: the client engraves each, and
+    /// reports on each, without walking the tree to find them.
+    scores: Vec<NodeIx>,
     /// The nodes with a `wake` handler (06 §1.1), likewise.
     wakers: Vec<NodeIx>,
     /// Nodes carrying a `location` handler, so the driver does not walk the
@@ -211,6 +214,7 @@ impl Session {
             island_roots: Vec::new(),
             exits: Vec::new(),
             media: Vec::new(),
+            scores: Vec::new(),
             wakers: Vec::new(),
             locators: Vec::new(),
             players: Vec::new(),
@@ -328,6 +332,52 @@ impl Session {
         &self.known
     }
 
+    /// What lays a `score` out (spec 03 §1.4): its source and the props that
+    /// move the music, with their defaults filled in. `None` for a node that
+    /// is not a score or carries no `src`, which draws nothing.
+    pub fn score_props(&self, ix: NodeIx) -> Option<ScoreProps<'_>> {
+        let node = self.arena.get(ix)?;
+        if node.kind != NodeKind::Score {
+            return None;
+        }
+        let k = &self.known;
+        let prop = |a: Option<u32>| a.and_then(|a| node.prop(a));
+        fn text<'s>(session: &'s Session, v: Option<&'s Value>) -> Option<&'s str> {
+            match v? {
+                Value::Str(s) => Some(s.as_str()),
+                Value::Atom(id) => session.atom(*id),
+                _ => None,
+            }
+        }
+        let num = |v: Option<&Value>| match v {
+            Some(Value::Int(n)) => Some(*n as f32),
+            Some(Value::Float(f)) => Some(*f as f32),
+            _ => None,
+        };
+        // `Str`, or `List[Str]` read as their concatenation: a source past
+        // 4 KiB cannot be one inline string (02 §4.4).
+        let src: std::borrow::Cow<'_, str> = match prop(k.src)? {
+            Value::List(parts) => {
+                let mut whole = String::new();
+                for part in parts {
+                    whole.push_str(text(self, Some(part))?);
+                }
+                std::borrow::Cow::Owned(whole)
+            }
+            single => std::borrow::Cow::Borrowed(text(self, Some(single))?),
+        };
+        Some(ScoreProps {
+            src,
+            staff_space: num(prop(k.staff_space)).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(8.0),
+            a4: text(self, prop(k.page)) == Some("a4"),
+            page_height: num(prop(k.page_height)).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0),
+            page_index: match prop(k.page_index) {
+                Some(Value::Int(n)) => u32::try_from(*n).unwrap_or(0),
+                _ => 0,
+            },
+        })
+    }
+
     /// Spec 03 §3: an `input` carrying `secret: true` is a password field.
     /// The client paints marks, measures those, and copies nothing from it.
     /// A `textarea` ignores the prop: a secret that wraps is not a password.
@@ -369,6 +419,11 @@ impl Session {
         &self.media
     }
 
+    /// The `score` nodes in the tree (03 §1.4).
+    pub fn scores(&self) -> &[NodeIx] {
+        &self.scores
+    }
+
     /// The nodes with a `wake` handler (06 §1.1).
     pub fn wakers(&self) -> &[NodeIx] {
         &self.wakers
@@ -388,6 +443,7 @@ impl Session {
     fn prune_sets(&mut self) {
         let arena = &self.arena;
         self.media.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
+        self.scores.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.wakers.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.locators.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
         self.players.retain(|ix| arena.get(*ix).is_some_and(|n| n.id != 0));
@@ -1363,6 +1419,9 @@ impl Session {
             if matches!(flat.kind, NodeKind::Audio | NodeKind::Video) {
                 self.media.push(ix);
             }
+            if flat.kind == NodeKind::Score {
+                self.scores.push(ix);
+            }
             if wakes {
                 self.wakers.push(ix);
             }
@@ -1470,6 +1529,22 @@ impl Iterator for Preorder<'_> {
     }
 }
 
+/// A `score`'s source and the props that move its music (spec 03 §1.4),
+/// defaults filled in. See [`Session::score_props`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreProps<'a> {
+    /// The LilyPond source, its chunks joined.
+    pub src: std::borrow::Cow<'a, str>,
+    /// px between two staff lines; `8` when absent.
+    pub staff_space: f32,
+    /// Laid out on A4 sheets rather than to the node's width.
+    pub a4: bool,
+    /// On a screen, the height a page may take; `0` for one page.
+    pub page_height: f32,
+    /// The page drawn, from 0.
+    pub page_index: u32,
+}
+
 /// The atom ids of the names the client reads per node, as far as the
 /// server has defined them: a painter asking for a text node's `spans`
 /// three thousand times a frame asks a field, not a hash table.
@@ -1563,6 +1638,20 @@ pub struct WellKnown {
     pub fps: Option<u32>,
     /// Samples a scene asks to be drawn with: 1 or 4.
     pub msaa: Option<u32>,
+    /// A score's distance between two staff lines, px (spec 03 §1.4).
+    pub staff_space: Option<u32>,
+    /// How a score is laid out: `"screen"` or `"a4"`.
+    pub page: Option<u32>,
+    /// On a screen, the height a score's page may take, px.
+    pub page_height: Option<u32>,
+    /// The page of a score that is drawn, from 0.
+    pub page_index: Option<u32>,
+    /// A score's items drawn in another colour: item number to colour.
+    pub marks: Option<u32>,
+    /// A score's items drawn in `accent.base`: a playhead.
+    pub lit: Option<u32>,
+    /// A score's ink.
+    pub colour: Option<u32>,
 }
 
 impl WellKnown {
@@ -1605,6 +1694,13 @@ impl WellKnown {
             "uniforms" => &mut self.uniforms,
             "fps" => &mut self.fps,
             "msaa" => &mut self.msaa,
+            "staff_space" => &mut self.staff_space,
+            "page" => &mut self.page,
+            "page_height" => &mut self.page_height,
+            "page_index" => &mut self.page_index,
+            "marks" => &mut self.marks,
+            "lit" => &mut self.lit,
+            "colour" => &mut self.colour,
             _ => return,
         };
         slot.get_or_insert(id);

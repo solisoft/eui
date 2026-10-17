@@ -2616,6 +2616,33 @@ of those components after the editor had run. They are `saver`, `chip_w`,
 other top-level function in the application is the target of a bare
 assignment (checked by script over `app/controllers` and `app/services`).
 
+**And music the client engraves** (2026-10-17, protocol 9). A `score`
+node (03 §1.4) carries LilyPond source; the client engraves it with
+`eui-score`, the catalogue's own engraver, keeps the engraving until a prop
+that moves the music changes, and draws exactly the paths the catalogue
+would have sent: `a_score_is_drawn_from_the_catalogues_paths` paints a
+score and a `canvas` holding `eui_score::paths` for the same source and
+compares the two draw lists quad for quad. Two events come back:
+`score_pick`, where in the music a press, a move while pressed or a release
+landed — page, system, staff, line, the nearest note and its distance, the
+notes either side and the fraction between — and `score_info`, the pages,
+where each starts on each staff, and a refusal. `tests/score.rs` is eight
+tests. On the build machine, release build, the score editor's Beethoven
+exposition (thirteen staves, 16 KB) is engraved and painted by the client in
+13 ms paged at 700 px and 16 ms on A4, and in 77 ms as one endless page of
+14 371 paths. lang sends the source to a session of 9 — cut into 4 KiB
+pieces when it is longer — and to an older one the catalogue's canvases,
+engraved natively (`a_score_is_sent_as_source_from_protocol_9_and_as_paths_before`).
+The score editor writes the node for a session of 9 and answers its
+presses from `score_pick` and the note model, never from an engraving
+(`tests/score_spec.sl`, six tests); over protocol 9 against a local server,
+a note moved in Beethoven's full score is 29–35 ms of server time and a
+render of Frère Jacques 4–7 ms, none of it engraving. The catalogue's
+`score()` still draws canvases, because it runs on servers that do not
+know the kind. Not done: the six libraries in `clients/` speak protocol 4
+and have no engraver to fall back on, so a `score` waits until they reach
+9; and protocol 9 is raised on the branch, not yet released.
+
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the
 beat and its speed together, Printed / Not printed, and beside them what

@@ -13,7 +13,7 @@
             </p>
 
             <nav class="toc">
-                <a href="#node"><b>The node</b><span>eight keys, seventeen kinds</span></a>
+                <a href="#node"><b>The node</b><span>eight keys, eighteen kinds</span></a>
                 <a href="#style"><b>Style</b><span>thirty-nine keys, thirty-three roles</span></a>
                 <a href="#events"><b>Events</b><span>thirty-two names, two handler forms</span></a>
                 <a href="#catalogue"><b>The catalogue</b><span>all 264, by family</span></a>
@@ -62,7 +62,7 @@
                 </div>
             </div>
 
-            <h3>The seventeen kinds</h3>
+            <h3>The eighteen kinds</h3>
             <p class="soft">
                 Implemented in the client. Adding one is a protocol version bump, which
                 is a deliberately high price: it is what keeps the catalogue a library
@@ -86,6 +86,7 @@
                 <div><b>audio</b><span>A sound. Draws nothing, plays</span></div>
                 <div><b>video</b><span>A moving picture, decoded in the worker</span></div>
                 <div><b>scene</b><span>A 3D pass into a target of its own, drawn by a shader the server sent. Leaf</span></div>
+                <div><b>score</b><span>Music the client engraves from LilyPond source the server sends. Leaf</span></div>
             </div>
         </div>
     </section>

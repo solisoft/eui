@@ -1011,3 +1011,35 @@ children and turns `justify`; a side's border colour is the box's one
 colours otherwise; `top-*`, `bottom-*`, `left-*`, `right-*` and `inset-*`
 on an absolute node are `self`, a `position` that names its edge (04 §5,
 version 7) and a margin.
+
+## 13. Scores — `crates/eui-client/tests/score.rs`, `crates/eui-proto/tests/frames.rs`, lang `src/serve/eui/score.rs`
+
+03 §1.4 and 06 §1.5. The client engraves; the server sends the source.
+
+- **The kind and the events are protocol 9.** `0x12` `score` round-trips
+  through `NodeKind`, and `0x22` `score_pick` and `0x23` `score_info`
+  through `EventKind`, with payloads of the declared shape and no other
+  (`the_score_kind_and_its_events_round_trip`).
+- **The client draws what the catalogue draws.** A `score` on the corpus
+  pieces, at a width and a staff space, is painted from exactly the paths
+  `eui_score::paths` gives for that source, width and page — the
+  catalogue's own (`a_score_is_drawn_from_the_catalogues_paths`).
+- **Its height is the page it draws**, at the width it is given, on a
+  screen and on A4 (`a_scores_height_is_the_page_it_draws`).
+- **Only what moves the music engraves it again.** A new `marks`, `lit`,
+  `page_index` or `colour` redraws and engraves nothing; a new `src`,
+  width, `staff_space`, `page` or `page_height` engraves once
+  (`only_what_moves_the_music_engraves_it_again`).
+- **A refusal draws nothing and says why**, in `score_info`, with the
+  position; a source past 512 KiB is refused unread
+  (`a_refused_score_draws_nothing_and_says_why`).
+- **`score_info` is sent once an engraving**, with the page count
+  (`score_info_is_sent_once_an_engraving`).
+- **`score_pick` names the music under the pointer**: on a press over a
+  note, that note's item as `near` with a `gap` under half a space, its
+  staff and line as `staff` and `pos`;
+  between two notes, `before`, `after` and `frac`; nothing at all from a
+  score that refused its source (`score_pick_names_the_music_under_the_pointer`).
+- **A server sends the source to a session of 9 and the paths to an older
+  one**: the catalogue's `score()` under lang, rendered for protocol 8 and
+  9 (`a_score_is_sent_as_source_from_protocol_9_and_as_paths_before`).
