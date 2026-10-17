@@ -350,3 +350,247 @@ fn the_largest_piece_is_engraved_inside_a_frame() {
         }
     }
 }
+
+// ------------------------------------------------ a score that edits itself
+//
+// 03 §1.4 and 06 §1.5, protocol 10: the selected note's pitch moves under a
+// drag and the arrows without a round trip, and is reported once it settles.
+
+const A_EDIT: u32 = 20;
+const A_SEL: u32 = 21;
+const A_AFTER: u32 = 22;
+const A_REPORT: u32 = 23;
+const A_KEY: u32 = 24;
+const A_CLICKED: u32 = 25;
+const A_DOWN: u32 = 26;
+
+/// A column (node 1, handling keys) holding a `score` (node 2) that edits
+/// its pitches with `selected`, and a button (node 3) under it.
+fn edit_page(src: &str, selected: i64, editing: bool) -> Batch {
+    let mut t = Subtree::default();
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 1, style: 1, key: 0, text: None, props: (0, 0), handlers: (0, 1), child_count: 2 });
+    let mut props = vec![(A_SRC, src_value(src)), (A_SP, Value::Int(8)), (A_SEL, Value::Int(selected)), (A_AFTER, Value::Int(500))];
+    if editing {
+        props.push((A_EDIT, Value::List(vec![Value::Str("pitch".into())])));
+    }
+    let n = props.len() as u32;
+    t.nodes.push(FlatNode { kind: NodeKind::Score, id: 2, style: 0, key: 0, text: None, props: (0, n), handlers: (1, 4), child_count: 0 });
+    t.nodes.push(FlatNode { kind: NodeKind::Box, id: 3, style: 2, key: 0, text: None, props: (n, 0), handlers: (5, 1), child_count: 0 });
+    t.props = props;
+    t.handlers.push((EventKind::KeyDown, Handler::Server(A_KEY)));
+    t.handlers.push((EventKind::ScorePick, Handler::Server(A_PICK)));
+    t.handlers.push((EventKind::ScoreInfo, Handler::Server(A_INFO)));
+    t.handlers.push((EventKind::ScoreEdit, Handler::Server(A_REPORT)));
+    t.handlers.push((EventKind::PointerDown, Handler::Server(A_DOWN)));
+    t.handlers.push((EventKind::Click, Handler::Server(A_CLICKED)));
+    let mut ops = vec![
+        Op::DefAtom { id: A_SRC, value: "src".into() },
+        Op::DefAtom { id: A_SP, value: "staff_space".into() },
+        Op::DefAtom { id: A_PICK, value: "pick".into() },
+        Op::DefAtom { id: A_INFO, value: "info".into() },
+        Op::DefAtom { id: A_EDIT, value: "edit".into() },
+        Op::DefAtom { id: A_SEL, value: "selected".into() },
+        Op::DefAtom { id: A_AFTER, value: "edit_after".into() },
+        Op::DefAtom { id: A_REPORT, value: "report".into() },
+        Op::DefAtom { id: A_KEY, value: "key".into() },
+        Op::DefAtom { id: A_CLICKED, value: "clicked".into() },
+        Op::DefAtom { id: A_DOWN, value: "down".into() },
+        Op::DefStyle { id: 1, record: StyleRecord { display: Display::Column, width: Dim::Px(W as u16), ..Default::default() } },
+        Op::DefStyle { id: 2, record: StyleRecord { width: Dim::Px(100), height: Dim::Px(40), ..Default::default() } },
+    ];
+    ops.push(Op::Mount(t));
+    Batch { seq: 1, ops }
+}
+
+fn edit_driver(src: &str, selected: i64, editing: bool) -> Driver {
+    let mut d = Driver::new(W, 900.0, 1.0, 0);
+    d.handle_frame(Frame::Welcome(Welcome { version: PROTOCOL_VERSION, session: [0u8; 16], start: Start::Fresh }));
+    assert_eq!(d.handle_frame(Frame::Batch(edit_page(src, selected, editing))), vec![Frame::Ack { seq: 1 }]);
+    painted(&mut d);
+    d
+}
+
+/// The score's source as the client now holds it.
+fn src_now(d: &Driver) -> String {
+    let ix = d.session().lookup(2).unwrap();
+    d.session().score_props(ix).unwrap().src.into_owned()
+}
+
+/// Where item `item`'s first head is drawn, px in the window.
+fn head_at(d: &Driver, src: &str, item: usize) -> (f32, f32) {
+    let r = score_rect(d);
+    let eng = eui_score::engrave(src, f64::from(W) / 8.0, &eui_score::Layout::default()).unwrap();
+    let sys = &eng.systems[0];
+    let ev = eng.staves[0][sys.lines[0].bars.clone()].iter().flat_map(|b| b.items.iter()).find(|e| e.i == item).unwrap();
+    let mid = ev.x + ev.head_w.unwrap_or(1.18) / 2.0;
+    let pos = ev.heads.first().map_or(4, |h| h.pos);
+    (r.x + (mid * 8.0) as f32, r.y + ((sys.top + pos as f64 / 2.0) * 8.0) as f32)
+}
+
+/// Every event that went out, by kind, in order.
+fn kinds(frames: &[Frame]) -> Vec<EventKind> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Event(e) => Some(e.event),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What settles once `edit_after` has gone by.
+fn settled(d: &mut Driver) -> Vec<Frame> {
+    d.tick(std::time::Instant::now() + std::time::Duration::from_secs(3));
+    painted(d)
+}
+
+/// Focus on the column, the way a click gives it: on the button under the
+/// score, which reports its click.
+fn focus_column(d: &mut Driver) -> Vec<Frame> {
+    let ix = d.session().lookup(3).unwrap();
+    let r = d.layout().rect(ix).unwrap();
+    let mut out = d.input(Input::PointerMove(r.x + 5.0, r.y + 5.0));
+    out.extend(d.input(Input::PointerDown(0)));
+    out.extend(d.input(Input::PointerUp(0)));
+    out
+}
+
+fn key(d: &mut Driver, name: &str, modifiers: u32) -> Vec<Frame> {
+    let mut out = d.input(Input::Key { key: name.into(), modifiers, down: true });
+    out.extend(d.input(Input::Key { key: name.into(), modifiers, down: false }));
+    out
+}
+
+#[test]
+fn the_score_edit_event_round_trips() {
+    assert_eq!(EventKind::from_u8(0x24).unwrap(), EventKind::ScoreEdit);
+    let entry = |v: [i64; 5]| Value::List(v.iter().map(|n| Value::Int(*n)).collect());
+    assert!(EventKind::ScoreEdit.payload_fits(&Value::List(vec![entry([1, 0, 5, 0, 5]), entry([4, 1, 3, -1, 4])])));
+    assert!(!EventKind::ScoreEdit.payload_fits(&Value::List(Vec::new())), "an empty report is never sent");
+    assert!(!EventKind::ScoreEdit.payload_fits(&Value::List(vec![entry([1, 0, 7, 0, 5])])), "a step past B");
+    assert!(!EventKind::ScoreEdit.payload_fits(&Value::List(vec![entry([1, 0, 5, 3, 5])])), "a triple sharp");
+    assert!(!EventKind::ScoreEdit.payload_fits(&Value::List(vec![Value::List(vec![Value::Int(1), Value::Int(0), Value::Int(5), Value::Int(0)])])), "four fields");
+}
+
+#[test]
+fn a_selected_note_dragged_moves_in_the_source_and_reports_once() {
+    let src = "{ c''4 d''4 e''4 f''4 }";
+    let mut d = edit_driver(src, 1, true);
+    let (x, y) = head_at(&d, src, 1);
+    let mut out = d.input(Input::PointerMove(x, y));
+    out.extend(d.input(Input::PointerDown(0)));
+    assert!(kinds(&out).is_empty(), "the press is the score's: {:?}", kinds(&out));
+    assert_eq!(src_now(&d), src, "pressed where it is, it stays");
+    out = d.input(Input::PointerUp(0));
+    out.extend(painted(&mut d));
+    assert!(kinds(&out).is_empty(), "a click is the score's too");
+    assert_eq!(src_now(&d), src, "and a click selects; it moves nothing");
+    // Pressed a line above the head, then two lines further up: the head
+    // moves by what the hand travelled, d'' to a'' — not to where the
+    // pointer is, which would be b''.
+    d.input(Input::PointerMove(x, y - 8.0));
+    out = d.input(Input::PointerDown(0));
+    assert!(kinds(&out).is_empty());
+    assert_eq!(src_now(&d), src, "a press off the head's line does not pull it there");
+    out = d.input(Input::PointerMove(x, y - 24.0));
+    out.extend(painted(&mut d));
+    assert!(kinds(&out).is_empty(), "no score_pick and no pointer_move while it follows the hand");
+    assert_eq!(src_now(&d), "{ c''4 a''4 e''4 f''4 }", "that head's pitch, and nothing else");
+    out = d.input(Input::PointerUp(0));
+    out.extend(painted(&mut d));
+    assert!(kinds(&out).is_empty(), "nor the lift");
+    let report = sent(&settled(&mut d), EventKind::ScoreEdit);
+    assert_eq!(report, vec![Value::List(vec![Value::List(vec![Value::Int(1), Value::Int(0), Value::Int(5), Value::Int(0), Value::Int(5)])])], "once, at its last pitch: A5");
+    assert!(sent(&settled(&mut d), EventKind::ScoreEdit).is_empty(), "and only once");
+}
+
+#[test]
+fn a_press_off_the_selected_note_is_the_servers() {
+    let src = "{ c''4 d''4 e''4 f''4 }";
+    let mut d = edit_driver(src, 1, true);
+    let (x, y) = head_at(&d, src, 2);
+    d.input(Input::PointerMove(x, y));
+    let out = d.input(Input::PointerDown(0));
+    assert_eq!(kinds(&out), vec![EventKind::PointerDown, EventKind::ScorePick], "another note is the server's to choose");
+    d.input(Input::PointerMove(x, y - 16.0));
+    painted(&mut d);
+    d.input(Input::PointerUp(0));
+    assert_eq!(src_now(&d), src);
+}
+
+#[test]
+fn arrows_move_the_selected_note_in_the_key() {
+    let cases: [(&str, u32, &str); 4] = [
+        // ↑ from E in G major is F sharp.
+        ("{ \\key g \\major c''4 e''4 }", 0, "{ \\key g \\major c''4 fis''4 }"),
+        // Shift+↑ from A in F major is B flat.
+        ("{ \\key f \\major c''4 a'4 }", 1, "{ \\key f \\major c''4 bes'4 }"),
+        // Ctrl+↑ is the octave, the sharp kept.
+        ("{ c''4 fis'4 }", 2, "{ c''4 fis''4 }"),
+        // A chord at the edge of the reach moves no head.
+        ("{ c''4 <a''' c''''>4 }", 0, "{ c''4 <a''' c''''>4 }"),
+    ];
+    for (src, modifiers, want) in cases {
+        let mut d = edit_driver(src, 1, true);
+        focus_column(&mut d);
+        let out = key(&mut d, "ArrowUp", modifiers);
+        assert!(kinds(&out).is_empty(), "{src}: the arrow is consumed");
+        assert_eq!(src_now(&d), want, "{src}, modifiers {modifiers}");
+        // Every other key is the server's — and goes after the edit it
+        // follows, when there is one (06 §2).
+        let other = kinds(&key(&mut d, "a", 0));
+        let expected = if src == want { vec![EventKind::KeyDown] } else { vec![EventKind::ScoreEdit, EventKind::KeyDown] };
+        assert_eq!(other, expected, "{src}");
+    }
+}
+
+#[test]
+fn edits_are_reported_before_any_other_event() {
+    let src = "{ c''4 d''4 e''4 f''4 }";
+    let mut d = edit_driver(src, 1, true);
+    focus_column(&mut d);
+    key(&mut d, "ArrowUp", 0);
+    assert_eq!(src_now(&d), "{ c''4 e''4 e''4 f''4 }");
+    let out = focus_column(&mut d);
+    let order = kinds(&out);
+    assert_eq!(order.first(), Some(&EventKind::ScoreEdit), "the edit first: {order:?}");
+    assert!(order.contains(&EventKind::Click), "then the click: {order:?}");
+    assert!(sent(&settled(&mut d), EventKind::ScoreEdit).is_empty(), "nothing left to report");
+
+    // Up and back down owes nothing.
+    key(&mut d, "ArrowUp", 0);
+    key(&mut d, "ArrowDown", 0);
+    assert!(sent(&settled(&mut d), EventKind::ScoreEdit).is_empty(), "a head brought back is not reported");
+}
+
+#[test]
+fn a_score_it_cannot_edit_is_left_alone() {
+    // `\relative`, a rest selected, and no `edit` at all: the press and the
+    // keys are reported as in protocol 9, and the source does not change.
+    for (src, sel, editing) in [("\\relative c'' { c4 d e f }", 1, true), ("{ c''4 r4 e''4 }", 1, true), ("{ c''4 d''4 e''4 }", 1, false)] {
+        let mut d = edit_driver(src, sel, editing);
+        let (x, _) = head_at(&d, "{ c''4 d''4 e''4 f''4 }", 1);
+        let r = score_rect(&d);
+        d.input(Input::PointerMove(x, r.y + r.h / 2.0));
+        let out = d.input(Input::PointerDown(0));
+        assert!(kinds(&out).contains(&EventKind::ScorePick), "{src}: the press is reported");
+        d.input(Input::PointerUp(0));
+        focus_column(&mut d);
+        assert_eq!(kinds(&key(&mut d, "ArrowUp", 0)), vec![EventKind::KeyDown], "{src}: the arrow is reported");
+        assert_eq!(src_now(&d), src, "{src}: nothing moved");
+    }
+}
+
+#[test]
+fn the_servers_source_replaces_unreported_edits() {
+    let src = "{ c''4 d''4 e''4 f''4 }";
+    let mut d = edit_driver(src, 1, true);
+    focus_column(&mut d);
+    key(&mut d, "ArrowUp", 0);
+    let theirs = "{ c''4 d''4 e''4 g''4 }";
+    let out = d.handle_frame(Frame::Batch(Batch { seq: 2, ops: vec![Op::SetProp { node: 2, prop: A_SRC, value: src_value(theirs) }] }));
+    assert_eq!(src_now(&d), theirs, "the server's source wins");
+    let report = sent(&out, EventKind::ScoreEdit);
+    assert_eq!(report.len(), 1, "and the edit it overtook is reported at once: {out:?}");
+    assert!(sent(&settled(&mut d), EventKind::ScoreEdit).is_empty(), "once");
+}

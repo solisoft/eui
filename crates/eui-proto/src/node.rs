@@ -214,6 +214,10 @@ pub enum EventKind {
     /// What the client's engraving of a `score` came to (spec 06 §1.5):
     /// `List[Int pages, Str refusal, List[List[Int]] starts]`. Protocol 9.
     ScoreInfo = 0x23,
+    /// The pitches the client changed in a `score` it edits (spec 06 §1.5):
+    /// `List[List[Int item, Int head, Int step, Int alter, Int octave]]`.
+    /// Protocol 10.
+    ScoreEdit = 0x24,
 }
 
 impl EventKind {
@@ -315,6 +319,19 @@ impl EventKind {
                 [Value::Int(phase), button, page, system, staff, pos, near, gap, before, after, frac, x, y]
                     if (0..=2).contains(phase) && [button, page, system, staff, pos, near, before, after].iter().all(|v| int(v)) && num(gap) && num(frac) && num(x) && num(y)),
 
+            // `List[List[Int item, Int head, Int step, Int alter, Int
+            // octave]]`: at least one head, each a note and a head that can
+            // exist, a step of the seven and an alteration of the five.
+            Self::ScoreEdit => {
+                !items.is_empty()
+                    && items.iter().all(|e| match e {
+                        Value::List(fields) => matches!(fields.as_slice(),
+                            [Value::Int(item), Value::Int(head), Value::Int(step), Value::Int(alter), Value::Int(_)]
+                                if *item >= 0 && *head >= 0 && (0..=6).contains(step) && (-2..=2).contains(alter)),
+                        _ => false,
+                    })
+            }
+
             // `List[Int pages, Str refusal, List[List[Int]] starts]`, at
             // least one page, and an item number or -1 a staff of each.
             Self::ScoreInfo => matches!(items,
@@ -376,6 +393,7 @@ impl EventKind {
             0x21 => Ok(Self::Midi),
             0x22 => Ok(Self::ScorePick),
             0x23 => Ok(Self::ScoreInfo),
+            0x24 => Ok(Self::ScoreEdit),
             _ => Err(DecodeError::UnknownTag("event kind")),
         }
     }

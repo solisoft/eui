@@ -24,6 +24,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub mod draw;
+pub mod edit;
 pub mod engrave;
 pub mod glyphs;
 pub mod marks;

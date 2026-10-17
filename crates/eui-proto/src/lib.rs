@@ -106,7 +106,13 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
+// 10 is music the client edits: a `score` carrying `edit` moves its
+// selected note's pitch itself, under a drag or the arrows (03 §1.4), and
+// reports what changed once it settles, in `score_edit` (06 §1.5). A
+// session below 10 is sent no `score_edit` handler, and a client below 10
+// ignores the props and reports the gestures as it always did: an editor
+// that keeps its own handling of them works with both.
 // 9 is music the client engraves: the `score` kind (03 §1.4) and its two
 // events, `score_pick` and `score_info` (06 §1.5), alongside what was
 // already written down for it — canvas fills (kind 5) and `midi` (06 §1.4).

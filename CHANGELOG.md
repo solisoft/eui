@@ -22,6 +22,19 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-17
+
+### Added
+
+- Protocol 10: a `score` the client edits (spec 03 §1.4). With
+  `edit: ["pitch"]`, a `selected` note and a `score_edit` handler, the
+  client moves that note's pitch itself — a drag carries it by the lines the
+  hand travels, the arrows move it a step in the key, a semitone with Shift,
+  an octave with Ctrl — rewrites the source, draws and plays it at once, and
+  reports the pitches once they settle (`score_edit`, event `0x24`, 06 §1.5):
+  after `edit_after` (2 s by default), on blur, and before any other event.
+  A drag in a full score no longer waits on a server render per line.
+
 ## [0.9.0] - 2026-10-17
 
 ### Added

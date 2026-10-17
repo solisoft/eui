@@ -147,6 +147,18 @@ below protocol 9 is sent the catalogue's paths instead, so nothing breaks
 for an older client. On the build machine, the score editor's Beethoven
 exposition is engraved and painted in 13 ms paged at 700 px and 16 ms on A4.
 
+From protocol 10 a score can also be **edited by the client**. With
+`edit: ["pitch"]`, a `selected` item and a `score_edit` handler, the client
+moves that note's pitch itself: a drag carries the head by the lines the
+hand travels (a click only selects), and `↑`/`↓` move it a step in the key,
+a semitone with Shift, an octave with Ctrl. It rewrites the few characters
+of the source that spell the pitch, engraves and draws the result, plays the
+note on the `audio` node `voice` names, and tells the server nothing until
+the music has stood still for `edit_after` (2 s by default), focus leaves,
+or any other event is about to go — then once, in `score_edit`, with each
+head's new pitch. The server checks each entry, applies it to its own model
+and sends back a source that is byte for byte the one already drawn.
+
 ## Sound and moving pictures
 
 `audio` and `video` were the fifteenth and sixteenth kinds, and they cost a

@@ -534,6 +534,10 @@ were most of a system; the server keeps the music, and only the music.
 | `marks` | `List[List[Int item, colour]]` | Items drawn in another colour: an item's number — its place among the notes and rests of the whole source, from 0, every staff counted in order — with the colour it is drawn in instead. How an editor shows what is selected. A list of pairs because a value is never a map (02 §4.4) |
 | `lit` | `List[Int]` | Item numbers drawn in `accent.base`: a playhead |
 | `colour` | colour | The ink. Absent is `text.default` |
+| `edit` | `List[Str]` | What the client may change in the music itself, without a round trip (below). This version defines `"pitch"`. Absent or empty: nothing. Protocol 10 |
+| `selected` | `Int` | The item the client's edits act on, numbered as `marks` numbers them; `-1` or absent for none. Protocol 10 |
+| `edit_after` | `Int`, ms, `300` to `60000` | How long the music has to stand still before what was edited is reported (06 §2). Absent is `2000`. Protocol 10 |
+| `voice` | `List[Str key, Int program]` | Where an edited note is heard: on the bank of the `audio` node (§7) keyed `key`, as MIDI `program`. Absent: an edit is silent. Protocol 10 |
 
 **Size.** A `score` has no intrinsic width: it takes the width its parent
 gives it, as a `text` does. Its height is intrinsic — the height of the page
@@ -566,6 +570,80 @@ in the sense §1.2 refuses ([`08-security.md`](08-security.md) §8): it tells
 the server nothing about pixels, nothing it did not write, and nothing
 about the machine. It saves the server the engraving it would need to
 answer a click.
+
+**Editing in the client** (protocol 10). A `score` whose `edit` names
+`"pitch"`, which has a `selected` item and a `score_edit` handler to hear
+about it, moves that item's pitch itself.
+It is the change a person makes most and the one a round trip cost most —
+a drag in a full score was a server render for every line crossed — so the
+client keeps the edited source as the node's `src`, engraves and draws it,
+and reports what changed later, once, in `score_edit` (06 §1.5): the
+server learns the music when it settles, not at every step.
+
+What moves it:
+
+- A press of the primary button whose `near` (06 §1.5) is the selected item,
+  at a `gap` of 2 staff spaces or less, takes hold of the item and moves
+  nothing: a click selects, it does not move. While the button is held, the
+  head nearest the line or space pressed moves by as many lines and spaces
+  as the hand has travelled up or down since the press, each frame, so the
+  head follows the hand from where it was rather than jumping to the
+  pointer. A press anywhere else is the server's, reported as before —
+  choosing another note is the application's decision. None of the three `score_pick` phases
+  of a gesture the client took is sent, and neither is its `pointer_down`,
+  `pointer_move` or `pointer_up`.
+- While focus is on the node — or on the ancestor a press on it focuses,
+  the nearest that handles keys (§3), with the node the first editing score
+  under it — `ArrowUp` and `ArrowDown` move every head of the
+  selected item a step up or down the staff, a semitone with `Shift`, an
+  octave with `Ctrl` (`⌘` on macOS). The client consumes them: no `key_down`
+  or `key_up` reports them. Every other key is reported as before.
+- A rest does not move: a press on a selected rest, and an arrow, are
+  reported as before.
+
+The pitch a head takes is the one the score's own engraver would read
+there, so client and server agree on it without asking each other:
+
+- **Under a drag**: the step that many lines and spaces from the head's
+  own, altered as the key in force at the item alters that step.
+- **By a step**: the next step up or down, altered as the key alters it.
+  **By an octave**: the same step and alteration, seven steps away.
+- **By a semitone**: one MIDI key up or down, spelled with the key's
+  alteration of a step if one of its seven steps sounds that key (A up in
+  F major is B flat), else as a natural, else sharp going up and flat going
+  down (F up in C major is F sharp, G down is G flat).
+- **Within reach**: a head stays within 14 half spaces of its staff's
+  middle line and between MIDI keys 21 and 108. A move that would take any
+  head of the item past either does not happen — a chord moves all its
+  heads or none — and the item stays as it was.
+- The heads of a chord stay in the source in ascending order.
+
+**How the source changes.** Only the pitch of a moved head is rewritten —
+its letter, its alteration (`is`, `isis`, `es`, `eses`, and `s`, `ses` after
+E and A: `es`, `as`) and its octave marks (`'`, `,`), in absolute pitch,
+with middle C `c'` — and every other
+byte stays as the server sent it. A pitch in `\relative` or `\fixed`
+depends on the ones before it, so a client MUST NOT edit a source that uses
+either, nor one it has refused: there `edit` is inert, and the gestures and
+keys are reported as though it were absent.
+
+**Heard**, with `voice`: each new pitch is played as soon as it is drawn —
+a program change to `program`, then every head of the item for 450 ms at
+velocity 100 — on the named node's bank, or on the client's own voices when
+that node has none or is not in the tree (§7).
+
+**Until the server answers**, the edited source stands: the client draws
+its own `src`, although the tree the server holds still has the old one. A
+new `src` from the server replaces it, and edits not yet reported are
+reported at once, so the server decides what they mean for the music it now
+holds. A client MUST lay the music out again when its own edit changes the
+source, as for any new `src`.
+
+The edit is advisory, like every local change (07 §1). The server applies
+the reported pitches to its own model after checking them (06 §4) and sends
+the source that results — which, from a server that writes a pitch as the
+client does, is the source the client already shows, so nothing moves when
+it lands.
 
 **What a client reports back.** `score_info` (06 §1.5) carries the number of
 pages and the refusal, if any, each time the engraving of a node changes —

@@ -2643,6 +2643,28 @@ know the kind. Not done: the six libraries in `clients/` speak protocol 4
 and have no engraver to fall back on, so a `score` waits until they reach
 9; and protocol 9 is raised on the branch, not yet released.
 
+**And music the client edits** (2026-10-17, protocol 10). A drag on a note
+in the score editor used to be a server render for every line crossed; the
+client now moves the selected note's pitch itself (03 §1.4) and reports
+the pitches once they settle, in `score_edit` (06 §1.5, event `0x24`).
+`eui-score` gained `edit`: a note found by its item number with the byte
+range of each head's pitch in the source (character positions, so a title
+with accents does not shift it), the editor's spelling in absolute
+octaves, steps, semitones and octaves in the key, the reach of 14 half
+spaces, and a rewrite that changes those bytes and no other
+(`tests/edit.rs`, seven tests). The driver takes a press on the selected
+note — a click selects and moves nothing; a drag moves the head by the lines
+travelled — and the arrows, plays the note on the `voice` node, holds back
+`score_info` while edits are unreported, and reports them after
+`edit_after`, on blur, before any other event, or at once when the server's
+own `src` overtakes them (`tests/score.rs`, seven new tests, 09 §13). lang
+sends `score_edit` to sessions of 10 only, from Soli 2.28.1; the demo's
+editor takes it up once that release serves it — it applies each entry it
+can check, with one step of undo, and stops moving a note on a second
+click. A `\relative` source is not edited. Not done: the note keys
+(A–G, durations, rests), the palette and undo are still the server's —
+steps 2 and 3.
+
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the
 beat and its speed together, Printed / Not printed, and beside them what

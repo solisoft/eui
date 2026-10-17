@@ -50,6 +50,7 @@ Event := node:varint  event:u8  name:varint  payload:Value
 | `0x21` | `midi` | `List[List[Int t_ms, Int status, Int data1, Int data2]]`, what the person's MIDI instruments sent since the last one (§1.4, protocol 9) | per frame, **batched and never coalesced**: every message, in order |
 | `0x22` | `score_pick` | `List[Int phase, Int button, Int page, Int system, Int staff, Int pos, Int near, Float gap, Int before, Int after, Float frac, Float x, Float y]`, where in the music the pointer is on a `score` (§1.5, protocol 9) | on a press and its release; per frame while pressed |
 | `0x23` | `score_info` | `List[Int pages, Str refusal, List[List[Int]] starts]`, what the client's engraving of a `score` came to (§1.5, protocol 9) | when that engraving changes |
+| `0x24` | `score_edit` | `List[List[Int item, Int head, Int step, Int alter, Int octave]]`, the pitches the client changed in a `score` it edits (§1.5, protocol 10) | when the edits settle (§2) |
 
 Coordinates are logical pixels relative to the node's border box. `button` is
 `0` primary, `1` secondary, `2` middle. `modifiers` is a bit set: `1` shift,
@@ -206,7 +207,27 @@ each page, and in it, for each staff from the top, the lowest item number
 on that page of that staff, or `-1` for a staff with none there — so a
 server can say which page a note is on, and turn to it, without engraving
 (empty for a refusal). A client MUST NOT send it twice for the same
-engraving.
+engraving. A score holding edits it has not yet reported (`score_edit`,
+below) sends none: that music is not the server's yet, and every step of a
+drag would otherwise be an event that reports the edits early (§2). It is
+sent for the engraving the score has once they are reported.
+
+**`score_edit`** (protocol 10) is sent to a `score` with a `score_edit`
+handler whose music the client edits (03 §1.4). Each entry is one head
+whose pitch changed since the last report, and the pitch it has now:
+
+| Field | Meaning |
+|---|---|
+| `item` | the note, numbered as `marks` numbers it, in the source the server last sent |
+| `head` | which of its heads, from `0` the lowest, as the source lists them |
+| `step` | `0` C to `6` B |
+| `alter` | `-2` to `2`, flats negative |
+| `octave` | the octave, middle C's being `4`: MIDI key `12 × (octave + 1)` plus the step's semitones plus `alter` |
+
+A head changed twice is reported once, at its last pitch; a head brought
+back to the pitch it had at the last report is not reported at all; an
+empty list is never sent. The server applies what it accepts to its own
+music (§4) and answers with the source that results.
 
 ### 1.3 Going back
 
@@ -288,6 +309,18 @@ for anything provisional — it has to be able to put it back.
   sent, nor for a node that has left the tree. `text_input` fires per
   committed insertion and exists for local handlers; a server that subscribes
   to it across a wide-area link has misread the design.
+- `score_edit` fires when a score's edits settle: `edit_after` ms after the
+  last of them (03 §1.4; 2 000 when absent), when the node loses focus, and
+  **before any other event the session sends** — so a click on Save, Play or
+  an undo reaches the server after the music it acts on, never before it.
+  An event a local handler keeps to itself is not one: only a frame that
+  leaves sends the edits first, so moving the pointer over the page reports
+  nothing. The timer is armed only while something is unreported, so a
+  score at rest costs nothing. A gesture does not report on its own: a drag
+  is many edits and one report. A session that ends with edits unreported
+  has lost them — the socket is gone before anything could carry them — so
+  an application that cannot afford `edit_after`'s worth of work keeps it
+  short or saves on its own events.
 - A **track** (spec 03 §3.4) reports `change` the moment the value under the
   hand crosses into another `track_step`, and not once more. The quantiser has
   already done for a hand what the 300 ms does for a field, so the timer does
@@ -373,6 +406,12 @@ movement, and the tree they lose is the tree that would have told them why.
 A server MUST refuse the event and MAY log it; a server that also wants to
 end the session on a malformed payload MAY, but it is not the rule, because
 the cheap attack is then a single bad frame against every reader.
+
+A `score_edit` is checked entry by entry, against the source the server last
+sent: an item it has, a head that item has, a step from 0 to 6, an
+alteration from −2 to 2, and a pitch within the reach of 03 §1.4. An entry
+that fails is ignored and the others are applied: one stale head is not a
+reason to throw away the rest of a person's work.
 
 A float where §1 asks for a float, and an **integer** where it does too: a
 coordinate of exactly zero is an integer to any encoder that writes the

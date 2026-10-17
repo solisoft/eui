@@ -358,6 +358,48 @@ impl std::fmt::Display for Close {
     }
 }
 
+/// 03 §1.4, protocol 10: one score's edits since it last reported them.
+#[derive(Debug)]
+struct ScoreEdits {
+    /// Each item touched, and its heads as they were at the last report.
+    base: std::collections::BTreeMap<usize, Vec<(i64, i64)>>,
+    /// The source as the client last wrote it: what a server's `src` is
+    /// compared with to tell that it has replaced it.
+    src: String,
+}
+
+/// A hold on a score's selected note (03 §1.4): what was pressed, and where
+/// the hand has gone since the last frame.
+#[derive(Debug, Clone)]
+struct ScoreDrag {
+    /// The score.
+    node: NodeIx,
+    /// Where the hand is, until the frame applies it.
+    at: Option<(f32, f32)>,
+    /// The line or space pressed (06 §1.5 `pos`).
+    pos: i64,
+    /// The note as it was when pressed.
+    item: eui_score::edit::Item,
+    /// Its head nearest the line pressed: the one that moves.
+    head: usize,
+}
+
+/// Notes a score played on an `audio` node in place of the server's.
+#[derive(Debug)]
+struct LocalNotes {
+    /// The MIDI commands (03 §7 `notes`).
+    list: Vec<Value>,
+    /// The `notes_seq` they play under.
+    seq: i64,
+    /// The server's `notes_seq` when they were played: once it moves, the
+    /// server has played something of its own and these are done.
+    server_seq: Option<i64>,
+}
+
+/// How long a score's edits stand still before they are reported, when it
+/// does not say (03 §1.4 `edit_after`).
+const EDIT_AFTER: Duration = Duration::from_millis(2000);
+
 #[derive(Debug, Default)]
 struct Pointer {
     x: f32,
@@ -388,6 +430,10 @@ struct Pointer {
     /// Spec 06 §1.5: the latest move over a pressed `score`, sent as one
     /// `score_pick` a frame like `pointer_move` above.
     score_move: Option<(NodeIx, f32, f32)>,
+    /// 03 §1.4, protocol 10: a press on the selected note of a score the
+    /// client edits. The gesture is the client's: nothing about it is
+    /// reported.
+    score_drag: Option<ScoreDrag>,
     /// When the last drag move was sent, while the server has not answered
     /// it. One move is in flight at a time: a drag that outruns the server
     /// otherwise builds a queue, and the queue is what a hand feels when
@@ -1388,6 +1434,17 @@ pub struct Driver {
     /// Spec 06 §1.5: the engraving each score last reported in
     /// `score_info`, by node id, so each is reported once.
     score_infos: HashMap<u32, u64>,
+    /// 03 §1.4, protocol 10: what each score the client edits has changed
+    /// and not yet reported, by owner and node id.
+    score_edits: HashMap<(u16, u32), ScoreEdits>,
+    /// When those settle (06 §2: `edit_after` after the last edit).
+    score_edit_due: Option<Instant>,
+    /// Notes an edited score played on an `audio` node, by its id, until
+    /// the server plays one of its own there (03 §1.4 `voice`).
+    local_notes: HashMap<u32, LocalNotes>,
+    /// The `notes_seq` the last of those was given: counted down from -1,
+    /// so it is never one a server sent.
+    local_seq: i64,
     /// Spec 06 §2: the size last reported by each node that asked for
     /// `resize`, by node id, so a size is reported once and a node that only
     /// *moved* reports nothing.
@@ -1705,6 +1762,10 @@ impl Driver {
             score_paint: Vec::new(),
             score_painted: HashMap::new(),
             score_infos: HashMap::new(),
+            score_edits: HashMap::new(),
+            score_edit_due: None,
+            local_notes: HashMap::new(),
+            local_seq: 0,
             sizes: HashMap::new(),
             paired_boxes: HashMap::new(),
             departed_keys: Vec::new(),
@@ -2100,7 +2161,11 @@ impl Driver {
                         }
                     }
                 }
-                self.apply(batch)
+                let mut out = self.apply(batch);
+                // 03 §1.4: a score whose source the server replaced reports
+                // the edits it had not yet reported, at once.
+                out.extend(self.overtaken_score_edits());
+                out
             }
             Frame::Ping(n) => vec![Frame::Pong(n)],
             Frame::Pong(_) => Vec::new(),
@@ -2411,6 +2476,8 @@ impl Driver {
             // An island's batch releases nodes exactly as the page's does,
             // and the pointer may well be standing on one of them.
             self.reanchor_hover();
+            let overtaken = self.overtaken_score_edits();
+            self.pending.extend(overtaken);
         }
         out
     }
@@ -4452,6 +4519,22 @@ impl Driver {
     }
 
     fn emit(&mut self, from: NodeIx, kind: EventKind, payload: Value) -> Vec<Frame> {
+        let islands_before = self.island_out.len();
+        let out = self.emit_one(from, kind, payload);
+        // 06 §2: what a score edited and has not reported goes before any
+        // event that leaves — and only one that leaves, so a hover a local
+        // handler keeps to itself reports nothing.
+        if kind == EventKind::ScoreEdit || self.score_edits.is_empty() || (out.is_empty() && self.island_out.len() == islands_before) {
+            return out;
+        }
+        let islands: Vec<(u16, Frame)> = self.island_out.drain(islands_before..).collect();
+        let mut first = self.flush_score_edits();
+        first.extend(out);
+        self.island_out.extend(islands);
+        first
+    }
+
+    fn emit_one(&mut self, from: NodeIx, kind: EventKind, payload: Value) -> Vec<Frame> {
         let Some((target, handler)) = self.target(from, kind) else {
             return Vec::new();
         };
@@ -4702,6 +4785,13 @@ impl Driver {
         self.pointer.x = x;
         self.pointer.y = y;
         self.pointer.inside = true;
+        // A note a score is moving follows the hand at the next frame, and
+        // the server hears nothing of it.
+        if let Some(drag) = self.pointer.score_drag.as_mut() {
+            drag.at = Some((x, y));
+            self.redraw = true;
+            return Vec::new();
+        }
         // A chip that follows the hand follows it here, not at the next
         // layout: the pointer moves many times a frame and the tree it is
         // moving over has not changed. Only the panel's origin does, which
@@ -5452,6 +5542,15 @@ impl Driver {
                 }
             }
         }
+        // 03 §1.4, protocol 10: a press on the selected note of a score that
+        // edits itself is that score's, and nothing about it is reported.
+        if button == 0 {
+            if let Some(taken) = self.score_press(ix, x, y) {
+                let mut out = dismissed;
+                out.extend(taken);
+                return out;
+            }
+        }
         self.pointer.pressed_on = Some(ix);
         // 03 §3.4: a track is the more specific claim on a press, so a
         // slider on a draggable card is moved by its handle and the card by
@@ -5506,6 +5605,14 @@ impl Driver {
 
     fn pointer_up(&mut self, button: u8) -> Vec<Frame> {
         if button == 0 && self.pointer.dragging_thumb.take().is_some() {
+            return Vec::new();
+        }
+        // The end of a score's own drag: where the hand let go is the last
+        // place the note goes, and the lift is not reported either.
+        if button == 0 && self.pointer.score_drag.is_some() {
+            self.apply_score_drag();
+            self.pointer.score_drag = None;
+            self.redraw = true;
             return Vec::new();
         }
         // 06 §2: a gesture that became a drag reports no `pointer_up` and no
@@ -5821,6 +5928,10 @@ impl Driver {
     fn set_focus(&mut self, new: Option<NodeIx>, visible: bool) -> Vec<Frame> {
         let mut out = Vec::new();
         let moved = new != self.focused;
+        // 06 §2: a score's edits are reported when focus leaves it.
+        if moved && !self.score_edits.is_empty() {
+            out.extend(self.flush_score_edits());
+        }
         if moved {
             if let Some(old) = self.focused.take() {
                 self.preedit.clear();
@@ -7339,6 +7450,11 @@ impl Driver {
         // `Ctrl+Shift+Tab` is the way out and nothing may take it: it moves
         // focus backwards whatever the tree says, which is what keeps a
         // surface that holds both tabs from stranding anyone in it.
+        // 03 §1.4, protocol 10: the arrows move a score's selected note, and
+        // are consumed while there is one to move.
+        if let Some(out) = self.score_key(key, modifiers, down) {
+            return out;
+        }
         if key == "Tab" {
             let shift = modifiers & 1 != 0;
             let ctrl = modifiers & 2 != 0;
@@ -8143,6 +8259,7 @@ impl Driver {
         self.pending.extend(dragged);
         let scored = self.flush_score_move();
         self.pending.extend(scored);
+        self.apply_score_drag();
         // A scroll in flight moves the view before layout; what it emits when
         // it lands is picked up by the next input or frame turn.
         let landed = self.advance_scroll();
@@ -8191,6 +8308,8 @@ impl Driver {
         self.pending.extend(woken);
         let settled = self.idle_changes();
         self.pending.extend(settled);
+        let edited = self.idle_score_edits();
+        self.pending.extend(edited);
         let placed = self.location_events();
         self.pending.extend(placed);
         // Spec 04 §7.1: a windowed list whose visible rows changed asks for
@@ -8368,7 +8487,7 @@ impl Driver {
         // `next_due`, or the cached list is handed back and the `change` is
         // never looked for. `others` feeds both, which is the whole of it.
         let change_due = self.edits.values().filter_map(|e| e.typed_at).min().map(|t| t + CHANGE_IDLE);
-        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due, self.caret_due];
+        let others = [settle_due, self.video_due, self.viewport_due, wake_due, locate_due, change_due, self.caret_due, self.score_edit_due];
         for due in others.into_iter().flatten() {
             self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         }
@@ -8631,7 +8750,15 @@ impl Driver {
             };
             // A node is a sound or a player of commands, not both (03 §7):
             // with an `src`, its `notes` are not looked at.
-            let (asset, seq) = match (prop(a_src), prop(a_notes)) {
+            // An edited score's note (03 §1.4 `voice`) plays here in place of
+            // the node's own commands, until the server plays one of its own.
+            let server_seq = match prop(a_seq) {
+                Some(Value::Int(n)) => Some(*n),
+                _ => None,
+            };
+            let local = self.local_notes.get(&node.id).filter(|l| l.server_seq == server_seq).map(|l| (Value::List(l.list.clone()), l.seq));
+            let commands = local.as_ref().map(|(v, _)| v).or_else(|| prop(a_notes));
+            let (asset, seq) = match (prop(a_src), commands) {
                 (Some(Value::Asset(hash)), _) => (*hash, None),
                 (None | Some(Value::Null), Some(Value::List(list))) => {
                     let Some(file) = notes_file(list) else {
@@ -8641,10 +8768,7 @@ impl Driver {
                     let hash = *blake3::hash(&file).as_bytes();
                     self.note_files.entry(hash).or_insert_with(|| Arc::new(file));
                     notes_named.insert(hash);
-                    let seq = match prop(a_seq) {
-                        Some(Value::Int(n)) => *n,
-                        _ => 0,
-                    };
+                    let seq = local.as_ref().map_or(server_seq.unwrap_or(0), |(_, seq)| *seq);
                     (hash, Some(seq))
                 }
                 // Nothing to play yet. A bank it names is parsed all the
@@ -9142,7 +9266,11 @@ impl Driver {
                 self.score_paint.push((id, paths));
                 self.score_painted.insert(id, built_from);
             }
-            if self.score_infos.get(&id) != Some(&engraving.serial) && self.target(ix, EventKind::ScoreInfo).is_some() {
+            // 06 §1.5: music with edits not yet reported is not the
+            // server's to hear about; its engraving is reported once they
+            // are, and the server's own `src` for it is the same engraving.
+            let edited = node.is_some_and(|n| self.score_edits.contains_key(&(n.owner, n.id)));
+            if !edited && self.score_infos.get(&id) != Some(&engraving.serial) && self.target(ix, EventKind::ScoreInfo).is_some() {
                 self.score_infos.insert(id, engraving.serial);
                 out.extend(self.emit(ix, EventKind::ScoreInfo, crate::score::info_payload(&engraving)));
             }
@@ -9178,6 +9306,293 @@ impl Driver {
         };
         let payload = crate::score::pick_payload(phase, button, &p, lx, ly);
         self.emit(target, EventKind::ScorePick, payload)
+    }
+
+    // ------------------------------------------- a score that edits itself
+    //
+    // 03 §1.4, protocol 10. A score carrying `edit: ["pitch"]`, a `selected`
+    // item and a `score_edit` handler moves that item's pitch under a drag
+    // and the arrows without asking, rewrites its own `src`, and reports the
+    // pitches once they settle (06 §1.5, §2).
+
+    /// The prop `name` of `ix`, when the server has named it at all.
+    fn named_prop(&self, ix: NodeIx, name: &str) -> Option<&Value> {
+        let atom = self.session.atom_id(name)?;
+        self.session.node(ix)?.prop(atom)
+    }
+
+    /// The score at or above `ix` that edits its own pitches, and the item
+    /// it has selected.
+    fn editing_score(&self, ix: NodeIx) -> Option<(NodeIx, usize)> {
+        let s = self.ancestor_where(ix, |k| matches!(k, NodeKind::Score))?;
+        self.session.handler(s, EventKind::ScoreEdit)?;
+        let pitch = match self.named_prop(s, "edit")? {
+            Value::List(what) => what.iter().any(|v| match v {
+                Value::Str(t) => t == "pitch",
+                Value::Atom(a) => self.session.atom(*a) == Some("pitch"),
+                _ => false,
+            }),
+            _ => false,
+        };
+        let selected = match self.named_prop(s, "selected")? {
+            Value::Int(n) => usize::try_from(*n).ok()?,
+            _ => return None,
+        };
+        pitch.then_some((s, selected))
+    }
+
+    /// The score the arrows move: the one with focus, or the first that
+    /// edits under the node with focus — the one a press on the score
+    /// focused (03 §3).
+    fn focused_score(&self) -> Option<(NodeIx, usize)> {
+        let f = self.focused?;
+        if let Some(found) = self.editing_score(f) {
+            return Some(found);
+        }
+        let mut stack = vec![f];
+        while let Some(ix) = stack.pop() {
+            if self.session.node(ix).map(|n| n.kind) == Some(NodeKind::Score) {
+                if let Some(found) = self.editing_score(ix) {
+                    return Some(found);
+                }
+            }
+            stack.extend(self.session.children(ix).iter().rev().copied());
+        }
+        None
+    }
+
+    /// The source of `s` and its note `item`, when that note can be moved
+    /// here: not a rest, and not in a source the client may not edit.
+    fn score_note(&self, s: NodeIx, item: usize) -> Option<(String, eui_score::edit::Item)> {
+        let src = self.session.score_props(s)?.src.into_owned();
+        let it = eui_score::edit::item(&src, item).ok()??;
+        Some((src, it))
+    }
+
+    /// Where in the music of `s` the point `(x, y)` is (06 §1.5).
+    fn score_pick_at(&mut self, s: NodeIx, x: f32, y: f32) -> Option<crate::score::Pick> {
+        let (bx, by, width) = self.score_box(s)?;
+        let props = self.session.score_props(s)?;
+        let page_index = props.page_index;
+        let engraving = self.scores.engraving(&props, width);
+        drop(props);
+        crate::score::pick(&engraving, page_index, x - bx, y - by)
+    }
+
+    /// A press that the score takes for itself: on its selected note, near
+    /// enough to be on it. The head goes to the line under the hand at once,
+    /// and the moves that follow are the client's.
+    fn score_press(&mut self, ix: NodeIx, x: f32, y: f32) -> Option<Vec<Frame>> {
+        let (s, selected) = self.editing_score(ix)?;
+        let p = self.score_pick_at(s, x, y)?;
+        if p.near != selected as i64 || p.gap > 2.0 {
+            return None;
+        }
+        let (_, it) = self.score_note(s, selected)?;
+        // A click selects; it does not move. The head nearest the line
+        // pressed is the one a drag will carry.
+        let pressed = eui_score::edit::at_position(it.clef, it.fifths, p.pos).0;
+        let head = it.heads.iter().enumerate().min_by_key(|(_, h)| (h.0 - pressed).abs()).map_or(0, |(k, _)| k);
+        self.pointer.score_drag = Some(ScoreDrag { node: s, at: None, pos: p.pos, item: it, head });
+        let takes_keys = self.ancestor_keyed(s);
+        Some(self.set_focus(takes_keys, false))
+    }
+
+    /// The hand's last place under a score drag, applied once a frame: the
+    /// held head moves by the lines and spaces travelled since the press.
+    fn apply_score_drag(&mut self) {
+        let Some(drag) = self.pointer.score_drag.as_mut() else {
+            return;
+        };
+        let Some((x, y)) = drag.at.take() else {
+            return;
+        };
+        let drag = drag.clone();
+        let Some(p) = self.score_pick_at(drag.node, x, y) else {
+            return;
+        };
+        let Some(&(from, _)) = drag.item.heads.get(drag.head) else {
+            return;
+        };
+        let Some(heads) = eui_score::edit::dragged(&drag.item, drag.head, from, drag.pos - p.pos) else {
+            return;
+        };
+        let Some((src, now)) = self.score_note(drag.node, drag.item.item) else {
+            return;
+        };
+        self.score_put(drag.node, &now, &src, heads);
+    }
+
+    /// `ArrowUp` and `ArrowDown` on a score that edits (03 §1.4): consumed,
+    /// down and up alike, whenever there is a note to move. `None` leaves
+    /// the key to be reported as before.
+    fn score_key(&mut self, key: &str, modifiers: u32, down: bool) -> Option<Vec<Frame>> {
+        let by = match key {
+            "ArrowUp" => 1,
+            "ArrowDown" => -1,
+            _ => return None,
+        };
+        let (s, selected) = self.focused_score()?;
+        let (src, it) = self.score_note(s, selected)?;
+        if down {
+            use eui_score::edit::Move;
+            // `2` control, `8` super: ⌘ on macOS (06 §1).
+            let how = if modifiers & (2 | 8) != 0 {
+                Move::Octave(by)
+            } else if modifiers & 1 != 0 {
+                Move::Semitone(by)
+            } else {
+                Move::Step(by)
+            };
+            if let Some(heads) = eui_score::edit::moved(&it, how) {
+                self.score_put(s, &it, &src, heads);
+            }
+        }
+        Some(Vec::new())
+    }
+
+    /// Write `heads` into the source of `s`, draw it, sound it, and owe the
+    /// server a report.
+    fn score_put(&mut self, s: NodeIx, it: &eui_score::edit::Item, src: &str, heads: Vec<(i64, i64)>) {
+        if heads == it.heads {
+            return;
+        }
+        let Some(node) = self.session.node(s) else {
+            return;
+        };
+        let key = (node.owner, node.id);
+        let Some(a_src) = self.session.atoms().src else {
+            return;
+        };
+        let new = eui_score::edit::rewrite(src, it, &heads);
+        let entry = self.score_edits.entry(key).or_insert_with(|| ScoreEdits { base: std::collections::BTreeMap::new(), src: String::new() });
+        entry.base.entry(it.item).or_insert_with(|| it.heads.clone());
+        entry.src.clone_from(&new);
+        self.session.set_prop_local(s, a_src, Value::Str(new));
+        self.touched = true;
+        self.invalidate();
+        let after = match self.named_prop(s, "edit_after") {
+            Some(Value::Int(ms)) => Duration::from_millis(u64::try_from((*ms).clamp(300, 60_000)).unwrap_or(2000)),
+            _ => EDIT_AFTER,
+        };
+        let due = self.now + after;
+        self.score_edit_due = Some(due);
+        self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
+        self.score_blip(s, &heads);
+        trace(|| format!("score: item {} now {heads:?}, {} reported in {after:?}", it.item, self.score_edits.len()));
+    }
+
+    /// Sound an edited note on the `audio` node `voice` names (03 §1.4):
+    /// a program change, then each head for 450 ms.
+    fn score_blip(&mut self, s: NodeIx, heads: &[(i64, i64)]) {
+        let Some(Value::List(voice)) = self.named_prop(s, "voice") else {
+            return;
+        };
+        let (key, program) = match voice.as_slice() {
+            [Value::Str(k), Value::Int(p)] => (k.clone(), *p),
+            [Value::Atom(k), Value::Int(p)] => (self.session.atom(*k).unwrap_or_default().to_owned(), *p),
+            _ => return,
+        };
+        let Some(audio) = self.session.atom_id(&key).and_then(|a| self.session.lookup_key(a)) else {
+            return;
+        };
+        let Some(node) = self.session.node(audio) else {
+            return;
+        };
+        if node.kind != NodeKind::Audio {
+            return;
+        }
+        let server_seq = match self.session.atoms().notes_seq.and_then(|a| node.prop(a)) {
+            Some(Value::Int(n)) => Some(*n),
+            _ => None,
+        };
+        let id = node.id;
+        let mut list = vec![Value::List(vec![Value::Int(0), Value::Int(192), Value::Int(program.clamp(0, 127)), Value::Int(0)])];
+        for &(d, alter) in heads {
+            let k = eui_score::edit::midi(d, alter);
+            list.push(Value::List(vec![Value::Int(0), Value::Int(144), Value::Int(k), Value::Int(100)]));
+            list.push(Value::List(vec![Value::Int(450), Value::Int(128), Value::Int(k), Value::Int(0)]));
+        }
+        self.local_seq = self.local_seq.saturating_sub(1);
+        self.local_notes.insert(id, LocalNotes { list, seq: self.local_seq, server_seq });
+        self.audio_dirty = true;
+    }
+
+    /// One score's edits as `score_edit` entries: each head whose pitch is
+    /// not what it was at the last report.
+    fn score_edit_entries(e: &ScoreEdits) -> Vec<Value> {
+        let mut out = Vec::new();
+        for (item, base) in &e.base {
+            let Ok(Some(now)) = eui_score::edit::item(&e.src, *item) else {
+                continue;
+            };
+            for (head, &(d, alter)) in now.heads.iter().enumerate() {
+                if base.get(head) == Some(&(d, alter)) {
+                    continue;
+                }
+                out.push(Value::List(vec![Value::Int(*item as i64), Value::Int(head as i64), Value::Int(d.rem_euclid(7)), Value::Int(alter), Value::Int(eui_score::edit::octave(d))]));
+            }
+        }
+        out
+    }
+
+    /// Report every score's edits now (06 §2).
+    fn flush_score_edits(&mut self) -> Vec<Frame> {
+        self.score_edit_due = None;
+        let pending: Vec<((u16, u32), ScoreEdits)> = self.score_edits.drain().collect();
+        let mut out = Vec::new();
+        for ((owner, id), e) in pending {
+            out.extend(self.report_score_edits(owner, id, &e));
+        }
+        out
+    }
+
+    fn report_score_edits(&mut self, owner: u16, id: u32, e: &ScoreEdits) -> Vec<Frame> {
+        let entries = Self::score_edit_entries(e);
+        if entries.is_empty() {
+            return Vec::new();
+        }
+        let Some(ix) = self.session.lookup_in(owner, id) else {
+            return Vec::new();
+        };
+        trace(|| format!("score: node {id} reports {} head(s)", entries.len()));
+        self.emit_one(ix, EventKind::ScoreEdit, Value::List(entries))
+    }
+
+    /// Edits that have stood still for `edit_after`, reported from `paint`.
+    fn idle_score_edits(&mut self) -> Vec<Frame> {
+        match self.score_edit_due {
+            Some(due) if self.now >= due => self.flush_score_edits(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// After a batch: a score whose source the server replaced has its
+    /// unreported edits reported at once (03 §1.4), against the music the
+    /// client had drawn.
+    fn overtaken_score_edits(&mut self) -> Vec<Frame> {
+        if self.score_edits.is_empty() {
+            return Vec::new();
+        }
+        let gone: Vec<(u16, u32)> = self
+            .score_edits
+            .iter()
+            .filter(|((owner, id), e)| {
+                let now = self.session.lookup_in(*owner, *id).and_then(|ix| self.session.score_props(ix)).map(|p| p.src.into_owned());
+                now.as_deref() != Some(e.src.as_str())
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        let mut out = Vec::new();
+        for key in gone {
+            if let Some(e) = self.score_edits.remove(&key) {
+                out.extend(self.report_score_edits(key.0, key.1, &e));
+            }
+        }
+        if self.score_edits.is_empty() {
+            self.score_edit_due = None;
+        }
+        out
     }
 
     fn window_events(&mut self) -> Vec<Frame> {

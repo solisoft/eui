@@ -1043,3 +1043,30 @@ version 7) and a margin.
 - **A server sends the source to a session of 9 and the paths to an older
   one**: the catalogue's `score()` under lang, rendered for protocol 8 and
   9 (`a_score_is_sent_as_source_from_protocol_9_and_as_paths_before`).
+- **A score edits its own pitches from protocol 10.** `0x24` `score_edit`
+  round-trips through `EventKind` with entries of five integers and no
+  other shape (`the_score_edit_event_round_trips`).
+- **A drag on the selected note moves it in the source and reports once.**
+  A press on the selected item moves nothing; a move two lines up from
+  where it pressed — a line above the head — rewrites that head's
+  pitch in `src` and nothing else, engrave it, send no `score_pick`, no
+  pointer event and no `score_info`, and after `edit_after` one `score_edit` with the head's
+  last pitch (`a_selected_note_dragged_moves_in_the_source_and_reports_once`).
+  A press on another item is reported as before
+  (`a_press_off_the_selected_note_is_the_servers`).
+- **The arrows move it in the key.** ↑ from E in G major is F sharp, Shift+↑
+  from A in F major is B flat, Ctrl+↑ is the octave, a chord moves all its
+  heads or none at the edge of the reach, and none of these keys is
+  reported (`arrows_move_the_selected_note_in_the_key`).
+- **Edits are reported before anything else.** An edit followed by a click
+  elsewhere sends `score_edit` first, then the click; blur sends it; a head
+  moved and moved back sends nothing
+  (`edits_are_reported_before_any_other_event`).
+- **What cannot be edited is not.** A source using `\relative`, a refused
+  source, a rest and a node without `edit` report the press and the keys as
+  in protocol 9 and change nothing (`a_score_it_cannot_edit_is_left_alone`).
+- **A new `src` from the server wins**, and edits it overtook are reported
+  at once (`the_servers_source_replaces_unreported_edits`).
+- **A server applies what it can.** lang applies a `score_edit` entry by
+  entry, ignoring one with an item, head or pitch out of range
+  (`a_score_edit_is_applied_entry_by_entry`).

@@ -424,6 +424,10 @@ pub struct Ev {
     // -- notes and rests
     /// Its pitches, none for a rest.
     pub pitches: Vec<Pitch>,
+    /// Where each of `pitches` is written: the character its name starts
+    /// at, in the order the source lists them. What an editor rewrites
+    /// (03 §1.4, protocol 10).
+    pub pitch_at: Vec<usize>,
     /// Its written value: 1, 2, 4 … 32.
     pub base: i64,
     /// Its dots.
@@ -1277,6 +1281,7 @@ fn tempo(toks: &[Tok], i: usize, st: &mut St) -> Result<usize, ScoreError> {
 fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let tk = toks[i].clone();
     let mut pitches = Vec::new();
+    let mut pitch_at = Vec::new();
     let mut rest: Option<String> = None;
     if tk.t == T::Sym('<') {
         i += 1;
@@ -1292,6 +1297,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
                 first = Some(d);
             }
             pitches.push(Pitch { d, alter });
+            pitch_at.push(toks[i].at);
             i += 1;
         }
         if i >= toks.len() || toks[i].t != T::Sym('>') {
@@ -1319,6 +1325,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
                 st.reference = Some(d);
             }
             pitches.push(Pitch { d, alter });
+            pitch_at.push(tk.at);
         }
         i += 1;
     }
@@ -1360,7 +1367,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         add /= 2;
         ticks += add;
     }
-    let mut ev = Ev { k: Kind::Note, pitches, base, dots, ticks, at: tk.at, i: st.items, ..Ev::default() };
+    let mut ev = Ev { k: Kind::Note, pitches, pitch_at, base, dots, ticks, at: tk.at, i: st.items, ..Ev::default() };
     if let Some(v) = st.voice {
         if count > 1 {
             return refuse("a run of bars' rest is the staff's: write it outside << \\\\ >>", tk.at);
