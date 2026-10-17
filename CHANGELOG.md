@@ -24,6 +24,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- The score editor's "Download PDF" prints the part of the track you are
+  on when the piece has several — that staff alone, its name set as the
+  part's instrument — and the full score from the full score. The button
+  says "Download part PDF" then, and the file is named after the track.
 - **Protocol 9: MIDI sounds** (spec 03 §7). An `audio` node's `src` may be
   a Standard MIDI File, which the client synthesizes — with the SoundFont 2
   bank its `soundfont` prop names (a list of assets, the parts of a bank

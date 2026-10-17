@@ -2983,8 +2983,10 @@ def score_scripts(sys)
       # A side the stem is on starts past the stem's end.
       up_cursor = ext[0] if ev["k"] == "note" && ev["up"] == true
       down_cursor = ext[1] if ev["k"] == "note" && ev["up"] != true
-      list = ev["scripts"].sort_by { |sc| SCORE_SCRIPTS[sc["name"]]["prio"] }
-      for sc in list
+      # Not `list`: that is the catalogue's virtualised list, and a bare
+      # assignment rebinds it for the whole worker (Soli's scope is flat).
+      in_order = ev["scripts"].sort_by { |sc| SCORE_SCRIPTS[sc["name"]]["prio"] }
+      for sc in in_order
         rule = SCORE_SCRIPTS[sc["name"]]
         dir = sc["dir"]
         dir = rule["side"] if dir == 0 && rule["side"] != 0
@@ -5050,7 +5052,7 @@ def score_ed_answer(state, ed_event, params, props)
     "hairpin" => score_ed_hairpin(state, props["grow"]),
     "artic" => score_ed_artic(state, props["name"]),
     "midi_save" => {"state": state, "save": score_midi(score_ed_full_source(state), {"bpm": state["tempo"], "beat": state["tempo_base"] ?? 4})},
-    "pdf_save" => {"state": state, "save": score_pdf(score_ed_full_source(state))},
+    "pdf_save" => {"state": state, "save": score_pdf(score_ed_print_source(state))},
     "words" => score_ed_words(state, params["payload"] ?? "", props["dir"] == "down" ? 1 : -1),
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
@@ -5916,6 +5918,8 @@ def score_ed_bar_tick(info, b)
 end
 
 def score_ed_ensemble_end(state, info)
+  return info["ensemble_end"] unless info["ensemble_end"].nil?
+
   ends = 0
   for trk in score_ed_all(state)
     total = trk["notes"].reduce(fn(acc, nt) acc + score_ed_ticks(nt), 0)
@@ -5925,6 +5929,7 @@ def score_ed_ensemble_end(state, info)
     end
     ends = score_max(ends, score_ed_bar_tick(info, b))
   end
+  info["ensemble_end"] = ends
   ends
 end
 
@@ -6107,10 +6112,13 @@ def score_ed_write_full(state, muting)
   info = score_ed_bar_marks(state)
   staves = []
   for trk, k in tracks
-    music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
+    # Not `music`: that is the music component's handler, and a bare
+    # assignment rebinds a function for the whole worker (Soli's scope is
+    # flat), so every Music page served after a full score failed there.
+    staff_music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
     heard = muting && trk["mute"] == true ? trk.merge({"volume": 0}) : trk
     lyrics = score_ed_lyrics_ly(trk["lyrics"] ?? "")
-    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
+    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + staff_music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
   end
   opener = {"Bracket": "\\new StaffGroup ", "Brace": "\\new PianoStaff ", "None": ""}[state["group"] ?? "Bracket"] ?? ""
   titles = score_ed_header_ly(state["header"] ?? {})
@@ -7325,10 +7333,14 @@ end
 def score_ed_track_music(state, k, info, opts)
   base = score_ed_v1(state)
   trk = score_ed_all(base)[k]
+  print_of = str([k, trk, info, opts, score_ed_ensemble_end(base, info), base["voice"], base["key"], base["time"], base["clef"], base["header"], base["tempo"], base["tempo_base"], base["tempo_text"], base["mark_tempo"]])
+  known = score_memo_get("ed_track", print_of)
+  return known unless known.nil?
+
   voiced = score_ed_voiced?(trk["notes2"])
   laid = score_ed_layout_track(base, k, info, voiced ? opts.merge({"gather": false}) : opts)
   both = score_ed_with_voice_two(base.merge({"notes": trk["notes"]}), laid, trk["notes2"], info, true)
-  {"words": both["words"], "map": both["map"]}
+  score_memo_put("ed_track", print_of, {"words": both["words"], "map": both["map"]}, 64)
 end
 
 def score_ed_layout_one(state)
@@ -7756,7 +7768,7 @@ def score_ed_doc_bar(state)
   row({"gap": 3, "align": "center", "width": "100%", "wrap": "wrap"}, [
     score_ed_labelled("View", segmented(SCORE_ED_VIEWS, state["view"], "view")),
     {"k": "box", "s": {"grow": 1}},
-    score_ed_save_button("Download PDF", "pdf_save", score_ed_file_name(state, "pdf"), state["notes"].length == 0),
+    score_ed_save_button(score_ed_part?(state) ? "Download part PDF" : "Download PDF", "pdf_save", score_ed_print_file_name(state), state["notes"].length == 0),
     score_ed_save_button("Download MIDI", "midi_save", score_ed_file_name(state, "mid"), state["notes"].length == 0),
     select_sized(SCORE_ED_EXAMPLES, "Examples…", state["ex_open"] == true, "ex_open", "example", 150, false, {"key": "score_examples"}),
     score_ed_tool("Clear", "clear", {}, state["notes"].length == 0, nil)
@@ -7764,15 +7776,43 @@ def score_ed_doc_bar(state)
 end
 
 def score_ed_save_button(label, on_save, name, disabled)
-  button = score_ed_tool(label, on_save, {}, disabled, nil)
+  # Not `button`: that is the catalogue's builder, and assigning it here
+  # rebound it for the worker — counter, todo, the tutorial and the tracker
+  # then failed with "Cannot call non-function value" wherever it served
+  # them after the score editor.
+  saver = score_ed_tool(label, on_save, {}, disabled, nil)
   kept = {}
-  for kind in (button["on"] ?? {}).keys
-    kept[kind] = button["on"][kind] unless kind == "click"
+  for kind in (saver["on"] ?? {}).keys
+    kept[kind] = saver["on"][kind] unless kind == "click"
   end
   kept["file_save"] = on_save
-  button["on"] = kept
-  button["p"] = (button["p"] ?? {}).merge({"save": name}) unless disabled
-  button
+  saver["on"] = kept
+  saver["p"] = (saver["p"] ?? {}).merge({"save": name}) unless disabled
+  saver
+end
+
+def score_ed_part?(state)
+  !score_ed_full_view(state) && score_ed_tracks(state).length > 1
+end
+
+def score_ed_print_source(state)
+  return score_ed_full_source(state) unless score_ed_part?(state)
+
+  ps_at = state["track"] ?? 0
+  ps_name = ((score_ed_tracks(state)[ps_at] ?? {})["name"] ?? "").trim
+  ps_name = "Track " + str(ps_at + 1) if ps_name == ""
+  score_ed_layout(state.merge({"header": (state["header"] ?? {}).merge({"instrument": ps_name})}))["src"]
+end
+
+def score_ed_print_file_name(state)
+  pf_whole = score_ed_file_name(state, "pdf")
+  return pf_whole unless score_ed_part?(state)
+
+  pf_at = state["track"] ?? 0
+  pf_name = ((score_ed_tracks(state)[pf_at] ?? {})["name"] ?? "").trim
+  pf_name = "track-" + str(pf_at + 1) if pf_name == ""
+  pf_clean = pf_name.chars().map { |ch| "/\\:*?\"<>|.".contains(ch) ? "" : (ch == " " ? "-" : ch) }.join("")
+  pf_whole.replace(".pdf", "-" + pf_clean + ".pdf")
 end
 
 def score_ed_file_name(state, ext)
@@ -7943,14 +7983,15 @@ def score_ed_chip_row(tracks, k, width)
   for trk, j in tracks
     label = trk["name"] == "" ? "Track " + str(j + 1) : trk["name"]
     label = label + "  (muted)" if trk["mute"] == true
-    chip = label.length * 7.6 + 30.0
-    if x > 0.0 && x + chip > width
+    # Not `chip`, the catalogue builder the gallery draws its filters with.
+    chip_w = label.length * 7.6 + 30.0
+    if x > 0.0 && x + chip_w > width
       line += 1
       x = 0.0
     end
     return line if j == k
 
-    x += chip + 2.0
+    x += chip_w + 2.0
   end
   line
 end
@@ -9338,6 +9379,23 @@ describe("the editor's tracks", fn() {
     engraved = score_engrave(src, 100.0)
     check("two staves", engraved["systems"][0]["staves"].length, 2)
     check("three bars each", engraved["systems"].map { |sys| sys["staves"][1]["bars"].length }.reduce(fn(acc, n) acc + n, 0), 3)
+  })
+
+  test("Download PDF prints the track's part from a track, and the full score from the full score", fn() {
+    ed = score_ed_from_source(spec_state(), "{ c''1 | d''1 }")
+    ed = score_ed_track_add(ed)
+    ed = score_ed_key(ed, "c", 0)
+    ed["tracks"][1] = ed["tracks"][1].merge({"name": "Viola"})
+    check("on a track of two, a part", score_ed_part?(ed), true)
+    part = score_ed_print_source(ed)
+    assert(part.contains("instrument = \"Viola\""))
+    assert(!part.contains("\\new Staff"))
+    check("one staff", score_engrave(part, 100.0)["systems"][0].has_key("staves"), false)
+    assert(score_ed_print_file_name(ed).ends_with?("-Viola.pdf"))
+    ed["full_view"] = true
+    check("on the full score, the full score", score_ed_part?(ed), false)
+    check("its source", score_ed_print_source(ed), score_ed_full_source(ed))
+    assert(!score_ed_print_file_name(ed).contains("Viola"))
   })
 
   test("a change from a bar is the first track's, and every staff writes it", fn() {

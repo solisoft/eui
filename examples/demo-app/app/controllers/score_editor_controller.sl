@@ -158,7 +158,7 @@ def score_ed_answer(state, ed_event, params, props)
     "hairpin" => score_ed_hairpin(state, props["grow"]),
     "artic" => score_ed_artic(state, props["name"]),
     "midi_save" => {"state": state, "save": score_midi(score_ed_full_source(state), {"bpm": state["tempo"], "beat": state["tempo_base"] ?? 4})},
-    "pdf_save" => {"state": state, "save": score_pdf(score_ed_full_source(state))},
+    "pdf_save" => {"state": state, "save": score_pdf(score_ed_print_source(state))},
     "words" => score_ed_words(state, params["payload"] ?? "", props["dir"] == "down" ? 1 : -1),
     "words_clear" => score_ed_words_pressed(state, ""),
     "words_mark" => score_ed_words_pressed(state, props["text"] ?? ""),
@@ -3338,7 +3338,7 @@ def score_ed_doc_bar(state)
   row({"gap": 3, "align": "center", "width": "100%", "wrap": "wrap"}, [
     score_ed_labelled("View", segmented(SCORE_ED_VIEWS, state["view"], "view")),
     {"k": "box", "s": {"grow": 1}},
-    score_ed_save_button("Download PDF", "pdf_save", score_ed_file_name(state, "pdf"), state["notes"].length == 0),
+    score_ed_save_button(score_ed_part?(state) ? "Download part PDF" : "Download PDF", "pdf_save", score_ed_print_file_name(state), state["notes"].length == 0),
     score_ed_save_button("Download MIDI", "midi_save", score_ed_file_name(state, "mid"), state["notes"].length == 0),
     select_sized(SCORE_ED_EXAMPLES, "Examples…", state["ex_open"] == true, "ex_open", "example", 150, false, {"key": "score_examples"}),
     score_ed_tool("Clear", "clear", {}, state["notes"].length == 0, nil)
@@ -3366,6 +3366,35 @@ end
 
 # The file's name: the title, without what a file system refuses (and its
 # dots), spaces as dashes, or "score".
+# What "Download PDF" prints. From the full score, the full score; from one
+# track of several, that track's part — its own staff, and its name as the
+# header's `instrument`, which the engraver sets bold under the titles as
+# LilyPond prints a part. A piece of one track has nothing else to print.
+def score_ed_part?(state)
+  !score_ed_full_view(state) && score_ed_tracks(state).length > 1
+end
+
+def score_ed_print_source(state)
+  return score_ed_full_source(state) unless score_ed_part?(state)
+
+  ps_at = state["track"] ?? 0
+  ps_name = ((score_ed_tracks(state)[ps_at] ?? {})["name"] ?? "").trim
+  ps_name = "Track " + str(ps_at + 1) if ps_name == ""
+  score_ed_layout(state.merge({"header": (state["header"] ?? {}).merge({"instrument": ps_name})}))["src"]
+end
+
+# The file a part is saved as: the piece's, then the track's name.
+def score_ed_print_file_name(state)
+  pf_whole = score_ed_file_name(state, "pdf")
+  return pf_whole unless score_ed_part?(state)
+
+  pf_at = state["track"] ?? 0
+  pf_name = ((score_ed_tracks(state)[pf_at] ?? {})["name"] ?? "").trim
+  pf_name = "track-" + str(pf_at + 1) if pf_name == ""
+  pf_clean = pf_name.chars().map { |ch| "/\\:*?\"<>|.".contains(ch) ? "" : (ch == " " ? "-" : ch) }.join("")
+  pf_whole.replace(".pdf", "-" + pf_clean + ".pdf")
+end
+
 def score_ed_file_name(state, ext)
   title = ((state["header"] ?? {})["title"] ?? "").trim
   clean = title.chars().map { |ch| "/\\:*?\"<>|.".contains(ch) ? "" : (ch == " " ? "-" : ch) }.join("")
