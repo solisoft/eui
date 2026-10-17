@@ -310,7 +310,7 @@ out of rather than a design: one server runs one `soli`.
 `.soli/current` at it, rewrites `app.infos`'s `start_script` to that path
 the first time (keeping `app.infos.before-own-soli`), runs the migrations
 with it, keeps `.soli/` out of the rsync's `--delete`, and fails the deploy
-if the fresh slot's `/proc/<pid>/exe` is not that binary. The server's
+if the fresh slot's `/proc/<pid>/exe` is not that binary. Every slot is checked after the restart as well: the first deploy left the other slot on the server's 2.5.5, and the proxy balanced between the two (Beethoven in 0.8 s on one, 21 s on the other), so a stale slot is switched out again and one that stays fails the deploy. The server's
 `soli` and every other site stay where they were. It was done for the score
 editor: Soli 2.26.0 is the first release with the native engraver, and on
 the server's 2.5.5 Beethoven's exposition took about 30 s to open, against

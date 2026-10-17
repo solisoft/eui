@@ -399,6 +399,40 @@ jobs:
       - name: Bring both slots up
         run: ssh "$USER@$HOST" "soli-proxy restart -c '$PROXY_CONF' '$APP'"
 
+      # Every process serving the site, not only the fresh one, on the
+      # site's Soli. The first deploy that moved the demo onto its own Soli
+      # left one of the two slots on the server's 2.5.5: the switch started
+      # the new binary, the restart did not replace the old process, and the
+      # proxy balanced between them — the score editor opened Beethoven in
+      # 0.8 s on one and 21 s on the other. A stale slot is switched out once
+      # more; one still there after that fails the deploy.
+      - name: Every slot runs the site's Soli
+        run: |
+          set -euo pipefail
+          stale() {
+            pids="$(ssh "$USER@$HOST" "$PIDS")"
+            ssh "$USER@$HOST" "for p in $pids; do printf '%s %s\n' \$p \"\$(readlink /proc/\$p/exe)\"; done" \
+              | grep -v "/.soli/$SOLI_VERSION/soli\$" || true
+          }
+          for round in 1 2; do
+            left="$(stale)"
+            if [ -z "$left" ]; then
+              echo "Every slot runs $SITES_DIR/$DOMAIN/.soli/$SOLI_VERSION/soli:"
+              ssh "$USER@$HOST" "$PIDS" | tr '\n' ' '; echo
+              exit 0
+            fi
+            echo "round $round, not on the site's Soli $SOLI_VERSION:"; echo "$left"
+            ssh "$USER@$HOST" "soli-proxy deploy -c '$PROXY_CONF' '$APP' 2>&1"
+            sleep 15
+            ssh "$USER@$HOST" "soli-proxy restart -c '$PROXY_CONF' '$APP'"
+            sleep 15
+          done
+          left="$(stale)"
+          [ -z "$left" ] && { echo "Every slot runs the site's Soli $SOLI_VERSION."; exit 0; }
+          echo "Still serving on another binary after two switches:" >&2; echo "$left" >&2
+          echo "  ssh $USER@$HOST 'soli-proxy logs -c $PROXY_CONF $APP'" >&2
+          exit 1
+
       # End to end, through the proxy, with the real hostname — where the 421
       # shows. The /up probe on the app's own port bypasses exactly the part
       # that fails.
