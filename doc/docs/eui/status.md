@@ -2600,7 +2600,8 @@ not see this yet: `eui-data.solisoft.net` runs Soli 2.5.5, which predates
 30 s** to open there against 0.115 s on the 2.27.2 release. The same day the
 demo moved onto a Soli of its own, 2.27.2, installed beside the site by its
 deploy (deploy/README.md); after that, 3 opens of 4 took about 2.5 s end to
-end and the fourth stalled.
+end and the fourth stalled. That Soli is no longer pinned: each deploy now
+takes the latest soli_lang release.
 
 **And a score editor that no longer breaks the pages served after it**
 (2026-10-17). Four locals in the score editor and in `score()` were named
