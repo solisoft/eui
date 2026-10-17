@@ -2667,22 +2667,6 @@ import now gives the second voice its own notes, silent up to each of its
 blocks, and what the editor writes reads back the same. `tests/score_spec.sl`
 is 126 tests.
 
-**The gallery opens as a page** (2026-10-17). A client given
-`wss://…/_eui/session/<component>` first asks `GET /_eui/view/<component>`
-and dials only on a 404 (01 §2.4), so every component that is not static
-pays that 404 before its socket. Measured from Paris against
-`eui-data.solisoft.net` behind Cloudflare, each new request to the origin
-costs about 110 ms where a round trip on an open socket costs 26: the
-manifest, the 404, the upgrade and the Welcome put the gallery's first
-tree at about 0.45 s, and its two pictures, on two fresh connections, at
-0.65. The gallery now takes `{"static": "public, max-age=60"}`: the page
-is the second request (46,177 bytes, an `ETag`), drawn pixel for pixel as
-the session draws it (`snapshot --view` against `--soli`, both themes),
-and the socket waits for the first click. Locally the view is answered in
-9 to 17 ms. Cloudflare holds neither the page nor the pictures yet: both
-come back `cf-cache-status: DYNAMIC`, because a path with no extension is
-not cached without a rule, whatever its `Cache-Control` says.
-
 ## Not started
 
 - The worker sandbox on macOS (`sandbox_init`) and Windows (AppContainer):

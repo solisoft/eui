@@ -19,14 +19,7 @@
 # before. Until then the manifest carries the directory's name, which is
 # what a launcher entry is labelled with.
 
-# The gallery is also served as a page, over `GET /_eui/view/gallery`
-# (01 §2.4), because a client asks for that first and opens a socket only
-# on a 404: without the option every reader paid that 404, then the
-# upgrade and the Welcome, before anything was drawn — about 0.45 s
-# through Cloudflare against 0.22 s for the manifest and the page. The
-# session opens on the first click. The deploy's Soli takes the option
-# since 2.4.0.
-router_eui("gallery", "live#gallery", "live#gallery_view", {"static": "public, max-age=60"})
+router_eui("gallery", "live#gallery", "live#gallery_view")
 router_eui("counter", "live#counter", "live#counter_view")
 router_eui("todo", "live#todo", "live#todo_view")
 router_eui("table", "live#table", "live#table_view")
@@ -57,9 +50,9 @@ router_eui("helpdesk", "helpdesk#helpdesk", "helpdesk#helpdesk_view")
 # paging and columns that leave as the window narrows. Seeded, so no table.
 router_eui("campaigns", "campaigns#campaigns", "campaigns#campaigns_view")
 # Meridian: a product landing page for an invented service, every style a
-# `tw()` class string. Not served as a page (`{"static": ...}`, as the
-# gallery is) yet: it was written when the deploy's Soli, 2.3.3, refused the
-# option, and nobody has measured it since the pin moved.
+# `tw()` class string. No `{"static": ...}` here, which would also serve it
+# over `GET /_eui/view/site`: the deploy's pinned Soli (2.3.3) refuses the
+# option and the routes do not load.
 router_eui("site", "site#site", "site#site_view")
 # The tutorial (doc/docs/eui/tutorial.md): one shopping list in six steps,
 # each a component so the page can run every step beside its code.
