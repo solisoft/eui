@@ -2300,10 +2300,20 @@ call rather than kept in the session, so the state is only what the person
 changed. The reducer is `app/services/campaigns_book.sl` (379 lines) and
 `tests/campaigns_spec.sl` holds it to 16 tests and 120 assertions — one of
 them caught "pause the ticked" reading the ticks after clearing them; the
-view is 584 lines. Measured with `snapshot` on 2026-10-12, it is 477 nodes
+view is 602 lines. Measured with `snapshot` on 2026-10-12, it is 477 nodes
 and 2,135 quads at 1 280×800 and 352 nodes and 475 quads at 420 px. No
 literal colour: the reference it was built from was a dark screen, and the
 light one came free.
+
+Since 2026-10-17 the same card is also the gallery's **Campaigns** section,
+between Reports and Settings. Its events all start `cp_`, so the gallery's
+handler hands them to the table's reducer by that prefix alone rather than
+listing them, and they cannot be read as the gallery's own `search`, `page`
+or `sort`; the table's state lives under the gallery's `cp` key, and what it
+says goes through the gallery's toast. The card is drawn at the width the
+gallery's content column leaves (`campaigns_card`), so at 1 280×800 the
+trend column has already left: the section is 506 nodes and 1,157 quads
+there.
 
 **And a score** (2026-10-12). The catalogue has a notation family:
 `score(src, opts)` engraves LilyPond's own input — `\relative`, clefs, keys,

@@ -64,20 +64,20 @@ describe("Sorting and paging") do
   end
 
   test("a new header sorts names A to Z and figures largest first; again turns it round") do
-    by_name = cp_reduce({}, "sort", {"props": {"col": "name"}})
+    by_name = cp_reduce({}, "cp_sort", {"props": {"col": "name"}})
     assert_eq(by_name["dir"], "asc")
     names = cp_page_of(by_name)["rows"].map(fn(c) { c["name"] })
     assert_eq(names[0], "Alpine Fleece Brand Exact")
-    by_cpa = cp_reduce(by_name, "sort", {"props": {"col": "cpa_c"}})
+    by_cpa = cp_reduce(by_name, "cp_sort", {"props": {"col": "cpa_c"}})
     assert_eq(by_cpa["dir"], "desc")
-    turned = cp_reduce(by_cpa, "sort", {"props": {"col": "cpa_c"}})
+    turned = cp_reduce(by_cpa, "cp_sort", {"props": {"col": "cpa_c"}})
     assert_eq(turned["dir"], "asc")
     rows = cp_page_of(turned)["rows"]
     assert(rows[0]["cpa_c"] <= rows[1]["cpa_c"])
   end
 
   test("the last page holds the rest, and a page past the end is the last") do
-    st = cp_reduce({"per": 20}, "page", {"props": {"page": 9}})
+    st = cp_reduce({"per": 20}, "cp_page", {"props": {"page": 9}})
     info = cp_page_of(st)
     assert_eq(info["page"], 2)
     assert_eq(info["rows"].length(), 10)
@@ -85,7 +85,7 @@ describe("Sorting and paging") do
   end
 
   test("rows per page goes back to the first page") do
-    st = cp_reduce({"page": 3}, "per", {"props": {"value": "30"}})
+    st = cp_reduce({"page": 3}, "cp_per", {"props": {"value": "30"}})
     assert_eq(st["per"], 30)
     assert_eq(st["page"], 1)
     assert_eq(cp_page_of(st)["rows"].length(), 30)
@@ -94,16 +94,16 @@ end
 
 describe("Search and filter") do
   test("search matches name, id, market and audience, and the figures follow") do
-    st = cp_reduce({}, "search", {"payload": "glacier"})
+    st = cp_reduce({}, "cp_search", {"payload": "glacier"})
     seen = cp_in_view(st)
     assert_eq(seen.filter(fn(c) { c["name"].index_of("Glacier") < 0 }).length(), 0)
     assert_eq(cp_totals(seen)["count"], seen.length())
-    assert_eq(cp_in_view(cp_reduce({}, "search", {"payload": "CMP-1007"})).length(), 1)
-    assert_eq(cp_in_view(cp_reduce({}, "search", {"payload": "nothing like this"})).length(), 0)
+    assert_eq(cp_in_view(cp_reduce({}, "cp_search", {"payload": "CMP-1007"})).length(), 1)
+    assert_eq(cp_in_view(cp_reduce({}, "cp_search", {"payload": "nothing like this"})).length(), 0)
   end
 
   test("the status filter keeps only that status") do
-    st = cp_reduce({}, "filter", {"props": {"value": "Limited"}})
+    st = cp_reduce({}, "cp_filter", {"props": {"value": "Limited"}})
     seen = cp_in_view(st)
     assert(seen.length() > 0)
     assert_eq(seen.filter(fn(c) { c["status"] != "Limited" }).length(), 0)
@@ -127,27 +127,27 @@ end
 
 describe("Ticking and pausing") do
   test("the header box ticks the page, then clears it, and leaves other pages alone") do
-    st = cp_reduce({}, "tick", {"props": {"id": "CMP-1030"}})
+    st = cp_reduce({}, "cp_tick", {"props": {"id": "CMP-1030"}})
     page_one = cp_spec_ids(st)
     assert(!page_one.includes?("CMP-1030"))
-    st = cp_reduce(st, "tick_page", {})
+    st = cp_reduce(st, "cp_tick_page", {})
     assert_eq(st["sel"].length(), 11)
-    st = cp_reduce(st, "tick_page", {})
+    st = cp_reduce(st, "cp_tick_page", {})
     assert_eq(st["sel"], ["CMP-1030"])
   end
 
   test("pausing from a row's menu pauses it, and resuming brings it back") do
     live = cp_campaigns().filter(fn(c) { c["status"] == "Live" })[0]
-    st = cp_reduce({}, "row_action", {"props": {"id": live["id"], "item": "Pause"}})
+    st = cp_reduce({}, "cp_row_action", {"props": {"id": live["id"], "item": "Pause"}})
     assert_eq(cp_find(st, live["id"])["status"], "Paused")
     assert_eq(st["toast"], "Paused " + live["name"])
     assert_eq(cp_totals(cp_in_view(st))["live"], cp_totals(cp_campaigns())["live"] - 1)
-    st = cp_reduce(st, "row_action", {"props": {"id": live["id"], "item": "Resume"}})
+    st = cp_reduce(st, "cp_row_action", {"props": {"id": live["id"], "item": "Resume"}})
     assert_eq(cp_find(st, live["id"])["status"], "Live")
   end
 
   test("pausing what is ticked pauses each of them and clears the ticks") do
-    st = cp_reduce({"sel": ["CMP-1002", "CMP-1003"]}, "pause_sel", {})
+    st = cp_reduce({"sel": ["CMP-1002", "CMP-1003"]}, "cp_pause_sel", {})
     assert_eq(st["sel"], [])
     assert_eq(cp_find(st, "CMP-1002")["status"], "Paused")
     assert_eq(cp_find(st, "CMP-1003")["status"], "Paused")
@@ -155,9 +155,9 @@ describe("Ticking and pausing") do
   end
 
   test("a hidden column comes back when it is toggled again") do
-    st = cp_reduce({}, "column", {"props": {"col": "trend"}})
+    st = cp_reduce({}, "cp_column", {"props": {"col": "trend"}})
     assert_eq(st["hidden"], ["trend"])
-    st = cp_reduce(st, "column", {"props": {"col": "trend"}})
+    st = cp_reduce(st, "cp_column", {"props": {"col": "trend"}})
     assert_eq(st["hidden"], [])
   end
 end

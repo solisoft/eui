@@ -967,7 +967,7 @@ end
 # holds the active section; the rail and the top bar are outside it, so the
 # page moves under a header that stays.
 
-ERP_SECTIONS = ["Dashboard", "Live", "Orders", "Customers", "Inventory", "Scene", "Files", "Reports", "Settings", "Catalogue"]
+ERP_SECTIONS = ["Dashboard", "Live", "Orders", "Customers", "Inventory", "Scene", "Files", "Reports", "Campaigns", "Settings", "Catalogue"]
 # The page transitions to try, as `motion` names (03 §5.2). `none` is first
 # and is the default: every one of the others is the client's rendering of a
 # change it was going to make anyway, so turning them all off has to leave an
@@ -980,7 +980,7 @@ ERP_STATUSES = ["Any status", "Draft", "Confirmed", "Picked", "Invoiced", "Late"
 ERP_DEMO_WH = ["Lyon dock", "Lyon-Sud", "Nantes", "Antwerp"]
 # What each section looks like, from the client's own set: no font, no
 # fetch, a name and a table (`crates/eui-render/src/icons.rs`).
-ERP_SECTION_ICONS = {"Dashboard": "grid", "Live": "circle", "Orders": "doc", "Customers": "users", "Inventory": "box", "Scene": "scene", "Files": "folder", "Reports": "chart", "Settings": "sliders", "Catalogue": "star"}
+ERP_SECTION_ICONS = {"Dashboard": "grid", "Live": "circle", "Orders": "doc", "Customers": "users", "Inventory": "box", "Scene": "scene", "Files": "folder", "Reports": "chart", "Campaigns": "filter", "Settings": "sliders", "Catalogue": "star"}
 
 ERP_PER_PAGE = 7
 
@@ -4530,6 +4530,7 @@ def gallery_defaults(state)
     .merge(erp_files_defaults())
     .merge(erp_board_state_defaults())
     .merge(erp_live_defaults())
+    .merge({"cp": {}})
   for key in base.keys()
     base[key] = state[key] unless state[key].nil?
   end
@@ -4556,6 +4557,11 @@ def gallery(event_data)
   return erp_cat_md_step(state, md_edit_what("cat_md", event), params) if md_edit_mine?("cat_md", event)
 
   return erp_files_event(state, event, params, props) if erp_files_owns?(event)
+
+  # The Campaigns section is `campaigns_controller.sl`'s table, whose events
+  # all start `cp_` so they cannot be mistaken for this page's own `search`,
+  # `page` or `sort`.
+  return gallery_campaigns(state, event, params) if event.starts_with?("cp_")
 
   match event {
     # The shell.
@@ -4800,6 +4806,18 @@ end
 # layers over it are in the order they have to be looked at: the drawer and
 # the sheet, then the new order, then a question, then the handbook, then
 # what the last click did, and last the dev bar.
+# The table keeps its state under "cp" and says what it did through the
+# gallery's toast rather than its own, so one page has one place for news.
+def gallery_campaigns(gc_state, gc_event, gc_params)
+  gc_cp = cp_reduce(gc_state["cp"] ?? {}, gc_event, gc_params)
+  gc_said = gc_cp["toast"] ?? ""
+  gc_cp["toast"] = ""
+  gc_state = set_key(gc_state, "cp", gc_cp)
+  return gc_state if gc_said == ""
+
+  erp_say(gc_state, gc_said)
+end
+
 def gallery_view(raw_state)
   state = gallery_defaults(raw_state ?? {})
   lay = erp_layout(state)
@@ -4812,6 +4830,9 @@ def gallery_view(raw_state)
   body = erp_scene_section(state, lay) if section == "Scene"
   body = erp_files_section(state, lay) if section == "Files"
   body = erp_reports_section(state, lay) if section == "Reports"
+  # The page's padding is 20 px a side when wide and 12 when not (`pad` 6 / 4
+  # below), and the card is told the width that leaves.
+  body = campaigns_card(state["cp"], erp_content_px(lay) - (lay["wide"] ? 40 : 24)) if section == "Campaigns"
   body = erp_settings_section(state, lay) if section == "Settings"
   body = erp_catalogue_section(state, lay) if section == "Catalogue"
   # One keyed page per section. The key is the section's name, so switching

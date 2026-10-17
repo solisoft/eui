@@ -349,30 +349,30 @@ def cp_reduce(rd_raw, rd_event, rd_params)
   rd_said = rd_p["payload"]
 
   return cp_set(rd_state, "viewport", rd_p["viewport"] ?? rd_state["viewport"]) if rd_event == "connect" || rd_event == "viewport"
-  return cp_set(cp_set(rd_state, "q", (rd_said ?? "").to_s), "page", 1) if rd_event == "search"
-  return cp_set(cp_set(cp_sort_by(rd_state, rd_props["col"] ?? "spend"), "page", 1), "menu", "") if rd_event == "sort"
-  return cp_set(rd_state, "page", rd_props["page"] ?? 1) if rd_event == "page"
-  return cp_set(cp_set(cp_set(rd_state, "per", int(rd_props["value"] ?? "10")), "page", 1), "menu", "") if rd_event == "per"
-  return cp_set(rd_state, "sel", cp_toggle_in(rd_state["sel"], rd_props["id"] ?? "")) if rd_event == "tick"
-  return cp_tick_page(rd_state) if rd_event == "tick_page"
-  return cp_set(rd_state, "sel", []) if rd_event == "clear_sel"
-  return cp_menu(rd_state, rd_props["which"] ?? "") if rd_event == "menu"
-  return cp_set(rd_state, "menu", "") if rd_event == "menu_close"
-  return cp_set(cp_set(cp_set(rd_state, "status", rd_props["value"] ?? "All"), "page", 1), "menu", "") if rd_event == "filter"
-  return cp_set(rd_state, "hidden", cp_toggle_in(rd_state["hidden"], rd_props["col"] ?? "")) if rd_event == "column"
-  return cp_set(cp_set(rd_state, "dense", (rd_props["value"] ?? "") == "Compact"), "menu", "") if rd_event == "density"
-  if rd_event == "row_action"
+  return cp_set(cp_set(rd_state, "q", (rd_said ?? "").to_s), "page", 1) if rd_event == "cp_search"
+  return cp_set(cp_set(cp_sort_by(rd_state, rd_props["col"] ?? "spend"), "page", 1), "menu", "") if rd_event == "cp_sort"
+  return cp_set(rd_state, "page", rd_props["page"] ?? 1) if rd_event == "cp_page"
+  return cp_set(cp_set(cp_set(rd_state, "per", int(rd_props["value"] ?? "10")), "page", 1), "menu", "") if rd_event == "cp_per"
+  return cp_set(rd_state, "sel", cp_toggle_in(rd_state["sel"], rd_props["id"] ?? "")) if rd_event == "cp_tick"
+  return cp_tick_page(rd_state) if rd_event == "cp_tick_page"
+  return cp_set(rd_state, "sel", []) if rd_event == "cp_clear_sel"
+  return cp_menu(rd_state, rd_props["which"] ?? "") if rd_event == "cp_menu"
+  return cp_set(rd_state, "menu", "") if rd_event == "cp_menu_close"
+  return cp_set(cp_set(cp_set(rd_state, "status", rd_props["value"] ?? "All"), "page", 1), "menu", "") if rd_event == "cp_filter"
+  return cp_set(rd_state, "hidden", cp_toggle_in(rd_state["hidden"], rd_props["col"] ?? "")) if rd_event == "cp_column"
+  return cp_set(cp_set(rd_state, "dense", (rd_props["value"] ?? "") == "Compact"), "menu", "") if rd_event == "cp_density"
+  if rd_event == "cp_row_action"
     rd_id = rd_props["id"] ?? ""
     return cp_set_running(rd_state, [rd_id], (rd_props["item"] ?? "") == "Resume")
   end
-  if rd_event == "pause_sel" || rd_event == "resume_sel"
+  if rd_event == "cp_pause_sel" || rd_event == "cp_resume_sel"
     # Read the ticks before clearing them: `cp_set` changes the hash it is
     # given, so clearing first would leave nothing to pause.
     rd_ticked = rd_state["sel"]
-    return cp_set_running(cp_set(rd_state, "sel", []), rd_ticked, rd_event == "resume_sel")
+    return cp_set_running(cp_set(rd_state, "sel", []), rd_ticked, rd_event == "cp_resume_sel")
   end
-  return cp_set(rd_state, "toast", "Export is not wired up in this demo") if rd_event == "export"
-  return cp_set(rd_state, "toast", "New campaigns are not part of this demo") if rd_event == "new"
+  return cp_set(rd_state, "toast", "Export is not wired up in this demo") if rd_event == "cp_export"
+  return cp_set(rd_state, "toast", "New campaigns are not part of this demo") if rd_event == "cp_new"
   return cp_set(rd_state, "toast", "") if rd_event == "toast_done"
 
   rd_state

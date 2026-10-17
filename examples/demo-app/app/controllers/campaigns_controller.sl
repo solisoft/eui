@@ -68,7 +68,10 @@ def cpv_sort_key(sk_col)
   sk_col
 end
 
-def cpv_lay(ly_state)
+# `ly_fit` is the card's width when somebody else owns the page around it —
+# the gallery, which hands over what its content column has left. Zero means
+# the card is the page, and takes the window less its margins.
+def cpv_lay(ly_state, ly_fit = 0)
   ly_w = (ly_state["viewport"] ?? {})["width"] ?? 1280
   ly_pad = 16
   ly_pad = 24 if ly_w >= 640
@@ -76,6 +79,7 @@ def cpv_lay(ly_state)
   ly_step = ly_pad == 16 ? 5 : (ly_pad == 24 ? 7 : 8)
   ly_card = ly_w - 2 * ly_pad
   ly_card = 1440 if ly_card > 1440
+  ly_card = ly_fit if ly_fit > 0
   ly_inner = ly_card - 2
   ly_hidden = ly_state["hidden"]
   ly_cols = cpv_columns().filter(fn(c) { !ly_hidden.includes?(c["id"]) })
@@ -221,7 +225,7 @@ end
 # A list of choices with the current one ticked, hung under its button.
 def cpv_choices(ch_state, ch_which, ch_anchor, ch_options, ch_value, ch_event, ch_w)
   ch_open = ch_state["menu"] == ch_which
-  dropdown(ch_anchor, ch_options.map(fn(o) { select_option(o, o == ch_value, ch_event, ch_w, {}) }), ch_open, DROPDOWN_MAX_PX, "menu_close")
+  dropdown(ch_anchor, ch_options.map(fn(o) { select_option(o, o == ch_value, ch_event, ch_w, {}) }), ch_open, DROPDOWN_MAX_PX, "cp_menu_close")
 end
 
 # ---- The header and the figures ------------------------------------------------
@@ -229,8 +233,8 @@ end
 def cpv_header(hd_state, hd_lay, hd_tot)
   hd_bits = [str(hd_tot["count"]) + (hd_tot["count"] == 1 ? " campaign" : " campaigns"), str(hd_tot["live"]) + " live in view", "Sep 6 to Oct 5"]
   hd_actions = row({"gap": 3, "align": "center", "shrink": 0}, [
-    cpv_button(hd_lay["card"] >= 560 ? "Export" : "", "arrow_down", "export", {}, "neutral", "cp_export"),
-    cpv_button(hd_lay["card"] >= 560 ? "New Campaign" : "", "plus", "new", {}, "accent", "cp_new")
+    cpv_button(hd_lay["card"] >= 560 ? "Export" : "", "arrow_down", "cp_export", {}, "neutral", "cp_export"),
+    cpv_button(hd_lay["card"] >= 560 ? "New Campaign" : "", "plus", "cp_new", {}, "accent", "cp_new")
   ])
   row({"gap": 4, "align": "center", "width": "100%", "pad": [5, 5, 5, 5]}, [
     column({"gap": 1, "grow": 1, "min_width": 0}, [
@@ -282,7 +286,7 @@ end
 # ---- The toolbar -----------------------------------------------------------------
 
 def cpv_search(sx_value, sx_px)
-  sx_field = input(sx_value, "search", {
+  sx_field = input(sx_value, "cp_search", {
     "key": "cp_q",
     "placeholder": "Search campaign, ID, market…",
     "style": {"bg": "none", "pad": [3, 4, 3, 9], "width": sx_px},
@@ -294,34 +298,34 @@ end
 
 def cpv_columns_menu(cm_state)
   cm_open = cm_state["menu"] == "columns"
-  cm_anchor = cpv_button("Columns", "grid", "menu", {"which": "columns"}, "neutral", "cp_columns", cm_open)
+  cm_anchor = cpv_button("Columns", "grid", "cp_menu", {"which": "columns"}, "neutral", "cp_columns", cm_open)
   cm_hidden = cm_state["hidden"]
   cm_items = cpv_columns().filter(fn(c) { cp_optional_columns().includes?(c["id"]) }).map(fn(c) {
-    checkbox(c["label"], !cm_hidden.includes?(c["id"]), "column", {"col": c["id"]}, {"key": "cp_col:" + c["id"]})
+    checkbox(c["label"], !cm_hidden.includes?(c["id"]), "cp_column", {"col": c["id"]}, {"key": "cp_col:" + c["id"]})
   })
-  dropdown(cm_anchor, [column({"gap": 0, "pad": 1, "min_width": 180}, cm_items)], cm_open, 0, "menu_close")
+  dropdown(cm_anchor, [column({"gap": 0, "pad": 1, "min_width": 180}, cm_items)], cm_open, 0, "cp_menu_close")
 end
 
 def cpv_toolbar(tb_state, tb_lay)
   tb_status = tb_state["status"]
   tb_filter_label = tb_status == "All" ? "Filter" : tb_status
   tb_filter = cpv_choices(tb_state, "filter",
-    cpv_button(tb_lay["card"] >= 520 ? tb_filter_label : "", "filter", "menu", {"which": "filter"}, tb_status == "All" ? "neutral" : "accent", "cp_filter", tb_state["menu"] == "filter"),
-    ["All", "Live", "Limited", "Paused"], tb_status, "filter", 160)
+    cpv_button(tb_lay["card"] >= 520 ? tb_filter_label : "", "filter", "cp_menu", {"which": "filter"}, tb_status == "All" ? "neutral" : "accent", "cp_filter", tb_state["menu"] == "filter"),
+    ["All", "Live", "Limited", "Paused"], tb_status, "cp_filter", 160)
   tb_left = [cpv_search(tb_state["q"], tb_lay["search"]), tb_filter]
   tb_n = tb_state["sel"].length()
   if tb_n > 0
     tb_left = tb_left.concat([
       text(str(tb_n) + " selected", {"size": 1, "weight": "medium", "fg": "text.default", "shrink": 0}),
-      cpv_button("Pause", "", "pause_sel", {}, "neutral", "cp_pause_sel"),
-      cpv_button("Resume", "", "resume_sel", {}, "neutral", "cp_resume_sel"),
-      cpv_button("Clear", "", "clear_sel", {}, "quiet", "cp_clear_sel")
+      cpv_button("Pause", "", "cp_pause_sel", {}, "neutral", "cp_pause_sel"),
+      cpv_button("Resume", "", "cp_resume_sel", {}, "neutral", "cp_resume_sel"),
+      cpv_button("Clear", "", "cp_clear_sel", {}, "quiet", "cp_clear_sel")
     ])
   end
   tb_dense = tb_state["dense"] == true
   tb_settings = cpv_choices(tb_state, "settings",
-    cpv_button(tb_lay["card"] >= 900 ? "Settings" : "", "sliders", "menu", {"which": "settings"}, "neutral", "cp_settings", tb_state["menu"] == "settings"),
-    ["Comfortable", "Compact"], tb_dense ? "Compact" : "Comfortable", "density", 180)
+    cpv_button(tb_lay["card"] >= 900 ? "Settings" : "", "sliders", "cp_menu", {"which": "settings"}, "neutral", "cp_settings", tb_state["menu"] == "settings"),
+    ["Comfortable", "Compact"], tb_dense ? "Compact" : "Comfortable", "cp_density", 180)
   tb_right = [tb_settings]
   tb_right = [cpv_columns_menu(tb_state)].concat(tb_right) if tb_lay["table"]
   row({"gap": 3, "align": "center", "width": "100%", "wrap": "wrap", "pad": [4, CPV_PAD_X, 4, CPV_PAD_X], "border": [1, 0, 0, 0], "border_color": "border.subtle"},
@@ -346,7 +350,7 @@ def cpv_head_cell(hc_state, hc_id, hc_label, hc_w)
     "k": "box",
     "key": "cp_head:" + hc_id,
     "s": hc_base,
-    "on": {"click": "sort"},
+    "on": {"click": "cp_sort"},
     "p": {"col": cpv_sort_key(hc_id), "role": "column_header", "label": "Sort by " + hc_label},
     "c": [
       text(hc_label, {"size": 1, "weight": "semibold", "fg": hc_on ? "text.default" : "text.muted"}),
@@ -360,7 +364,7 @@ def cpv_table_head(th_state, th_lay, th_page)
   th_sel = th_state["sel"]
   th_on = th_ids.filter(fn(x) { th_sel.includes?(x) }).length()
   th_all = th_on > 0 && th_on == th_ids.length()
-  th_box = checkbox("", th_all, "tick_page", {}, {"key": "cp_tick_page", "indeterminate": th_on > 0 && !th_all, "name": "Select this page"})
+  th_box = checkbox("", th_all, "cp_tick_page", {}, {"key": "cp_tick_page", "indeterminate": th_on > 0 && !th_all, "name": "Select this page"})
   th_cells = [
     row({"width": CPV_CHECK, "shrink": 0}, [th_box]),
     cpv_head_cell(th_state, "name", "Campaign", th_lay["name"])
@@ -416,17 +420,17 @@ def cpv_row_menu(rm_state, rm_c)
     "key": "cp_more:" + rm_c["id"],
     "tone": "quiet",
     "shape": {"width": CPV_ACT, "height": CPV_ACT, "pad": 0, "min_width": 0, "border": 0},
-    "on": {"click": "menu"},
+    "on": {"click": "cp_menu"},
     "props": {"which": rm_which},
     "a11y": {"role": "button", "label": "Actions for " + rm_c["name"], "expanded": rm_open},
     "c": [icon("more_h", {"width": 18, "height": 18, "fg": "text.muted"})]
   })
   # The menu's items without the menu's own frame: the dropdown is the panel.
-  rm_items = menu([rm_c["status"] == "Paused" ? "Resume" : "Pause"], "row_action")["c"].map(fn(it) {
+  rm_items = menu([rm_c["status"] == "Paused" ? "Resume" : "Pause"], "cp_row_action")["c"].map(fn(it) {
     it["p"] = it["p"].merge({"id": rm_c["id"]})
     it
   })
-  rm_drop = dropdown(rm_anchor, [column({"gap": 0, "min_width": 140}, rm_items)], rm_open, 0, "menu_close")
+  rm_drop = dropdown(rm_anchor, [column({"gap": 0, "min_width": 140}, rm_items)], rm_open, 0, "cp_menu_close")
   row({"width": CPV_ACT, "shrink": 0, "justify": "center"}, [rm_drop])
 end
 
@@ -441,7 +445,7 @@ def cpv_table_row(tr_state, tr_lay, tr_c)
     "transition": "fast"
   }
   tr_cells = [
-    row({"width": CPV_CHECK, "shrink": 0}, [checkbox("", tr_ticked, "tick", {"id": tr_c["id"]}, {"key": "cp_tick:" + tr_c["id"], "name": "Select " + tr_c["name"]})]),
+    row({"width": CPV_CHECK, "shrink": 0}, [checkbox("", tr_ticked, "cp_tick", {"id": tr_c["id"]}, {"key": "cp_tick:" + tr_c["id"], "name": "Select " + tr_c["name"]})]),
     cpv_campaign_cell(tr_c, tr_lay["name"])
   ].concat(tr_lay["cols"].map(fn(col) { cpv_cell(tr_c, col) })).concat([cpv_row_menu(tr_state, tr_c)])
   tr_row = {"k": "box", "s": tr_base, "c": tr_cells, "p": {"role": "row", "label": tr_c["name"]}}
@@ -462,7 +466,7 @@ def cpv_item(it_state, it_lay, it_c)
   }
   it_line = column({"gap": 3, "width": "100%", "pad": [4, CPV_PAD_X, 4, CPV_PAD_X], "border": [0, 0, 1, 0], "border_color": "border.subtle", "bg": it_ticked ? "info.subtle" : "surface.raised"}, [
     row({"gap": 3, "align": "center", "width": "100%"}, [
-      checkbox("", it_ticked, "tick", {"id": it_c["id"]}, {"key": "cp_tick:" + it_c["id"], "name": "Select " + it_c["name"]}),
+      checkbox("", it_ticked, "cp_tick", {"id": it_c["id"]}, {"key": "cp_tick:" + it_c["id"], "name": "Select " + it_c["name"]}),
       cpv_channel_tile(it_c["channel"], 36),
       column({"gap": 1, "width": it_text_w}, [
         cpv_text_w(it_c["name"], {"size": 1, "weight": "medium", "fg": "text.default"}, it_text_w),
@@ -502,7 +506,7 @@ def cpv_page_button(pb_n, pb_on)
     "tone": "quiet",
     "selected": pb_on,
     "shape": {"width": 36, "height": 36, "pad": 0, "min_width": 0, "border": 0},
-    "on": {"click": "page"},
+    "on": {"click": "cp_page"},
     "props": {"page": pb_n},
     "a11y": {"role": "button", "label": "Page " + str(pb_n), "selected": pb_on},
     "c": [text(str(pb_n), {"size": 1, "weight": pb_on ? "semibold" : "regular", "fg": pb_on ? "text.default" : "text.muted"})]
@@ -515,7 +519,7 @@ def cpv_step_button(sb_icon, sb_page, sb_off, sb_label)
     "tone": "quiet",
     "disabled": sb_off,
     "shape": {"width": 36, "height": 36, "pad": 0, "min_width": 0, "border": 0},
-    "on": {"click": "page"},
+    "on": {"click": "cp_page"},
     "props": {"page": sb_page},
     "a11y": {"role": "button", "label": sb_label},
     "c": [icon(sb_icon, {"width": 18, "height": 18})]
@@ -527,11 +531,11 @@ def cpv_footer(ft_state, ft_lay, ft_page)
     control({
       "key": "cp_per", "tone": "neutral", "size": "md",
       "shape": {"gap": 3, "min_height": 36, "pad": [2, 4, 2, 4]},
-      "on": {"click": "menu"}, "props": {"which": "per"},
+      "on": {"click": "cp_menu"}, "props": {"which": "per"},
       "a11y": {"role": "button", "label": "Rows per page", "expanded": ft_state["menu"] == "per"},
       "c": [text(str(ft_state["per"]), {"size": 1}), icon("chevron_down", {"width": 16, "height": 16, "fg": "text.muted"})]
     }),
-    CP_PER_PAGE.map(fn(n) { str(n) }), str(ft_state["per"]), "per", 96)
+    CP_PER_PAGE.map(fn(n) { str(n) }), str(ft_state["per"]), "cp_per", 96)
   ft_from = ft_page["total"] == 0 ? 0 : ft_page["from"] + 1
   ft_says = str(ft_from) + " - " + str(ft_page["to"]) + " of " + str(ft_page["total"]) + " campaigns"
   ft_pages = range(1, ft_page["pages"] + 1).map(fn(n) { cpv_page_button(n, n == ft_page["page"]) })
@@ -558,9 +562,9 @@ def cpv_toast(to_state)
   }
 end
 
-def campaigns_view(raw_state)
-  cv_state = cp_state(raw_state ?? {})
-  cv_lay = cpv_lay(cv_state)
+# The card: the figures, the toolbar, the table and the pager, and nothing
+# around them, so that a page of somebody else's can hold it.
+def cpv_card(cv_state, cv_lay)
   cv_page = cp_page_of(cv_state)
   cv_tot = cp_totals(cp_in_view(cv_state))
   cv_body = []
@@ -575,6 +579,20 @@ def campaigns_view(raw_state)
     "gap": 0, "width": cv_lay["card"], "bg": "surface.raised", "radius": 3,
     "border": 1, "border_color": "border.subtle", "shadow": 1, "overflow": "clip"
   }, [cpv_header(cv_state, cv_lay, cv_tot), cpv_kpis(cv_tot, cv_lay["kpi_per_row"]), cpv_toolbar(cv_state, cv_lay)].concat(cv_body).concat([cpv_footer(cv_state, cv_lay, cv_page)]))
+  cv_card
+end
+
+# The gallery's Campaigns section: the same card at the width its content
+# column has, the state being whatever the gallery keeps under "cp".
+def campaigns_card(cc_raw, cc_px)
+  cc_state = cp_state(cc_raw ?? {})
+  cpv_card(cc_state, cpv_lay(cc_state, cc_px))
+end
+
+def campaigns_view(raw_state)
+  cv_state = cp_state(raw_state ?? {})
+  cv_lay = cpv_lay(cv_state)
+  cv_card = cpv_card(cv_state, cv_lay)
   cv_scroll = scroll({"grow": 1, "min_height": 0, "width": "100%"}, [
     column({"gap": 0, "width": "100%", "align": "center", "pad": [cv_lay["pad"], 0, cv_lay["pad"], 0]}, [cv_card])
   ])
