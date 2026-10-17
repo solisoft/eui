@@ -150,7 +150,7 @@ That is a deliberate failure mode, not a reason to leave it unset.
 
 ## The demo application
 
-Same three steps, four differences — and each of them is a way this site
+Same three steps, five differences — and each of them is a way this site
 could be broken by a deployment that looked fine.
 
 **It has a database.** `soli db:migrate up` runs on the server after the
@@ -180,6 +180,18 @@ every handler in every controller before it answers, so a boot that reaches
 error in a controller and a capability the server has never heard of, the
 two ways this application has actually failed. No database is needed for
 that: `/up` is Soli's own readiness probe.
+
+**It runs on a Soli of its own, the latest release.** Not the server's
+`soli`, which the other sites on the box share: no version is written in
+the workflow. `verify` reads the latest soli_lang release when the run
+starts, installs it and boots the application on it; `deploy` installs that
+same version into `<site>/.soli/<version>/`, points `.soli/current` and
+`app.infos`'s `start_script` at it, and checks after the switch that every
+slot runs it. The version before is kept, because the slot still serving
+runs it until the switch; older ones are removed. A new Soli release
+therefore reaches the demo on the next deploy, which a push to `crates/`,
+`examples/demo-app/` or the workflow starts — or `gh workflow run
+deploy-data.yml`, to take a release without a change.
 
 The workflow finishes by fetching `/.well-known/eui` through the proxy and
 printing the first sixteen hex digits of the manifest's checksum. The

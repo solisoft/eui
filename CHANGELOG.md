@@ -22,6 +22,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Changed
+
+- The demo at eui-data.solisoft.net runs on the latest Soli release, read
+  at each deploy, instead of a version written in its workflow: it sat on
+  2.27.2 after 2.28.0 shipped. The deploy boots the application on that
+  release before installing the same one beside the site.
+
 ## [0.9.0] - 2026-10-17
 
 ### Added
