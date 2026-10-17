@@ -2597,7 +2597,24 @@ a note 10 ms (was 22), the first full score 100–109 ms (was 244). The
 picture after three edits is the baseline's byte for byte. Production does
 not see this yet: `eui-data.solisoft.net` runs Soli 2.5.5, which predates
 `eui_score_layout`, so it engraves in Soli — the exposition takes **about
-30 s** to open there against 0.115 s on the 2.27.2 release.
+30 s** to open there against 0.115 s on the 2.27.2 release. The same day the
+demo moved onto a Soli of its own, 2.27.2, installed beside the site by its
+deploy (deploy/README.md); after that, 3 opens of 4 took about 2.5 s end to
+end and the fourth stalled.
+
+**And a score editor that no longer breaks the pages served after it**
+(2026-10-17). Four locals in the score editor and in `score()` were named
+after functions — `button`, `chip` and `list`, the catalogue's builders,
+and `music`, the Music component's handler — and Soli's scope is flat, so
+assigning one rebinds the function for the whole worker. Once a worker had
+drawn a score, the counter, the todo list, the gallery, the 10 000-row
+table, the tracker, Music and tutorial steps 4 to 6 failed on it with
+`Cannot call non-function value` (`pantry_5`'s "pre-existing" fault among
+them): on a local 2.27.2 with 8 workers, 28 view failures over two rounds
+of those components after the editor had run. They are `saver`, `chip_w`,
+`in_order` and `staff_music` now, and the same rounds fail nothing. No
+other top-level function in the application is the target of a bare
+assignment (checked by script over `app/controllers` and `app/services`).
 
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the

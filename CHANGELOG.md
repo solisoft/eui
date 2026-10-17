@@ -263,6 +263,11 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- After the score editor had run, other demo pages served by the same
+  worker failed with "Cannot call non-function value" — the counter, the
+  todo list, the gallery, the table, the tracker, Music and three tutorial
+  steps. Four of the editor's locals were named after functions
+  (`button`, `chip`, `list`, `music`) and rebound them for the worker.
 - The demo at eui-data.solisoft.net runs on a Soli of its own, 2.27.2,
   installed beside the site by its deploy, instead of the server's 2.5.5:
   the score editor engraves natively there, and Beethoven's exposition opens

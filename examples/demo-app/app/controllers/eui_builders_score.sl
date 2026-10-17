@@ -2864,8 +2864,10 @@ def score_scripts(sys)
       # A side the stem is on starts past the stem's end.
       up_cursor = ext[0] if ev["k"] == "note" && ev["up"] == true
       down_cursor = ext[1] if ev["k"] == "note" && ev["up"] != true
-      list = ev["scripts"].sort_by { |sc| SCORE_SCRIPTS[sc["name"]]["prio"] }
-      for sc in list
+      # Not `list`: that is the catalogue's virtualised list, and a bare
+      # assignment rebinds it for the whole worker (Soli's scope is flat).
+      in_order = ev["scripts"].sort_by { |sc| SCORE_SCRIPTS[sc["name"]]["prio"] }
+      for sc in in_order
         rule = SCORE_SCRIPTS[sc["name"]]
         dir = sc["dir"]
         dir = rule["side"] if dir == 0 && rule["side"] != 0

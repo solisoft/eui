@@ -1379,10 +1379,13 @@ def score_ed_write_full(state, muting)
   info = score_ed_bar_marks(state)
   staves = []
   for trk, k in tracks
-    music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
+    # Not `music`: that is the music component's handler, and a bare
+    # assignment rebinds a function for the whole worker (Soli's scope is
+    # flat), so every Music page served after a full score failed there.
+    staff_music = score_ed_track_music(state, k, info, {"header": false, "tempo": k == 0})["words"].join(" ")
     heard = muting && trk["mute"] == true ? trk.merge({"volume": 0}) : trk
     lyrics = score_ed_lyrics_ly(trk["lyrics"] ?? "")
-    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
+    staves.push("\\new Staff \\with { " + score_ed_track_with(heard) + "} { " + staff_music + " }" + (lyrics == "" ? "" : " \\addlyrics { " + lyrics + " }"))
   end
   opener = {"Bracket": "\\new StaffGroup ", "Brace": "\\new PianoStaff ", "None": ""}[state["group"] ?? "Bracket"] ?? ""
   titles = score_ed_header_ly(state["header"] ?? {})
@@ -3346,15 +3349,19 @@ end
 # (spec 03 §3.2), and the place the person chooses comes back as a
 # `file_save` event, which the handler answers with the bytes.
 def score_ed_save_button(label, on_save, name, disabled)
-  button = score_ed_tool(label, on_save, {}, disabled, nil)
+  # Not `button`: that is the catalogue's builder, and assigning it here
+  # rebound it for the worker — counter, todo, the tutorial and the tracker
+  # then failed with "Cannot call non-function value" wherever it served
+  # them after the score editor.
+  saver = score_ed_tool(label, on_save, {}, disabled, nil)
   kept = {}
-  for kind in (button["on"] ?? {}).keys
-    kept[kind] = button["on"][kind] unless kind == "click"
+  for kind in (saver["on"] ?? {}).keys
+    kept[kind] = saver["on"][kind] unless kind == "click"
   end
   kept["file_save"] = on_save
-  button["on"] = kept
-  button["p"] = (button["p"] ?? {}).merge({"save": name}) unless disabled
-  button
+  saver["on"] = kept
+  saver["p"] = (saver["p"] ?? {}).merge({"save": name}) unless disabled
+  saver
 end
 
 # The file's name: the title, without what a file system refuses (and its
@@ -3543,14 +3550,15 @@ def score_ed_chip_row(tracks, k, width)
   for trk, j in tracks
     label = trk["name"] == "" ? "Track " + str(j + 1) : trk["name"]
     label = label + "  (muted)" if trk["mute"] == true
-    chip = label.length * 7.6 + 30.0
-    if x > 0.0 && x + chip > width
+    # Not `chip`, the catalogue builder the gallery draws its filters with.
+    chip_w = label.length * 7.6 + 30.0
+    if x > 0.0 && x + chip_w > width
       line += 1
       x = 0.0
     end
     return line if j == k
 
-    x += chip + 2.0
+    x += chip_w + 2.0
   end
   line
 end
