@@ -263,6 +263,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Fixed
 
+- The demo's gallery opens about twice as fast: it is served as a page
+  (`GET /_eui/view/gallery`), so the client draws it from its second
+  request instead of after a 404, a WebSocket upgrade and a Welcome. The
+  session opens on the first click.
 - A window on macOS draws as soon as it opens, instead of staying empty
   until it was clicked or resized. Since wgpu 30 the Metal surface gives
   no texture while macOS reports the window occluded, which it still does
