@@ -49,25 +49,27 @@
 
         <h2>As a file is written</h2>
         <p>A <code>\global</code> of the key and the pickup, the tune and its harmony in variables, chord names over the staff, the words sung to the voice that is named for them, and the same tune on a guitar's six strings: LilyPond as its users write it, read since protocol 11 and drawn as LilyPond draws it.</p>
-        <% sheet_src = """global = { \key g \major \time 3/4 \partial 4 }
-melody = \relative c' {
-  \global
-  d4 | g2 b8( g) | b2 a4 | g2 e4 | d2 d4 |
-  g2 b8( g) | b2 a8( b) | d2. \bar "|."
-}
-harmony = \chordmode { \global s4 | g2. | g:7 | c | g | e:m | d:7 | g }
-words = \lyricmode {
-  A -- ma -- zing grace, how sweet the sound
-  that saved a wretch like me
-}
-\score {
-  <<
-    \new ChordNames \harmony
-    \new Staff \new Voice = "tune" \melody
-    \new Lyrics \lyricsto "tune" \words
-    \new TabStaff \melody
-  >>
-}""" %>
+        <% sheet_src = [
+          "global = { \\key g \\major \\time 3/4 \\partial 4 }",
+          "melody = \\relative c' {",
+          "  \\global",
+          "  d4 | g2 b8( g) | b2 a4 | g2 e4 | d2 d4 |",
+          "  g2 b8( g) | b2 a8( b) | d2. \\bar \"|.\"",
+          "}",
+          "harmony = \\chordmode { \\global s4 | g2. | g:7 | c | g | e:m | d:7 | g }",
+          "words = \\lyricmode {",
+          "  A -- ma -- zing grace, how sweet the sound",
+          "  that saved a wretch like me",
+          "}",
+          "\\score {",
+          "  <<",
+          "    \\new ChordNames \\harmony",
+          "    \\new Staff \\new Voice = \"tune\" \\melody",
+          "    \\new Lyrics \\lyricsto \"tune\" \\words",
+          "    \\new TabStaff \\melody",
+          "  >>",
+          "}"
+        ].join("\n") %>
         <div class="pane">
             <b>the source</b>
 <pre><%= sheet_src %></pre>
@@ -79,58 +81,169 @@ words = \lyricmode {
         <h2 id="everything">Everything it reads</h2>
         <p>Each construct protocol 11 reads, set as LilyPond 2.25 sets it &mdash; every one of these was drawn beside LilyPond's own engraving of the same source while the engraver learned it. The source is under each.</p>
 <% demos = [
-    {"id": "voices", "title": "Two voices and a global", "text": "<code>\\new Voice</code> twice on one staff, <code>\\voiceOne</code> with its stems up and <code>\\voiceTwo</code> down, and a <code>\\global</code> of the key and the metre set in the first.", "src": """global = { \key d \major \time 4/4 }
-\new Staff <<
-  \global
-  \new Voice { \voiceOne \relative c'' { fis4 e d2 | e4 fis8 g a2 \bar "|." } }
-  \new Voice { \voiceTwo \relative c' { d4 cis b2 | cis4 d8 e fis2 } }
->>"""},
-    {"id": "pitch", "title": "Pickup, names, transposition", "text": "<code>\\language \"english\"</code>, <code>\\fixed c'</code>, a <code>\\partial 4</code> that is bar 0 and <code>q</code> repeating the chord &mdash; all of it moved up a tone by <code>\\transpose c d</code>.", "src": """\language "english"
-melody = \fixed c' { \time 3/4 \partial 4 g8 a | <c' e' g'>4 q q | bf2 fs4 | g2. \bar "|." }
-\transpose c d \melody"""},
-    {"id": "grace", "title": "Grace notes", "text": "<code>\\acciaccatura</code> slashed and slurred, <code>\\appoggiatura</code> slurred, <code>\\grace</code> beamed when there are several, <code>\\slashedGrace</code>: small, before their note, and taking none of its time.", "src": """\relative c'' {
-  \key g \major
-  \acciaccatura e8 d4 \appoggiatura c8 b4 \grace { a16 b } c4 \slashedGrace e8 d4 |
-  \grace { b16 c d } e2 \acciaccatura fis8 g2 \bar "|."
-}"""},
-    {"id": "clefs", "title": "Clefs and their keys", "text": "Tenor, soprano, baritone, <code>\"treble_8\"</code>, <code>\"bass^8\"</code> and the French violin clef, each key signature where LilyPond puts it for that clef.", "src": """{
-  \clef tenor \key d \major d'4 e' fis' g' |
-  \clef soprano \key bes \major bes'4 a' g' f' |
-  \clef baritone \key c \major c4 d e f |
-  \clef "treble_8" c'4 d' e' f' |
-  \clef "bass^8" c4 d e f |
-  \clef french g'1 \bar "|."
-}"""},
-    {"id": "marks", "title": "Marks and words", "text": "Fingerings, a phrasing slur over a slur, <code>\\markup</code> in italic and in bold, rehearsal marks by <code>\\mark \\default</code>, an <code>\\ottava</code> bracket, a chord's fingers above and below it, and a segno.", "src": """\relative c'' {
-  \mark \default
-  c4-1 d-2\( e-3( f-4) | g2^\markup { \italic dolce } e4 c\) |
-  \mark \default
-  \ottava #1 c'4 d e f | g1 \ottava #0 |
-  <c,, e g>2_\markup { \bold "f" sub. } <d f-3 a-5>2
-  \mark \markup { \musicglyph "scripts.segno" } \bar "|."
-}"""},
-    {"id": "ornaments", "title": "Ornaments", "text": "<code>\\trill</code>, <code>\\prall</code>, <code>\\mordent</code>, <code>\\turn</code>, <code>\\arpeggio</code>, <code>\\glissando</code>, and tremolo strokes &mdash; <code>c4:16</code> &mdash; which the MIDI file plays as the repetition.", "src": """\relative c'' {
-  g2\trill a4\prall b\mordent | c1\turn |
-  <c, e g c>2\arpeggio <d f a d>2\arpeggio |
-  c2\glissando g'2 | c,4:16 d8:32 e f2:32 | c1:32 \bar "|."
-}"""},
-    {"id": "repeats", "title": "Repeats and a cadenza", "text": "<code>\\repeat unfold</code> written out, <code>volta</code> with its endings, <code>percent</code> drawn as the sign, and a <code>\\cadenzaOn</code> with no bar line or beam but the ones written.", "src": """\relative c' {
-  \repeat unfold 2 { c8 d e f } |
-  \repeat volta 2 { g2 a4 b } \alternative { { c2 c } { c1 } } |
-  \repeat percent 2 { g4 a b c } |
-  \cadenzaOn c8 d e f g a b c \cadenzaOff \bar "|."
-}"""},
-    {"id": "chords", "title": "Chord names", "text": "<code>\\new ChordNames</code> over the chords themselves, named as LilyPond names them: m, ⁷, △, ø, °, sus, ♭⁹, a bass after the slash, N.C. for a rest.", "src": """harmony = \chordmode {
-  c2 c:m | c:7 c:maj7 | c:m7 c:dim7 | c:aug c:sus4 |
-  c:9 c:m7.5- | c:7.9- c/e | bes:7 fis:m7 | aes:maj7 r
-}
-<< \new ChordNames \harmony \new Staff \harmony >>"""},
-    {"id": "drums", "title": "A drum kit", "text": "<code>\\drums</code>: the hi-hat, open and closed, over the bass drum, the snare and the toms, each where LilyPond's <code>drums-style</code> puts it, in the shape of its head; MIDI plays them on the percussion channel.", "src": """\drums {
-  \time 4/4
-  << { hh8 hh hh hh hho hh hhc hh | cymc4 hh8 hh tomh tomh toml toml } \\ { bd4 sn bd8 bd sn4 | bd4 sn tomfh tomfl } >>
-}"""},
-    {"id": "tab", "title": "A tablature", "text": "The same music on a guitar's six strings, each note on the highest string that reaches it; <code>\\2</code> and <code>\\4</code> name a string, circled on the staff.", "src": """melody = \relative c { c4 e g c | e c\2 g e | <c, e g c>1 | a'4 c e a\4 | g1 \bar "|." }
-<< \new Staff { \clef "treble_8" \melody } \new TabStaff \melody >>"""}
+  {
+    "id": "voices",
+    "title": "Two voices and a global",
+    "text": [
+      "<code>\\new Voice</code> twice on one staff, <code>\\voiceOne</code> with its stems up and ",
+      "<code>\\voiceTwo</code> down, and a <code>\\global</code> of the key and the metre set in ",
+      "the first."
+    ].join(""),
+    "src": [
+      "global = { \\key d \\major \\time 4/4 }",
+      "\\new Staff <<",
+      "  \\global",
+      "  \\new Voice { \\voiceOne \\relative c'' { fis4 e d2 | e4 fis8 g a2 \\bar \"|.\" } }",
+      "  \\new Voice { \\voiceTwo \\relative c' { d4 cis b2 | cis4 d8 e fis2 } }",
+      ">>"
+    ].join("\n")
+  },
+  {
+    "id": "pitch",
+    "title": "Pickup, names, transposition",
+    "text": [
+      "<code>\\language \"english\"</code>, <code>\\fixed c'</code>, a <code>\\partial 4</code> that ",
+      "is bar 0 and <code>q</code> repeating the chord &mdash; all of it moved up a tone by ",
+      "<code>\\transpose c d</code>."
+    ].join(""),
+    "src": [
+      "\\language \"english\"",
+      "melody = \\fixed c' { \\time 3/4 \\partial 4 g8 a | <c' e' g'>4 q q | bf2 fs4 | g2. \\bar \"|.\" }",
+      "\\transpose c d \\melody"
+    ].join("\n")
+  },
+  {
+    "id": "grace",
+    "title": "Grace notes",
+    "text": [
+      "<code>\\acciaccatura</code> slashed and slurred, <code>\\appoggiatura</code> slurred, ",
+      "<code>\\grace</code> beamed when there are several, <code>\\slashedGrace</code>: small, ",
+      "before their note, and taking none of its time."
+    ].join(""),
+    "src": [
+      "\\relative c'' {",
+      "  \\key g \\major",
+      "  \\acciaccatura e8 d4 \\appoggiatura c8 b4 \\grace { a16 b } c4 \\slashedGrace e8 d4 |",
+      "  \\grace { b16 c d } e2 \\acciaccatura fis8 g2 \\bar \"|.\"",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "clefs",
+    "title": "Clefs and their keys",
+    "text": [
+      "Tenor, soprano, baritone, <code>\"treble_8\"</code>, <code>\"bass^8\"</code> and the French ",
+      "violin clef, each key signature where LilyPond puts it for that clef."
+    ].join(""),
+    "src": [
+      "{",
+      "  \\clef tenor \\key d \\major d'4 e' fis' g' |",
+      "  \\clef soprano \\key bes \\major bes'4 a' g' f' |",
+      "  \\clef baritone \\key c \\major c4 d e f |",
+      "  \\clef \"treble_8\" c'4 d' e' f' |",
+      "  \\clef \"bass^8\" c4 d e f |",
+      "  \\clef french g'1 \\bar \"|.\"",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "marks",
+    "title": "Marks and words",
+    "text": [
+      "Fingerings, a phrasing slur over a slur, <code>\\markup</code> in italic and in bold, ",
+      "rehearsal marks by <code>\\mark \\default</code>, an <code>\\ottava</code> bracket, a chord's",
+      " fingers above and below it, and a segno."
+    ].join(""),
+    "src": [
+      "\\relative c'' {",
+      "  \\mark \\default",
+      "  c4-1 d-2\\( e-3( f-4) | g2^\\markup { \\italic dolce } e4 c\\) |",
+      "  \\mark \\default",
+      "  \\ottava #1 c'4 d e f | g1 \\ottava #0 |",
+      "  <c,, e g>2_\\markup { \\bold \"f\" sub. } <d f-3 a-5>2",
+      "  \\mark \\markup { \\musicglyph \"scripts.segno\" } \\bar \"|.\"",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "ornaments",
+    "title": "Ornaments",
+    "text": [
+      "<code>\\trill</code>, <code>\\prall</code>, <code>\\mordent</code>, <code>\\turn</code>, ",
+      "<code>\\arpeggio</code>, <code>\\glissando</code>, and tremolo strokes &mdash; ",
+      "<code>c4:16</code> &mdash; which the MIDI file plays as the repetition."
+    ].join(""),
+    "src": [
+      "\\relative c'' {",
+      "  g2\\trill a4\\prall b\\mordent | c1\\turn |",
+      "  <c, e g c>2\\arpeggio <d f a d>2\\arpeggio |",
+      "  c2\\glissando g'2 | c,4:16 d8:32 e f2:32 | c1:32 \\bar \"|.\"",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "repeats",
+    "title": "Repeats and a cadenza",
+    "text": [
+      "<code>\\repeat unfold</code> written out, <code>volta</code> with its endings, ",
+      "<code>percent</code> drawn as the sign, and a <code>\\cadenzaOn</code> with no bar line or ",
+      "beam but the ones written."
+    ].join(""),
+    "src": [
+      "\\relative c' {",
+      "  \\repeat unfold 2 { c8 d e f } |",
+      "  \\repeat volta 2 { g2 a4 b } \\alternative { { c2 c } { c1 } } |",
+      "  \\repeat percent 2 { g4 a b c } |",
+      "  \\cadenzaOn c8 d e f g a b c \\cadenzaOff \\bar \"|.\"",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "chords",
+    "title": "Chord names",
+    "text": [
+      "<code>\\new ChordNames</code> over the chords themselves, named as LilyPond names them: m, ",
+      "⁷, △, ø, °, sus, ♭⁹, a bass after the slash, N.C. for a rest."
+    ].join(""),
+    "src": [
+      "harmony = \\chordmode {",
+      "  c2 c:m | c:7 c:maj7 | c:m7 c:dim7 | c:aug c:sus4 |",
+      "  c:9 c:m7.5- | c:7.9- c/e | bes:7 fis:m7 | aes:maj7 r",
+      "}",
+      "<< \\new ChordNames \\harmony \\new Staff \\harmony >>"
+    ].join("\n")
+  },
+  {
+    "id": "drums",
+    "title": "A drum kit",
+    "text": [
+      "<code>\\drums</code>: the hi-hat, open and closed, over the bass drum, the snare and the ",
+      "toms, each where LilyPond's <code>drums-style</code> puts it, in the shape of its head; ",
+      "MIDI plays them on the percussion channel."
+    ].join(""),
+    "src": [
+      "\\drums {",
+      "  \\time 4/4",
+      "  <<",
+      "    { hh8 hh hh hh hho hh hhc hh | cymc4 hh8 hh tomh tomh toml toml }",
+      "    \\\\",
+      "    { bd4 sn bd8 bd sn4 | bd4 sn tomfh tomfl }",
+      "  >>",
+      "}"
+    ].join("\n")
+  },
+  {
+    "id": "tab",
+    "title": "A tablature",
+    "text": [
+      "The same music on a guitar's six strings, each note on the highest string that reaches it;",
+      " <code>\\2</code> and <code>\\4</code> name a string, circled on the staff."
+    ].join(""),
+    "src": [
+      "melody = \\relative c { c4 e g c | e c\\2 g e | <c, e g c>1 | a'4 c e a\\4 | g1 \\bar \"|.\" }",
+      "<< \\new Staff { \\clef \"treble_8\" \\melody } \\new TabStaff \\melody >>"
+    ].join("\n")
+  }
 ] %>
         <nav class="scores__jump" aria-label="What it reads">
 <% for d in demos %>            <a href="#<%= d["id"] %>"><%= d["title"] %></a>
