@@ -376,8 +376,13 @@ struct ScoreDrag {
     node: NodeIx,
     /// Where the hand is, until the frame applies it.
     at: Option<(f32, f32)>,
-    /// The line or space pressed (06 §1.5 `pos`).
-    pos: i64,
+    /// Where the hand pressed, px down the window. The drag is measured
+    /// from here and from nothing the music does after: a staff found anew
+    /// each frame was the nearest to the hand, which in a full score is
+    /// another staff a few lines down, and the note jumped there.
+    y: f32,
+    /// Half a staff space, px, as the music was drawn when pressed.
+    half: f32,
     /// The note as it was when pressed.
     item: eui_score::edit::Item,
     /// Its head nearest the line pressed: the one that moves.
@@ -9370,13 +9375,16 @@ impl Driver {
     }
 
     /// Where in the music of `s` the point `(x, y)` is (06 §1.5).
-    fn score_pick_at(&mut self, s: NodeIx, x: f32, y: f32) -> Option<crate::score::Pick> {
+    /// Where in the music of `s` the point `(x, y)` is (06 §1.5), and half
+    /// a staff space in px as it is drawn.
+    fn score_pick_at(&mut self, s: NodeIx, x: f32, y: f32) -> Option<(crate::score::Pick, f32)> {
         let (bx, by, width) = self.score_box(s)?;
         let props = self.session.score_props(s)?;
         let page_index = props.page_index;
         let engraving = self.scores.engraving(&props, width);
         drop(props);
-        crate::score::pick(&engraving, page_index, x - bx, y - by)
+        let half = (engraving.laid.as_ref().ok()?.sp / 2.0) as f32;
+        Some((crate::score::pick(&engraving, page_index, x - bx, y - by)?, half))
     }
 
     /// A press that the score takes for itself: on its selected note, near
@@ -9384,8 +9392,8 @@ impl Driver {
     /// and the moves that follow are the client's.
     fn score_press(&mut self, ix: NodeIx, x: f32, y: f32) -> Option<Vec<Frame>> {
         let (s, selected) = self.editing_score(ix)?;
-        let p = self.score_pick_at(s, x, y)?;
-        if p.near != selected as i64 || p.gap > 2.0 {
+        let (p, half) = self.score_pick_at(s, x, y)?;
+        if p.near != selected as i64 || p.gap > 2.0 || half <= 0.0 {
             return None;
         }
         let (_, it) = self.score_note(s, selected)?;
@@ -9393,7 +9401,7 @@ impl Driver {
         // pressed is the one a drag will carry.
         let pressed = eui_score::edit::at_position(it.clef, it.fifths, p.pos).0;
         let head = it.heads.iter().enumerate().min_by_key(|(_, h)| (h.0 - pressed).abs()).map_or(0, |(k, _)| k);
-        self.pointer.score_drag = Some(ScoreDrag { node: s, at: None, pos: p.pos, item: it, head });
+        self.pointer.score_drag = Some(ScoreDrag { node: s, at: None, y, half, item: it, head });
         let takes_keys = self.ancestor_keyed(s);
         Some(self.set_focus(takes_keys, false))
     }
@@ -9404,17 +9412,16 @@ impl Driver {
         let Some(drag) = self.pointer.score_drag.as_mut() else {
             return;
         };
-        let Some((x, y)) = drag.at.take() else {
+        let Some((_, y)) = drag.at.take() else {
             return;
         };
         let drag = drag.clone();
-        let Some(p) = self.score_pick_at(drag.node, x, y) else {
-            return;
-        };
         let Some(&(from, _)) = drag.item.heads.get(drag.head) else {
             return;
         };
-        let Some(heads) = eui_score::edit::dragged(&drag.item, drag.head, from, drag.pos - p.pos) else {
+        // Half spaces travelled, up positive: the hand alone decides.
+        let by = ((drag.y - y) / drag.half).round() as i64;
+        let Some(heads) = eui_score::edit::dragged(&drag.item, drag.head, from, by) else {
             return;
         };
         let Some((src, now)) = self.score_note(drag.node, drag.item.item) else {

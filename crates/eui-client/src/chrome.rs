@@ -199,6 +199,9 @@ const BLANK_FIELD: u32 = 16;
 /// neither on a label, and a diagnostic nobody can paste into a bug report
 /// is half a diagnostic.
 const BLANK_WHY: u32 = 17;
+/// Which client this is, at the foot of the blank page: `eui --version`'s
+/// line, so whoever is asked can read it off.
+const BLANK_VERSION: u32 = 30;
 /// The recent list on the blank page. Eight ids to a row, of which five are
 /// used: the row, its sigil box, the letter in it, the name and the host. A
 /// stride that only just fits is a collision waiting for the next label —
@@ -836,6 +839,12 @@ impl Chrome {
             ..Default::default()
         });
 
+        // The client's version, at the foot of the blank page: mono, muted
+        // and small — something to read off when asked, not to look at. A
+        // label and not a field, so it is no stop for `Tab` and takes no
+        // typing; `eui --version` prints the same line to copy.
+        let s_version = b.style(StyleRecord { font_size: 0, font_family: eui_proto::FontFamily::Mono, fg: role(Role::TextDisabled.id()), text_align: TextAlign::Center, ..Default::default() });
+
         // The application's own area. It draws nothing — the application's
         // list is composited over it — but it has to be in the tree so the
         // strip and the row are the height they are.
@@ -844,7 +853,7 @@ impl Chrome {
         if self.blank {
             let shown = self.recents.len().min(crate::recent::KEEP);
             let why = self.trouble.as_deref().unwrap_or("");
-            b.open(NodeKind::Box, CONTENT, s_blank, 4 + u32::from(!why.is_empty()) + u32::from(shown > 0));
+            b.open(NodeKind::Box, CONTENT, s_blank, 5 + u32::from(!why.is_empty()) + u32::from(shown > 0));
             b.open(NodeKind::Box, BLANK_MARK, s_mark, 1);
             b.text(BLANK_MARK_TEXT, s_mark_text, "EUI");
             b.close();
@@ -895,6 +904,7 @@ impl Chrome {
                 }
                 b.close();
             }
+            b.text(BLANK_VERSION, s_version, crate::version());
             b.close();
         } else {
             let Some(t) = tabs.get(active) else { return };

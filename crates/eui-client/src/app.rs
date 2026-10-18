@@ -1924,10 +1924,10 @@ impl Shell {
     /// `allowed` is what the person granted on the command line, kept for
     /// every tab this window will open rather than only the first.
     fn open(launches: Vec<Launch>, chrome: bool, allowed: u32, event_loop: &ActiveEventLoop, proxy: Proxy, shared: &mut Option<Shared>) -> Option<Self> {
-        // The build is in the title because a window cannot otherwise be
-        // told from one built an hour earlier, and a demo downloaded from
-        // the wrong run looks exactly like the right one.
-        let title = format!("{} — {}", launches.first().map_or("EUI", |l| l.title.as_str()), crate::BUILD);
+        // The version and the build are in the title because a window
+        // cannot otherwise be told from one built an hour earlier, and a
+        // demo downloaded from the wrong run looks exactly like the right one.
+        let title = format!("{} — eui {} ({})", launches.first().map_or("EUI", |l| l.title.as_str()), env!("CARGO_PKG_VERSION"), crate::BUILD);
         // Born hidden, shown once the renderer exists. Two reasons: the
         // AccessKit adapter must exist before the window is first shown, and
         // macOS enforces that with a panic where AT-SPI merely tolerates it;

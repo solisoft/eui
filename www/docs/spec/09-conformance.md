@@ -1053,7 +1053,10 @@ version 7) and a margin.
   pointer event and no `score_info`, and after `edit_after` one `score_edit` with the head's
   last pitch (`a_selected_note_dragged_moves_in_the_source_and_reports_once`).
   A press on another item is reported as before
-  (`a_press_off_the_selected_note_is_the_servers`).
+  (`a_press_off_the_selected_note_is_the_servers`). A drag is measured from
+  the press, not from the staff nearest the hand: dragged down past the
+  middle of two staves, the note keeps going down a line or space at a time
+  (`a_drag_follows_the_hand_not_the_nearest_staff`).
 - **The arrows move it in the key.** ↑ from E in G major is F sharp, Shift+↑
   from A in F major is B flat, Ctrl+↑ is the octave, a chord moves all its
   heads or none at the edge of the reach, and none of these keys is

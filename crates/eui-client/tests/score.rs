@@ -594,3 +594,28 @@ fn the_servers_source_replaces_unreported_edits() {
     assert_eq!(report.len(), 1, "and the edit it overtook is reported at once: {out:?}");
     assert!(sent(&settled(&mut d), EventKind::ScoreEdit).is_empty(), "once");
 }
+
+#[test]
+fn a_drag_follows_the_hand_not_the_nearest_staff() {
+    // Two staves: the top one's second note dragged down until the hand is
+    // nearer the bottom staff than its own. The note goes down by what the
+    // hand travelled — four px a half space at 8 px a space — and never
+    // jumps to a line of the other staff.
+    let src = "<< \\new Staff { c''4 d''4 e''4 } \\new Staff { c'4 d'4 e'4 } >>";
+    let mut d = edit_driver(src, 1, true);
+    let (x, y) = head_at(&d, src, 1);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    let mut seen = Vec::new();
+    for step in 1..=8 {
+        d.input(Input::PointerMove(x, y + 4.0 * step as f32));
+        painted(&mut d);
+        seen.push(src_now(&d));
+    }
+    // One line or space a step: d'' down to c'', b', a' … c'.
+    let names = ["c''", "b'", "a'", "g'", "f'", "e'", "d'", "c'"];
+    for (k, (got, name)) in seen.iter().zip(names).enumerate() {
+        assert!(got.starts_with(&format!("<< \\new Staff {{ c''4 {name}4 e''4 }}")), "step {}: {got}", k + 1);
+    }
+    d.input(Input::PointerUp(0));
+}
