@@ -73,7 +73,15 @@ pub struct ScriptPlace {
     pub figure: Option<String>,
     /// …
     pub k: f64,
+    /// The figures are a string's number, in a circle.
+    pub circled: bool,
 }
+
+/// A string number's circle: its radius, and its figure's size against
+/// the time signature's digits.
+pub(crate) const STRING_R: f64 = 0.75;
+/// …
+pub(crate) const STRING_K: f64 = 0.45;
 
 /// A fingering's size against the time signature's digits: LilyPond's
 /// `font-size` -5.
@@ -656,9 +664,10 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
                     low = low.min(vb.y - 0.4);
                 }
             }
+            // An ottava's figure just after the bar line still sits under it.
             for ot in &line.ottavas {
-                if ot.up && ot.x0 < x + w && ot.x1 > x {
-                    low = low.min(ot.y - 1.2);
+                if ot.up && ot.x0 < x + w + 1.0 && ot.x1 > x - 1.0 {
+                    low = low.min(ot.y - 1.6);
                 }
             }
             out.push(MarkPlace { runs, x, y: low - 0.8 - foot });
@@ -811,12 +820,12 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
             };
             let mut fingers: Vec<(&crate::parse::Finger, i64)> = ev.fingers.iter().map(|f| (f, finger_dir(f))).collect();
             fingers.sort_by_key(|(f, dir)| f.head.unwrap_or(0) * -dir);
-            let mut list: Vec<(&str, i64, Option<&str>)> = ev.scripts.iter().map(|sc| (sc.name.as_str(), sc.dir, None)).collect();
-            list.extend(fingers.iter().map(|(f, dir)| ("", *dir, Some(f.text.as_str()))));
+            let mut list: Vec<(&str, i64, Option<&str>, bool)> = ev.scripts.iter().map(|sc| (sc.name.as_str(), sc.dir, None, false)).collect();
+            list.extend(fingers.iter().map(|(f, dir)| ("", *dir, Some(f.text.as_str()), f.circled)));
             list.sort_by_key(|sc| if sc.2.is_some() { 100 } else { script_rule(sc.0).prio });
-            for (name, sdir, figure) in list {
+            for (name, sdir, figure, circled) in list {
                 if let Some(figure) = figure {
-                    let bb = figure_box(figure);
+                    let bb = if circled { (-STRING_R - 0.05, STRING_R + 0.05) } else { figure_box(figure) };
                     let y;
                     if sdir < 0 {
                         y = up_cursor - 0.5 - bb.1;
@@ -825,7 +834,7 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
                         y = down_cursor + 0.5 - bb.0;
                         down_cursor = y + bb.1;
                     }
-                    line.scripts.push(ScriptPlace { glyph: "", x: xc, y, figure: Some(figure.to_owned()), k: FINGER_K });
+                    line.scripts.push(ScriptPlace { glyph: "", x: xc, y, figure: Some(figure.to_owned()), k: if circled { STRING_K } else { FINGER_K }, circled });
                     continue;
                 }
                 let rule = script_rule(name);
@@ -862,7 +871,7 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
                     }
                     down_cursor = y + bb[3];
                 }
-                line.scripts.push(ScriptPlace { glyph: name, x: xc, y, figure: None, k: 1.0 });
+                line.scripts.push(ScriptPlace { glyph: name, x: xc, y, figure: None, k: 1.0, circled: false });
             }
             ev.reach_up = Some(ext.0.min(up_cursor));
             ev.reach_down = Some(ext.1.max(down_cursor));

@@ -1108,8 +1108,11 @@ version 7) and a margin.
   (`chord_names_as_lilypond_names_them`); drums sit in LilyPond's places
   and play on channel 10
   (`drums_sit_where_lilypond_puts_them_and_play_on_the_tenth_channel`); a
-  tablature's frets are LilyPond's
-  (`a_tablature_puts_each_note_on_the_highest_string_that_reaches_it`).
+  tablature's frets are LilyPond's, a string the note is below is passed
+  over and a string's number is circled on a staff
+  (`a_tablature_puts_each_note_on_the_highest_string_that_reaches_it`); a
+  rehearsal mark stands over an ottava's figure beside it
+  (`a_rehearsal_mark_stands_over_an_ottava_that_starts_beside_it`).
 - **A source says which client can engrave it.** `eui_score::protocol` is 9
   for every piece of the catalogue's corpus but the three it reads as
   LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11

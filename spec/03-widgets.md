@@ -596,7 +596,8 @@ construct as LilyPond 2.25 draws it:
   for a rest), `\new DrumStaff` and `\drums` (`\drummode`, LilyPond's
   `drums-style`: heads, places, the open and closed hi-hat, MIDI channel
   10), `\new TabStaff` (standard tuning, each note on the highest string
-  that reaches it, `\5` naming one; frets, no rhythm).
+  that reaches it, `\5` naming one — passed over when the note is below
+  that string — and circled over the note on a staff; frets, no rhythm).
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

@@ -552,7 +552,11 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     for sc in &line.scripts {
         match &sc.figure {
             Some(figure) => {
-                let mut x = sc.x - figure_width(figure) / 2.0;
+                if sc.circled {
+                    draw_ring(&mut pen, sc.x, top + sc.y, crate::marks::STRING_R, 0.1);
+                }
+                let w: f64 = figure.chars().map(|ch| glyph(&format!("timeSig{ch}")).advance * sc.k).sum();
+                let mut x = sc.x - if sc.circled { w } else { figure_width(figure) } / 2.0;
                 let sp = pen.sp;
                 for ch in figure.chars() {
                     let g = glyph(&format!("timeSig{ch}"));
@@ -1371,4 +1375,51 @@ fn draw_graces(pen: &mut Pen, ev: &Ev, top: f64) {
             pen.fill(&cmds, 0.0, top);
         }
     }
+}
+
+/// A ring at `(x, y)`, `r` its outer radius, `t` thick: the outer circle one
+/// way round and the inner the other, so the fill leaves the middle empty.
+fn draw_ring(pen: &mut Pen, x: f64, y: f64, r: f64, t: f64) {
+    let circle = |r: f64, turn: f64| -> Vec<f64> {
+        let c = 0.552_284_749_830_793_4 * r;
+        let ry = r * turn;
+        let cy = c * turn;
+        vec![
+            0.0,
+            x + r,
+            y,
+            3.0,
+            x + r,
+            y + cy,
+            x + c,
+            y + ry,
+            x,
+            y + ry,
+            3.0,
+            x - c,
+            y + ry,
+            x - r,
+            y + cy,
+            x - r,
+            y,
+            3.0,
+            x - r,
+            y - cy,
+            x - c,
+            y - ry,
+            x,
+            y - ry,
+            3.0,
+            x + c,
+            y - ry,
+            x + r,
+            y - cy,
+            x + r,
+            y,
+            4.0,
+        ]
+    };
+    let mut cmds = circle(r, 1.0);
+    cmds.extend(circle(r - t, -1.0));
+    pen.fill(&cmds, 0.0, 0.0);
 }

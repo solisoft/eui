@@ -829,6 +829,8 @@ pub struct Finger {
     pub dir: i64,
     /// In a chord, the diatonic number of the head it is written on.
     pub head: Option<i64>,
+    /// A string's number, `\\2`, drawn in a circle.
+    pub circled: bool,
 }
 
 /// The tuplet a note is in.
@@ -2229,7 +2231,7 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     if nxt.t == T::Num && !nxt.v.contains('/') {
         beyond();
         let last = last_note(&mut st.events, &tk)?;
-        last.fingers.push(Finger { text: nxt.v, dir, head: None });
+        last.fingers.push(Finger { text: nxt.v, dir, head: None, circled: false });
         return Ok(i + 2);
     }
     if nxt.t == T::Cmd && nxt.v == "markup" {
@@ -2573,6 +2575,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         for p in last.pitches.clone() {
             last.strings.push((p.d, n));
         }
+        last.fingers.push(Finger { text: word.to_owned(), dir: -1, head: None, circled: true });
         return Ok(i + 1);
     }
     if DYNAMICS.contains(&word) {
@@ -2925,6 +2928,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
                 }
                 if let Some(p) = pitches.last() {
                     strings.push((p.d, n));
+                    chord_fingers.push(Finger { text: toks[i].v.clone(), dir: -1, head: Some(p.d), circled: true });
                 }
                 i += 1;
             }
@@ -2936,7 +2940,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
                     T::Sym('_') => 1,
                     _ => 0,
                 };
-                chord_fingers.push(Finger { text: toks[i + 1].v.clone(), dir, head: pitches.last().map(|p: &Pitch| p.d) });
+                chord_fingers.push(Finger { text: toks[i + 1].v.clone(), dir, head: pitches.last().map(|p: &Pitch| p.d), circled: false });
                 i += 2;
             }
         }

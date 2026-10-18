@@ -31,6 +31,19 @@ describe("Scores", fn() {
     assert_contains(body, "\\drums {")
   })
 
+  # One example a construct protocol 11 reads, each drawn and its source
+  # shown under it.
+  test("shows everything it reads, each with its source", fn() {
+    let body = res_body(get("/scores"))
+    for id in ["voices", "pitch", "grace", "clefs", "marks", "ornaments", "repeats", "chords", "drums", "tab"]
+      assert_contains(body, "<h3 id=\"" + id + "\">")
+      assert_contains(body, "href=\"#" + id + "\"")
+    end
+    assert_contains(body, "\\acciaccatura e8 d4")
+    assert_contains(body, html_escape("\\new ChordNames \\harmony \\new Staff \\harmony"))
+    assert_eq(body.split("<details class=\"scores__source\">").length, 11)
+  })
+
   # The module is served `immutable`; "none" is what the controller answers
   # when nothing has been built, which is a page that cannot draw.
   test("stamps the build of the element it will load", fn() {

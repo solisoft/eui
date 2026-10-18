@@ -38,7 +38,7 @@ fn pitches(p: &Parsed, staff: usize) -> Vec<Vec<(i64, i64)>> {
 fn every_piece_engraves_plays_and_needs_protocol_11() {
     let mut names: Vec<String> = fs::read_dir(dir("lilypond")).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".ly")).collect();
     names.sort();
-    assert!(names.len() >= 9, "the pieces are missing");
+    assert!(names.len() >= 19, "the pieces are missing");
     for name in names {
         let src = fs::read_to_string(dir("lilypond").join(&name)).unwrap();
         let eng = engrave(&src, 900.0 / 8.0, &Layout::default()).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -193,6 +193,20 @@ fn a_tablature_puts_each_note_on_the_highest_string_that_reaches_it() {
     assert_eq!(frets, vec![vec![(5, 3)], vec![(4, 2)], vec![(3, 0)], vec![(2, 1)]], "LilyPond's 3 2 0 1");
     assert_eq!(bars[1].items[0].tab, vec![(3, 0), (4, 2), (5, 3)]);
     assert_eq!(bars[2].items[0].tab, vec![(5, 15)], "\\5 names the string");
+    let eng = engrave("\\new TabStaff { e4\\3 }", 900.0 / 8.0, &Layout::default()).unwrap();
+    assert_eq!(eng.staves[0][0].items[0].tab, vec![(4, 2)], "a string that cannot sound the note is not the one: e on the D string, as LilyPond plays it");
+    let staff = engrave("{ c''4\\2 }", 900.0 / 8.0, &Layout::default()).unwrap();
+    let circled = staff.systems[0].lines[0].scripts.iter().filter(|s| s.circled).count();
+    assert_eq!(circled, 1, "a string's number is circled on a staff");
+}
+
+#[test]
+fn a_rehearsal_mark_stands_over_an_ottava_that_starts_beside_it() {
+    let eng = engrave(&piece("d05_marks"), 900.0 / 8.0, &Layout::default()).unwrap();
+    let line = &eng.systems[0].lines[0];
+    let ottava = &line.ottavas[0];
+    let b = line.rehearsal.iter().find(|m| m.runs[0].text == "B").unwrap();
+    assert!(b.y < ottava.y - 1.0, "B at {} over the 8 at {}", b.y, ottava.y);
 }
 
 #[test]

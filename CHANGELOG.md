@@ -34,7 +34,8 @@ release. A wire change lands here first, is released, and then the pin moves.
   `\new ChordNames`, `\new DrumStaff` and `\new TabStaff` — each drawn as
   LilyPond 2.25 draws it, in the client, the server's native engraver and
   `<eui-score>`. A server sends a session below 11 the paths of a source
-  that needs it (`eui_score::protocol`).
+  that needs it (`eui_score::protocol`). The site's /scores page shows
+  each of these in an example, drawn, with its source.
 
 ### Fixed
 

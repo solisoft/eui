@@ -114,7 +114,8 @@ pub(crate) fn tab_frets(ev: &mut Ev) {
     let mut out = Vec::new();
     for h in ev.heads.iter().rev() {
         let key = crate::parse::semitones(h.d, h.alter) + 48;
-        let written = ev.strings.iter().find(|s| s.0 == h.d).map(|s| s.1);
+        // A string that cannot sound the note is not the one it is played on.
+        let written = ev.strings.iter().find(|s| s.0 == h.d).map(|s| s.1).filter(|&s| !used.contains(&s) && key >= GUITAR[(s - 1) as usize]);
         let string = written.or_else(|| (1..=6).find(|&s| !used.contains(&s) && key >= GUITAR[(s - 1) as usize]));
         let Some(s) = string else { continue };
         used.push(s);

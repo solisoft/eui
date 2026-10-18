@@ -446,7 +446,7 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 9 959 lines since protocol 11 (6 482 before it); `serde_json` its
+writers. 10 024 lines since protocol 11 (6 482 before it); `serde_json` its
 one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
@@ -2722,13 +2722,21 @@ corpus piece but those three, 11 for the rest — and PROTOCOL_VERSION is 11.
 The glyph data gained 17 Emmentaler glyphs through `xtask smufl` (smufl.json
 71 848 → 88 446 bytes) and the italic face its letters through `xtask
 letters` (10 → 142 characters; letters.json 127 134 → 192 346 bytes), every
-existing outline byte for byte as it was. `tests/lilypond.rs` (13 tests)
-holds the pitches, bars, chord names, drum places and keys, frets and
-protocol levels, and nine pieces that must engrave and play; with them the
+existing outline byte for byte as it was. `tests/lilypond.rs` (14 tests)
+holds the pitches, bars, chord names, drum places and keys, frets, string
+numbers and protocol levels, and nineteen pieces that must engrave and play; with them the
 engraver, the protocol, the web engraver and the client pass 614 tests.
-`<eui-score>` grew with it: **802 KB, 236 KB with brotli** (built with
+`<eui-score>` grew with it: **804 KB, 236 KB with brotli** (built with
 `wasm-opt -Oz` and the deploy's flags, measured 2026-10-18), against 593 and
-175. Not done: three voices on a staff, several verses of lyrics, a voice
+175. `/scores` shows all of it in ten examples — voices, pickup and
+transposition, grace notes, clefs, marks, ornaments, repeats, chord names,
+drums, a tablature — each drawn, with its source under it; headless
+Chromium drew the page's fourteen scores with no error. Setting them beside
+LilyPond once more found three things, fixed with them: a string number the
+note cannot be played on (`e\3`) gave a negative fret and is now passed
+over as LilyPond passes it over, a string number is circled on the staff,
+and a rehearsal mark beside an `\ottava`'s figure now stands over it.
+Not done: three voices on a staff, several verses of lyrics, a voice
 switching staves, `\override`, and the catalogue's Soli engraver, which
 still reads only its own subset and the old voice pitches.
 
