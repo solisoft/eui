@@ -21,6 +21,16 @@ describe("Scores", fn() {
     assert_contains(body, html_escape(src))
   })
 
+  # Protocol 11's LilyPond, as a file is written: the page shows the
+  # source and the element below reads the same.
+  test("shows LilyPond as a file is written, and draws it", fn() {
+    let body = res_body(get("/scores"))
+    assert_contains(body, "\\new ChordNames \\harmony")
+    assert_contains(body, "\\new Lyrics \\lyricsto \"tune\" \\words")
+    assert_contains(body, "\\new TabStaff \\melody")
+    assert_contains(body, "\\drums {")
+  })
+
   # The module is served `immutable`; "none" is what the controller answers
   # when nothing has been built, which is a page that cannot draw.
   test("stamps the build of the element it will load", fn() {

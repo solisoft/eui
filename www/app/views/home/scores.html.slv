@@ -8,7 +8,7 @@
             <p class="lede">
                 The engraver the EUI client draws a <code>score</code> with, compiled to
                 WebAssembly and drawing SVG: a page shows LilyPond source with no session,
-                no server and no GPU. One module of 593&nbsp;KB &mdash; 175&nbsp;KB with
+                no server and no GPU. One module of 802&nbsp;KB &mdash; 236&nbsp;KB with
                 brotli &mdash; and one element, <code>&lt;eui-score&gt;</code>.
             </p>
 
@@ -45,6 +45,44 @@
         </div>
         <div class="scores__sheet">
             <eui-score><script type="text/x-lilypond"><%- tune_src %></script></eui-score>
+        </div>
+
+        <h2>As a file is written</h2>
+        <p>A <code>\global</code> of the key and the pickup, the tune and its harmony in variables, chord names over the staff, the words sung to the voice that is named for them, and the same tune on a guitar's six strings: LilyPond as its users write it, read since protocol 11 and drawn as LilyPond draws it.</p>
+        <% sheet_src = """global = { \key g \major \time 3/4 \partial 4 }
+melody = \relative c' {
+  \global
+  d4 | g2 b8( g) | b2 a4 | g2 e4 | d2 d4 |
+  g2 b8( g) | b2 a8( b) | d2. \bar "|."
+}
+harmony = \chordmode { \global s4 | g2. | g:7 | c | g | e:m | d:7 | g }
+words = \lyricmode {
+  A -- ma -- zing grace, how sweet the sound
+  that saved a wretch like me
+}
+\score {
+  <<
+    \new ChordNames \harmony
+    \new Staff \new Voice = "tune" \melody
+    \new Lyrics \lyricsto "tune" \words
+    \new TabStaff \melody
+  >>
+}""" %>
+        <div class="pane">
+            <b>the source</b>
+<pre><%= sheet_src %></pre>
+        </div>
+        <div class="scores__sheet">
+            <eui-score staff-space="7"><script type="text/x-lilypond"><%- sheet_src %></script></eui-score>
+        </div>
+
+        <h2>A drum kit</h2>
+        <p><code>\drums</code>: the hi-hat over the bass drum and the snare, each where LilyPond's <code>drums-style</code> puts it, in the shapes of its heads.</p>
+        <div class="scores__sheet">
+            <eui-score><script type="text/x-lilypond">\drums {
+  \time 4/4
+  << { hh8 hh hh hh hho hh hhc hh | cymc4 hh8 hh hh hh hh4 } \\ { bd4 sn bd8 bd sn4 | bd4 sn bd sn } >>
+}</script></eui-score>
         </div>
 
         <h2>A full score, a page at a time</h2>

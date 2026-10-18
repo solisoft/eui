@@ -4,7 +4,7 @@
 //! where it is drawn. Several staves are a format-1 file, a track each.
 
 use crate::measure::{measures, Bar};
-use crate::parse::{modulo, parse, Kind, Props};
+use crate::parse::{modulo, parse, Kind, Props, StaffKind};
 use crate::{ScoreError, WHOLE};
 
 /// What a source has not said.
@@ -35,11 +35,16 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     let holds = holds(&measured);
     let mut tracks: Vec<Vec<u8>> = Vec::new();
     for (si, stf) in parsed.staves.iter().enumerate() {
+        // Chord names are read, not played, as LilyPond's \\midi has them.
+        if stf.kind == StaffKind::ChordNames && parsed.staves.len() > 1 {
+            continue;
+        }
         let props: &Props = &stf.props;
         let program = props.midi_instrument.as_deref().and_then(program_of).unwrap_or(opts.program);
         let name = props.instrument_name.clone().unwrap_or_else(|| if si == 0 { title.clone() } else { String::new() });
-        let channel = (if si < 9 { si } else { si + 1 }).min(15) as i64;
-        let track = track(&measured[si], opts, &holds, program, &name, channel, si == 0);
+        // A drum staff plays on General MIDI's percussion channel, the tenth.
+        let channel = if stf.kind == StaffKind::Drums { 9 } else { (if si < 9 { si } else { si + 1 }).min(15) as i64 };
+        let track = track(&measured[si], opts, &holds, program, &name, channel, tracks.is_empty());
         let mut controls: Vec<u8> = Vec::new();
         if let Some(v) = props.midi_maximum_volume {
             controls.extend([0, (176 + channel) as u8, 7, (v.clamp(0.0, 1.0) * 127.0 + 0.5) as u8]);
@@ -123,6 +128,27 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             if ev.hairpin_end {
                 hairpin = None;
             }
+            // Grace notes sound before the note they go to, in the time they
+            // take from it — at most half of it.
+            let mut stolen = 0;
+            let written: i64 = ev.graces.iter().map(|g| g.ticks).sum();
+            if written > 0 {
+                let take = written.min(span / 2).max(1);
+                let vel = (volume + 0.5).clamp(1.0, 127.0) as u8;
+                let mut t = t0;
+                for g in &ev.graces {
+                    let len = (g.ticks * take / written).max(1);
+                    for hd in &g.heads {
+                        let key = key_of(hd.d, hd.alter);
+                        ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                        ev_out.push((t + len, 0, vec![(128 + channel) as u8, key as u8, 64]));
+                    }
+                    t += len;
+                }
+                stolen = take;
+            }
+            let t0 = t0 + stolen;
+            let span = span - stolen;
             if ev.k != Kind::Note {
                 continue;
             }
@@ -145,8 +171,23 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             if has("portato") {
                 length = span * 3 / 4;
             }
+            if ev.tremolo > 0 {
+                // `c4:16`: the note again each sixteenth of it.
+                let each = (WHOLE / ev.tremolo).max(1);
+                let mut t = t0;
+                while t < t0 + span {
+                    let len = each.min(t0 + span - t);
+                    for hd in &ev.heads {
+                        let key = key_of(hd.d, hd.alter);
+                        ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                        ev_out.push((t + len, 0, vec![(128 + channel) as u8, key as u8, 64]));
+                    }
+                    t += each;
+                }
+                continue;
+            }
             for hd in &ev.heads {
-                let key = key_of(hd.d, hd.alter);
+                let key = ev.drums.iter().find(|dr| dr.d == hd.d).map_or_else(|| key_of(hd.d, hd.alter), |dr| dr.key);
                 if let Some((_, held)) = sounding.iter_mut().find(|(k, _)| *k == key) {
                     if held.until == t0 && held.tied {
                         held.until = t0 + length;

@@ -70,9 +70,9 @@ fn a_chord_moves_all_its_heads_or_none() {
 #[test]
 fn a_drag_puts_the_nearest_head_on_the_line() {
     // Treble: pos 0 is the top line, F5; pos 8 the bottom one, E4.
-    assert_eq!(edit::at_position(Clef::Treble, 0, 0), (17, 0));
-    assert_eq!(edit::at_position(Clef::Treble, 0, 8), (9, 0));
-    assert_eq!(edit::at_position(Clef::Treble, 2, 0), (17, 1), "F is sharp in D major");
+    assert_eq!(edit::at_position(Clef::TREBLE, 0, 0), (17, 0));
+    assert_eq!(edit::at_position(Clef::TREBLE, 0, 8), (9, 0));
+    assert_eq!(edit::at_position(Clef::TREBLE, 2, 0), (17, 1), "F is sharp in D major");
     let chord = item("{ <c'' e''>4 }", 0);
     // g'' is nearer e'' than c'': the top head goes, the order is kept.
     assert_eq!(edit::placed(&chord, 18, 0), Some(vec![(14, 0), (18, 0)]));

@@ -150,7 +150,7 @@ exposition is engraved and painted in 13 ms paged at 700 px and 16 ms on A4.
 Without a session at all, a web page can show the same music read-only
 with `<eui-score>`: `crates/eui-score-web` is `eui-score` compiled to
 WebAssembly and drawing SVG in `currentColor`, so the page's own text colour
-is the ink and a dark theme needs nothing. One module of 593 KB (175 KB
+is the ink and a dark theme needs nothing. One module of 802 KB (236 KB
 with brotli), one element:
 
 ```html
@@ -179,6 +179,36 @@ the music has stood still for `edit_after` (2 s by default), focus leaves,
 or any other event is about to go — then once, in `score_edit`, with each
 head's new pitch. The server checks each entry, applies it to its own model
 and sends back a source that is byte for byte the one already drawn.
+
+From protocol 11 the source can be **LilyPond as people write it**: the
+variables, `\global` and `\new Voice`s of a file found on Mutopia,
+`\lyricsto`, `\partial`, grace notes, every clef with its key in
+LilyPond's places, `\fixed`, `\transpose`, `\language` and `q`, fingerings,
+`\markup`, rehearsal marks, `\ottava`, ornaments, arpeggios, glissandi and
+tremolos, `\repeat unfold` and `percent`, cadenzas, and three staves of
+other kinds — chord names, drums and a guitar's tablature:
+
+```lilypond
+harmony = \chordmode { c2 a:m7 | f:maj7 g:7 }
+melody = \relative c'' { e2 c | a4 b c d }
+<<
+  \new ChordNames \harmony
+  \new Staff \new Voice = "tune" \melody
+  \new Lyrics \lyricsto "tune" { Here we go a -- gain }
+  \new TabStaff \melody
+>>
+```
+
+Each construct was set beside LilyPond 2.25's own engraving of the same
+source while it was written, and `eui-score`'s `tests/lilypond.rs` pins what
+the two agreed on: the pitches, the bars, the chord names, the drums' places
+and MIDI keys, the frets. A server asks `eui_score::protocol(src)` which
+client a source needs and sends an older one the paths, so it draws the
+same picture and refuses nothing. One correction came with it: two voices
+under `\relative` are read as LilyPond reads them, each from the last pitch
+of the voice before it, where the catalogue's Soli engraver read both from
+the pitch before `<<`. What an edit cannot rewrite it leaves alone: a source
+under `\transpose` or in another `\language`, a `q`, a chord name, a drum.
 
 ## Sound and moving pictures
 

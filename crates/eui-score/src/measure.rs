@@ -1,9 +1,9 @@
 //! A staff's events cut into bars, with what each note's heads print
 //! (`eui_builders_score.sl`, "Bars").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use crate::parse::{modulo, refuse, Clef, Ev, Head, Kind};
+use crate::parse::{modulo, refuse, Clef, Ev, Head, Kind, Sign, Words};
 use crate::{ScoreError, WHOLE};
 
 /// What changes at the start of a bar.
@@ -116,6 +116,17 @@ pub struct Bar {
     /// With two voices, its columns: what starts at each moment, both
     /// voices' (`Kind::Col`, members `(0, index in items)`).
     pub cols: Vec<Ev>,
+    /// A pickup bar's missing beginning, in ticks (`\partial`): where its
+    /// first note stands in the metre the beams follow.
+    pub offset: i64,
+    /// A copy of `\repeat percent`: its notes are played and its bar is
+    /// drawn as the percent sign.
+    pub percent: bool,
+    /// It holds a cadenza: no metre, so no beams but the ones written.
+    pub cadenza: bool,
+    /// Rehearsal marks, segni and codas: where in the bar, in ticks — 0 its
+    /// start, its length its end — and what they say.
+    pub marks: Vec<(i64, Words)>,
 }
 
 impl Bar {
@@ -143,13 +154,17 @@ pub fn key_alters(fifths: i64) -> [i64; 7] {
     out
 }
 
-/// The middle line's diatonic number under each clef.
+/// The middle line's diatonic number under a clef: the pitch the sign
+/// names — g' for G, c' for C, f for F — on the clef's line, moved by its
+/// octaves. A percussion staff reads as a C clef on the middle line, as
+/// LilyPond's does.
 pub fn clef_mid(clef: Clef) -> i64 {
-    match clef {
-        Clef::Treble => 13,
-        Clef::Bass => 1,
-        Clef::Alto => 7,
-    }
+    let named = match clef.sign {
+        Sign::G => 11,
+        Sign::C | Sign::Percussion | Sign::Tab => 7,
+        Sign::F => 3,
+    };
+    named + 7 * clef.octave - clef.line
 }
 
 fn kind_name(k: &Kind) -> &'static str {
@@ -162,6 +177,8 @@ fn kind_name(k: &Kind) -> &'static str {
 
 /// Where the second voice of `<< \\\\ >>` is.
 struct Poly {
+    /// `\ottava`'s octaves from each tick on, the first voice's.
+    ottavas: Vec<(i64, i64)>,
     from: i64,
     to: i64,
     at: i64,
@@ -178,14 +195,14 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     let Some(bi) = bars.iter().rposition(|b| b.tick0 <= at && at < b.tick0 + b.length) else {
         return refuse("the second voice runs past the first", ev.at);
     };
+    if ev.spacer {
+        p.at = at + ev.ticks;
+        return Ok(());
+    }
     let bar = &mut bars[bi];
     let pos = at - bar.tick0;
     if pos + ev.ticks > bar.length {
         return refuse(format!("a note runs past the bar line (bar {})", bi + 1), ev.at);
-    }
-    if ev.spacer {
-        p.at = at + ev.ticks;
-        return Ok(());
     }
     ev.start = pos;
     ev.bar = bi;
@@ -196,8 +213,10 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
         p.seen.clear();
         p.seen_bar = Some(bi);
     }
+    ev.ottava = p.ottavas.iter().rev().find(|o| o.0 <= at).map_or(0, |o| o.1);
+    grace_heads(&mut ev.graces, clef_mid(clef) + 7 * ev.ottava, ev.ottava, &mut p.seen, &alters, ev.voice);
     if ev.k == Kind::Note {
-        let mid = clef_mid(clef);
+        let mid = clef_mid(clef) + 7 * ev.ottava;
         let mut heads = Vec::new();
         for pt in &ev.pitches {
             let now = match p.seen.get(&pt.d) {
@@ -209,10 +228,11 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
                 show = false;
             }
             p.seen.insert(pt.d, pt.alter);
-            heads.push(Head { pos: pt.d - mid, d: pt.d, alter: pt.alter, acc: if show { Some(pt.alter) } else { None }, side: 0, acc_x: None });
+            heads.push(Head { pos: pt.d - mid, d: pt.d, alter: pt.alter, acc: if show { Some(pt.alter) } else { None }, side: 0, acc_x: None, style: "" });
         }
         heads.sort_by_key(|h| h.pos);
         ev.heads = heads;
+        drum_heads(&mut ev);
         p.tied.clear();
         if ev.tie {
             for pt in &ev.pitches {
@@ -227,9 +247,42 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     Ok(())
 }
 
+/// A drum note's heads, each its drum's.
+fn drum_heads(ev: &mut Ev) {
+    for h in &mut ev.heads {
+        if let Some(dr) = ev.drums.iter().find(|dr| dr.d == h.d) {
+            h.style = dr.head;
+        }
+    }
+}
+
+/// The heads of grace notes, before the note they go to: their accidentals
+/// as the bar has them so far, and counted in it.
+fn grace_heads(graces: &mut [Ev], mid: i64, ottava: i64, seen: &mut HashMap<i64, i64>, alters: &[i64; 7], voice: Option<u8>) {
+    for g in graces {
+        g.ottava = ottava;
+        g.voice = voice;
+        g.up = voice != Some(2);
+        let mut heads = Vec::new();
+        for p in &g.pitches {
+            let now = match seen.get(&p.d) {
+                Some(v) => *v,
+                None => alters[modulo(p.d, 7) as usize],
+            };
+            seen.insert(p.d, p.alter);
+            heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if p.alter != now { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "" });
+        }
+        heads.sort_by_key(|h| h.pos);
+        g.heads = heads;
+    }
+}
+
 /// The bars of a staff.
 pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
-    let mut clef = Clef::Treble;
+    let mut clef = Clef::default();
+    let mut cadenza = false;
+    let mut ottava = 0;
+    let mut ottavas: Vec<(i64, i64)> = Vec::new();
     let mut fifths = 0;
     let (mut tn, mut td) = (4, 4);
     let mut bars: Vec<Bar> = Vec::new();
@@ -256,7 +309,8 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             flat.push(ev.clone());
         }
     }
-    for mut ev in flat {
+    let mut queue: VecDeque<Ev> = flat.into();
+    while let Some(mut ev) = queue.pop_front() {
         if ev.k == Kind::Tempo {
             tempo = ev.tempo.clone();
             continue;
@@ -266,7 +320,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         }
         match ev.k {
             Kind::Voices => {
-                poly = Some(Poly { from: tick_at, to: 0, at: 0, two: false, seen: HashMap::new(), seen_bar: None, tied: HashMap::new() });
+                poly = Some(Poly { ottavas: ottavas.clone(), from: tick_at, to: 0, at: 0, two: false, seen: HashMap::new(), seen_bar: None, tied: HashMap::new() });
                 continue;
             }
             Kind::VoiceNext => {
@@ -274,6 +328,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
                     p.two = true;
                     p.to = tick_at;
                     p.at = p.from;
+                    p.ottavas = ottavas.clone();
                 }
                 continue;
             }
@@ -384,6 +439,45 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
                 alters = key_alters(fifths);
                 continue;
             }
+            Kind::Partial => {
+                if bars.len() > 1 || pos > 0 {
+                    return refuse("\\partial goes before the first note", ev.at);
+                }
+                let bar = &mut bars[ci];
+                let full = bar.time.0 * WHOLE / bar.time.1;
+                if ev.ticks >= full {
+                    return refuse("a \\partial is shorter than a bar", ev.at);
+                }
+                bar.length = ev.ticks;
+                bar.offset = full - ev.ticks;
+                continue;
+            }
+            Kind::CadenzaOn => {
+                cadenza = true;
+                continue;
+            }
+            Kind::Ottava => {
+                ottava = ev.ottava;
+                ottavas.push((tick_at, ottava));
+                continue;
+            }
+            Kind::Mark => {
+                if let Some(w) = ev.texts.first() {
+                    bars[ci].marks.push((pos, w.clone()));
+                }
+                continue;
+            }
+            Kind::CadenzaOff => {
+                cadenza = false;
+                // The bar ends where the cadenza does, with no bar line
+                // unless one is written after it.
+                if pos > 0 {
+                    bars[ci].length = pos;
+                    bars[ci].bar = String::new();
+                    cur = None;
+                }
+                continue;
+            }
             Kind::Bar => {
                 if pos == 0 && bars.len() > 1 {
                     let n = bars.len();
@@ -411,6 +505,20 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             ev.mm = Some(ev.count);
             bars[ci].span = Some(ev.count);
         }
+        if cadenza {
+            bars[ci].cadenza = true;
+            if pos + ev.ticks > bars[ci].length {
+                bars[ci].length = pos + ev.ticks;
+            }
+        }
+        if pos + ev.ticks > bars[ci].length && ev.spacer {
+            // A spacer across bar lines, `s1*16`: a piece in each bar.
+            let room = bars[ci].length - pos;
+            let mut rest = ev.clone();
+            rest.ticks -= room;
+            ev.ticks = room;
+            queue.push_front(rest);
+        }
         if pos + ev.ticks > bars[ci].length {
             return refuse(format!("a note runs past the bar line (bar {})", bars.len()), ev.at);
         }
@@ -425,8 +533,10 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         if tempo.is_some() {
             ev.tempo = tempo.take();
         }
+        ev.ottava = ottava;
+        grace_heads(&mut ev.graces, clef_mid(clef) + 7 * ottava, ottava, &mut seen, &alters, ev.voice);
         if ev.k == Kind::Note {
-            let mid = clef_mid(clef);
+            let mid = clef_mid(clef) + 7 * ottava;
             let mut heads = Vec::new();
             for p in &ev.pitches {
                 let now = match seen.get(&p.d) {
@@ -438,10 +548,11 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
                     show = false;
                 }
                 seen.insert(p.d, p.alter);
-                heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None });
+                heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "" });
             }
             heads.sort_by_key(|h| h.pos);
             ev.heads = heads;
+            drum_heads(&mut ev);
             tied.clear();
             if ev.tie {
                 for p in &ev.pitches {
@@ -455,7 +566,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         tick_at += ticks * ev.mm.unwrap_or(1);
         bars[ci].items.push(ev);
         pos += ticks;
-        if pos == bars[ci].length {
+        if pos == bars[ci].length && !cadenza {
             cur = None;
         }
     }
@@ -467,11 +578,21 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             b.items.sort_by_key(|ev| ev.start * 4 + i64::from(ev.voice.unwrap_or(1)));
         }
     }
+    // A mark after the last note stands over the last bar line.
+    for bi in 1..bars.len() {
+        if bars[bi].items.is_empty() && !bars[bi].changes.any() && !bars[bi].marks.is_empty() {
+            let marks = std::mem::take(&mut bars[bi].marks);
+            let end = bars[bi - 1].length;
+            bars[bi - 1].marks.extend(marks.into_iter().map(|m| (end, m.1)));
+        }
+    }
     let mut bars: Vec<Bar> = bars.into_iter().filter(|b| !b.items.is_empty() || b.changes.any()).collect();
     if bars.is_empty() {
         return refuse("there is no music", 0);
     }
-    let mut number = 1;
+    percent_bars(&mut bars)?;
+    // A pickup is bar 0, as LilyPond counts.
+    let mut number = if bars[0].offset > 0 { 0 } else { 1 };
     for bi in 0..bars.len() {
         bars[bi].number = number;
         number += bars[bi].span.unwrap_or(1);
@@ -481,4 +602,19 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         }
     }
     Ok(bars)
+}
+
+/// The bars `\repeat percent` copies, each drawn as the percent sign: a copy
+/// fills its bar, and nothing else is in it.
+fn percent_bars(bars: &mut [Bar]) -> Result<(), ScoreError> {
+    for bi in 0..bars.len() {
+        let Some(first) = bars[bi].items.iter().find_map(|ev| ev.percent.map(|p| (p, ev.at))) else { continue };
+        let whole = bars[bi].items.iter().all(|ev| ev.percent == Some(first.0));
+        let alone = bars.iter().enumerate().all(|(k, b)| k == bi || b.items.iter().all(|ev| ev.percent != Some(first.0)));
+        if !(whole && alone) {
+            return refuse("\\repeat percent draws a body of one whole bar", first.1);
+        }
+        bars[bi].percent = true;
+    }
+    Ok(())
 }

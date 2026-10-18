@@ -6,9 +6,9 @@
 use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
-use crate::marks::{self, curves, reach, DynEl, HairpinPiece, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
+use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{measures, Bar, Beam, Changes, Opening};
-use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Syllable, Tempo};
+use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
 
@@ -74,6 +74,53 @@ pub struct Line {
     pub key_w: Option<f64>,
     /// How far its bar lines run on down to the next staff.
     pub connect_down: f64,
+    /// Glissandi: from `(x, y)` to `(x, y)`.
+    pub glissandi: Vec<[f64; 4]>,
+    /// `\ottava`'s brackets.
+    pub ottavas: Vec<OttavaPlace>,
+    /// Rehearsal marks, segni and codas.
+    pub rehearsal: Vec<MarkPlace>,
+    /// What kind of staff it is.
+    pub kind: StaffKind,
+}
+
+/// How tall a staff of a kind is, from its top line to its bottom one.
+pub(crate) fn staff_height(kind: StaffKind) -> f64 {
+    match kind {
+        StaffKind::Tab => 7.5,
+        _ => 4.0,
+    }
+}
+
+/// The size of a chord's name: LilyPond's `font-size` 1.5.
+pub(crate) fn chord_em() -> f64 {
+    em(1.5)
+}
+
+/// The baseline chord names stand on, in their line's frame.
+pub(crate) const CHORD_BASE: f64 = 3.0;
+
+/// The size of a tablature's frets, which LilyPond sets in bold.
+pub(crate) fn fret_em() -> f64 {
+    em(-1.5)
+}
+
+/// Each head of a tablature's note on a string, with its fret: the string
+/// written (`\\5`), or the highest string the note reaches with a fret
+/// of 0 or more not taken by another head of the chord, the highest note
+/// first.
+pub(crate) fn tab_frets(ev: &mut Ev) {
+    let mut used: Vec<i64> = Vec::new();
+    let mut out = Vec::new();
+    for h in ev.heads.iter().rev() {
+        let key = crate::parse::semitones(h.d, h.alter) + 48;
+        let written = ev.strings.iter().find(|s| s.0 == h.d).map(|s| s.1);
+        let string = written.or_else(|| (1..=6).find(|&s| !used.contains(&s) && key >= GUITAR[(s - 1) as usize]));
+        let Some(s) = string else { continue };
+        used.push(s);
+        out.push((s, key - GUITAR[(s - 1) as usize]));
+    }
+    ev.tab = out;
 }
 
 /// A system: one line, or one line of each staff.
@@ -190,6 +237,12 @@ pub(crate) fn voice_lists(bar: &Bar) -> Vec<Vec<usize>> {
     vec![one, two]
 }
 
+/// Whether a staff of a kind beams its notes: a tablature shows no rhythm,
+/// and chord names have no stems.
+fn beamed(kind: StaffKind) -> bool {
+    matches!(kind, StaffKind::Notes | StaffKind::Drums)
+}
+
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
     for bar in bars.iter_mut() {
         let wins = beam_windows(bar.time);
@@ -278,7 +331,9 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
                 manual = true;
                 continue;
             }
-            let w = ev.start / wins.0;
+            // A cadenza has no beats to beam by: only `[ ]` beams in it.
+            let fl = if bar.cadenza { 0 } else { fl };
+            let w = (ev.start + bar.offset) / wins.0;
             if (fl == 0 || w != win || gap) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
             }
@@ -299,7 +354,7 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
                 let mut pt: Option<i64> = None;
                 for &j in &g {
                     let ev = &bar.items[j];
-                    let w = ev.start / wins.1;
+                    let w = (ev.start + bar.offset) / wins.1;
                     let tid = ev.tuplet.map(|t| t.id);
                     if (w != pw || tid != pt) && !part.is_empty() {
                         by_beat.push(std::mem::take(&mut part));
@@ -405,11 +460,81 @@ pub(crate) fn flag_name(base: i64, up: bool) -> String {
     format!("flag{stem}{}", if up { "Up" } else { "Down" })
 }
 
-fn columns(bars: &mut [Bar], shortest: i64) {
+/// Grace notes' size against a note's: LilyPond's `font-size` -3.
+pub(crate) const GRACE_K: f64 = std::f64::consts::FRAC_1_SQRT_2;
+
+/// Where a note's grace notes go: left of it and of everything it has
+/// there, each at its x from the note's, stems up (down in a second voice),
+/// beamed when every one has a flag, the stems of a beam ending together.
+/// The note's room on the left grows by theirs.
+fn grace_layout(ev: &mut Ev) {
+    if ev.graces.is_empty() {
+        return;
+    }
+    let k = GRACE_K;
+    let beamed = ev.graces.len() > 1 && ev.graces.iter().all(|g| flags(g.base) > 0);
+    let mut x = 0.0;
+    let mut xs = Vec::with_capacity(ev.graces.len());
+    for g in &ev.graces {
+        let acc_w = g.heads.iter().filter_map(|h| h.acc).map(|a| glyph(acc_name(a)).advance).fold(0.0, f64::max) * k;
+        if acc_w > 0.0 {
+            x += acc_w + 0.15;
+        }
+        xs.push(x);
+        x += glyph(head_name(g.base)).advance * k;
+        if !beamed && flags(g.base) > 0 && g.up {
+            x += (glyph(&flag_name(g.base, true)).advance - RULE.stem) * k;
+        }
+        x += 0.3;
+    }
+    let room = x + 0.2;
+    let before = ev.left;
+    let len = 3.0 * k;
+    let top = |g: &Ev| y_of(g.heads.last().map_or(0, |h| h.pos));
+    let low = |g: &Ev| y_of(g.heads.first().map_or(0, |h| h.pos));
+    let up = ev.graces[0].up;
+    let tip = if up { ev.graces.iter().map(|g| top(g) - len).fold(f64::INFINITY, f64::min) } else { ev.graces.iter().map(|g| low(g) + len).fold(f64::NEG_INFINITY, f64::max) };
+    for (g, gx) in ev.graces.iter_mut().zip(xs) {
+        g.x = gx - before - room;
+        g.head_w = Some(glyph(head_name(g.base)).advance * k);
+        g.stem_end = if beamed {
+            tip
+        } else if up {
+            top(g) - len
+        } else {
+            low(g) + len
+        };
+        g.beam = beamed.then_some(0);
+    }
+    ev.left += room;
+}
+
+fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
             let t = space_ticks(ev);
             ev.ideal = duration_space(t, shortest);
+            if kind == StaffKind::ChordNames {
+                // A name takes the room it is wide.
+                ev.left = 0.0;
+                ev.right = if ev.chord_name.is_empty() { 0.0 } else { marks::runs_width(&ev.chord_name, chord_em()) + 0.6 };
+                ev.head_w = Some(glyph("noteheadBlack").advance);
+                continue;
+            }
+            if kind == StaffKind::Tab && ev.k == Kind::Note {
+                tab_frets(ev);
+                let hw = glyph("noteheadBlack").advance;
+                let w = ev.tab.iter().map(|t| text_width(&t.1.to_string(), Weight::Bold, fret_em())).fold(0.0, f64::max);
+                ev.head_w = Some(hw);
+                ev.left = (w - hw).max(0.0) / 2.0 + 0.2;
+                ev.right = hw + (w - hw).max(0.0) / 2.0 + 0.2;
+                continue;
+            }
+            if kind == StaffKind::Tab {
+                ev.left = 0.0;
+                ev.right = 0.0;
+                continue;
+            }
             if ev.k == Kind::Rest {
                 if let Some(mm) = ev.mm {
                     ev.ideal = if mm <= 10 { 3.0 + church_width(mm) } else { 7.0 + log2(mm as f64) };
@@ -420,6 +545,7 @@ fn columns(bars: &mut [Bar], shortest: i64) {
                 let g = glyph(rest_name(ev.base));
                 ev.left = 0.0;
                 ev.right = g.advance + if ev.dots > 0 { 0.3 + 0.6 * ev.dots as f64 } else { 0.0 };
+                grace_layout(ev);
                 continue;
             }
             let hw = glyph(head_name(ev.base)).advance;
@@ -439,6 +565,13 @@ fn columns(bars: &mut [Bar], shortest: i64) {
             let shifted = ev.heads.iter().any(|h| h.side == -1);
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);
+            if ev.arpeggio {
+                // The wavy line before the chord and its accidentals.
+                let w = glyph("wiggleArpeggiatoUp").advance;
+                ev.left += 0.3 + w;
+                ev.arp_x = Some(-ev.left);
+            }
+            grace_layout(ev);
             lyric_room(ev);
         }
         if bar.poly {
@@ -459,14 +592,14 @@ fn columns(bars: &mut [Bar], shortest: i64) {
 /// a slur after its first, holds the syllable before — a melisma — and
 /// takes none; rests take none; syllables past the last note are dropped,
 /// as LilyPond drops them.
-fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>) {
+fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8) {
     let Some(sylls) = sylls else { return };
     let mut k = 0;
     let mut tied = false;
     let mut slurred = false;
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
-            if ev.voice == Some(2) || ev.k != Kind::Note {
+            if marks::voice_of(ev) != voice || ev.k != Kind::Note || ev.percent.is_some() {
                 continue;
             }
             if tied || slurred {
@@ -689,10 +822,12 @@ pub(crate) fn time_width(time: (i64, i64)) -> f64 {
 }
 
 pub(crate) fn clef_glyph(clef: Clef) -> &'static str {
-    match clef {
-        Clef::Treble => "gClef",
-        Clef::Bass => "fClef",
-        Clef::Alto => "cClef",
+    match clef.sign {
+        Sign::G => "gClef",
+        Sign::F => "fClef",
+        Sign::C => "cClef",
+        Sign::Percussion => "unpitchedPercussionClef1",
+        Sign::Tab => "6stringTabClef",
     }
 }
 
@@ -838,6 +973,7 @@ fn bar_width(bar: &Bar, k: f64, opening: bool) -> f64 {
 
 pub(crate) fn barline_parts(kind: &str) -> &'static [&'static str] {
     match kind {
+        "" => &[],
         "||" => &["thin", "thin"],
         "|." => &["thin", "thick"],
         ".|:" => &["thick", "thin", "dots"],
@@ -857,6 +993,9 @@ pub(crate) fn part_width(part: &str) -> f64 {
 
 pub(crate) fn barline_width(kind: &str) -> f64 {
     let parts = barline_parts(kind);
+    if parts.is_empty() {
+        return 0.0;
+    }
     parts.iter().fold(0.0, |acc, p| acc + part_width(p)) + RULE.kern * (parts.len() as f64 - 1.0)
 }
 
@@ -1051,7 +1190,7 @@ fn place(bars: &mut [Bar], lines: &mut [Line], left: f64, indent: f64, rest: f64
             }
             let gs = gaps(bar, k);
             let length = bar.length;
-            let whole = bar.items.len() == 1 && bar.items[0].k == Kind::Rest && (bar.items[0].full || bar.items[0].ticks == length);
+            let whole = bar.items.len() == 1 && bar.items[0].k == Kind::Rest && !bar.items[0].spacer && (bar.items[0].full || bar.items[0].ticks == length);
             if whole {
                 let span = gs.iter().fold(0.0, |acc, g| acc + g);
                 let it = &mut bar.items[0];
@@ -1336,11 +1475,14 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     if parsed.staves.len() > 1 {
         return engrave_many(parsed, width, layout);
     }
+    let kind = parsed.staves[0].kind;
     let mut bars = measures(&parsed.staves[0].events)?;
-    lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref());
-    beams(&mut bars)?;
+    lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
+    if beamed(kind) {
+        beams(&mut bars)?;
+    }
     let sh = shortest(bars.iter());
-    columns(&mut bars, sh);
+    columns(&mut bars, sh, kind);
     let mut left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0);
     let mut lines = break_bars(&mut bars, width, indent, 0.0);
@@ -1355,6 +1497,9 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         lines = break_bars(&mut bars, width, indent, 0.0);
     }
     place(&mut bars, &mut lines, left, indent, 0.0);
+    for line in &mut lines {
+        line.kind = kind;
+    }
     curves(&mut bars, &mut lines);
     marks::marks(&mut bars, &mut lines);
     let head = header_lines(&parsed.header, width);
@@ -1374,6 +1519,11 @@ fn master_bar(all: &[Vec<Bar>], k: usize, shortest: i64) -> Bar {
     mb.cols = Vec::new();
     mb.poly = false;
     mb.staff_openings = all.iter().map(|bars| bars[k].opening()).collect();
+    // A bar line is the system's, as LilyPond's is: the first staff's that
+    // is not a plain one — a chord name's line has none to say.
+    if let Some(kind) = all.iter().map(|bars| &bars[k].bar).find(|b| b.as_str() != "|") {
+        mb.bar = kind.clone();
+    }
     let mut starts: Vec<i64> = Vec::new();
     for bars in all {
         for ev in &bars[k].items {
@@ -1430,7 +1580,10 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
             let sb = &mut bars[b];
             sb.x0 = mb.x0;
             sb.x1 = mb.x1;
-            sb.bar_drawn = mb.bar_drawn.clone();
+            // The piece's first bar shows its metre on every staff, as the
+            // room the shared bar keeps for it says.
+            sb.first = mb.first;
+            sb.bar_drawn = mb.bar_drawn.clone().or_else(|| (sb.bar != mb.bar).then(|| mb.bar.clone()));
             sb.open_repeat = mb.open_repeat.clone();
             sb.open_repeat_x = mb.open_repeat_x;
         }
@@ -1443,7 +1596,7 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
         for bars in staves.iter_mut() {
             let sb = &mut bars[b];
             let length = sb.length;
-            if sb.items.len() == 1 && sb.items[0].k == Kind::Rest && (sb.items[0].full || sb.items[0].ticks == length) {
+            if sb.items.len() == 1 && sb.items[0].k == Kind::Rest && !sb.items[0].spacer && (sb.items[0].full || sb.items[0].ticks == length) {
                 let it = &mut sb.items[0];
                 it.x = (content0 + mb.x1) / 2.0 - glyph("restWhole").advance / 2.0;
                 it.whole_bar = true;
@@ -1475,12 +1628,14 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         }
     }
     for (si, bars) in all.iter_mut().enumerate() {
-        lyrics_assign(bars, staves_src[si].lyrics.as_deref());
-        beams(bars)?;
+        lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);
+        if beamed(staves_src[si].kind) {
+            beams(bars)?;
+        }
     }
     let sh = shortest(all.iter().flatten());
-    for bars in &mut all {
-        columns(bars, sh);
+    for (si, bars) in all.iter_mut().enumerate() {
+        columns(bars, sh, staves_src[si].kind);
     }
     let mut master: Vec<Bar> = (0..count).map(|k| master_bar(&all, k, sh)).collect();
     let deco = groups_width(&parsed.groups, staves_src.len());
@@ -1503,6 +1658,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         let mut staff_lines: Vec<Line> = Vec::new();
         for (s, bars) in all.iter().enumerate() {
             let mut ss = Line {
+                kind: staves_src[s].kind,
                 bars: range.clone(),
                 staff_index: Some(s),
                 left: line.left,
@@ -1573,7 +1729,10 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, l)| reach(&all[s], l)).collect();
     let mut offsets = vec![0.0];
     for s in 1..reaches.len() {
-        let o = (offsets[s - 1] + 9.0_f64).max(offsets[s - 1] + reaches[s - 1].1 + 1.0 - reaches[s].0);
+        // Chord names sit as close over their staff as their ink lets them.
+        let names = sys.lines[s - 1].kind == StaffKind::ChordNames || sys.lines[s].kind == StaffKind::ChordNames;
+        let least: f64 = if names { 0.0 } else { 9.0 };
+        let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);
     }
     let last = offsets.len() - 1;
@@ -1581,7 +1740,7 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
     for (s, ss) in sys.lines.iter_mut().enumerate() {
         let through = groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && s < g.last);
-        ss.connect_down = if through { offsets[s + 1] - offsets[s] - 4.0 } else { 0.0 };
+        ss.connect_down = if through { offsets[s + 1] - offsets[s] - staff_height(ss.kind) } else { 0.0 };
     }
     sys.offsets = offsets;
 }

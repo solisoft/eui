@@ -41,6 +41,11 @@ pub enum NotEditable {
     /// It uses `\relative` or `\fixed`: a pitch there depends on the ones
     /// before it.
     Relative,
+    /// It uses `\transpose`: a pitch drawn is not the pitch written.
+    Transposed,
+    /// It names its notes in another language than LilyPond's default,
+    /// which is the one an edit writes.
+    Language,
 }
 
 /// The note numbered `item` in `src`, or `Ok(None)` when there is no such
@@ -54,15 +59,24 @@ pub fn item(src: &str, item: usize) -> Result<Option<Item>, NotEditable> {
     if toks.iter().any(|t| t.t == T::Cmd && (t.v == "relative" || t.v == "fixed")) {
         return Err(NotEditable::Relative);
     }
+    if toks.iter().any(|t| t.t == T::Cmd && t.v == "transpose") {
+        return Err(NotEditable::Transposed);
+    }
+    if toks.iter().any(|t| t.t == T::Cmd && (t.v == "language" || t.v == "include")) {
+        return Err(NotEditable::Language);
+    }
     let parsed = parse::parse(src).map_err(|_| NotEditable::Refused)?;
     // Character positions, as the tokens count them, to bytes.
     let bytes: Vec<usize> = src.char_indices().map(|(b, _)| b).chain(std::iter::once(src.len())).collect();
     for staff in &parsed.staves {
-        let (mut clef, mut fifths) = (Clef::default(), 0);
+        let (mut clef, mut fifths, mut ottava) = (Clef::default(), 0, 0);
         for ev in &staff.events {
             match ev.k {
                 Kind::Clef => clef = ev.clef,
                 Kind::Key => fifths = ev.fifths,
+                Kind::Ottava => ottava = ev.ottava,
+                // A chord symbol, a drum and a `q` write no pitch to move.
+                Kind::Note if ev.i == item && (ev.pitch_at.len() != ev.pitches.len() || !ev.drums.is_empty() || !ev.chord_name.is_empty()) => return Ok(None),
                 Kind::Note if ev.i == item => {
                     let mut spans = Vec::with_capacity(ev.pitch_at.len());
                     for &at in &ev.pitch_at {
@@ -70,6 +84,9 @@ pub fn item(src: &str, item: usize) -> Result<Option<Item>, NotEditable> {
                         spans.push(start..start + pitch_len(&src[start..]));
                     }
                     let heads = ev.pitches.iter().map(|p| (p.d, p.alter)).collect();
+                    // Under `\ottava` a line stands for a pitch an octave off,
+                    // as under a clef that moves the music.
+                    let clef = Clef { octave: clef.octave + ottava, ..clef };
                     return Ok(Some(Item { item, clef, fifths, heads, spans }));
                 }
                 Kind::Rest if ev.i == item => return Ok(None),

@@ -159,6 +159,12 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, ScoreError>) -> Result<T, ScoreError
     }
 }
 
+/// The protocol a client needs to engrave `src` (03 §1.4): 9 for the
+/// subset the Soli engraver reads, 11 for one using what protocol 11 adds.
+pub fn protocol(src: &str) -> Result<u32, ScoreError> {
+    guarded(|| parse::protocol(src))
+}
+
 /// Parse, lay out and place everything, `width` staff spaces wide.
 pub fn engrave(src: &str, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     guarded(|| {

@@ -22,6 +22,30 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Added
+
+- Protocol 11: a `score` reads LilyPond as people write it (spec 03 §1.4) —
+  variables and `\global`, `\new Voice` with `\voiceOne`/`\voiceTwo`,
+  `\new Lyrics \lyricsto`, `\language`, `\fixed`, `\transpose`, `q`,
+  `\partial`, `\cadenzaOn`, spacers anywhere, `\repeat unfold` and
+  `percent`, grace notes, the tenor, soprano, baritone, `treble_8` and other
+  clefs, fingerings, `\markup`, `\mark`, `\ottava`, phrasing slurs,
+  `\trill` and other ornaments, `\arpeggio`, `\glissando`, tremolos, and
+  `\new ChordNames`, `\new DrumStaff` and `\new TabStaff` — each drawn as
+  LilyPond 2.25 draws it, in the client, the server's native engraver and
+  `<eui-score>`. A server sends a session below 11 the paths of a source
+  that needs it (`eui_score::protocol`).
+
+### Fixed
+
+- Two voices under `\relative`: the second is read from the first voice's
+  last pitch, as LilyPond reads it, not from the pitch before `<<`.
+- A system of several staves draws the metre on its first bar, where it
+  kept the room for it and drew nothing.
+- A bar line written in one staff is the system's, drawn on every staff and
+  spaced as the widest, as LilyPond draws it: a final `|.` under chord names
+  ran off the edge.
+
 ### Changed
 
 - The demo at eui-data.solisoft.net runs on the server's own `soli`

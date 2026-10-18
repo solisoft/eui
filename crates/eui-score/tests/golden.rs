@@ -49,6 +49,16 @@ fn compare(what: &str, ours: &[Path], theirs: &Value, out: &mut Vec<String>) {
     }
 }
 
+/// Where this engraver and the Soli one part, LilyPond siding with this one.
+/// Three sing two voices under `\relative`, and LilyPond reads a voice's
+/// first note from the last pitch of the voice before it
+/// (`music_list_to_relative`), where the Soli engraver read it from the
+/// pitch before `<<`; `tests/lilypond.rs` pins the pitches LilyPond gives.
+/// In the fourth a `\bar "|."` is written in one staff of two, and a bar
+/// line is the system's in LilyPond, drawn on both, where the Soli engraver
+/// drew it on the staff that wrote it.
+const PARTED: [&str; 4] = ["lyrics_choir", "piano_voices", "voices", "voices_spacers"];
+
 #[test]
 fn the_corpus_draws_as_the_soli_engraver_drew_it() {
     let mut failures = Vec::new();
@@ -56,8 +66,12 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
     names.retain(|n| n.ends_with(".json") && n != "refusals.json");
     names.sort();
     assert!(names.len() >= 19, "the golden files are missing");
+    assert!(PARTED.iter().all(|p| names.iter().any(|n| n == &format!("{p}.json"))), "a parted piece is missing");
     for file in names {
         let name = file.trim_end_matches(".json");
+        if PARTED.contains(&name) {
+            continue;
+        }
         let golden: Value = serde_json::from_str(&fs::read_to_string(dir("golden").join(&file)).unwrap_or_default()).unwrap_or(Value::Null);
         let src = fs::read_to_string(dir("corpus").join(format!("{name}.ly"))).unwrap_or_default();
 
@@ -137,6 +151,16 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
     assert!(failures.is_empty(), "{} differences:\n{}", failures.len(), failures.join("\n"));
 }
 
+/// What this engraver reads and the Soli one refuses: the LilyPond protocol
+/// 11 adds (03 §1.4). `tests/lilypond.rs` holds what each draws.
+const BEYOND: [&str; 5] = ["{ \\clef tenor c'4 }", "{ c'1 \\repeat unfold 2 { c'4 } }", "{ << { c'4 } >> }", "{ << { c4 } \\\\ { \\clef bass d4 } >> }", "{ c'4 s4 }"];
+
+/// What both refuse, this one saying more of why.
+const REWORDED: [(&str, &str); 2] = [
+    ("{ c'4 \\new Voice }", "score: \\new Voice wants its music (at character 6)"),
+    ("\\new Foo { c'4 }", "score: \\new Foo is not drawn: a Staff, a ChordNames, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is (at character 0)"),
+];
+
 #[test]
 fn what_the_soli_engraver_refuses_this_refuses_in_the_same_words() {
     let all: Value = serde_json::from_str(&fs::read_to_string(dir("golden").join("refusals.json")).unwrap_or_default()).unwrap_or(Value::Null);
@@ -145,7 +169,13 @@ fn what_the_soli_engraver_refuses_this_refuses_in_the_same_words() {
     let mut failures = Vec::new();
     for case in cases {
         let src = case["src"].as_str().unwrap_or_default();
-        let want = case["error"].as_str().unwrap_or_default();
+        let mut want = case["error"].as_str().unwrap_or_default();
+        if BEYOND.contains(&src) {
+            want = "ACCEPTED";
+        }
+        if let Some((_, now)) = REWORDED.iter().find(|(s, _)| *s == src) {
+            want = now;
+        }
         match engrave(src, 900.0 / 8.0, &Layout::default()) {
             Ok(_) if want == "ACCEPTED" => {}
             Ok(_) => failures.push(format!("{src:?}: accepted, the Soli engraver said {want:?}")),

@@ -89,6 +89,26 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     // The ends of a staff group's bracket.
     ("bracketTop", '\u{E003}', &[]),
     ("bracketBottom", '\u{E004}', &[]),
+    // Protocol 11's: a percussion staff's clef and a tablature's, the
+    // ornaments, an arpeggio's wiggle, segno and coda, the slash of an
+    // acciaccatura, a drum's heads and the hi-hat's open and closed signs.
+    ("unpitchedPercussionClef1", '\u{E069}', &[]),
+    ("6stringTabClef", '\u{E06D}', &[]),
+    ("ornamentTrill", '\u{E566}', &[]),
+    ("ornamentShortTrill", '\u{E56C}', &[]),
+    ("ornamentMordent", '\u{E56D}', &[]),
+    ("ornamentTurn", '\u{E567}', &[]),
+    ("wiggleArpeggiatoUp", '\u{EAA9}', &[]),
+    ("segno", '\u{E047}', &[]),
+    ("coda", '\u{E048}', &[]),
+    ("graceNoteSlashStemUp", '\u{E564}', &[]),
+    ("graceNoteSlashStemDown", '\u{E565}', &[]),
+    ("noteheadXWhole", '\u{E0A7}', &[]),
+    ("noteheadXHalf", '\u{E0A8}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadXBlack", '\u{E0A9}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadCircleX", '\u{E0B3}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("brassMuteOpen", '\u{E5E7}', &[]),
+    ("brassMuteClosed", '\u{E5E5}', &[]),
 ];
 
 /// The same glyphs in a face that names them (Emmentaler): the SMuFL name,
@@ -151,6 +171,23 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("fermataBelow", "scripts.dfermata", 0.0),
     ("bracketTop", "brackettips.up", 0.0),
     ("bracketBottom", "brackettips.down", 0.0),
+    ("unpitchedPercussionClef1", "clefs.percussion", 0.0),
+    ("6stringTabClef", "clefs.tab", 0.0),
+    ("ornamentTrill", "scripts.trill", 0.0),
+    ("ornamentShortTrill", "scripts.prall", 0.0),
+    ("ornamentMordent", "scripts.mordent", 0.0),
+    ("ornamentTurn", "scripts.turn", 0.0),
+    ("wiggleArpeggiatoUp", "scripts.arpeggio", 0.0),
+    ("segno", "scripts.segno", 0.0),
+    ("coda", "scripts.coda", 0.0),
+    ("graceNoteSlashStemUp", "flags.ugrace", 0.0),
+    ("graceNoteSlashStemDown", "flags.dgrace", 0.0),
+    ("noteheadXWhole", "noteheads.s0cross", 0.0),
+    ("noteheadXHalf", "noteheads.s1cross", 0.0),
+    ("noteheadXBlack", "noteheads.s2cross", 0.0),
+    ("noteheadCircleX", "noteheads.s2xcircle", 0.0),
+    ("brassMuteOpen", "scripts.open", 0.0),
+    ("brassMuteClosed", "scripts.stopped", 0.0),
 ];
 
 /// Where a named face's flag meets its stem: its origin is a little in from
@@ -322,7 +359,7 @@ pub(crate) fn run(path: &str, licence: Option<&str>, braces: Option<&str>) -> Re
 
 /// The characters a score's titles and tempo marks may use: printable
 /// ASCII, the letters French needs, and the typographer's quotes and dashes.
-const LETTERS_EXTRA: &str = "àâäçéèêëîïôöùûüÿœæÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŒÆ«»’‘“”–—…°";
+const LETTERS_EXTRA: &str = "àâäçéèêëîïôöùûüÿœæÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŒÆ«»’‘“”–—…°øØ△";
 
 /// Every character the regular and the bold faces carry: printable ASCII
 /// and the accented letters and punctuation of a French title.
@@ -399,8 +436,9 @@ fn letter_rows(path: &str, chars: &mut dyn Iterator<Item = char>) -> Result<Vec<
 
 /// `cargo run -p xtask -- letters <regular.otf> <bold.otf> <italic.otf> [licence]`:
 /// the letters `score()` sets titles and tempo marks in, written as Soli —
-/// `letter_glyph_table()`, a regular and a bold face keyed by character,
-/// and the italic's digits, which number a tuplet.
+/// `letter_glyph_table()`, a regular, a bold and an italic face keyed by
+/// character: the italic numbers a tuplet, and since protocol 11 sets
+/// `\markup \italic`, an ottava's "8va" and a clef's 8.
 pub(crate) fn letters(regular: &str, bold: &str, italic: &str, licence: Option<&str>) -> Result<String, String> {
     let mut s = String::new();
     let _ = writeln!(s, "# Letter outlines for the text `score()` prints: titles, composers, tempo");
@@ -433,7 +471,7 @@ pub(crate) fn letters(regular: &str, bold: &str, italic: &str, licence: Option<&
     let _ = writeln!(s, "{}", letter_rows(bold, &mut text_chars())?.join(",\n"));
     let _ = writeln!(s, "    }},");
     let _ = writeln!(s, "    \"italic\": {{");
-    let _ = writeln!(s, "{}", letter_rows(italic, &mut "0123456789".chars())?.join(",\n"));
+    let _ = writeln!(s, "{}", letter_rows(italic, &mut text_chars())?.join(",\n"));
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "  }}");
     let _ = writeln!(s, "end");

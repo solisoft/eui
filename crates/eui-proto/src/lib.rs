@@ -106,7 +106,15 @@ pub use writer::Writer;
 /// still spoken -- a manifest says the range it serves, a `Welcome` names
 /// the lower of the two ends, and an application that asked for nothing new
 /// goes on working with the clients it already had.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
+// 11 is LilyPond as it is written: a `score`'s source may use what the
+// engraver reads beyond the catalogue's Soli one (03 §1.4) — variables and
+// `\new Voice`, `\lyricsto`, `\partial`, grace notes, the other clefs,
+// `\fixed`, `\transpose`, `\language`, fingerings, `\markup`, `\mark`,
+// `\ottava`, ornaments, tremolos, `\repeat unfold` and `percent`, chord
+// names, drums and a tablature. Nothing on the wire changed: a server asks
+// `eui_score::protocol` what a source needs, and sends a session below it
+// the paths, as it sends a session below 9 — nothing is refused.
 // 10 is music the client edits: a `score` carrying `edit` moves its
 // selected note's pitch itself, under a drag or the arrows (03 §1.4), and
 // reports what changed once it settles, in `score_edit` (06 §1.5). A

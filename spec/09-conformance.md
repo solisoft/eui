@@ -813,8 +813,17 @@ one rather than to a second description:
 the Soli engraver's to the hundredth of a pixel — the screen's bands too, a
 staff each in a system of several, their tops and heights to the pixel —
 and its MIDI file and its
-PDF to be the same bytes; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
-requires its refusals word for word, character position included. Two
+PDF to be the same bytes — but for four pieces where it follows LilyPond
+(`PARTED`): `voices.ly`, `piano_voices.ly` and `voices_spacers.ly` sing two
+voices under `\relative`, which LilyPond reads each from the last pitch of
+the one before it and the Soli engraver read from the pitch before `<<`
+(`under_relative_a_voice_starts_from_the_last_pitch_of_the_one_before`,
+`crates/eui-score/tests/lilypond.rs`), and `lyrics_choir.ly` writes its
+final bar line in one staff of two, which LilyPond draws across the system
+and the Soli engraver drew on that staff alone; `what_the_soli_engraver_refuses_this_refuses_in_the_same_words`
+requires its refusals word for word, character position included, but
+for the five protocol 11 reads (`BEYOND`) and two it refuses in other
+words (`REWORDED`). Two
 voices are among the pieces (`voices.ly`, `voices_spacers.ly`,
 `piano_voices.ly`, and `voices_crossed.ly`: two eighths of the second voice
 a spacer apart, not beamed, and the voices crossing, the first a head to
@@ -1078,6 +1087,39 @@ version 7) and a margin.
 - **What cannot be edited is not.** A source using `\relative`, a refused
   source, a rest and a node without `edit` report the press and the keys as
   in protocol 9 and change nothing (`a_score_it_cannot_edit_is_left_alone`).
+- **What protocol 11 reads is LilyPond's** (03 §1.4), held to LilyPond
+  2.25's own engraving of the same sources in `crates/eui-score/tests/lilypond.rs`:
+  every piece of `tests/lilypond/` — variables and voices, a pickup, repeats
+  written out, clefs and their keys, marks, grace notes, chord names, drums,
+  a tablature — engraves on a screen and on A4 and plays
+  (`every_piece_engraves_plays_and_needs_protocol_11`); a voice under
+  `\relative` starts from the last pitch of the one before it
+  (`under_relative_a_voice_starts_from_the_last_pitch_of_the_one_before`); a
+  `\global` and two `\new Voice` share a staff, the lyrics sung to the one
+  named (`variables_a_global_two_voices_and_lyrics_sung_to_one_by_name`); a
+  pickup is bar 0 in English names, `\fixed`, `\transpose` and `q` give
+  LilyPond's pitches (`a_pickup_in_english_names_fixed_and_transposed_with_q`);
+  `\repeat unfold` numbers its copies, `percent` draws the sign, a cadenza
+  beams nothing (`repeats_written_out_percent_bars_and_a_cadenza`); the
+  clefs' middle lines (`clefs_put_the_middle_line_where_lilypond_does`) and
+  a tenor clef's key (`key_signatures_under_a_tenor_clef_start_low`); grace
+  notes take no time, no number and sound first
+  (`grace_notes_take_no_time_and_no_number`); chord names are LilyPond's
+  (`chord_names_as_lilypond_names_them`); drums sit in LilyPond's places
+  and play on channel 10
+  (`drums_sit_where_lilypond_puts_them_and_play_on_the_tenth_channel`); a
+  tablature's frets are LilyPond's
+  (`a_tablature_puts_each_note_on_the_highest_string_that_reaches_it`).
+- **A source says which client can engrave it.** `eui_score::protocol` is 9
+  for every piece of the catalogue's corpus but the three it reads as
+  LilyPond does (`what_the_soli_engraver_reads_needs_protocol_9`), and 11
+  for each of `tests/lilypond/`; a server sends a source needing 11 to an
+  older session as paths (lang `src/serve/eui/tree.rs`,
+  `a_score_using_protocol_11_is_sent_as_paths_before_11`).
+- **What an edit cannot rewrite it leaves.** A source under `\transpose`
+  or another `\language`, a `q`, a chord name, a drum; a note under
+  `\ottava` read an octave off; a variable's note rewritten where it is
+  defined (`an_edit_leaves_what_it_cannot_rewrite`).
 - **A new `src` from the server wins**, and edits it overtook are reported
   at once (`the_servers_source_replaces_unreported_edits`).
 - **A server applies what it can.** lang applies a `score_edit` entry by

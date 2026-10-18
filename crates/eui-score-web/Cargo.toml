@@ -14,7 +14,7 @@ name = "eui_score_web"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-eui-score = { path = "../eui-score", version = "0.10.0" }
+eui-score = { path = "../eui-score", version = "0.11.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

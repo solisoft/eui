@@ -446,7 +446,8 @@ function, so lang can call it instead of interpreting it: the same
 Emmentaler outlines and TeX Gyre Schola letters (`data/`, read from the
 same JSON the Soli tables were written from), the same spacing, breaking,
 stem, beam, slur, tuplet, dynamic and page rules, the same MIDI and PDF
-writers. 6 482 lines; `serde_json` its one dependency, for the font data.
+writers. 9 959 lines since protocol 11 (6 482 before it); `serde_json` its
+one dependency, for the font data.
 
 - Held to the Soli engraver, not to a description of it: the golden files
   (`tests/golden/`, 6.6 MB) are what the Soli engraver drew for the 26
@@ -457,7 +458,9 @@ writers. 6 482 lines; `serde_json` its one dependency, for the font data.
   every band's top and height, to agree to the hundredth of a pixel and
   the MIDI and the PDF to the byte;
   `what_the_soli_engraver_refuses_this_refuses_in_the_same_words` holds its
-  44 refusals to theirs, character position included. Both pass. The last
+  44 refusals to theirs, character position included. Both pass — but for
+  four pieces where it follows LilyPond instead and five sources it now
+  reads, named in the tests and in the protocol 11 entry below. The last
   difference to go was rounding: Soli's `round(2)` rounds the shortest
   decimal that reads back as the number, so 22.884999… is 22.88 there and
   22.89 under `(v * 100).round()`, and two PDFs differed by that digit.
@@ -2691,6 +2694,43 @@ light and dark themes; `www/tests/scores_spec.sl` (5) holds the files it
 fetches and the build it stamps. It imports the element from an inline
 module, so a reader who arrives by a link — the site swaps `<body>` —
 gets the scores drawn too.
+
+**And LilyPond as it is written** (2026-10-18, protocol 11). The engraver
+read the Soli engraver's subset and refused the rest, so a file found on
+Mutopia — variables, a `\global`, `\new Voice`, `\lyricsto` — was refused
+at its first line. It now reads, each construct set beside LilyPond 2.25's
+own engraving of the same source while it was written (LilyPond from PyPI,
+its fonts the ones the engraver's data was cut from): variables and
+`\paper`/`\layout` blocks, `\language` (six), voices side by side with a
+`\global` merged into the first, lyrics sung to a voice by name,
+`\partial`, cadenzas, spacers anywhere, `\fixed`, `\transpose`, `q`,
+`\repeat unfold` and `percent`, grace notes (four kinds), twelve clefs and
+their octave figures with keys in LilyPond's places
+(`key-signature-interface::alteration-positions`), fingerings, `\markup`,
+`\mark`, `\ottava`, phrasing slurs, four ornaments, arpeggios, glissandi,
+tremolos, and chord names, drums and a tablature as staves of their own.
+Two things it did not do were wrong and are fixed with it: under
+`\relative` a second voice was read from the pitch before `<<`, where
+LilyPond reads it from the first voice's last; a system of several
+staves kept room for the metre on its first bar and drew none; and a bar
+line written in one staff was drawn on that staff alone, and spaced as the
+first staff's, where LilyPond's is the system's — a lead sheet's `|.` ran
+off the edge under its chord names. Four golden pieces now part from the
+Soli engraver for the first and the last (`PARTED`).
+`eui_score::protocol(src)` says which client a source needs — 9 for every
+corpus piece but those three, 11 for the rest — and PROTOCOL_VERSION is 11.
+The glyph data gained 17 Emmentaler glyphs through `xtask smufl` (smufl.json
+71 848 → 88 446 bytes) and the italic face its letters through `xtask
+letters` (10 → 142 characters; letters.json 127 134 → 192 346 bytes), every
+existing outline byte for byte as it was. `tests/lilypond.rs` (13 tests)
+holds the pitches, bars, chord names, drum places and keys, frets and
+protocol levels, and nine pieces that must engrave and play; with them the
+engraver, the protocol, the web engraver and the client pass 614 tests.
+`<eui-score>` grew with it: **802 KB, 236 KB with brotli** (built with
+`wasm-opt -Oz` and the deploy's flags, measured 2026-10-18), against 593 and
+175. Not done: three voices on a staff, several verses of lyrics, a voice
+switching staves, `\override`, and the catalogue's Soli engraver, which
+still reads only its own subset and the old voice pitches.
 
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the

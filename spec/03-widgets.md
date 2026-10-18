@@ -554,6 +554,63 @@ so a server that falls back to paths for an older client (§4) and a client
 that engraves draw one picture. `eui-score`'s golden tests hold the two to a
 hundredth of a pixel.
 
+**What the source may say** (protocol 11). Beyond the catalogue's subset
+(§4), a client of protocol 11 engraves LilyPond as people write it, each
+construct as LilyPond 2.25 draws it:
+
+- *A file's shape*: variables (`melody = \relative c'' { … }`, then
+  `\melody`), `\paper`, `\layout` and `\midi` blocks, Scheme (`#(…)`),
+  `\language` (nederlands, english, deutsch, italiano, français, español)
+  and `\include` of a language's file, `%{ … %}`, header fields a title
+  page does not print, nested `{ }`.
+- *Voices*: `<< … >>` of one or two voices written side by side —
+  `\new Voice = "name" { \voiceOne … }`, `\voiceTwo` — and of parts with no
+  notes, a `\global` of the staff's settings and spacers, set in the first
+  voice where they fall; a staff of its own for a voice with none; under
+  `\relative` each part from the last pitch of the part before it and what
+  follows from the last's, as LilyPond reads them. `\new Lyrics \lyricsto
+  "name" { … }`, `\lyricmode`, `\skip` and `\set stanza` in lyrics, and
+  lyrics sung to a second voice.
+- *Pitches*: `\relative` anywhere and with no pitch (from f), `\fixed`,
+  `\transpose` (keys too), `q`.
+- *Time*: `\partial` (bar 0, beamed in its metre), `\cadenzaOn`/`Off` (no
+  beams but the written ones), spacers `s` anywhere and `s1*16` across bar
+  lines, `\bar ""`, `\repeat unfold` (with `\alternative`) and `\repeat
+  percent` of one bar, drawn as the percent sign.
+- *On the staff*: the clefs `treble`, `bass`, `alto`, `tenor`, `soprano`,
+  `mezzosoprano`, `baritone`, `varbaritone`, `subbass`, `french`,
+  `percussion`, `tab` and their `_8`, `^8`, `_15`, `^15`, each key
+  signature in LilyPond's places for its clef; grace notes (`\grace`,
+  `\acciaccatura`, `\appoggiatura`, `\slashedGrace`), small, before their
+  note, beamed, slashed and slurred as LilyPond draws them, taking no time
+  on the page and at most half their note's in MIDI; fingerings (`-1`,
+  `<c-1 e-3>`, the lower half of a chord's under it); `\markup` with
+  `\bold`, `\italic`, `\musicglyph` and the commands that only size or
+  move words; `\mark \default`, `\mark "A"`, `\mark 5`, `\segnoMark`,
+  `\codaMark`; `\ottava` with its bracket; phrasing slurs `\( \)`;
+  `\trill`, `\prall`, `\mordent`, `\turn`; `\arpeggio`; `\glissando`;
+  tremolo strokes `c4:16`, played as the repetition.
+- *Other staves*: `\new ChordNames` and `\chords` (`\chordmode`'s `m`,
+  `maj`, `dim`, `aug`, `sus`, steps to 13, `.5-`, `^7`, `/e`, named as
+  LilyPond's default names them: C, Cm, C⁷, C△, C°, Cø, C⁷ ♭⁹, C/E, N.C.
+  for a rest), `\new DrumStaff` and `\drums` (`\drummode`, LilyPond's
+  `drums-style`: heads, places, the open and closed hi-hat, MIDI channel
+  10), `\new TabStaff` (standard tuning, each note on the highest string
+  that reaches it, `\5` naming one; frets, no rhythm).
+
+Every construct outside this is still refused with its position. A server
+knows which source needs which client: `eui_score::protocol(src)` answers 9
+for the catalogue's subset and 11 for one using any of the above, and a
+server MUST send a session whose protocol is below that the paths, as it
+does a session below 9 (§4) — so an older client draws the same picture
+and refuses nothing. The engraver's golden tests hold it to the Soli one
+on the catalogue's corpus but for four pieces where LilyPond sides with it:
+three that sing voices under `\relative`, which the Soli engraver read from
+the pitch before `<<`, and one whose final bar line is written in one staff
+of two, which LilyPond draws across the system; and
+`eui-score`'s `tests/lilypond.rs` holds what is above to LilyPond's own
+engraving of the same sources.
+
 **A refusal draws nothing.** A source the engraver cannot set is refused with
 the character it stopped at; the node paints its own background and the
 client reports the refusal in `score_info` ([`06-events.md`](06-events.md)
@@ -634,7 +691,14 @@ with middle C `c'` — and every other
 byte stays as the server sent it. A pitch in `\relative` or `\fixed`
 depends on the ones before it, so a client MUST NOT edit a source that uses
 either, nor one it has refused: there `edit` is inert, and the gestures and
-keys are reported as though it were absent.
+keys are reported as though it were absent. The same holds for a source
+under `\transpose`, whose pitches are not the ones written, and for one
+naming its notes in another `\language`, which an edit would spell in
+LilyPond's own; and an item that writes no pitch — a `q`, a chord of
+`\chordmode`, a drum — does not move. A note in a variable is rewritten
+where the variable defines it, which moves it everywhere it is used; a note
+under `\ottava` is placed on the staff an octave off, as the engraver draws
+it (protocol 11).
 
 **Heard**, with `voice`: each new pitch is played as soon as it is drawn —
 a program change to `program`, then every head of the item for 450 ms at
@@ -1319,7 +1383,8 @@ outlines of a music font and a text face, with LilyPond's spacing, stem,
 beam and slur rules, on a screen or on A4 pages; a construct it cannot draw
 is refused with its position, as `tw()` refuses a class; a server that has
 the native engraver — lang's `eui_score_*` builtins over the `eui-score`
-crate — engraves with it, and draws the same paths. `score()` itself
+crate — engraves with it, and draws the same paths; with it `score()` reads
+what protocol 11 adds besides (§1.4), which the Soli engraver refuses. `score()` itself
 keeps drawing canvases, because it has to run on a server that has never
 heard of a `score` node; a view that writes one (§1.4) — the score editor
 does, for a session of protocol 9 — is sent as the source to such a
