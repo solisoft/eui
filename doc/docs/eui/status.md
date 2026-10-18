@@ -2672,9 +2672,9 @@ steps 2 and 3.
 (`assets/web/eui-score.js`) is the element that loads it: a page shows a
 LilyPond source read-only, with no session, no server and no GPU, laid out
 to the element's width, a page at a time, in the page's own text colour.
-Measured on 2026-10-18: the module is **575 KB after `wasm-opt`, 174 KB
-with brotli** (599 KB without it, 218 KB with gzip); the client it is cut
-from is 9.2 MB, 2.6 MB with brotli. That day also found `wasm-opt` failing
+Measured on 2026-10-18, as eui.solisoft.net serves it: the module is **593
+KB, 175 KB with brotli** (218 KB with gzip); the client it is cut from is
+8.8 MB, 2.6 MB with brotli. That day also found `wasm-opt` failing
 in every deploy since binaryen 108 met rustc's default features, so both
 modules had gone out unoptimised; with the features named it runs, and
 saves 4–7% raw and nothing with brotli. In headless Chromium a page holding Frère
