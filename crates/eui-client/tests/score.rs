@@ -423,8 +423,10 @@ fn head_at(d: &Driver, src: &str, item: usize) -> (f32, f32) {
     let sys = &eng.systems[0];
     let ev = eng.staves[0][sys.lines[0].bars.clone()].iter().flat_map(|b| b.items.iter()).find(|e| e.i == item).unwrap();
     let mid = ev.x + ev.head_w.unwrap_or(1.18) / 2.0;
-    let pos = ev.heads.first().map_or(4, |h| h.pos);
-    (r.x + (mid * 8.0) as f32, r.y + ((sys.top + pos as f64 / 2.0) * 8.0) as f32)
+    // An engraved head's `pos` is half spaces up from the middle line; the
+    // window's y goes down from the top line, which is 4 half spaces above it.
+    let pos = ev.heads.first().map_or(0, |h| h.pos);
+    (r.x + (mid * 8.0) as f32, r.y + ((sys.top + (4 - pos) as f64 / 2.0) * 8.0) as f32)
 }
 
 /// Every event that went out, by kind, in order.
@@ -617,5 +619,76 @@ fn a_drag_follows_the_hand_not_the_nearest_staff() {
     for (k, (got, name)) in seen.iter().zip(names).enumerate() {
         assert!(got.starts_with(&format!("<< \\new Staff {{ c''4 {name}4 e''4 }}")), "step {}: {got}", k + 1);
     }
+    d.input(Input::PointerUp(0));
+}
+
+#[test]
+fn an_edit_does_not_move_the_score_under_the_hand() {
+    // Above the clef, a note is the system's highest ink, and the engraver
+    // places the system by it: B5 to C6 moved the whole score down half a
+    // space, and C6 back to B5 up again. The client keeps the edited system
+    // where it was drawn: the same point of the window is on the same line
+    // after an edit that would have raised it.
+    let src = "{ c'''4 a'4 }";
+    let mut d = edit_driver(src, 0, true);
+    let (x1, y1) = head_at(&d, src, 1);
+    let line_at = |d: &mut Driver| -> Value {
+        d.input(Input::PointerMove(x1, y1));
+        let down = sent(&d.input(Input::PointerDown(0)), EventKind::ScorePick);
+        d.input(Input::PointerUp(0));
+        let Value::List(p) = &down[0] else { panic!("a pick: {down:?}") };
+        p[5].clone()
+    };
+    let before = line_at(&mut d);
+    focus_column(&mut d);
+    key(&mut d, "ArrowDown", 0);
+    assert_eq!(src_now(&d), "{ b''4 a'4 }");
+    painted(&mut d);
+    assert_eq!(line_at(&mut d), before, "the same point is on the same line or space");
+}
+
+#[test]
+fn an_arrow_on_a_chord_moves_the_head_pressed_or_the_top_one() {
+    let src = "{ c''4 <c'' e'' g''>4 }";
+    let mut d = edit_driver(src, 1, true);
+    focus_column(&mut d);
+    // No head pressed yet: the top one, the tune.
+    key(&mut d, "ArrowUp", 0);
+    assert_eq!(src_now(&d), "{ c''4 <c'' e'' a''>4 }");
+    // A click on the chord's middle head, e'' (16), chooses it and moves
+    // nothing.
+    let now = src_now(&d);
+    let r = score_rect(&d);
+    let eng = eui_score::engrave(&now, f64::from(W) / 8.0, &eui_score::Layout::default()).unwrap();
+    let sys = &eng.systems[0];
+    let ev = eng.staves[0][sys.lines[0].bars.clone()].iter().flat_map(|b| b.items.iter()).find(|e| e.i == 1).unwrap();
+    let e_head = ev.heads.iter().find(|h| h.d == 16).unwrap();
+    let x = r.x + ((ev.x + ev.head_w.unwrap_or(1.18) / 2.0) * 8.0) as f32;
+    d.input(Input::PointerMove(x, r.y + ((sys.top + (4 - e_head.pos) as f64 / 2.0) * 8.0) as f32));
+    d.input(Input::PointerDown(0));
+    d.input(Input::PointerUp(0));
+    assert_eq!(src_now(&d), "{ c''4 <c'' e'' a''>4 }");
+    key(&mut d, "ArrowUp", 0);
+    assert_eq!(src_now(&d), "{ c''4 <c'' f'' a''>4 }", "the head pressed, and it alone");
+    key(&mut d, "ArrowUp", 0);
+    assert_eq!(src_now(&d), "{ c''4 <c'' g'' a''>4 }", "and the arrows stay on it");
+}
+
+#[test]
+fn a_drag_with_shift_held_moves_by_semitones() {
+    let src = "{ c''4 e''4 }";
+    let mut d = edit_driver(src, 1, true);
+    let (x, y) = head_at(&d, src, 1);
+    d.input(Input::PointerMove(x, y));
+    d.input(Input::PointerDown(0));
+    d.input(Input::Key { key: "Shift".into(), modifiers: 1, down: true });
+    // Two half spaces up: two semitones with Shift — F sharp, not G.
+    d.input(Input::PointerMove(x, y - 8.0));
+    painted(&mut d);
+    assert_eq!(src_now(&d), "{ c''4 fis''4 }");
+    // Shift let go with the hand still: the same travel in the key.
+    d.input(Input::Key { key: "Shift".into(), modifiers: 0, down: false });
+    painted(&mut d);
+    assert_eq!(src_now(&d), "{ c''4 g''4 }");
     d.input(Input::PointerUp(0));
 }

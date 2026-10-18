@@ -1444,6 +1444,13 @@ pub struct Driver {
     score_edits: HashMap<(u16, u32), ScoreEdits>,
     /// When those settle (06 §2: `edit_after` after the last edit).
     score_edit_due: Option<Instant>,
+    /// The head each score's arrows move, by owner and node id: the item,
+    /// and the pitch of the head last pressed or moved in it (03 §1.4).
+    score_heads: HashMap<(u16, u32), (usize, i64)>,
+    /// The modifier keys held, as the key events left them (06 §1 bits):
+    /// a pointer event carries none, and a drag with Shift moves by
+    /// semitones.
+    held: u32,
     /// Notes an edited score played on an `audio` node, by its id, until
     /// the server plays one of its own there (03 §1.4 `voice`).
     local_notes: HashMap<u32, LocalNotes>,
@@ -1769,6 +1776,8 @@ impl Driver {
             score_infos: HashMap::new(),
             score_edits: HashMap::new(),
             score_edit_due: None,
+            score_heads: HashMap::new(),
+            held: 0,
             local_notes: HashMap::new(),
             local_seq: 0,
             sizes: HashMap::new(),
@@ -5550,6 +5559,7 @@ impl Driver {
         // 03 §1.4, protocol 10: a press on the selected note of a score that
         // edits itself is that score's, and nothing about it is reported.
         if button == 0 {
+            self.score_remember_press(ix, x, y);
             if let Some(taken) = self.score_press(ix, x, y) {
                 let mut out = dismissed;
                 out.extend(taken);
@@ -7446,6 +7456,22 @@ impl Driver {
     }
 
     fn key(&mut self, key: &str, modifiers: u32, down: bool) -> Vec<Frame> {
+        let bit = match key {
+            "Shift" => 1,
+            "Control" => 2,
+            "Alt" => 4,
+            "Meta" | "Super" => 8,
+            _ => 0,
+        };
+        self.held = if down { modifiers | bit } else { modifiers & !bit };
+        // Shift pressed or let go in the middle of a score drag changes what
+        // the hand's travel means: the note goes again from where it was.
+        if bit == 1 {
+            if let Some(drag) = self.pointer.score_drag.as_mut() {
+                drag.at = Some((self.pointer.x, self.pointer.y));
+                self.redraw = true;
+            }
+        }
         // Navigation keys belong to the client and are never reported —
         // except that `Tab` and `Shift+Tab` belong to a focused node that
         // declared `typing` (03 §3.1). A terminal means the tab character by
@@ -9401,9 +9427,40 @@ impl Driver {
         // pressed is the one a drag will carry.
         let pressed = eui_score::edit::at_position(it.clef, it.fifths, p.pos).0;
         let head = it.heads.iter().enumerate().min_by_key(|(_, h)| (h.0 - pressed).abs()).map_or(0, |(k, _)| k);
+        if let (Some(n), Some(&(d, _))) = (self.session.node(s), it.heads.get(head)) {
+            self.score_heads.insert((n.owner, n.id), (it.item, d));
+        }
         self.pointer.score_drag = Some(ScoreDrag { node: s, at: None, y, half, item: it, head });
         let takes_keys = self.ancestor_keyed(s);
         Some(self.set_focus(takes_keys, false))
+    }
+
+    /// Which head of a chord a press on a score chose, kept for the arrows
+    /// (03 §1.4) — a press the server answers by selecting the note too, or
+    /// the arrows would move the top head of a chord the hand pointed into.
+    fn score_remember_press(&mut self, ix: NodeIx, x: f32, y: f32) {
+        let Some(s) = self.ancestor_where(ix, |k| matches!(k, NodeKind::Score)) else {
+            return;
+        };
+        let Some((p, _)) = self.score_pick_at(s, x, y) else {
+            return;
+        };
+        let Ok(item) = usize::try_from(p.near) else {
+            return;
+        };
+        if p.gap > 2.0 {
+            return;
+        }
+        let Some((_, it)) = self.score_note(s, item) else {
+            return;
+        };
+        let pressed = eui_score::edit::at_position(it.clef, it.fifths, p.pos).0;
+        let Some(&(d, _)) = it.heads.get(eui_score::edit::nearest_head(&it, pressed)) else {
+            return;
+        };
+        if let Some(n) = self.session.node(s) {
+            self.score_heads.insert((n.owner, n.id), (item, d));
+        }
     }
 
     /// The hand's last place under a score drag, applied once a frame: the
@@ -9419,11 +9476,26 @@ impl Driver {
         let Some(&(from, _)) = drag.item.heads.get(drag.head) else {
             return;
         };
-        // Half spaces travelled, up positive: the hand alone decides.
+        // Half spaces travelled, up positive: the hand alone decides — a
+        // step of the key each, or with Shift held a semitone each.
         let by = ((drag.y - y) / drag.half).round() as i64;
-        let Some(heads) = eui_score::edit::dragged(&drag.item, drag.head, from, by) else {
+        let Some(&start) = drag.item.heads.get(drag.head) else {
             return;
         };
+        // The held head alone, moved: its new pitch is the one the arrows
+        // go on from.
+        let alone = eui_score::edit::Item { heads: vec![start], spans: Vec::new(), ..drag.item.clone() };
+        let (moved, to) = if self.held & 1 != 0 {
+            (eui_score::edit::dragged_chromatic(&drag.item, drag.head, start, by), eui_score::edit::dragged_chromatic(&alone, 0, start, by))
+        } else {
+            (eui_score::edit::dragged(&drag.item, drag.head, from, by), eui_score::edit::dragged(&alone, 0, from, by))
+        };
+        let (Some(heads), Some(&(to, _))) = (moved, to.as_deref().and_then(|v| v.first())) else {
+            return;
+        };
+        if let Some(n) = self.session.node(drag.node) {
+            self.score_heads.insert((n.owner, n.id), (drag.item.item, to));
+        }
         let Some((src, now)) = self.score_note(drag.node, drag.item.item) else {
             return;
         };
@@ -9451,7 +9523,18 @@ impl Driver {
             } else {
                 Move::Step(by)
             };
-            if let Some(heads) = eui_score::edit::moved(&it, how) {
+            // One head: the one last pressed or moved in this chord, else
+            // the top one, the tune.
+            let key = self.session.node(s).map(|n| (n.owner, n.id));
+            let head = match key.and_then(|k| self.score_heads.get(&k)) {
+                Some(&(item, d)) if item == it.item => eui_score::edit::nearest_head(&it, d),
+                _ => it.heads.len().saturating_sub(1),
+            };
+            let one = eui_score::edit::Item { heads: it.heads.get(head).copied().into_iter().collect(), spans: Vec::new(), ..it.clone() };
+            if let (Some(heads), Some(&(to, _))) = (eui_score::edit::moved_head(&it, head, how), eui_score::edit::moved(&one, how).as_deref().and_then(|v| v.first())) {
+                if let Some(k) = key {
+                    self.score_heads.insert(k, (it.item, to));
+                }
                 self.score_put(s, &it, &src, heads);
             }
         }
@@ -9472,6 +9555,7 @@ impl Driver {
             return;
         };
         let new = eui_score::edit::rewrite(src, it, &heads);
+        self.score_keep_place(s, it.item, &new);
         let entry = self.score_edits.entry(key).or_insert_with(|| ScoreEdits { base: std::collections::BTreeMap::new(), src: String::new() });
         entry.base.entry(it.item).or_insert_with(|| it.heads.clone());
         entry.src.clone_from(&new);
@@ -9487,6 +9571,30 @@ impl Driver {
         self.next_due = Some(self.next_due.map_or(due, |d| d.min(due)));
         self.score_blip(s, &heads);
         trace(|| format!("score: item {} now {heads:?}, {} reported in {after:?}", it.item, self.score_edits.len()));
+    }
+
+    /// The edited system stays where it is drawn (03 §1.4): when the new
+    /// source would put it higher — less ink above it than before — it is
+    /// drawn that much lower; when the ink needs more room, it goes down.
+    /// The score never jumps up under the hand.
+    fn score_keep_place(&mut self, s: NodeIx, item: usize, new: &str) {
+        let Some((_, _, width)) = self.score_box(s) else {
+            return;
+        };
+        let Some(props) = self.session.score_props(s) else {
+            return;
+        };
+        if props.a4 {
+            return;
+        }
+        let shown = self.scores.engraving(&props, width);
+        let next = eui_tree::ScoreProps { src: std::borrow::Cow::Borrowed(new), staff_space: props.staff_space, a4: props.a4, page_height: props.page_height, page_index: props.page_index };
+        let raw = self.scores.engraving(&next, width);
+        if let (Some(was), Some(now)) = (crate::score::item_top(&shown, item), crate::score::item_top(&raw, item)) {
+            if was > now {
+                self.scores.lower(new, was - now);
+            }
+        }
     }
 
     /// Sound an edited note on the `audio` node `voice` names (03 §1.4):

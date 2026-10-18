@@ -1058,9 +1058,16 @@ version 7) and a margin.
   middle of two staves, the note keeps going down a line or space at a time
   (`a_drag_follows_the_hand_not_the_nearest_staff`).
 - **The arrows move it in the key.** ↑ from E in G major is F sharp, Shift+↑
-  from A in F major is B flat, Ctrl+↑ is the octave, a chord moves all its
-  heads or none at the edge of the reach, and none of these keys is
-  reported (`arrows_move_the_selected_note_in_the_key`).
+  from A in F major is B flat, Ctrl+↑ is the octave, a head at the edge of
+  the reach does not move, and none of these keys is reported
+  (`arrows_move_the_selected_note_in_the_key`). On a chord they move the
+  head last pressed, else the top one, and stay on it
+  (`an_arrow_on_a_chord_moves_the_head_pressed_or_the_top_one`).
+- **A drag with Shift moves by semitones**, and letting go of Shift with the
+  hand still goes back to steps (`a_drag_with_shift_held_moves_by_semitones`).
+- **An edit does not move the score under the hand**: an edit that would
+  raise the edited system leaves the same point of the window on the same
+  line (`an_edit_does_not_move_the_score_under_the_hand`).
 - **Edits are reported before anything else.** An edit followed by a click
   elsewhere sends `score_edit` first, then the click; blur sends it; a head
   moved and moved back sends nothing

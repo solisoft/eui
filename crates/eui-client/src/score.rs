@@ -34,6 +34,9 @@ struct Key {
     staff_space: i64,
     a4: bool,
     page_height: i64,
+    /// How far the systems were lowered, in quarter spaces: see
+    /// [`Scores::lower`].
+    lowered: i64,
 }
 
 fn quarter(v: f32) -> i64 {
@@ -41,7 +44,7 @@ fn quarter(v: f32) -> i64 {
 }
 
 /// A source laid out, and the scale it is drawn at.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Laid {
     /// The engraving, in staff spaces.
     pub eng: Engraved,
@@ -108,19 +111,43 @@ impl Engraving {
 pub struct Scores {
     kept: HashMap<Key, Arc<Engraving>>,
     order: Vec<Key>,
+    /// Sources an edit made in this client, and how many staff spaces lower
+    /// their systems are drawn than the engraver puts them (03 §1.4).
+    lowered: HashMap<[u8; 32], f64>,
+    lowered_order: Vec<[u8; 32]>,
     /// Engravings made, ever: how a test tells a redraw from an engraving.
     pub engraved: u64,
 }
 
 impl Scores {
-    /// The engraving of `p` at `width` px, made now if it is not kept.
+    /// The engraving of `p` at `width` px, made now if it is not kept —
+    /// lowered, when an edit here asked for it.
     pub fn engraving(&mut self, p: &ScoreProps<'_>, width: f32) -> Arc<Engraving> {
-        let key = Key { src: *blake3::hash(p.src.as_bytes()).as_bytes(), width: quarter(width), staff_space: quarter(p.staff_space), a4: p.a4, page_height: quarter(p.page_height) };
+        let src = *blake3::hash(p.src.as_bytes()).as_bytes();
+        let lower = if p.a4 { 0.0 } else { self.lowered.get(&src).copied().unwrap_or(0.0) };
+        let key = Key { src, width: quarter(width), staff_space: quarter(p.staff_space), a4: p.a4, page_height: quarter(p.page_height), lowered: quarter(lower as f32) };
         if let Some(e) = self.kept.get(&key) {
             return Arc::clone(e);
         }
+        let laid = if key.lowered > 0 {
+            let raw = self.engraving_at(Key { lowered: 0, ..key }, p, width);
+            raw.laid.clone().map(|l| Laid { eng: lowered(l.eng, lower), ..l })
+        } else {
+            engrave(p, width)
+        };
+        self.keep(key, laid)
+    }
+
+    fn engraving_at(&mut self, key: Key, p: &ScoreProps<'_>, width: f32) -> Arc<Engraving> {
+        if let Some(e) = self.kept.get(&key) {
+            return Arc::clone(e);
+        }
+        self.keep(key, engrave(p, width))
+    }
+
+    fn keep(&mut self, key: Key, laid: Result<Laid, String>) -> Arc<Engraving> {
         self.engraved = self.engraved.saturating_add(1);
-        let e = Arc::new(Engraving { laid: engrave(p, width), serial: self.engraved });
+        let e = Arc::new(Engraving { laid, serial: self.engraved });
         if self.order.len() >= KEEP {
             let gone = self.order.remove(0);
             self.kept.remove(&gone);
@@ -129,6 +156,52 @@ impl Scores {
         self.kept.insert(key, Arc::clone(&e));
         e
     }
+
+    /// Draw `src` with its systems `spaces` lower than the engraver puts
+    /// them. An edit changes the ink, and the engraver places the first
+    /// system by its highest ink — a B's stem up, a C's down — so the whole
+    /// score moved under the hand at every step. The client keeps the
+    /// edited system where it was instead (03 §1.4).
+    pub fn lower(&mut self, src: &str, spaces: f64) {
+        let key = *blake3::hash(src.as_bytes()).as_bytes();
+        if !self.lowered.contains_key(&key) {
+            if self.lowered_order.len() >= KEEP {
+                let gone = self.lowered_order.remove(0);
+                self.lowered.remove(&gone);
+            }
+            self.lowered_order.push(key);
+        }
+        self.lowered.insert(key, spaces);
+    }
+}
+
+/// Every system `dy` spaces lower, and the music that much taller.
+fn lowered(mut eng: Engraved, dy: f64) -> Engraved {
+    for sys in &mut eng.systems {
+        sys.top += dy;
+        sys.bottom += dy;
+        for line in &mut sys.lines {
+            line.top += dy;
+            line.bottom += dy;
+        }
+    }
+    eng.height += dy;
+    eng
+}
+
+/// The top of the system holding `item`, in staff spaces.
+pub fn item_top(e: &Engraving, item: usize) -> Option<f64> {
+    let l = e.laid.as_ref().ok()?;
+    for sys in &l.eng.systems {
+        for (n, line) in sys.lines.iter().enumerate() {
+            let staff = if sys.multi { n } else { line.staff_index.unwrap_or(0) };
+            let Some(bars) = l.eng.staves.get(staff).and_then(|b| b.get(line.bars.clone())) else { continue };
+            if bars.iter().flat_map(|b| b.items.iter()).any(|ev| ev.i == item) {
+                return Some(sys.top);
+            }
+        }
+    }
+    None
 }
 
 fn engrave(p: &ScoreProps<'_>, width: f32) -> Result<Laid, String> {

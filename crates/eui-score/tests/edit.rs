@@ -96,3 +96,24 @@ fn a_relative_source_is_not_edited() {
     assert_eq!(edit::item("\\relative c' { c4 d e }", 0), Err(NotEditable::Relative));
     assert_eq!(edit::item("{ c'4 \\nonsense }", 0), Err(NotEditable::Refused));
 }
+
+#[test]
+fn an_arrow_on_a_chord_moves_one_head() {
+    let chord = item("{ <c'' e'' g''>4 }", 0);
+    assert_eq!(edit::moved_head(&chord, 1, Move::Step(1)), Some(vec![(14, 0), (17, 0), (18, 0)]), "e'' up to f''");
+    assert_eq!(edit::moved_head(&chord, 0, Move::Step(-1)), Some(vec![(13, 0), (16, 0), (18, 0)]), "c'' down to b'");
+    // Past another head: the chord stays ascending.
+    assert_eq!(edit::moved_head(&chord, 0, Move::Octave(1)), Some(vec![(16, 0), (18, 0), (21, 0)]));
+    assert_eq!(edit::nearest_head(&chord, 17), 1);
+    assert_eq!(edit::nearest_head(&chord, 40), 2);
+}
+
+#[test]
+fn a_drag_with_shift_moves_by_semitones() {
+    let e = item("{ \\key f \\major a'4 }", 0);
+    // Up a semitone from A in F major is B flat; two, B natural; down one, A flat.
+    assert_eq!(edit::dragged_chromatic(&e, 0, (12, 0), 1), Some(vec![(13, -1)]));
+    assert_eq!(edit::dragged_chromatic(&e, 0, (12, 0), 2), Some(vec![(13, 0)]));
+    assert_eq!(edit::dragged_chromatic(&e, 0, (12, 0), -1), Some(vec![(12, -1)]));
+    assert_eq!(edit::dragged_chromatic(&e, 0, (12, 0), 0), Some(vec![(12, 0)]));
+}

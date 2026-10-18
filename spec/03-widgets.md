@@ -588,16 +588,23 @@ What moves it:
   head nearest the line or space pressed moves by as many lines and spaces
   as the hand has travelled up or down since the press, each frame, so the
   head follows the hand from where it was rather than jumping to the
-  pointer. A press anywhere else is the server's, reported as before —
+  pointer — measured from the press alone, not from the staff nearest the
+  hand, which in a full score is soon another one. With `Shift` held each
+  half space travelled is a semitone instead of a step, and pressing or
+  letting go of `Shift` mid-drag moves the head again from where it began.
+  A press anywhere else is the server's, reported as before —
   choosing another note is the application's decision. None of the three `score_pick` phases
   of a gesture the client took is sent, and neither is its `pointer_down`,
   `pointer_move` or `pointer_up`.
 - While focus is on the node — or on the ancestor a press on it focuses,
   the nearest that handles keys (§3), with the node the first editing score
-  under it — `ArrowUp` and `ArrowDown` move every head of the
-  selected item a step up or down the staff, a semitone with `Shift`, an
-  octave with `Ctrl` (`⌘` on macOS). The client consumes them: no `key_down`
-  or `key_up` reports them. Every other key is reported as before.
+  under it — `ArrowUp` and `ArrowDown` move one head of the selected item a
+  step up or down the staff, a semitone with `Shift`, an octave with `Ctrl`
+  (`⌘` on macOS): the head last pressed or moved in it — the press the
+  server answers by selecting the note counts — else the top one, the
+  tune. The arrows stay on that head as it moves. The client consumes
+  them: no `key_down` or `key_up` reports them. Every other key is reported
+  as before.
 - A rest does not move: a press on a selected rest, and an arrow, are
   reported as before.
 
@@ -613,9 +620,8 @@ there, so client and server agree on it without asking each other:
   F major is B flat), else as a natural, else sharp going up and flat going
   down (F up in C major is F sharp, G down is G flat).
 - **Within reach**: a head stays within 14 half spaces of its staff's
-  middle line and between MIDI keys 21 and 108. A move that would take any
-  head of the item past either does not happen — a chord moves all its
-  heads or none — and the item stays as it was.
+  middle line and between MIDI keys 21 and 108. A move that would take the
+  head past either does not happen, and the item stays as it was.
 - The heads of a chord stay in the source in ascending order.
 
 **How the source changes.** Only the pitch of a moved head is rewritten —
@@ -631,6 +637,14 @@ keys are reported as though it were absent.
 a program change to `program`, then every head of the item for 450 ms at
 velocity 100 — on the named node's bank, or on the client's own voices when
 that node has none or is not in the tree (§7).
+
+**Where it is drawn.** The engraver places a system by its highest ink, so
+an edit that changes the top of the ink — a note above the clef — would
+move the whole score under the hand. A client keeps the edited system where
+it was drawn instead: an engraving the edit would raise is drawn that much
+lower, and one whose ink needs more room above goes down. The score never
+jumps up during an edit; the server's next `src` that is not the client's
+own is drawn where the engraver puts it.
 
 **Until the server answers**, the edited source stands: the client draws
 its own `src`, although the tree the server holds still has the old one. A

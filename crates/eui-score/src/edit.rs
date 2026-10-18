@@ -153,6 +153,19 @@ pub fn dragged(it: &Item, head: usize, from: i64, by: i64) -> Option<Vec<(i64, i
     Some(out)
 }
 
+/// [`dragged`] by semitones: head `head` moved `by` semitones from the
+/// MIDI key of `from`, spelled as the key spells it. A drag with Shift held.
+pub fn dragged_chromatic(it: &Item, head: usize, from: (i64, i64), by: i64) -> Option<Vec<(i64, i64)>> {
+    let (d, alter) = if by == 0 { from } else { spell_key(it.fifths, midi(from.0, from.1) + by, by.signum()) };
+    if !fits(it.clef, d, alter) {
+        return None;
+    }
+    let mut out = it.heads.clone();
+    *out.get_mut(head)? = (d, alter);
+    out.sort_by_key(|h| h.0);
+    Some(out)
+}
+
 /// How the arrows move a note (03 §1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Move {
@@ -180,6 +193,22 @@ pub fn moved(it: &Item, how: Move) -> Option<Vec<(i64, i64)>> {
         })
         .collect();
     out.iter().all(|&(d, a)| fits(it.clef, d, a)).then_some(out)
+}
+
+/// Head `head` of `it` moved, the others where they are and the heads
+/// kept ascending; `None` past the reach. The arrows on a chord (03 §1.4).
+pub fn moved_head(it: &Item, head: usize, how: Move) -> Option<Vec<(i64, i64)>> {
+    let one = Item { heads: vec![*it.heads.get(head)?], ..it.clone() };
+    let to = *moved(&one, how)?.first()?;
+    let mut out = it.heads.clone();
+    *out.get_mut(head)? = to;
+    out.sort_by_key(|h| h.0);
+    Some(out)
+}
+
+/// The head of `it` nearest the pitch `d`: the one a press there chose.
+pub fn nearest_head(it: &Item, d: i64) -> usize {
+    it.heads.iter().enumerate().min_by_key(|(_, h)| (h.0 - d).abs()).map_or(0, |(k, _)| k)
 }
 
 /// A MIDI key spelled as 03 §1.4 says: with the key's alteration of a step

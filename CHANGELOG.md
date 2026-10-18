@@ -33,6 +33,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   Soli 2.28.1): dragged or with the arrows, drawn and heard at once, and
   sent to the server once it settles. A click selects a note and never
   moves it, the second click included; a drag moves it.
+- On a chord, ↑/↓ move one note — the one last clicked or moved in it,
+  else the top one — not the whole chord. A drag with Shift held moves the
+  note by semitones.
 - The shell shows which client it is: `eui --version`'s line at the foot
   of a new tab's page, and the version beside the build in the window's
   title.
@@ -44,6 +47,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   score is soon the next one down. A drag is now measured from where the
   hand pressed, half a staff space at a time, whatever the music does
   under it.
+- Editing a note above the clef moved the whole score: the engraver places
+  a system by its highest ink. The client keeps the edited system where it
+  was drawn; the score never jumps up under the hand.
 - In the score editor, a click that selects a note no longer moves it: the
   hand trembling as it clicked was taken for a drag, and the note jumped to
   the line under the pointer. A note already selected, or one the click has
