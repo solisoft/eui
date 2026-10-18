@@ -2684,7 +2684,13 @@ cold load; that Beethoven page is 230 KB of SVG. Its four tests
 (`crates/eui-score-web/tests/svg.rs`) hold the SVG to the engraver's own
 rectangles and fills, the refusal, the page count and the A4 sheet.
 `xtask-web score` builds it into `www/public/eui-score/` with a demo page,
-and the site's deploy does so on every push.
+and the site's deploy does so on every push. The site's own page,
+`/scores` (§09), shows a tune, Beethoven a page at a time with a pager the
+page builds from `eui-score:engraved`, and a sheet of A4, in the site's
+light and dark themes; `www/tests/scores_spec.sl` (5) holds the files it
+fetches and the build it stamps. It imports the element from an inline
+module, so a reader who arrives by a link — the site swaps `<body>` —
+gets the scores drawn too.
 
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the

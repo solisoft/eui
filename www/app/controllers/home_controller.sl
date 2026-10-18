@@ -78,6 +78,33 @@ class HomeController < Controller
     )
   end
 
+  # GET /scores
+  #
+  # Music engraved in the page by `<eui-score>`: the engraver alone, compiled
+  # to WebAssembly, with no session to open.
+  def scores
+    render(
+      "home/scores",
+      {
+        "title": "EUI scores — music in any page, engraved where it is read",
+        "description": "LilyPond source engraved in the browser by the engraver "
+        + "the EUI client uses, compiled to WebAssembly and drawn as SVG: "
+        + "one module, one element, no server.",
+        "score_build": this._score_build()
+      }
+    )
+  end
+
+  # Which build of `<eui-score>` is on disk: `xtask-web score` writes its
+  # manifest beside the module, as it does the client's.
+  def _score_build
+    raw = slurp("public/eui-score/manifest.json") rescue null
+    return "none" if raw.nil?
+
+    parsed = JSON.parse(raw) rescue null
+    parsed.nil? ? "none" : (parsed["version"] ?? "none")
+  end
+
   # Which build of the browser client is on disk, for the page to stamp on
   # the script URL. `xtask-web` writes the manifest beside the module; a tree
   # with no manifest has no client built yet, and says so rather than

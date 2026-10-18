@@ -47,7 +47,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   is the engraver compiled to WebAssembly (593 KB, 175 KB with brotli),
   drawing SVG in the page's text colour, laid out to the element's width a
   page at a time. `<script type="module" src="/eui-score/eui-score.js">`
-  and `<eui-score src="piece.ly">`; a demo at `/eui-score/demo.html`.
+  and `<eui-score src="piece.ly">`. The site shows it at
+  [eui.solisoft.net/scores](https://eui.solisoft.net/scores): a tune, a
+  full score with a pager, a sheet of A4.
 
 ### Fixed
 

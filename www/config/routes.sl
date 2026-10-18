@@ -20,6 +20,9 @@ get("/samples", "home#samples")
 # application under this host so that the origin matches (see the controller).
 get("/demo", "home#demo")
 
+# Music in the page: the engraver alone, as `<eui-score>`, with no session.
+get("/scores", "home#scores")
+
 # The documentation and the specification, served here rather than handed
 # to a file browser on github.com. `:page` is a key into a whitelist in the
 # controller, not a path fragment.

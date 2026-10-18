@@ -1,0 +1,109 @@
+<main class="sheet">
+    <%- partial("layouts/top", {"here": "scores"}) %>
+
+    <section class="hero">
+        <div class="mark">Scores<span>&sect;09</span></div>
+        <div>
+            <h1>Music in any page, engraved where it is read.</h1>
+            <p class="lede">
+                The engraver the EUI client draws a <code>score</code> with, compiled to
+                WebAssembly and drawing SVG: a page shows LilyPond source with no session,
+                no server and no GPU. One module of 593&nbsp;KB &mdash; 175&nbsp;KB with
+                brotli &mdash; and one element, <code>&lt;eui-score&gt;</code>.
+            </p>
+
+            <p>
+                It lays the music out to its own width and again when that changes, a page
+                at a time, in the page's text colour &mdash; so the scores below follow this
+                site into its dark theme without being told. What it draws is what the
+                client draws for the same source: the same engraver, held to the
+                catalogue's <code>score()</code> by its golden tests.
+            </p>
+
+            <div class="pane">
+                <b>in a page</b>
+<pre>&lt;script type="module" src="/eui-score/eui-score.js"&gt;&lt;/script&gt;
+&lt;eui-score src="/scores/<span class="s">piece</span>.ly"&gt;&lt;/eui-score&gt;
+&lt;eui-score&gt;&lt;script type="text/x-lilypond"&gt;{ &lt;c' e' g'&gt;2 }&lt;/script&gt;&lt;/eui-score&gt;</pre>
+            </div>
+        </div>
+    </section>
+
+    <%# A section here is the site's two-column grid — the rail, then the
+        text — so the examples go in the text's column, under the hero's. %>
+    <section class="scores">
+        <div></div>
+        <div>
+        <h2>A tune</h2>
+        <p>Written in the page, inside a <code>&lt;script type="text/x-lilypond"&gt;</code>: a chord's <code>&lt;c' e' g'&gt;</code> is a tag to the HTML parser as plain text.</p>
+        <div class="scores__sheet">
+            <eui-score><script type="text/x-lilypond">
+\header { title = "Frère Jacques" }
+{ \clef treble \key f \major \time 4/4
+  f'4 g'4 a'4 f'4 | f'4 g'4 a'4 f'4 | a'4 bes'4 c''2 | a'4 bes'4 c''2 |
+  c''8 d''8 c''8 bes'8 a'4 f'4 | c''8 d''8 c''8 bes'8 a'4 f'4 | f'4 c'4 f'2 | f'4 c'4 f'2 }
+</script></eui-score>
+        </div>
+
+        <h2>A full score, a page at a time</h2>
+        <p>Beethoven's Fifth, the exposition &mdash; thirteen staves, read from a file and laid out to pages the height of a screen. The element says how many pages there are, and this page builds its own pager from that.</p>
+        <div class="scores__pager">
+            <button type="button" data-turn="-1">Previous</button>
+            <span class="scores__where" role="status">Page 1</span>
+            <button type="button" data-turn="1">Next</button>
+        </div>
+        <div class="scores__sheet">
+            <eui-score id="scores-beethoven" src="/eui-score/beethoven.ly" staff-space="6" page-height="900"></eui-score>
+        </div>
+
+        <h2>On paper</h2>
+        <p><code>paper="a4"</code>: an A4 sheet at LilyPond's staff size, scaled to the width.</p>
+        <div class="scores__sheet scores__sheet--a4">
+            <eui-score paper="a4"><script type="text/x-lilypond">
+\header { title = "Chords" }
+{ \clef treble \time 3/4 <c' e' g'>2. | <d' f' a'>2. | <b d' g'>2 r4 | <c' e' g' c''>2. }
+</script></eui-score>
+        </div>
+        </div>
+    </section>
+</main>
+
+<style>
+    .scores h2 { font-family: var(--serif); font-weight: 400; font-size: 1.75rem; margin: 3rem 0 0.5rem; }
+    .scores h2:first-child { margin-top: 0; }
+    .scores p { color: var(--ink-soft); max-width: var(--measure); }
+    .scores__sheet { color: var(--ink); background: var(--paper-sunk); border: 1px solid var(--rule-faint); border-radius: 4px; padding: 1rem; margin: 1rem 0; }
+    .scores__sheet--a4 { max-width: 40rem; }
+    .scores__pager { display: flex; gap: 0.75rem; align-items: center; font-family: var(--mono); font-size: 0.875rem; color: var(--ink-soft); }
+    .scores__pager button { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.25rem 0.75rem; cursor: pointer; }
+    .scores__pager button:disabled { opacity: 0.4; cursor: default; }
+</style>
+
+<%# The element, imported from an inline module so it runs on every visit —
+    the site swaps `<body>` on a link click, and a script tag in a swapped body
+    is not a script that ran. The import is cached, the element is defined
+    once, and every `<eui-score>` this page inserts is upgraded by the
+    browser. The version is the one `xtask-web` stamped into the manifest
+    beside the module, as /demo does for the client. The pager listens on the
+    element it was built for and nothing else. %>
+<script type="module">
+    import <%- "\"/eui-score/eui-score.js?v=" + score_build + "\"" %>;
+    const score = document.getElementById("scores-beethoven");
+    const where = document.querySelector(".scores__where");
+    const buttons = [...document.querySelectorAll(".scores__pager button")];
+    if (score && !score.dataset.pagerWired) {
+        score.dataset.pagerWired = "1";
+        score.addEventListener("eui-score:engraved", (e) => {
+            const { pages, page } = e.detail;
+            where.textContent = `Page ${page + 1} of ${pages}`;
+            buttons[0].disabled = page === 0;
+            buttons[1].disabled = page + 1 >= pages;
+        });
+        for (const b of buttons) {
+            b.addEventListener("click", () => {
+                const next = Math.max(0, Number(score.getAttribute("page") || 0) + Number(b.dataset.turn));
+                score.setAttribute("page", String(next));
+            });
+        }
+    }
+</script>
