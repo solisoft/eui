@@ -34,7 +34,7 @@ pub mod parse;
 mod pdf;
 pub mod text;
 
-pub use draw::{Band, Path, Ranges};
+pub use draw::{Band, HeadRanges, Path, Ranges};
 pub use engrave::Engraved;
 pub use midi::MidiOptions;
 
@@ -180,6 +180,17 @@ pub fn paths(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, Ranges)
         let mut ranges = Vec::new();
         let paths = draw::page_paths(eng, sp, page, &mut ranges);
         Ok((paths, ranges))
+    })
+}
+
+/// [`paths`], and where each note head was drawn: what a client editing a
+/// chord colours to show which of its notes the arrows move (03 §1.4).
+pub fn paths_heads(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, Ranges, HeadRanges), ScoreError> {
+    guarded(|| {
+        let mut ranges = Vec::new();
+        let mut heads = Vec::new();
+        let paths = draw::page_paths_heads(eng, sp, page, &mut ranges, Some(&mut heads));
+        Ok((paths, ranges, heads))
     })
 }
 

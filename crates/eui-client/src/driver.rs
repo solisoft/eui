@@ -9283,16 +9283,19 @@ impl Driver {
             let node = self.session.node(ix);
             let prop = |a: Option<u32>| a.and_then(|a| node.and_then(|n| n.prop(a)));
             let (ink, marks, lit) = (prop(known.colour).cloned().unwrap_or_else(|| Value::Str("text.default".into())), prop(known.marks).cloned(), prop(known.lit).cloned());
+            // 03 §1.4: the note of a chord the arrows move is the one that
+            // shows, on a score the client edits.
+            let active = self.editing_score(ix).map(|(_, selected)| (selected, node.and_then(|n| self.score_heads.get(&(n.owner, n.id))).filter(|(item, _)| *item == selected).map(|(_, d)| *d)));
             let looks = {
                 use std::hash::{Hash as _, Hasher as _};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                format!("{ink:?}{marks:?}{lit:?}").hash(&mut h);
+                format!("{ink:?}{marks:?}{lit:?}{active:?}").hash(&mut h);
                 h.finish()
             };
             let page = engraving.page_shown(page_index);
             let built_from = (engraving.serial, page, looks);
             if self.score_painted.get(&id) != Some(&built_from) {
-                let paths = Arc::new(crate::score::page_paths(&engraving, page_index, &ink, marks.as_ref(), lit.as_ref()));
+                let paths = Arc::new(crate::score::page_paths(&engraving, page_index, &ink, marks.as_ref(), lit.as_ref(), active));
                 self.score_paint.retain(|(n, _)| *n != id);
                 self.score_paint.push((id, paths));
                 self.score_painted.insert(id, built_from);
@@ -9459,7 +9462,11 @@ impl Driver {
             return;
         };
         if let Some(n) = self.session.node(s) {
-            self.score_heads.insert((n.owner, n.id), (item, d));
+            // A head chosen in a chord is drawn as chosen: a frame is owed.
+            if self.score_heads.insert((n.owner, n.id), (item, d)) != Some((item, d)) {
+                self.touched = true;
+                self.redraw = true;
+            }
         }
     }
 

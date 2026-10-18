@@ -228,10 +228,15 @@ fn engrave(p: &ScoreProps<'_>, width: f32) -> Result<Laid, String> {
 /// `accent.base` for one in `lit`. The same values lang's `eui_score_bands`
 /// writes, so a client that engraves and a server that falls back draw one
 /// picture.
-pub fn page_paths(e: &Engraving, page_index: u32, ink: &Value, marks: Option<&Value>, lit: Option<&Value>) -> Vec<Value> {
+///
+/// `active` is the item a client edits and the head its arrows move (03
+/// §1.4): on a chord that is marked, that head alone is drawn in the mark's
+/// colour and the rest of the chord in the ink, so the note the arrows will
+/// move is the one that shows. The top head when none was pressed.
+pub fn page_paths(e: &Engraving, page_index: u32, ink: &Value, marks: Option<&Value>, lit: Option<&Value>, active: Option<(usize, Option<i64>)>) -> Vec<Value> {
     let Ok(l) = &e.laid else { return Vec::new() };
     let page = e.page_shown(page_index);
-    let Ok((paths, ranges)) = eui_score::paths(&l.eng, l.sp, page) else {
+    let Ok((paths, ranges, heads)) = eui_score::paths_heads(&l.eng, l.sp, page) else {
         return Vec::new();
     };
     let mut colours: Vec<Option<Value>> = vec![None; paths.len()];
@@ -257,6 +262,24 @@ pub fn page_paths(e: &Engraving, page_index: u32, ink: &Value, marks: Option<&Va
         if let Some(c) = marked(*item) {
             for slot in colours.iter_mut().skip(range.start).take(range.len()) {
                 *slot = Some(c.clone());
+            }
+        }
+    }
+    if let Some((item, pressed)) = active {
+        let chord: Vec<&(usize, i64, std::ops::Range<usize>)> = heads.iter().filter(|h| h.0 == item).collect();
+        let distinct = chord.iter().map(|h| h.1).collect::<std::collections::BTreeSet<_>>().len();
+        if let (true, Some(c)) = (distinct > 1, marked(item)) {
+            for (_, range) in ranges.iter().filter(|r| r.0 == item) {
+                for slot in colours.iter_mut().skip(range.start).take(range.len()) {
+                    *slot = None;
+                }
+            }
+            let top = chord.iter().map(|h| h.1).max();
+            let d = pressed.filter(|d| chord.iter().any(|h| h.1 == *d)).or(top);
+            for (_, _, range) in chord.iter().filter(|h| Some(h.1) == d) {
+                for slot in colours.iter_mut().skip(range.start).take(range.len()) {
+                    *slot = Some(c.clone());
+                }
             }
         }
     }
@@ -397,4 +420,53 @@ pub fn info_payload(e: &Engraving) -> Value {
         Err(_) => Vec::new(),
     };
     Value::List(vec![Value::Int(e.pages() as i64), Value::Str(e.refusal().to_owned()), Value::List(starts)])
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+    use super::*;
+
+    fn colour_of(p: &Value) -> Option<&str> {
+        match p {
+            Value::List(v) => match v.get(1) {
+                Some(Value::Str(c)) => Some(c.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_chord_being_edited_shows_the_head_its_arrows_move() {
+        // 03 §1.4: the chord is selected (marked accent); the head the
+        // arrows move — e'' here, 16 — is the one drawn in the mark's
+        // colour, and the rest of the chord in the ink.
+        let src = "{ c''4 <c'' e'' g''>4 }";
+        let mut scores = Scores::default();
+        let props = ScoreProps { src: std::borrow::Cow::Borrowed(src), staff_space: 8.0, a4: false, page_height: 0.0, page_index: 0 };
+        let e = scores.engraving(&props, 600.0);
+        let ink = Value::Str("text.default".into());
+        let marks = Value::List(vec![Value::List(vec![Value::Int(1), Value::Str("accent.base".into())])]);
+        let l = e.laid.as_ref().unwrap();
+        let (_, ranges, heads) = eui_score::paths_heads(&l.eng, l.sp, 0).unwrap();
+        let e_head = heads.iter().find(|h| h.0 == 1 && h.1 == 16).unwrap().2.clone();
+        let chord: usize = ranges.iter().filter(|r| r.0 == 1).map(|r| r.1.len()).sum();
+
+        let whole = page_paths(&e, 0, &ink, Some(&marks), None, None);
+        assert_eq!(whole.iter().filter(|p| colour_of(p) == Some("accent.base")).count(), chord, "not edited: the whole chord is marked");
+
+        let shown = page_paths(&e, 0, &ink, Some(&marks), None, Some((1, Some(16))));
+        let accented: Vec<usize> = shown.iter().enumerate().filter(|(_, p)| colour_of(p) == Some("accent.base")).map(|(k, _)| k).collect();
+        assert_eq!(accented, e_head.collect::<Vec<_>>(), "the e'' head and nothing else");
+
+        let top = page_paths(&e, 0, &ink, Some(&marks), None, Some((1, None)));
+        let g_head = heads.iter().find(|h| h.0 == 1 && h.1 == 18).unwrap().2.clone();
+        let accented: Vec<usize> = top.iter().enumerate().filter(|(_, p)| colour_of(p) == Some("accent.base")).map(|(k, _)| k).collect();
+        assert_eq!(accented, g_head.collect::<Vec<_>>(), "none pressed: the top head");
+
+        let single = page_paths(&e, 0, &ink, Some(&Value::List(vec![Value::List(vec![Value::Int(0), Value::Str("accent.base".into())])])), None, Some((0, None)));
+        let one: usize = ranges.iter().filter(|r| r.0 == 0).map(|r| r.1.len()).sum();
+        assert_eq!(single.iter().filter(|p| colour_of(p) == Some("accent.base")).count(), one, "a single note keeps its whole mark");
+    }
 }

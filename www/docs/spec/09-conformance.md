@@ -1062,7 +1062,10 @@ version 7) and a margin.
   the reach does not move, and none of these keys is reported
   (`arrows_move_the_selected_note_in_the_key`). On a chord they move the
   head last pressed, else the top one, and stay on it
-  (`an_arrow_on_a_chord_moves_the_head_pressed_or_the_top_one`).
+  (`an_arrow_on_a_chord_moves_the_head_pressed_or_the_top_one`); that head
+  alone wears the chord's mark, the others the ink, and a single note its
+  whole mark (`a_chord_being_edited_shows_the_head_its_arrows_move`, in
+  `crates/eui-client/src/score.rs`).
 - **A drag with Shift moves by semitones**, and letting go of Shift with the
   hand still goes back to steps (`a_drag_with_shift_held_moves_by_semitones`).
 - **An edit does not move the score under the hand**: an edit that would

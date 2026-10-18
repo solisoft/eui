@@ -34,8 +34,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   sent to the server once it settles. A click selects a note and never
   moves it, the second click included; a drag moves it.
 - On a chord, ↑/↓ move one note — the one last clicked or moved in it,
-  else the top one — not the whole chord. A drag with Shift held moves the
-  note by semitones.
+  else the top one — not the whole chord, and that note is the one drawn in
+  the selection's colour, the rest of the chord in the ink. A drag with
+  Shift held moves the note by semitones.
 - The shell shows which client it is: `eui --version`'s line at the foot
   of a new tab's page, and the version beside the build in the window's
   title.

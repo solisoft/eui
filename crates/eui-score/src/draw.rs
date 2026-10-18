@@ -29,6 +29,11 @@ pub enum Path {
 /// and rests of its staff's piece, and the range.
 pub type Ranges = Vec<(usize, Range<usize>)>;
 
+/// Each note head's paths: the item, the head's diatonic number, and the
+/// range its glyph, accidental and dots take — what an editor colours to
+/// show one note of a chord (03 §1.4).
+pub type HeadRanges = Vec<(usize, i64, Range<usize>)>;
+
 /// To the hundredth as Soli's `Float#round(2)` does it: on the shortest
 /// decimal that reads back as `v`, halves away from zero — so 22.884999…
 /// (written "22.884999999999998") is 22.88, where `(v * 100).round()`
@@ -81,6 +86,8 @@ fn fill(cmds: &[f64], ox: f64, oy: f64, sp: f64) -> Path {
 struct Pen<'a> {
     paths: &'a mut Vec<Path>,
     sp: f64,
+    /// Where each head was drawn, when somebody asked.
+    heads: Option<&'a mut HeadRanges>,
 }
 
 impl Pen<'_> {
@@ -127,10 +134,15 @@ impl Pen<'_> {
 /// The paths of page `page`: its titles if it is the first, its number if
 /// it is not, and its systems. `ranges` gets where each item's paths are.
 pub fn page_paths(eng: &Engraved, sp: f64, page: usize, ranges: &mut Ranges) -> Vec<Path> {
+    page_paths_heads(eng, sp, page, ranges, None)
+}
+
+/// [`page_paths`], and where each head was drawn.
+pub fn page_paths_heads(eng: &Engraved, sp: f64, page: usize, ranges: &mut Ranges, mut heads: Option<&mut HeadRanges>) -> Vec<Path> {
     let mut paths = head_paths(eng, sp, page);
     for sys in &eng.systems {
         if sys.page == page {
-            draw_system(&mut paths, eng, sys, sys.top, sp, ranges);
+            draw_system_heads(&mut paths, eng, sys, sys.top, sp, ranges, heads.as_deref_mut());
         }
     }
     paths
@@ -220,11 +232,11 @@ fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
         starts.push(paths.len());
         let offset = sys.offsets.get(s).copied().unwrap_or(0.0);
         if let Some(bars) = eng.staves.get(s) {
-            draw_line(&mut paths, bars, line, top + offset, sp, &mut ranges);
+            draw_line(&mut paths, bars, line, top + offset, sp, &mut ranges, None);
         }
     }
     starts.push(paths.len());
-    draw_groups(&mut Pen { paths: &mut paths, sp }, eng, sys, top);
+    draw_groups(&mut Pen { paths: &mut paths, sp, heads: None }, eng, sys, top);
     let tops: Vec<f64> = (0..n).map(|s| pad as f64 + sys.offsets.get(s).copied().unwrap_or(0.0) * sp).collect();
     let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, line)| eng.staves.get(s).map_or((0.0, 4.0), |bars| reach(bars, line))).collect();
     let mut cuts: Vec<i64> = vec![0];
@@ -309,7 +321,7 @@ fn meets(pa: &Path, bottom: i64) -> bool {
 /// A page's titles if it is the first, its number if it is numbered.
 pub fn head_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut paths = Vec::new();
-    let mut pen = Pen { paths: &mut paths, sp };
+    let mut pen = Pen { paths: &mut paths, sp, heads: None };
     let left = eng.left;
     draw_titles(&mut pen, eng, page);
     if page > 0 && eng.numbered {
@@ -337,7 +349,7 @@ fn draw_titles(pen: &mut Pen, eng: &Engraved, page: usize) {
 /// systems, with no number at the top — the footer carries it.
 pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut paths = Vec::new();
-    draw_titles(&mut Pen { paths: &mut paths, sp }, eng, page);
+    draw_titles(&mut Pen { paths: &mut paths, sp, heads: None }, eng, page);
     for sys in &eng.systems {
         if sys.page == page {
             draw_system(&mut paths, eng, sys, sys.top, sp, &mut Vec::new());
@@ -351,7 +363,7 @@ pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
 /// `n / count` at the right, two steps smaller than the music's words.
 pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &str, y: f64) -> Vec<Path> {
     let mut paths = Vec::new();
-    let mut pen = Pen { paths: &mut paths, sp };
+    let mut pen = Pen { paths: &mut paths, sp, heads: None };
     let e = em(-2.0);
     let number = format!("{} / {count}", page + 1);
     let number_w = text_width(&number, Weight::Regular, e);
@@ -374,14 +386,18 @@ pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &st
 
 /// One system with its first staff's top line at `top`.
 pub fn draw_system(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64, sp: f64, ranges: &mut Ranges) {
+    draw_system_heads(paths, eng, sys, top, sp, ranges, None);
+}
+
+fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64, sp: f64, ranges: &mut Ranges, mut heads: Option<&mut HeadRanges>) {
     if sys.multi {
         for (s, line) in sys.lines.iter().enumerate() {
-            draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges);
+            draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges, heads.as_deref_mut());
         }
-        draw_groups(&mut Pen { paths, sp }, eng, sys, top);
+        draw_groups(&mut Pen { paths, sp, heads: None }, eng, sys, top);
         return;
     }
-    draw_line(paths, &eng.staves[0], &sys.lines[0], top, sp, ranges);
+    draw_line(paths, &eng.staves[0], &sys.lines[0], top, sp, ranges, heads);
 }
 
 fn clef_y(clef: Clef) -> f64 {
@@ -392,8 +408,8 @@ fn clef_y(clef: Clef) -> f64 {
     }
 }
 
-fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64, ranges: &mut Ranges) {
-    let mut pen = Pen { paths, sp };
+fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64, ranges: &mut Ranges, heads: Option<&mut HeadRanges>) {
+    let mut pen = Pen { paths, sp, heads };
     let right = line.right;
     let left = line.left;
     for i in 0..5 {
@@ -916,6 +932,7 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         dot_x += hw - RULE.stem;
     }
     for hd in &ev.heads {
+        let from = pen.paths.len();
         let hx = ev.x + hd.side as f64 * (hw - RULE.stem);
         let y = top + y_of(hd.pos);
         pen.glyph(hname, hx, y);
@@ -929,6 +946,10 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
                 pen.glyph("augmentationDot", dx, top + y_of(dot_pos));
                 dx += 0.6;
             }
+        }
+        let to = pen.paths.len();
+        if let Some(h) = pen.heads.as_deref_mut() {
+            h.push((ev.i, hd.d, from..to));
         }
     }
     if ev.base == 1 {

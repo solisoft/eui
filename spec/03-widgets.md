@@ -602,7 +602,10 @@ What moves it:
   step up or down the staff, a semitone with `Shift`, an octave with `Ctrl`
   (`⌘` on macOS): the head last pressed or moved in it — the press the
   server answers by selecting the note counts — else the top one, the
-  tune. The arrows stay on that head as it moves. The client consumes
+  tune. The arrows stay on that head as it moves, and it is the one that
+  shows: on a chord `marks` marks, the client draws that head — its glyph,
+  accidental and dots — in the mark's colour and the rest of the chord in
+  the ink; a single note keeps its whole mark. The client consumes
   them: no `key_down` or `key_up` reports them. Every other key is reported
   as before.
 - A rest does not move: a press on a selected rest, and an arrow, are
