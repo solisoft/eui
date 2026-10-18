@@ -1232,6 +1232,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "eui-score-web"
+version = "0.10.0"
+dependencies = [
+ "eui-score",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "eui-shader"
 version = "0.10.0"
 dependencies = [

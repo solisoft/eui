@@ -1,0 +1,23 @@
+[package]
+name = "eui-score-web"
+description = "Music engraved in a web page, read only: eui-score compiled to WebAssembly, drawn as SVG."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "eui_score_web"
+# `cdylib` for the browser, `rlib` so the SVG is tested natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eui-score = { path = "../eui-score", version = "0.10.0" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true

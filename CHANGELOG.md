@@ -41,6 +41,14 @@ release. A wire change lands here first, is released, and then the pin moves.
   of a new tab's page, and the version beside the build in the window's
   title.
 
+### Added
+
+- `<eui-score>`: music in any web page, read only. `crates/eui-score-web`
+  is the engraver compiled to WebAssembly (599 KB, 174 KB with brotli),
+  drawing SVG in the page's text colour, laid out to the element's width a
+  page at a time. `<script type="module" src="/eui-score/eui-score.js">`
+  and `<eui-score src="piece.ly">`; a demo at `/eui-score/demo.html`.
+
 ### Fixed
 
 - A note dragged in a score went where the hand went and then jumped: each

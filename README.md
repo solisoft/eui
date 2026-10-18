@@ -47,6 +47,7 @@ crates/
               iOS bundle from its eui.toml, nothing compiled  [built; no device yet]
   eui-uikit   the one UIKit question winit does not answer         [untested]
   eui-web     where a page's client starts, on wasm32                 [built]
+  eui-score-web  <eui-score>: eui-score on wasm32 drawing SVG, read only [built]
 examples/
   counter-server  the counter as a hand-written Rust server, on loopback
   demo-app        counter, todo, a 10 000-row table, a gallery, Atrium —

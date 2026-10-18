@@ -2667,6 +2667,22 @@ step of undo, and no longer moves a note on a second click. A `\relative` source
 (A–G, durations, rests), the palette and undo are still the server's —
 steps 2 and 3.
 
+**And music in any web page** (2026-10-18). `crates/eui-score-web` is
+`eui-score` compiled to WebAssembly and drawing SVG, and `<eui-score>`
+(`assets/web/eui-score.js`) is the element that loads it: a page shows a
+LilyPond source read-only, with no session, no server and no GPU, laid out
+to the element's width, a page at a time, in the page's own text colour.
+Measured on 2026-10-18: the module is **599 KB, 218 KB with gzip and 174 KB
+with brotli**, built without `wasm-opt` (the site's deploy runs it); the
+client it is cut from is 7 MB. In headless Chromium a page holding Frère
+Jacques, a chord, page 2 of Beethoven's exposition (13 staves, 522 fills
+and 463 rectangles) and a refused source drew all four in 101 ms from a
+cold load; that Beethoven page is 230 KB of SVG. Its four tests
+(`crates/eui-score-web/tests/svg.rs`) hold the SVG to the engraver's own
+rectangles and fills, the refusal, the page count and the A4 sheet.
+`xtask-web score` builds it into `www/public/eui-score/` with a demo page,
+and the site's deploy does so on every push.
+
 **And words that say what they are** (2026-10-13). The Score tab's
 "Words" was the tempo's text: it is a **Tempo mark** now — the words, the
 beat and its speed together, Printed / Not printed, and beside them what

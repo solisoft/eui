@@ -147,6 +147,27 @@ below protocol 9 is sent the catalogue's paths instead, so nothing breaks
 for an older client. On the build machine, the score editor's Beethoven
 exposition is engraved and painted in 13 ms paged at 700 px and 16 ms on A4.
 
+Without a session at all, a web page can show the same music read-only
+with `<eui-score>`: `crates/eui-score-web` is `eui-score` compiled to
+WebAssembly and drawing SVG in `currentColor`, so the page's own text colour
+is the ink and a dark theme needs nothing. One module of 599 KB (174 KB
+with brotli, before `wasm-opt`), one element:
+
+```html
+<script type="module" src="/eui-score/eui-score.js"></script>
+<eui-score src="/scores/piece.ly" staff-space="6" page-height="900" page="0"></eui-score>
+<eui-score paper="a4"><script type="text/x-lilypond">{ <c' e' g'>2 }</script></eui-score>
+```
+
+The source is the file `src` names, else a `<script type="text/x-lilypond">`
+inside the element — a chord's `<c' e' g'>` is a tag to the HTML parser as
+plain text — else the element's text. It lays the music out to its own width
+and again when that changes, draws one page (`page`, from 0), refuses a
+source it cannot set with the engraver's message, and fires
+`eui-score:engraved` with `{pages, page, refusal}` so the page can build a
+pager. `cargo run -p xtask-web -- score` builds it into
+`www/public/eui-score/`, with a demo page beside it (`demo.html`).
+
 From protocol 10 a score can also be **edited by the client**. With
 `edit: ["pitch"]`, a `selected` item and a `score_edit` handler, the client
 moves that note's pitch itself: a drag carries the head by the lines the

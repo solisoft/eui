@@ -59,6 +59,7 @@ dist/
 # client change does not belong in a history.
 # `cargo run -p xtask -- web` writes these; the source is assets/web/.
 www/public/eui/
+www/public/eui-score/
 doc/public/eui/
 examples/demo-app/public/eui/
 

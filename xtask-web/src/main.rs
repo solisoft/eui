@@ -68,6 +68,12 @@ fn main() {
         }
     }
 
+    // `cargo run -p xtask-web -- score`: the read-only score element alone.
+    if std::env::args().nth(1).as_deref() == Some("score") {
+        score(&cargo);
+        return;
+    }
+
     // Its own target directory, for the reason every other step here has
     // one: these flags are part of a build's fingerprint, and sharing would
     // have each run evict what the other left.
@@ -148,6 +154,47 @@ fn main() {
         // *reader*; this line is what saves whoever built it.
         println!("note: restart `soli serve` to pick this up — it caches its JS at boot");
     }
+}
+
+/// `<eui-score>`: `crates/eui-score-web` as a module, the element that loads
+/// it, and the version the page puts on the element's URL, into
+/// `www/public/eui-score/` — the engraver alone, with no session to open.
+fn score(cargo: &str) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/web");
+    let status = std::process::Command::new(cargo).args(["build", "--release", "--target", TARGET, "-p", "eui-score-web"]).env("CARGO_TARGET_DIR", &dir).status().expect("cargo runs");
+    if !status.success() {
+        eprintln!("web: FAILED at cargo build of eui-score-web");
+        std::process::exit(1);
+    }
+    let module = dir.join(TARGET).join("release/eui_score_web.wasm");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let out = root.join("www/public/eui-score");
+    let status = std::process::Command::new("wasm-bindgen").args(["--target", "web", "--no-typescript", "--out-dir"]).arg(&out).arg(&module).status().expect("wasm-bindgen runs");
+    if !status.success() {
+        eprintln!("web: FAILED at wasm-bindgen for eui-score-web");
+        std::process::exit(1);
+    }
+    let wasm = out.join("eui_score_web_bg.wasm");
+    match std::process::Command::new("wasm-opt").args(["-Oz", "--enable-bulk-memory", "-o"]).arg(&wasm).arg(&wasm).status() {
+        Ok(s) if s.success() => {}
+        Ok(_) => eprintln!("note: wasm-opt failed; shipping the unoptimised module"),
+        Err(_) => eprintln!("note: no wasm-opt on PATH — the module is larger than it needs to be (`binaryen`)"),
+    }
+    // The element, a page that shows it, and the full score that page reads.
+    for (from, to) in [("assets/web/eui-score.js", "eui-score.js"), ("assets/web/eui-score-demo.html", "demo.html"), ("examples/demo-app/public/scores/beethoven-symphony-5-1.ly", "beethoven.ly")] {
+        if let Err(e) = std::fs::copy(root.join(from), out.join(to)) {
+            eprintln!("web: cannot copy {from}: {e}");
+            std::process::exit(1);
+        }
+    }
+    let stamp = std::fs::metadata(&wasm).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let version = format!("{}-{stamp}", build_id());
+    if let Err(e) = std::fs::write(out.join("manifest.json"), format!("{{\"version\":\"{version}\"}}\n")) {
+        eprintln!("web: cannot write the manifest: {e}");
+        std::process::exit(1);
+    }
+    let bytes = std::fs::metadata(&wasm).map_or(0, |m| m.len());
+    println!("{}: {:.0} KB, version {version}", wasm.display(), bytes as f64 / 1024.0);
 }
 
 /// The short commit this module was built from, with `+` when the tree it

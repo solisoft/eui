@@ -96,6 +96,10 @@ jobs:
       - name: Build the browser client
         run: cargo run -p xtask-web
 
+      # `<eui-score>`, the engraver alone, read only (crates/eui-score-web).
+      - name: Build the score element
+        run: cargo run -p xtask-web -- score
+
       # The site serves the documentation and the specification, and the
       # only directory this deploy rsyncs is `www/` — so both live there as
       # copies, written by one script from `doc/docs/eui/` and `spec/`. A
@@ -214,6 +218,15 @@ jobs:
             [ -s "www/public/eui/$f" ] || { echo "xtask-web did not write $f" >&2; exit 1; }
           done
           ls -l www/public/eui/
+
+      - name: Build the score element
+        run: |
+          set -euo pipefail
+          cargo run -p xtask-web -- score
+          for f in eui_score_web.js eui_score_web_bg.wasm eui-score.js demo.html beethoven.ly manifest.json; do
+            [ -s "www/public/eui-score/$f" ] || { echo "xtask-web did not write eui-score/$f" >&2; exit 1; }
+          done
+          ls -l www/public/eui-score/
 
       # --delete-delay: what leaves the repository leaves the server. The
       # exclusions protect what lives on the server (.env, app.infos,

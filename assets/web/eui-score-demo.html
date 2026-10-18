@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eui-score — music in a page</title>
+<style>
+  :root { color-scheme: light dark; --ink: #111827; --muted: #6b7280; --ground: #ffffff; --raised: #f9fafb; --line: #e5e7eb; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #f3f4f6; --muted: #9ca3af; --ground: #111827; --raised: #1f2937; --line: #374151; } }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.6 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 30px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 40px 0 12px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  code, pre { font: 14px/1.5 ui-monospace, monospace; }
+  pre { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; overflow-x: auto; color: var(--ink); }
+  .card { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  .pager { display: flex; gap: 8px; align-items: center; margin: 8px 0; color: var(--muted); }
+  button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--ground); color: var(--ink); cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: default; }
+</style>
+<script type="module" src="./eui-score.js"></script>
+</head>
+<body>
+<main>
+  <h1>Music in a page</h1>
+  <p>LilyPond source engraved in the browser by the engraver EUI's client uses, compiled to WebAssembly and drawn as SVG. No session, no server: one module and one element. The ink is the page's text colour.</p>
+
+  <h2>A tune</h2>
+  <div class="card">
+    <eui-score><script type="text/x-lilypond">
+\header { title = "Frère Jacques" }
+{ \clef treble \key f \major \time 4/4
+  f'4 g'4 a'4 f'4 | f'4 g'4 a'4 f'4 | a'4 bes'4 c''2 | a'4 bes'4 c''2 |
+  c''8 d''8 c''8 bes'8 a'4 f'4 | c''8 d''8 c''8 bes'8 a'4 f'4 | f'4 c'4 f'2 | f'4 c'4 f'2 }
+</script></eui-score>
+  </div>
+  <pre>&lt;script type="module" src="/eui-score/eui-score.js"&gt;&lt;/script&gt;
+&lt;eui-score&gt;&lt;script type="text/x-lilypond"&gt;{ f'4 g'4 a'4 f'4 }&lt;/script&gt;&lt;/eui-score&gt;</pre>
+
+  <h2>A full score, a page at a time</h2>
+  <p>Beethoven's Fifth, the exposition: thirteen staves, read from a file and laid out to pages the height of a screen.</p>
+  <div class="pager"><button id="prev">Previous</button><span id="where">Page 1</span><button id="next">Next</button></div>
+  <div class="card">
+    <eui-score id="beethoven" src="./beethoven.ly" staff-space="6" page-height="900"></eui-score>
+  </div>
+  <pre>&lt;eui-score src="beethoven.ly" staff-space="6" page-height="900" page="0"&gt;&lt;/eui-score&gt;</pre>
+
+  <h2>On paper</h2>
+  <div class="card" style="max-width: 595px">
+    <eui-score paper="a4"><script type="text/x-lilypond">
+\header { title = "Chords" }
+{ \clef treble \time 3/4 <c' e' g'>2. | <d' f' a'>2. | <b d' g'>2 r4 | <c' e' g' c''>2. }
+</script></eui-score>
+  </div>
+</main>
+<script>
+  const score = document.getElementById("beethoven");
+  const prev = document.getElementById("prev");
+  const next = document.getElementById("next");
+  const where = document.getElementById("where");
+  score.addEventListener("eui-score:engraved", (e) => {
+    const { pages, page } = e.detail;
+    where.textContent = `Page ${page + 1} of ${pages}`;
+    prev.disabled = page === 0;
+    next.disabled = page + 1 >= pages;
+  });
+  const turn = (by) => score.setAttribute("page", String(Math.max(0, Number(score.getAttribute("page") || 0) + by)));
+  prev.addEventListener("click", () => turn(-1));
+  next.addEventListener("click", () => turn(1));
+</script>
+</body>
+</html>
