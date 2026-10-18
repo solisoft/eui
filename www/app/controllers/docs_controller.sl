@@ -184,11 +184,9 @@ class DocsController < Controller
   end
 
   def _tokens(lang, source)
-    return html_escape(source) unless [
-      "soli",
-      "ruby",
-      "sh"
-    ].includes?(lang)
+    unless ["soli", "ruby", "sh"].includes?(lang)
+      return html_escape(source)
+    end
 
     shell = lang == "sh"
     cs = source.chars()
@@ -216,7 +214,7 @@ class DocsController < Controller
     return [this._skip(cs, i + 1, "number"), "n"] if this._digit(c) && (i == 0 || !this._word_char(cs[i - 1]))
     return [i + 1, ""] unless this._word_char(c) || c == "@" || (shell && c == "$")
 
-    j = this._skip(cs, i + 1, "word");
+    j = this._skip(cs, i + 1, "word")
     [j, this._word_kind(cs.slice(i, j).join(""), shell, first, j < cs.length() ? cs[j] : "")]
   end
 

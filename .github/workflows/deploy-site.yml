@@ -48,11 +48,12 @@ concurrency:
 env:
   # Pinned, so the CI tests exactly what the server runs. The step "Note the
   # version the server runs" compares the two on every deploy and warns when
-  # they differ -- a CI testing a different version tests nothing. 2.5.5 is
-  # what eui.solisoft.net runs (2026-09-27); 2.3.3 held this line until then,
-  # which made the warning the normal state of every run. `soli fmt --check`
-  # and `soli lint` from 2.5.5 are clean over the site.
-  SOLI_VERSION: "2.5.5"
+  # they differ -- a CI testing a different version tests nothing. 2.28.1 is
+  # what eui.solisoft.net runs (2026-10-18); 2.5.5 held this line from
+  # 2026-09-27 until then, long after the server had moved, and failed the
+  # /scores page that newer Soli serves. `soli fmt --check`, `soli lint` and
+  # the suite from 2.28.1 are clean over the site.
+  SOLI_VERSION: "2.28.1"
   # The site is a Soli app in this subdirectory, not at the repository root.
   APP_DIR: www
 

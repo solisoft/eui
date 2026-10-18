@@ -316,11 +316,13 @@ than production tests nothing, so the two are compared explicitly rather
 than assumed; when the server is upgraded, bump the pins in the same
 commit.
 
-The two workflows pin different versions today, and that is a state to get
-out of rather than a design: one server runs one `soli`.
+The site's workflow pins the version the server runs — 2.28.1 since
+2026-10-18, when its 2.5.5 had fallen far behind the server and failed a
+page the server serves. The demo's checks boot the latest Soli release
+instead, and the demo itself runs on the server's `soli`.
 
-**The demo application no longer runs on the server's `soli`** (2026-10-17).
-`deploy-data.yml` installs its pinned release into
+**History: the demo application on a Soli of its own** (2026-10-17, undone
+2026-10-18 — it runs on the server's `soli` again, above). `deploy-data.yml` installed its pinned release into
 `/home/rocky/sites/eui-data.solisoft.net/.soli/<version>/soli`, points
 `.soli/current` at it, rewrites `app.infos`'s `start_script` to that path
 the first time (keeping `app.infos.before-own-soli`), runs the migrations
