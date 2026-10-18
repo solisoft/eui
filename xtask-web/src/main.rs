@@ -44,6 +44,15 @@ fn std_installed(target: &str) -> bool {
 /// module that a bare `<script type="module">` can import. `wasm-pack`
 /// would wrap that in an npm package for nobody, and `trunk` wants to own
 /// an `index.html` that Soli already owns.
+/// `wasm-opt`'s flags. Every feature rustc emits for `wasm32-unknown-unknown`
+/// has to be named: with `--enable-bulk-memory` alone, binaryen 108 (what
+/// Ubuntu 24.04 packages, so what the deploys install) refused the module
+/// on its first `i64.trunc_sat_f64_s`, and every module went out
+/// unoptimised. Measured 2026-10-18 on the client: 9.88 MB to 9.22 MB raw,
+/// and 2.60 MB to 2.64 MB with brotli — a smaller module to compile, not a
+/// smaller one to send.
+const WASM_OPT: [&str; 7] = ["-Oz", "--enable-bulk-memory", "--enable-sign-ext", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-reference-types", "--enable-multivalue"];
+
 fn main() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     if !std_installed(TARGET) {
@@ -102,10 +111,10 @@ fn main() {
         // the module works either way and the difference is bytes on a
         // documentation page, not correctness.
         let wasm = out.join("eui_web_bg.wasm");
-        match std::process::Command::new("wasm-opt").args(["-Oz", "--enable-bulk-memory", "-o"]).arg(&wasm).arg(&wasm).status() {
+        match std::process::Command::new("wasm-opt").args(WASM_OPT).arg("-o").arg(&wasm).arg(&wasm).status() {
             Ok(s) if s.success() => {}
             Ok(_) => eprintln!("note: wasm-opt failed; shipping the unoptimised module"),
-            Err(_) => eprintln!("note: no wasm-opt on PATH — the module is some 30% larger than it needs to be (`binaryen`)"),
+            Err(_) => eprintln!("note: no wasm-opt on PATH — the module is some 7% larger raw, no larger with brotli (`binaryen`)"),
         }
         // The bootstrap script, from the one copy of it there is.
         //
@@ -175,10 +184,10 @@ fn score(cargo: &str) {
         std::process::exit(1);
     }
     let wasm = out.join("eui_score_web_bg.wasm");
-    match std::process::Command::new("wasm-opt").args(["-Oz", "--enable-bulk-memory", "-o"]).arg(&wasm).arg(&wasm).status() {
+    match std::process::Command::new("wasm-opt").args(WASM_OPT).arg("-o").arg(&wasm).arg(&wasm).status() {
         Ok(s) if s.success() => {}
         Ok(_) => eprintln!("note: wasm-opt failed; shipping the unoptimised module"),
-        Err(_) => eprintln!("note: no wasm-opt on PATH — the module is larger than it needs to be (`binaryen`)"),
+        Err(_) => eprintln!("note: no wasm-opt on PATH — the module is some 4% larger raw (`binaryen`)"),
     }
     // The element, a page that shows it, and the full score that page reads.
     for (from, to) in [("assets/web/eui-score.js", "eui-score.js"), ("assets/web/eui-score-demo.html", "demo.html"), ("examples/demo-app/public/scores/beethoven-symphony-5-1.ly", "beethoven.ly")] {

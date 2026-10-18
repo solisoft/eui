@@ -150,8 +150,8 @@ exposition is engraved and painted in 13 ms paged at 700 px and 16 ms on A4.
 Without a session at all, a web page can show the same music read-only
 with `<eui-score>`: `crates/eui-score-web` is `eui-score` compiled to
 WebAssembly and drawing SVG in `currentColor`, so the page's own text colour
-is the ink and a dark theme needs nothing. One module of 599 KB (174 KB
-with brotli, before `wasm-opt`), one element:
+is the ink and a dark theme needs nothing. One module of 575 KB (174 KB
+with brotli), one element:
 
 ```html
 <script type="module" src="/eui-score/eui-score.js"></script>

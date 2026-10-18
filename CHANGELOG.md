@@ -44,7 +44,7 @@ release. A wire change lands here first, is released, and then the pin moves.
 ### Added
 
 - `<eui-score>`: music in any web page, read only. `crates/eui-score-web`
-  is the engraver compiled to WebAssembly (599 KB, 174 KB with brotli),
+  is the engraver compiled to WebAssembly (575 KB, 174 KB with brotli),
   drawing SVG in the page's text colour, laid out to the element's width a
   page at a time. `<script type="module" src="/eui-score/eui-score.js">`
   and `<eui-score src="piece.ly">`; a demo at `/eui-score/demo.html`.
