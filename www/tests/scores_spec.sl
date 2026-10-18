@@ -12,6 +12,15 @@ describe("Scores", fn() {
     assert_contains(body, "src=\"/eui-score/beethoven.ly\"")
   })
 
+  # The first example shows its markup and then draws it: the code a reader
+  # copies is the source the element below it read, chords and all.
+  test("the markup it shows is the markup it draws", fn() {
+    let body = res_body(get("/scores"))
+    let src = "{ \\clef treble \\time 4/4 <c' e' g'>2 <d' f' a'>2 | <e' g' b'>2 <c' e' g' c''>2 }"
+    assert_contains(body, "<script type=\"text/x-lilypond\">" + src + "</script>")
+    assert_contains(body, html_escape(src))
+  })
+
   # The module is served `immutable`; "none" is what the controller answers
   # when nothing has been built, which is a page that cannot draw.
   test("stamps the build of the element it will load", fn() {

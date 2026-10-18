@@ -36,13 +36,15 @@
         <div>
         <h2>A tune</h2>
         <p>Written in the page, inside a <code>&lt;script type="text/x-lilypond"&gt;</code>: a chord's <code>&lt;c' e' g'&gt;</code> is a tag to the HTML parser as plain text.</p>
+        <%# One source, shown and drawn: the markup in the code block is the
+            markup the element below reads, so the two cannot drift apart. %>
+        <% tune_src = "{ \\clef treble \\time 4/4 <c' e' g'>2 <d' f' a'>2 | <e' g' b'>2 <c' e' g' c''>2 }" %>
+        <div class="pane">
+            <b>the markup</b>
+<pre><%= "<eui-score><script type=\"text/x-lilypond\">\n" + tune_src + "\n</script></eui-score>" %></pre>
+        </div>
         <div class="scores__sheet">
-            <eui-score><script type="text/x-lilypond">
-\header { title = "Frère Jacques" }
-{ \clef treble \key f \major \time 4/4
-  f'4 g'4 a'4 f'4 | f'4 g'4 a'4 f'4 | a'4 bes'4 c''2 | a'4 bes'4 c''2 |
-  c''8 d''8 c''8 bes'8 a'4 f'4 | c''8 d''8 c''8 bes'8 a'4 f'4 | f'4 c'4 f'2 | f'4 c'4 f'2 }
-</script></eui-score>
+            <eui-score><script type="text/x-lilypond"><%- tune_src %></script></eui-score>
         </div>
 
         <h2>A full score, a page at a time</h2>
