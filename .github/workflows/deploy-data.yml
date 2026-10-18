@@ -23,9 +23,9 @@
 #      Booting it warms every handler in the tree, which is what catches a
 #      parse error in a controller and a capability the server has never
 #      heard of — the two ways this application has actually failed.
-#   5. It runs on **a Soli of its own**, the latest soli_lang release,
-#      installed beside the site in .soli/<version>/ rather than the
-#      server's shared `soli`. See `env:` below.
+#   5. Its checks boot **the latest soli_lang release**, and it runs on the
+#      server's own `soli`, as the other sites do: the deploy says when the
+#      two differ. See `env:` below.
 #
 # See deploy/README.md for the one-time server setup.
 name: verify & deploy the demo application
@@ -56,15 +56,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # No Soli version is written here. The demo runs on the latest release of
-  # soli_lang, read when the run starts: `verify` finds it, installs it and
-  # boots the application on it, and `deploy` installs that same version
-  # into <site>/.soli/<version>/ and points app.infos at it -- so what the
-  # checks booted is what goes live, even when a release lands between the
-  # two jobs. Not the server's `soli`, which the other sites on the box
-  # share and which stays where it is (2.5.5 on 2026-10-17): the score
-  # editor needs `eui_score_layout` (2.26.0 and later), and a pin let the
-  # demo sit on 2.27.2 after 2.28.0 shipped.
+  # No Soli version is written here. `verify` boots the application on the
+  # latest release of soli_lang, read when the run starts; `deploy` runs it
+  # on the server's own `soli` — `soli serve` in app.infos, as every other
+  # site on the box — which whoever runs the server keeps current, and says
+  # in the run's summary when that version is not the one the checks
+  # booted. From 2026-10-17 to 10-18 the demo carried a Soli of its own in
+  # <site>/.soli/; the deploy now points app.infos back at the server's and
+  # removes that directory once no slot runs from it.
   APP_DIR: examples/demo-app
 
 jobs:
@@ -220,55 +219,37 @@ jobs:
           ssh "$USER@$HOST" "test -f '$SITES_DIR/$DOMAIN/app.infos' && test -f '$SITES_DIR/$DOMAIN/.env'" \
             || { echo "$SITES_DIR/$DOMAIN must hold app.infos and .env — see deploy/README.md" >&2; exit 1; }
 
-      # The site's own Soli, before anything is sent: the version the verify
-      # job just booted, in <site>/.soli/<version>/, with `current` pointing
-      # at it. Fetched once a version — a second deploy of the same release finds
-      # it and moves on — and from the same release tarball the runner used.
-      # The server's own `soli` is not touched: other sites run on it.
-      - name: Install that Soli beside the site
+      # Which Soli the server runs, against the one the checks booted. Not a
+      # refusal: the server's `soli` is shared and is upgraded by whoever runs
+      # the box, so a release can land before it does. A version behind is a
+      # warning in the summary, and the boot after the switch is the check.
+      - name: The server's Soli
         run: |
           set -euo pipefail
-          ssh "$USER@$HOST" "bash -s" <<SH
-          set -euo pipefail
-          [ "\$(uname -m)" = x86_64 ] || { echo "the release tarball is linux-amd64; this server is \$(uname -m)" >&2; exit 1; }
-          home='$SITES_DIR/$DOMAIN/.soli'
-          dir="\$home/$SOLI_VERSION"
-          if ! "\$dir/soli" --version 2>/dev/null | grep -qx "Soli $SOLI_VERSION"; then
-            tmp="\$(mktemp -d)"
-            curl -fsSL "https://github.com/solisoft/soli_lang/releases/download/v$SOLI_VERSION/soli-linux-amd64.tar.gz" -o "\$tmp/pkg.tar.gz"
-            tar -xzf "\$tmp/pkg.tar.gz" -C "\$tmp"
-            install -D -m 0755 "\$(find "\$tmp" -type f -name soli -perm -u+x | head -1)" "\$dir/soli"
-            rm -rf "\$tmp"
+          installed="$(ssh "$USER@$HOST" 'soli --version' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          echo "server: $installed — booted by the checks: $SOLI_VERSION"
+          if [ "$installed" != "$SOLI_VERSION" ]; then
+            echo "::warning::the server runs Soli $installed; the checks booted $SOLI_VERSION"
+            echo "⚠️ The server runs Soli \`$installed\`; the checks booted \`$SOLI_VERSION\`." >> "$GITHUB_STEP_SUMMARY"
           fi
-          "\$dir/soli" --version
-          ln -sfn "$SOLI_VERSION" "\$home/current"
-          # Two kept: this one and the newest before it, which the slot still
-          # serving runs until the switch. With no pin, every release would
-          # otherwise leave one behind for good.
-          ls -1 "\$home" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\$' | sort -V | head -n -2 | while read -r old; do
-            echo "removing \$home/\$old"; rm -rf "\$home/\$old"
-          done
-          SH
 
       # app.infos is the server's file and this workflow never sends it, but
-      # its `start_script` decides which `soli` the proxy runs. One that
-      # still names the bare `soli` of the PATH is pointed at the site's own,
-      # once, with the original kept beside it; one already pointing there is
-      # left alone. The proxy watches the sites directory and reads it again.
-      - name: Point app.infos at the site's Soli
+      # its `start_script` decides which `soli` the proxy runs: the server's,
+      # `soli serve …`. One still naming the site's own copy (.soli/current,
+      # what the deploys of 2026-10-17 wrote) is pointed back, once.
+      - name: app.infos starts the server's soli
         run: |
           set -euo pipefail
           ssh "$USER@$HOST" "bash -s" <<SH
           set -euo pipefail
           infos='$SITES_DIR/$DOMAIN/app.infos'
-          own='$SITES_DIR/$DOMAIN/.soli/current/soli'
-          if grep -q '^start_script = "soli ' "\$infos"; then
-            cp -n "\$infos" "\$infos.before-own-soli"
-            sed -i "s|^start_script = \"soli |start_script = \"\$own |" "\$infos"
-            echo "app.infos now starts \$own (the original is app.infos.before-own-soli)"
+          if grep -q '^start_script = "[^"]*/\.soli/current/soli ' "\$infos"; then
+            sed -i 's|^start_script = "[^"]*/\.soli/current/soli |start_script = "soli |' "\$infos"
+            rm -f "\$infos.before-own-soli"
+            echo "app.infos starts the server's soli again"
           fi
           grep '^start_script' "\$infos"
-          grep -q "^start_script = \"\$own " "\$infos" || { echo "app.infos does not start \$own; see deploy/README.md" >&2; exit 1; }
+          grep -q '^start_script = "soli ' "\$infos" || { echo "app.infos does not start soli; see deploy/README.md" >&2; exit 1; }
           SH
 
       # The browser client, built here because it is not committed.
@@ -352,7 +333,7 @@ jobs:
       - name: Migrate
         run: |
           set -euo pipefail
-          ssh "$USER@$HOST" "cd '$SITES_DIR/$DOMAIN' && .soli/current/soli db:migrate up"
+          ssh "$USER@$HOST" "cd '$SITES_DIR/$DOMAIN' && soli db:migrate up"
 
       # `soli-proxy deploy` rather than `touch restart.txt`: the trigger file
       # is ignored in silence when the proxy cannot start the slot — an
@@ -388,14 +369,13 @@ jobs:
               code="$(ssh "$USER@$HOST" "$PROBE" 2>/dev/null | tail -1 || echo 000)"
               echo "attempt $i: new process $fresh, /up -> $code"
               if [ "$code" = "200" ]; then
-                # Which binary the slot really is: the point of the site's own
-                # Soli is lost if the proxy still started the PATH's.
+                # Which binary the slot really is, and its version: what the
+                # proxy started from app.infos, which the next step holds
+                # every slot to.
                 exe="$(ssh "$USER@$HOST" "for p in $fresh; do readlink /proc/\$p/exe; done" | sort -u)"
-                echo "the new slot runs: $exe"
-                case "$exe" in
-                  *"/.soli/$SOLI_VERSION/soli") echo "The new slot answers, on Soli $SOLI_VERSION."; exit 0 ;;
-                  *) echo "The new slot is not the site's Soli $SOLI_VERSION: $exe" >&2; exit 1 ;;
-                esac
+                echo "$exe" > /tmp/slot-exe
+                echo "The new slot answers, on $exe: $(ssh "$USER@$HOST" "'$exe' --version")"
+                exit 0
               fi
             else
               echo "attempt $i: no fresh process"
@@ -412,36 +392,41 @@ jobs:
       - name: Bring both slots up
         run: ssh "$USER@$HOST" "soli-proxy restart -c '$PROXY_CONF' '$APP'"
 
-      # Every process serving the site, not only the fresh one, on the
-      # site's Soli. The first deploy that moved the demo onto its own Soli
-      # left one of the two slots on the server's 2.5.5: the switch started
-      # the new binary, the restart did not replace the old process, and the
-      # proxy balanced between them — the score editor opened Beethoven in
-      # 0.8 s on one and 21 s on the other. A stale slot is switched out once
-      # more; one still there after that fails the deploy.
-      - name: Every slot runs the site's Soli
+      # Every process serving the site on the binary the new slot runs. The
+      # first deploy that moved the demo onto a Soli of its own left one of
+      # the two slots on the old one: the switch started the new binary, the
+      # restart did not replace the old process, and the proxy balanced
+      # between them — the score editor opened Beethoven in 0.8 s on one and
+      # 21 s on the other. A stale slot is switched out once more; one still
+      # there after that fails the deploy. Once none runs from the site's
+      # own .soli/, the directory goes.
+      - name: Every slot runs the same Soli
         run: |
           set -euo pipefail
+          want="$(cat /tmp/slot-exe)"
           stale() {
             pids="$(ssh "$USER@$HOST" "$PIDS")"
             ssh "$USER@$HOST" "for p in $pids; do printf '%s %s\n' \$p \"\$(readlink /proc/\$p/exe)\"; done" \
-              | grep -v "/.soli/$SOLI_VERSION/soli\$" || true
+              | grep -v " $want\$" || true
           }
-          for round in 1 2; do
+          for round in 1 2 3; do
             left="$(stale)"
             if [ -z "$left" ]; then
-              echo "Every slot runs $SITES_DIR/$DOMAIN/.soli/$SOLI_VERSION/soli:"
+              echo "Every slot runs $want:"
               ssh "$USER@$HOST" "$PIDS" | tr '\n' ' '; echo
+              case "$want" in
+                */.soli/*) ;;
+                *) ssh "$USER@$HOST" "rm -rf '$SITES_DIR/$DOMAIN/.soli'" && echo "removed $SITES_DIR/$DOMAIN/.soli" ;;
+              esac
               exit 0
             fi
-            echo "round $round, not on the site's Soli $SOLI_VERSION:"; echo "$left"
+            [ "$round" = 3 ] && break
+            echo "round $round, not on $want:"; echo "$left"
             ssh "$USER@$HOST" "soli-proxy deploy -c '$PROXY_CONF' '$APP' 2>&1"
             sleep 15
             ssh "$USER@$HOST" "soli-proxy restart -c '$PROXY_CONF' '$APP'"
             sleep 15
           done
-          left="$(stale)"
-          [ -z "$left" ] && { echo "Every slot runs the site's Soli $SOLI_VERSION."; exit 0; }
           echo "Still serving on another binary after two switches:" >&2; echo "$left" >&2
           echo "  ssh $USER@$HOST 'soli-proxy logs -c $PROXY_CONF $APP'" >&2
           exit 1

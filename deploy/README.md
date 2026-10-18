@@ -181,17 +181,20 @@ error in a controller and a capability the server has never heard of, the
 two ways this application has actually failed. No database is needed for
 that: `/up` is Soli's own readiness probe.
 
-**It runs on a Soli of its own, the latest release.** Not the server's
-`soli`, which the other sites on the box share: no version is written in
-the workflow. `verify` reads the latest soli_lang release when the run
-starts, installs it and boots the application on it; `deploy` installs that
-same version into `<site>/.soli/<version>/`, points `.soli/current` and
-`app.infos`'s `start_script` at it, and checks after the switch that every
-slot runs it. The version before is kept, because the slot still serving
-runs it until the switch; older ones are removed. A new Soli release
-therefore reaches the demo on the next deploy, which a push to `crates/`,
-`examples/demo-app/` or the workflow starts — or `gh workflow run
-deploy-data.yml`, to take a release without a change.
+**Its checks boot the latest Soli; it runs on the server's.** No version is
+written in the workflow. `verify` reads the latest soli_lang release when
+the run starts, installs it on the runner and boots the application on it;
+`deploy` runs the application on the server's own `soli` — `start_script =
+"soli serve . …"` in `app.infos`, as every other site on the box — and
+puts a warning in the run's summary when the server's version is not the
+one the checks booted. Keeping that `soli` current is the server's
+business, not this workflow's. After the switch every slot has to run the
+binary the new slot runs, and the run names it with its version.
+
+For two days (2026-10-17 and 18) the deploy installed a Soli of its own into
+`<site>/.soli/<version>/` and pointed `app.infos` at it. A deploy now points
+`app.infos` back at `soli serve` if it still names that copy, and removes
+`.soli/` once no slot runs from it.
 
 The workflow finishes by fetching `/.well-known/eui` through the proxy and
 printing the first sixteen hex digits of the manifest's checksum. The

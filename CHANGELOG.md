@@ -24,10 +24,11 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Changed
 
-- The demo at eui-data.solisoft.net runs on the latest Soli release, read
-  at each deploy, instead of a version written in its workflow: it sat on
-  2.27.2 after 2.28.0 shipped. The deploy boots the application on that
-  release before installing the same one beside the site.
+- The demo at eui-data.solisoft.net runs on the server's own `soli`
+  (`soli serve` in its `app.infos`), as the other sites do, instead of a
+  version pinned in its workflow and installed beside it: it sat on 2.27.2
+  after 2.28.0 shipped. The deploy's checks boot the latest Soli release
+  and warn when the server's differs.
 - The score editor moves its selected note in the window (protocol 10,
   Soli 2.28.1): dragged or with the arrows, drawn and heard at once, and
   sent to the server once it settles. A click selects a note and never
