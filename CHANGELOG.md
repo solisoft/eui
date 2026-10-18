@@ -22,6 +22,8 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-18
+
 ### Added
 
 - Protocol 11: a `score` reads LilyPond as people write it (spec 03 §1.4) —
