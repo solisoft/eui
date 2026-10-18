@@ -2356,9 +2356,13 @@ end
 def score_ed_press(state, point, page)
   return score_ed_insert_at(state, point, page) if score_ed_inserting(state)
 
+  pr_before = state["sel"] ?? -1
+  pr_count = state["notes"].length
   state = score_ed_pick(state, point, page)
   current = score_ed_selected(state)
-  state["dragging"] = !current.nil?
+  # A press that chooses a note does not move it: a note already chosen is
+  # dragged, and so is one the press has just written.
+  state["dragging"] = !current.nil? && ((state["sel"] ?? -1) == pr_before || state["notes"].length > pr_count)
   state["drag_saved"] = false
   state
 end
@@ -4194,8 +4198,13 @@ def score_ed_score_pick(state, sp_payload, sp_props)
     state["dragging"] = false
     return score_ed_insert_pick(state, sp_pick)
   end
+  sp_before = state["sel"] ?? -1
+  sp_count = state["notes"].length
   state = score_ed_pick_at(state, sp_pick)
-  state["dragging"] = !score_ed_selected(state).nil?
+  # A press that chooses a note does not move it — the hand trembling as
+  # it clicks was a move, and the note jumped to the line under it. A note
+  # already chosen is dragged, and so is one the press has just written.
+  state["dragging"] = !score_ed_selected(state).nil? && ((state["sel"] ?? -1) == sp_before || state["notes"].length > sp_count)
   state["drag_saved"] = false
   state
 end

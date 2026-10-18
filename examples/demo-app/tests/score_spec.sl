@@ -6945,9 +6945,13 @@ end
 def score_ed_press(state, point, page)
   return score_ed_insert_at(state, point, page) if score_ed_inserting(state)
 
+  pr_before = state["sel"] ?? -1
+  pr_count = state["notes"].length
   state = score_ed_pick(state, point, page)
   current = score_ed_selected(state)
-  state["dragging"] = !current.nil?
+  # A press that chooses a note does not move it: a note already chosen is
+  # dragged, and so is one the press has just written.
+  state["dragging"] = !current.nil? && ((state["sel"] ?? -1) == pr_before || state["notes"].length > pr_count)
   state["drag_saved"] = false
   state
 end
@@ -8310,8 +8314,13 @@ def score_ed_score_pick(state, sp_payload, sp_props)
     state["dragging"] = false
     return score_ed_insert_pick(state, sp_pick)
   end
+  sp_before = state["sel"] ?? -1
+  sp_count = state["notes"].length
   state = score_ed_pick_at(state, sp_pick)
-  state["dragging"] = !score_ed_selected(state).nil?
+  # A press that chooses a note does not move it — the hand trembling as
+  # it clicks was a move, and the note jumped to the line under it. A note
+  # already chosen is dragged, and so is one the press has just written.
+  state["dragging"] = !score_ed_selected(state).nil? && ((state["sel"] ?? -1) == sp_before || state["notes"].length > sp_count)
   state["drag_saved"] = false
   state
 end
@@ -9818,13 +9827,17 @@ describe("the editor's tracks", fn() {
     ed = score_ed_flag(score_ed_from_source(spec_state(), "{ c''4 d''4 e''4 f''4 | g''1 }"), "protocol", 9)
     ed = score_ed_score_pick(ed, spec_pick(0, 4, 2, 0.2, 2, 3, 0.1), {})
     check("selected", ed["sel"], 2)
-    check("held for a drag", ed["dragging"], true)
+    check("the press that chose it holds nothing", ed["dragging"], false)
+    # The hand trembling as it clicks: a move over the top line.
+    ed = score_ed_score_pick(ed, spec_pick(1, 0, 2, 0.2, 2, 3, 0.1), {})
+    check("and it does not move the note it chose", ed["notes"][2]["pitches"][0]["step"], 2)
     ed = score_ed_score_pick(ed, spec_pick(2, 4, 2, 0.2, 2, 3, 0.1), {})
     check("released", ed["dragging"], false)
     # Pressed again, on the middle line: a click selects, it does not move.
     ed = score_ed_score_pick(ed, spec_pick(0, 4, 2, 0.1, 2, 3, 0.0), {})
     check("still selected", ed["sel"], 2)
     check("and still an E", ed["notes"][2]["pitches"][0]["step"], 2)
+    check("a note already chosen is held for a drag", ed["dragging"], true)
     # Far from every head: nothing chosen.
     ed = score_ed_score_pick(score_ed_flag(ed, "sel", -1), spec_pick(0, 4, 1, 2.6, 1, 2, 0.5), {})
     check("nothing within two spaces", ed["sel"], -1)
