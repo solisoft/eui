@@ -40,3 +40,20 @@ fn dynamics_on_neighbouring_notes_do_not_overlap() {
         assert!(pair[0].1 + 0.3 <= pair[1].0, "{:?} runs into {:?}", pair[0], pair[1]);
     }
 }
+
+/// A rest of one voice clears the notes the other voice sounds with it — in
+/// Bach's C major prelude, the left hand's sixteenth rest drew on its middle C.
+#[test]
+fn a_rest_of_two_voices_clears_the_other_voices_notes() {
+    let src = r"{ \clef bass \time 4/4 << { r16 e'8. ~ e'4 r16 e'8. ~ e'4 } \\ { c'2 c'2 } >> }";
+    let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+    let items = &eng.staves[0][0].items;
+    let c_top = items.iter().filter(|e| e.voice == Some(2) && !e.heads.is_empty()).map(|e| 2.0 - e.heads.last().unwrap().pos as f64 / 2.0 - 0.5).fold(f64::MAX, f64::min);
+    let rests: Vec<_> = items.iter().filter(|e| e.voice == Some(1) && e.heads.is_empty()).collect();
+    assert_eq!(rests.len(), 2);
+    for rest in rests {
+        // A rest's ink is 1 to 3 spaces under the top line, moved by its lift.
+        let bottom = 3.0 + rest.rest_y.unwrap_or(-2.0);
+        assert!(bottom <= c_top - 0.5, "the rest reaches {bottom}, the C's head is at {c_top}");
+    }
+}

@@ -746,6 +746,9 @@ fn tuplet_edge(ev: &Ev, up: bool) -> f64 {
 /// Where a rest of two voices stands: the first voice's two spaces up, the
 /// second's two down; a rest of one voice on the middle of the staff.
 pub(crate) fn rest_lift(ev: &Ev) -> f64 {
+    if let Some(y) = ev.rest_y {
+        return y;
+    }
     match ev.voice {
         Some(1) => -2.0,
         Some(2) => 2.0,

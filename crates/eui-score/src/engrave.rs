@@ -576,6 +576,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
             lyric_room(ev);
         }
         if bar.poly {
+            rest_collisions(bar);
             poly_cols(bar, shortest);
         }
     }
@@ -628,6 +629,42 @@ fn lyric_room(ev: &mut Ev) {
     let after = if lyr.hyphen { 0.9 } else { 0.35 };
     ev.right = ev.right.max(c + w / 2.0 + after);
     ev.left = ev.left.max(w / 2.0 - c + 0.35);
+}
+
+/// Rests of two voices clear of the other voice's notes, as LilyPond's
+/// rest collision moves them: a first voice's rest stands two spaces up,
+/// higher by whole spaces while a note of the second sounding with it
+/// reaches it — a high C under a sixteenth rest drew on top of it — and a
+/// second voice's two spaces down, lower the same way.
+fn rest_collisions(bar: &mut Bar) {
+    let notes: Vec<(u8, i64, i64, f64, f64)> = bar
+        .items
+        .iter()
+        .filter(|e| e.k == Kind::Note && !e.heads.is_empty())
+        .map(|e| {
+            let top = y_of(e.heads.last().map_or(0, |h| h.pos)) - 0.5;
+            let bottom = y_of(e.heads.first().map_or(0, |h| h.pos)) + 0.5;
+            (marks::voice_of(e), e.start, e.start + e.ticks, top, bottom)
+        })
+        .collect();
+    for ev in bar.items.iter_mut().filter(|e| e.k == Kind::Rest && !e.full && e.voice.is_some()) {
+        let voice = marks::voice_of(ev);
+        let (a, b) = (ev.start, ev.start + ev.ticks);
+        let others = notes.iter().filter(|n| n.0 != voice && n.1 < b && n.2 > a);
+        // The rest's ink, as its extent counts it, is 1 to 3 spaces down
+        // from the top line, moved by its lift; half a space more is clear.
+        if voice == 1 {
+            let top = others.map(|n| n.3).fold(f64::MAX, f64::min);
+            if top < f64::MAX {
+                ev.rest_y = Some((-2.0_f64).min((top - 3.5).floor()));
+            }
+        } else {
+            let bottom = others.map(|n| n.4).fold(f64::MIN, f64::max);
+            if bottom > f64::MIN {
+                ev.rest_y = Some(2.0_f64.max((bottom - 0.5).ceil()));
+            }
+        }
+    }
 }
 
 /// What a bar is spaced by: its notes and rests, or, with two voices, its

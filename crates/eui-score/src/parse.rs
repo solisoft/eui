@@ -1005,6 +1005,9 @@ pub struct Ev {
     pub members: Vec<(usize, usize)>,
     /// Of `<< { … } \\ { … } >>`, the voice: 1 stems up, 2 stems down.
     pub voice: Option<u8>,
+    /// A rest of two voices: where it stands, in spaces from where one
+    /// voice's rest would — moved clear of the other voice's notes.
+    pub rest_y: Option<f64>,
     /// `s`: a rest that takes time and is not drawn.
     pub spacer: bool,
     /// How far a first voice's note stands right of its column, clear of

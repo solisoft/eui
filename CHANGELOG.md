@@ -28,6 +28,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   staff under it — a chord name such as `^"E7"` on an ending's first note
   was drawn through the bracket's number — and over the scripts, tuplet
   numbers and slurs there, as LilyPond's outside-staff priorities put it.
+- A rest of two voices on a staff clears the notes the other voice sounds
+  with it, moved by whole spaces as LilyPond moves it: in Bach's C major
+  prelude the left hand's sixteenth rest was drawn on its middle C.
 - Dynamics on notes side by side (`c''4\fff d''\pp e''\p f''\fz`) no
   longer run into one word: the two notes stand far enough apart for both.
 
