@@ -905,12 +905,22 @@ fn gaps(bar: &Bar, k: f64) -> Vec<f64> {
     for i in 0..items.len() {
         let ev = &items[i];
         if let Some(nxt) = items.get(i + 1) {
-            out.push((ev.ideal * k).max(ev.right + 0.6 + nxt.left));
+            out.push((ev.ideal * k).max(ev.right + 0.6 + nxt.left).max(dynamics_apart(ev, nxt)));
         } else {
             out.push((ev.ideal * k).max(ev.right + 0.8));
         }
     }
     out
+}
+
+/// Two dynamics on notes side by side — `\\fff` then `\\pp` — each
+/// centred on its note: the notes stand far enough apart that the letters
+/// do not run into one word, as LilyPond's spacing keeps them. Nothing
+/// moves where there are not two.
+fn dynamics_apart(ev: &Ev, nxt: &Ev) -> f64 {
+    let (Some(a), Some(b)) = (&ev.dynamic, &nxt.dynamic) else { return 0.0 };
+    let width = |d: &str| marks::dyn_letters(d).iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
+    width(a) / 2.0 + width(b) / 2.0 + 0.6
 }
 
 fn bar_springs(bar: &Bar) -> f64 {

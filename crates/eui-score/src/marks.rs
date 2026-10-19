@@ -510,11 +510,14 @@ pub(crate) fn points(cmds: &[f64]) -> Vec<(f64, f64)> {
 pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
     hairpins(bars, lines);
     for line in lines.iter_mut() {
-        line.voltas = if line.staff_index.unwrap_or(0) == 0 { voltas(bars, line) } else { Vec::new() };
         line.tuplets = tuplets(bars, line);
         scripts(bars, line);
         dynamics(bars, line);
         texts(bars, line);
+        // After what stands above the staff: a bracket goes over the words,
+        // the scripts and the tuplets under it, as LilyPond's
+        // `outside-staff-priority` puts a VoltaBracket over TextScripts.
+        line.voltas = if line.staff_index.unwrap_or(0) == 0 { voltas(bars, line) } else { Vec::new() };
         lyric_line(bars, line);
         line.marks = Vec::new();
         let range = line.bars.clone();
@@ -1139,9 +1142,34 @@ fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
                 }
                 low = low.min(y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.7);
                 low = low.min(ev.stem_end - 0.3);
+                // An articulation above the note, a fermata: as its stem.
+                low = low.min(ev.reach_up.unwrap_or(0.0) - 0.3);
             }
         }
-        vb.y = low - 1.0;
+        // What else stands above the staff under the bracket: its label,
+        // "1.", hangs 1.8 spaces below the line, so the line clears it all
+        // by that and a little more.
+        let (x0, x1) = (vb.x0, vb.x1);
+        let under = |x: f64| x >= x0 - 0.5 && x <= x1 + 0.5;
+        let mut above: f64 = 0.0;
+        for tx in &line.texts {
+            if tx.dir < 0 && tx.x1 >= x0 && tx.x0 <= x1 {
+                above = above.min(tx.top - 0.3);
+            }
+        }
+        for tp in &line.tuplets {
+            if tp.up && tp.x1 >= x0 && tp.x0 <= x1 {
+                above = above.min(tp.ya.min(tp.yb) - 1.0);
+            }
+        }
+        for c in &line.curves {
+            for (px, py) in points(c) {
+                if under(px) {
+                    above = above.min(py - 0.2);
+                }
+            }
+        }
+        vb.y = (low - 1.0).min(above - 2.0);
     }
     out
 }

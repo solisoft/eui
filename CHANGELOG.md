@@ -22,6 +22,15 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Fixed
+
+- A score's ending bracket ("1.", "2.") stands over the words above the
+  staff under it — a chord name such as `^"E7"` on an ending's first note
+  was drawn through the bracket's number — and over the scripts, tuplet
+  numbers and slurs there, as LilyPond's outside-staff priorities put it.
+- Dynamics on notes side by side (`c''4\fff d''\pp e''\p f''\fz`) no
+  longer run into one word: the two notes stand far enough apart for both.
+
 ## [0.11.0] - 2026-10-18
 
 ### Added
