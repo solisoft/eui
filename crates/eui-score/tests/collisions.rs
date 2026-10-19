@@ -57,3 +57,27 @@ fn a_rest_of_two_voices_clears_the_other_voices_notes() {
         assert!(bottom <= c_top - 0.5, "the rest reaches {bottom}, the C's head is at {c_top}");
     }
 }
+
+/// An ending's number hangs under its bracket: a high note at the ending's
+/// start was drawn through "1." (Ode to Joy, an a'' under the bracket).
+#[test]
+fn a_volta_number_clears_the_high_note_under_it() {
+    let src = r"{ \key d \major \repeat volta 2 { d''1 } \alternative { { a''4 g'' fis'' e'' } { d''1 } } }";
+    let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+    let mut seen = 0;
+    for sys in &eng.systems {
+        for line in &sys.lines {
+            for vb in line.voltas.iter().filter(|v| v.first) {
+                for &b in &vb.bars {
+                    for ev in eng.staves[0][b].items.iter().filter(|e| !e.heads.is_empty() && e.x <= vb.x0 + 2.5) {
+                        let head_top = 2.0 - ev.heads.last().unwrap().pos as f64 / 2.0 - 0.5;
+                        // The number's baseline is 1.5 under the line.
+                        assert!(vb.y + 1.5 + 0.2 <= head_top + 1e-9, "\"{}\" at {} runs into the head at {}", vb.label, vb.y, head_top);
+                        seen += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(seen >= 2, "both endings' first notes were laid out");
+}

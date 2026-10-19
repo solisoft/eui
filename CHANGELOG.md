@@ -33,6 +33,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   prelude the left hand's sixteenth rest was drawn on its middle C.
 - Dynamics on notes side by side (`c''4\fff d''\pp e''\p f''\fz`) no
   longer run into one word: the two notes stand far enough apart for both.
+- An ending's number clears the high notes under it: an `a''` starting
+  "1." in Ode to Joy was drawn through the number, the bracket having
+  cleared the notes by its line alone.
 
 ## [0.11.0] - 2026-10-18
 

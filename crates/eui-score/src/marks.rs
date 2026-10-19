@@ -1137,16 +1137,25 @@ fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
         }
     }
     for vb in &mut out {
+        // Its label, "1.", where draw_volta writes it: what stands under the
+        // label is cleared by the label's height, not by the line's alone.
+        let lx0 = vb.x0 + 0.5;
+        let lx1 = if vb.first { lx0 + 0.3 + text_width(&vb.label, Weight::Bold, em(-2.0)) + 0.3 } else { lx0 };
         let mut low: f64 = -2.0;
+        let mut label_low: f64 = 0.0;
         for &b in &vb.bars {
             for ev in &bars[b].items {
                 if ev.k != Kind::Note {
                     continue;
                 }
-                low = low.min(y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.7);
-                low = low.min(ev.stem_end - 0.3);
-                // An articulation above the note, a fermata: as its stem.
-                low = low.min(ev.reach_up.unwrap_or(0.0) - 0.3);
+                let top = (y_of(ev.heads.last().map_or(0, |h| h.pos)) - 0.7)
+                    .min(ev.stem_end - 0.3)
+                    // An articulation above the note, a fermata: as its stem.
+                    .min(ev.reach_up.unwrap_or(0.0) - 0.3);
+                low = low.min(top);
+                if ev.x <= lx1 && ev.x + ev.head_w.unwrap_or(1.2) >= lx0 {
+                    label_low = label_low.min(top);
+                }
             }
         }
         // What else stands above the staff under the bracket: its label,
@@ -1172,7 +1181,7 @@ fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
                 }
             }
         }
-        vb.y = (low - 1.0).min(above - 2.0);
+        vb.y = (low - 1.0).min(label_low - 1.7).min(above - 2.0);
     }
     out
 }
