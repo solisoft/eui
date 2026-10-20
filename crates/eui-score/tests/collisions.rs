@@ -81,3 +81,22 @@ fn a_volta_number_clears_the_high_note_under_it() {
     }
     assert!(seen >= 2, "both endings' first notes were laid out");
 }
+
+/// A tempo mark over grace notes high above the staff stands over them —
+/// it was drawn through two acciaccaturas before a high G.
+#[test]
+fn a_tempo_mark_clears_the_grace_notes_under_it() {
+    let src = r#"{ \tempo "Allegro assai" 4 = 116 \key d \major \acciaccatura { a''16 c'''16 } g''4\mf fis'' g'' a'' | a''4 g'' fis'' e'' }"#;
+    let eng = engrave(src, 120.0, &Layout::default()).unwrap();
+    let mark = eng.systems.iter().flat_map(|s| &s.lines).flat_map(|l| &l.marks).next().expect("the tempo mark");
+    let first = eng.staves[0][0].items.iter().find(|e| !e.graces.is_empty()).expect("the note with grace notes");
+    let mut seen = 0;
+    for g in &first.graces {
+        let head_top = 2.0 - g.heads.last().unwrap().pos as f64 / 2.0 - 0.4;
+        // The mark's baseline stands clear of every grace note's head and stem.
+        let reach = head_top.min(g.stem_end);
+        assert!(mark.y + 0.3 <= reach, "the mark at {} runs into a grace note reaching {reach}", mark.y);
+        seen += 1;
+    }
+    assert_eq!(seen, 2);
+}

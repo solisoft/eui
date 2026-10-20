@@ -766,11 +766,24 @@ pub(crate) fn voice_of(ev: &Ev) -> u8 {
     }
 }
 
+/// How far a note's ink reaches up and down — its grace notes' with it,
+/// so what stands over the staff (a tempo mark, words) clears them too.
 fn item_extent(ev: &Ev) -> (f64, f64) {
     if ev.k != Kind::Note {
         return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
-    (tuplet_edge(ev, true), tuplet_edge(ev, false))
+    let (mut up, mut down) = (tuplet_edge(ev, true), tuplet_edge(ev, false));
+    for g in &ev.graces {
+        for hd in &g.heads {
+            up = up.min(y_of(hd.pos) - 0.4);
+            down = down.max(y_of(hd.pos) + 0.4);
+        }
+        if g.base > 1 {
+            up = up.min(g.stem_end);
+            down = down.max(g.stem_end);
+        }
+    }
+    (up, down)
 }
 
 pub(crate) fn item_w(ev: &Ev) -> f64 {
