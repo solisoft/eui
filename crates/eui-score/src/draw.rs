@@ -1031,10 +1031,6 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         pen.rect(lx, top + y_of(pos) - lt / 2.0, lw, lt);
         pos -= 2;
     }
-    let mut dot_x = ev.x + hw + 0.3;
-    if wide && ev.up {
-        dot_x += hw - RULE.stem;
-    }
     for hd in &ev.heads {
         let from = pen.paths.len();
         let hx = ev.x + hd.side as f64 * (hw - RULE.stem);
@@ -1045,7 +1041,7 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         }
         if ev.dots > 0 {
             let dot_pos = if hd.pos % 2 == 0 { hd.pos + 1 } else { hd.pos };
-            let mut dx = dot_x;
+            let mut dx = ev.x + dot_start(ev, dot_pos);
             for _ in 0..ev.dots {
                 pen.glyph("augmentationDot", dx, top + y_of(dot_pos));
                 dx += 0.6;
@@ -1086,6 +1082,36 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let anchor = glyph(&flag).anchors.get(if ev.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
         pen.glyph(&flag, sx - anchor[0], tip - anchor[1]);
     }
+}
+
+/// Where a note's dots at `dot_pos` start, from its x: right of its head
+/// (of a head moved right of the stem, in a chord stem up), past a flag
+/// hanging there.
+pub(crate) fn dot_start(ev: &Ev, dot_pos: i64) -> f64 {
+    let hw = ev.head_w.unwrap_or(0.0);
+    let mut x = hw + 0.3;
+    if ev.up && ev.heads.iter().any(|h| h.side != 0) {
+        x += hw - RULE.stem;
+    }
+    x.max(past_flag(ev, dot_pos))
+}
+
+/// Where a dot at `dot_pos` must start, from the note's x, to stand clear
+/// of its stem-up flag: past the flag when the flag hangs down to the dot's
+/// height (a dotted eighth on a line, its dot in the space above), else 0.
+pub(crate) fn past_flag(ev: &Ev, dot_pos: i64) -> f64 {
+    if !ev.up || ev.beam.is_some() || ev.base <= 1 || flags(ev.base) == 0 {
+        return 0.0;
+    }
+    let flag = glyph(&flag_name(ev.base, true));
+    let anchor = flag.anchors.get("stemUpNW").copied().unwrap_or([0.0, 0.0]);
+    let (top, bottom) = (ev.stem_end - anchor[1] + flag.bbox[1], ev.stem_end - anchor[1] + flag.bbox[3]);
+    let dot = glyph("augmentationDot");
+    let y = y_of(dot_pos);
+    if y + dot.bbox[3] + 0.1 <= top || y + dot.bbox[1] - 0.1 >= bottom {
+        return 0.0;
+    }
+    stem_x(ev) - ev.x - RULE.stem - anchor[0] + flag.bbox[2] + 0.2
 }
 
 fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
@@ -1422,4 +1448,45 @@ fn draw_ring(pen: &mut Pen, x: f64, y: f64, r: f64, t: f64) {
     let mut cmds = circle(r, 1.0);
     cmds.extend(circle(r - t, -1.0));
     pen.fill(&cmds, 0.0, 0.0);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+
+    /// A dotted eighth, stem up and unbeamed: on a line its dot goes in the
+    /// space above, where the flag hangs — it stands past the flag; in a
+    /// space, under the flag's tip, it stays by the head.
+    #[test]
+    fn a_dotted_eighths_dot_stands_past_its_flag() {
+        let eng = crate::engrave(r"{ \time 2/4 g'8.~ g'4 r16 | f'8.~ f'4 r16 | a'8.~ a'4 r16 }", 120.0, &crate::Layout::default()).unwrap();
+        let dotted: Vec<&Ev> = eng.staves[0].iter().flat_map(|b| &b.items).filter(|e| e.dots == 1 && e.k == Kind::Note).collect();
+        assert_eq!(dotted.len(), 3);
+        let dot_pos = |ev: &Ev| {
+            let pos = ev.heads[0].pos;
+            if pos % 2 == 0 {
+                pos + 1
+            } else {
+                pos
+            }
+        };
+        let flag = glyph(&flag_name(8, true));
+        for ev in &dotted {
+            assert!(ev.up && ev.beam.is_none(), "a lone eighth, stem up");
+            let flag_right = stem_x(ev) - ev.x - RULE.stem - flag.anchors["stemUpNW"][0] + flag.bbox[2];
+            let moved = past_flag(ev, dot_pos(ev));
+            let flag_bottom = ev.stem_end + flag.bbox[3];
+            let dot_top = y_of(dot_pos(ev)) - 0.224;
+            if dot_top < flag_bottom {
+                // The flag reaches the dot's height: the dot starts right of it.
+                assert!(moved >= flag_right + 0.1, "the dot at {moved} is under the flag ending at {flag_right}");
+            } else {
+                assert!(moved == 0.0, "a dot clear of the flag stays by its head");
+            }
+        }
+        // g' is on a line (its dot under the flag), f' and a' in a space.
+        assert!(past_flag(dotted[0], dot_pos(dotted[0])) > 0.0);
+        assert!(past_flag(dotted[2], dot_pos(dotted[2])) == 0.0);
+    }
 }

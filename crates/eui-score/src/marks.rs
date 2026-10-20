@@ -3,6 +3,7 @@
 //! marks, and how far all of it reaches (`eui_builders_score.sl`, "Ties and
 //! slurs" and "Expression").
 
+use crate::draw::{dot_start, past_flag};
 use crate::engrave::{barline_width, clef_glyph, rest_name, stem_x, y_of, Line};
 use crate::glyphs::{glyph, Weight};
 use crate::measure::Bar;
@@ -327,7 +328,15 @@ fn tie(lines: &mut [Line], ev: &Ev, pos: i64, nxt: &Ev, other: i64, over: bool) 
     let dir = if over { -1.0 } else { 1.0 };
     let y = y_of(pos) + dir * 0.35;
     let y2 = y_of(other) + dir * 0.35;
-    let xa = ev.x + ev.head_w.unwrap_or(0.0) + 0.15;
+    let mut xa = ev.x + ev.head_w.unwrap_or(0.0) + 0.15;
+    if ev.dots > 0 && over {
+        // A dot moved past its note's flag, out in the space above: a tie
+        // over the note starts after it rather than arching over it.
+        let dot_pos = if pos % 2 == 0 { pos + 1 } else { pos };
+        if past_flag(ev, dot_pos) > 0.0 {
+            xa = xa.max(ev.x + dot_start(ev, dot_pos) + 0.6 * (ev.dots - 1) as f64 + glyph("augmentationDot").advance + 0.15);
+        }
+    }
     let xb = nxt.x - 0.15;
     if ev.sys == nxt.sys {
         arc(&mut lines[ev.sys], xa, y, xb, y2, dir, 1.0, 0.333);
