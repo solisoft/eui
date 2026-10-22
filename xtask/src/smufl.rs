@@ -108,6 +108,8 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     ("noteheadXBlack", '\u{E0A9}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
     ("noteheadCircleX", '\u{E0B3}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
     ("brassMuteOpen", '\u{E5E7}', &[]),
+    ("keyboardPedalPed", '\u{E650}', &[]),
+    ("keyboardPedalUp", '\u{E655}', &[]),
     ("brassMuteClosed", '\u{E5E5}', &[]),
 ];
 
@@ -188,6 +190,8 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("noteheadCircleX", "noteheads.s2xcircle", 0.0),
     ("brassMuteOpen", "scripts.open", 0.0),
     ("brassMuteClosed", "scripts.stopped", 0.0),
+    ("keyboardPedalPed", "pedal.Ped", 0.0),
+    ("keyboardPedalUp", "pedal.*", 0.0),
 ];
 
 /// Where a named face's flag meets its stem: its origin is a little in from

@@ -147,6 +147,14 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
                 }
                 stolen = take;
             }
+            // The sustain pedal, controller 64, with the note it is written
+            // on: let go before the notes there start, pressed with them.
+            if ev.pedal_off {
+                ev_out.push((t0, 0, vec![(176 + channel) as u8, 64, 0]));
+            }
+            if ev.pedal_on {
+                ev_out.push((t0, 1, vec![(176 + channel) as u8, 64, 127]));
+            }
             let t0 = t0 + stolen;
             let span = span - stolen;
             if ev.k != Kind::Note {

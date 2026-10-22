@@ -942,6 +942,12 @@ pub struct Ev {
     pub arpeggio: bool,
     /// `\glissando` to the next note.
     pub gliss: bool,
+    /// `\sustainOn`: the sustain pedal pressed with this note, "Ped."
+    /// under the staff.
+    pub pedal_on: bool,
+    /// `\sustainOff`: let go with this note, "*" — before it is pressed
+    /// again, when a note has both (`\sustainOff\sustainOn`).
+    pub pedal_off: bool,
     /// `c4:16`: the note repeated in sixteenths, strokes across its stem.
     pub tremolo: i64,
     /// `\ottava`'s octaves where the note stands; on `Kind::Ottava`, the new
@@ -2535,6 +2541,25 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             last_note(&mut st.events, &tk)?.gliss = true;
             return Ok(i + 1);
         }
+        "sustainOn" | "sustainOff" => {
+            // Drawn as LilyPond's default pedal style, text: "Ped." and "*"
+            // under the staff, at the note.
+            let on = word == "sustainOn";
+            let last = last_item(&mut st.events, &tk)?;
+            if on {
+                last.pedal_on = true;
+            } else {
+                last.pedal_off = true;
+            }
+            let glyph = if on { "keyboardPedalPed" } else { "keyboardPedalUp" };
+            // Let go and pressed again on one note: "* Ped." side by side.
+            let pedal = last.texts.iter_mut().find(|w| w.dir > 0 && w.runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal")));
+            match pedal {
+                Some(w) => w.runs.push(Run::glyph(glyph)),
+                None => last.texts.push(Words { text: String::new(), dir: 1, runs: vec![Run::glyph(glyph)] }),
+            }
+            return Ok(i + 1);
+        }
         "startTrillSpan" => {
             last_note(&mut st.events, &tk)?.scripts.push(Script { name: "trill".into(), dir: 0 });
             return Ok(i + 1);
@@ -2557,6 +2582,22 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             }
             st.events.push(Ev { k: Kind::Ottava, ottava: sign * n, at: tk.at, ..Ev::default() });
             return Ok(j + 1);
+        }
+        "jump" | "fine" => {
+            // LilyPond 2.24's jumps: `\jump "D.S. al Coda"`, `\fine`. Set in
+            // italics at the end of the bar they are written after, against
+            // its bar line; `dir` 1 tells them from a mark over it.
+            let (runs, j) = if word == "fine" {
+                (vec![Run::words("Fine", Weight::Italic)], i + 1)
+            } else {
+                match toks.get(i + 1) {
+                    Some(t) if t.t == T::Str => (vec![Run::words(t.v.clone(), Weight::Italic)], i + 2),
+                    Some(t) if t.t == T::Cmd && t.v == "markup" => markup(toks, i + 2, t.at)?,
+                    _ => return refuse("\\jump wants a string or \\markup", tk.at),
+                }
+            };
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: 1, runs }], at: tk.at, ..Ev::default() });
+            return Ok(j);
         }
         "mark" | "segnoMark" | "codaMark" => {
             let (runs, j) = match word {

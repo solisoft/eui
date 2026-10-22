@@ -22,6 +22,15 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ## [Unreleased]
 
+### Added
+
+- A score reads the sustain pedal, `\sustainOn` and `\sustainOff`: "Ped."
+  and "*" under the staff (Emmentaler's own signs, two glyphs added to the
+  table through `xtask smufl`), and the pedal held in MIDI (controller 64).
+- A score reads LilyPond 2.24's jumps, `\jump "D.S. al Coda"` and `\fine`,
+  set in italics against the bar line that ends their bar; a rehearsal
+  mark at the same bar line stands over them instead of through them.
+
 ### Fixed
 
 - A score's ending bracket ("1.", "2.") stands over the words above the

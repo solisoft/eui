@@ -232,3 +232,41 @@ fn an_edit_leaves_what_it_cannot_rewrite() {
     let it = item("melody = { c'4 d' }\n{ \\melody }", 1).unwrap().unwrap();
     assert_eq!(&"melody = { c'4 d' }"[it.spans[0].clone()], "d'", "a variable's note is rewritten where it is defined");
 }
+
+#[test]
+fn the_sustain_pedal_is_drawn_under_the_staff_and_held_down_in_the_midi() {
+    let src = r"\relative c' { \clef bass c,4\sustainOn e g c\sustainOff | <c, e g>1\sustainOff\sustainOn | c1\sustainOff }";
+    let p = read(src);
+    let notes: Vec<_> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
+    assert!(notes[0].pedal_on && !notes[0].pedal_off);
+    assert!(notes[3].pedal_off && !notes[3].pedal_on);
+    assert!(notes[4].pedal_off && notes[4].pedal_on, "let go and pressed again on one chord");
+    let change: Vec<_> = notes[4].texts.iter().filter(|w| w.dir == 1).collect();
+    assert_eq!(change.len(), 1, "one line of signs");
+    assert_eq!(change[0].runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["keyboardPedalUp", "keyboardPedalPed"], "* then Ped.");
+    assert!(notes[0].texts.iter().any(|w| w.dir == 1 && w.runs.iter().any(|r| r.glyph && r.text == "keyboardPedalPed")), "Ped. under the staff");
+    assert!(notes[3].texts.iter().any(|w| w.runs.iter().any(|r| r.glyph && r.text == "keyboardPedalUp")), "* where it is let go");
+    engrave(src, 80.0, &Layout::default()).unwrap();
+    let bytes = midi(src, &MidiOptions::default()).unwrap();
+    let down = bytes.windows(3).filter(|w| w == &[0xB0, 64, 127]).count();
+    let up = bytes.windows(3).filter(|w| w == &[0xB0, 64, 0]).count();
+    assert_eq!((down, up), (2, 3), "controller 64 down and up, as written");
+    assert!(parse(r"{ \sustainOn c'4 }").is_err(), "a pedal goes after its note");
+}
+
+#[test]
+fn a_jump_ends_its_bar_and_stands_over_the_next_bars_mark() {
+    let src = r#"{ c'1 \jump "D.S. al Coda" | \mark \default d'1 | e'1 \fine }"#;
+    let p = read(src);
+    let marks: Vec<_> = p.staves[0].events.iter().filter(|e| e.k == Kind::Mark).collect();
+    assert_eq!(marks.len(), 3);
+    assert_eq!(marks[0].texts[0].dir, 1, "a jump");
+    assert_eq!(marks[2].texts[0].runs[0].text, "Fine");
+    let bars = measures(&p.staves[0].events).unwrap();
+    assert_eq!(bars[0].marks.len(), 1, "the D.S. ends bar 1");
+    assert_eq!(bars[0].marks[0].0, bars[0].length);
+    assert_eq!(bars[1].marks.len(), 1, "the letter starts bar 2");
+    assert_eq!(bars[2].marks.last().unwrap().0, bars[2].length, "Fine ends the last bar");
+    engrave(src, 60.0, &Layout::default()).unwrap();
+    assert!(parse(r"{ c'1 \jump 3 }").is_err());
+}

@@ -125,7 +125,8 @@ pub struct Bar {
     /// It holds a cadenza: no metre, so no beams but the ones written.
     pub cadenza: bool,
     /// Rehearsal marks, segni and codas: where in the bar, in ticks — 0 its
-    /// start, its length its end — and what they say.
+    /// start, its length its end — and what they say. A jump (`\jump`,
+    /// `\fine`, its `dir` 1) is at the end of the bar it follows.
     pub marks: Vec<(i64, Words)>,
 }
 
@@ -463,7 +464,13 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             }
             Kind::Mark => {
                 if let Some(w) = ev.texts.first() {
-                    bars[ci].marks.push((pos, w.clone()));
+                    // A jump written at a bar line ends the bar before it.
+                    if w.dir > 0 && pos == 0 && ci > 0 {
+                        let end = bars[ci - 1].length;
+                        bars[ci - 1].marks.push((end, w.clone()));
+                    } else {
+                        bars[ci].marks.push((pos, w.clone()));
+                    }
                 }
                 continue;
             }

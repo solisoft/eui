@@ -645,7 +645,10 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
             let runs = words.pieces();
             let w = runs_width(&runs, e);
             let (_, foot) = runs_box(&runs, e);
-            let x = if *pos >= bar.length {
+            let x = if *pos >= bar.length && words.dir > 0 {
+                // A jump ends at its bar line, as LilyPond right-aligns it.
+                bar.x1 + barline_width(bar.drawn()) / 2.0 - w
+            } else if *pos >= bar.length {
                 bar.x1 + barline_width(bar.drawn()) / 2.0 - w / 2.0
             } else if *pos == 0 && bi == 0 {
                 line.left
@@ -674,6 +677,15 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
             for vb in &line.voltas {
                 if vb.x0 < x + w && vb.x1 > x {
                     low = low.min(vb.y - 0.4);
+                }
+            }
+            // Two marks at one bar line — a D.S. ending a bar, a letter
+            // starting the next — stand one over the other.
+            for placed in &out {
+                let MarkPlace { runs: other, x: ox, y: oy } = placed;
+                if *ox < x + w + 0.3 && *ox + runs_width(other, e) > x - 0.3 {
+                    let (top, _) = runs_box(other, e);
+                    low = low.min(oy + top - 0.4 + 0.8 + foot);
                 }
             }
             // An ottava's figure just after the bar line still sits under it.

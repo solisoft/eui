@@ -587,7 +587,11 @@ construct as LilyPond 2.25 draws it:
   `<c-1 e-3>`, the lower half of a chord's under it); `\markup` with
   `\bold`, `\italic`, `\musicglyph` and the commands that only size or
   move words; `\mark \default`, `\mark "A"`, `\mark 5`, `\segnoMark`,
-  `\codaMark`; `\ottava` with its bracket; phrasing slurs `\( \)`;
+  `\codaMark`, and the jumps `\jump "D.S. al Coda"` and `\fine`, set in
+  italics against the bar line they end at (marks at one bar line stand
+  one over the other); the sustain pedal `\sustainOn` / `\sustainOff`,
+  "Ped." and "*" under the staff, side by side on a note with both, and
+  controller 64 in MIDI; `\ottava` with its bracket; phrasing slurs `\( \)`;
   `\trill`, `\prall`, `\mordent`, `\turn`; `\arpeggio`; `\glissando`;
   tremolo strokes `c4:16`, played as the repetition.
 - *Other staves*: `\new ChordNames` and `\chords` (`\chordmode`'s `m`,
