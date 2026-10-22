@@ -317,3 +317,21 @@ fn verses_stand_one_under_another_each_on_the_same_notes() {
         "verses sung to two voices"
     );
 }
+
+#[test]
+fn a_name_with_a_flat_or_a_sharp_prints_them() {
+    use eui_score::glyphs::{letters, Weight};
+    use eui_score::text::text_width;
+    // "Clarinet in B♭": the text faces have the accidentals, drawn from the music font.
+    for weight in [Weight::Regular, Weight::Bold, Weight::Italic] {
+        for sign in ['♭', '♯', '♮'] {
+            let letter = letters().face(weight).get(&sign).expect("the sign is in the face");
+            assert!(!letter.f.is_empty() && letter.a > 200.0, "{sign} has an outline and room");
+        }
+    }
+    let plain = text_width("Clarinet in B", Weight::Bold, 1.0);
+    assert!(text_width("Clarinet in B♭", Weight::Bold, 1.0) > plain + 0.25, "the flat takes its own room");
+    let src = r#"\new Staff \with { instrumentName = "Clarinet in B♭" } { c'1 }"#;
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+}
