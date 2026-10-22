@@ -440,16 +440,13 @@ fn syllables(items: &[LyricItem], at: usize) -> Result<Vec<Syllable>, ScoreError
 }
 
 /// `\addlyrics { … }` after a staff's music: its words, one syllable a
-/// note. One verse a staff is what this sets.
+/// note; each `\addlyrics` after the first a verse under it.
 fn attach_lyrics(toks: &[Tok], mut i: usize, staves: &mut [Staff]) -> Result<usize, ScoreError> {
     while is_cmd(toks, i, "addlyrics") {
         let at = toks[i].at;
         let Some(last) = staves.last_mut() else {
             return refuse("\\addlyrics follows a staff's music", at);
         };
-        if last.lyrics.is_some() {
-            return refuse("one verse of lyrics a staff is what this sets", at);
-        }
         let mut j = i + 1;
         if is_cmd(toks, j, "lyricmode") {
             j += 1;
@@ -457,11 +454,26 @@ fn attach_lyrics(toks: &[Tok], mut i: usize, staves: &mut [Staff]) -> Result<usi
         if !is(toks, j, T::Lyrics) {
             return refuse("\\addlyrics wants a { block } of words", at);
         }
-        last.lyrics = Some(syllables(&toks[j].lyrics, at)?);
-        last.lyrics_voice = 1;
+        let words = syllables(&toks[j].lyrics, at)?;
+        add_verse(last, words, 1, at)?;
         i = j + 1;
     }
     Ok(i)
+}
+
+/// A verse of a staff's lyrics, sung to its voice `voice`: the first, or
+/// one more under the ones before — all sung to one voice.
+fn add_verse(staff: &mut Staff, words: Vec<Syllable>, voice: u8, at: usize) -> Result<(), ScoreError> {
+    if staff.lyrics.is_none() {
+        staff.lyrics = Some(words);
+        staff.lyrics_voice = voice;
+        return Ok(());
+    }
+    if staff.lyrics_voice != voice {
+        return refuse("a staff's verses are sung to one voice", at);
+    }
+    staff.verses.push(words);
+    Ok(())
 }
 
 /// A language LilyPond names its notes in (`\language`).
@@ -1023,6 +1035,8 @@ pub struct Ev {
     pub arp_x: Option<f64>,
     /// Its syllable, centred under its head.
     pub lyric: Option<Syllable>,
+    /// Its syllables of the verses after the first, a line each.
+    pub verses: Vec<Option<Syllable>>,
     /// It holds the syllable of a note before it: a melisma.
     pub lyric_held: bool,
 }
@@ -1140,8 +1154,11 @@ pub struct Staff {
     pub events: Vec<Ev>,
     /// Its settings.
     pub props: Props,
-    /// Its `\addlyrics` or `\lyricsto`, a syllable a note.
+    /// Its `\addlyrics` or `\lyricsto`, a syllable a note: the first verse.
     pub lyrics: Option<Vec<Syllable>>,
+    /// The verses after the first, each set on its own line under the one
+    /// before, sung to the same voice.
+    pub verses: Vec<Vec<Syllable>>,
     /// The voice they are sung to: 1, or 2 for the second of two.
     pub lyrics_voice: u8,
     /// Its voices' names, `\new Voice = "name"`, and their numbers.
@@ -1514,11 +1531,8 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             return refuse(format!("\\lyricsto \"{}\" names no voice: a \\new Voice = \"{}\" is what it sings to", p.voice, p.voice), p.at);
         };
         let staff = &mut staves[si];
-        if staff.lyrics.is_some() {
-            return refuse("one verse of lyrics a staff is what this sets", p.at);
-        }
-        staff.lyrics_voice = staff.voices.iter().find(|v| v.0 == p.voice).map_or(1, |v| v.1);
-        staff.lyrics = Some(p.syllables);
+        let voice = staff.voices.iter().find(|v| v.0 == p.voice).map_or(1, |v| v.1);
+        add_verse(staff, p.syllables, voice, p.at)?;
     }
     Ok(Parsed { header: st.header, staves, groups })
 }
@@ -1773,11 +1787,7 @@ fn lyrics_part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut [Staff]) 
         Some(v) => st.pending.push(Pending { voice: v, syllables, at }),
         None => {
             let Some(last) = staves.last_mut() else { return refuse("\\new Lyrics follows the staff it is sung to", at) };
-            if last.lyrics.is_some() {
-                return refuse("one verse of lyrics a staff is what this sets", at);
-            }
-            last.lyrics = Some(syllables);
-            last.lyrics_voice = 1;
+            add_verse(last, syllables, 1, at)?;
         }
     }
     Ok(i)
@@ -1892,7 +1902,7 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
     }
     base.counter = st.items;
     base.notes = st.notes;
-    staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, lyrics_voice: 1, voices: st.voice_names });
+    staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names });
     Ok(i)
 }
 

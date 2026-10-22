@@ -1143,12 +1143,20 @@ fn texts(bars: &[Bar], line: &mut Line) {
 /// below it — notes, stems, slurs, dynamics, words — and never nearer the
 /// staff than 1.2 spaces from its bottom line to the top of the letters.
 fn lyric_line(bars: &[Bar], line: &mut Line) {
-    let has = line.bars.clone().any(|b| bars[b].items.iter().any(|ev| ev.lyric.is_some()));
+    let items = || line.bars.clone().flat_map(|b| bars[b].items.iter());
+    let has = items().any(|ev| ev.lyric.is_some() || ev.verses.iter().any(Option::is_some));
     if !has {
         return;
     }
     let e = em(0.0);
     line.lyric_y = Some((reach(bars, line).1 + 0.6).max(5.2) + 0.72 * e);
+    line.lyric_lines = 1 + items().map(|ev| ev.verses.len()).max().unwrap_or(0);
+}
+
+/// From one verse's baseline to the next's, as LilyPond stacks a staff's
+/// Lyrics contexts.
+pub(crate) fn verse_gap() -> f64 {
+    1.35 * em(0.0)
 }
 
 fn voltas(bars: &[Bar], line: &Line) -> Vec<Volta> {
@@ -1320,7 +1328,7 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
         }
     }
     if let Some(ly) = line.lyric_y {
-        lo = lo.max(ly + 0.25 * em(0.0) + 0.6);
+        lo = lo.max(ly + verse_gap() * line.lyric_lines.saturating_sub(1) as f64 + 0.25 * em(0.0) + 0.6);
     }
     for ot in &line.ottavas {
         let (t, b) = text_box(&ot.text, Weight::Bold, ottava_em());

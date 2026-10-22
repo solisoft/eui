@@ -300,3 +300,20 @@ fn a_note_past_its_bar_line_is_cut_into_tied_notes() {
     assert_eq!(b, 1, "b'2 from the second beat fits its bar");
     engrave(r"{ << { c''1 d''1 } \\ { a'2. b'2 g'2 r4 } >> }", 80.0, &Layout::default()).unwrap();
 }
+
+#[test]
+fn verses_stand_one_under_another_each_on_the_same_notes() {
+    let src = r#"\relative c'' { c4 d e( f) | g1 } \addlyrics { Ah, vous di -- rai } \addlyrics { Al -- lons en -- fants }"#;
+    let p = read(src);
+    assert_eq!(p.staves[0].verses.len(), 1, "a second verse");
+    assert_eq!(p.staves[0].verses[0][1].text, "lons");
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+    // \new Lyrics \lyricsto: two verses to one voice; to two voices, refused.
+    let named = r#"<< \new Staff { \new Voice = "m" { c''4 d'' } } \new Lyrics \lyricsto "m" { la la } \new Lyrics \lyricsto "m" { lo lo } >>"#;
+    assert_eq!(read(named).staves[0].verses.len(), 1);
+    assert!(
+        parse(r#"\new Staff { << \new Voice = "a" { \voiceOne c''4 } \new Voice = "b" { \voiceTwo a'4 } >> } \addlyrics { la } \new Lyrics \lyricsto "b" { lo }"#).is_err(),
+        "verses sung to two voices"
+    );
+}

@@ -64,6 +64,8 @@ pub struct Line {
     pub texts: Vec<TextPlace>,
     /// The baseline its syllables stand on, when it has any.
     pub lyric_y: Option<f64>,
+    /// How many lines of lyrics it holds: its verses, one under another.
+    pub lyric_lines: usize,
     /// Hairpins, before they are placed.
     pub hairpins: Vec<HairpinPiece>,
     /// In a score of several staves, which.
@@ -595,6 +597,11 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
 /// takes none; rests take none; syllables past the last note are dropped,
 /// as LilyPond drops them.
 fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8) {
+    verse_assign(bars, sylls, voice, 0);
+}
+
+/// Verse `verse` (0 the first) onto the notes, as [`lyrics_assign`] does.
+fn verse_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8, verse: usize) {
     let Some(sylls) = sylls else { return };
     let mut k = 0;
     let mut tied = false;
@@ -607,7 +614,14 @@ fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8) {
             if tied || slurred {
                 ev.lyric_held = true;
             } else if let Some(s) = sylls.get(k) {
-                ev.lyric = Some(s.clone());
+                if verse == 0 {
+                    ev.lyric = Some(s.clone());
+                } else {
+                    if ev.verses.len() < verse {
+                        ev.verses.resize(verse, None);
+                    }
+                    ev.verses[verse - 1] = Some(s.clone());
+                }
                 k += 1;
             }
             tied = ev.tie;
@@ -620,15 +634,15 @@ fn lyrics_assign(bars: &mut [Bar], sylls: Option<&[Syllable]>, voice: u8) {
 /// LilyPond's 0.35 of word space beyond, more after it when a hyphen
 /// follows.
 fn lyric_room(ev: &mut Ev) {
-    let Some(lyr) = &ev.lyric else { return };
-    if lyr.text.is_empty() {
-        return;
+    // The widest syllable of every verse sung on the note.
+    let sung: Vec<Syllable> = ev.lyric.iter().chain(ev.verses.iter().flatten()).filter(|l| !l.text.is_empty()).cloned().collect();
+    for lyr in sung {
+        let w = text_width(&lyr.text, Weight::Regular, em(0.0));
+        let c = ev.head_w.unwrap_or(0.0) / 2.0;
+        let after = if lyr.hyphen { 0.9 } else { 0.35 };
+        ev.right = ev.right.max(c + w / 2.0 + after);
+        ev.left = ev.left.max(w / 2.0 - c + 0.35);
     }
-    let w = text_width(&lyr.text, Weight::Regular, em(0.0));
-    let c = ev.head_w.unwrap_or(0.0) / 2.0;
-    let after = if lyr.hyphen { 0.9 } else { 0.35 };
-    ev.right = ev.right.max(c + w / 2.0 + after);
-    ev.left = ev.left.max(w / 2.0 - c + 0.35);
 }
 
 /// Rests of two voices clear of the other voice's notes, as LilyPond's
@@ -1526,6 +1540,9 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     let kind = parsed.staves[0].kind;
     let mut bars = measures(&parsed.staves[0].events)?;
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
+    for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
+        verse_assign(&mut bars, Some(verse), parsed.staves[0].lyrics_voice, k + 1);
+    }
     if beamed(kind) {
         beams(&mut bars)?;
     }
@@ -1677,6 +1694,9 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
     }
     for (si, bars) in all.iter_mut().enumerate() {
         lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);
+        for (k, verse) in staves_src[si].verses.iter().enumerate() {
+            verse_assign(bars, Some(verse), staves_src[si].lyrics_voice, k + 1);
+        }
         if beamed(staves_src[si].kind) {
             beams(bars)?;
         }

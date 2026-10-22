@@ -152,10 +152,10 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
 }
 
 /// What this engraver reads and the Soli one refuses: the LilyPond protocol
-/// 11 adds (03 §1.4). `tests/lilypond.rs` holds what each draws. The last
-/// two run past a bar line: cut into tied notes here, as LilyPond's
-/// Completion_heads_engraver cuts them.
-const BEYOND: [&str; 7] = [
+/// 11 adds (03 §1.4). `tests/lilypond.rs` holds what each draws. Two run
+/// past a bar line: cut into tied notes here, as LilyPond's
+/// Completion_heads_engraver cuts them; the last sets a second verse.
+const BEYOND: [&str; 8] = [
     "{ \\clef tenor c'4 }",
     "{ c'1 \\repeat unfold 2 { c'4 } }",
     "{ << { c'4 } >> }",
@@ -163,6 +163,7 @@ const BEYOND: [&str; 7] = [
     "{ c'4 s4 }",
     "{ c'4 d'4 e'4 f'4 g'4 a'4 b'4 c''4 d''2 e''2 f''1 g''1 a''1 b''1 c'''1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'2 c'1 }",
     "{ c'4 c'4 c'4 c'4 c'2. c'2 }",
+    "{ c'4 } \\addlyrics { la } \\addlyrics { lo }",
 ];
 
 /// What both refuse, this one saying more of why.

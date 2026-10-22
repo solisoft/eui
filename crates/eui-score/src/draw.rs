@@ -10,9 +10,9 @@ use crate::engrave::{
     Engraved, Line, System, GRACE_K,
 };
 use crate::glyphs::{glyph, letters, Weight};
-use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, reach, rest_lift, run_em, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
+use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, reach, rest_lift, run_em, verse_gap, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
 use crate::measure::{clef_mid, Bar, Beam, Opening};
-use crate::parse::{modulo, Clef, Ev, GraceKind, GroupKind, Kind, Run, Sign, StaffKind};
+use crate::parse::{modulo, Clef, Ev, GraceKind, GroupKind, Kind, Run, Sign, StaffKind, Syllable};
 use crate::text::{args_of, em, text_box, text_width};
 use crate::RULE;
 
@@ -583,7 +583,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         draw_mark(&mut pen, mk, top);
     }
     if let Some(ly) = line.lyric_y {
-        draw_lyrics(&mut pen, bars, line, top + ly);
+        for verse in 0..line.lyric_lines.max(1) {
+            draw_lyrics(&mut pen, bars, line, top + ly + verse_gap() * verse as f64, verse);
+        }
     }
     if line.courtesy > 0.0 {
         if let Some(Courtesy::Single(o)) = &line.courtesy_bar {
@@ -597,13 +599,13 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
 /// they stand close and none where they touch, after the last syllable of a
 /// line whose word goes on; an extender at the foot of the letters from a
 /// held syllable's end to the last head it is held over.
-fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
+fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
     let e = em(0.0);
     // The voice they are sung to: the one whose notes hold them.
-    let sung = line.bars.clone().flat_map(|b| bars[b].items.iter()).find(|ev| ev.lyric.is_some() || ev.lyric_held).map_or(1, voice_of);
+    let sung = line.bars.clone().flat_map(|b| bars[b].items.iter()).find(|ev| verse_of(ev, verse).is_some() || ev.lyric_held).map_or(1, voice_of);
     let notes: Vec<&Ev> = line.bars.clone().flat_map(|b| bars[b].items.iter()).filter(|ev| ev.k == Kind::Note && voice_of(ev) == sung).collect();
     for (k, ev) in notes.iter().enumerate() {
-        let Some(lyr) = &ev.lyric else { continue };
+        let Some(lyr) = verse_of(ev, verse) else { continue };
         let w = if lyr.text.is_empty() { 0.0 } else { text_width(&lyr.text, Weight::Regular, e) };
         let x0 = ev.x + ev.head_w.unwrap_or(0.0) / 2.0 - w / 2.0;
         let x1 = x0 + w;
@@ -615,7 +617,7 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
         let mut j = k + 1;
         while j < notes.len() && nxt.is_none() {
             let other = notes[j];
-            if other.lyric.is_none() {
+            if verse_of(other, verse).is_none() {
                 if other.lyric_held {
                     held = Some(other);
                 }
@@ -626,7 +628,7 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
         }
         if lyr.hyphen && w > 0.0 {
             let n0 = match nxt {
-                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - nx.lyric.as_ref().map_or(0.0, |l| text_width(&l.text, Weight::Regular, e)) / 2.0,
+                Some(nx) => nx.x + nx.head_w.unwrap_or(0.0) / 2.0 - verse_of(nx, verse).map_or(0.0, |l| text_width(&l.text, Weight::Regular, e)) / 2.0,
                 None => line.right,
             };
             let len = 0.66_f64.min(n0 - x1 - 0.3);
@@ -641,6 +643,15 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64) {
                 pen.rect(x1 + 0.2, y - 0.05, end_x - x1 - 0.2, 0.1);
             }
         }
+    }
+}
+
+/// Verse `verse`'s syllable on a note: the first verse's own, or one after it.
+fn verse_of(ev: &Ev, verse: usize) -> Option<&Syllable> {
+    if verse == 0 {
+        ev.lyric.as_ref()
+    } else {
+        ev.verses.get(verse - 1).and_then(Option::as_ref)
     }
 }
 
