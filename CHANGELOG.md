@@ -24,6 +24,10 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A note or a rest longer than what is left of its bar is cut at the bar
+  lines into tied notes (rests), in either voice of a staff, as LilyPond's
+  `Completion_heads_engraver` cuts it — `\time 3/4 c'2 d'2` was refused
+  with "a note runs past the bar line".
 - A score reads the sustain pedal, `\sustainOn` and `\sustainOff`: "Ped."
   and "*" under the staff (Emmentaler's own signs, two glyphs added to the
   table through `xtask smufl`), and the pedal held in MIDI (controller 64).

@@ -168,6 +168,85 @@ pub fn clef_mid(clef: Clef) -> i64 {
     named + 7 * clef.octave - clef.line
 }
 
+/// Written values, longest first: `(base, dots, ticks)` — whole to 32nd,
+/// with up to two dots.
+fn values() -> Vec<(i64, i64, i64)> {
+    let mut out = Vec::new();
+    for base in [1, 2, 4, 8, 16, 32] {
+        for dots in 0..=2 {
+            let one = WHOLE / base;
+            let ticks = one * (2 * (1 << dots) - 1) / (1 << dots);
+            if one % (1 << dots) == 0 {
+                out.push((base, dots, ticks));
+            }
+        }
+    }
+    out.sort_by_key(|v| -v.2);
+    out
+}
+
+/// `ticks` as written values, as few as can be, longest first; none when
+/// no sum of them makes it.
+fn spell(mut ticks: i64) -> Option<Vec<(i64, i64, i64)>> {
+    let mut out = Vec::new();
+    while ticks > 0 {
+        let v = values().into_iter().find(|v| v.2 <= ticks)?;
+        out.push(v);
+        ticks -= v.2;
+    }
+    Some(out)
+}
+
+/// A note or rest that runs past its bar line, as the pieces it is written
+/// in: `room` ticks in its own bar, then whole bars of `length`, then what is
+/// left. A note's pieces are tied, each to the next; what belongs to its
+/// start (dynamics, scripts, words, a slur's start, grace notes) stays on
+/// the first, what belongs to its end (a slur's end, its own tie, a
+/// glissando) on the last.
+fn cut_at_bar_lines(ev: &Ev, room: i64, length: i64) -> Option<Vec<Ev>> {
+    let mut spans = vec![room];
+    let mut left = ev.ticks - room;
+    while left > 0 {
+        spans.push(left.min(length));
+        left -= length;
+    }
+    let mut out = Vec::new();
+    for span in spans {
+        for (base, dots, ticks) in spell(span)? {
+            let mut piece = ev.clone();
+            piece.base = base;
+            piece.dots = dots;
+            piece.ticks = ticks;
+            out.push(piece);
+        }
+    }
+    let last = out.len() - 1;
+    for (k, piece) in out.iter_mut().enumerate() {
+        if k > 0 {
+            piece.dynamic = None;
+            piece.hairpin = None;
+            piece.scripts.clear();
+            piece.texts.clear();
+            piece.fingers.clear();
+            piece.slur_on = false;
+            piece.phrase_on = false;
+            piece.graces.clear();
+            piece.arpeggio = false;
+            piece.pedal_on = false;
+            piece.pedal_off = false;
+            piece.chord_name.clear();
+        }
+        if k < last {
+            piece.slur_off = false;
+            piece.phrase_off = false;
+            piece.hairpin_end = false;
+            piece.gliss = false;
+            piece.tie = piece.k == Kind::Note;
+        }
+    }
+    Some(out)
+}
+
 fn kind_name(k: &Kind) -> &'static str {
     match k {
         Kind::Clef => "clef",
@@ -200,8 +279,17 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
         p.at = at + ev.ticks;
         return Ok(());
     }
+    let pos = at - bars[bi].tick0;
+    if pos + ev.ticks > bars[bi].length && ev.tuplet.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
+        // Past the bar line, cut as the first voice's notes are.
+        if let Some(pieces) = cut_at_bar_lines(&ev, bars[bi].length - pos, bars[bi].length) {
+            for piece in pieces {
+                voice_two(bars, piece, p)?;
+            }
+            return Ok(());
+        }
+    }
     let bar = &mut bars[bi];
-    let pos = at - bar.tick0;
     if pos + ev.ticks > bar.length {
         return refuse(format!("a note runs past the bar line (bar {})", bi + 1), ev.at);
     }
@@ -525,6 +613,21 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             rest.ticks -= room;
             ev.ticks = room;
             queue.push_front(rest);
+        }
+        if pos + ev.ticks > bars[ci].length && !cadenza && ev.tuplet.is_none() && ev.mm.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
+            // A note longer than what is left of its bar is cut at the bar
+            // lines into tied notes, as LilyPond's Completion_heads_engraver
+            // cuts it; a rest into rests. Each piece is written as few
+            // values as can be.
+            if let Some(pieces) = cut_at_bar_lines(&ev, bars[ci].length - pos, bars[ci].length) {
+                let mut pieces = pieces.into_iter();
+                if let Some(first) = pieces.next() {
+                    for piece in pieces.rev() {
+                        queue.push_front(piece);
+                    }
+                    ev = first;
+                }
+            }
         }
         if pos + ev.ticks > bars[ci].length {
             return refuse(format!("a note runs past the bar line (bar {})", bars.len()), ev.at);

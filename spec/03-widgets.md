@@ -1348,7 +1348,9 @@ expandable row, tree table, grid, multi-select list, list item, chart, stat, cod
 diff, filter builder), markdown (document, document rows for a windowed
 list, block editor and its model), notation (`score`: LilyPond's input —
 a `\header`, `\relative`, clefs, keys, metres and tempo marks that may
-change at any bar, notes, rests, chords, ties, slurs and beams, repeats
+change at any bar, notes, rests, chords, ties, slurs and beams (a note or
+a rest longer than what is left of its bar cut at the bar lines into tied
+notes, or rests, as LilyPond's `Completion_heads_engraver` cuts it), repeats
 (`\repeat volta` with an `\alternative`'s bracketed endings, or the
 `\bar` signs `.|:`, `:|.`, `:|.|:`, and `.|:` before the first note,
 drawn after the clef, key and time as LilyPond draws it), two voices on a

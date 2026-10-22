@@ -270,3 +270,33 @@ fn a_jump_ends_its_bar_and_stands_over_the_next_bars_mark() {
     engrave(src, 60.0, &Layout::default()).unwrap();
     assert!(parse(r"{ c'1 \jump 3 }").is_err());
 }
+
+#[test]
+fn a_note_past_its_bar_line_is_cut_into_tied_notes() {
+    let src = r#"{ \time 3/4 c'2 d'2\p^"dolce"( e'4) | r2 r2 r2 | g'1 a'1 }"#;
+    let p = read(src);
+    let bars = measures(&p.staves[0].events).unwrap();
+    let shape = |b: usize| bars[b].items.iter().map(|e| (e.base, e.dots, e.tie)).collect::<Vec<_>>();
+    assert_eq!(shape(0), [(2, 0, false), (4, 0, true)], "d'2 begins in bar 1, a quarter, tied");
+    assert_eq!(shape(1), [(4, 0, false), (4, 0, false), (4, 0, false)], "and ends in bar 2, before e'4 and a rest's start");
+    let d = &bars[0].items[1];
+    assert_eq!(d.dynamic.as_deref(), Some("p"), "its start keeps the dynamic");
+    assert!(d.slur_on && !d.slur_off);
+    assert!(bars[1].items[0].dynamic.is_none() && bars[1].items[0].texts.is_empty(), "the piece after has none");
+    // A rest is cut into rests, never tied.
+    assert!(bars[2].items.iter().all(|e| e.k == Kind::Rest && !e.tie));
+    // A whole note in 3/4, on the last beat: a quarter tied to a dotted half.
+    let g: Vec<_> = bars.iter().flat_map(|b| &b.items).filter(|e| e.k == Kind::Note && e.pitches[0].d == 11).collect();
+    assert_eq!(g.iter().map(|e| (e.base, e.dots, e.tie)).collect::<Vec<_>>(), [(4, 0, true), (2, 1, false)]);
+    assert_eq!(g.iter().map(|e| e.ticks).sum::<i64>(), eui_score::WHOLE);
+    assert_ne!(g[0].bar, g[1].bar, "on each side of the bar line");
+    engrave(src, 80.0, &Layout::default()).unwrap();
+    assert!(!midi(src, &MidiOptions::default()).unwrap().is_empty());
+    assert!(measures(&read(r"{ \time 3/4 c'2 \tuplet 3/2 { d'4 e' f' } }").staves[0].events).is_err(), "a tuplet is not cut");
+    // A second voice's note too.
+    let two = read(r"{ << { c''2 d''2 e''1 } \\ { a'4 b'2 g'4 g'1 } >> }");
+    let bars = measures(&two.staves[0].events).unwrap();
+    let b = bars[0].items.iter().filter(|e| e.voice == Some(2) && e.pitches.first().is_some_and(|x| x.d == 13)).count();
+    assert_eq!(b, 1, "b'2 from the second beat fits its bar");
+    engrave(r"{ << { c''1 d''1 } \\ { a'2. b'2 g'2 r4 } >> }", 80.0, &Layout::default()).unwrap();
+}
