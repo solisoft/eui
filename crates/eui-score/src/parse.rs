@@ -981,6 +981,12 @@ pub struct Ev {
     /// A `\figuremode` figure's lines, top to bottom: `<6 4>` is two, each
     /// its number and its accidental; an empty line for `_`.
     pub figures: Vec<Vec<Run>>,
+    /// Its size in LilyPond's font-size steps: 0 as usual, `\small` -1,
+    /// `\tiny` -2, `\teeny` and a cue -3; each six steps half the size.
+    pub size: i8,
+    /// A cue note (`\new CueVoice`, `\cueDuring`): another part's, drawn
+    /// small to be read, and not played.
+    pub cue: bool,
     /// A `\drummode` note's strokes.
     pub drums: Vec<Drum>,
     /// The strings a note's heads are played on: `(diatonic number, string)`,
@@ -1090,6 +1096,10 @@ pub enum StaffKind {
     /// `\new FretBoards`: each chord's guitar diagram over the staff below,
     /// its shape found for a guitar in standard tuning.
     FretBoards,
+    /// An ossia: `\new Staff \with { alignAboveContext = … }` inside a
+    /// staff's `<< >>` — another way to play a passage, on a staff over the
+    /// one it belongs to, drawn only where it has notes, and not played.
+    Ossia,
     /// `\new DrumStaff`: a drum kit on five lines.
     Drums,
     /// `\new TabStaff`: a guitar's six strings, and frets on them.
@@ -1264,6 +1274,8 @@ struct Base {
     notes: usize,
     lang: Lang,
     pending: Vec<Pending>,
+    /// `\addQuote "name" { … }`: a part's music that a cue quotes, by name.
+    quotes: HashMap<String, Vec<Ev>>,
 }
 
 struct St {
@@ -1306,6 +1318,16 @@ struct St {
     /// The staff's own name, and the one `\\change Staff` sends its notes to.
     own: Option<String>,
     cross: Option<String>,
+    /// The notes' size from here (`\small`, `\tiny`, `\teeny`, a cue voice).
+    size: i8,
+    /// In a cue voice: drawn small, not played.
+    cue: bool,
+    /// The parts a cue may quote.
+    quotes: std::rc::Rc<HashMap<String, Vec<Ev>>>,
+    /// Where the `<< >>` being read starts in the staff's time.
+    here: i64,
+    /// The ossias read in the staff: where each starts, and its music.
+    ossias: Vec<(i64, Vec<Ev>)>,
 }
 
 #[derive(Clone, Copy)]
@@ -1529,7 +1551,7 @@ fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new() };
+    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new() };
     let mut i = preamble(&toks, 0, &mut st)?;
     let in_score = is_cmd(&toks, i, "score");
     if in_score {
@@ -1620,6 +1642,19 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
                     message: format!("score: the language \"{}\" is not one this reads (nederlands, english, deutsch, italiano, français, español) (at character {})", name.v, name.at),
                 })?;
                 i += 2;
+            }
+            "addQuote" => {
+                // A part's music a cue may quote, read as a staff's and kept by name.
+                beyond();
+                let Some(name) = toks.get(i + 1).filter(|n| n.t == T::Str).map(|n| n.v.clone()) else { return refuse("\\addQuote wants the quote's name, in quotes, then its music", t.at) };
+                if !starts_expr(toks, i + 2) && !is(toks, i + 2, T::Word) {
+                    return refuse("\\addQuote wants the quote's name, in quotes, then its music", t.at);
+                }
+                let (counter, notes) = (st.counter, st.notes);
+                let mut read = Vec::new();
+                i = staff_named(toks, i + 2, st, &mut read, Props::default(), StaffKind::Notes, None)?;
+                (st.counter, st.notes) = (counter, notes);
+                st.quotes.insert(name, read.pop().map(|s| s.events).unwrap_or_default());
             }
             "include" => {
                 let Some(name) = toks.get(i + 1).filter(|n| n.t == T::Str) else { return refuse("\\include wants a file's name, in quotes", t.at) };
@@ -1771,7 +1806,7 @@ fn staff_kind(kind: &str) -> Option<StaffKind> {
 
 /// A context a staff's music is sung in.
 fn voice_kind(kind: &str) -> bool {
-    matches!(kind, "Voice" | "DrumVoice" | "TabVoice")
+    matches!(kind, "Voice" | "DrumVoice" | "TabVoice" | "CueVoice")
 }
 
 /// Whether the `<<` at `i` holds staves, rather than the voices of one.
@@ -2048,6 +2083,11 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         },
         own: name.clone(),
         cross: None,
+        size: 0,
+        cue: false,
+        quotes: std::rc::Rc::new(base.quotes.clone()),
+        here: 0,
+        ossias: Vec::new(),
     };
     match kind {
         StaffKind::Drums => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Percussion, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
@@ -2064,6 +2104,10 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     }
     base.counter = st.items;
     base.notes = st.notes;
+    if !st.ossias.is_empty() {
+        let events = ossia_events(&st.events, std::mem::take(&mut st.ossias))?;
+        staves.push(Staff { kind: StaffKind::Ossia, events, props: Props::default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
+    }
     if kind == StaffKind::FretBoards {
         // Each chord's shape on the guitar, its lowest note the bass; a rest shows none.
         for ev in &mut st.events {
@@ -2201,6 +2245,209 @@ struct Part {
     at: usize,
 }
 
+/// `\new Staff \with { alignAboveContext = "main" } { … }` beside a staff's
+/// music in `<< >>`: an ossia, kept to be set over the staff.
+fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    let mut j = i + 2;
+    if is(toks, j, T::Sym('=')) && is(toks, j + 1, T::Str) {
+        j += 2;
+    }
+    let mut above = false;
+    if is_cmd(toks, j, "with") {
+        let end = skip_block(toks, j + 1)?;
+        above = toks[j + 1..end].iter().any(|t| t.t == T::Word && t.v == "alignAboveContext");
+        j = end;
+    }
+    if !above {
+        return refuse("a staff inside a staff's music is an ossia: \\new Staff \\with { alignAboveContext = … }", at);
+    }
+    if !starts_expr(toks, j) {
+        return refuse("an ossia wants its music", at);
+    }
+    beyond();
+    let outer = std::mem::take(&mut st.events);
+    let outer_part = st.in_part;
+    st.in_part = false;
+    let start = st.here + elapsed(&outer);
+    j = expr(toks, j, st, hd)?;
+    st.in_part = outer_part;
+    let music = std::mem::replace(&mut st.events, outer);
+    st.ossias.push((start, music));
+    Ok(j)
+}
+
+/// The ossias' staff: the music of each where it starts, spacers between,
+/// and what the staff says of its bars — clef, key, metre, breaks, bar
+/// lines, repeats, marks — at the same moments, for the staves' bars are
+/// one and the staff above is the one that says them.
+fn ossia_events(main: &[Ev], mut ossias: Vec<(i64, Vec<Ev>)>) -> Result<Vec<Ev>, ScoreError> {
+    let mut said: Vec<(i64, Ev)> = Vec::new();
+    let (mut t, mut second) = (0, false);
+    for ev in main {
+        match ev.k {
+            Kind::Voices => {}
+            Kind::VoiceNext => second = true,
+            Kind::VoicesEnd => second = false,
+            Kind::Note | Kind::Rest => {
+                if !second {
+                    t += ev.ticks * ev.count.max(1);
+                }
+            }
+            _ if !second => said.push((t, ev.clone())),
+            _ => {}
+        }
+    }
+    let total = t;
+    ossias.sort_by_key(|o| o.0);
+    let mut out = Vec::new();
+    let mut t = 0;
+    let mut said = said.into_iter().peekable();
+    // Up to `to`: spacers, and what the staff says on the way.
+    let fill = |out: &mut Vec<Ev>, t: &mut i64, to: i64, said: &mut std::iter::Peekable<std::vec::IntoIter<(i64, Ev)>>| {
+        while let Some((at, _)) = said.peek() {
+            if *at > to {
+                break;
+            }
+            let (at, ev) = said.next().unwrap_or((to, Ev::default()));
+            if at < *t {
+                continue;
+            }
+            if at > *t {
+                out.push(Ev { k: Kind::Rest, spacer: true, ticks: at - *t, base: 4, ..Ev::default() });
+                *t = at;
+            }
+            out.push(ev);
+        }
+        if to > *t {
+            out.push(Ev { k: Kind::Rest, spacer: true, ticks: to - *t, base: 4, ..Ev::default() });
+            *t = to;
+        }
+    };
+    for (start, music) in ossias {
+        if start < t {
+            return refuse("two ossias over the same notes", music.first().map_or(0, |ev| ev.at));
+        }
+        fill(&mut out, &mut t, start, &mut said);
+        let end = start + elapsed(&music);
+        // What the staff says inside the ossia's bars is the ossia's own to say.
+        while said.peek().is_some_and(|(at, _)| *at < end) {
+            said.next();
+        }
+        out.extend(music);
+        t = end;
+    }
+    fill(&mut out, &mut t, total, &mut said);
+    Ok(out)
+}
+
+/// Where a staff's music has got to: the time of its first voice's notes
+/// and rests so far.
+fn elapsed(events: &[Ev]) -> i64 {
+    let mut t = 0;
+    let mut second = false;
+    for ev in events {
+        match ev.k {
+            Kind::VoiceNext => second = true,
+            Kind::VoicesEnd => second = false,
+            Kind::Note | Kind::Rest if !second => t += ev.ticks * ev.count.max(1),
+            _ => {}
+        }
+    }
+    t
+}
+
+/// `\cueDuring "flute" #UP { R1 }`: the music, and over it, small and
+/// silent, what the quote named plays meanwhile — a voice of its own, stems
+/// up (`#UP`) or down, the music the other voice.
+fn cue_during(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    beyond();
+    let Some(name) = toks.get(i + 1).filter(|n| n.t == T::Str).map(|n| n.v.clone()) else {
+        return refuse("\\cueDuring wants a quote's name in quotes, #UP or #DOWN, then the music", at);
+    };
+    let up = match (toks.get(i + 2).map(|t| t.t), toks.get(i + 3).map(|t| t.v.as_str())) {
+        (Some(T::Sym('#')), Some("UP")) => true,
+        (Some(T::Sym('#')), Some("DOWN")) => false,
+        _ => return refuse("\\cueDuring wants a quote's name in quotes, #UP or #DOWN, then the music", at),
+    };
+    let Some(quote) = st.quotes.get(&name).cloned() else {
+        return refuse(format!("\\cueDuring \"{name}\": no \\addQuote names it"), at);
+    };
+    let from = elapsed(&st.events);
+    let outer = std::mem::take(&mut st.events);
+    let j = expr(toks, i + 4, st, hd)?;
+    let mut music = std::mem::replace(&mut st.events, outer);
+    // A run of bars' rest, R1*4, a bar each: a voice's rests are counted one by one.
+    music = music
+        .into_iter()
+        .flat_map(|ev| {
+            let n = if ev.k == Kind::Rest && ev.full { ev.count.max(1) } else { 1 };
+            (0..n).map(move |_| Ev { count: if n > 1 { 1 } else { ev.count }, ..ev.clone() })
+        })
+        .collect();
+    let to = from + elapsed(&music);
+    // What the quote plays from `from` to `to`, its notes whole; a spacer where it does not.
+    let mut cue = Vec::new();
+    let (mut t, mut held) = (0, from);
+    let mut second = false;
+    let mut tuplets: HashMap<i64, i64> = HashMap::new();
+    for ev in &quote {
+        match ev.k {
+            Kind::VoiceNext => second = true,
+            Kind::VoicesEnd => second = false,
+            Kind::Note | Kind::Rest if !second => {
+                let (start, end) = (t, t + ev.ticks * ev.count.max(1));
+                t = end;
+                if ev.k != Kind::Note || start < from || end > to {
+                    continue;
+                }
+                if start > held {
+                    cue.push(Ev { k: Kind::Rest, spacer: true, ticks: start - held, base: 4, at, i: st.items, ..Ev::default() });
+                    st.items += 1;
+                }
+                let mut note = ev.clone();
+                note.i = st.items;
+                st.items += 1;
+                note.n = Some(st.notes);
+                st.notes += 1;
+                (note.size, note.cue) = (-3, true);
+                (note.tie, note.slur_on, note.slur_off, note.beam_on, note.beam_off) = (false, false, false, false, false);
+                (note.dynamic, note.hairpin, note.hairpin_end) = (None, None, false);
+                note.texts.clear();
+                note.voice = None;
+                if let Some(tup) = note.tuplet.as_mut() {
+                    let next = st.tuplets + 1 + tuplets.len() as i64;
+                    tup.id = *tuplets.entry(tup.id).or_insert(next);
+                }
+                cue.push(note);
+                held = end;
+            }
+            _ => {}
+        }
+    }
+    st.tuplets += tuplets.len() as i64;
+    if to > held {
+        cue.push(Ev { k: Kind::Rest, spacer: true, ticks: to - held, base: 4, at, i: st.items, ..Ev::default() });
+        st.items += 1;
+    }
+    let (first, second_voice) = if up { (cue, music) } else { (music, cue) };
+    st.events.push(Ev { k: Kind::Voices, at, ..Ev::default() });
+    for (v, events) in [(1u8, first), (2u8, second_voice)] {
+        if v == 2 {
+            st.events.push(Ev { k: Kind::VoiceNext, at, ..Ev::default() });
+        }
+        for mut ev in events {
+            if matches!(ev.k, Kind::Note | Kind::Rest) {
+                ev.voice = Some(v);
+            }
+            st.events.push(ev);
+        }
+    }
+    st.events.push(Ev { k: Kind::VoicesEnd, at, ..Ev::default() });
+    Ok(j)
+}
+
 /// Whether a part sings — has notes or rests, where a `\global` of the
 /// staff's settings and spacers has none.
 fn sings(events: &[Ev]) -> bool {
@@ -2303,6 +2550,8 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         beyond();
     }
     let outer = std::mem::take(&mut st.events);
+    let outer_here = st.here;
+    st.here += elapsed(&outer);
     let outer_cmd = st.voice_cmd;
     let outer_part = st.in_part;
     let mut parts: Vec<Part> = Vec::new();
@@ -2340,6 +2589,7 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         parts.push(Part { events: std::mem::take(&mut st.events), voice: st.voice_cmd, name: st.voice_name.take(), at });
     }
     st.events = outer;
+    st.here = outer_here;
     st.voice_cmd = outer_cmd;
     st.in_part = outer_part;
     let singing: Vec<usize> = (0..parts.len()).filter(|&k| sings(&parts[k].events)).collect();
@@ -2675,6 +2925,9 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "new" | "context" => {
             let kind = arg.as_ref().map_or("", |a| a.v.as_str());
+            if kind == "Staff" && st.in_part {
+                return ossia(toks, i, st, hd);
+            }
             if !voice_kind(kind) {
                 return refuse(format!("\\new {kind} inside a staff's music is not drawn: a staff's music has voices"), tk.at);
             }
@@ -2690,7 +2943,14 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             if !starts_expr(toks, j) {
                 return refuse(format!("\\new {kind} wants its music"), tk.at);
             }
+            // A cue voice: another part's notes, small, read and not played.
+            let saved = (st.size, st.cue);
+            if kind == "CueVoice" {
+                beyond();
+                (st.size, st.cue) = (-3, true);
+            }
             j = expr(toks, j, st, hd)?;
+            (st.size, st.cue) = saved;
             if let Some(name) = name {
                 if st.in_part {
                     st.voice_name = Some(name);
@@ -2710,6 +2970,18 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(i + 1);
         }
         "oneVoice" => return Ok(i + 1),
+        "cueDuring" => return cue_during(toks, i, st, hd),
+        "normalsize" | "small" | "tiny" | "teeny" => {
+            // The notes after it, smaller: LilyPond's font-size steps.
+            beyond();
+            st.size = match word {
+                "small" => -1,
+                "tiny" => -2,
+                "teeny" => -3,
+                _ => 0,
+            };
+            return Ok(i + 1);
+        }
         "change" => {
             // `\\change Staff = "down"`: the notes after it are drawn on that staff.
             let ok = toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff") && is(toks, i + 2, T::Sym('=')) && is(toks, i + 3, T::Str);
@@ -3409,6 +3681,8 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     if ev.k == Kind::Note {
         ev.cross = st.cross.clone();
     }
+    ev.size = st.size;
+    ev.cue = st.cue;
     st.events.push(ev);
     Ok(i)
 }

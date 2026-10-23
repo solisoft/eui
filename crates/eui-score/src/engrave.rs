@@ -584,12 +584,14 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                     continue;
                 }
                 let g = glyph(rest_name(ev.base));
+                let k = mag(ev);
                 ev.left = 0.0;
-                ev.right = g.advance + if ev.dots > 0 { 0.3 + 0.6 * ev.dots as f64 } else { 0.0 };
+                ev.right = (g.advance + if ev.dots > 0 { 0.3 + 0.6 * ev.dots as f64 } else { 0.0 }) * k;
                 grace_layout(ev);
                 continue;
             }
-            let hw = glyph(head_name(ev.base)).advance;
+            let k = mag(ev);
+            let hw = glyph(head_name(ev.base)).advance * k;
             ev.head_w = Some(hw);
             displace(ev);
             let mut right = hw;
@@ -597,10 +599,10 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 right += hw - RULE.stem;
             }
             if ev.dots > 0 {
-                right += 0.3 + 0.6 * ev.dots as f64;
+                right += (0.3 + 0.6 * ev.dots as f64) * k;
             }
             if ev.up && ev.beam.is_none() && flags(ev.base) > 0 {
-                right += glyph(&flag_name(ev.base, true)).advance - RULE.stem;
+                right += glyph(&flag_name(ev.base, true)).advance * k - RULE.stem;
             }
             ev.right = right;
             let shifted = ev.heads.iter().any(|h| h.side == -1);
@@ -1374,6 +1376,11 @@ pub(crate) fn stems_beams(bars: &mut [Bar]) {
     }
 }
 
+/// How large a note is drawn: LilyPond's magnification, 2^(size/6).
+pub(crate) fn mag(ev: &Ev) -> f64 {
+    2f64.powf(f64::from(ev.size) / 6.0)
+}
+
 fn stem(ev: &mut Ev) {
     let hi = ev.heads.last().map_or(0, |h| h.pos);
     let lo = ev.heads.first().map_or(0, |h| h.pos);
@@ -1383,13 +1390,18 @@ fn stem(ev: &mut Ev) {
     }
     // Each flag past the second needs room on the stem: a 64th's and a
     // 128th's are a space and two spaces taller than a 32nd's.
-    let len = 3.5
-        + match ev.base {
+    let len =
+        (3.5 + match ev.base {
             32 => 0.75,
             64 => 1.75,
             128 => 2.75,
             _ => 0.0,
-        };
+        }) * mag(ev);
+    // A small note's stem keeps its length: it is not drawn to the middle line.
+    if ev.size < 0 {
+        ev.stem_end = if ev.up { y_of(hi) - len } else { y_of(lo) + len };
+        return;
+    }
     if ev.up {
         ev.stem_end = (y_of(hi) - len).min(2.0);
     } else {
@@ -1434,7 +1446,7 @@ fn beam(bar: &mut Bar, gi: usize) {
     let notes = bar.beams[gi].notes.clone();
     let up = bar.beams[gi].up;
     let n_beams = notes.iter().fold(0, |acc, &j| acc.max(flags(bar.items[j].base)));
-    let thick = RULE.beam;
+    let thick = RULE.beam * notes.first().map_or(1.0, |&j| mag(&bar.items[j]));
     let near: Vec<f64> = notes
         .iter()
         .map(|&j| {
@@ -1965,7 +1977,9 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             let mut ss = Line {
                 kind: staves_src[s].kind,
                 bars: range.clone(),
-                staff_index: Some(s),
+                // Which staff, an ossia not counted: the first staff writes the
+                // bar numbers, the endings and the marks; an ossia none of them.
+                staff_index: Some(if staves_src[s].kind == StaffKind::Ossia { usize::MAX } else { staves_src[..s].iter().filter(|x| x.kind != StaffKind::Ossia).count() }),
                 left: line.left,
                 prefix: line.prefix,
                 right: line.right,
@@ -2033,16 +2047,30 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
 fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[crate::parse::Staff]) {
     let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, l)| reach(&all[s], l)).collect();
     let mut offsets = vec![0.0];
+    // An ossia with nothing in this system takes no room.
+    let idle = |s: usize| sys.lines[s].kind == StaffKind::Ossia && sys.lines[s].bars.clone().all(|b| all[s][b].items.iter().all(|ev| ev.spacer));
     for s in 1..reaches.len() {
-        // Chord names sit as close over their staff as their ink lets them.
+        if idle(s - 1) {
+            offsets.push(offsets[s - 1]);
+            continue;
+        }
+        // Chord names sit as close over their staff as their ink lets them,
+        // an ossia closer than another staff.
         let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         let names = words(sys.lines[s - 1].kind) || words(sys.lines[s].kind);
-        let least: f64 = if names { 0.0 } else { 9.0 };
+        let least: f64 = if names {
+            0.0
+        } else if sys.lines[s - 1].kind == StaffKind::Ossia {
+            7.0
+        } else {
+            9.0
+        };
         let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);
     }
     let last = offsets.len() - 1;
-    sys.reach = Some((reaches[0].0, offsets[last] + reaches[last].1));
+    let high = (0..reaches.len()).filter(|&s| !idle(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
+    sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
     sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
     for (s, ss) in sys.lines.iter_mut().enumerate() {
         let through = groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && s < g.last);

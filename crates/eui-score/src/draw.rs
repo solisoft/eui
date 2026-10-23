@@ -110,6 +110,12 @@ impl Pen<'_> {
         self.push(fill(&glyph(name).fill, x, y, sp));
     }
 
+    /// A glyph at `k` times its size, its origin where the full-size one's is.
+    fn glyph_k(&mut self, name: &str, x: f64, y: f64, k: f64) {
+        let sp = self.sp;
+        self.push(fill_k(&glyph(name).fill, x, y, k, sp));
+    }
+
     /// `words` on a baseline at `y` from `x`; answers where they end.
     fn text(&mut self, words: &str, weight: Weight, x: f64, y: f64, em: f64) -> f64 {
         let face = letters().face(weight);
@@ -470,6 +476,10 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         }
         return;
     }
+    if line.kind == StaffKind::Ossia {
+        draw_ossia(&mut pen, bars, line, top, ranges);
+        return;
+    }
     let tab = line.kind == StaffKind::Tab;
     if tab {
         draw_strings(&mut pen, bars, line, top);
@@ -607,6 +617,42 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         if let Some(Courtesy::Single(o)) = &line.courtesy_bar {
             draw_courtesy(&mut pen, o, line.bar_end, top);
         }
+    }
+}
+
+/// An ossia: its staff and its notes over the bars it plays in, and only
+/// there; its ties and slurs.
+fn draw_ossia(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64, ranges: &mut Ranges) {
+    for b in line.bars.clone() {
+        let bar = &bars[b];
+        if bar.items.iter().all(|ev| ev.spacer) {
+            continue;
+        }
+        let kind = bar.drawn();
+        let x1 = bar.x1 + barline_width(kind);
+        for i in 0..5 {
+            pen.rect(bar.x0, top + i as f64 - RULE.staff / 2.0, x1 - bar.x0, RULE.staff);
+        }
+        draw_bar(pen, "|", bar.x0, top, 0.0);
+        draw_bar(pen, kind, x1, top, 0.0);
+        for ev in &bar.items {
+            let from_k = pen.paths.len();
+            if !ev.spacer {
+                draw_graces(pen, ev, top);
+                if ev.k == Kind::Rest {
+                    draw_rest(pen, ev, top);
+                } else {
+                    draw_note(pen, ev, top);
+                }
+            }
+            ranges.push((ev.i, from_k..pen.paths.len()));
+        }
+        for g in &bar.beams {
+            draw_beam(pen, bar, g, top);
+        }
+    }
+    for c in &line.curves {
+        pen.fill(c, 0.0, top);
     }
 }
 
@@ -781,7 +827,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let offsets = &sys.offsets;
     let left = sys.left;
     // The system's line joins its staves — not the chord names over them.
-    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards)).collect();
+    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
             let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);
@@ -794,7 +840,9 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
         if g.kind == GroupKind::None {
             continue;
         }
-        let y0 = top + offsets[g.first];
+        // An ossia over a group's first staff stands outside its bracket.
+        let first = (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first);
+        let y0 = top + offsets[first];
         let y1 = top + offsets[g.last] + crate::engrave::staff_height(sys.lines[g.last].kind);
         let x = left - 0.3 - (deepest - g.depth) as f64 * 1.6;
         if g.kind == GroupKind::Brace {
@@ -1019,19 +1067,21 @@ fn draw_rest(pen: &mut Pen, ev: &Ev, top: f64) {
         return;
     }
     let name = rest_name(ev.base);
+    let k = crate::engrave::mag(ev);
     let y = if ev.base == 1 { 1.0 } else { 2.0 } + rest_lift(ev);
-    pen.glyph(name, ev.x, top + y);
+    pen.glyph_k(name, ev.x, top + y, k);
     if ev.dots > 0 {
-        let mut dx = ev.x + glyph(name).advance + 0.3;
+        let mut dx = ev.x + (glyph(name).advance + 0.3) * k;
         for _ in 0..ev.dots {
-            pen.glyph("augmentationDot", dx, top + 1.5 + rest_lift(ev));
-            dx += 0.6;
+            pen.glyph_k("augmentationDot", dx, top + 1.5 + rest_lift(ev), k);
+            dx += 0.6 * k;
         }
     }
 }
 
 fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
     let hname = head_name(ev.base);
+    let k = crate::engrave::mag(ev);
     let hw = ev.head_w.unwrap_or(0.0);
     let hi = ev.heads.last().map_or(0, |h| h.pos);
     let lo = ev.heads.first().map_or(0, |h| h.pos);
@@ -1061,16 +1111,16 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let from = pen.paths.len();
         let hx = ev.x + hd.side as f64 * (hw - RULE.stem);
         let y = top + y_of(hd.pos);
-        pen.glyph(head_glyph(ev.base, hd.style), hx, y);
+        pen.glyph_k(head_glyph(ev.base, hd.style), hx, y, k);
         if let Some(acc) = hd.acc {
-            pen.glyph(acc_name(acc), ev.x + hd.acc_x.unwrap_or(0.0), y);
+            pen.glyph_k(acc_name(acc), ev.x + hd.acc_x.unwrap_or(0.0), y, k);
         }
         if ev.dots > 0 {
             let dot_pos = if hd.pos % 2 == 0 { hd.pos + 1 } else { hd.pos };
             let mut dx = ev.x + dot_start(ev, dot_pos);
             for _ in 0..ev.dots {
-                pen.glyph("augmentationDot", dx, top + y_of(dot_pos));
-                dx += 0.6;
+                pen.glyph_k("augmentationDot", dx, top + y_of(dot_pos), k);
+                dx += 0.6 * k;
             }
         }
         let to = pen.paths.len();
@@ -1095,18 +1145,18 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
     let sx;
     let tip = top + ev.stem_end;
     if ev.up {
-        let root = top + y_of(lo) + g.anchors.get("stemUpSE").map_or(0.0, |a| a[1]);
+        let root = top + y_of(lo) + g.anchors.get("stemUpSE").map_or(0.0, |a| a[1]) * k;
         sx = stem_x(ev) - RULE.stem;
         pen.rect(sx, tip, RULE.stem, root - tip);
     } else {
-        let root = top + y_of(hi) + g.anchors.get("stemDownNW").map_or(0.0, |a| a[1]);
+        let root = top + y_of(hi) + g.anchors.get("stemDownNW").map_or(0.0, |a| a[1]) * k;
         sx = stem_x(ev);
         pen.rect(sx, root, RULE.stem, tip - root);
     }
     if ev.beam.is_none() && flags(ev.base) > 0 {
         let flag = flag_name(ev.base, ev.up);
         let anchor = glyph(&flag).anchors.get(if ev.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
-        pen.glyph(&flag, sx - anchor[0], tip - anchor[1]);
+        pen.glyph_k(&flag, sx - anchor[0] * k, tip - anchor[1] * k, k);
     }
 }
 
@@ -1143,8 +1193,9 @@ pub(crate) fn past_flag(ev: &Ev, dot_pos: i64) -> f64 {
 fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
     let notes: Vec<&Ev> = g.notes.iter().map(|&j| &bar.items[j]).collect();
     let dir = if g.up { 1.0 } else { -1.0 };
+    let k = notes.first().map_or(1.0, |ev| crate::engrave::mag(ev));
     for level in 0..g.n {
-        let off = level as f64 * RULE.beam_step * dir;
+        let off = level as f64 * RULE.beam_step * k * dir;
         let mut i = 0;
         while i < notes.len() {
             if flags(notes[i].base) <= level {
@@ -1168,7 +1219,7 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
             }
             let ya = beam_y(g, xa) + off;
             let yb = beam_y(g, xb) + off;
-            let bt = RULE.beam;
+            let bt = RULE.beam * k;
             let cmds = if g.up { [0.0, xa, ya, 1.0, xb, yb, 1.0, xb, yb + bt, 1.0, xa, ya + bt, 4.0] } else { [0.0, xa, ya - bt, 1.0, xb, yb - bt, 1.0, xb, yb, 1.0, xa, ya, 4.0] };
             pen.fill(&cmds, 0.0, top);
             i = jj + 1;

@@ -584,3 +584,50 @@ fn fret_boards_and_fret_diagrams_draw_a_guitars_chords() {
     let refused = parse("{ c''1^\\markup \\fret-diagram-terse \"x;3;2;\" }").unwrap_err().message;
     assert!(refused.contains("a guitar has 6"), "{refused}");
 }
+
+#[test]
+fn cue_notes_are_small_silent_and_what_the_quote_plays_meanwhile() {
+    let src = "\\addQuote \"flute\" { c''4 d'' e'' f'' | g''8 a'' b'' c''' g''2 }\n{ c'1 | \\cueDuring \"flute\" #UP { R1 } }";
+    let p = read(src);
+    let cue: Vec<(i64, bool, i8)> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note && e.cue).map(|e| (e.pitches[0].d, e.cue, e.size)).collect();
+    assert_eq!(cue.iter().map(|c| c.0).collect::<Vec<_>>(), vec![18, 19, 20, 21, 18], "the flute's second bar: g'' a'' b'' c''' g''");
+    assert!(cue.iter().all(|c| c.2 == -3));
+    let rest = p.staves[0].events.iter().find(|e| e.k == Kind::Rest && e.full).unwrap();
+    assert_eq!((rest.voice, cue.len()), (Some(2), 5), "the rest under them, a voice of its own");
+    // Drawn: the cue's heads smaller than a note's.
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let hw = |b: usize, j: usize| eng.staves[0][b].items[j].head_w.unwrap();
+    assert!(hw(1, 0) < hw(0, 0) * 0.8, "{} {}", hw(1, 0), hw(0, 0));
+    // Not played: the c' alone.
+    let on = midi(src, &MidiOptions::default()).unwrap().windows(3).filter(|w| w[0] & 0xF0 == 0x90 && w[2] > 0).count();
+    assert_eq!(on, 1);
+    // \tiny and a cue voice, written by hand; a quote no one wrote is refused.
+    let small = read("{ \\tiny c'4 \\normalsize d' << { \\new CueVoice { e'4 } } \\\\ { r4 } >> r4 }");
+    let sizes: Vec<(i8, bool)> = small.staves[0].events.iter().filter(|e| e.k == Kind::Note).map(|e| (e.size, e.cue)).collect();
+    assert_eq!(sizes, vec![(-2, false), (0, false), (-3, true)]);
+    assert!(parse("{ \\cueDuring \"oboe\" #UP { R1 } }").unwrap_err().message.contains("no \\addQuote names it"));
+    assert!(parse("\\addQuote \"f\" { c'1 } { \\cueDuring \"f\" { R1 } }").unwrap_err().message.contains("#UP or #DOWN"));
+}
+
+#[test]
+fn an_ossia_stands_over_its_bars_only_and_sounds_nothing() {
+    let src = "\\new Staff = \"main\" \\relative { c''4 b d c | << { c4 b d c } \\new Staff \\with { alignAboveContext = \"main\" } { d4 c e d } >> | c4 b c2 }";
+    let p = read(src);
+    assert_eq!(p.staves.len(), 2);
+    assert_eq!(p.staves[0].kind, StaffKind::Ossia, "over the staff");
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    // Its notes under the staff's of the same bar, its other bars empty.
+    let notes = |s: usize, b: usize| eng.staves[s][b].items.iter().filter(|e| !e.spacer).map(|e| e.x).collect::<Vec<_>>();
+    assert_eq!(notes(0, 1), notes(1, 1));
+    assert!(notes(0, 0).is_empty() && notes(0, 2).is_empty());
+    // The bar numbers and marks stay the staff's, and a system without it takes no room for it.
+    assert_eq!(eng.systems[0].lines[1].staff_index, Some(0));
+    assert!(eng.systems[0].offsets[1] >= 7.0, "the staff under its ossia");
+    let broken = engrave(&src.replace("c | <<", "c \\break <<"), 900.0 / 8.0, &Layout::default()).unwrap();
+    assert_eq!(broken.systems.len(), 2);
+    assert_eq!(broken.systems[0].offsets, vec![0.0, 0.0], "no ossia in the first system: no room for one");
+    assert!(broken.systems[1].offsets[1] >= 7.0);
+    let on = |s: &str| midi(s, &MidiOptions::default()).unwrap().windows(3).filter(|w| w[0] & 0xF0 == 0x90 && w[2] > 0).count();
+    assert_eq!(on(src), on("\\relative { c''4 b d c | c4 b d c | c4 b c2 }"), "the staff's notes; the ossia's are not played");
+    assert!(parse("{ << { c'1 } \\new Staff { e'1 } >> }").unwrap_err().message.contains("is an ossia"));
+}
