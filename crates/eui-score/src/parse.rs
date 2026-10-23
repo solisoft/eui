@@ -1235,6 +1235,9 @@ pub struct PaperSpec {
     pub bottom: Option<f64>,
     /// `indent`: the first system's.
     pub indent: Option<f64>,
+    /// `page-breaking`: `#ly:optimal-breaking` spreads the lines evenly over
+    /// the pages (true), `#ly:minimal-breaking` fills each in turn (false).
+    pub even_pages: Option<bool>,
 }
 
 /// Lyrics sung to a voice by its name, attached once every voice is read.
@@ -1667,6 +1670,17 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
         if t.t == T::Sym('#') {
             scheme_paper(toks, j, paper);
             j = scheme_end(toks, j)?;
+            continue;
+        }
+        // `page-breaking = #ly:optimal-breaking`: the lines spread over the pages.
+        if t.t == T::Word && t.v == "page-breaking" && is(toks, j + 1, T::Sym('=')) && is(toks, j + 2, T::Sym('#')) {
+            let name = toks.get(j + 5).filter(|w| w.t == T::Word && toks[j + 3].v == "ly" && is(toks, j + 4, T::Sym(':')));
+            match name.map(|w| w.v.as_str()) {
+                Some("optimal-breaking") => paper.even_pages = Some(true),
+                Some("minimal-breaking" | "page-turn-breaking" | "one-page-breaking" | "one-line-breaking") => paper.even_pages = Some(false),
+                _ => {}
+            }
+            j += 6;
             continue;
         }
         if t.t == T::Word && is(toks, j + 1, T::Sym('=')) {

@@ -1542,7 +1542,8 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     };
     let next_top = |ptop: f64, pbottom: f64, si: usize| (ptop + gap).max(pbottom + 1.0 - reaches[si].0);
     let starts = match page_h {
-        Some(_) => page_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
+        Some(_) if layout.even_pages => page_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
+        Some(_) => filled_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
         None => vec![0],
     };
     let mut pages: Vec<Page> = Vec::new();
@@ -1596,6 +1597,29 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
         }
     }
     pages
+}
+
+/// The systems that start a page when each is filled in turn: a system goes
+/// on the page it fits on, else starts the next.
+fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+    let mut starts = vec![0];
+    let mut prev: Option<(f64, f64)> = None;
+    for si in 0..n {
+        let top = match prev {
+            Some((ptop, pbottom)) => {
+                let tp = next_top(ptop, pbottom, si);
+                if forced[si - 1] || tp + reaches[si].1 + 1.0 > floor_y {
+                    starts.push(si);
+                    first_top(si)
+                } else {
+                    tp
+                }
+            }
+            None => first_top(si),
+        };
+        prev = Some((top, top + reaches[si].1));
+    }
+    starts
 }
 
 /// The systems that start a page, the first included: as few pages as the

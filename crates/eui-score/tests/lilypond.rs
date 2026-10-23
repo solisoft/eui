@@ -504,19 +504,24 @@ fn notes_sent_to_the_other_staff_are_drawn_there_and_still_sound_in_their_own() 
 }
 
 #[test]
-fn pages_are_cut_evenly_and_the_last_is_not_left_with_a_line() {
+fn pages_are_cut_evenly_when_asked_and_the_last_is_not_left_with_a_line() {
     use eui_score::engrave_paper;
-    let per_page = |n: usize, breaks: &str| {
+    const EVEN: &str = "\\paper { page-breaking = #ly:optimal-breaking }\n";
+    let cut = |n: usize, breaks: &str, paper: &str| {
         let music: String = (0..n).map(|k| if k + 1 < n { format!("c'1 {breaks} ") } else { "c'1".into() }).collect();
-        let (eng, _) = engrave_paper(&format!("{{ {music} }}")).unwrap();
+        let (eng, _) = engrave_paper(&format!("{paper}{{ {music} }}")).unwrap();
         eng.pages.iter().map(|p| p.systems.len()).collect::<Vec<_>>()
     };
+    let per_page = |n: usize, breaks: &str| cut(n, breaks, EVEN);
     // How many lines one page holds.
     let room = (1..80).take_while(|&n| per_page(n, "\\break").len() == 1).last().unwrap();
     // One line more: the greedy cut left it alone on page 2; now the two pages share them.
     let pages = per_page(room + 1, "\\break");
     assert_eq!(pages.len(), 2, "{pages:?}");
     assert!(pages[0] - pages[1] <= 1, "{pages:?}");
+    // Asked for nothing, or for pages filled in turn: each page full, the last with what is left.
+    assert_eq!(cut(room + 1, "\\break", ""), vec![room, 1]);
+    assert_eq!(cut(room + 1, "\\break", "\\paper { page-breaking = #ly:minimal-breaking }\n"), vec![room, 1]);
     // Over three pages too: as few pages as before, evenly full.
     let three = per_page(2 * room + 1, "\\break");
     assert_eq!(three.len(), 3, "{three:?}");
@@ -524,8 +529,8 @@ fn pages_are_cut_evenly_and_the_last_is_not_left_with_a_line() {
     // A \pageBreak still ends its page, and the pages either side are cut evenly on their own.
     let n = room + 3;
     let music: String = (0..n).map(|k| if k == 1 { "c'1 \\pageBreak ".to_string() } else { "c'1 \\break ".to_string() }).collect();
-    let (eng, _) = engrave_paper(&format!("{{ {music} c'1 }}")).unwrap();
-    let cut: Vec<usize> = eng.pages.iter().map(|p| p.systems.len()).collect();
-    assert_eq!(cut[0], 2, "{cut:?}");
-    assert!(cut[1..].iter().max().unwrap() - cut[1..].iter().min().unwrap() <= 1, "{cut:?}");
+    let (eng, _) = engrave_paper(&format!("{EVEN}{{ {music} c'1 }}")).unwrap();
+    let forced: Vec<usize> = eng.pages.iter().map(|p| p.systems.len()).collect();
+    assert_eq!(forced[0], 2, "{forced:?}");
+    assert!(forced[1..].iter().max().unwrap() - forced[1..].iter().min().unwrap() <= 1, "{forced:?}");
 }

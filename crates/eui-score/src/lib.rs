@@ -106,6 +106,9 @@ pub struct Layout {
     pub indent: Option<f64>,
     /// From one system's top line to the next's, at least.
     pub gap: Option<f64>,
+    /// The lines spread evenly over the pages, the last one too; else each
+    /// page is filled in turn.
+    pub even_pages: bool,
 }
 
 /// A sheet of paper, in staff spaces.
@@ -127,6 +130,9 @@ pub struct Paper {
     pub indent: f64,
     /// Points a staff space: 5 at LilyPond's default staff size, 20 pt.
     pub pt: f64,
+    /// The lines spread evenly over the pages (`page-breaking =
+    /// #ly:optimal-breaking`), rather than each page filled in turn.
+    pub even_pages: bool,
 }
 
 impl Paper {
@@ -136,7 +142,7 @@ impl Paper {
     /// PDF's footer sits on the 6 mm line, and the music stops above it.
     pub fn a4() -> Self {
         let space = 25.4 * 5.0 / 72.0;
-        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space, pt: 5.0 }
+        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space, pt: 5.0, even_pages: false }
     }
 
     /// The page a source asks for (`\paper`, `set-global-staff-size`), A4 at
@@ -168,6 +174,7 @@ impl Paper {
             bottom: spec.bottom.unwrap_or(12.0).max(12.0) / space,
             indent: spec.indent.unwrap_or(15.0) / space,
             pt,
+            even_pages: spec.even_pages.unwrap_or(false),
         }
     }
 
@@ -183,7 +190,7 @@ impl Paper {
 
     /// The layout that sets music on it.
     pub fn layout(&self) -> Layout {
-        Layout { page_h: Some(self.h), top: Some(self.top), bottom: Some(self.bottom), left: Some(self.left), indent: Some(self.indent), gap: Some(12.0) }
+        Layout { page_h: Some(self.h), top: Some(self.top), bottom: Some(self.bottom), left: Some(self.left), indent: Some(self.indent), gap: Some(12.0), even_pages: self.even_pages }
     }
 }
 
