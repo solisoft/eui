@@ -1200,10 +1200,33 @@ pub struct Group {
 pub struct Parsed {
     /// `\header`'s fields.
     pub header: HashMap<String, String>,
+    /// What `\paper` and `#(set-global-staff-size …)` say of the page.
+    pub paper: PaperSpec,
     /// The staves.
     pub staves: Vec<Staff>,
     /// Their groups, innermost first.
     pub groups: Vec<Group>,
+}
+
+/// The page a source asks for: `\paper { #(set-paper-size "letter")
+/// left-margin = 15\mm … }` and `#(set-global-staff-size 18)`. Lengths in
+/// millimetres; none where the source says nothing, the A4 defaults then.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PaperSpec {
+    /// `set-paper-size`'s name: "a4", "letter", "a3landscape"…
+    pub size: Option<String>,
+    /// The staff size, in points (LilyPond's default is 20).
+    pub staff_size: Option<f64>,
+    /// `left-margin`.
+    pub left: Option<f64>,
+    /// `right-margin`.
+    pub right: Option<f64>,
+    /// `top-margin`.
+    pub top: Option<f64>,
+    /// `bottom-margin`.
+    pub bottom: Option<f64>,
+    /// `indent`: the first system's.
+    pub indent: Option<f64>,
 }
 
 /// Lyrics sung to a voice by its name, attached once every voice is read.
@@ -1215,6 +1238,7 @@ struct Pending {
 
 struct Base {
     header: HashMap<String, String>,
+    paper: PaperSpec,
     counter: usize,
     notes: usize,
     lang: Lang,
@@ -1479,7 +1503,7 @@ fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st = Base { header: HashMap::new(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new() };
+    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new() };
     let mut i = preamble(&toks, 0, &mut st)?;
     let in_score = is_cmd(&toks, i, "score");
     if in_score {
@@ -1534,7 +1558,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         let voice = staff.voices.iter().find(|v| v.0 == p.voice).map_or(1, |v| v.1);
         add_verse(staff, p.syllables, voice, p.at)?;
     }
-    Ok(Parsed { header: st.header, staves, groups })
+    Ok(Parsed { header: st.header, paper: st.paper, staves, groups })
 }
 
 /// What a file says before and after its music: `\version`, `\header`,
@@ -1545,6 +1569,7 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
         let t = &toks[i];
         if t.t == T::Sym('#') {
             beyond();
+            scheme_paper(toks, i, &mut st.paper);
             i = scheme_end(toks, i)?;
             continue;
         }
@@ -1554,7 +1579,11 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
         match t.v.as_str() {
             "version" => i += 2,
             "header" => i = header(toks, i, st)?,
-            "paper" | "layout" | "midi" => {
+            "paper" => {
+                beyond();
+                i = paper_block(toks, i + 1, &mut st.paper)?;
+            }
+            "layout" | "midi" => {
                 beyond();
                 i = skip_block(toks, i + 1)?;
             }
@@ -1578,6 +1607,83 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
         }
     }
     Ok(i)
+}
+
+/// `#(set-paper-size "letter")` or `#(set-global-staff-size 18)` at `i` (a
+/// `#`), into `paper`; any other Scheme is left to be skipped.
+fn scheme_paper(toks: &[Tok], i: usize, paper: &mut PaperSpec) {
+    if !is(toks, i + 1, T::Sym('(')) {
+        return;
+    }
+    let Some(name) = toks.get(i + 2).filter(|t| t.t == T::Word) else { return };
+    match name.v.as_str() {
+        "set-paper-size" => {
+            if let Some(size) = toks.get(i + 3).filter(|t| t.t == T::Str) {
+                paper.size = Some(size.v.to_lowercase());
+            }
+        }
+        "set-global-staff-size" => paper.staff_size = number_at(toks, i + 3).map(|(n, _)| n).filter(|n| (8.0..=40.0).contains(n)),
+        _ => {}
+    }
+}
+
+/// A number at `i` — `15`, `-2`, `17.5` — and where it ends.
+fn number_at(toks: &[Tok], mut i: usize) -> Option<(f64, usize)> {
+    let negative = is(toks, i, T::Sym('-'));
+    if negative {
+        i += 1;
+    }
+    let whole = toks.get(i).filter(|t| t.t == T::Num)?;
+    let mut text = whole.v.clone();
+    i += 1;
+    if is(toks, i, T::Sym('.')) && is(toks, i + 1, T::Num) {
+        text = format!("{text}.{}", toks[i + 1].v);
+        i += 2;
+    }
+    let n: f64 = text.parse().ok()?;
+    Some((if negative { -n } else { n }, i))
+}
+
+/// A `\paper { … }` block from `i` (its `{`), its sizes into `paper`;
+/// what it says that this does not lay out is passed over.
+fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
+    let end = skip_block(toks, i)?;
+    let mut j = i + 1;
+    while j + 1 < end {
+        let t = &toks[j];
+        if t.t == T::Sym('#') {
+            scheme_paper(toks, j, paper);
+            j = scheme_end(toks, j)?;
+            continue;
+        }
+        if t.t == T::Word && is(toks, j + 1, T::Sym('=')) {
+            if let Some((n, after)) = number_at(toks, j + 2) {
+                // A length: millimetres unless a unit says otherwise.
+                let unit = toks.get(after).filter(|u| u.t == T::Cmd).map(|u| u.v.as_str());
+                let mm = match unit {
+                    Some("cm") => n * 10.0,
+                    Some("in") => n * 25.4,
+                    Some("pt") => n * 25.4 / 72.27,
+                    _ => n,
+                };
+                let slot = match t.v.as_str() {
+                    "left-margin" => Some(&mut paper.left),
+                    "right-margin" => Some(&mut paper.right),
+                    "top-margin" => Some(&mut paper.top),
+                    "bottom-margin" => Some(&mut paper.bottom),
+                    "indent" => Some(&mut paper.indent),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    *slot = Some(mm.max(0.0));
+                }
+                j = if unit.is_some() { after + 1 } else { after };
+                continue;
+            }
+        }
+        j += 1;
+    }
+    Ok(end)
 }
 
 fn skip_block(toks: &[Tok], mut i: usize) -> Result<usize, ScoreError> {

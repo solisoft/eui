@@ -10,7 +10,7 @@ use crate::Paper;
 
 /// The file, from an engraving laid out on `paper` (`Paper::layout`).
 pub(crate) fn pdf(eng: &Engraved, title: &str, paper: &Paper) -> String {
-    let sp = 5.0;
+    let sp = paper.pt;
     let page_w = paper.w * sp;
     let page_h = paper.h * sp;
     let mut bodies: Vec<String> = Vec::new();

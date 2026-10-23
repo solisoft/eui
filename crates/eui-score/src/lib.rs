@@ -124,6 +124,8 @@ pub struct Paper {
     pub bottom: f64,
     /// The first system's indent.
     pub indent: f64,
+    /// Points a staff space: 5 at LilyPond's default staff size, 20 pt.
+    pub pt: f64,
 }
 
 impl Paper {
@@ -133,12 +135,44 @@ impl Paper {
     /// PDF's footer sits on the 6 mm line, and the music stops above it.
     pub fn a4() -> Self {
         let space = 25.4 * 5.0 / 72.0;
-        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space }
+        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space, pt: 5.0 }
+    }
+
+    /// The page a source asks for (`\paper`, `set-global-staff-size`), A4 at
+    /// 20 pt where it says nothing. The bottom margin keeps room for the
+    /// footer, 6 mm up: never under 12 mm.
+    pub fn of(spec: &parse::PaperSpec) -> Self {
+        let pt = spec.staff_size.unwrap_or(20.0) / 4.0;
+        let space = 25.4 * pt / 72.0;
+        let name = spec.size.as_deref().unwrap_or("a4");
+        let landscape = name.ends_with("landscape");
+        let (w, h) = match name.trim_end_matches("landscape") {
+            "a3" => (297.0, 420.0),
+            "a5" => (148.0, 210.0),
+            "a6" => (105.0, 148.0),
+            "b4" => (250.0, 353.0),
+            "b5" => (176.0, 250.0),
+            "letter" => (215.9, 279.4),
+            "legal" => (215.9, 355.6),
+            "tabloid" | "11x17" => (279.4, 431.8),
+            _ => (210.0, 297.0),
+        };
+        let (w, h) = if landscape { (h, w) } else { (w, h) };
+        Paper {
+            w: w / space,
+            h: h / space,
+            left: spec.left.unwrap_or(10.0) / space,
+            right: spec.right.unwrap_or(10.0) / space,
+            top: spec.top.unwrap_or(5.0) / space,
+            bottom: spec.bottom.unwrap_or(12.0).max(12.0) / space,
+            indent: spec.indent.unwrap_or(15.0) / space,
+            pt,
+        }
     }
 
     /// The footer's baseline, up from the paper's bottom edge.
     pub fn foot(&self) -> f64 {
-        6.0 / (25.4 * 5.0 / 72.0)
+        6.0 / (25.4 * self.pt / 72.0)
     }
 
     /// The line width.
@@ -210,12 +244,21 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     guarded(|| midi::midi(src, opts))
 }
 
-/// The source on A4 as a PDF, each page's footer its title and number;
-/// `title` for one its header does not give.
+/// The music on the paper its source asks for (`\paper`), A4 otherwise.
+pub fn engrave_paper(src: &str) -> Result<(Engraved, Paper), ScoreError> {
+    guarded(|| {
+        let parsed = parse::parse(src)?;
+        let paper = Paper::of(&parsed.paper);
+        Ok((engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?, paper))
+    })
+}
+
+/// The source as a PDF, on the paper it asks for (A4 otherwise), each page's
+/// footer its title and number; `title` for one its header does not give.
 pub fn pdf(src: &str, title: &str) -> Result<String, ScoreError> {
     guarded(|| {
         let parsed = parse::parse(src)?;
-        let paper = Paper::a4();
+        let paper = Paper::of(&parsed.paper);
         let eng = engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
         Ok(pdf::pdf(&eng, title, &paper))

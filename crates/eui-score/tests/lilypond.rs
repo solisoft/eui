@@ -335,3 +335,48 @@ fn a_name_with_a_flat_or_a_sharp_prints_them() {
     let eng = engrave(src, 80.0, &Layout::default()).unwrap();
     assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
 }
+
+#[test]
+fn the_paper_a_source_asks_for_is_the_pdfs() {
+    use eui_score::{engrave_paper, pdf, Paper};
+    // \paper's size, margins in any unit, and the staff size, as LilyPond writes them.
+    let src = r#"#(set-global-staff-size 16)
+\paper { #(set-paper-size "letter") left-margin = 2\cm right-margin = 15 top-margin = 0.5\in indent = 0 }
+{ c'1 }"#;
+    let spec = parse(src).unwrap().paper;
+    assert_eq!(spec.size.as_deref(), Some("letter"));
+    assert_eq!(spec.staff_size, Some(16.0));
+    assert_eq!(spec.left, Some(20.0));
+    assert_eq!(spec.right, Some(15.0));
+    assert!((spec.top.unwrap() - 12.7).abs() < 1e-9);
+    assert_eq!(spec.indent, Some(0.0));
+    let paper = Paper::of(&spec);
+    assert_eq!(paper.pt, 4.0);
+    let mm = |spaces: f64| spaces * paper.pt * 25.4 / 72.0;
+    assert!((mm(paper.w) - 215.9).abs() < 1e-6 && (mm(paper.h) - 279.4).abs() < 1e-6, "US letter");
+    assert!((mm(paper.left) - 20.0).abs() < 1e-6);
+    // The PDF's pages are letter: 612 × 792 points.
+    assert!(pdf(src, "Letter").unwrap().contains("/MediaBox [0 0 612 792]"));
+    // Nothing said: A4 at 20 pt, as before.
+    assert!(pdf("{ c'1 }", "A4").unwrap().contains("/MediaBox [0 0 595.28 841.89]"));
+    assert_eq!(Paper::of(&parse("{ c'1 }").unwrap().paper), Paper::a4());
+    // Landscape turns the sheet; a staff size out of reason is not taken.
+    let wide = Paper::of(&parse("\\paper { #(set-paper-size \"a3landscape\") } { c'1 }").unwrap().paper);
+    assert!(wide.w > wide.h);
+    assert_eq!(parse("#(set-global-staff-size 200) { c'1 }").unwrap().paper.staff_size, None);
+    // A smaller staff fits more on a line: fewer systems for the same music.
+    let music: String = (0..64).map(|_| "c'4 d' e' f' ").collect();
+    let lines = |size: &str| engrave_paper(&format!("#(set-global-staff-size {size}) {{ {music} }}")).unwrap().0.systems.len();
+    assert!(lines("14") < lines("24"), "14 pt: fewer lines than 24 pt");
+}
+
+#[test]
+fn a_page_break_starts_a_new_page() {
+    use eui_score::engrave_paper;
+    let (one, _) = engrave_paper("{ c'1 c'1 c'1 c'1 }").unwrap();
+    let (two, _) = engrave_paper("{ c'1 c'1 \\pageBreak c'1 c'1 }").unwrap();
+    assert_eq!(one.pages.len(), 1);
+    assert_eq!(two.pages.len(), 2, "the music after \\pageBreak is on page 2");
+    let (lines, _) = engrave_paper("{ c'1 \\break c'1 \\break c'1 }").unwrap();
+    assert_eq!(lines.systems.len(), 3, "a \\break ends its line");
+}
