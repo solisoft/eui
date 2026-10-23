@@ -502,3 +502,30 @@ fn notes_sent_to_the_other_staff_are_drawn_there_and_still_sound_in_their_own() 
     assert!(engrave(r#"<< \new Staff = "up" { \change Staff = "nowhere" c'1 } \new Staff = "down" { c1 } >>"#, 80.0, &Layout::default()).is_err());
     assert!(engrave(r#"{ \change Staff = "down" c'1 }"#, 80.0, &Layout::default()).is_err());
 }
+
+#[test]
+fn pages_are_cut_evenly_and_the_last_is_not_left_with_a_line() {
+    use eui_score::engrave_paper;
+    let per_page = |n: usize, breaks: &str| {
+        let music: String = (0..n).map(|k| if k + 1 < n { format!("c'1 {breaks} ") } else { "c'1".into() }).collect();
+        let (eng, _) = engrave_paper(&format!("{{ {music} }}")).unwrap();
+        eng.pages.iter().map(|p| p.systems.len()).collect::<Vec<_>>()
+    };
+    // How many lines one page holds.
+    let room = (1..80).take_while(|&n| per_page(n, "\\break").len() == 1).last().unwrap();
+    // One line more: the greedy cut left it alone on page 2; now the two pages share them.
+    let pages = per_page(room + 1, "\\break");
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    assert!(pages[0] - pages[1] <= 1, "{pages:?}");
+    // Over three pages too: as few pages as before, evenly full.
+    let three = per_page(2 * room + 1, "\\break");
+    assert_eq!(three.len(), 3, "{three:?}");
+    assert!(three.iter().max().unwrap() - three.iter().min().unwrap() <= 1, "{three:?}");
+    // A \pageBreak still ends its page, and the pages either side are cut evenly on their own.
+    let n = room + 3;
+    let music: String = (0..n).map(|k| if k == 1 { "c'1 \\pageBreak ".to_string() } else { "c'1 \\break ".to_string() }).collect();
+    let (eng, _) = engrave_paper(&format!("{{ {music} c'1 }}")).unwrap();
+    let cut: Vec<usize> = eng.pages.iter().map(|p| p.systems.len()).collect();
+    assert_eq!(cut[0], 2, "{cut:?}");
+    assert!(cut[1..].iter().max().unwrap() - cut[1..].iter().min().unwrap() <= 1, "{cut:?}");
+}

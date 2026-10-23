@@ -1517,36 +1517,55 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     let floor_y = page_h.map_or(0.0, |h| h - layout.bottom.unwrap_or(0.0));
     let gap = layout.gap.unwrap_or(10.0);
     let titled = !head.lines.is_empty();
-    let mut pages = vec![Page { index: 0, systems: Vec::new() }];
-    let mut prev: Option<(f64, f64, bool)> = None;
+    let reaches: Vec<(f64, f64)> = systems.iter().map(|sys| system_reach(sys, staves)).collect();
+    // A \pageBreak at the end of a system: the next starts a page.
+    let forced: Vec<bool> = systems
+        .iter()
+        .map(|sys| {
+            let last_bar = sys.lines[0].bars.end - 1;
+            staves[0].get(last_bar).is_some_and(|b| b.brk.as_deref() == Some("page"))
+        })
+        .collect();
+    // Where a system goes: the first under the title, the first of a later
+    // page under the margin, the others under the one before.
+    let first_top = |si: usize| {
+        let r = reaches[si];
+        if si == 0 {
+            let mut tp = if titled { (margin + head.bottom + 3.0).max(margin + head.bottom + 0.5 - r.0) } else { margin + 0.5 - r.0 };
+            if titled && page_h.is_none() {
+                tp += 1.0;
+            }
+            tp
+        } else {
+            margin + 3.5 + 1.0 - r.0
+        }
+    };
+    let next_top = |ptop: f64, pbottom: f64, si: usize| (ptop + gap).max(pbottom + 1.0 - reaches[si].0);
+    let starts = match page_h {
+        Some(_) => page_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
+        None => vec![0],
+    };
+    let mut pages: Vec<Page> = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
     for (si, sys) in systems.iter_mut().enumerate() {
-        let r = system_reach(sys, staves);
-        let mut tp;
-        match prev {
-            None => {
-                tp = if titled { (margin + head.bottom + 3.0).max(margin + head.bottom + 0.5 - r.0) } else { margin + 0.5 - r.0 };
-                if titled && page_h.is_none() {
-                    tp += 1.0;
-                }
+        let r = reaches[si];
+        let tp = match prev {
+            Some((ptop, pbottom)) if !starts.contains(&si) => next_top(ptop, pbottom, si),
+            _ => {
+                pages.push(Page { index: pages.len(), systems: Vec::new() });
+                first_top(si)
             }
-            Some((ptop, pbottom, _)) => {
-                tp = (ptop + gap).max(pbottom + 1.0 - r.0);
-            }
-        }
-        let forced = prev.is_some_and(|p| p.2);
-        if page_h.is_some() && prev.is_some() && (forced || tp + r.1 + 1.0 > floor_y) {
-            pages.push(Page { index: pages.len(), systems: Vec::new() });
-            tp = margin + 3.5 + 1.0 - r.0;
-        }
+        };
         sys.top = tp;
         sys.bottom = tp + r.1;
         sys.reach_hi = r.0;
         sys.page = pages.len() - 1;
         let pi = pages.len() - 1;
         pages[pi].systems.push(si);
-        let last_bar = sys.lines[0].bars.end - 1;
-        let brk_page = staves[0].get(last_bar).is_some_and(|b| b.brk.as_deref() == Some("page"));
-        prev = Some((sys.top, sys.bottom, brk_page));
+        prev = Some((sys.top, sys.bottom));
+    }
+    if pages.is_empty() {
+        pages.push(Page { index: 0, systems: Vec::new() });
     }
     if page_h.is_some() {
         let n = pages.len();
@@ -1577,6 +1596,59 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
         }
     }
     pages
+}
+
+/// The systems that start a page, the first included: as few pages as the
+/// systems need, and among those ways to cut them, the one whose pages are
+/// most evenly full — the last one too, so that it is not left with a line
+/// on it. A system starts a page after a \pageBreak; one taller than a page
+/// has a page to itself.
+fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+    if n == 0 {
+        return vec![0];
+    }
+    // best[j]: the least (pages, unevenness) for systems 0..j, and where its last page starts.
+    let mut best: Vec<Option<(usize, f64, usize)>> = vec![None; n + 1];
+    best[0] = Some((0, 0.0, 0));
+    for i in 0..n {
+        let Some((pages, cost, _)) = best[i] else { continue };
+        let top = first_top(i);
+        let room = (floor_y - 1.0 - top).max(1.0);
+        let (mut ptop, mut pbottom) = (top, top + reaches[i].1);
+        for j in i..n {
+            if j > i {
+                ptop = next_top(ptop, pbottom, j);
+                pbottom = ptop + reaches[j].1;
+                if pbottom + 1.0 > floor_y {
+                    break;
+                }
+            }
+            let empty = ((floor_y - 1.0 - pbottom) / room).max(0.0);
+            let candidate = (pages + 1, cost + empty * empty, i);
+            let better = match best[j + 1] {
+                None => true,
+                Some((p, c, _)) => candidate.0 < p || (candidate.0 == p && candidate.1 < c - 1e-9),
+            };
+            if better {
+                best[j + 1] = Some(candidate);
+            }
+            if forced[j] {
+                break;
+            }
+        }
+    }
+    let mut starts = Vec::new();
+    let mut j = n;
+    while j > 0 {
+        let Some((_, _, i)) = best[j] else { break };
+        starts.push(i);
+        j = i;
+    }
+    starts.reverse();
+    if starts.first() != Some(&0) {
+        starts.insert(0, 0);
+    }
+    starts
 }
 
 fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
