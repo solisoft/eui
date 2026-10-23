@@ -890,6 +890,8 @@ pub struct Ev {
     pub fifths: i64,
     /// `\time`'s numerator and denominator.
     pub time: (i64, i64),
+    /// An additive metre's parts, `2+3/8` as `[2, 3, 0, 0]`; zeros for one figure.
+    pub time_parts: [u8; 4],
     /// `\bar`'s kind, an ending's label.
     pub v: String,
     /// `\pageBreak`.
@@ -941,6 +943,8 @@ pub struct Ev {
     pub hairpin_end: bool,
     /// The tuplet it is in.
     pub tuplet: Option<TupletRef>,
+    /// The tuplet around that one, when tuplets nest: a triplet in a quintuplet.
+    pub tuplet_outer: Option<TupletRef>,
     /// A copy `\repeat percent` makes: played, and drawn as the percent
     /// sign of its bar. The copy's number.
     pub percent: Option<i64>,
@@ -1262,6 +1266,8 @@ struct St {
     alts: i64,
     tuplets: i64,
     tuplet: Option<TupletState>,
+    /// The tuplet the current one is inside, when they nest (two deep at most).
+    tuplet_outer: Option<TupletState>,
     /// The pitches of the last chord, which `q` repeats.
     chord: Option<Vec<Pitch>>,
     /// `\voiceOne` … `\voiceFour` in the music being read: 1 or 2.
@@ -1979,6 +1985,7 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
         alts: 0,
         tuplets: 0,
         tuplet: None,
+        tuplet_outer: None,
         chord: None,
         voice_cmd: None,
         voice_name: None,
@@ -2460,14 +2467,27 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             if mode.t != T::Cmd {
                 return refuse("\\key wants a pitch and \\major or \\minor", tk.at);
             }
-            if mode.v != "major" && mode.v != "minor" {
-                return refuse(format!("the mode '{}' is not \\major or \\minor", mode.v), mode.at);
+            // A mode's signature: its tonic's major key, moved round the circle of fifths.
+            let shift = match mode.v.as_str() {
+                "major" | "ionian" => 0,
+                "minor" | "aeolian" => -3,
+                "dorian" => -2,
+                "phrygian" => -4,
+                "lydian" => 1,
+                "mixolydian" => -1,
+                "locrian" => -5,
+                _ => {
+                    return refuse(
+                        format!("the mode '{}' is not one a key signature is written for (\\major, \\minor, \\dorian, \\phrygian, \\lydian, \\mixolydian, \\aeolian, \\locrian, \\ionian)", mode.v),
+                        mode.at,
+                    )
+                }
+            };
+            if shift != 0 && shift != -3 {
+                beyond();
             }
             let tonic = transposed(st, step, alter, tk.at)?;
-            let mut fifths = [0, 2, 4, -1, 1, 3, 5][modulo(tonic.d, 7) as usize] + 7 * tonic.alter;
-            if mode.v == "minor" {
-                fifths -= 3;
-            }
+            let fifths = [0, 2, 4, -1, 1, 3, 5][modulo(tonic.d, 7) as usize] + 7 * tonic.alter + shift;
             if !(-7..=7).contains(&fifths) {
                 return refuse(format!("a key of {fifths} fifths has no signature"), tk.at);
             }
@@ -2475,18 +2495,37 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(i + 3);
         }
         "time" => {
-            let parts: Vec<String> = arg.as_ref().map(|a| a.v.split('/').map(str::to_owned).collect()).unwrap_or_default();
-            if parts.len() != 2 {
-                return refuse("\\time wants a fraction like 3/4", tk.at);
+            // `3/4`, or an additive metre, `2+3/8`, its parts summed and kept to be drawn.
+            let mut j = i + 1;
+            let mut added: Vec<i64> = Vec::new();
+            while is(toks, j, T::Num) && !toks[j].v.contains('/') && is(toks, j + 1, T::Sym('+')) {
+                added.push(toks[j].v.parse().unwrap_or(0));
+                j += 2;
             }
-            let num: i64 = parts[0].parse().unwrap_or(0);
+            let last = toks.get(j).filter(|t| t.t == T::Num);
+            let parts: Vec<String> = last.map(|a| a.v.split('/').map(str::to_owned).collect()).unwrap_or_default();
+            if parts.len() != 2 {
+                return refuse("\\time wants a fraction like 3/4, or 2+3/8", tk.at);
+            }
+            added.push(parts[0].parse().unwrap_or(0));
+            let num: i64 = added.iter().sum();
             let den: i64 = parts[1].parse().unwrap_or(0);
-            if !(num > 0 && num < 13 && [1, 2, 4, 8, 16].contains(&den)) {
+            let fits = added.iter().all(|p| (1..=99).contains(p)) && added.len() <= 4 && num <= 99;
+            if !(fits && [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 32, 64].contains(&den)) {
                 let a = arg.unwrap_or(tk.clone());
                 return refuse(format!("\\time {} is not a metre this draws", a.v), a.at);
             }
-            st.events.push(Ev { k: Kind::Time, time: (num, den), at: tk.at, ..Ev::default() });
-            return Ok(i + 2);
+            if added.len() > 1 || num > 12 || ![1, 2, 4, 8, 16].contains(&den) {
+                beyond();
+            }
+            let mut time_parts = [0u8; 4];
+            if added.len() > 1 {
+                for (slot, p) in time_parts.iter_mut().zip(&added) {
+                    *slot = u8::try_from(*p).unwrap_or(0);
+                }
+            }
+            st.events.push(Ev { k: Kind::Time, time: (num, den), time_parts, at: tk.at, ..Ev::default() });
+            return Ok(j + 1);
         }
         "bar" => {
             let Some(arg) = arg.filter(|a| a.t == T::Str) else { return refuse("\\bar wants a string", tk.at) };
@@ -2796,7 +2835,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
 /// ticks, and the token after it.
 fn duration_arg(toks: &[Tok], mut i: usize) -> Option<(i64, usize)> {
     let base: i64 = toks.get(i).filter(|t| t.t == T::Num && !t.v.contains('/'))?.v.parse().ok()?;
-    if ![1, 2, 4, 8, 16, 32, 64].contains(&base) {
+    if ![1, 2, 4, 8, 16, 32, 64, 128].contains(&base) {
         return None;
     }
     i += 1;
@@ -2992,8 +3031,8 @@ fn tuplet(toks: &[Tok], i: usize, st: &mut St, word: &str, hd: &mut HashMap<Stri
     if !((2..=12).contains(&n) && (1..=12).contains(&d) && n != d) {
         return refuse(format!("a tuplet of {n} in the time of {d} is not one this draws"), tk.at);
     }
-    if st.tuplet.is_some() {
-        return refuse("a tuplet inside a tuplet is not drawn", tk.at);
+    if st.tuplet_outer.is_some() {
+        return refuse("a tuplet three deep is not drawn: two tuplets nest, no more", tk.at);
     }
     let mut j = i + 2;
     let mut span = 0;
@@ -3008,13 +3047,17 @@ fn tuplet(toks: &[Tok], i: usize, st: &mut St, word: &str, hd: &mut HashMap<Stri
     if !is(toks, j, T::Sym('{')) {
         return refuse(format!("\\{word} wants a {{ block }}"), tk.at);
     }
+    if st.tuplet.is_some() {
+        beyond();
+    }
     st.tuplets += 1;
+    st.tuplet_outer = st.tuplet.take();
     st.tuplet = Some(TupletState { id: st.tuplets, n, d, span, used: 0 });
     let k = music(toks, j + 1, st, hd)?;
     if k >= toks.len() || toks[k].t != T::Sym('}') {
         return refuse("a tuplet that is never closed", tk.at);
     }
-    st.tuplet = None;
+    st.tuplet = st.tuplet_outer.take();
     Ok(k + 1)
 }
 
@@ -3145,8 +3188,8 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     }
     if is(toks, i, T::Num) {
         let base: i64 = toks[i].v.parse().unwrap_or(0);
-        if ![1, 2, 4, 8, 16, 32].contains(&base) {
-            return refuse(format!("the duration {} is not one this draws (1, 2, 4, 8, 16, 32)", toks[i].v), toks[i].at);
+        if ![1, 2, 4, 8, 16, 32, 64, 128].contains(&base) {
+            return refuse(format!("the duration {} is not one this draws (1, 2, 4, 8, 16, 32, 64, 128)", toks[i].v), toks[i].at);
         }
         st.base = base;
         st.dots = 0;
@@ -3229,6 +3272,16 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         ev.tuplet = Some(TupletRef { id: tup.id, n: tup.n, d: tup.d });
         tup.used += ev.ticks;
         st.tuplet = Some(tup);
+        // Inside another: that one's ratio too, its time counted.
+        if let Some(mut outer) = st.tuplet_outer {
+            if (ev.ticks * outer.d) % outer.n != 0 {
+                return refuse(format!("a 1/{base} in these tuplets cannot be cut {} ways", outer.n), tk.at);
+            }
+            ev.ticks = ev.ticks * outer.d / outer.n;
+            ev.tuplet_outer = Some(TupletRef { id: outer.id, n: outer.n, d: outer.d });
+            outer.used += ev.ticks;
+            st.tuplet_outer = Some(outer);
+        }
     }
     st.items += 1;
     ev.graces = std::mem::take(&mut st.graces);

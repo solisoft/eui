@@ -54,6 +54,8 @@ pub struct Opening {
     pub fifths: i64,
     /// The metre.
     pub time: (i64, i64),
+    /// An additive metre's parts (`Ev::time_parts`).
+    pub time_parts: [u8; 4],
     /// What changes here.
     pub changes: Changes,
 }
@@ -67,6 +69,8 @@ pub struct Bar {
     pub fifths: i64,
     /// Its metre.
     pub time: (i64, i64),
+    /// An additive metre's parts (`Ev::time_parts`).
+    pub time_parts: [u8; 4],
     /// Its notes and rests — or, in a shared bar, its columns.
     pub items: Vec<Ev>,
     /// Its bar line.
@@ -132,7 +136,7 @@ pub struct Bar {
 
 impl Bar {
     pub(crate) fn opening(&self) -> Opening {
-        Opening { clef: self.clef, fifths: self.fifths, time: self.time, changes: self.changes }
+        Opening { clef: self.clef, fifths: self.fifths, time: self.time, time_parts: self.time_parts, changes: self.changes }
     }
 
     pub(crate) fn drawn(&self) -> &str {
@@ -168,11 +172,11 @@ pub fn clef_mid(clef: Clef) -> i64 {
     named + 7 * clef.octave - clef.line
 }
 
-/// Written values, longest first: `(base, dots, ticks)` — whole to 32nd,
+/// Written values, longest first: `(base, dots, ticks)` — whole to 128th,
 /// with up to two dots.
 fn values() -> Vec<(i64, i64, i64)> {
     let mut out = Vec::new();
-    for base in [1, 2, 4, 8, 16, 32] {
+    for base in [1, 2, 4, 8, 16, 32, 64, 128] {
         for dots in 0..=2 {
             let one = WHOLE / base;
             let ticks = one * (2 * (1 << dots) - 1) / (1 << dots);
@@ -374,6 +378,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     let mut ottavas: Vec<(i64, i64)> = Vec::new();
     let mut fifths = 0;
     let (mut tn, mut td) = (4, 4);
+    let mut tparts = [0u8; 4];
     let mut bars: Vec<Bar> = Vec::new();
     let mut cur: Option<usize> = None;
     let mut pos = 0;
@@ -437,7 +442,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         let ci = match cur {
             Some(ci) => ci,
             None => {
-                let b = Bar { clef, fifths, time: (tn, td), bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
+                let b = Bar { clef, fifths, time: (tn, td), time_parts: tparts, bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
                 bars.push(b);
                 pos = 0;
                 seen.clear();
@@ -520,7 +525,9 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
                     _ => {
                         tn = ev.time.0;
                         td = ev.time.1;
+                        tparts = ev.time_parts;
                         bar.time = (tn, td);
+                        bar.time_parts = tparts;
                         bar.length = tn * WHOLE / td;
                         bar.changes.time = true;
                     }
@@ -634,7 +641,7 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
         }
         ev.start = pos;
         ev.bar = bars.len() - 1;
-        if let Some(t) = ev.tuplet {
+        for t in [ev.tuplet, ev.tuplet_outer].into_iter().flatten() {
             if tuplet_bar.get(&t.id).is_some_and(|b| *b != ev.bar) {
                 return refuse("a tuplet runs across a bar line", ev.at);
             }

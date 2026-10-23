@@ -154,8 +154,9 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
 /// What this engraver reads and the Soli one refuses: the LilyPond protocol
 /// 11 adds (03 §1.4). `tests/lilypond.rs` holds what each draws. Two run
 /// past a bar line: cut into tied notes here, as LilyPond's
-/// Completion_heads_engraver cuts them; the last sets a second verse.
-const BEYOND: [&str; 8] = [
+/// Completion_heads_engraver cuts them; then a second verse, a mode, an odd
+/// metre and a tuplet in a tuplet.
+const BEYOND: [&str; 11] = [
     "{ \\clef tenor c'4 }",
     "{ c'1 \\repeat unfold 2 { c'4 } }",
     "{ << { c'4 } >> }",
@@ -164,11 +165,16 @@ const BEYOND: [&str; 8] = [
     "{ c'4 d'4 e'4 f'4 g'4 a'4 b'4 c''4 d''2 e''2 f''1 g''1 a''1 b''1 c'''1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'1 c'2 c'1 }",
     "{ c'4 c'4 c'4 c'4 c'2. c'2 }",
     "{ c'4 } \\addlyrics { la } \\addlyrics { lo }",
+    // A mode, an odd metre, a tuplet in a tuplet.
+    "{ \\key c \\dorian c'4 }",
+    "{ \\time 3/5 c'4 }",
+    "{ \\tuplet 3/2 { \\tuplet 3/2 { c'8 d' e' } } }",
 ];
 
 /// What both refuse, this one saying more of why.
-const REWORDED: [(&str, &str); 2] = [
+const REWORDED: [(&str, &str); 3] = [
     ("{ c'4 \\new Voice }", "score: \\new Voice wants its music (at character 6)"),
+    ("{ c'7 }", "score: the duration 7 is not one this draws (1, 2, 4, 8, 16, 32, 64, 128) (at character 4)"),
     ("\\new Foo { c'4 }", "score: \\new Foo is not drawn: a Staff, a ChordNames, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is (at character 0)"),
 ];
 

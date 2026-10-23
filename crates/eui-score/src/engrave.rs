@@ -201,6 +201,8 @@ pub(crate) fn flags(base: i64) -> i64 {
         8 => 1,
         16 => 2,
         32 => 3,
+        64 => 4,
+        128 => 5,
         _ => 0,
     }
 }
@@ -418,11 +420,11 @@ pub(crate) fn shortest<'a>(bars: impl Iterator<Item = &'a Bar>) -> i64 {
 }
 
 fn space_ticks(ev: &Ev) -> i64 {
-    let t = WHOLE / ev.base.max(1);
-    match ev.tuplet {
-        None => t,
-        Some(tp) => t * tp.d / tp.n,
+    let mut t = WHOLE / ev.base.max(1);
+    for tp in [ev.tuplet, ev.tuplet_outer].into_iter().flatten() {
+        t = t * tp.d / tp.n;
     }
+    t
 }
 
 pub(crate) fn head_name(base: i64) -> &'static str {
@@ -440,7 +442,9 @@ pub(crate) fn rest_name(base: i64) -> &'static str {
         4 => "restQuarter",
         8 => "rest8th",
         16 => "rest16th",
-        _ => "rest32nd",
+        32 => "rest32nd",
+        64 => "rest64th",
+        _ => "rest128th",
     }
 }
 
@@ -458,7 +462,9 @@ pub(crate) fn flag_name(base: i64, up: bool) -> String {
     let stem = match base {
         8 => "8th",
         16 => "16th",
-        _ => "32nd",
+        32 => "32nd",
+        64 => "64th",
+        _ => "128th",
     };
     format!("flag{stem}{}", if up { "Up" } else { "Down" })
 }
@@ -845,7 +851,10 @@ pub(crate) fn key_width(fifths: i64) -> f64 {
     fifths.abs() as f64 * (g.advance + 0.1)
 }
 
-pub(crate) fn time_glyph(time: (i64, i64)) -> Option<&'static str> {
+pub(crate) fn time_glyph(time: (i64, i64), parts: [u8; 4]) -> Option<&'static str> {
+    if parts[1] != 0 {
+        return None;
+    }
     if time == (4, 4) {
         return Some("timeSigCommon");
     }
@@ -859,13 +868,29 @@ pub(crate) fn digits(v: i64) -> Vec<String> {
     v.to_string().chars().map(|ch| format!("timeSig{ch}")).collect()
 }
 
-pub(crate) fn time_width(time: (i64, i64)) -> f64 {
-    if let Some(one) = time_glyph(time) {
+/// A metre's numerator, as glyphs: its figure, or an additive metre's
+/// parts with a + between them.
+pub(crate) fn numerator(time: (i64, i64), parts: [u8; 4]) -> Vec<String> {
+    if parts[1] == 0 {
+        return digits(time.0);
+    }
+    let mut out = Vec::new();
+    for (k, p) in parts.iter().filter(|p| **p > 0).enumerate() {
+        if k > 0 {
+            out.push("timeSigPlus".to_owned());
+        }
+        out.extend(digits(i64::from(*p)));
+    }
+    out
+}
+
+pub(crate) fn time_width(time: (i64, i64), parts: [u8; 4]) -> f64 {
+    if let Some(one) = time_glyph(time, parts) {
         return glyph(one).advance;
     }
     let mut wide: f64 = 0.0;
-    for part in [time.0, time.1] {
-        let w = digits(part).iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
+    for names in [numerator(time, parts), digits(time.1)] {
+        let w = names.iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
         if w > wide {
             wide = w;
         }
@@ -889,7 +914,7 @@ fn prefix_width_of(o: &Opening, first: bool) -> f64 {
         w += key_width(o.fifths) + 0.8;
     }
     if first || o.changes.time {
-        w += time_width(o.time) + 1.0;
+        w += time_width(o.time, o.time_parts) + 1.0;
     }
     w
 }
@@ -935,7 +960,7 @@ fn change_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        w += time_width(o.time) + 1.0;
+        w += time_width(o.time, o.time_parts) + 1.0;
     }
     w
 }
@@ -990,7 +1015,7 @@ pub(crate) fn courtesy_of(bar: &Bar) -> Courtesy {
 }
 
 fn courtesy_opening(o: &Opening) -> Opening {
-    Opening { clef: o.clef, fifths: o.fifths, time: o.time, changes: Changes { clef: false, key: o.changes.key, key_from: o.changes.key_from, time: o.changes.time } }
+    Opening { clef: o.clef, fifths: o.fifths, time: o.time, time_parts: o.time_parts, changes: Changes { clef: false, key: o.changes.key, key_from: o.changes.key_from, time: o.changes.time } }
 }
 
 fn courtesy_width_of(o: &Opening) -> f64 {
@@ -1006,7 +1031,7 @@ fn courtesy_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        cw += time_width(o.time) + 0.5;
+        cw += time_width(o.time, o.time_parts) + 0.5;
     }
     if cw > 0.0 {
         cw + 0.6
@@ -1309,7 +1334,15 @@ fn stem(ev: &mut Ev) {
         ev.stem_end = y_of(hi);
         return;
     }
-    let len = 3.5 + if ev.base == 32 { 0.75 } else { 0.0 };
+    // Each flag past the second needs room on the stem: a 64th's and a
+    // 128th's are a space and two spaces taller than a 32nd's.
+    let len = 3.5
+        + match ev.base {
+            32 => 0.75,
+            64 => 1.75,
+            128 => 2.75,
+            _ => 0.0,
+        };
     if ev.up {
         ev.stem_end = (y_of(hi) - len).min(2.0);
     } else {

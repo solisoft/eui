@@ -701,20 +701,23 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
 }
 
 fn tuplets(bars: &[Bar], line: &Line) -> Vec<TupletPlace> {
-    let mut groups: Vec<(i64, i64, Vec<&Ev>)> = Vec::new();
+    // Each group: its id, its number, whether it holds another, its notes.
+    let mut groups: Vec<(i64, i64, bool, Vec<&Ev>)> = Vec::new();
     for b in line.bars.clone() {
         for ev in &bars[b].items {
-            let Some(t) = ev.tuplet else { continue };
-            match groups.iter_mut().find(|g| g.0 == t.id) {
-                Some(g) => g.2.push(ev),
-                None => groups.push((t.id, t.n, vec![ev])),
+            for (t, outer) in [(ev.tuplet, false), (ev.tuplet_outer, true)] {
+                let Some(t) = t else { continue };
+                match groups.iter_mut().find(|g| g.0 == t.id) {
+                    Some(g) => g.3.push(ev),
+                    None => groups.push((t.id, t.n, outer, vec![ev])),
+                }
             }
         }
     }
-    groups.iter().map(|(_, n, items)| tuplet_place(bars, items, *n)).collect()
+    groups.iter().map(|(_, n, outer, items)| tuplet_place(bars, items, *n, *outer)).collect()
 }
 
-fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64) -> TupletPlace {
+fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64, outer: bool) -> TupletPlace {
     let notes: Vec<&Ev> = items.iter().copied().filter(|ev| ev.k == Kind::Note).collect();
     let first_beam = notes.first().and_then(|ev| ev.beam.map(|b| (ev.bar, b)));
     let beamed = notes.len() == items.len() && notes.len() > 1 && first_beam.is_some() && notes.iter().all(|ev| ev.beam.map(|b| (ev.bar, b)) == first_beam);
@@ -747,7 +750,12 @@ fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64) -> TupletPlace {
         ya += push;
         yb += push;
     }
-    TupletPlace { x0, x1, ya, yb, up, bracket: !beamed, label: n.to_string() }
+    // A tuplet holding another stands beyond it, with its own bracket.
+    if outer {
+        ya += 1.8 * dir;
+        yb += 1.8 * dir;
+    }
+    TupletPlace { x0, x1, ya, yb, up, bracket: !beamed || outer, label: n.to_string() }
 }
 
 /// How far a note or a rest reaches on one side, in staff y: its stem's end

@@ -486,7 +486,7 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         x = draw_key(&mut pen, first.fifths, first.clef, x, top, false, 0) + 0.8;
     }
     if (first.first || first.changes.time) && !tab {
-        draw_time(&mut pen, first.time, x, top);
+        draw_time(&mut pen, first.time, first.time_parts, x, top);
     }
     let down = line.connect_down + crate::engrave::staff_height(line.kind) - 4.0;
     for (bi, b) in line.bars.clone().enumerate() {
@@ -875,7 +875,7 @@ fn draw_courtesy(pen: &mut Pen, o: &Opening, bar_end: f64, top: f64) {
         }
     }
     if ch.time {
-        draw_time(pen, o.time, x, top);
+        draw_time(pen, o.time, o.time_parts, x, top);
     }
 }
 
@@ -905,14 +905,13 @@ fn draw_key(pen: &mut Pen, fifths: i64, clef: Clef, mut x: f64, top: f64, cancel
     x
 }
 
-fn draw_time(pen: &mut Pen, time: (i64, i64), x: f64, top: f64) {
-    if let Some(one) = time_glyph(time) {
+fn draw_time(pen: &mut Pen, time: (i64, i64), parts: [u8; 4], x: f64, top: f64) {
+    if let Some(one) = time_glyph(time, parts) {
         pen.glyph(one, x, top + 2.0);
         return;
     }
-    let wide = time_width(time);
-    for (pi, part) in [time.0, time.1].into_iter().enumerate() {
-        let names = digits(part);
+    let wide = time_width(time, parts);
+    for (pi, names) in [crate::engrave::numerator(time, parts), digits(time.1)].into_iter().enumerate() {
         let w = names.iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
         let mut cx = x + (wide - w) / 2.0;
         for nm in &names {
@@ -940,7 +939,7 @@ fn draw_changes(pen: &mut Pen, o: &Opening, x0: f64, top: f64) {
         }
     }
     if ch.time {
-        draw_time(pen, o.time, x, top);
+        draw_time(pen, o.time, o.time_parts, x, top);
     }
 }
 

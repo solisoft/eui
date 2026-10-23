@@ -55,7 +55,7 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
         controls.extend(track);
         tracks.push(controls);
     }
-    let quarter = WHOLE / 4;
+    let quarter = WHOLE / 4 / MIDI_SCALE;
     let mut out: Vec<u8> = vec![77, 84, 104, 100, 0, 0, 0, 6, 0, if tracks.len() > 1 { 1 } else { 0 }];
     out.extend(be(tracks.len() as i64, 2));
     out.extend(be(quarter, 2));
@@ -66,6 +66,11 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     }
     Ok(out)
 }
+
+/// The file's ticks are the engraver's divided by this: a quarter of 6720,
+/// as before WHOLE took a second factor of three for nested triplets — the
+/// files stay what they were, and only a triplet in a triplet rounds.
+const MIDI_SCALE: i64 = 3;
 
 struct Sounding {
     until: i64,
@@ -224,9 +229,11 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
     let mut out = Vec::new();
     let mut last = 0;
     for (t, _, bytes) in ev_out {
-        out.extend(vlq(t - last));
+        // Written at the file's resolution (MIDI_SCALE), from absolute times: no drift.
+        let at = (t + MIDI_SCALE / 2) / MIDI_SCALE;
+        out.extend(vlq(at - last));
         out.extend(bytes);
-        last = t;
+        last = at;
     }
     out.extend([0, 255, 47, 0]);
     out

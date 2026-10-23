@@ -38,10 +38,11 @@ pub use draw::{Band, HeadRanges, Path, Ranges};
 pub use engrave::Engraved;
 pub use midi::MidiOptions;
 
-/// The ticks in a whole note. 256 × 105: a 1/32 with three dots is a whole
+/// The ticks in a whole note. 256 × 315: a 1/128 with a dot is a whole
 /// number of ticks, and so is any of them in a triplet, a quintuplet, a
-/// sextuplet or a septuplet.
-pub const WHOLE: i64 = 26880;
+/// sextuplet or a septuplet — or in a triplet inside a triplet. A quarter is
+/// 20160, under the 32768 a MIDI file's division allows.
+pub const WHOLE: i64 = 80640;
 
 /// The thicknesses, LilyPond's defaults at its staff size 20, in staff
 /// spaces.

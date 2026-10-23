@@ -380,3 +380,74 @@ fn a_page_break_starts_a_new_page() {
     let (lines, _) = engrave_paper("{ c'1 \\break c'1 \\break c'1 }").unwrap();
     assert_eq!(lines.systems.len(), 3, "a \\break ends its line");
 }
+
+#[test]
+fn sixty_fourths_and_hundred_twenty_eighths_have_their_flags_and_rests() {
+    let src = r"{ \time 1/8 c''64 d'' e'' f'' g''128 a'' b'' c''' r64 r128 r128 }";
+    let p = parse(src).unwrap();
+    let ticks: Vec<i64> = p.staves[0].events.iter().filter(|e| matches!(e.k, Kind::Note | Kind::Rest)).map(|e| e.ticks).collect();
+    assert_eq!(ticks[0], eui_score::WHOLE / 64);
+    assert_eq!(ticks[4], eui_score::WHOLE / 128);
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+    // One alone has its flags; written past the bar, it is cut into tied notes of the small values too.
+    for alone in [r"{ c''64 r64 r32 r16 r8 r4 r2 }", r"{ c''128 r128 r64 r32 r16 r8 r4 r2 }"] {
+        engrave(alone, 80.0, &Layout::default()).unwrap();
+    }
+    assert!(parse(r"{ c'256 }").is_err(), "256ths are not drawn");
+}
+
+#[test]
+fn a_key_in_a_mode_has_the_signature_of_its_notes() {
+    let fifths = |src: &str| parse(src).unwrap().staves[0].events.iter().find(|e| e.k == Kind::Key).map(|e| e.fifths).unwrap();
+    assert_eq!(fifths(r"{ \key d \dorian c'1 }"), 0, "D dorian: no sharp or flat");
+    assert_eq!(fifths(r"{ \key g \mixolydian c'1 }"), 0);
+    assert_eq!(fifths(r"{ \key e \phrygian c'1 }"), 0);
+    assert_eq!(fifths(r"{ \key f \lydian c'1 }"), 0);
+    assert_eq!(fifths(r"{ \key b \locrian c'1 }"), 0);
+    assert_eq!(fifths(r"{ \key a \dorian c'1 }"), 1, "A dorian: one sharp");
+    assert_eq!(fifths(r"{ \key d \minor c'1 }"), -1);
+    assert_eq!(fifths(r"{ \key c \ionian c'1 }"), 0);
+    assert!(parse(r"{ \key c \blues c'1 }").is_err());
+}
+
+#[test]
+fn metres_added_up_long_or_odd_are_read_and_drawn() {
+    let time = |src: &str| {
+        let p = parse(src).unwrap();
+        let ev = p.staves[0].events.iter().find(|e| e.k == Kind::Time).cloned().unwrap();
+        (ev.time, ev.time_parts)
+    };
+    assert_eq!(time(r"{ \time 2+3/8 c'4 c'4. }"), ((5, 8), [2, 3, 0, 0]));
+    assert_eq!(time(r"{ \time 3+2+2/8 c'4. c'4 c'4 }"), ((7, 8), [3, 2, 2, 0]));
+    assert_eq!(time(r"{ \time 15/16 c'2.. c'16 }").0, (15, 16));
+    assert_eq!(time(r"{ \time 3/32 c'16 c'32 }").0, (3, 32));
+    for src in [r"{ \time 2+3/8 c'4 c'4. | c'4. c'4 }", r"{ \time 13/8 c'1 c'4. c'4 }", r"{ \time 4/5 \tuplet 5/4 { c'4 c' c' c' } }"] {
+        let eng = engrave(src, 80.0, &Layout::default()).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+    }
+    // The bar of 2+3/8 lasts five eighths: a sixth does not fit.
+    assert!(engrave(r"{ \time 2+3/8 c'4 c'4. c'8 }", 80.0, &Layout::default()).is_ok(), "cut into the next bar");
+    assert!(parse(r"{ \time 3/7 c'4 }").is_err(), "a seventh is not a note");
+    assert!(parse(r"{ \time 60+50/8 c'4 }").is_err(), "more than 99 in a bar");
+}
+
+#[test]
+fn a_tuplet_inside_a_tuplet_takes_both_ratios_and_has_both_brackets() {
+    // A triplet of eighths in the time of a quarter, inside a quintuplet of quarters in the time of four.
+    let src = r"{ \tuplet 5/4 { c'4 \tuplet 3/2 { d'8 e' f' } g'4 a' b' } }";
+    let p = parse(src).unwrap();
+    let notes: Vec<_> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
+    let quarter = eui_score::WHOLE / 4;
+    assert_eq!(notes[0].ticks, quarter * 4 / 5);
+    assert_eq!(notes[1].ticks, quarter / 2 * 2 / 3 * 4 / 5, "both ratios");
+    assert!(notes[1].tuplet.is_some() && notes[1].tuplet_outer.is_some());
+    assert_eq!(notes[1].tuplet_outer.unwrap().id, notes[0].tuplet.unwrap().id, "the outer tuplet is the quintuplet");
+    assert_eq!(notes.iter().map(|n| n.ticks).sum::<i64>(), eui_score::WHOLE, "a whole bar");
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    let tuplets = &eng.systems[0].lines[0].tuplets;
+    assert_eq!(tuplets.len(), 2, "a bracket each");
+    let labels: Vec<&str> = tuplets.iter().map(|t| t.label.as_str()).collect();
+    assert!(labels.contains(&"5") && labels.contains(&"3"));
+    assert!(parse(r"{ \tuplet 3/2 { \tuplet 3/2 { \tuplet 3/2 { c'32 c' c' } } } }").is_err(), "three deep");
+}
