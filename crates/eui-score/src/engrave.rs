@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
-use crate::measure::{measures, Bar, Beam, Changes, Opening};
+use crate::measure::{clef_mid, measures, Bar, Beam, Changes, Opening};
 use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
@@ -238,8 +238,15 @@ pub(crate) fn voice_lists(bar: &Bar) -> Vec<Vec<usize>> {
     if !bar.poly {
         return vec![all.collect()];
     }
-    let (two, one): (Vec<usize>, Vec<usize>) = all.partition(|&j| bar.items[j].voice == Some(2));
-    vec![one, two]
+    // One list a voice, in their order; a note outside the voices goes with the first.
+    let mut lists: Vec<Vec<usize>> = Vec::new();
+    for v in 1u8..=4 {
+        let list: Vec<usize> = all.clone().filter(|&j| bar.items[j].voice.unwrap_or(1) == v).collect();
+        if !list.is_empty() {
+            lists.push(list);
+        }
+    }
+    lists
 }
 
 /// Whether a staff of a kind beams its notes: a tablature shows no rhythm,
@@ -275,7 +282,7 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
             }
             let mut up = -lowest > highest;
             if let Some(v) = bar.items[g[0]].voice {
-                up = v == 1;
+                up = v % 2 == 1;
             }
             let gi = bar.beams.len();
             for &j in &g {
@@ -289,7 +296,7 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
                 continue;
             }
             match ev.voice {
-                Some(v) => ev.up = v == 1,
+                Some(v) => ev.up = v % 2 == 1,
                 None if ev.beam.is_none() => ev.up = stem_up(ev),
                 None => {}
             }
@@ -732,7 +739,8 @@ fn poly_cols(bar: &mut Bar, shortest: i64) {
             }
         }
         col.ideal = ideal.unwrap_or(0.0);
-        let note = |j: usize, two: bool| bar.items[j].k == Kind::Note && (bar.items[j].voice == Some(2)) == two;
+        // The stem-up voices (first, third) against the stem-down (second, fourth).
+        let note = |j: usize, two: bool| bar.items[j].k == Kind::Note && (bar.items[j].voice.is_some_and(|v| v % 2 == 0)) == two;
         let ones: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, false)).collect();
         let twos: Vec<usize> = col.members.iter().map(|m| m.1).filter(|&j| note(j, true)).collect();
         // They meet when the first voice's lowest head comes within a step
@@ -748,6 +756,20 @@ fn poly_cols(bar: &mut Bar, shortest: i64) {
                 let hw = ev.head_w.unwrap_or(0.0);
                 ev.shift = Some(hw);
                 col.right = col.right.max(ev.right + hw);
+            }
+        }
+        // A third or fourth voice stands a head to the right of the first two
+        // where they sound together, as LilyPond's \voiceThree and \voiceFour do.
+        let inner = col.members.iter().any(|m| bar.items[m.1].k == Kind::Note && bar.items[m.1].voice.is_none_or(|v| v <= 2));
+        if inner {
+            for m in col.members.clone() {
+                let ev = &mut bar.items[m.1];
+                if ev.k == Kind::Note && ev.voice.is_some_and(|v| v >= 3) {
+                    let hw = ev.head_w.unwrap_or(1.2);
+                    let at = ev.shift.unwrap_or(0.0) + hw;
+                    ev.shift = Some(at);
+                    col.right = col.right.max(ev.right + at);
+                }
             }
         }
         cols.push(col);
@@ -1571,6 +1593,9 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         return engrave_many(parsed, width, layout);
     }
     let kind = parsed.staves[0].kind;
+    if let Some(ev) = parsed.staves[0].events.iter().find(|ev| ev.cross.is_some()) {
+        return refuse("\\change Staff wants a second staff to go to", ev.at);
+    }
     let mut bars = measures(&parsed.staves[0].events)?;
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
     for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
@@ -1708,6 +1733,49 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
     }
 }
 
+/// Notes after `\\change Staff = "…"` drawn on that staff: each moves to the
+/// same moment of the same bar there, its heads placed by that staff's clef,
+/// its stem towards the staff it came from (a third voice's up, a fourth's
+/// down); its own staff keeps a spacer in its place. They sound in their own
+/// staff, as they were written. Beams do not cross from one staff to the
+/// other: each side beams its own.
+fn cross_staff(all: &mut [Vec<Bar>], staves: &[crate::parse::Staff]) -> Result<(), ScoreError> {
+    let mut touched: Vec<(usize, usize)> = Vec::new();
+    for a in 0..all.len() {
+        for b in 0..all[a].len() {
+            for j in 0..all[a][b].items.len() {
+                let item = &all[a][b].items[j];
+                let Some(name) = item.cross.clone().filter(|_| item.k == Kind::Note) else { continue };
+                let Some(t) = staves.iter().position(|s| s.name.as_deref() == Some(name.as_str())) else {
+                    return refuse(format!("\\change Staff = \"{name}\" names no staff: a \\new Staff = \"{name}\" is what it goes to"), item.at);
+                };
+                if t == a {
+                    continue;
+                }
+                let mut moved = item.clone();
+                let lift = clef_mid(all[a][b].clef) - clef_mid(all[t][b].clef);
+                for h in &mut moved.heads {
+                    h.pos += lift;
+                }
+                moved.voice = Some(if t > a { 3 } else { 4 });
+                moved.cross = None;
+                let ev = &mut all[a][b].items[j];
+                ev.k = Kind::Rest;
+                ev.spacer = true;
+                ev.heads.clear();
+                ev.cross = None;
+                all[t][b].items.push(moved);
+                all[t][b].poly = true;
+                touched.push((t, b));
+            }
+        }
+    }
+    for (t, b) in touched {
+        all[t][b].items.sort_by_key(|ev| ev.start * 8 + i64::from(ev.voice.unwrap_or(1)));
+    }
+    Ok(())
+}
+
 fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let staves_src = &parsed.staves;
     let mut all: Vec<Vec<Bar>> = Vec::new();
@@ -1725,6 +1793,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             }
         }
     }
+    cross_staff(&mut all, staves_src)?;
     for (si, bars) in all.iter_mut().enumerate() {
         lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);
         for (k, verse) in staves_src[si].verses.iter().enumerate() {

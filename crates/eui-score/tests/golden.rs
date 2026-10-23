@@ -155,8 +155,8 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
 /// 11 adds (03 §1.4). `tests/lilypond.rs` holds what each draws. Two run
 /// past a bar line: cut into tied notes here, as LilyPond's
 /// Completion_heads_engraver cuts them; then a second verse, a mode, an odd
-/// metre and a tuplet in a tuplet.
-const BEYOND: [&str; 11] = [
+/// metre, a tuplet in a tuplet and three voices.
+const BEYOND: [&str; 12] = [
     "{ \\clef tenor c'4 }",
     "{ c'1 \\repeat unfold 2 { c'4 } }",
     "{ << { c'4 } >> }",
@@ -169,6 +169,7 @@ const BEYOND: [&str; 11] = [
     "{ \\key c \\dorian c'4 }",
     "{ \\time 3/5 c'4 }",
     "{ \\tuplet 3/2 { \\tuplet 3/2 { c'8 d' e' } } }",
+    "{ << { c'4 } \\\\ { d'4 } \\\\ { e'4 } >> }",
 ];
 
 /// What both refuse, this one saying more of why.

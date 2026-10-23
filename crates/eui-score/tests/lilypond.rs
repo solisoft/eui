@@ -451,3 +451,54 @@ fn a_tuplet_inside_a_tuplet_takes_both_ratios_and_has_both_brackets() {
     assert!(labels.contains(&"5") && labels.contains(&"3"));
     assert!(parse(r"{ \tuplet 3/2 { \tuplet 3/2 { \tuplet 3/2 { c'32 c' c' } } } }").is_err(), "three deep");
 }
+
+#[test]
+fn three_or_four_voices_on_a_staff_each_have_their_stems_and_their_place() {
+    // A chorale on one staff: soprano and alto up and down, then tenor and bass.
+    let src = r"{ << { \voiceOne e''4 f'' g''2 } \\ { \voiceTwo c''4 d'' e''2 } \\ { \voiceThree g'4 a' b'2 } \\ { \voiceFour c'4 f' g'2 } >> }";
+    let p = parse(src).unwrap();
+    let voices: Vec<Option<u8>> = p.staves[0].events.iter().filter(|e| e.k == Kind::Note).map(|e| e.voice).collect();
+    assert_eq!(voices, vec![Some(1), Some(1), Some(1), Some(2), Some(2), Some(2), Some(3), Some(3), Some(3), Some(4), Some(4), Some(4)]);
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    let bar = &eng.staves[0][0];
+    let stems: Vec<(u8, bool)> = bar.items.iter().filter(|e| e.k == Kind::Note).map(|e| (e.voice.unwrap_or(0), e.up)).collect();
+    assert!(stems.iter().all(|(v, up)| *up == (v % 2 == 1)), "odd voices up, even down: {stems:?}");
+    // The third and fourth voices stand a head to the right of the first two.
+    let shift = |v: u8| bar.items.iter().find(|e| e.voice == Some(v)).and_then(|e| e.shift).unwrap_or(0.0);
+    assert!(shift(3) > 0.5 && shift(4) > 0.5);
+    assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+    // Unnamed parts take the numbers in turn; the same number twice, or a fifth voice, is refused.
+    let three = parse(r"{ << { c''4 } \\ { a'4 } \\ { e'4 } >> }").unwrap();
+    assert!(three.staves[0].events.iter().any(|e| e.voice == Some(3)));
+    assert!(parse(r"{ << { \voiceOne c''4 } \\ { \voiceOne a'4 } >> }").is_err());
+    assert!(parse(r"{ << { c''4 } \\ { a'4 } \\ { e'4 } \\ { c'4 } \\ { g4 } >> }").is_err());
+    // Voices that last differently are refused, the third too.
+    assert!(engrave(r"{ << { c''4 } \\ { a'4 } \\ { e'2 } >> }", 80.0, &Layout::default()).is_err());
+}
+
+#[test]
+fn notes_sent_to_the_other_staff_are_drawn_there_and_still_sound_in_their_own() {
+    let src = r#"\new PianoStaff <<
+  \new Staff = "up" { c''4 \change Staff = "down" c'4 e'4 \change Staff = "up" c''4 }
+  \new Staff = "down" { \clef bass s1 }
+>>"#;
+    let p = parse(src).unwrap();
+    assert_eq!(p.staves[0].name.as_deref(), Some("up"));
+    let crossed: Vec<_> = p.staves[0].events.iter().filter(|e| e.cross.is_some()).collect();
+    assert_eq!(crossed.len(), 2);
+    let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+    let up = &eng.staves[0][0];
+    let down = &eng.staves[1][0];
+    assert_eq!(up.items.iter().filter(|e| e.k == Kind::Note).count(), 2, "two notes stay up");
+    let moved: Vec<_> = down.items.iter().filter(|e| e.k == Kind::Note).collect();
+    assert_eq!(moved.len(), 2, "two are drawn down");
+    // Middle C on the bass staff sits a space above its top line: position 6.
+    assert_eq!(moved[0].heads[0].pos, 6);
+    assert!(moved.iter().all(|e| e.up), "their stems reach up, to the staff they came from");
+    assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
+    // They still sound in the right hand's track.
+    midi(src, &MidiOptions::default()).unwrap();
+    // A name no staff has, or a score of one staff, is refused.
+    assert!(engrave(r#"<< \new Staff = "up" { \change Staff = "nowhere" c'1 } \new Staff = "down" { c1 } >>"#, 80.0, &Layout::default()).is_err());
+    assert!(engrave(r#"{ \change Staff = "down" c'1 }"#, 80.0, &Layout::default()).is_err());
+}

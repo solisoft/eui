@@ -1027,6 +1027,8 @@ pub struct Ev {
     pub members: Vec<(usize, usize)>,
     /// Of `<< { … } \\ { … } >>`, the voice: 1 stems up, 2 stems down.
     pub voice: Option<u8>,
+    /// The staff a note is drawn on after `\\change Staff = "…"`, by its name.
+    pub cross: Option<String>,
     /// A rest of two voices: where it stands, in spaces from where one
     /// voice's rest would — moved clear of the other voice's notes.
     pub rest_y: Option<f64>,
@@ -1167,6 +1169,8 @@ pub struct Staff {
     pub lyrics_voice: u8,
     /// Its voices' names, `\new Voice = "name"`, and their numbers.
     pub voices: Vec<(String, u8)>,
+    /// Its name, `\\new Staff = "down"`: what `\\change Staff` names.
+    pub name: Option<String>,
 }
 
 /// How a group of staves is marked.
@@ -1286,6 +1290,9 @@ struct St {
     graces: Vec<Ev>,
     /// How words are read.
     mode: Mode,
+    /// The staff's own name, and the one `\\change Staff` sends its notes to.
+    own: Option<String>,
+    cross: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1796,7 +1803,9 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
             return refuse(format!("\\new {kind} is not drawn: a Staff, a ChordNames, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"), tk.at);
         }
         i += 2;
+        let mut name = None;
         if i + 1 < toks.len() && toks[i].t == T::Sym('=') && toks[i + 1].t == T::Str {
+            name = Some(toks[i + 1].v.clone());
             i += 2;
         }
         let mut props = Props::default();
@@ -1804,7 +1813,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
             i = with(toks, i, &mut props)?;
         }
         if let Some(sk) = staff_kind(&kind) {
-            return staff(toks, i, st, staves, props, sk);
+            return staff_named(toks, i, st, staves, props, sk, name);
         }
         if !double(toks, i, '<') {
             return refuse(format!("\\new {kind} wants its staves between << and >>"), tk.at);
@@ -1970,7 +1979,11 @@ fn staff_prop(toks: &[Tok], mut i: usize, props: &mut Props, what: &str) -> Resu
     Ok(i + 1)
 }
 
-fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, props: Props, kind: StaffKind) -> Result<usize, ScoreError> {
+fn staff(toks: &[Tok], i: usize, base: &mut Base, staves: &mut Vec<Staff>, props: Props, kind: StaffKind) -> Result<usize, ScoreError> {
+    staff_named(toks, i, base, staves, props, kind, None)
+}
+
+fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, props: Props, kind: StaffKind, name: Option<String>) -> Result<usize, ScoreError> {
     let mut st = St {
         reference: None,
         fixed: None,
@@ -1999,6 +2012,8 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
             StaffKind::Drums => Mode::Drums,
             _ => Mode::Notes,
         },
+        own: name.clone(),
+        cross: None,
     };
     match kind {
         StaffKind::Drums => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Percussion, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
@@ -2015,7 +2030,7 @@ fn staff(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Staff>, p
     }
     base.counter = st.items;
     base.notes = st.notes;
-    staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names });
+    staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names, name });
     Ok(i)
 }
 
@@ -2255,8 +2270,8 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         }
         if is(toks, i, T::Sym('\\')) {
             apart += 1;
-            if apart == 2 {
-                return refuse("two voices on a staff are what this draws", toks[i].at);
+            if apart == 4 {
+                return refuse("four voices on a staff are what this draws, no more", toks[i].at);
             }
             i += 1;
             continue;
@@ -2284,8 +2299,11 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
     if parts.len() != 2 || apart != 1 || parts.iter().skip(1).any(|p| p.events.iter().any(|ev| staff_level(&ev.k))) {
         beyond();
     }
+    if singing.len() > 4 {
+        return refuse("four voices on a staff are what this draws, no more", parts[singing[4]].at);
+    }
     if singing.len() > 2 {
-        return refuse("two voices on a staff are what this draws", parts[singing[2]].at);
+        beyond();
     }
     if singing.len() < 2 {
         // One voice, and perhaps the staff's settings beside it.
@@ -2302,26 +2320,46 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         st.events.extend(main);
         return Ok(i);
     }
-    let (a, b) = (singing[0], singing[1]);
-    let (va, _) = match (parts[a].voice, parts[b].voice) {
-        (Some(x), Some(y)) if x == y => return refuse("two voices on a staff are what this draws: one \\voiceOne, one \\voiceTwo", parts[b].at),
-        (Some(x), _) => (x, 3 - x),
-        (None, Some(y)) => (3 - y, y),
-        (None, None) => (1, 2),
-    };
-    let (one, two) = if va == 1 { (a, b) } else { (b, a) };
-    if parts[one].events.iter().chain(&parts[two].events).any(|ev| ev.k == Kind::Voices) {
-        return refuse("two voices on a staff are what this draws", parts[b].at);
-    }
-    let mut first = std::mem::take(&mut parts[one].events);
-    let mut second = std::mem::take(&mut parts[two].events);
-    (first, second) = merge(first, second);
-    for (k, p) in parts.iter_mut().enumerate() {
-        if k != one && k != two {
-            first = merge(first, std::mem::take(&mut p.events)).0;
+    // Each voice its number: the one \\voiceOne … \\voiceFour gives it, else
+    // the first left in the order the parts come.
+    let mut numbers: Vec<Option<u8>> = singing.iter().map(|&k| parts[k].voice).collect();
+    for x in 0..numbers.len() {
+        if let Some(v) = numbers[x] {
+            if numbers.iter().take(x).any(|w| *w == Some(v)) {
+                return refuse("two voices on a staff with the same \\voiceOne … \\voiceFour", parts[singing[x]].at);
+            }
         }
     }
-    for (events, v) in [(&mut first, 1u8), (&mut second, 2u8)] {
+    for x in 0..numbers.len() {
+        if numbers[x].is_none() {
+            let free = (1u8..=4).find(|v| !numbers.contains(&Some(*v))).unwrap_or(4);
+            numbers[x] = Some(free);
+        }
+    }
+    let mut voices: Vec<(u8, usize)> = singing.iter().zip(&numbers).map(|(&k, v)| (v.unwrap_or(1), k)).collect();
+    voices.sort_by_key(|v| v.0);
+    if parts.iter().any(|p| p.events.iter().any(|ev| ev.k == Kind::Voices)) {
+        return refuse("voices inside voices are not drawn", parts[voices[0].1].at);
+    }
+    let mut lists: Vec<Vec<Ev>> = Vec::new();
+    for &(_, k) in &voices {
+        lists.push(std::mem::take(&mut parts[k].events));
+    }
+    // What a voice says for the whole staff (a key, a metre) goes with the first.
+    for x in 1..lists.len() {
+        let other = std::mem::take(&mut lists[x]);
+        let first = std::mem::take(&mut lists[0]);
+        let (merged, kept) = merge(first, other);
+        lists[0] = merged;
+        lists[x] = kept;
+    }
+    for p in parts.iter_mut() {
+        if !p.events.is_empty() {
+            let first = std::mem::take(&mut lists[0]);
+            lists[0] = merge(first, std::mem::take(&mut p.events)).0;
+        }
+    }
+    for (events, &(v, _)) in lists.iter_mut().zip(&voices) {
         for ev in events.iter_mut() {
             if ev.k == Kind::Note || ev.k == Kind::Rest {
                 if ev.count > 1 {
@@ -2331,15 +2369,18 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
             }
         }
     }
-    for (k, v) in [(one, 1u8), (two, 2u8)] {
+    for &(v, k) in &voices {
         if let Some(name) = parts[k].name.take() {
             st.voice_names.push((name, v));
         }
     }
     st.events.push(Ev { k: Kind::Voices, at: open_at, ..Ev::default() });
-    st.events.extend(first);
-    st.events.push(Ev { k: Kind::VoiceNext, at: parts[two].at, ..Ev::default() });
-    st.events.extend(second);
+    for (x, events) in lists.into_iter().enumerate() {
+        if x > 0 {
+            st.events.push(Ev { k: Kind::VoiceNext, at: parts[voices[x].1].at, ..Ev::default() });
+        }
+        st.events.extend(events);
+    }
     st.events.push(Ev { k: Kind::VoicesEnd, at: open_at, ..Ev::default() });
     Ok(i)
 }
@@ -2612,15 +2653,27 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             }
             return Ok(j);
         }
-        "voiceOne" | "voiceThree" => {
-            st.voice_cmd = Some(1);
-            return Ok(i + 1);
-        }
-        "voiceTwo" | "voiceFour" => {
-            st.voice_cmd = Some(2);
+        "voiceOne" | "voiceTwo" | "voiceThree" | "voiceFour" => {
+            st.voice_cmd = Some(match word {
+                "voiceOne" => 1,
+                "voiceTwo" => 2,
+                "voiceThree" => 3,
+                _ => 4,
+            });
             return Ok(i + 1);
         }
         "oneVoice" => return Ok(i + 1),
+        "change" => {
+            // `\\change Staff = "down"`: the notes after it are drawn on that staff.
+            let ok = toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff") && is(toks, i + 2, T::Sym('=')) && is(toks, i + 3, T::Str);
+            if !ok {
+                return refuse("\\change wants Staff = and a staff's name in quotes", tk.at);
+            }
+            beyond();
+            let name = toks[i + 3].v.clone();
+            st.cross = if st.own.as_deref() == Some(name.as_str()) { None } else { Some(name) };
+            return Ok(i + 4);
+        }
         "sequential" => return expr(toks, i + 1, st, hd),
         "chordmode" | "chords" | "drummode" | "drums" | "notemode" => {
             let saved = st.mode;
@@ -3296,6 +3349,9 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             ev.spacer = r == "s";
             ev.count = count;
         }
+    }
+    if ev.k == Kind::Note {
+        ev.cross = st.cross.clone();
     }
     st.events.push(ev);
     Ok(i)

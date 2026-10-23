@@ -255,13 +255,13 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
             // Two voices: the first's ties over, the second's under.
             if let Some(v) = ev.voice {
-                over = v == 1;
+                over = v % 2 == 1;
             }
             tie(lines, ev, hd.pos, nxt, other.pos, over);
         }
     }
     // Each voice's slurs close on its own notes.
-    let mut open: [Vec<At>; 2] = [Vec::new(), Vec::new()];
+    let mut open: [Vec<At>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     let mut slurs: Vec<(At, At)> = Vec::new();
     for &at in &notes {
         let ev = ev_at(at);
@@ -278,7 +278,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
     }
     // Phrasing slurs, `\( \)`: drawn as slurs are, and outside any slur
     // they share notes with.
-    let mut open: [Vec<At>; 2] = [Vec::new(), Vec::new()];
+    let mut open: [Vec<At>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for &at in &notes {
         let ev = ev_at(at);
         let mine = &mut open[usize::from(voice_of(ev) - 1)];
@@ -358,7 +358,7 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, ext
     let mut over = !all_up;
     // Of two voices, the first's slurs above and the second's below.
     if let Some(v) = f.voice {
-        over = v == 1;
+        over = v % 2 == 1;
     }
     let dir = if over { -1.0 } else { 1.0 };
     let e0 = slur_end(f, over);
@@ -781,6 +781,8 @@ pub(crate) fn rest_lift(ev: &Ev) -> f64 {
     match ev.voice {
         Some(1) => -2.0,
         Some(2) => 2.0,
+        Some(3) => -3.0,
+        Some(4) => 3.0,
         _ => 0.0,
     }
 }
@@ -788,11 +790,7 @@ pub(crate) fn rest_lift(ev: &Ev) -> f64 {
 /// The voice a note sings in: the second, or the first, which a note
 /// outside `<< \\\\ >>` goes on as.
 pub(crate) fn voice_of(ev: &Ev) -> u8 {
-    if ev.voice == Some(2) {
-        2
-    } else {
-        1
-    }
+    ev.voice.unwrap_or(1)
 }
 
 /// How far a note's ink reaches up and down — its grace notes' with it,

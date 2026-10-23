@@ -355,7 +355,7 @@ fn grace_heads(graces: &mut [Ev], mid: i64, ottava: i64, seen: &mut HashMap<i64,
     for g in graces {
         g.ottava = ottava;
         g.voice = voice;
-        g.up = voice != Some(2);
+        g.up = voice.is_none_or(|v| v % 2 == 1);
         let mut heads = Vec::new();
         for p in &g.pitches {
             let now = match seen.get(&p.d) {
@@ -419,9 +419,19 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
             }
             Kind::VoiceNext => {
                 if let Some(p) = &mut poly {
+                    // A third or fourth voice: the one before it as long as the first.
+                    if p.two && p.at != p.to {
+                        return refuse("the voices of << \\\\ >> are not as long as each other", ev.at);
+                    }
+                    if !p.two {
+                        p.to = tick_at;
+                    }
                     p.two = true;
-                    p.to = tick_at;
                     p.at = p.from;
+                    // Each voice its own accidentals and ties.
+                    p.seen.clear();
+                    p.seen_bar = None;
+                    p.tied.clear();
                     p.ottavas = ottavas.clone();
                 }
                 continue;
@@ -690,9 +700,9 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     // A bar with two voices lists its notes by when they start, the first
     // voice's first.
     for b in &mut bars {
-        if b.items.iter().any(|ev| ev.voice == Some(2)) {
+        if b.items.iter().any(|ev| ev.voice.is_some_and(|v| v >= 2)) {
             b.poly = true;
-            b.items.sort_by_key(|ev| ev.start * 4 + i64::from(ev.voice.unwrap_or(1)));
+            b.items.sort_by_key(|ev| ev.start * 8 + i64::from(ev.voice.unwrap_or(1)));
         }
     }
     // A mark after the last note stands over the last bar line.
