@@ -459,7 +459,7 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         }
         return;
     }
-    if line.kind == StaffKind::ChordNames {
+    if matches!(line.kind, StaffKind::ChordNames | StaffKind::FretBoards) {
         // The chords' names, and nothing else: no lines, no bar lines.
         for b in line.bars.clone() {
             for ev in &bars[b].items {
@@ -781,7 +781,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let offsets = &sys.offsets;
     let left = sys.left;
     // The system's line joins its staves — not the chord names over them.
-    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures)).collect();
+    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
             let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);
@@ -1199,7 +1199,20 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
         if k > 0 && r.gap {
             x += space * re / e;
         }
-        if r.glyph {
+        if let Some(d) = crate::frets::from_spec(&r.text) {
+            // A guitar's chord: its diagram standing on the baseline.
+            let (w, h) = crate::frets::size(&d, re);
+            for shape in crate::frets::shapes(&d, x, y - rise - h, re) {
+                match shape {
+                    crate::frets::Shape::Rect(sx, sy, sw, sh) => pen.rect(sx, sy, sw, sh),
+                    crate::frets::Shape::Fill(cmds) => pen.fill(&cmds, 0.0, 0.0),
+                    crate::frets::Shape::Text(t, tx, ty, te) => {
+                        pen.text(&t, Weight::Regular, tx, ty, te);
+                    }
+                }
+            }
+            x += w;
+        } else if r.glyph {
             let g = glyph(&r.text);
             let sp = pen.sp;
             pen.push(fill_k(&g.fill, x - g.bbox[0] * r.size, y - rise - g.bbox[3] * r.size, r.size, sp));

@@ -555,7 +555,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.right = if w > 0.0 { hw + ((w - hw) / 2.0).max(0.0) + 0.2 } else { 0.0 };
                 continue;
             }
-            if kind == StaffKind::ChordNames {
+            if matches!(kind, StaffKind::ChordNames | StaffKind::FretBoards) {
                 // A name takes the room it is wide.
                 ev.left = 0.0;
                 ev.right = if ev.chord_name.is_empty() { 0.0 } else { marks::runs_width(&ev.chord_name, chord_em()) + 0.6 };
@@ -1909,7 +1909,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         .unwrap_or_default();
     let mut all: Vec<Vec<Bar>> = Vec::new();
     for stf in staves_src {
-        let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures);
+        let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         if words && !stf.events.iter().any(|ev| matches!(ev.k, Kind::Time | Kind::Partial)) && !opening.is_empty() {
             let events: Vec<Ev> = opening.iter().cloned().chain(stf.events.iter().cloned()).collect();
             all.push(measures(&events)?);
@@ -2035,7 +2035,7 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let mut offsets = vec![0.0];
     for s in 1..reaches.len() {
         // Chord names sit as close over their staff as their ink lets them.
-        let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures);
+        let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         let names = words(sys.lines[s - 1].kind) || words(sys.lines[s].kind);
         let least: f64 = if names { 0.0 } else { 9.0 };
         let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);

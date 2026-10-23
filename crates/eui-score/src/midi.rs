@@ -37,7 +37,7 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     for (si, stf) in parsed.staves.iter().enumerate() {
         // Chord names are read, not played, as LilyPond's \\midi has them.
         // A figured bass, too: the bass it figures is played.
-        if (stf.kind == StaffKind::ChordNames && parsed.staves.len() > 1) || stf.kind == StaffKind::Figures {
+        if (stf.kind == StaffKind::ChordNames && parsed.staves.len() > 1) || matches!(stf.kind, StaffKind::Figures | StaffKind::FretBoards) {
             continue;
         }
         let props: &Props = &stf.props;
@@ -298,7 +298,7 @@ fn hairpin_of(bars: &[Bar], bi: usize, start: &crate::parse::Ev, volume: f64) ->
     Hairpin { left: n, step: (target - volume) / n as f64 }
 }
 
-fn key_of(d: i64, alter: i64) -> i64 {
+pub(crate) fn key_of(d: i64, alter: i64) -> i64 {
     let step = modulo(d, 7);
     12 * ((d - step) / 7 + 4) + [0, 2, 4, 5, 7, 9, 11][step as usize] + alter
 }

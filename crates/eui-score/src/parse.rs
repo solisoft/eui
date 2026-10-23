@@ -1087,6 +1087,9 @@ pub enum StaffKind {
     /// `\new FiguredBass`: a thorough bass's figures under the staff above,
     /// no lines.
     Figures,
+    /// `\new FretBoards`: each chord's guitar diagram over the staff below,
+    /// its shape found for a guitar in standard tuning.
+    FretBoards,
     /// `\new DrumStaff`: a drum kit on five lines.
     Drums,
     /// `\new TabStaff`: a guitar's six strings, and frets on them.
@@ -1759,6 +1762,7 @@ fn staff_kind(kind: &str) -> Option<StaffKind> {
         "Staff" => StaffKind::Notes,
         "ChordNames" => StaffKind::ChordNames,
         "FiguredBass" => StaffKind::Figures,
+        "FretBoards" => StaffKind::FretBoards,
         "DrumStaff" => StaffKind::Drums,
         "TabStaff" => StaffKind::Tab,
         _ => return None,
@@ -1826,7 +1830,10 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
             return staff(toks, i, st, staves, Props::default(), StaffKind::Notes);
         }
         if staff_kind(&kind).is_none() && group_kind(&kind).is_none() {
-            return refuse(format!("\\new {kind} is not drawn: a Staff, a ChordNames, a FiguredBass, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"), tk.at);
+            return refuse(
+                format!("\\new {kind} is not drawn: a Staff, a ChordNames, a FiguredBass, a FretBoards, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"),
+                tk.at,
+            );
         }
         i += 2;
         let mut name = None;
@@ -2034,7 +2041,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         marks: 0,
         graces: Vec::new(),
         mode: match kind {
-            StaffKind::ChordNames => Mode::Chords,
+            StaffKind::ChordNames | StaffKind::FretBoards => Mode::Chords,
             StaffKind::Figures => Mode::Figures,
             StaffKind::Drums => Mode::Drums,
             _ => Mode::Notes,
@@ -2057,6 +2064,19 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     }
     base.counter = st.items;
     base.notes = st.notes;
+    if kind == StaffKind::FretBoards {
+        // Each chord's shape on the guitar, its lowest note the bass; a rest shows none.
+        for ev in &mut st.events {
+            ev.chord_name = match (ev.k == Kind::Note, ev.pitches.first()) {
+                (true, Some(bass)) => {
+                    let pc = |p: &Pitch| crate::midi::key_of(p.d, p.alter);
+                    let classes: Vec<i64> = ev.pitches.iter().map(pc).collect();
+                    crate::frets::voicing(&classes, pc(bass)).map(|d| vec![Run::words(format!("{}{}", crate::frets::FRET, d.spec()), Weight::Regular)]).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+        }
+    }
     staves.push(Staff { kind, events: st.events, props: st.props, lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: st.voice_names, name });
     Ok(i)
 }
@@ -3563,6 +3583,14 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
             "hspace" | "vspace" => {
                 let j = if is(toks, i + 1, T::Sym('#')) { scheme_end(toks, i + 1)? } else { i + 2 };
                 Ok(j)
+            }
+            "fret-diagram" | "fret-diagram-terse" => {
+                // `\fret-diagram "6-x;5-3;…"`: a guitar's chord, drawn.
+                let Some(spec) = toks.get(i + 1).filter(|s| s.t == T::Str) else { return refuse(format!("\\{} wants its strings in quotes", t.v), t.at) };
+                let read = if t.v == "fret-diagram" { crate::frets::verbose(&spec.v) } else { crate::frets::terse(&spec.v) };
+                let d = read.map_err(|why| ScoreError { message: format!("score: \\{} {why} (at character {})", t.v, spec.at) })?;
+                runs.push(Run::words(format!("{}{}", crate::frets::FRET, d.spec()), weight));
+                Ok(i + 2)
             }
             "musicglyph" => {
                 let mut j = i + 1;

@@ -560,3 +560,27 @@ fn a_figured_bass_stacks_its_figures_under_the_bass_and_sounds_nothing() {
     assert!(parse("\\figures { <6 4 }").is_err());
     assert!(parse("\\figures { <>4 }").unwrap_err().message.contains("an empty figure"));
 }
+
+#[test]
+fn fret_boards_and_fret_diagrams_draw_a_guitars_chords() {
+    use eui_score::frets::{from_spec, FRET};
+    let shapes =
+        |src: &str, staff: usize| -> Vec<String> { read(src).staves[staff].events.iter().filter_map(|e| e.chord_name.first()).filter_map(|r| r.text.strip_prefix(FRET).map(str::to_string)).collect() };
+    let src = "<< \\new FretBoards \\chordmode { c1 g e:m r } \\new Staff { e'1 d' e' r } >>";
+    assert_eq!(read(src).staves[0].kind, StaffKind::FretBoards);
+    assert_eq!(shapes(src, 0), vec!["x;3;2;o;1;o;", "3;2;o;o;o;3;", "o;2;2;o;o;o;"], "a rest shows no diagram");
+    // Over the staff below, as tall as a diagram: the system rises to hold them; silent.
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let names = engrave("<< \\chords { c1 g e:m r } \\new Staff { e'1 d' e' r } >>", 900.0 / 8.0, &Layout::default()).unwrap();
+    assert!(eng.systems[0].reach_hi < names.systems[0].reach_hi - 2.0, "{} {}", eng.systems[0].reach_hi, names.systems[0].reach_hi);
+    let alone = midi("{ e'1 d' e' r }", &MidiOptions::default()).unwrap();
+    let notes_on = |bytes: &[u8]| bytes.windows(3).filter(|w| w[0] & 0xF0 == 0x90 && w[2] > 0).count();
+    assert_eq!(notes_on(&midi(src, &MidiOptions::default()).unwrap()), notes_on(&alone));
+    // In markup: as written, over its note.
+    let p = read("{ c''1^\\markup \\fret-diagram \"6-x;5-3;4-2;3-o;2-1;1-o;\" }");
+    let words = &p.staves[0].events.iter().find(|e| e.k == Kind::Note).unwrap().texts[0].runs[0].text;
+    assert_eq!(from_spec(words).unwrap().spec(), "x;3;2;o;1;o;");
+    assert!(engrave("{ c''1^\\markup \\fret-diagram-terse \"x;x;7;9;10;9;\" }", 900.0 / 8.0, &Layout::default()).is_ok());
+    let refused = parse("{ c''1^\\markup \\fret-diagram-terse \"x;3;2;\" }").unwrap_err().message;
+    assert!(refused.contains("a guitar has 6"), "{refused}");
+}

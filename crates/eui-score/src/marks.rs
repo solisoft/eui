@@ -1250,7 +1250,7 @@ pub(crate) fn mark_width(mark: &Tempo) -> f64 {
 /// goes.
 pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     match line.kind {
-        StaffKind::ChordNames => {
+        StaffKind::ChordNames | StaffKind::FretBoards => {
             let base = crate::engrave::CHORD_BASE;
             let (mut hi, mut lo) = (base - 1.0, base);
             for b in line.bars.clone() {
@@ -1407,7 +1407,9 @@ pub(crate) fn runs_width(runs: &[Run], e: f64) -> f64 {
         if k > 0 && r.gap {
             w += space * re / e;
         }
-        w += if r.glyph {
+        w += if let Some(d) = crate::frets::from_spec(&r.text) {
+            crate::frets::size(&d, re).0
+        } else if r.glyph {
             glyph_run_w(r)
         } else if r.text == TRIANGLE {
             0.62 * re
@@ -1435,7 +1437,9 @@ pub(crate) fn runs_box(runs: &[Run], e: f64) -> (f64, f64) {
     let mut bottom: f64 = 0.0;
     for r in runs {
         let (re, rise) = run_em(r, e);
-        let (t, b) = if r.glyph {
+        let (t, b) = if let Some(d) = crate::frets::from_spec(&r.text) {
+            (-crate::frets::size(&d, re).1, 0.0)
+        } else if r.glyph {
             let g = glyph(&r.text);
             (-(g.bbox[3] - g.bbox[1]) * r.size, 0.0)
         } else if r.text == TRIANGLE {
