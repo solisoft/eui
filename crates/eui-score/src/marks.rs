@@ -1262,6 +1262,14 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
             }
             return (hi - 0.2, lo + 0.2);
         }
+        StaffKind::Figures => {
+            let lines = line.bars.clone().flat_map(|b| bars[b].items.iter()).map(|ev| ev.figures.len()).max().unwrap_or(0);
+            if lines == 0 {
+                return (0.0, 0.5);
+            }
+            let (_, bottom) = runs_box(&[Run::words("0", Weight::Regular)], crate::engrave::figure_em());
+            return (0.0, crate::engrave::figure_line(lines - 1) + bottom + 0.3);
+        }
         StaffKind::Tab => return (-1.0, 8.5),
         _ => {}
     }

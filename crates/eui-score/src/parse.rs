@@ -978,6 +978,9 @@ pub struct Ev {
     /// A `\chordmode` chord's name, as `ChordNames` prints it; "N.C." for a
     /// rest there.
     pub chord_name: Vec<Run>,
+    /// A `\figuremode` figure's lines, top to bottom: `<6 4>` is two, each
+    /// its number and its accidental; an empty line for `_`.
+    pub figures: Vec<Vec<Run>>,
     /// A `\drummode` note's strokes.
     pub drums: Vec<Drum>,
     /// The strings a note's heads are played on: `(diatonic number, string)`,
@@ -1081,6 +1084,9 @@ pub enum StaffKind {
     Notes,
     /// `\new ChordNames`: the chords' names over the staff below, no lines.
     ChordNames,
+    /// `\new FiguredBass`: a thorough bass's figures under the staff above,
+    /// no lines.
+    Figures,
     /// `\new DrumStaff`: a drum kit on five lines.
     Drums,
     /// `\new TabStaff`: a guitar's six strings, and frets on them.
@@ -1093,6 +1099,7 @@ enum Mode {
     Notes,
     Chords,
     Drums,
+    Figures,
 }
 
 /// A drum's stroke: its place on the staff, its General MIDI key, its head.
@@ -1434,7 +1441,7 @@ fn expr_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 /// `<< >>`, or a command around music — where a bare `\clef` starts a
 /// sequence.
 fn wraps(toks: &[Tok], i: usize) -> bool {
-    const AROUND: [&str; 12] = ["relative", "fixed", "transpose", "new", "context", "sequential", "simultaneous", "chordmode", "drummode", "chords", "drums", "notemode"];
+    const AROUND: [&str; 14] = ["relative", "fixed", "transpose", "new", "context", "sequential", "simultaneous", "chordmode", "drummode", "chords", "drums", "notemode", "figuremode", "figures"];
     match toks.get(i) {
         Some(t) => t.t == T::Sym('{') || twin(toks, i, '<') || (t.t == T::Cmd && AROUND.contains(&t.v.as_str())),
         None => false,
@@ -1751,6 +1758,7 @@ fn staff_kind(kind: &str) -> Option<StaffKind> {
     Some(match kind {
         "Staff" => StaffKind::Notes,
         "ChordNames" => StaffKind::ChordNames,
+        "FiguredBass" => StaffKind::Figures,
         "DrumStaff" => StaffKind::Drums,
         "TabStaff" => StaffKind::Tab,
         _ => return None,
@@ -1787,7 +1795,7 @@ fn holds_staves(toks: &[Tok], i: usize) -> bool {
                     return true;
                 }
             }
-            T::Cmd if depth == 0 && (toks[j].v == "chords" || toks[j].v == "drums") => {
+            T::Cmd if depth == 0 && (toks[j].v == "chords" || toks[j].v == "drums" || toks[j].v == "figures") => {
                 return true;
             }
             _ => {}
@@ -1802,10 +1810,14 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         return refuse("there is no music", 0);
     }
     let tk = toks[i].clone();
-    if tk.t == T::Cmd && (tk.v == "chords" || tk.v == "drums") {
+    if tk.t == T::Cmd && (tk.v == "chords" || tk.v == "drums" || tk.v == "figures") {
         // `\chords { … }` is `\new ChordNames \chordmode { … }`, `\drums`
-        // the same of a drum staff.
-        let kind = if tk.v == "chords" { StaffKind::ChordNames } else { StaffKind::Drums };
+        // the same of a drum staff, `\figures` of a figured bass.
+        let kind = match tk.v.as_str() {
+            "chords" => StaffKind::ChordNames,
+            "figures" => StaffKind::Figures,
+            _ => StaffKind::Drums,
+        };
         return staff(toks, i + 1, st, staves, Props::default(), kind);
     }
     if tk.t == T::Cmd && (tk.v == "new" || tk.v == "context") {
@@ -1814,7 +1826,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
             return staff(toks, i, st, staves, Props::default(), StaffKind::Notes);
         }
         if staff_kind(&kind).is_none() && group_kind(&kind).is_none() {
-            return refuse(format!("\\new {kind} is not drawn: a Staff, a ChordNames, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"), tk.at);
+            return refuse(format!("\\new {kind} is not drawn: a Staff, a ChordNames, a FiguredBass, a DrumStaff, a TabStaff, a PianoStaff, a GrandStaff, a StaffGroup or a ChoirStaff is"), tk.at);
         }
         i += 2;
         let mut name = None;
@@ -2023,6 +2035,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         graces: Vec::new(),
         mode: match kind {
             StaffKind::ChordNames => Mode::Chords,
+            StaffKind::Figures => Mode::Figures,
             StaffKind::Drums => Mode::Drums,
             _ => Mode::Notes,
         },
@@ -2689,11 +2702,12 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(i + 4);
         }
         "sequential" => return expr(toks, i + 1, st, hd),
-        "chordmode" | "chords" | "drummode" | "drums" | "notemode" => {
+        "chordmode" | "chords" | "drummode" | "drums" | "notemode" | "figuremode" | "figures" => {
             let saved = st.mode;
             st.mode = match word {
                 "chordmode" | "chords" => Mode::Chords,
                 "drummode" | "drums" => Mode::Drums,
+                "figuremode" | "figures" => Mode::Figures,
                 _ => Mode::Notes,
             };
             let j = expr(toks, i + 1, st, hd)?;
@@ -3166,7 +3180,15 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let mut drum_scripts = Vec::new();
     let mut root: Option<Pitch> = None;
     let mut rest: Option<String> = None;
-    if tk.t == T::Sym('<') {
+    let mut figures: Vec<Vec<Run>> = Vec::new();
+    if st.mode == Mode::Figures && tk.t == T::Sym('<') {
+        // `<6 4+>`: its figures, top to bottom; held where a note would be,
+        // and sounding nothing.
+        let (lines, j) = figure_lines(toks, i)?;
+        figures = lines;
+        rest = Some("s".into());
+        i = j;
+    } else if tk.t == T::Sym('<') {
         i += 1;
         let mut reference = st.reference;
         let mut first = None;
@@ -3322,7 +3344,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         count = 1;
     }
     let scripts = drum_scripts.iter().map(|n| Script { name: (*n).to_owned(), dir: -1 }).collect();
-    let mut ev = Ev { k: Kind::Note, pitches, pitch_at, base, dots, ticks, at: tk.at, i: st.items, fingers: chord_fingers, tremolo, chord_name, drums, strings, scripts, ..Ev::default() };
+    let mut ev = Ev { k: Kind::Note, pitches, pitch_at, base, dots, ticks, at: tk.at, i: st.items, fingers: chord_fingers, tremolo, chord_name, figures, drums, strings, scripts, ..Ev::default() };
     if let Some(mut tup) = st.tuplet {
         if rest.as_deref() == Some("R") {
             return refuse("a whole-bar rest cannot be in a tuplet", tk.at);
@@ -3369,6 +3391,47 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     }
     st.events.push(ev);
     Ok(i)
+}
+
+/// A figure's lines from its `<` at `i`, and the token after its `>`: each
+/// a number or `_` (none), then `+`, `-` or `!` — sharp, flat, natural —
+/// set before it; `\\` and `/` (a stroke through it) are read and not drawn.
+fn figure_lines(toks: &[Tok], mut i: usize) -> Result<(Vec<Vec<Run>>, usize), ScoreError> {
+    let at = toks[i].at;
+    i += 1;
+    let mut lines: Vec<Vec<Run>> = Vec::new();
+    loop {
+        let Some(t) = toks.get(i) else { return refuse("a figure that is never closed", at) };
+        let (number, mut j) = match t.t {
+            T::Sym('>') => break,
+            T::Num if !t.v.contains('/') => (Some(t.v.clone()), i + 1),
+            T::Sym('_') => (None, i + 1),
+            T::Sym('[' | ']') => {
+                i += 1;
+                continue;
+            }
+            _ => return refuse("a figure is a number or _, then +, - or !: <6 4+>", t.at),
+        };
+        let mut accidental = None;
+        while let Some(m) = toks.get(j) {
+            match m.t {
+                T::Sym('+') => accidental = Some('♯'),
+                T::Sym('-') => accidental = Some('♭'),
+                T::Sym('!') => accidental = Some('♮'),
+                T::Sym('\\' | '/' | ']') => {}
+                _ => break,
+            }
+            j += 1;
+        }
+        // The accidental before the number, in the figures' own face.
+        let text: String = accidental.into_iter().chain(number.unwrap_or_default().chars()).collect();
+        lines.push(if text.is_empty() { Vec::new() } else { vec![Run::words(text, Weight::Regular)] });
+        i = j;
+    }
+    if lines.is_empty() {
+        return refuse("an empty figure: <_> holds none", at);
+    }
+    Ok((lines, i + 1))
 }
 
 // ---- Markup -------------------------------------------------------------------

@@ -102,6 +102,23 @@ pub(crate) fn chord_em() -> f64 {
 /// The baseline chord names stand on, in their line's frame.
 pub(crate) const CHORD_BASE: f64 = 3.0;
 
+/// The size of a figured bass's figures.
+pub(crate) fn figure_em() -> f64 {
+    em(-1.0)
+}
+
+/// A figure's first baseline in its line's frame, and how far each line of
+/// it is under the one above.
+pub(crate) fn figure_line(k: usize) -> f64 {
+    let step = crate::draw::digit_height(figure_em()) * 1.25;
+    step + 0.2 + step * k as f64
+}
+
+/// A figure's width: its widest line.
+pub(crate) fn figure_width(ev: &Ev) -> f64 {
+    ev.figures.iter().map(|line| marks::runs_width(line, figure_em())).fold(0.0, f64::max)
+}
+
 /// The size of a tablature's frets, which LilyPond sets in bold.
 pub(crate) fn fret_em() -> f64 {
     em(-1.5)
@@ -530,6 +547,14 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
         for ev in &mut bar.items {
             let t = space_ticks(ev);
             ev.ideal = duration_space(t, shortest);
+            if kind == StaffKind::Figures {
+                // A figure, centred on its note: the room it is wide.
+                let (hw, w) = (glyph("noteheadBlack").advance, figure_width(ev));
+                ev.head_w = Some(hw);
+                ev.left = if w > 0.0 { ((w - hw) / 2.0).max(0.0) + 0.2 } else { 0.0 };
+                ev.right = if w > 0.0 { hw + ((w - hw) / 2.0).max(0.0) + 0.2 } else { 0.0 };
+                continue;
+            }
             if kind == StaffKind::ChordNames {
                 // A name takes the room it is wide.
                 ev.left = 0.0;
@@ -1874,8 +1899,22 @@ fn cross_staff(all: &mut [Vec<Bar>], staves: &[crate::parse::Staff]) -> Result<(
 
 fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let staves_src = &parsed.staves;
+    // A line of chord names or figures that says no metre takes the one the
+    // music starts in, and its pickup, as LilyPond's \time and \partial,
+    // which are the whole score's.
+    let opening: Vec<Ev> = staves_src
+        .iter()
+        .find(|stf| stf.kind == StaffKind::Notes)
+        .map(|stf| stf.events.iter().take_while(|ev| !matches!(ev.k, Kind::Note | Kind::Rest)).filter(|ev| matches!(ev.k, Kind::Time | Kind::Partial)).cloned().collect())
+        .unwrap_or_default();
     let mut all: Vec<Vec<Bar>> = Vec::new();
     for stf in staves_src {
+        let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures);
+        if words && !stf.events.iter().any(|ev| matches!(ev.k, Kind::Time | Kind::Partial)) && !opening.is_empty() {
+            let events: Vec<Ev> = opening.iter().cloned().chain(stf.events.iter().cloned()).collect();
+            all.push(measures(&events)?);
+            continue;
+        }
         all.push(measures(&stf.events)?);
     }
     let count = all[0].len();
@@ -1996,7 +2035,8 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let mut offsets = vec![0.0];
     for s in 1..reaches.len() {
         // Chord names sit as close over their staff as their ink lets them.
-        let names = sys.lines[s - 1].kind == StaffKind::ChordNames || sys.lines[s].kind == StaffKind::ChordNames;
+        let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures);
+        let names = words(sys.lines[s - 1].kind) || words(sys.lines[s].kind);
         let least: f64 = if names { 0.0 } else { 9.0 };
         let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);

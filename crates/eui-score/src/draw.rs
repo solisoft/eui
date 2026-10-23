@@ -443,6 +443,22 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     let mut pen = Pen { paths, sp, heads };
     let right = line.right;
     let left = line.left;
+    if line.kind == StaffKind::Figures {
+        // The figures, each line under the one above, centred on its note.
+        let e = crate::engrave::figure_em();
+        for b in line.bars.clone() {
+            for ev in &bars[b].items {
+                let from_k = pen.paths.len();
+                let mid = ev.x + ev.head_w.unwrap_or(0.0) / 2.0;
+                for (k, runs) in ev.figures.iter().enumerate() {
+                    let w = crate::marks::runs_width(runs, e);
+                    draw_runs(&mut pen, runs, mid - w / 2.0, top + crate::engrave::figure_line(k), e);
+                }
+                ranges.push((ev.i, from_k..pen.paths.len()));
+            }
+        }
+        return;
+    }
     if line.kind == StaffKind::ChordNames {
         // The chords' names, and nothing else: no lines, no bar lines.
         for b in line.bars.clone() {
@@ -692,7 +708,7 @@ fn draw_tempo(pen: &mut Pen, mk: &TempoMark, top: f64) {
     pen.text(&format!("= {})", mark.bpm), Weight::Regular, x, y, e);
 }
 
-fn digit_height(e: f64) -> f64 {
+pub(crate) fn digit_height(e: f64) -> f64 {
     let face = &letters().italic;
     let mut rise: f64 = 0.0;
     for ch in "0123456789".chars() {
@@ -765,7 +781,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let offsets = &sys.offsets;
     let left = sys.left;
     // The system's line joins its staves — not the chord names over them.
-    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| sys.lines[s].kind != StaffKind::ChordNames).collect();
+    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
             let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);

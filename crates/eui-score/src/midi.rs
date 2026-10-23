@@ -36,7 +36,8 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     let mut tracks: Vec<Vec<u8>> = Vec::new();
     for (si, stf) in parsed.staves.iter().enumerate() {
         // Chord names are read, not played, as LilyPond's \\midi has them.
-        if stf.kind == StaffKind::ChordNames && parsed.staves.len() > 1 {
+        // A figured bass, too: the bass it figures is played.
+        if (stf.kind == StaffKind::ChordNames && parsed.staves.len() > 1) || stf.kind == StaffKind::Figures {
             continue;
         }
         let props: &Props = &stf.props;

@@ -534,3 +534,29 @@ fn pages_are_cut_evenly_when_asked_and_the_last_is_not_left_with_a_line() {
     assert_eq!(forced[0], 2, "{forced:?}");
     assert!(forced[1..].iter().max().unwrap() - forced[1..].iter().min().unwrap() <= 1, "{forced:?}");
 }
+
+#[test]
+fn a_figured_bass_stacks_its_figures_under_the_bass_and_sounds_nothing() {
+    let src = "<< \\new Staff { \\clef bass \\time 3/4 g,4 b, c | d2. } \\new FiguredBass \\figuremode { <5 3>4 <6> <7 5- 3!> | <_+>2. } >>";
+    let p = read(src);
+    assert_eq!(p.staves[1].kind, StaffKind::Figures);
+    let figures: Vec<Vec<String>> =
+        p.staves[1].events.iter().filter(|e| !e.figures.is_empty()).map(|e| e.figures.iter().map(|line| line.iter().map(|r| r.text.clone()).collect::<String>()).collect()).collect();
+    assert_eq!(figures, vec![vec!["5", "3"], vec!["6"], vec!["7", "♭5", "♮3"], vec!["♯"]], "top to bottom, the accidental before its number");
+    // Under the bass, each figure centred on its note; the line takes the bass's 3/4.
+    let eng = engrave(src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let sys = &eng.systems[0];
+    assert!(sys.offsets[1] > sys.offsets[0] + 4.0, "below the staff");
+    let notes: Vec<f64> = eng.staves[0][0].items.iter().map(|e| e.x).collect();
+    let figs: Vec<f64> = eng.staves[1][0].items.iter().map(|e| e.x).collect();
+    assert_eq!(notes, figs, "each figure at its note");
+    // Played: the bass alone.
+    let alone = midi("\\new Staff { \\clef bass \\time 3/4 g,4 b, c | d2. }", &MidiOptions::default()).unwrap();
+    let both = midi(src, &MidiOptions::default()).unwrap();
+    let notes_on = |bytes: &[u8]| bytes.windows(3).filter(|w| w[0] & 0xF0 == 0x90 && w[2] > 0).count();
+    assert_eq!(notes_on(&both), notes_on(&alone));
+    // A figure that is no figure is refused, with its reason.
+    assert!(parse("\\figures { <6 x>4 }").unwrap_err().message.contains("a figure is a number or _"));
+    assert!(parse("\\figures { <6 4 }").is_err());
+    assert!(parse("\\figures { <>4 }").unwrap_err().message.contains("an empty figure"));
+}
