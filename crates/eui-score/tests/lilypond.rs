@@ -631,3 +631,37 @@ fn an_ossia_stands_over_its_bars_only_and_sounds_nothing() {
     assert_eq!(on(src), on("\\relative { c''4 b d c | c4 b d c | c4 b c2 }"), "the staff's notes; the ossia's are not played");
     assert!(parse("{ << { c'1 } \\new Staff { e'1 } >> }").unwrap_err().message.contains("is an ossia"));
 }
+
+#[test]
+fn compressed_bars_of_rest_are_one_bar_counted_as_many() {
+    // `\compressMMRests` around any music, around staves, and `skipBars`.
+    let bars = |src: &str| engrave(src, 900.0 / 8.0, &Layout::default()).unwrap().staves[0].iter().map(|b| (b.number, b.span)).collect::<Vec<_>>();
+    let gathered = vec![(1, None), (2, Some(4)), (6, Some(12)), (18, None)];
+    assert_eq!(bars("{ \\compressMMRests { c''1 R1*4 R1*12 d''1 } }"), gathered);
+    assert_eq!(bars("\\compressMMRests \\new Staff { c''1 R1*4 R1*12 d''1 }"), gathered);
+    assert_eq!(bars("\\new Staff \\compressMMRests \\relative { c''1 R1*4 R1*12 d1 }"), gathered);
+    assert_eq!(bars("{ \\set Score.skipBars = ##t c''1 R1*4 R1*12 d''1 }"), gathered);
+    assert_eq!(bars("{ c''1 R1*4 R1*12 d''1 }").len(), 18, "without it, a bar each");
+    assert_eq!(bars("{ \\set Score.skipBars = ##f c''1 R1*4 d''1 }").len(), 6);
+    // Played as long as it counts: the same MIDI either way.
+    let opts = MidiOptions::default();
+    assert_eq!(midi("{ \\compressMMRests { c''1 R1*7 d''1 } }", &opts).unwrap(), midi("{ c''1 R1*7 d''1 }", &opts).unwrap());
+    // Church rests to ten bars, the wide bar past that (LilyPond's expand-limit).
+    let eng = engrave("{ \\compressMMRests { R1*10 R1*11 } }", 900.0 / 8.0, &Layout::default()).unwrap();
+    assert_eq!(eng.staves[0].iter().map(|b| b.items[0].mm).collect::<Vec<_>>(), vec![Some(10), Some(11)]);
+    // In a score, gathered where every staff rests the same bars; where another
+    // staff plays on, the rest is as many bars as it counts.
+    let p = piece("d14_mmrests");
+    let eng = engrave(&p, 900.0 / 8.0, &Layout::default()).unwrap();
+    let spans = |s: usize| eng.staves[s].iter().map(|b| b.span).collect::<Vec<_>>();
+    assert_eq!(spans(0), vec![None, Some(9), Some(24), Some(3), None, None, None, None]);
+    assert_eq!(spans(0), spans(1));
+    assert_eq!(eng.staves[0].iter().map(|b| b.number).collect::<Vec<_>>(), vec![1, 2, 11, 35, 38, 39, 40, 41]);
+    // The words over a gathered rest stand over its count, centred on it.
+    let solo = eng.systems[0].lines[0].texts.iter().find(|t| t.text == "Solo").unwrap();
+    let rest = &eng.staves[0][2].items[0];
+    assert!(solo.bottom < -2.3, "over the count: {}", solo.bottom);
+    assert!(((solo.x0 + solo.x1) / 2.0 - (rest.span0 + rest.span1) / 2.0).abs() < 0.01);
+    let tempo = &eng.systems[0].lines[0].marks[0];
+    assert!(tempo.y < -2.6, "the tempo over the count: {}", tempo.y);
+}

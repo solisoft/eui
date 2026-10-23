@@ -24,6 +24,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A score gathers bars of rest wherever LilyPond does (score #362):
+  `\compressMMRests` around any music — a staff's, a `\new Staff`, or
+  the `<< >>` of a whole score — and `\set Score.skipBars = ##t`. In a
+  score of several staves a run is one bar only where every staff rests
+  the same bars, as many bars as it counts where another plays on. Words
+  over a gathered rest (`R1*24^"Solo"`) and a tempo mark at it stand over
+  its count instead of through it.
 - A note or a rest longer than what is left of its bar is cut at the bar
   lines into tied notes (rests), in either voice of a staff, as LilyPond's
   `Completion_heads_engraver` cuts it — `\time 3/4 c'2 d'2` was refused

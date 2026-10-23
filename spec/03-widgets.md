@@ -576,7 +576,9 @@ construct as LilyPond 2.25 draws it:
 - *Time*: `\partial` (bar 0, beamed in its metre), `\cadenzaOn`/`Off` (no
   beams but the written ones), spacers `s` anywhere and `s1*16` across bar
   lines, `\bar ""`, `\repeat unfold` (with `\alternative`) and `\repeat
-  percent` of one bar, drawn as the percent sign.
+  percent` of one bar, drawn as the percent sign; `\compressMMRests` around
+  any music or around staves, and `\set Score.skipBars = ##t`, a run of
+  bars' rest gathered where every staff of the score rests it.
 - *On the staff*: the clefs `treble`, `bass`, `alto`, `tenor`, `soprano`,
   `mezzosoprano`, `baritone`, `varbaritone`, `subbass`, `french`,
   `percussion`, `tab` and their `_8`, `^8`, `_15`, `^15`, each key

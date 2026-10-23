@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
-use crate::measure::{clef_mid, measures, Bar, Beam, Changes, Opening};
+use crate::measure::{clef_mid, measures, measures_keeping, Bar, Beam, Changes, Opening};
 use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
@@ -1920,14 +1920,32 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         .map(|stf| stf.events.iter().take_while(|ev| !matches!(ev.k, Kind::Note | Kind::Rest)).filter(|ev| matches!(ev.k, Kind::Time | Kind::Partial)).cloned().collect())
         .unwrap_or_default();
     let mut all: Vec<Vec<Bar>> = Vec::new();
+    let mut sources: Vec<std::borrow::Cow<'_, [Ev]>> = Vec::new();
     for stf in staves_src {
         let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         if words && !stf.events.iter().any(|ev| matches!(ev.k, Kind::Time | Kind::Partial)) && !opening.is_empty() {
             let events: Vec<Ev> = opening.iter().cloned().chain(stf.events.iter().cloned()).collect();
             all.push(measures(&events)?);
+            sources.push(events.into());
             continue;
         }
         all.push(measures(&stf.events)?);
+        sources.push(stf.events.as_slice().into());
+    }
+    // Bars of rest gathered in one staff and not in another: gathered only
+    // where every staff rests the same bars.
+    if all.iter().any(|bars| bars.iter().any(|b| b.span.is_some())) {
+        let gathered = |bars: &[Bar]| -> Vec<(i64, i64)> { bars.iter().filter_map(|b| b.span.map(|n| (b.tick0, n))).collect() };
+        let mut keep = gathered(&all[0]);
+        for bars in &all[1..] {
+            let theirs = gathered(bars);
+            keep.retain(|g| theirs.contains(g));
+        }
+        for (si, events) in sources.iter().enumerate() {
+            if gathered(&all[si]).iter().any(|g| !keep.contains(g)) {
+                all[si] = measures_keeping(events, Some(&keep))?;
+            }
+        }
     }
     let count = all[0].len();
     for (si, bars) in all.iter().enumerate() {

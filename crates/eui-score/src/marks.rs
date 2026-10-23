@@ -796,6 +796,11 @@ pub(crate) fn voice_of(ev: &Ev) -> u8 {
 /// How far a note's ink reaches up and down — its grace notes' with it,
 /// so what stands over the staff (a tempo mark, words) clears them too.
 fn item_extent(ev: &Ev) -> (f64, f64) {
+    if ev.mm.is_some() {
+        // The count over a gathered rest: its digits, centred a space and a
+        // third over the staff.
+        return (-2.3, 3.0);
+    }
     if ev.k != Kind::Note {
         return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
@@ -1099,7 +1104,8 @@ fn texts(bars: &[Bar], line: &mut Line) {
                 let runs = tx.pieces();
                 let w = runs_width(&runs, e);
                 let bx = runs_box(&runs, e);
-                let x0 = ev.x;
+                // Over a gathered rest the words are centred on it, over its count.
+                let x0 = if ev.mm.is_some() { (ev.span0 + ev.span1) / 2.0 - w / 2.0 } else { ev.x };
                 let x1 = x0 + w;
                 let y = if tx.dir < 0 {
                     let mut edge: f64 = -0.5;

@@ -372,6 +372,15 @@ fn grace_heads(graces: &mut [Ev], mid: i64, ottava: i64, seen: &mut HashMap<i64,
 
 /// The bars of a staff.
 pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
+    measures_keeping(events, None)
+}
+
+/// The bars of a staff of several: a run of bars' rest stays gathered into
+/// one bar only where `keep` lists it — `(tick it starts at, bars)` — which
+/// is where every staff of the score rests the same bars; elsewhere it is
+/// as many bars as it counts, as LilyPond's `skipBars` leaves a rest that
+/// another staff plays through.
+pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Result<Vec<Bar>, ScoreError> {
     let mut clef = Clef::default();
     let mut cadenza = false;
     let mut ottava = 0;
@@ -609,6 +618,12 @@ pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
                 continue;
             }
             _ => {}
+        }
+        if ev.count > 1 && keep.is_some_and(|k| !k.contains(&(tick_at, ev.count))) {
+            for _ in 1..ev.count {
+                queue.push_front(Ev { count: 1, ..ev.clone() });
+            }
+            ev.count = 1;
         }
         if ev.count > 1 {
             if !(pos == 0 && ev.ticks == bars[ci].length) {

@@ -1276,6 +1276,9 @@ struct Base {
     pending: Vec<Pending>,
     /// `\addQuote "name" { … }`: a part's music that a cue quotes, by name.
     quotes: HashMap<String, Vec<Ev>>,
+    /// Inside `\compressMMRests` around staves: each staff read gathers its
+    /// runs of bars' rest.
+    compress: usize,
 }
 
 struct St {
@@ -1551,7 +1554,7 @@ fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new() };
+    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0 };
     let mut i = preamble(&toks, 0, &mut st)?;
     let in_score = is_cmd(&toks, i, "score");
     if in_score {
@@ -1849,6 +1852,14 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         return refuse("there is no music", 0);
     }
     let tk = toks[i].clone();
+    if tk.t == T::Cmd && tk.v == "compressMMRests" && (is_cmd(toks, i + 1, "new") || is_cmd(toks, i + 1, "context") || double(toks, i + 1, '<')) {
+        // Around staves: every staff in it gathers its runs of bars' rest.
+        beyond();
+        st.compress += 1;
+        let read = part(toks, i + 1, st, staves, groups, depth);
+        st.compress -= 1;
+        return read;
+    }
     if tk.t == T::Cmd && (tk.v == "chords" || tk.v == "drums" || tk.v == "figures") {
         // `\chords { … }` is `\new ChordNames \chordmode { … }`, `\drums`
         // the same of a drum staff, `\figures` of a figured bass.
@@ -2089,6 +2100,9 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         here: 0,
         ossias: Vec::new(),
     };
+    if base.compress > 0 {
+        st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
+    }
     match kind {
         StaffKind::Drums => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Percussion, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
         StaffKind::Tab => st.events.push(Ev { k: Kind::Clef, clef: Clef { sign: Sign::Tab, line: 0, octave: 0 }, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() }),
@@ -3170,6 +3184,15 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         st.events.push(Ev { k: Kind::Break, page: word == "pageBreak", at: tk.at, ..Ev::default() });
         return Ok(i + 1);
     }
+    if word == "set" && is(toks, i + 2, T::Sym('.')) && toks.get(i + 3).is_some_and(|t| t.t == T::Word && t.v == "skipBars") && is(toks, i + 4, T::Sym('=')) && is(toks, i + 5, T::Sym('#')) {
+        // `\set Score.skipBars = ##t`: the older way to gather bars of rest.
+        beyond();
+        let end = scheme_end(toks, i + 5)?;
+        if toks[i + 5..end].iter().any(|t| t.t == T::Word && t.v == "t") {
+            st.events.push(Ev { k: Kind::Compress, at: tk.at, ..Ev::default() });
+        }
+        return Ok(end);
+    }
     if word == "set" {
         let ok = i + 3 < toks.len() && toks[i + 1].t == T::Word && toks[i + 1].v == "Staff" && toks[i + 2].t == T::Sym('.');
         if !ok {
@@ -3191,9 +3214,15 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         return Ok(i + 1);
     }
     if word == "compressMMRests" {
+        // LilyPond's music function: the music after it, `{ … }` or any
+        // other expression, its runs of bars' rest gathered.
         st.events.push(Ev { k: Kind::Compress, at: tk.at, ..Ev::default() });
         if !arg.is_some_and(|a| a.t == T::Sym('{')) {
-            return refuse("\\compressMMRests wants a { block }", tk.at);
+            if !starts_expr(toks, i + 1) && !is(toks, i + 1, T::Word) {
+                return refuse("\\compressMMRests wants its music", tk.at);
+            }
+            beyond();
+            return expr(toks, i + 1, st, hd);
         }
         let j = music(toks, i + 2, st, hd)?;
         if j >= toks.len() || toks[j].t != T::Sym('}') {
