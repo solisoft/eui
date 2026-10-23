@@ -24,6 +24,15 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A clef or a key may change in the middle of a bar (score #360) — the
+  left hand's `\clef treble` between two beats, a MusicXML import that
+  writes one — where it was refused: the clef is drawn smaller before the
+  note it falls on, as LilyPond draws a clef that does not open a line
+  (Emmentaler's own `clefs.*_change`, three glyphs added through `xtask
+  smufl`), the key with the old one's naturals; the notes after it, the
+  other voices of the staff too, read under it, a new key starting the
+  bar's accidentals afresh. Room is made for it on every staff of the
+  system. `\time` still changes at a bar line.
 - A score gathers bars of rest wherever LilyPond does (score #362):
   `\compressMMRests` around any music — a staff's, a `\new Staff`, or
   the `<< >>` of a whole score — and `\set Score.skipBars = ##t`. In a

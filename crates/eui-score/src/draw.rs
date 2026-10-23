@@ -430,7 +430,12 @@ fn head_glyph(base: i64, style: &str) -> &'static str {
 /// two: in italic, small, centred under its foot or over its head, as
 /// LilyPond's `ClefModifier` sets it.
 fn draw_clef(pen: &mut Pen, clef: Clef, x: f64, top: f64) {
-    let name = clef_glyph(clef);
+    draw_clef_as(pen, clef, clef_glyph(clef), x, top);
+}
+
+/// A clef in the glyph given: its own, or the smaller one of a change in
+/// the middle of a bar.
+fn draw_clef_as(pen: &mut Pen, clef: Clef, name: &str, x: f64, top: f64) {
     let g = glyph(name);
     let y = top + clef_y(clef);
     pen.glyph(name, x, y);
@@ -531,6 +536,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
             continue;
         }
         for ev in &bar.items {
+            if let Some(cx) = ev.change_x {
+                draw_mid_change(&mut pen, ev, bar.clef_at(ev.start).0, ev.x + cx, top);
+            }
             let from_k = pen.paths.len();
             if ev.percent.is_none() {
                 draw_graces(&mut pen, ev, top);
@@ -981,6 +989,25 @@ fn draw_time(pen: &mut Pen, time: (i64, i64), parts: [u8; 4], x: f64, top: f64) 
         for nm in &names {
             pen.glyph(nm, cx, top + if pi == 0 { 1.0 } else { 3.0 });
             cx += glyph(nm).advance;
+        }
+    }
+}
+
+/// A clef or a key changed in the middle of a bar, from `x` before its
+/// note: the clef smaller, the old key's naturals, the new key.
+fn draw_mid_change(pen: &mut Pen, ev: &Ev, clef: Clef, mut x: f64, top: f64) {
+    if let Some(c) = ev.clef_change {
+        let name = crate::engrave::clef_change_glyph(c);
+        draw_clef_as(pen, c, name, x, top);
+        x += glyph(name).advance + 0.6;
+    }
+    if let Some((from, to)) = ev.key_change {
+        let skip = key_cancel(from, to);
+        if skip >= 0 {
+            x = draw_key(pen, from, clef, x, top, true, skip) + 0.5;
+        }
+        if to != 0 {
+            draw_key(pen, to, clef, x, top, false, 0);
         }
     }
 }

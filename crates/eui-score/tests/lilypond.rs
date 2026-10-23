@@ -665,3 +665,46 @@ fn compressed_bars_of_rest_are_one_bar_counted_as_many() {
     let tempo = &eng.systems[0].lines[0].marks[0];
     assert!(tempo.y < -2.6, "the tempo over the count: {}", tempo.y);
 }
+
+#[test]
+fn a_clef_or_a_key_changes_in_the_middle_of_a_bar() {
+    use eui_score::parse::Clef;
+    let eng = |src: &str| engrave(src, 900.0 / 8.0, &Layout::default()).unwrap_or_else(|e| panic!("{src}: {e}"));
+    // Read in place, the notes after it under the new clef, drawn smaller before them.
+    let e = eng("{ c'2 \\clef bass c2 }");
+    let bar = &e.staves[0][0];
+    assert_eq!(e.staves[0].len(), 1);
+    assert_eq!(bar.inline, vec![(eui_score::WHOLE / 2, Clef::BASS, 0)]);
+    assert_eq!(bar.items[1].clef_change, Some(Clef::BASS));
+    assert_eq!(bar.items[1].heads[0].pos, -1, "c in the bass clef");
+    assert!(bar.items[1].change_x.unwrap() < -2.0);
+    let plain = eng("{ c'2 c2 }");
+    assert!(bar.items[1].x - bar.items[0].x > plain.staves[0][0].items[1].x - plain.staves[0][0].items[0].x + 2.0, "room for the clef");
+    assert_eq!(midi("{ c'2 \\clef bass c2 }", &MidiOptions::default()).unwrap(), midi("{ c'2 c2 }", &MidiOptions::default()).unwrap());
+    assert_eq!(protocol("{ c'2 \\clef bass c2 }"), Ok(11));
+    assert_eq!(protocol("{ c'2 c2 }"), Ok(9));
+    // A key: the old one's naturals, the new one; the bar's accidentals start afresh.
+    let e = eng("{ \\key d \\major d'4 fis' \\key c \\major fis'4 c''4 }");
+    let items = &e.staves[0][0].items;
+    assert_eq!(items[2].key_change, Some((2, 0)));
+    assert_eq!(items[2].heads[0].acc, Some(1), "f sharp in C major is written");
+    assert_eq!(items[3].heads[0].acc, None);
+    let e = eng("{ \\key d \\major cis''2 \\key bes \\major bes'4 d'' | bes'1 }");
+    assert_eq!(e.staves[0][0].items[1].key_change, Some((2, -2)));
+    assert_eq!(e.staves[0][0].items[1].heads[0].acc, None, "b flat is in the key");
+    assert_eq!(e.staves[0][1].fifths, -2, "the next bar is in it");
+    assert!(!e.staves[0][1].changes.key, "and says nothing more");
+    // A second voice reads under the clef where it lands.
+    let e = eng("{ << { c''2 \\clef bass c2 } \\\\ { e'2 e2 } >> }");
+    let second: Vec<i64> = e.staves[0][0].items.iter().filter(|ev| ev.voice == Some(2)).map(|ev| ev.heads[0].pos).collect();
+    assert_eq!(second, vec![-4, 1], "e' under the treble clef, e under the bass");
+    // In a piano staff the other staff's notes make room for it too.
+    let e = eng(&piece("d15_midbar"));
+    let x = |s: usize, b: usize, j: usize| e.staves[s][b].items[j].x;
+    assert_eq!(x(0, 0, 2), x(1, 0, 2));
+    assert!(e.staves[1][0].items[2].clef_change.is_some());
+    // After the last note of a bar, at the next one's start; \time still at a bar line.
+    let e = eng("{ c'2 \\clef bass s2 | c1 }");
+    assert!(e.staves[0][1].changes.clef);
+    assert!(engrave("{ c'2 \\time 3/4 c'4 }", 100.0, &Layout::default()).unwrap_err().message.contains("\\time in the middle of a bar"));
+}

@@ -128,6 +128,9 @@ pub struct Bar {
     pub percent: bool,
     /// It holds a cadenza: no metre, so no beams but the ones written.
     pub cadenza: bool,
+    /// The clefs and keys changed in the middle of it: where, in ticks
+    /// from its start, and the clef and the key from there on.
+    pub inline: Vec<(i64, Clef, i64)>,
     /// Rehearsal marks, segni and codas: where in the bar, in ticks — 0 its
     /// start, its length its end — and what they say. A jump (`\jump`,
     /// `\fine`, its `dir` 1) is at the end of the bar it follows.
@@ -141,6 +144,12 @@ impl Bar {
 
     pub(crate) fn drawn(&self) -> &str {
         self.bar_drawn.as_deref().unwrap_or(&self.bar)
+    }
+
+    /// The clef and the key in force `pos` ticks into it: its own, or the
+    /// last changed in it at or before `pos`.
+    pub fn clef_at(&self, pos: i64) -> (Clef, i64) {
+        self.inline.iter().rev().find(|c| c.0 <= pos).map_or((self.clef, self.fifths), |c| (c.1, c.2))
     }
 }
 
@@ -299,9 +308,9 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     }
     ev.start = pos;
     ev.bar = bi;
-    // Under the clef and the key of the bar it lands in.
-    let alters = key_alters(bar.fifths);
-    let clef = bar.clef;
+    // Under the clef and the key in force where it lands.
+    let (clef, fifths) = bar.clef_at(pos);
+    let alters = key_alters(fifths);
     if p.seen_bar != Some(bi) {
         p.seen.clear();
         p.seen_bar = Some(bi);
@@ -393,6 +402,9 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     let mut pos = 0;
     let mut seen: HashMap<i64, i64> = HashMap::new();
     let mut alters = key_alters(0);
+    // A clef or a key changed in the middle of a bar, waiting for the note
+    // or the rest it is drawn before.
+    let mut change: (Option<Clef>, Option<(i64, i64)>) = (None, None);
     let mut tied: HashMap<i64, i64> = HashMap::new();
     let mut tempo = None;
     let mut volta_open: Option<String> = None;
@@ -461,7 +473,15 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
         let ci = match cur {
             Some(ci) => ci,
             None => {
-                let b = Bar { clef, fifths, time: (tn, td), time_parts: tparts, bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
+                let mut b = Bar { clef, fifths, time: (tn, td), time_parts: tparts, bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
+                // A change after the last note of a bar is drawn at the next one's start.
+                if change.0.take().is_some() {
+                    b.changes.clef = true;
+                }
+                if let Some((from, _)) = change.1.take() {
+                    b.changes.key = true;
+                    b.changes.key_from = from;
+                }
                 bars.push(b);
                 pos = 0;
                 seen.clear();
@@ -522,6 +542,24 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 } else {
                     return refuse("an end repeat before any music", ev.at);
                 }
+                continue;
+            }
+            Kind::Clef | Kind::Key if pos > 0 => {
+                // In the middle of a bar: the notes after it read under the
+                // new clef or key, which is drawn before the next of them.
+                if ev.k == Kind::Clef {
+                    clef = ev.clef;
+                    change.0 = Some(clef);
+                } else {
+                    let from = change.1.map_or(fifths, |k| k.0);
+                    fifths = ev.fifths;
+                    change.1 = Some((from, fifths));
+                    alters = key_alters(fifths);
+                    // A new key starts the bar's accidentals afresh, as
+                    // LilyPond's Key_engraver sets localAlterations to it.
+                    seen.clear();
+                }
+                bars[ci].inline.push((pos, clef, fifths));
                 continue;
             }
             Kind::Clef | Kind::Key | Kind::Time => {
@@ -666,6 +704,10 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
         }
         ev.start = pos;
         ev.bar = bars.len() - 1;
+        if !ev.spacer {
+            ev.clef_change = change.0.take();
+            ev.key_change = change.1.take();
+        }
         for t in [ev.tuplet, ev.tuplet_outer].into_iter().flatten() {
             if tuplet_bar.get(&t.id).is_some_and(|b| *b != ev.bar) {
                 return refuse("a tuplet runs across a bar line", ev.at);

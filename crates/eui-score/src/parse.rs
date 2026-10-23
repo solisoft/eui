@@ -83,6 +83,12 @@ const DRAWN_BEFORE: [&str; 5] = ["Staff", "PianoStaff", "GrandStaff", "StaffGrou
 pub fn protocol(src: &str) -> Result<u32, ScoreError> {
     BEYOND.with(|b| b.set(false));
     let read = parse(src);
+    // A clef or a key in the middle of a bar shows only once the bars are cut.
+    if let Ok(p) = &read {
+        if p.staves.iter().any(|s| crate::measure::measures(&s.events).is_ok_and(|bars| bars.iter().any(|b| !b.inline.is_empty()))) {
+            beyond();
+        }
+    }
     let level = if BEYOND.with(Cell::get) { 11 } else { 9 };
     BEYOND.with(|b| b.set(false));
     read.map(|_| level)
@@ -987,6 +993,18 @@ pub struct Ev {
     /// A cue note (`\new CueVoice`, `\cueDuring`): another part's, drawn
     /// small to be read, and not played.
     pub cue: bool,
+    /// A clef changed in the middle of a bar just before it: drawn before
+    /// it, smaller, as LilyPond draws a clef that is not a line's.
+    pub clef_change: Option<Clef>,
+    /// A key changed in the middle of a bar just before it: the key before,
+    /// in fifths, and the new one — drawn before it, the old key's
+    /// accidentals cancelled as LilyPond cancels them.
+    pub key_change: Option<(i64, i64)>,
+    /// Where those changes start, from its x.
+    pub change_x: Option<f64>,
+    /// Room before it that its duration's space does not cover: a change's
+    /// width, which LilyPond sets in a column of its own.
+    pub pre: f64,
     /// A `\drummode` note's strokes.
     pub drums: Vec<Drum>,
     /// The strings a note's heads are played on: `(diatonic number, string)`,

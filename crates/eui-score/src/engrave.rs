@@ -588,6 +588,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.left = 0.0;
                 ev.right = (g.advance + if ev.dots > 0 { 0.3 + 0.6 * ev.dots as f64 } else { 0.0 }) * k;
                 grace_layout(ev);
+                change_room(ev);
                 continue;
             }
             let k = mag(ev);
@@ -615,6 +616,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.arp_x = Some(-ev.left);
             }
             grace_layout(ev);
+            change_room(ev);
             lyric_room(ev);
         }
         if bar.poly {
@@ -759,6 +761,7 @@ fn poly_cols(bar: &mut Bar, shortest: i64) {
                 let want = if ev.ticks <= upto - at { ev.ideal } else { duration_space(upto - at, shortest) };
                 ideal = Some(ideal.map_or(want, |v| v.min(want)));
                 col.left = col.left.max(ev.left);
+                col.pre = col.pre.max(ev.pre);
                 let after = list.get(jj + 1).map_or(length, |&n| bar.items[n].start);
                 if after == upto {
                     col.right = col.right.max(ev.right);
@@ -947,6 +950,49 @@ pub(crate) fn time_width(time: (i64, i64), parts: [u8; 4]) -> f64 {
     wide
 }
 
+/// A clef changed in the middle of a bar: the sign smaller, as LilyPond's
+/// `clefs.G_change` and its kin.
+pub(crate) fn clef_change_glyph(clef: Clef) -> &'static str {
+    match clef.sign {
+        Sign::G => "gClefChange",
+        Sign::F => "fClefChange",
+        Sign::C => "cClefChange",
+        _ => clef_glyph(clef),
+    }
+}
+
+/// The room a clef or a key changed in the middle of a bar takes before
+/// its note: the clef, then the naturals that cancel the old key and the
+/// new one.
+pub(crate) fn mid_change_width(clef: Option<Clef>, key: Option<(i64, i64)>) -> f64 {
+    let mut w = 0.0;
+    if let Some(c) = clef {
+        w += glyph(clef_change_glyph(c)).advance + 0.6;
+    }
+    if let Some((from, to)) = key {
+        let skip = key_cancel(from, to);
+        if skip >= 0 {
+            w += (from.abs() - skip) as f64 * (glyph("accidentalNatural").advance + 0.1) + 0.5;
+        }
+        if to != 0 {
+            w += key_width(to) + 0.8;
+        }
+    }
+    w
+}
+
+/// A note's room on the left grows by a change drawn before it — half a
+/// space clear of what comes before, three tenths of what follows — and the
+/// change starts there.
+fn change_room(ev: &mut Ev) {
+    let w = mid_change_width(ev.clef_change, ev.key_change);
+    if w > 0.0 {
+        ev.left += 0.5 + w + 0.3;
+        ev.change_x = Some(0.5 - ev.left);
+        ev.pre = 0.5 + w + 0.3;
+    }
+}
+
 pub(crate) fn clef_glyph(clef: Clef) -> &'static str {
     match clef.sign {
         Sign::G => "gClef",
@@ -1030,7 +1076,7 @@ fn gaps(bar: &Bar, k: f64) -> Vec<f64> {
     for i in 0..items.len() {
         let ev = &items[i];
         if let Some(nxt) = items.get(i + 1) {
-            out.push((ev.ideal * k).max(ev.right + 0.6 + nxt.left).max(dynamics_apart(ev, nxt)));
+            out.push((ev.ideal * k + nxt.pre).max(ev.right + 0.6 + nxt.left).max(dynamics_apart(ev, nxt)));
         } else {
             out.push((ev.ideal * k).max(ev.right + 0.8));
         }
@@ -1805,6 +1851,7 @@ fn master_bar(all: &[Vec<Bar>], k: usize, shortest: i64) -> Bar {
                 let want = if own <= upto - at { ev.ideal } else { duration_space(upto - at, shortest) };
                 ideal = Some(ideal.map_or(want, |v| v.min(want)));
                 col.left = col.left.max(ev.left);
+                col.pre = col.pre.max(ev.pre);
                 let after = items.get(j + 1).map_or(length, |n| n.start);
                 if after == upto {
                     col.right = col.right.max(ev.right);
@@ -1886,12 +1933,13 @@ fn cross_staff(all: &mut [Vec<Bar>], staves: &[crate::parse::Staff]) -> Result<(
                     continue;
                 }
                 let mut moved = item.clone();
-                let lift = clef_mid(all[a][b].clef) - clef_mid(all[t][b].clef);
+                let lift = clef_mid(all[a][b].clef_at(item.start).0) - clef_mid(all[t][b].clef_at(item.start).0);
                 for h in &mut moved.heads {
                     h.pos += lift;
                 }
                 moved.voice = Some(if t > a { 3 } else { 4 });
                 moved.cross = None;
+                (moved.clef_change, moved.key_change) = (None, None);
                 let ev = &mut all[a][b].items[j];
                 ev.k = Kind::Rest;
                 ev.spacer = true;

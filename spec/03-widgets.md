@@ -582,7 +582,9 @@ construct as LilyPond 2.25 draws it:
 - *On the staff*: the clefs `treble`, `bass`, `alto`, `tenor`, `soprano`,
   `mezzosoprano`, `baritone`, `varbaritone`, `subbass`, `french`,
   `percussion`, `tab` and their `_8`, `^8`, `_15`, `^15`, each key
-  signature in LilyPond's places for its clef; grace notes (`\grace`,
+  signature in LilyPond's places for its clef; a clef or a key changed in
+  the middle of a bar, drawn before the note it falls on — the clef
+  smaller, the key with the old one's naturals; grace notes (`\grace`,
   `\acciaccatura`, `\appoggiatura`, `\slashedGrace`), small, before their
   note, beamed, slashed and slurred as LilyPond draws them, taking no time
   on the page and at most half their note's in MIDI; fingerings (`-1`,

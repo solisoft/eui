@@ -117,6 +117,10 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     ("brassMuteOpen", '\u{E5E7}', &[]),
     ("keyboardPedalPed", '\u{E650}', &[]),
     ("keyboardPedalUp", '\u{E655}', &[]),
+    // A clef changed in the middle of a bar, smaller.
+    ("gClefChange", '\u{E07A}', &[]),
+    ("cClefChange", '\u{E07B}', &[]),
+    ("fClefChange", '\u{E07C}', &[]),
     ("brassMuteClosed", '\u{E5E5}', &[]),
 ];
 
@@ -206,6 +210,9 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("brassMuteClosed", "scripts.stopped", 0.0),
     ("keyboardPedalPed", "pedal.Ped", 0.0),
     ("keyboardPedalUp", "pedal.*", 0.0),
+    ("gClefChange", "clefs.G_change", 0.0),
+    ("cClefChange", "clefs.C_change", 0.0),
+    ("fClefChange", "clefs.F_change", 0.0),
 ];
 
 /// Where a named face's flag meets its stem: its origin is a little in from
