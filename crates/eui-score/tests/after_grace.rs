@@ -163,3 +163,102 @@ fn after_grace_notes_are_played_in_the_end_of_their_note() {
     let (e_len, f_len) = (uneven[1].2 - uneven[1].1, uneven[2].2 - uneven[2].1);
     assert!(e_len.abs_diff(2 * f_len) <= 1, "an eighth twice a sixteenth: {e_len} {f_len}");
 }
+
+/// The note `\afterGrace` is written on, among `src`'s events.
+fn main_note(src: &str) -> eui_score::parse::Ev {
+    let p = parse(src).unwrap_or_else(|e| panic!("{src}: {}", e.message));
+    p.staves[0].events.iter().find(|e| !e.after_graces.is_empty()).cloned().unwrap()
+}
+
+#[test]
+fn what_is_written_after_the_note_before_its_braces_is_the_notes() {
+    // A tie, a slur, a phrasing slur, a dynamic, a hairpin, articulations,
+    // a fingering, words: on the note, as for a note on its own.
+    let tie = main_note(r"{ \afterGrace c''1~ { d''16 } c''1 }");
+    assert!(tie.tie);
+    assert!(tie.after_graces.iter().all(|g| !g.tie), "the tie is the note's, not its grace's");
+    let slur = parse(r"{ \afterGrace c''1( { d''16 c'' } d''1) }").unwrap();
+    let notes: Vec<_> = slur.staves[0].events.iter().filter(|e| e.k == Kind::Note).collect();
+    assert_eq!(notes.len(), 2);
+    assert!(notes[0].slur_on && !notes[0].slur_off && notes[1].slur_off);
+    assert_eq!(notes[0].after_graces.len(), 2);
+    assert!(notes[0].after_graces.iter().all(|g| !g.slur_on && !g.slur_off));
+    assert!(main_note(r"{ \afterGrace c''1\( { d''16 } d''1\) }").phrase_on);
+    assert_eq!(main_note(r"{ \afterGrace c''1\f { d''16 } r1 }").dynamic.as_deref(), Some("f"));
+    assert_eq!(main_note(r"{ \afterGrace c''1\< { d''16 } r1\! }").hairpin, Some('<'));
+    let names = |ev: &eui_score::parse::Ev| ev.scripts.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&main_note(r"{ \afterGrace c''1-> { d''16 } r1 }")), vec!["accent"]);
+    assert_eq!(names(&main_note(r"{ \afterGrace c''1^. { d''16 } r1 }")), vec!["staccato"]);
+    assert_eq!(names(&main_note(r"{ \afterGrace c''1\fermata { d''16 } r1 }")), vec!["fermata"]);
+    assert_eq!(names(&main_note(r"{ \afterGrace c''1\startTrillSpan { b'16 c'' } d''1\stopTrillSpan }")), vec!["trill"]);
+    assert_eq!(main_note(r"{ \afterGrace c''1-3 { d''16 } r1 }").fingers[0].text, "3");
+    assert_eq!(main_note(r#"{ \afterGrace c''1^"rit." { d''16 } r1 }"#).texts[0].text, "rit.");
+    // Several, one after the other, and the fraction written before the note.
+    let many = main_note(r"{ \afterGrace 7/8 c''1~\p-> { d''16 } c''1 }");
+    assert!(many.tie && many.dynamic.as_deref() == Some("p") && names(&many) == vec!["accent"]);
+    assert!((many.after_at - 0.875).abs() < 1e-9);
+    assert!(main_note(r"{ \afterGrace 7/8 c''1~ { d''16 } c''1 }").tie);
+    // The tie after the braces still the note's, as before.
+    assert!(main_note(r"{ \afterGrace c''1 { d''16 }~ c''1 }").tie);
+    // A chord, and \relative reading the graces from the note.
+    assert!(main_note(r"{ \afterGrace <c'' e''>1~ { d''16 } <c'' e''>1 }").tie);
+    let rel = main_note(r"\relative c'' { \afterGrace c1~ { d16 } c1 }");
+    assert!(rel.tie);
+    assert_eq!(rel.after_graces[0].pitches[0].d, 15, "d'' after c''");
+    // Music between the note and its braces is still refused.
+    let err = parse(r"{ \afterGrace c''1 \clef bass { d16 } r1 }").expect_err("a clef").message;
+    assert!(err.contains("\\afterGrace wants"), "{err}");
+}
+
+#[test]
+fn a_tie_from_the_note_is_drawn_over_its_grace_notes_to_the_next() {
+    for src in [r"{ \afterGrace c''2~ { d''16 } c''2 }", r"{ \afterGrace c''2 { d''16 }~ c''2 }", r"{ \afterGrace 7/8 c''2~ { d''16 } c''2 }"] {
+        let eng = engrave(src, 80.0, &Layout::default()).unwrap();
+        let line = &eng.systems[0].lines[0];
+        assert_eq!(line.curves.len(), 1, "{src}: one tie");
+        let items = &eng.staves[0][0].items;
+        let main = items.iter().find(|e| !e.after_graces.is_empty()).unwrap();
+        let next = items.iter().find(|e| e.k == Kind::Note && e.start > main.start).unwrap();
+        let (xa, xb) = (line.curves[0][1], line.curves[0][8]);
+        assert!(xa > main.x && xa < main.x + main.after_graces[0].x, "{src}: from the note, before its grace");
+        assert!(xb > main.x + main.after_graces[0].x && xb < next.x, "{src}: past the grace, into the next note");
+        paths(&eng, 8.0, 0).unwrap();
+    }
+    // The slur, the dynamic and the accent drawn as on a plain note.
+    let eng = engrave(r"{ \afterGrace c''2(\f-> { d''16 } d''2) }", 80.0, &Layout::default()).unwrap();
+    let line = &eng.systems[0].lines[0];
+    assert_eq!(line.curves.len(), 1, "one slur");
+    assert_eq!(line.dynamics.len(), 1);
+    assert_eq!(line.scripts.len(), 1);
+}
+
+#[test]
+fn a_tied_note_is_held_under_its_grace_notes_into_the_next() {
+    // c''2~ c''2 with d''16 after the first: c sounds once, the whole
+    // note long, the grace over it in the first half's last quarter.
+    for src in [r"{ \afterGrace c''2~ { d''16 } c''2 }", r"{ \afterGrace c''2 { d''16 }~ c''2 }"] {
+        let (division, all) = notes(&midi(src, &MidiOptions::default()).unwrap());
+        let half = 2 * u32::from(division);
+        assert_eq!(all.len(), 2, "{src}: c once, held; d: {all:?}");
+        let c = all.iter().find(|n| n.0 == 72).unwrap();
+        let d = all.iter().find(|n| n.0 == 74).unwrap();
+        assert_eq!((c.1, c.2), (0, 2 * half), "{src}: held into the next");
+        assert_eq!((d.1, d.2), (half * 3 / 4, half), "{src}");
+    }
+    // The fraction written: the grace moves, the note is still held.
+    let (division, all) = notes(&midi(r"{ \afterGrace 7/8 c''2~ { d''16 } c''2 }", &MidiOptions::default()).unwrap());
+    let half = 2 * u32::from(division);
+    assert_eq!(all, vec![(72, 0, 2 * half), (74, half * 7 / 8, half)]);
+    // Not tied: struck again, the note giving its end to the grace.
+    let (_, untied) = notes(&midi(r"{ \afterGrace c''2 { d''16 } c''2 }", &MidiOptions::default()).unwrap());
+    assert_eq!(untied.len(), 3);
+    assert_eq!((untied[0].0, untied[0].2), (72, half * 3 / 4));
+    // A grace of the note's own key strikes it again: the tie gives way.
+    let (_, own) = notes(&midi(r"{ \afterGrace c''2~ { c''16 } c''2 }", &MidiOptions::default()).unwrap());
+    assert_eq!(own.iter().filter(|n| n.0 == 72).count(), 3, "{own:?}");
+    assert_eq!(own[0].2, half * 3 / 4);
+    // Tied into a different note, nothing is held.
+    let (_, other) = notes(&midi(r"{ \afterGrace c''2~ { d''16 } e''2 }", &MidiOptions::default()).unwrap());
+    assert_eq!(other.len(), 3);
+    assert_eq!(other[0].2, half, "held its own time, the tie pointing nowhere: {other:?}");
+}

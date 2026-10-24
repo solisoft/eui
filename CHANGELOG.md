@@ -123,6 +123,13 @@ release. A wire change lands here first, is released, and then the pin moves.
 - An ending's number clears the high notes under it: an `a''` starting
   "1." in Ode to Joy was drawn through the number, the bracket having
   cleared the notes by its line alone.
+- `\afterGrace` takes what is written after its note, before the braces,
+  as LilyPond's own examples write it: `\afterGrace c''1~ { d''16 } c''1`,
+  `c''1( { … } d''1)`, `c''1\f`, `c''1->`, fingerings, words, hairpins,
+  trill spans, with or without a fraction, all the note's. They were
+  refused; only `{ … }~` was read. A tie from the note is drawn over its
+  grace notes into the next, and played as one note held under them,
+  unless a grace note is its own key.
 
 ## [0.11.0] - 2026-10-18
 

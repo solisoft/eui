@@ -2818,25 +2818,70 @@ fn music(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Strin
             T::Sym('<') if twin(toks, i, '<') => i = voices(toks, i, st, hd)?,
             T::Word | T::Sym('<') => i = note(toks, i, st)?,
             T::Sym('|') => i += 1,
-            T::Sym('~') => {
-                last_note(&mut st.events, &tk)?.tie = true;
-                i += 1;
-            }
-            T::Sym('-' | '^' | '_') => i = postfix(toks, i, st, hd)?,
-            T::Sym(c @ ('(' | ')' | '[' | ']')) => {
-                let last = last_note(&mut st.events, &tk)?;
-                match c {
-                    '(' => last.slur_on = true,
-                    ')' => last.slur_off = true,
-                    '[' => last.beam_on = true,
-                    _ => last.beam_off = true,
-                }
-                i += 1;
-            }
+            T::Sym('~' | '-' | '^' | '_' | '(' | ')' | '[' | ']') => i = post_sign(toks, i, st, hd)?,
             _ => return refuse(format!("'{}' is not expected here", tk.v), tk.at),
         }
     }
     Ok(i)
+}
+
+/// A sign written after a note, for it: `~`, `(` `)`, `[` `]`, or `-` `^`
+/// `_` and what follows them.
+fn post_sign(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let tk = toks[i].clone();
+    match tk.t {
+        T::Sym('-' | '^' | '_') => postfix(toks, i, st, hd),
+        T::Sym(c) => {
+            let last = last_note(&mut st.events, &tk)?;
+            match c {
+                '~' => last.tie = true,
+                '(' => last.slur_on = true,
+                ')' => last.slur_off = true,
+                '[' => last.beam_on = true,
+                _ => last.beam_off = true,
+            }
+            Ok(i + 1)
+        }
+        _ => refuse(format!("'{}' is not expected here", tk.v), tk.at),
+    }
+}
+
+/// Whether the token at `i` is written after a note, for it — a tie, a
+/// slur, a beam, an articulation, a fingering, words, a dynamic, a hairpin,
+/// a phrasing slur — rather than music of its own.
+fn post_event(toks: &[Tok], i: usize) -> bool {
+    let Some(t) = toks.get(i) else { return false };
+    match t.t {
+        T::Sym('~' | '-' | '^' | '_' | '(' | ')' | '[' | ']') => true,
+        T::Cmd => {
+            let w = t.v.as_str();
+            DYNAMICS.contains(&w)
+                || SCRIPTS.contains(&w)
+                || (!w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
+                || [
+                    "<",
+                    ">",
+                    "!",
+                    "(",
+                    ")",
+                    "arpeggio",
+                    "glissando",
+                    "sustainOn",
+                    "sustainOff",
+                    "startTrillSpan",
+                    "stopTrillSpan",
+                    "laissezVibrer",
+                    "repeatTie",
+                    "cresc",
+                    "dim",
+                    "decresc",
+                    "startTextSpan",
+                    "stopTextSpan",
+                ]
+                .contains(&w)
+        }
+        _ => false,
+    }
 }
 
 /// `<<` or `>>`: two of the sign written together.
@@ -3648,8 +3693,16 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 j += 1;
             }
             let before = st.events.len();
-            let j = expr(toks, j, st, hd)?;
+            let mut j = expr(toks, j, st, hd)?;
             if st.events.len() != before + 1 || st.events[before].k != Kind::Note || st.events[before].grace.is_some() {
+                return refuse("\\afterGrace wants one note, then its grace notes in { }", tk.at);
+            }
+            // `\afterGrace c''1~ { d''16 }`, `c''1( { … }`, `c''1\f { … }`:
+            // what is written after the note is the note's, as LilyPond reads it.
+            while post_event(toks, j) {
+                j = if toks[j].t == T::Cmd { command(toks, j, st, hd)? } else { post_sign(toks, j, st, hd)? };
+            }
+            if st.events.len() != before + 1 {
                 return refuse("\\afterGrace wants one note, then its grace notes in { }", tk.at);
             }
             if !is(toks, j, T::Sym('{')) && !is(toks, j, T::Sym('<')) && !is(toks, j, T::Word) {

@@ -203,7 +203,13 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
                     }
                     t = end;
                 }
-                length = length.min(from);
+                // Tied on, the note is held under them into the next, as
+                // LilyPond plays it: unless one of them is its own key,
+                // which strikes it again.
+                let own = ev.after_graces.iter().flat_map(|g| &g.heads).any(|g| ev.heads.iter().any(|h| key_of(h.d, h.alter) == key_of(g.d, g.alter)));
+                if !ev.tie || own {
+                    length = length.min(from);
+                }
             }
             if ev.tremolo > 0 {
                 // `c4:16`: the note again each sixteenth of it.
