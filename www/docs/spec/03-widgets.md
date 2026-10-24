@@ -587,7 +587,10 @@ construct as LilyPond 2.25 draws it:
   smaller, the key with the old one's naturals; grace notes (`\grace`,
   `\acciaccatura`, `\appoggiatura`, `\slashedGrace`), small, before their
   note, beamed, slashed and slurred as LilyPond draws them, taking no time
-  on the page and at most half their note's in MIDI; fingerings (`-1`,
+  on the page and at most half their note's in MIDI; `\afterGrace` (with
+  its optional fraction, `\afterGrace 7/8 …`), its grace notes small after
+  their note, before the next one, played in the note's last quarter (from
+  the fraction written); fingerings (`-1`,
   `<c-1 e-3>`, the lower half of a chord's under it); `\markup` with
   `\bold`, `\italic`, `\musicglyph` and the commands that only size or
   move words; `\mark \default`, `\mark "A"`, `\mark 5`, `\segnoMark`,

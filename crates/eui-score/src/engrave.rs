@@ -560,6 +560,51 @@ fn grace_layout(ev: &mut Ev) {
     ev.left += room;
 }
 
+/// Where `\afterGrace`'s notes go: right of the note and all it has
+/// there, a little apart, laid out as grace notes before a note are; the
+/// note's room on the right grows by theirs. The drawing moves them up to
+/// the next note when the spacing leaves more room (`draw::after_shift`).
+fn after_layout(ev: &mut Ev) {
+    if ev.after_graces.is_empty() {
+        return;
+    }
+    let k = GRACE_K;
+    let beamed = ev.after_graces.len() > 1 && ev.after_graces.iter().all(|g| flags(g.base) > 0);
+    let start = ev.right + 0.5;
+    let mut x = 0.0;
+    let mut xs = Vec::with_capacity(ev.after_graces.len());
+    for g in &ev.after_graces {
+        let acc_w = g.heads.iter().filter_map(|h| h.acc).map(|a| glyph(acc_name(a)).advance).fold(0.0, f64::max) * k;
+        if acc_w > 0.0 {
+            x += acc_w + 0.15;
+        }
+        xs.push(x);
+        x += glyph(head_name(g.base)).advance * k;
+        if !beamed && flags(g.base) > 0 && g.up {
+            x += (glyph(&flag_name(g.base, true)).advance - RULE.stem) * k;
+        }
+        x += 0.3;
+    }
+    let len = 3.0 * k;
+    let top = |g: &Ev| y_of(g.heads.last().map_or(0, |h| h.pos));
+    let low = |g: &Ev| y_of(g.heads.first().map_or(0, |h| h.pos));
+    let up = ev.after_graces[0].up;
+    let tip = if up { ev.after_graces.iter().map(|g| top(g) - len).fold(f64::INFINITY, f64::min) } else { ev.after_graces.iter().map(|g| low(g) + len).fold(f64::NEG_INFINITY, f64::max) };
+    for (g, gx) in ev.after_graces.iter_mut().zip(xs) {
+        g.x = start + gx;
+        g.head_w = Some(glyph(head_name(g.base)).advance * k);
+        g.stem_end = if beamed {
+            tip
+        } else if up {
+            top(g) - len
+        } else {
+            low(g) + len
+        };
+        g.beam = beamed.then_some(0);
+    }
+    ev.right = start + x;
+}
+
 fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
     for bar in bars.iter_mut() {
         for ev in &mut bar.items {
@@ -629,6 +674,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 ev.right = ev.right.max(hw + 0.15 + marks::SHORT_TIE + 0.2);
             }
             breath_room(ev);
+            after_layout(ev);
             let shifted = ev.heads.iter().any(|h| h.side == -1);
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);

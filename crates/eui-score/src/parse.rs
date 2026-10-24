@@ -27,6 +27,10 @@ pub const SCRIPTS: [&str; 17] =
 /// a variable used in a variable used in a variable multiplies.
 const MAX_TOKENS: usize = 400_000;
 
+/// Where `\afterGrace`'s grace notes start, as a part of their note:
+/// LilyPond's `afterGraceFraction`.
+pub const AFTER_GRACE: f64 = 0.75;
+
 thread_local! {
     /// The source being read uses what protocol 11 adds.
     static BEYOND: Cell<bool> = const { Cell::new(false) };
@@ -1017,6 +1021,12 @@ pub struct Ev {
     /// The grace notes before it, `\grace` and its kin: notes of their own,
     /// taking no time, drawn small.
     pub graces: Vec<Ev>,
+    /// `\afterGrace`'s grace notes, after it: drawn small before the next
+    /// note, played in the end of this one, from `after_at`.
+    pub after_graces: Vec<Ev>,
+    /// Where `after_graces` start, as a part of the note: 3/4 unless
+    /// `\afterGrace 7/8 …` says.
+    pub after_at: f64,
     /// On a grace note, which: `\grace`, `\acciaccatura` (slashed and
     /// slurred), `\appoggiatura` (slurred) or `\slashedGrace`.
     pub grace: Option<GraceKind>,
@@ -3618,6 +3628,60 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             return Ok(i + 1);
         }
         "language" => return refuse("\\language goes before the music", tk.at),
+        "afterGrace" => {
+            // `\afterGrace c2 { d16 e }`, or `\afterGrace 7/8 c2 { … }`: the
+            // grace notes after the note, at that point of it (3/4 when no
+            // fraction is written, LilyPond's afterGraceFraction).
+            beyond();
+            if st.tuplet.is_some() {
+                return refuse("a grace note in a tuplet is not drawn", tk.at);
+            }
+            let mut j = i + 1;
+            let mut fraction = AFTER_GRACE;
+            if is(toks, j, T::Num) && toks[j].v.contains('/') {
+                let parts: Vec<f64> = toks[j].v.split('/').map(|p| p.parse().unwrap_or(0.0)).collect();
+                let (n, d) = (parts.first().copied().unwrap_or(0.0), parts.get(1).copied().unwrap_or(0.0));
+                if !(d > 0.0 && n > 0.0 && n < d) {
+                    return refuse("\\afterGrace's fraction is a part of its note, between 0 and 1, like 7/8", toks[j].at);
+                }
+                fraction = n / d;
+                j += 1;
+            }
+            let before = st.events.len();
+            let j = expr(toks, j, st, hd)?;
+            if st.events.len() != before + 1 || st.events[before].k != Kind::Note || st.events[before].grace.is_some() {
+                return refuse("\\afterGrace wants one note, then its grace notes in { }", tk.at);
+            }
+            if !is(toks, j, T::Sym('{')) && !is(toks, j, T::Sym('<')) && !is(toks, j, T::Word) {
+                return refuse("\\afterGrace wants its grace notes after the note, in { }", tk.at);
+            }
+            let (items, notes) = (st.items, st.notes);
+            let waiting = std::mem::take(&mut st.graces);
+            let after = st.events.len();
+            let j = expr(toks, j, st, hd)?;
+            let read = st.events.split_off(after);
+            st.graces = waiting;
+            st.items = items;
+            st.notes = notes;
+            if read.is_empty() {
+                return refuse("\\afterGrace wants grace notes after its note", tk.at);
+            }
+            let mut graces = Vec::with_capacity(read.len());
+            for mut g in read {
+                if g.k != Kind::Note || !g.graces.is_empty() {
+                    return refuse("grace notes are notes: no rests or settings among them", g.at);
+                }
+                g.grace = Some(GraceKind::Plain);
+                g.slur_on = false;
+                g.slur_off = false;
+                g.n = None;
+                graces.push(g);
+            }
+            let main = &mut st.events[before];
+            main.after_graces = graces;
+            main.after_at = fraction;
+            return Ok(j);
+        }
         "grace" | "acciaccatura" | "appoggiatura" | "slashedGrace" => {
             let kind = match word {
                 "acciaccatura" => GraceKind::Acciaccatura,

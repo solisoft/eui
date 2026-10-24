@@ -261,6 +261,8 @@ fn cut_at_bar_lines(ev: &Ev, room: i64, length: i64) -> Option<Vec<Ev>> {
             piece.hairpin_end = false;
             piece.gliss = false;
             piece.tie = piece.k == Kind::Note;
+            // `\afterGrace`'s notes go after the last piece of a note cut at a bar line.
+            piece.after_graces.clear();
         }
     }
     Some(out)
@@ -352,6 +354,8 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     } else {
         p.tied.clear();
     }
+    // `\afterGrace`'s notes, after the note: the bar's accidentals as it left them.
+    grace_heads(&mut ev.after_graces, clef_mid(clef) + 7 * ev.ottava, ev.ottava, &mut p.seen, &alters, ev.voice);
     p.at = at + ev.ticks;
     bar.items.push(ev);
     Ok(())
@@ -793,6 +797,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
         } else {
             tied.clear();
         }
+        grace_heads(&mut ev.after_graces, clef_mid(clef) + 7 * ottava, ottava, &mut seen, &alters, ev.voice);
         let ticks = ev.ticks;
         tick_at += ticks * ev.mm.unwrap_or(1);
         bars[ci].items.push(ev);

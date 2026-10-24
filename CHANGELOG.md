@@ -24,6 +24,16 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\afterGrace` (score #389): `\afterGrace c2 { d16 e }`, and LilyPond's
+  `\afterGrace 7/8 c2 { … }`, where it was refused as an unknown command.
+  The grace notes ride on their note (`Ev::after_graces`, `after_at`),
+  taking no time and no number; they are drawn small, beamed as grace notes
+  are, after the note and moved up to the next one as LilyPond sets them,
+  with no slur (LilyPond leaves it to the source); in MIDI the note ends at
+  its 3/4 point (or the fraction written) and the grace notes share the
+  rest by their written values. A note cut at a bar line keeps them on its
+  last piece. Protocol 11.
+
 - The page around a score's music (score #388). `\paper`'s
   `oddHeaderMarkup`, `evenHeaderMarkup`, `oddFooterMarkup` and
   `evenFooterMarkup` are read and printed in the PDF — words, the header's

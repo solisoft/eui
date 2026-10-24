@@ -186,6 +186,25 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             if has("portato") {
                 length = span * 3 / 4;
             }
+            // `\afterGrace`: the note gives its end, from `after_at` (3/4 of
+            // it), to its grace notes, which share that time as written.
+            if !ev.after_graces.is_empty() && span > 1 {
+                let part = if ev.after_at > 0.0 && ev.after_at < 1.0 { ev.after_at } else { crate::parse::AFTER_GRACE };
+                let from = ((span as f64 * part).round() as i64).clamp(1, span - 1);
+                let room = span - from;
+                let written: i64 = ev.after_graces.iter().map(|g| g.ticks.max(1)).sum();
+                let mut t = t0 + from;
+                for (gi, g) in ev.after_graces.iter().enumerate() {
+                    let end = if gi + 1 == ev.after_graces.len() { t0 + span } else { (t + g.ticks.max(1) * room / written).max(t + 1) };
+                    for hd in &g.heads {
+                        let key = key_of(hd.d, hd.alter);
+                        ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                        ev_out.push((end, 0, vec![(128 + channel) as u8, key as u8, 64]));
+                    }
+                    t = end;
+                }
+                length = length.min(from);
+            }
             if ev.tremolo > 0 {
                 // `c4:16`: the note again each sixteenth of it.
                 let each = (WHOLE / ev.tremolo).max(1);

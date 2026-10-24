@@ -936,7 +936,7 @@ fn item_ink(ev: &Ev) -> (f64, f64) {
         return (1.0 + rest_lift(ev), 3.0 + rest_lift(ev));
     }
     let (mut up, mut down) = (tuplet_edge(ev, true), tuplet_edge(ev, false));
-    for g in &ev.graces {
+    for g in ev.graces.iter().chain(&ev.after_graces) {
         for hd in &g.heads {
             up = up.min(y_of(hd.pos) - 0.4);
             down = down.max(y_of(hd.pos) + 0.4);
@@ -1432,7 +1432,7 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     }
     for b in range.clone() {
         for ev in &bars[b].items {
-            for g in &ev.graces {
+            for g in ev.graces.iter().chain(&ev.after_graces) {
                 for hd in &g.heads {
                     hi = hi.min(y_of(hd.pos) - 0.6);
                     lo = lo.max(y_of(hd.pos) + 0.6);

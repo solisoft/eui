@@ -604,6 +604,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
             let from_k = pen.paths.len();
             if ev.percent.is_none() {
                 draw_graces(&mut pen, ev, top);
+                if !ev.after_graces.is_empty() {
+                    draw_after_graces(&mut pen, ev, after_shift(ev, next_left(bar, ev)), top);
+                }
             }
             if ev.percent.is_some() || ev.spacer {
                 // Played, and drawn as nothing: a spacer, or a copy the
@@ -723,6 +726,7 @@ fn draw_ossia(pen: &mut Pen, bars: &[Bar], line: &Line, top: f64, ranges: &mut R
             let from_k = pen.paths.len();
             if !ev.spacer {
                 draw_graces(pen, ev, top);
+                draw_after_graces(pen, ev, after_shift(ev, next_left(bar, ev)), top);
                 if ev.k == Kind::Rest {
                     draw_rest(pen, ev, top);
                 } else {
@@ -1560,13 +1564,42 @@ fn draw_mark(pen: &mut Pen, mk: &MarkPlace, top: f64) {
 /// lines, stems with a flag or under one beam, the slash of an
 /// acciaccatura, and its slur — or an appoggiatura's — to the note.
 fn draw_graces(pen: &mut Pen, ev: &Ev, top: f64) {
-    let Some(first) = ev.graces.first() else { return };
+    draw_grace_group(pen, ev, &ev.graces, 0.0, top);
+}
+
+/// `\afterGrace`'s notes, after `ev`: where they were laid out, moved
+/// right by `shift` — up to the next note, as LilyPond sets them — and with
+/// no slur, which LilyPond leaves to the source.
+fn draw_after_graces(pen: &mut Pen, ev: &Ev, shift: f64, top: f64) {
+    draw_grace_group(pen, ev, &ev.after_graces, shift, top);
+}
+
+/// How far `ev`'s after-grace notes move right: up to half a space before
+/// `next` (where the next note's ink starts, or the bar line), never left of
+/// where they were laid out.
+fn after_shift(ev: &Ev, next: f64) -> f64 {
+    let Some(last) = ev.after_graces.last() else { return 0.0 };
+    let end = ev.x + last.x + last.head_w.unwrap_or(0.0);
+    (next - 0.6 - end).max(0.0)
+}
+
+/// Where the next note's ink starts after `ev` in its bar: the next item
+/// of its voice, else the bar line.
+fn next_left(bar: &Bar, ev: &Ev) -> f64 {
+    bar.items.iter().filter(|o| o.start > ev.start && o.voice == ev.voice && !o.spacer).map(|o| o.x - o.left).fold(bar.x1, f64::min)
+}
+
+/// Grace notes, small: heads, accidentals and ledger lines, stems with a
+/// flag or under one beam, the slash of an acciaccatura, and its slur — or
+/// an appoggiatura's — to the note. `dx` moves them all right.
+fn draw_grace_group(pen: &mut Pen, ev: &Ev, graces: &[Ev], dx: f64, top: f64) {
+    let Some(first) = graces.first() else { return };
     let k = GRACE_K;
     let sp = pen.sp;
     let beamed = first.beam.is_some();
     let mut stems: Vec<f64> = Vec::new();
-    for g in &ev.graces {
-        let x = ev.x + g.x;
+    for g in graces {
+        let x = ev.x + g.x + dx;
         let hname = head_name(g.base);
         let hw = g.head_w.unwrap_or(0.0);
         let hi = g.heads.last().map_or(0, |h| h.pos);
@@ -1610,14 +1643,14 @@ fn draw_graces(pen: &mut Pen, ev: &Ev, top: f64) {
             pen.push(fill_k(&glyph(&flag).fill, sx - anchor[0] * k, tip - anchor[1] * k, k, sp));
         }
         let slashed = matches!(g.grace, Some(GraceKind::Acciaccatura | GraceKind::Slashed));
-        if slashed && (ev.graces.len() == 1 || std::ptr::eq(g, first)) {
+        if slashed && (graces.len() == 1 || std::ptr::eq(g, first)) {
             let name = if g.up { "graceNoteSlashStemUp" } else { "graceNoteSlashStemDown" };
             pen.push(fill_k(&glyph(name).fill, sx, tip, k, sp));
         }
     }
     if beamed && stems.len() > 1 {
         let up = first.up;
-        let n = ev.graces.iter().map(|g| flags(g.base)).max().unwrap_or(1);
+        let n = graces.iter().map(|g| flags(g.base)).max().unwrap_or(1);
         let y = top + first.stem_end;
         let (xa, xb) = (stems[0], stems[stems.len() - 1] + RULE.stem * k);
         let t = RULE.beam * k;
@@ -1627,7 +1660,7 @@ fn draw_graces(pen: &mut Pen, ev: &Ev, top: f64) {
             pen.rect(xa, y0, xb - xa, t);
         }
     }
-    if matches!(first.grace, Some(GraceKind::Acciaccatura | GraceKind::Appoggiatura)) && !ev.heads.is_empty() {
+    if dx == 0.0 && std::ptr::eq(graces, ev.graces.as_slice()) && matches!(first.grace, Some(GraceKind::Acciaccatura | GraceKind::Appoggiatura)) && !ev.heads.is_empty() {
         // Under the heads when the grace stems are up, over them when down.
         let below = first.up;
         let dir = if below { 1.0 } else { -1.0 };
