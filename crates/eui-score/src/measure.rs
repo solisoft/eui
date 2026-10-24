@@ -131,6 +131,12 @@ pub struct Bar {
     /// The clefs and keys changed in the middle of it: where, in ticks
     /// from its start, and the clef and the key from there on.
     pub inline: Vec<(i64, Clef, i64)>,
+    /// A movement starts with it (`Kind::Movement`): a line starts here, the
+    /// bars are counted from it again, and the line before announces nothing.
+    pub fresh: bool,
+    /// The title over the line it starts: the movement's `piece` and `opus`,
+    /// as LilyPond's `scoreTitleMarkup` sets them, left and right.
+    pub title: Option<(String, String)>,
     /// Rehearsal marks, segni and codas: where in the bar, in ticks — 0 its
     /// start, its length its end — and what they say. A jump (`\jump`,
     /// `\fine`, its `dir` 1) is at the end of the bar it follows.
@@ -329,8 +335,10 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
             if p.tied.get(&pt.d) == Some(&pt.alter) {
                 show = false;
             }
+            let paren = ev.cautionary.contains(&pt.d);
+            show = show || paren || ev.forced.contains(&pt.d);
             p.seen.insert(pt.d, pt.alter);
-            heads.push(Head { pos: pt.d - mid, d: pt.d, alter: pt.alter, acc: if show { Some(pt.alter) } else { None }, side: 0, acc_x: None, style: "" });
+            heads.push(Head { pos: pt.d - mid, d: pt.d, alter: pt.alter, acc: if show { Some(pt.alter) } else { None }, side: 0, acc_x: None, style: "", paren });
         }
         heads.sort_by_key(|h| h.pos);
         ev.heads = heads;
@@ -372,7 +380,9 @@ fn grace_heads(graces: &mut [Ev], mid: i64, ottava: i64, seen: &mut HashMap<i64,
                 None => alters[modulo(p.d, 7) as usize],
             };
             seen.insert(p.d, p.alter);
-            heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if p.alter != now { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "" });
+            let paren = g.cautionary.contains(&p.d);
+            let show = p.alter != now || paren || g.forced.contains(&p.d);
+            heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "", paren });
         }
         heads.sort_by_key(|h| h.pos);
         g.heads = heads;
@@ -405,6 +415,8 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     // A clef or a key changed in the middle of a bar, waiting for the note
     // or the rest it is drawn before.
     let mut change: (Option<Clef>, Option<(i64, i64)>) = (None, None);
+    // A movement starting, waiting for its first bar: its title.
+    let mut fresh: Option<(String, String)> = None;
     let mut tied: HashMap<i64, i64> = HashMap::new();
     let mut tempo = None;
     let mut volta_open: Option<String> = None;
@@ -474,6 +486,11 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
             Some(ci) => ci,
             None => {
                 let mut b = Bar { clef, fifths, time: (tn, td), time_parts: tparts, bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
+                if let Some(title) = fresh.take() {
+                    b.fresh = true;
+                    b.first = true;
+                    b.title = Some(title);
+                }
                 // A change after the last note of a bar is drawn at the next one's start.
                 if change.0.take().is_some() {
                     b.changes.clef = true;
@@ -592,8 +609,35 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 alters = key_alters(fifths);
                 continue;
             }
+            Kind::Movement => {
+                // The movement before ends here, its bar as long as it got.
+                if pos > 0 {
+                    bars[ci].length = pos;
+                    cur = None;
+                } else if bars[ci].items.is_empty() && !bars[ci].changes.any() {
+                    bars.pop();
+                    cur = None;
+                }
+                if let Some(last) = bars.last_mut() {
+                    last.brk = Some(if ev.page || last.brk.as_deref() == Some("page") { "page".into() } else { "line".into() });
+                }
+                clef = Clef::default();
+                fifths = 0;
+                alters = key_alters(0);
+                (tn, td, tparts) = (4, 4, [0; 4]);
+                ottava = 0;
+                ottavas.push((tick_at, 0));
+                cadenza = false;
+                volta_open = None;
+                seen.clear();
+                tied.clear();
+                change = (None, None);
+                let text = |k: usize| ev.texts.get(k).map(|w| w.text.clone()).unwrap_or_default();
+                fresh = Some((text(0), text(1)));
+                continue;
+            }
             Kind::Partial => {
-                if bars.len() > 1 || pos > 0 {
+                if (bars.len() > 1 && !bars[ci].fresh) || pos > 0 {
                     return refuse("\\partial goes before the first note", ev.at);
                 }
                 let bar = &mut bars[ci];
@@ -731,8 +775,11 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 if tied.get(&p.d) == Some(&p.alter) {
                     show = false;
                 }
+                // `cis!` prints its accidental whatever the bar says, `cis?` in parentheses.
+                let paren = ev.cautionary.contains(&p.d);
+                show = show || paren || ev.forced.contains(&p.d);
                 seen.insert(p.d, p.alter);
-                heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "" });
+                heads.push(Head { pos: p.d - mid, d: p.d, alter: p.alter, acc: if show { Some(p.alter) } else { None }, side: 0, acc_x: None, style: "", paren });
             }
             heads.sort_by_key(|h| h.pos);
             ev.heads = heads;
@@ -778,6 +825,10 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     // A pickup is bar 0, as LilyPond counts.
     let mut number = if bars[0].offset > 0 { 0 } else { 1 };
     for bi in 0..bars.len() {
+        // A movement counts its bars from 1, its pickup 0.
+        if bars[bi].fresh {
+            number = if bars[bi].offset > 0 { 0 } else { 1 };
+        }
         bars[bi].number = number;
         number += bars[bi].span.unwrap_or(1);
         if bars[bi].start_repeat && bi > 0 {

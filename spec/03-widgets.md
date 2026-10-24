@@ -607,6 +607,19 @@ construct as LilyPond 2.25 draws it:
   that reaches it, `\5` naming one — passed over when the note is below
   that string — and circled over the note on a staff; frets, no rhythm).
 
+- *Real files* (score #359): layout settings — `\override`, `\revert`,
+  `\once`, `\tweak`, `\set`, `\unset`, the direction and style switches,
+  `\transposition`, a context's `\with`, `\layout`, `\midi` and `\paper`
+  settings, top-level `\markup`, `\include` and unprinted header fields —
+  read whole and passed over, each reported as a warning
+  (`eui_score::warnings(src)`); `\stemUp`/`\stemDown`/`\stemNeutral` and
+  `\autoBeamOff`/`\autoBeamOn` honoured; `\breathe`, `\caesura`,
+  `\upbow`, `\downbow`, `\flageolet`, `\espressivo`, `\laissezVibrer`,
+  `\repeatTie`, `\cresc`/`\dim`/`\decresc` as words and dashes, text
+  spanners, and `cis!` / `cis?` accidentals drawn; several `\score` blocks
+  (in `\book`/`\bookpart` or not) engraved one after another on the same
+  staves, each under its `piece` and `opus`.
+
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9
 for the catalogue's subset and 11 for one using any of the above, and a

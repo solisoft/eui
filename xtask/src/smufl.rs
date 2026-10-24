@@ -117,10 +117,20 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     ("brassMuteOpen", '\u{E5E7}', &[]),
     ("keyboardPedalPed", '\u{E650}', &[]),
     ("keyboardPedalUp", '\u{E655}', &[]),
-    // A clef changed in the middle of a bar, smaller.
+    // A clef changed in the middle of a bar, smaller; a breath, a caesura,
+    // the bowings, a harmonic's circle, the espressivo (SMuFL's messa di
+    // voce is its shape) and a reminder accidental's parentheses.
     ("gClefChange", '\u{E07A}', &[]),
     ("cClefChange", '\u{E07B}', &[]),
     ("fClefChange", '\u{E07C}', &[]),
+    ("breathMarkComma", '\u{E4CE}', &[]),
+    ("caesura", '\u{E4D1}', &[]),
+    ("stringsUpBow", '\u{E612}', &[]),
+    ("stringsDownBow", '\u{E610}', &[]),
+    ("stringsHarmonic", '\u{E614}', &[]),
+    ("dynamicMessaDiVoce", '\u{E540}', &[]),
+    ("accidentalParensLeft", '\u{E26A}', &[]),
+    ("accidentalParensRight", '\u{E26B}', &[]),
     ("brassMuteClosed", '\u{E5E5}', &[]),
 ];
 
@@ -213,6 +223,14 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("gClefChange", "clefs.G_change", 0.0),
     ("cClefChange", "clefs.C_change", 0.0),
     ("fClefChange", "clefs.F_change", 0.0),
+    ("breathMarkComma", "scripts.rcomma", 0.0),
+    ("caesura", "scripts.caesura.straight", 0.0),
+    ("stringsUpBow", "scripts.upbow", 0.0),
+    ("stringsDownBow", "scripts.downbow", 0.0),
+    ("stringsHarmonic", "scripts.flageolet", 0.0),
+    ("dynamicMessaDiVoce", "scripts.espr", 0.0),
+    ("accidentalParensLeft", "accidentals.leftparen", 0.0),
+    ("accidentalParensRight", "accidentals.rightparen", 0.0),
 ];
 
 /// Where a named face's flag meets its stem: its origin is a little in from

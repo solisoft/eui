@@ -708,3 +708,144 @@ fn a_clef_or_a_key_changes_in_the_middle_of_a_bar() {
     assert!(e.staves[0][1].changes.clef);
     assert!(engrave("{ c'2 \\time 3/4 c'4 }", 100.0, &Layout::default()).unwrap_err().message.contains("\\time in the middle of a bar"));
 }
+
+#[test]
+fn layout_settings_are_read_and_passed_over_with_a_warning() {
+    use eui_score::warnings;
+    // Each of these refused the whole file; now read whole, the music after it too.
+    let said = [
+        "{ \\override Staff.TimeSignature.stencil = ##f c'4 d' }",
+        "{ \\override Stem #'length = #5 c'4 d' }",
+        "{ \\once \\override NoteHead.color = #red c'4 \\revert NoteHead.color d' }",
+        "{ \\override Slur.positions = #'(1 . 2) c'4( d') }",
+        "{ \\override TextScript.extra-offset = #(cons 0 1) c'4 d' }",
+        "{ \\tweak color #red c'4 d'-\\tweak Script.color #blue -> }",
+        "{ \\set Score.currentBarNumber = #5 \\unset Score.currentBarNumber c'4 }",
+        "{ \\slurUp \\tieDown \\dynamicUp \\dynamicNeutral \\tieNeutral \\slurNeutral c'4 }",
+        "{ \\transposition bes c'4 }",
+        "\\new Staff \\with { \\consists \"Ambitus_engraver\" \\remove \"Time_signature_engraver\" fontSize = #-2 } { c'4 }",
+        "\\layout { \\context { \\Score \\override BarNumber.break-visibility = ##(#f #t #t) } } { c'4 }",
+        "\\midi { \\tempo 4 = 90 } { c'4 }",
+        "\\paper { ragged-right = ##t system-system-spacing.basic-distance = #10 } { c'4 }",
+        "\\header { encodingsoftware = \"musicxml2ly\" title = \\markup { \\bold Song } } { c'4 }",
+        "<< \\set Score.proportionalNotationDuration = #(ly:make-moment 1/8) \\new Staff { c'4 } >>",
+    ];
+    for src in said {
+        let p = read(src);
+        assert!(!p.warnings.is_empty(), "{src}: no warning");
+        assert_eq!(warnings(src).unwrap(), p.warnings);
+        engrave(src, 900.0 / 8.0, &Layout::default()).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert_eq!(protocol(src), Ok(11), "{src}");
+    }
+    assert!(read("{ \\override Stem.direction = #DOWN c'4 }").warnings.is_empty(), "honoured, not passed over");
+    assert_eq!(read("\\header { title = \\markup { \\bold Song } } { c'4 }").header["title"], "Song");
+    let w = &read("{ \\override NoteHead.color = #red c'4 }").warnings[0];
+    assert_eq!((w.message.as_str(), w.at), ("\\override NoteHead.color is not drawn", 2));
+    // Still refused: a command that is none of them, and a setting without its value.
+    assert!(parse("{ c'4 \\foo }").unwrap_err().message.contains("\\foo is not a command"));
+    assert!(parse("{ \\override Stem.direction c'4 }").is_err());
+    // What is honoured: the stems' direction and the beams.
+    let eng = engrave("{ \\stemDown c''4 \\stemUp c'' \\stemNeutral c'' c''8 d'' \\autoBeamOff e'' f'' \\autoBeamOn g'' a'' b'' c''' }", 900.0 / 8.0, &Layout::default()).unwrap();
+    let ups: Vec<bool> = eng.staves[0][0].items.iter().map(|e| e.up).collect();
+    assert_eq!(&ups[..3], &[false, true, false]);
+    let beamed = |b: usize| eng.staves[0][b].items.iter().map(|e| e.beam.is_some()).collect::<Vec<_>>();
+    assert_eq!(beamed(0), vec![false, false, false, true, true]);
+    assert_eq!(beamed(1), vec![false, false, true, true, true, true], "e'' f'' under \\autoBeamOff");
+}
+
+#[test]
+fn breaths_bowings_short_ties_and_spanners_are_drawn() {
+    let eng = |src: &str| engrave(src, 900.0 / 8.0, &Layout::default()).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let p = read("{ c''4\\upbow d''\\downbow e''\\flageolet f''\\espressivo }");
+    let names: Vec<&str> = p.staves[0].events.iter().map(|e| e.scripts[0].name.as_str()).collect();
+    assert_eq!(names, vec!["upbow", "downbow", "flageolet", "espressivo"]);
+    let e = eng("{ c''4\\upbow d''\\downbow e''\\flageolet f''\\espressivo }");
+    let glyphs: Vec<&str> = e.systems[0].lines[0].scripts.iter().map(|s| s.glyph).collect();
+    assert_eq!(glyphs, vec!["stringsUpBow", "stringsDownBow", "stringsHarmonic", "dynamicMessaDiVoce"]);
+    // A breath after its note, room made for it; a caesura.
+    let e = eng("{ c''4 \\breathe d'' \\caesura e''2 }");
+    let items = &e.staves[0][0].items;
+    assert_eq!((items[0].breath, items[1].breath), (Some("breathMarkComma"), Some("caesura")));
+    assert!(items[0].breath_x > items[0].head_w.unwrap());
+    assert!(items[1].x - items[0].x >= items[0].right + 0.6);
+    // Short ties: one from the note, one into it; each head its own.
+    let tied = eng("{ <c'' e''>2\\laissezVibrer c''2\\repeatTie }");
+    let plain = eng("{ <c'' e''>2 c''2 }");
+    assert_eq!(tied.systems[0].lines[0].curves.len(), 3);
+    assert!(plain.systems[0].lines[0].curves.is_empty());
+    // "cresc." and dashes for \cresc, the hairpin's MIDI kept.
+    let e = eng("{ c'4\\p\\cresc d' e' f'\\f | g'1\\dim | c'1\\! }");
+    let words: Vec<Option<String>> = e.systems[0].lines[0].dynamics.iter().filter(|d| d.text.is_none()).map(|d| d.words.clone()).collect();
+    assert_eq!(words, vec![Some("cresc.".into()), Some("dim.".into())]);
+    // A text spanner, its words from \override, over the notes it spans.
+    let e = eng("{ \\override TextSpanner.bound-details.left.text = \"rit.\" c''4\\startTextSpan d'' e'' f''\\stopTextSpan | g''1 }");
+    let sp = &e.systems[0].lines[0].spans;
+    assert_eq!(sp.len(), 1);
+    assert_eq!(sp[0].runs[0].text, "rit.");
+    assert!(sp[0].y < -1.0, "over the staff: {}", sp[0].y);
+    let bare = eng("{ c''4\\startTextSpan d'' e'' f''\\stopTextSpan }");
+    assert!(bare.systems[0].lines[0].spans[0].runs.is_empty(), "the dashed line alone");
+}
+
+#[test]
+fn forced_and_reminder_accidentals_print_their_sign() {
+    let eng = |src: &str| engrave(src, 900.0 / 8.0, &Layout::default()).unwrap_or_else(|e| panic!("{src}: {e}"));
+    let p = read("{ cis''4 cis''! cis''? <e'' g''?>4 }");
+    let evs: Vec<_> = p.staves[0].events.iter().map(|e| (e.forced.clone(), e.cautionary.clone())).collect();
+    assert_eq!(evs, vec![(vec![], vec![]), (vec![14], vec![]), (vec![], vec![14]), (vec![], vec![18])]);
+    let e = eng("{ cis''4 cis''! cis''? c'' | g'4 g'? fis'! f' }");
+    let accs: Vec<Vec<(Option<i64>, bool)>> = e.staves[0].iter().flat_map(|b| b.items.iter()).map(|ev| ev.heads.iter().map(|h| (h.acc, h.paren)).collect()).collect();
+    assert_eq!(accs[0], vec![(Some(1), false)]);
+    assert_eq!(accs[1], vec![(Some(1), false)], "a sharp the bar already has, printed");
+    assert_eq!(accs[2], vec![(Some(1), true)], "in parentheses");
+    assert_eq!(accs[5], vec![(Some(0), true)], "a natural as a reminder");
+    assert_eq!(accs[6], vec![(Some(1), false)]);
+    // The parentheses take their room.
+    let items = &e.staves[0][0].items;
+    assert!(items[2].left > items[1].left + 0.8, "{} {}", items[2].left, items[1].left);
+    assert_eq!(protocol("{ c'?4 }"), Ok(11));
+    assert_eq!(protocol("{ c'!4 }"), Ok(11));
+}
+
+#[test]
+fn several_scores_are_engraved_one_after_another() {
+    let src = piece("d16_real_files");
+    let p = read(&src);
+    assert_eq!(p.staves.len(), 1);
+    let mv = p.staves[0].events.iter().find(|e| e.k == Kind::Movement).unwrap();
+    assert_eq!((mv.texts[0].text.as_str(), mv.texts[1].text.as_str()), ("II. Menuet", "Op. 1"));
+    let eng = engrave(&src, 900.0 / 8.0, &Layout::default()).unwrap();
+    let bars = &eng.staves[0];
+    let fresh = bars.iter().position(|b| b.fresh).unwrap();
+    assert_eq!(bars[fresh].number, 0, "the second movement's pickup is bar 0");
+    assert_eq!(bars[fresh + 1].number, 1);
+    assert_eq!(bars[fresh].clef, Clef::TREBLE);
+    assert_eq!((bars[fresh].fifths, bars[fresh].time), (2, (3, 4)));
+    assert_eq!(bars[fresh - 1].brk.as_deref(), Some("line"));
+    // On a line of its own, under its title.
+    let line = eng.systems.iter().flat_map(|s| &s.lines).find(|l| l.bars.start == fresh).unwrap();
+    assert_eq!(line.title.as_ref().unwrap().0, "II. Menuet");
+    assert!(line.title_y.unwrap() < -2.0);
+    assert!(line.courtesy == 0.0);
+    let before = eng.systems.iter().flat_map(|s| &s.lines).find(|l| l.bars.end == fresh).unwrap();
+    assert_eq!(before.courtesy, 0.0, "the line before announces nothing");
+    // Played one after the other; on A4 too.
+    engrave_a4(&src).unwrap();
+    let on = |s: &str| midi(s, &MidiOptions::default()).unwrap().windows(3).filter(|w| w[0] & 0xF0 == 0x90 && w[2] > 0).count();
+    assert!(on(&src) > on("{ g'1 }"));
+    // Music without \score, a \book and \bookpart (a page each), and a movement whose staves differ.
+    let two = read("{ c'1 } { d'1 }");
+    assert_eq!(two.staves[0].events.iter().filter(|e| e.k == Kind::Movement).count(), 1);
+    let book = read("\\book { \\header { title = \"B\" } \\bookpart { \\score { { c'1 } } } \\bookpart { \\header { title = \"Part 2\" } \\score { { d'1 } } } }");
+    assert_eq!(book.header["title"], "B");
+    let mv = book.staves[0].events.iter().find(|e| e.k == Kind::Movement).unwrap();
+    assert!(mv.page);
+    assert_eq!(mv.texts[0].text, "Part 2");
+    let paged = engrave_a4("\\book { \\bookpart { { c'1 } } \\bookpart { { d'1 } } }").unwrap();
+    assert_eq!(paged.pages.len(), 2);
+    let odd = read("{ c'1 } \\new PianoStaff << \\new Staff { c'1 } \\new Staff { c1 } >>");
+    assert_eq!(odd.staves.len(), 1);
+    assert!(odd.warnings.iter().any(|w| w.message.contains("movement 2 is not engraved")));
+    assert!(parse("\\book { { c'1 }").unwrap_err().message.contains("\\book block that is never closed"));
+    assert!(parse("{ c'4 } }").unwrap_err().message.contains("'}' after the end of the music"));
+}

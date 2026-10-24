@@ -24,6 +24,34 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- A score opens the LilyPond files people have (score #359) — Mutopia's,
+  Frescobaldi's, musicxml2ly's — where one layout command refused the
+  whole file ("\X is not a command this reads"). `\override`, `\revert`,
+  `\once`, `\tweak`, `\set` and `\unset` of any property, the direction
+  and style switches (`\slurUp`, `\tieDown`, `\dynamicUp` and their kin),
+  `\transposition`, a context's `\with { \consists … \override … }`,
+  `\layout`, `\midi` and `\paper` settings, top-level `\markup`, an
+  `\include` and header fields no title prints are read whole — Scheme
+  values `#red`, `##t`, `#'(1 . 2)`, `#(…)` included — and passed over,
+  each with a warning the caller can read (`eui_score::warnings`,
+  `Parsed::warnings`). `\stemUp` / `\stemDown` / `\stemNeutral` (and
+  `\override Stem.direction`) and `\autoBeamOff` / `\autoBeamOn` (and
+  `\set Staff.autoBeaming`) are honoured.
+- Drawn: `\breathe` (a comma over the staff after its note) and `\caesura`
+  (the railroad tracks), `\upbow`, `\downbow`, `\flageolet`,
+  `\espressivo`, `\laissezVibrer` and `\repeatTie` (short ties), `\cresc`,
+  `\dim` and `\decresc` as words and dashes, `\startTextSpan` …
+  `\stopTextSpan` (a dashed line, after the words `\override
+  TextSpanner.bound-details.left.text` gives it), and forced and reminder
+  accidentals, `cis!` and `cis?` (in parentheses). Eight glyphs added to
+  the table through `xtask smufl`.
+- Several `\score` blocks — or pieces of music written one after another
+  — inside `\book` and `\bookpart` or not, are engraved one after another
+  on the same staves: each movement on a line of its own (a page for a
+  book part), its bars counted from 1, its clef, key and metre LilyPond's
+  defaults until it says its own, under its header's `piece` and `opus`
+  as LilyPond sets them. A movement whose staves are not the first's is
+  left out, with a warning.
 - A clef or a key may change in the middle of a bar (score #360) — the
   left hand's `\clef treble` between two beats, a MusicXML import that
   writes one — where it was refused: the clef is drawn smaller before the

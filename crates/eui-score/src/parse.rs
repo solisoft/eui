@@ -8,7 +8,7 @@
 //! the voice it is named for — and `\fixed`, `\transpose`, `q`, `\partial`,
 //! `\cadenzaOn`, spacers, and `\repeat unfold` and `percent`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::glyphs::Weight;
@@ -18,9 +18,10 @@ use crate::{ScoreError, WHOLE};
 pub const DYNAMICS: [&str; 21] = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "ffff", "fp", "sf", "sff", "sp", "spp", "sfz", "sfp", "rfz", "rf", "fz", "n"];
 
 /// The articulations a score prints, by their LilyPond names: the Soli
-/// engraver's seven, and the ornaments and the hi-hat's signs protocol 11
-/// adds.
-pub const SCRIPTS: [&str; 13] = ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato", "fermata", "trill", "prall", "mordent", "turn", "open", "stopped"];
+/// engraver's seven, and the ornaments, the hi-hat's signs, the bowings,
+/// the harmonic's circle and the espressivo protocol 11 adds.
+pub const SCRIPTS: [&str; 17] =
+    ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato", "fermata", "trill", "prall", "mordent", "turn", "open", "stopped", "upbow", "downbow", "flageolet", "espressivo"];
 
 /// The most tokens a source may come to once its variables are written out:
 /// a variable used in a variable used in a variable multiplies.
@@ -29,6 +30,37 @@ const MAX_TOKENS: usize = 400_000;
 thread_local! {
     /// The source being read uses what protocol 11 adds.
     static BEYOND: Cell<bool> = const { Cell::new(false) };
+    /// What the source being read says that is passed over.
+    static WARNINGS: RefCell<Vec<Warning>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The most warnings one source keeps: past them, a file that sets a
+/// property on every note says so once more and stops.
+const MAX_WARNINGS: usize = 200;
+
+/// What a source says that is read and not drawn — a layout setting
+/// (`\override`, `\stemUp` …), a `\layout` block's contents, a header
+/// field no title prints — so a file that writes one still opens, and a
+/// caller can say what was left out. Never a refusal: a source the
+/// engraver cannot set is refused, not warned about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    /// What was passed over, in words: "\override Stem.direction is not
+    /// drawn".
+    pub message: String,
+    /// The character it starts at.
+    pub at: usize,
+}
+
+/// A setting read and passed over, once per place in the source.
+pub(crate) fn warn(message: impl Into<String>, at: usize) {
+    WARNINGS.with(|w| {
+        let mut w = w.borrow_mut();
+        let message = message.into();
+        if w.len() < MAX_WARNINGS && !w.iter().any(|x| x.at == at && x.message == message) {
+            w.push(Warning { message, at });
+        }
+    });
 }
 
 /// What protocol 11 adds was read: a client of protocol 10 cannot engrave
@@ -735,6 +767,11 @@ pub enum Kind {
     Ottava,
     /// `\mark`: a rehearsal mark, or a segno or a coda, over the bar line.
     Mark,
+    /// A movement starts: the music of a `\score` after the first, on a
+    /// line of its own (`page`: a page, for a `\bookpart`), its bars counted
+    /// from 1 and its clef, key and metre LilyPond's defaults until it says
+    /// its own. `texts`: its header's `piece`, then its `opus`.
+    Movement,
 }
 
 /// A pitch of a note: its diatonic number (`c'` is 7) and its alteration.
@@ -879,6 +916,8 @@ pub struct Head {
     pub acc_x: Option<f64>,
     /// A drum's head: "" a plain one, "X", "CircleX".
     pub style: &'static str,
+    /// Its accidental is a reminder, `cis?`: drawn in parentheses.
+    pub paren: bool,
 }
 
 /// One event of a staff, and once it is in a bar, everything placing it
@@ -1005,6 +1044,34 @@ pub struct Ev {
     /// Room before it that its duration's space does not cover: a change's
     /// width, which LilyPond sets in a column of its own.
     pub pre: f64,
+    /// `\stemUp` (1) or `\stemDown` (-1) in force where it is written; 0
+    /// after `\stemNeutral`, or none written: its voice's or its own.
+    pub stem_dir: i8,
+    /// `\autoBeamOff` in force: beamed only where `[ ]` says.
+    pub no_autobeam: bool,
+    /// `\breathe` or `\caesura` after it: the sign's glyph, after the note
+    /// over the staff.
+    pub breath: Option<&'static str>,
+    /// Where that sign stands, from its x.
+    pub breath_x: f64,
+    /// `\laissezVibrer`: a short tie from each head, to nothing.
+    pub lv: bool,
+    /// `\repeatTie`: a short tie into each head, from nothing.
+    pub repeat_tie: bool,
+    /// `\cresc`, `\dim`, `\decresc`: the hairpin it starts is words —
+    /// "cresc." and a dashed line — instead of a wedge.
+    pub hairpin_text: Option<String>,
+    /// `\startTextSpan`: a dashed line over the notes from it to the
+    /// `\stopTextSpan`, after the words `\override TextSpanner.bound-details
+    /// .left.text` set (none: the line alone).
+    pub span_start: Option<Vec<Run>>,
+    /// `\stopTextSpan`.
+    pub span_stop: bool,
+    /// Its pitches written with `!`, `cis!`: an accidental printed whatever
+    /// the key and the bar say. Diatonic numbers.
+    pub forced: Vec<i64>,
+    /// … with `?`, `cis?`: printed, in parentheses — a reminder.
+    pub cautionary: Vec<i64>,
     /// A `\drummode` note's strokes.
     pub drums: Vec<Drum>,
     /// The strings a note's heads are played on: `(diatonic number, string)`,
@@ -1252,6 +1319,9 @@ pub struct Parsed {
     pub staves: Vec<Staff>,
     /// Their groups, innermost first.
     pub groups: Vec<Group>,
+    /// What the source says that was read and not drawn, in the order it
+    /// is written (protocol 11).
+    pub warnings: Vec<Warning>,
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -1297,6 +1367,9 @@ struct Base {
     /// Inside `\compressMMRests` around staves: each staff read gathers its
     /// runs of bars' rest.
     compress: usize,
+    /// The header being read belongs to a movement after the first, not to
+    /// the piece: its `piece` and `opus` are the movement's title.
+    local: Option<HashMap<String, String>>,
 }
 
 struct St {
@@ -1349,6 +1422,13 @@ struct St {
     here: i64,
     /// The ossias read in the staff: where each starts, and its music.
     ossias: Vec<(i64, Vec<Ev>)>,
+    /// `\stemUp` 1, `\stemDown` -1, else 0.
+    stem: i8,
+    /// `\autoBeamOff` in force.
+    no_autobeam: bool,
+    /// The words a text spanner starts with, from `\override
+    /// TextSpanner.bound-details.left.text`.
+    span_text: Vec<Run>,
 }
 
 #[derive(Clone, Copy)]
@@ -1563,48 +1643,332 @@ fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
     if is(toks, j, T::Sym('.')) && is(toks, j + 1, T::Num) {
         j += 2;
     }
+    // `#ly:optimal-breaking`, `#:roman`: a name with its module.
+    while is(toks, j, T::Sym(':')) && is(toks, j + 1, T::Word) && toks[j + 1].at == toks[j].at + 1 {
+        j += 2;
+    }
     Ok(j)
+}
+
+// ---- Settings ---------------------------------------------------------------
+//
+// What a file says of its layout — `\override`, `\set`, `\tweak`, `\stemUp`,
+// a `\with { … }` of a context, `\layout { … }` — that nearly every real file
+// writes: read whole, so the music after it reads, and passed over with a
+// warning; honoured where the engraver has the hook (`\stemUp`, `\autoBeamOff`,
+// a text spanner's words).
+
+/// The commands that only switch a layout setting on or off, passed over.
+const SWITCHES: [&str; 96] = [
+    "slurUp",
+    "slurDown",
+    "slurNeutral",
+    "slurDashed",
+    "slurDotted",
+    "slurSolid",
+    "slurHalfDashed",
+    "slurHalfSolid",
+    "phrasingSlurUp",
+    "phrasingSlurDown",
+    "phrasingSlurNeutral",
+    "phrasingSlurDashed",
+    "phrasingSlurDotted",
+    "phrasingSlurSolid",
+    "tieUp",
+    "tieDown",
+    "tieNeutral",
+    "tieDashed",
+    "tieDotted",
+    "tieSolid",
+    "dynamicUp",
+    "dynamicDown",
+    "dynamicNeutral",
+    "tupletUp",
+    "tupletDown",
+    "tupletNeutral",
+    "textSpannerUp",
+    "textSpannerDown",
+    "textSpannerNeutral",
+    "dotsUp",
+    "dotsDown",
+    "dotsNeutral",
+    "arpeggioArrowUp",
+    "arpeggioArrowDown",
+    "arpeggioNormal",
+    "arpeggioBracket",
+    "arpeggioParenthesis",
+    "arpeggioParenthesisDashed",
+    "textLengthOn",
+    "textLengthOff",
+    "markLengthOn",
+    "markLengthOff",
+    "hideNotes",
+    "unHideNotes",
+    "shiftOn",
+    "shiftOnn",
+    "shiftOnnn",
+    "shiftOff",
+    "mergeDifferentlyHeadedOn",
+    "mergeDifferentlyHeadedOff",
+    "mergeDifferentlyDottedOn",
+    "mergeDifferentlyDottedOff",
+    "numericTimeSignature",
+    "defaultTimeSignature",
+    "crescTextCresc",
+    "dimTextDecresc",
+    "dimTextDecr",
+    "dimTextDim",
+    "crescHairpin",
+    "dimHairpin",
+    "harmonicsOn",
+    "harmonicsOff",
+    "easyHeadsOn",
+    "easyHeadsOff",
+    "improvisationOn",
+    "improvisationOff",
+    "xNotesOn",
+    "xNotesOff",
+    "germanChords",
+    "semiGermanChords",
+    "italianChords",
+    "frenchChords",
+    "powerChords",
+    "showStaffSwitch",
+    "hideStaffSwitch",
+    "bassFigureExtendersOn",
+    "bassFigureExtendersOff",
+    "bassFigureStaffAlignmentDown",
+    "bassFigureStaffAlignmentUp",
+    "bassFigureStaffAlignmentNeutral",
+    "autoLineBreaksOn",
+    "autoLineBreaksOff",
+    "autoPageBreaksOn",
+    "autoPageBreaksOff",
+    "noBreak",
+    "noPageBreak",
+    "pageTurn",
+    "noPageTurn",
+    "allowPageTurn",
+    "expandEmptyMeasures",
+    "expandFullBarRests",
+    "balloonLengthOn",
+    "balloonLengthOff",
+    "endSpanners",
+    "predefinedFretboardsOn",
+    "predefinedFretboardsOff",
+];
+
+/// Where a property path ends: `Staff.TimeSignature.stencil`, `Stem
+/// #'direction`, `#'color`, `TextSpanner.bound-details.left.text`.
+fn path_end(toks: &[Tok], i: usize) -> usize {
+    let mut j = i;
+    let mut want_word = true;
+    loop {
+        let quoted = is(toks, j, T::Sym('#')) && is(toks, j + 1, T::Sym('\''));
+        if quoted {
+            j = scheme_end(toks, j).unwrap_or(j + 2);
+            want_word = false;
+            continue;
+        }
+        if want_word && is(toks, j, T::Word) {
+            j += 1;
+            want_word = false;
+            continue;
+        }
+        if !want_word && is(toks, j, T::Sym('.')) && is(toks, j + 1, T::Word) {
+            j += 1;
+            want_word = true;
+            continue;
+        }
+        break;
+    }
+    j
+}
+
+/// The words of a property path from `i` to `end`: `["Staff", "TimeSignature", "stencil"]`.
+fn path_words(toks: &[Tok], i: usize, end: usize) -> Vec<String> {
+    toks[i..end.min(toks.len())].iter().filter(|t| t.t == T::Word).map(|t| t.v.clone()).collect()
+}
+
+/// The token after a setting's value: Scheme (`#red`, `##t`, `#'(1 . 2)`,
+/// `#(…)`), a string, a number and its unit (`2\cm`), a `\markup`, a `{ }`
+/// block, a word, or a command (`\default`).
+fn value_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+    let Some(t) = toks.get(i) else { return refuse("a setting with no value", at_of(toks, i.saturating_sub(1))) };
+    match t.t {
+        T::Sym('#') => scheme_end(toks, i),
+        T::Sym('{') => skip_block(toks, i),
+        T::Str | T::Word | T::Lyrics => Ok(i + 1),
+        T::Num | T::Sym('-') => {
+            let j = number_at(toks, i).map_or(i + 1, |(_, j)| j);
+            let unit = toks.get(j).is_some_and(|u| u.t == T::Cmd && ["cm", "mm", "in", "pt", "bp"].contains(&u.v.as_str()));
+            Ok(if unit { j + 1 } else { j })
+        }
+        T::Cmd if t.v == "markup" || t.v == "markuplist" => markup_skip(toks, i + 1),
+        T::Cmd => Ok(i + 1),
+        _ => refuse(format!("'{}' is not a setting's value this reads", t.v), t.at),
+    }
+}
+
+/// The token after one markup item, read leniently — any command, its Scheme
+/// arguments and the markup it takes: how a markup this does not draw is
+/// passed over.
+fn markup_skip(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+    let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at_of(toks, i.saturating_sub(1))) };
+    match t.t {
+        T::Sym('{') => skip_block(toks, i),
+        T::Sym('#') => scheme_end(toks, i),
+        T::Cmd => {
+            let mut j = i + 1;
+            while is(toks, j, T::Sym('#')) {
+                j = scheme_end(toks, j)?;
+            }
+            // A command that takes markup: the item after it. One that takes
+            // none (`\null`) is followed by what is not markup, or the end.
+            match toks.get(j).map(|n| n.t) {
+                Some(T::Sym('{') | T::Str | T::Cmd) => markup_skip(toks, j),
+                _ => Ok(j),
+            }
+        }
+        _ => Ok(i + 1),
+    }
+}
+
+/// A layout setting at `i`, read whole: `\override path = value`, `\revert
+/// path`, `\set path = value`, `\unset path`, `\once` / `\temporary` (and
+/// what follows), `\consists "…"` and its kin in a `\with`, `name = value`,
+/// a switch (`\slurUp`), or a context's name (`\Staff` in `\context { }`).
+/// None when `i` is none of them. `what` says where, for the warning.
+fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, ScoreError> {
+    let Some(t) = toks.get(i) else { return Ok(None) };
+    let named = |j: usize| path_words(toks, i + 1, j).join(".");
+    let end = match (t.t, t.v.as_str()) {
+        (T::Cmd, "override") => {
+            let j = path_end(toks, i + 1);
+            if !is(toks, j, T::Sym('=')) {
+                return refuse("\\override wants a property, = and a value", t.at);
+            }
+            warn(format!("\\override {}{what} is not drawn", named(j)), t.at);
+            value_end(toks, j + 1)?
+        }
+        (T::Cmd, "set") => {
+            let j = path_end(toks, i + 1);
+            if j == i + 1 || !is(toks, j, T::Sym('=')) {
+                return refuse("\\set wants a property, = and a value", t.at);
+            }
+            warn(format!("\\set {}{what} is not drawn", named(j)), t.at);
+            value_end(toks, j + 1)?
+        }
+        (T::Cmd, "revert" | "unset" | "hide" | "omit" | "undo") => {
+            let j = path_end(toks, i + 1);
+            warn(format!("\\{} {}{what} is not drawn", t.v, named(j)), t.at);
+            j
+        }
+        (T::Cmd, "once" | "temporary" | "single") => i + 1,
+        (T::Cmd, "consists" | "remove" | "accepts" | "denies" | "alias" | "defaultchild" | "name" | "description") => {
+            warn(format!("\\{}{what} is not read", t.v), t.at);
+            value_end(toks, i + 1)?
+        }
+        (T::Cmd, w) if SWITCHES.contains(&w) => {
+            warn(format!("\\{w}{what} is not drawn"), t.at);
+            i + 1
+        }
+        // A context's name, `\\Staff` in `\\context { \\Staff … }`: only where one is
+        // read (`what` names the block), never a variable no one defined.
+        (T::Cmd, w) if !what.is_empty() && w.starts_with(|c: char| c.is_ascii_uppercase()) => i + 1,
+        (T::Word, _) => {
+            let j = path_end(toks, i);
+            if !is(toks, j, T::Sym('=')) {
+                return Ok(None);
+            }
+            warn(format!("{}{what} is not read", path_words(toks, i, j).join(".")), t.at);
+            value_end(toks, j + 1)?
+        }
+        _ => return Ok(None),
+    };
+    beyond();
+    Ok(Some(end))
 }
 
 // ---- The file ---------------------------------------------------------------
 
 /// Read a source.
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
+    WARNINGS.with(|w| w.borrow_mut().clear());
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
-    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0 };
-    let mut i = preamble(&toks, 0, &mut st)?;
-    let in_score = is_cmd(&toks, i, "score");
-    if in_score {
-        if !is(&toks, i + 1, T::Sym('{')) {
-            return refuse("\\score wants a { block }", toks[i].at);
+    let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0, local: None };
+    // The file's scores, one after another: `\score { … }` blocks, music
+    // written without one, inside `\book { }` and `\bookpart { }`.
+    let mut movements: Vec<Movement> = Vec::new();
+    let mut books: Vec<usize> = Vec::new();
+    let mut new_page = false;
+    let mut i = 0;
+    loop {
+        let before = i;
+        i = preamble(&toks, i, &mut st)?;
+        if i != before && !movements.is_empty() {
+            beyond();
         }
-        i = preamble(&toks, i + 2, &mut st)?;
+        let Some(t) = toks.get(i) else { break };
+        if t.t == T::Cmd && (t.v == "book" || t.v == "bookpart") {
+            if !is(&toks, i + 1, T::Sym('{')) {
+                return refuse(format!("\\{} wants a {{ block }}", t.v), t.at);
+            }
+            beyond();
+            // A book part after the first starts a page; its header titles it.
+            if t.v == "bookpart" && !movements.is_empty() {
+                new_page = true;
+                st.local = Some(HashMap::new());
+            }
+            books.push(t.at);
+            i += 2;
+            continue;
+        }
+        if t.t == T::Sym('}') && !books.is_empty() {
+            books.pop();
+            i += 1;
+            continue;
+        }
+        if !movements.is_empty() {
+            if t.t == T::Sym('}') || !(t.t == T::Cmd || t.t == T::Sym('{') || twin(&toks, i, '<')) {
+                return refuse(format!("'{}' after the end of the music", t.v), t.at);
+            }
+            beyond();
+            st.local.get_or_insert_with(HashMap::new);
+        }
+        let at = t.at;
+        let (staves, groups, j) = score(&toks, i, &mut st)?;
+        i = j;
+        let header = st.local.take().unwrap_or_default();
+        movements.push(Movement { staves, groups, header, page: std::mem::take(&mut new_page), at });
     }
-    let mut staves = Vec::new();
-    let mut groups = Vec::new();
-    i = part(&toks, i, &mut st, &mut staves, &mut groups, 0)?;
-    i = attach_lyrics(&toks, i, &mut staves)?;
-    if in_score {
-        while i < toks.len() && toks[i].t == T::Cmd && ["layout", "midi", "header"].contains(&toks[i].v.as_str()) {
-            if toks[i].v == "header" {
-                i = header(&toks, i, &mut st)?;
-            } else {
-                i = skip_block(&toks, i + 1)?;
+    if let Some(&at) = books.last() {
+        return refuse("a \\book block that is never closed", at);
+    }
+    if movements.is_empty() {
+        return refuse("there is no music", 0);
+    }
+    let first = movements.remove(0);
+    let (mut staves, groups) = (first.staves, first.groups);
+    for (k, mv) in movements.into_iter().enumerate() {
+        // Each movement goes on after the one before, on the same staves.
+        let same = mv.staves.len() == staves.len() && mv.staves.iter().zip(&staves).all(|(a, b)| a.kind == b.kind);
+        if !same {
+            warn(format!("movement {} is not engraved: its staves are not the first movement's ({} against {})", k + 2, mv.staves.len(), staves.len()), mv.at);
+            continue;
+        }
+        let get = |name: &str| mv.header.get(name).cloned().unwrap_or_default();
+        let piece = if get("piece").is_empty() { get("title") } else { get("piece") };
+        let texts = vec![Words::plain(piece, -1), Words::plain(get("opus"), -1)];
+        for (dst, src) in staves.iter_mut().zip(mv.staves) {
+            dst.events.push(Ev { k: Kind::Movement, page: mv.page, texts: texts.clone(), at: mv.at, ..Ev::default() });
+            dst.events.extend(src.events);
+            dst.voices.extend(src.voices);
+            if src.lyrics.is_some() {
+                warn(format!("the lyrics of movement {} are not set: a staff's words are its first movement's", k + 2), mv.at);
             }
         }
-        if i >= toks.len() || toks[i].t != T::Sym('}') {
-            return refuse("a \\score block that is never closed", 0);
-        }
-        i += 1;
-    }
-    let after = i;
-    i = preamble(&toks, i, &mut st)?;
-    if i != after {
-        beyond();
-    }
-    if i < toks.len() {
-        return refuse(format!("'{}' after the end of the music", toks[i].v), toks[i].at);
     }
     // A spacer anywhere but a second voice is protocol 11's.
     for stf in &staves {
@@ -1618,7 +1982,50 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             }
         }
     }
-    for p in st.pending {
+    let mut warnings = WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()));
+    warnings.sort_by_key(|w| w.at);
+    Ok(Parsed { header: st.header, paper: st.paper, staves, groups, warnings })
+}
+
+/// A score of the file, read: its staves and groups, its own header (a
+/// movement after the first's), whether a book part starts a page with it.
+struct Movement {
+    staves: Vec<Staff>,
+    groups: Vec<Group>,
+    header: HashMap<String, String>,
+    page: bool,
+    at: usize,
+}
+
+/// One score from `i`: `\score { … }`, or music written without one; its
+/// staves, their groups, and the token after it. The lyrics sung to its
+/// voices by name are set on them.
+fn score(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<(Vec<Staff>, Vec<Group>, usize), ScoreError> {
+    let in_score = is_cmd(toks, i, "score");
+    if in_score {
+        if !is(toks, i + 1, T::Sym('{')) {
+            return refuse("\\score wants a { block }", toks[i].at);
+        }
+        i = preamble(toks, i + 2, st)?;
+    }
+    let mut staves = Vec::new();
+    let mut groups = Vec::new();
+    i = part(toks, i, st, &mut staves, &mut groups, 0)?;
+    i = attach_lyrics(toks, i, &mut staves)?;
+    if in_score {
+        while i < toks.len() && toks[i].t == T::Cmd && ["layout", "midi", "header"].contains(&toks[i].v.as_str()) {
+            if toks[i].v == "header" {
+                i = header(toks, i, st)?;
+            } else {
+                i = layout_block(toks, i)?;
+            }
+        }
+        if i >= toks.len() || toks[i].t != T::Sym('}') {
+            return refuse("a \\score block that is never closed", 0);
+        }
+        i += 1;
+    }
+    for p in std::mem::take(&mut st.pending) {
         let found = staves.iter().position(|s| s.voices.iter().any(|v| v.0 == p.voice));
         let Some(si) = found else {
             return refuse(format!("\\lyricsto \"{}\" names no voice: a \\new Voice = \"{}\" is what it sings to", p.voice, p.voice), p.at);
@@ -1627,7 +2034,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
         let voice = staff.voices.iter().find(|v| v.0 == p.voice).map_or(1, |v| v.1);
         add_verse(staff, p.syllables, voice, p.at)?;
     }
-    Ok(Parsed { header: st.header, paper: st.paper, staves, groups })
+    Ok((staves, groups, i))
 }
 
 /// What a file says before and after its music: `\version`, `\header`,
@@ -1654,7 +2061,13 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
             }
             "layout" | "midi" => {
                 beyond();
-                i = skip_block(toks, i + 1)?;
+                i = layout_block(toks, i)?;
+            }
+            "markup" | "markuplist" => {
+                // Words between the scores — a title page, a dedication: not set.
+                beyond();
+                warn(format!("\\{} outside the music is not drawn", t.v), t.at);
+                i = markup_skip(toks, i + 1)?;
             }
             "pointAndClickOff" | "pointAndClickOn" => i += 1,
             "language" => {
@@ -1679,10 +2092,14 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
             }
             "include" => {
                 let Some(name) = toks.get(i + 1).filter(|n| n.t == T::Str) else { return refuse("\\include wants a file's name, in quotes", t.at) };
-                let Some(lang) = name.v.strip_suffix(".ly").and_then(Lang::named) else {
-                    return refuse(format!("\\include \"{}\": a score reads one source, and includes none", name.v), t.at);
-                };
-                st.lang = lang;
+                match name.v.strip_suffix(".ly").and_then(Lang::named) {
+                    Some(lang) => st.lang = lang,
+                    None => {
+                        // A score reads one source: what another file defines is not here.
+                        beyond();
+                        warn(format!("\\include \"{}\" is not read: a score reads one source", name.v), t.at);
+                    }
+                }
                 i += 2;
             }
             _ => break,
@@ -1767,14 +2184,31 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
                     "indent" => Some(&mut paper.indent),
                     _ => None,
                 };
-                if let Some(slot) = slot {
-                    *slot = Some(mm.max(0.0));
+                match slot {
+                    Some(slot) => *slot = Some(mm.max(0.0)),
+                    None => warn(format!("\\paper's {} is not read", t.v), t.at),
                 }
                 j = if unit.is_some() { after + 1 } else { after };
                 continue;
             }
+            // `ragged-right = ##t`, `print-page-number = ##f`: passed over.
+            if !(j > 0 && is(toks, j - 1, T::Sym('.'))) {
+                warn(format!("\\paper's {} is not read", t.v), t.at);
+            }
+            j = value_end(toks, j + 2).unwrap_or(j + 2);
+            continue;
         }
         j += 1;
+    }
+    Ok(end)
+}
+
+/// `\\layout { … }` or `\\midi { … }` at `i`: passed over, with a warning
+/// when it says anything.
+fn layout_block(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+    let end = skip_block(toks, i + 1)?;
+    if end > i + 3 {
+        warn(format!("the \\{} block's settings are not read", toks[i].v), toks[i].at);
     }
     Ok(end)
 }
@@ -1934,6 +2368,11 @@ fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, gro
     let first = staves.len();
     let mut bare = false;
     while i < toks.len() && !double(toks, i, '>') {
+        // A setting between the staves, `\\set Score.… = …`: passed over.
+        if let Some(j) = skip_setting(toks, i, "")? {
+            i = j;
+            continue;
+        }
         let ctx = toks[i].t == T::Cmd && (toks[i].v == "new" || toks[i].v == "context");
         let kind_here = if ctx { toks.get(i + 1).map_or("", |k| k.v.as_str()) } else { "" };
         if kind_here == "Lyrics" {
@@ -2018,7 +2457,17 @@ fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreErr
     }
     i += 2;
     while i < toks.len() && toks[i].t != T::Sym('}') {
-        i = staff_prop(toks, i, props, "\\with")?;
+        let known = toks[i].t == T::Word && STAFF_PROPS.contains(&toks[i].v.as_str()) && is(toks, i + 1, T::Sym('='));
+        if known {
+            i = staff_prop(toks, i, props, "\\with")?;
+            continue;
+        }
+        // What else a context's `\with` says — `\consists`, `\override`,
+        // `fontSize = #-2` — is read and passed over.
+        match skip_setting(toks, i, " in \\with")? {
+            Some(j) => i = j,
+            None => return staff_prop(toks, i, props, "\\with"),
+        }
     }
     if i >= toks.len() {
         return refuse("a \\with block that is never closed", at);
@@ -2063,6 +2512,18 @@ fn staff_prop(toks: &[Tok], mut i: usize, props: &mut Props, what: &str) -> Resu
             props.midi_pan_position = Some(sign * value);
         }
         return Ok(i);
+    }
+    // `instrumentName = \markup { … }`: its words.
+    if is_cmd(toks, i, "markup") {
+        let (runs, j) = markup(toks, i + 1, toks[i].at)?;
+        let value = runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
+        beyond();
+        match tk.v.as_str() {
+            "instrumentName" => props.instrument_name = Some(value),
+            "shortInstrumentName" => props.short_instrument_name = Some(value),
+            _ => props.midi_instrument = Some(value),
+        }
+        return Ok(j);
     }
     if !is(toks, i, T::Str) {
         return refuse(format!("{} wants a \"string\"", tk.v), tk.at);
@@ -2117,6 +2578,9 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         quotes: std::rc::Rc::new(base.quotes.clone()),
         here: 0,
         ossias: Vec::new(),
+        stem: 0,
+        no_autobeam: false,
+        span_text: Vec::new(),
     };
     if base.compress > 0 {
         st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
@@ -2189,18 +2653,41 @@ fn header(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreError
         let name = toks[i].clone();
         if name.t == T::Word && silent.contains(&name.v.as_str()) && is(toks, i + 1, T::Sym('=')) {
             beyond();
-            i = expr_end(toks, i + 2)?;
+            i = value_end(toks, i + 2)?;
             continue;
         }
-        let ok = name.t == T::Word && i + 2 < toks.len() && toks[i + 1].t == T::Sym('=') && toks[i + 2].t == T::Str;
+        let ok = name.t == T::Word && i + 2 < toks.len() && toks[i + 1].t == T::Sym('=');
         if !ok {
             return refuse("a header field is a name, = and a string", name.at);
         }
-        if !fields.contains(&name.v.as_str()) {
-            return refuse(format!("the header field '{}' is not one a title page prints", name.v), name.at);
+        // A field no title prints — `encodingsoftware`, `copyright` set
+        // twice — is passed over; a `\markup` value is its words.
+        let value = match &toks[i + 2] {
+            v if v.t == T::Str => Some((v.v.clone(), i + 3)),
+            v if v.t == T::Cmd && v.v == "markup" => {
+                beyond();
+                match markup(toks, i + 3, v.at) {
+                    Ok((runs, j)) => Some((runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" "), j)),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+        let known = fields.contains(&name.v.as_str());
+        match value {
+            Some((text, j)) if known => {
+                match st.local.as_mut() {
+                    Some(local) => local.insert(name.v.clone(), text),
+                    None => st.header.insert(name.v.clone(), text),
+                };
+                i = j;
+            }
+            _ => {
+                beyond();
+                warn(if known { format!("the header field '{}' is not words this prints", name.v) } else { format!("the header field '{}' is not one a title page prints", name.v) }, name.at);
+                i = value_end(toks, i + 2)?;
+            }
         }
-        st.header.insert(name.v.clone(), toks[i + 2].v.clone());
-        i += 3;
     }
     if i >= toks.len() {
         return refuse("a \\header that is never closed", at);
@@ -3212,11 +3699,24 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         return Ok(end);
     }
     if word == "set" {
-        let ok = i + 3 < toks.len() && toks[i + 1].t == T::Word && toks[i + 1].v == "Staff" && toks[i + 2].t == T::Sym('.');
-        if !ok {
-            return refuse("\\set sets Staff.instrumentName, Staff.shortInstrumentName or Staff.midiInstrument", tk.at);
+        let staff =
+            toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff") && is(toks, i + 2, T::Sym('.')) && toks.get(i + 3).is_some_and(|t| t.t == T::Word && STAFF_PROPS.contains(&t.v.as_str()));
+        if staff {
+            return staff_prop(toks, i + 3, &mut st.props, "\\set Staff");
         }
-        return staff_prop(toks, i + 3, &mut st.props, "\\set Staff");
+        // `\set Staff.autoBeaming = ##f`: beams only where written.
+        let j = path_end(toks, i + 1);
+        if path_words(toks, i + 1, j).last().is_some_and(|w| w == "autoBeaming") && is(toks, j, T::Sym('=')) && is(toks, j + 1, T::Sym('#')) {
+            beyond();
+            let end = scheme_end(toks, j + 1)?;
+            st.no_autobeam = toks[j + 1..end].iter().any(|t| t.t == T::Word && t.v == "f");
+            return Ok(end);
+        }
+        // Anything else it sets is read and passed over.
+        return match skip_setting(toks, i, "")? {
+            Some(end) => Ok(end),
+            None => refuse("\\set wants a property, = and a value", tk.at),
+        };
     }
     if word == "tuplet" || word == "times" {
         return tuplet(toks, i, st, word, hd);
@@ -3248,7 +3748,131 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         return Ok(j + 1);
     }
+    if let Some(j) = layout_command(toks, i, st)? {
+        return Ok(j);
+    }
     refuse(format!("\\{word} is not a command this reads"), tk.at)
+}
+
+/// The staff's settings `\set Staff.…` and `\with` read.
+const STAFF_PROPS: [&str; 5] = ["instrumentName", "shortInstrumentName", "midiInstrument", "midiMaximumVolume", "midiPanPosition"];
+
+/// The layout settings and the signs a staff's music may say beyond the
+/// Soli engraver's: honoured where the engraver can, else read and passed
+/// over with a warning. None for a command that is neither.
+fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, ScoreError> {
+    let tk = toks[i].clone();
+    let word = tk.v.as_str();
+    let at = tk.at;
+    let done = |j: usize| {
+        beyond();
+        Ok(Some(j))
+    };
+    match word {
+        "stemUp" | "stemDown" | "stemNeutral" => {
+            st.stem = match word {
+                "stemUp" => 1,
+                "stemDown" => -1,
+                _ => 0,
+            };
+            done(i + 1)
+        }
+        "autoBeamOff" | "autoBeamOn" => {
+            st.no_autobeam = word == "autoBeamOff";
+            done(i + 1)
+        }
+        "override" => {
+            let j = path_end(toks, i + 1);
+            let path = path_words(toks, i + 1, j);
+            if !is(toks, j, T::Sym('=')) {
+                return refuse("\\override wants a property, = and a value", at);
+            }
+            let is_path = |want: &[&str]| path.len() >= want.len() && path[path.len() - want.len()..].iter().zip(want).all(|(a, b)| a == b);
+            // A text spanner's words, which `\startTextSpan` sets before its line.
+            if is_path(&["TextSpanner", "bound-details", "left", "text"]) {
+                let v = toks.get(j + 1);
+                st.span_text = match v {
+                    Some(s) if s.t == T::Str => vec![Run::words(s.v.clone(), Weight::Regular)],
+                    Some(s) if s.t == T::Cmd && s.v == "markup" => markup(toks, j + 2, s.at)?.0,
+                    _ => Vec::new(),
+                };
+                return done(value_end(toks, j + 1)?);
+            }
+            // `\override Stem.direction = #UP`: `\stemUp`.
+            if is_path(&["Stem", "direction"]) && is(toks, j + 1, T::Sym('#')) {
+                if let Some(dir) = toks.get(j + 2).map(|t| t.v.as_str()) {
+                    st.stem = match dir {
+                        "UP" | "1" => 1,
+                        "DOWN" => -1,
+                        _ => 0,
+                    };
+                    if dir == "-" {
+                        st.stem = -1;
+                    }
+                }
+                return done(value_end(toks, j + 1)?);
+            }
+            Ok(skip_setting(toks, i, "")?)
+        }
+        "revert" | "unset" | "hide" | "omit" | "undo" | "once" | "temporary" | "single" => Ok(skip_setting(toks, i, "")?),
+        w if SWITCHES.contains(&w) => Ok(skip_setting(toks, i, "")?),
+        "tweak" => {
+            // `\tweak color #red`, `-\tweak Accidental.color #red`: before what it tweaks.
+            let j = path_end(toks, i + 1);
+            warn(format!("\\tweak {} is not drawn", path_words(toks, i + 1, j).join(".")), at);
+            done(value_end(toks, j)?)
+        }
+        "accidentalStyle" => {
+            let j = path_end(toks, i + 1);
+            warn(format!("\\accidentalStyle {} is not drawn: accidentals are printed as LilyPond's default style prints them", path_words(toks, i + 1, j).join(".")), at);
+            done(j)
+        }
+        "shape" => {
+            // `\shape #'((0 . 0) …) Slur`: the curve's offsets, then the grob.
+            let j = value_end(toks, i + 1)?;
+            warn("\\shape is not drawn", at);
+            done(path_end(toks, j))
+        }
+        "transposition" => {
+            if !is(toks, i + 1, T::Word) {
+                return refuse("\\transposition wants a pitch", at);
+            }
+            warn("\\transposition is not read: the notes are played as written", at);
+            done(i + 2)
+        }
+        "compressFullBarRests" => {
+            st.events.push(Ev { k: Kind::Compress, at, ..Ev::default() });
+            done(i + 1)
+        }
+        "breathe" | "caesura" => {
+            last_item(&mut st.events, &tk)?.breath = Some(if word == "breathe" { "breathMarkComma" } else { "caesura" });
+            done(i + 1)
+        }
+        "laissezVibrer" | "repeatTie" => {
+            let last = last_note(&mut st.events, &tk)?;
+            if word == "laissezVibrer" {
+                last.lv = true;
+            } else {
+                last.repeat_tie = true;
+            }
+            done(i + 1)
+        }
+        "cresc" | "dim" | "decresc" => {
+            let last = last_item(&mut st.events, &tk)?;
+            last.hairpin = Some(if word == "cresc" { '<' } else { '>' });
+            last.hairpin_text = Some(format!("{word}."));
+            done(i + 1)
+        }
+        "startTextSpan" => {
+            last_item(&mut st.events, &tk)?.span_start = Some(st.span_text.clone());
+            done(i + 1)
+        }
+        "stopTextSpan" => {
+            last_item(&mut st.events, &tk)?.span_stop = true;
+            done(i + 1)
+        }
+        _ => Ok(None),
+    }
 }
 
 /// A duration written as an argument — `4`, `8.`, `2*3`, `4*3/2` — in
@@ -3520,6 +4144,8 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let mut root: Option<Pitch> = None;
     let mut rest: Option<String> = None;
     let mut figures: Vec<Vec<Run>> = Vec::new();
+    // `cis!` and `cis?`: the accidentals written as a reminder.
+    let (mut forced, mut cautionary): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
     if st.mode == Mode::Figures && tk.t == T::Sym('<') {
         // `<6 4+>`: its figures, top to bottom; held where a note would be,
         // and sounding nothing.
@@ -3551,6 +4177,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             pitches.push(transposed(st, d, alter, toks[i].at)?);
             pitch_at.push(toks[i].at);
             i += 1;
+            i = reminder(toks, i, pitches.last().map_or(0, |p| p.d), &mut forced, &mut cautionary);
             // `<c\5 e\4>`: the strings of a tablature.
             while toks.get(i).is_some_and(|t| t.t == T::Cmd && !t.v.is_empty() && t.v.chars().all(|c| c.is_ascii_digit())) {
                 let n: i64 = toks[i].v.parse().unwrap_or(0);
@@ -3613,6 +4240,9 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             pitch_at.push(tk.at);
         }
         i += 1;
+        if let Some(p) = pitches.last().filter(|_| pitch_at.len() == 1 && st.mode == Mode::Notes) {
+            i = reminder(toks, i, p.d, &mut forced, &mut cautionary);
+        }
     }
     if is(toks, i, T::Num) {
         let base: i64 = toks[i].v.parse().unwrap_or(0);
@@ -3683,7 +4313,26 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         count = 1;
     }
     let scripts = drum_scripts.iter().map(|n| Script { name: (*n).to_owned(), dir: -1 }).collect();
-    let mut ev = Ev { k: Kind::Note, pitches, pitch_at, base, dots, ticks, at: tk.at, i: st.items, fingers: chord_fingers, tremolo, chord_name, figures, drums, strings, scripts, ..Ev::default() };
+    let mut ev = Ev {
+        k: Kind::Note,
+        pitches,
+        pitch_at,
+        base,
+        dots,
+        ticks,
+        at: tk.at,
+        i: st.items,
+        fingers: chord_fingers,
+        tremolo,
+        chord_name,
+        figures,
+        drums,
+        strings,
+        scripts,
+        forced,
+        cautionary,
+        ..Ev::default()
+    };
     if let Some(mut tup) = st.tuplet {
         if rest.as_deref() == Some("R") {
             return refuse("a whole-bar rest cannot be in a tuplet", tk.at);
@@ -3729,9 +4378,30 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         ev.cross = st.cross.clone();
     }
     ev.size = st.size;
+    ev.stem_dir = st.stem;
+    ev.no_autobeam = st.no_autobeam;
     ev.cue = st.cue;
     st.events.push(ev);
     Ok(i)
+}
+
+/// `!` or `?` written against the pitch before `i` — `cis!`, `cis?` — onto
+/// `forced` or `cautionary` (by the pitch's diatonic number `d`); the token
+/// after it.
+fn reminder(toks: &[Tok], i: usize, d: i64, forced: &mut Vec<i64>, cautionary: &mut Vec<i64>) -> usize {
+    let against = i > 0 && toks.get(i).is_some_and(|t| t.at == tok_end(&toks[i - 1]));
+    match toks.get(i).map(|t| t.t) {
+        Some(T::Sym('!')) if against => {
+            beyond();
+            forced.push(d);
+            i + 1
+        }
+        Some(T::Sym('?')) if against => {
+            cautionary.push(d);
+            i + 1
+        }
+        _ => i,
+    }
 }
 
 /// A figure's lines from its `<` at `i`, and the token after its `>`: each

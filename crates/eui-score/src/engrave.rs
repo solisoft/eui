@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
-use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, TempoMark, TextPlace, TupletPlace, Volta};
+use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, SpanPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{clef_mid, measures, measures_keeping, Bar, Beam, Changes, Opening};
 use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
@@ -84,6 +84,14 @@ pub struct Line {
     pub rehearsal: Vec<MarkPlace>,
     /// What kind of staff it is.
     pub kind: StaffKind,
+    /// Text spanners, `\startTextSpan` … `\stopTextSpan`.
+    pub spans: Vec<SpanPlace>,
+    /// The title over it when a movement starts with it: `piece`, `opus`.
+    pub title: Option<(String, String)>,
+    /// Where they start: the piece's left, the opus's right.
+    pub title_x: (f64, f64),
+    /// Their baseline, once placed.
+    pub title_y: Option<f64>,
 }
 
 /// How tall a staff of a kind is, from its top line to its bottom one.
@@ -301,6 +309,10 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
             if let Some(v) = bar.items[g[0]].voice {
                 up = v % 2 == 1;
             }
+            // `\stemUp`, `\stemDown`: over the voice's direction too.
+            if bar.items[g[0]].stem_dir != 0 {
+                up = bar.items[g[0]].stem_dir > 0;
+            }
             let gi = bar.beams.len();
             for &j in &g {
                 bar.items[j].beam = Some(gi);
@@ -316,6 +328,9 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
                 Some(v) => ev.up = v % 2 == 1,
                 None if ev.beam.is_none() => ev.up = stem_up(ev),
                 None => {}
+            }
+            if ev.stem_dir != 0 && ev.beam.is_none() {
+                ev.up = ev.stem_dir > 0;
             }
         }
     }
@@ -360,8 +375,9 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
                 manual = true;
                 continue;
             }
-            // A cadenza has no beats to beam by: only `[ ]` beams in it.
-            let fl = if bar.cadenza { 0 } else { fl };
+            // A cadenza has no beats to beam by, and `\autoBeamOff` beams by
+            // none: only `[ ]` beams there.
+            let fl = if bar.cadenza || ev.no_autobeam { 0 } else { fl };
             let w = (ev.start + bar.offset) / wins.0;
             if (fl == 0 || w != win || gap) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
@@ -587,6 +603,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 let k = mag(ev);
                 ev.left = 0.0;
                 ev.right = (g.advance + if ev.dots > 0 { 0.3 + 0.6 * ev.dots as f64 } else { 0.0 }) * k;
+                breath_room(ev);
                 grace_layout(ev);
                 change_room(ev);
                 continue;
@@ -606,9 +623,16 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 right += glyph(&flag_name(ev.base, true)).advance * k - RULE.stem;
             }
             ev.right = right;
+            if ev.lv {
+                ev.right = ev.right.max(hw + 0.15 + marks::SHORT_TIE + 0.2);
+            }
+            breath_room(ev);
             let shifted = ev.heads.iter().any(|h| h.side == -1);
             let lefts = if shifted { hw - RULE.stem } else { 0.0 };
             ev.left = lefts + place_accidentals(ev);
+            if ev.repeat_tie {
+                ev.left += marks::SHORT_TIE + 0.3;
+            }
             if ev.arpeggio {
                 // The wavy line before the chord and its accidentals.
                 let w = glyph("wiggleArpeggiatoUp").advance;
@@ -834,7 +858,10 @@ fn place_accidentals(ev: &mut Ev) -> f64 {
     let mut col_of: Vec<Option<usize>> = vec![None; ev.heads.len()];
     for hk in (0..ev.heads.len()).rev() {
         let Some(acc) = ev.heads[hk].acc else { continue };
-        let g = glyph(acc_name(acc));
+        let mut g = glyph(acc_name(acc)).clone();
+        if ev.heads[hk].paren {
+            g.advance = paren_width(acc);
+        }
         let y = 2.0 - ev.heads[hk].pos as f64 / 2.0;
         let top = y + g.bbox[1];
         let low = y + g.bbox[3];
@@ -872,6 +899,19 @@ fn place_accidentals(ev: &mut Ev) -> f64 {
         0.0
     }
 }
+
+/// A reminder accidental's width, `cis?`: the sign between parentheses, as
+/// LilyPond's `accidentals.leftparen` and `rightparen` hold it — the left
+/// one reaching back from the sign's origin, the right one on from its
+/// edge.
+pub(crate) fn paren_width(acc: i64) -> f64 {
+    PAREN_LEFT + glyph(acc_name(acc)).advance + PAREN_RIGHT
+}
+
+/// How far a reminder's left parenthesis reaches before its sign.
+pub(crate) const PAREN_LEFT: f64 = 0.6;
+/// … and its right one past the sign's advance.
+pub(crate) const PAREN_RIGHT: f64 = 0.5;
 
 pub(crate) fn church_width(count: i64) -> f64 {
     let mut left_bars = count;
@@ -979,6 +1019,15 @@ pub(crate) fn mid_change_width(clef: Option<Clef>, key: Option<(i64, i64)>) -> f
         }
     }
     w
+}
+
+/// A breath or a caesura after a note: half a space after its ink, and the
+/// note's room on the right as far as the sign's.
+fn breath_room(ev: &mut Ev) {
+    if let Some(name) = ev.breath {
+        ev.breath_x = ev.right + 0.5;
+        ev.right = ev.breath_x + glyph(name).advance + 0.2;
+    }
 }
 
 /// A note's room on the left grows by a change drawn before it — half a
@@ -1200,8 +1249,10 @@ fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64) -> Vec<Line>
     let opening_min: Vec<f64> = bars.iter().map(|b| bar_width(b, 0.0, true)).collect();
     let inner_min: Vec<f64> = bars.iter().map(|b| bar_width(b, 0.0, false)).collect();
     let springs: Vec<f64> = bars.iter().map(bar_springs).collect();
-    let courtesy_w: Vec<f64> = bars.iter().map(|b| courtesy_width(&courtesy_of(b))).collect();
-    let prefix_w: Vec<f64> = (0..count).map(|t| prefix_width(&bars[t], t == 0)).collect();
+    // A movement's first bar opens a line, indented, with its metre, and the
+    // line before it announces nothing.
+    let courtesy_w: Vec<f64> = bars.iter().map(|b| if b.fresh { 0.0 } else { courtesy_width(&courtesy_of(b)) }).collect();
+    let prefix_w: Vec<f64> = (0..count).map(|t| prefix_width(&bars[t], t == 0 || bars[t].first)).collect();
     let mut best = vec![-1.0; count + 1];
     best[0] = 0.0;
     let mut from_bar = vec![0usize; count + 1];
@@ -1209,7 +1260,7 @@ fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64) -> Vec<Line>
         if best[i] < 0.0 {
             continue;
         }
-        let room = if i == 0 { width - indent } else { width - rest };
+        let room = if i == 0 || bars[i].fresh { width - indent } else { width - rest };
         let mut w = prefix_w[i] + opening_w[i];
         let mut tight = prefix_w[i] + opening_min[i];
         let mut spring = springs[i];
@@ -1277,9 +1328,10 @@ fn break_lines(bars: &mut [Bar], width: f64, indent: f64, starts: &[usize], rest
         }
     }
     for si in 0..n {
-        let mut room = if si == 0 { width - indent } else { width - rest };
+        let opens = si == 0 || bars[lines[si].bars.start].fresh;
+        let mut room = if opens { width - indent } else { width - rest };
         lines[si].courtesy = 0.0;
-        if si + 1 < n {
+        if si + 1 < n && !bars[lines[si + 1].bars.start].fresh {
             let next_first = lines[si + 1].bars.start;
             let c = courtesy_of(&bars[next_first]);
             lines[si].courtesy = courtesy_width(&c);
@@ -1353,7 +1405,9 @@ fn fit(bars: &[Bar], width: f64, mut lo: f64, mut hi: f64) -> f64 {
 fn place(bars: &mut [Bar], lines: &mut [Line], left: f64, indent: f64, rest: f64) {
     for (si, line) in lines.iter_mut().enumerate() {
         let range = line.bars.clone();
-        line.left = left + if si == 0 { indent } else { rest };
+        line.left = left + if si == 0 || bars[range.start].fresh { indent } else { rest };
+        // A movement's title: the piece at the margin, the opus at the right.
+        line.title = bars[range.start].title.clone();
         let first = &bars[range.start];
         let mut x = line.left + prefix_width(first, first.first);
         line.prefix = x;
@@ -1405,6 +1459,9 @@ fn place(bars: &mut [Bar], lines: &mut [Line], left: f64, indent: f64, rest: f64
         }
         line.bar_end = x;
         line.right = x + line.courtesy;
+        if let Some((_, opus)) = &line.title {
+            line.title_x = (left, line.right - text_width(opus, Weight::Regular, em(0.0)));
+        }
         stems_beams(&mut bars[range]);
     }
 }
@@ -1776,6 +1833,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         return refuse("\\change Staff wants a second staff to go to", ev.at);
     }
     let mut bars = measures(&parsed.staves[0].events)?;
+    first_title(&mut bars, parsed);
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
     for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
         verse_assign(&mut bars, Some(verse), parsed.staves[0].lyrics_voice, k + 1);
@@ -1810,6 +1868,16 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     let pages = stack(&mut systems, &staves, layout, &head);
     let bottom = systems.iter().fold(0.0, |acc: f64, s| acc.max(s.bottom));
     Ok(Engraved { staves, systems, height: bottom + 1.0, width, left, header: head, pages, paper: layout.page_h, numbered: layout.page_h.is_some() && layout.top.is_some(), groups: Vec::new() })
+}
+
+/// The first movement's title, `piece` and `opus` of the header, over the
+/// first line (LilyPond's `scoreTitleMarkup` under the book's titles).
+fn first_title(bars: &mut [Bar], parsed: &Parsed) {
+    let get = |k: &str| parsed.header.get(k).cloned().unwrap_or_default();
+    let (piece, opus) = (get("piece"), get("opus"));
+    if let Some(b) = bars.first_mut().filter(|_| !(piece.is_empty() && opus.is_empty())) {
+        b.title = Some((piece, opus));
+    }
 }
 
 fn master_bar(all: &[Vec<Bar>], k: usize, shortest: i64) -> Bar {
@@ -1995,6 +2063,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             }
         }
     }
+    first_title(&mut all[0], parsed);
     let count = all[0].len();
     for (si, bars) in all.iter().enumerate() {
         if bars.len() != count {
@@ -2054,6 +2123,9 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
                 courtesy: line.courtesy,
                 ..Line::default()
             };
+            if s == 0 {
+                (ss.title, ss.title_x) = (line.title.clone(), line.title_x);
+            }
             if si + 1 < n_lines && line.courtesy > 0.0 {
                 let next_first = lines[si + 1].bars.start;
                 ss.courtesy_bar = Some(courtesy_of(&bars[next_first]));
@@ -2071,7 +2143,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             ss.clef_w = Some(clef_w);
             ss.key_w = Some(key_w);
         }
-        systems.push(System { lines: staff_lines, multi: true, left: line.left, right: line.right, first_line: si == 0, ..System::default() });
+        systems.push(System { lines: staff_lines, multi: true, left: line.left, right: line.right, first_line: si == 0 || master[range.start].fresh, ..System::default() });
     }
     for (s, bars) in all.iter_mut().enumerate() {
         let mut staff_lines: Vec<Line> = systems.iter().map(|o| o.lines[s].clone()).collect();

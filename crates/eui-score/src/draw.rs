@@ -551,6 +551,12 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
             } else {
                 draw_note(&mut pen, ev, top);
             }
+            if let Some(name) = ev.breath.filter(|_| !ev.spacer) {
+                // A comma just over the top line; a caesura across it.
+                let g = glyph(name);
+                let y = if name == "caesura" { -(g.bbox[1] + g.bbox[3]) / 2.0 } else { -0.1 - g.bbox[3] };
+                pen.glyph(name, ev.x + ev.breath_x, top + y);
+            }
             ranges.push((ev.i, from_k..pen.paths.len()));
         }
         if bar.percent {
@@ -612,6 +618,14 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     }
     for ot in &line.ottavas {
         draw_ottava(&mut pen, ot, top);
+    }
+    for sp in &line.spans {
+        draw_span(&mut pen, sp, top);
+    }
+    if let (Some((piece, opus)), Some(y)) = (&line.title, line.title_y) {
+        let e = em(0.0);
+        pen.text(piece, Weight::Regular, line.title_x.0, top + y, e);
+        pen.text(opus, Weight::Regular, line.title_x.1, top + y, e);
     }
     for mk in &line.rehearsal {
         draw_mark(&mut pen, mk, top);
@@ -817,6 +831,16 @@ fn draw_dynamic(pen: &mut Pen, dy: &DynEl, top: f64) {
             pen.glyph(name, x, top + dy.y + 0.6);
             x += glyph(name).advance;
         }
+        return;
+    }
+    if let Some(words) = &dy.words {
+        // `\cresc`: "cresc." in italics, then dashes to where it ends.
+        let e = em(0.0);
+        let mut x = dy.x0;
+        if !words.is_empty() {
+            x = pen.text(words, Weight::Italic, dy.x0, top + dy.y + 0.45, e) + 0.4;
+        }
+        dashes(pen, x, dy.x1, top + dy.y);
         return;
     }
     let h = 0.6666;
@@ -1140,7 +1164,16 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let y = top + y_of(hd.pos);
         pen.glyph_k(head_glyph(ev.base, hd.style), hx, y, k);
         if let Some(acc) = hd.acc {
-            pen.glyph_k(acc_name(acc), ev.x + hd.acc_x.unwrap_or(0.0), y, k);
+            let ax = ev.x + hd.acc_x.unwrap_or(0.0);
+            if hd.paren {
+                // A reminder, `cis?`: the sign between parentheses.
+                let at = ax + crate::engrave::PAREN_LEFT;
+                pen.glyph_k("accidentalParensLeft", at, y, k);
+                pen.glyph_k(acc_name(acc), at, y, k);
+                pen.glyph_k("accidentalParensRight", at + glyph(acc_name(acc)).advance + crate::engrave::PAREN_RIGHT - glyph("accidentalParensRight").bbox[2], y, k);
+            } else {
+                pen.glyph_k(acc_name(acc), ax, y, k);
+            }
         }
         if ev.dots > 0 {
             let dot_pos = if hd.pos % 2 == 0 { hd.pos + 1 } else { hd.pos };
@@ -1427,6 +1460,33 @@ fn draw_ottava(pen: &mut Pen, ot: &OttavaPlace, top: f64) {
             pen.rect(ot.x1 - thick, line_y - h + thick / 2.0, thick, h);
         }
     }
+}
+
+/// A dashed line from `x0` to `x1` at `y`, as an ottava's or a spanner's.
+fn dashes(pen: &mut Pen, mut x: f64, x1: f64, y: f64) {
+    let (dash, gap, thick) = (0.6, 0.4, 0.1);
+    while x < x1 {
+        let to = (x + dash).min(x1);
+        pen.rect(x, y - thick / 2.0, to - x, thick);
+        x = to + gap;
+    }
+}
+
+/// A text spanner: its words, then dashes.
+fn draw_span(pen: &mut Pen, sp: &crate::marks::SpanPlace, top: f64) {
+    let e = em(0.0);
+    let y = top + sp.y;
+    let mut x = sp.x0;
+    let mid = if sp.runs.is_empty() {
+        y
+    } else {
+        let w = crate::marks::runs_width(&sp.runs, e);
+        draw_runs(pen, &sp.runs, sp.x0, y, e);
+        x += w + 0.4;
+        let (t, b) = crate::marks::runs_box(&sp.runs, e);
+        y + (t + b) / 2.0
+    };
+    dashes(pen, x, sp.x1, mid);
 }
 
 /// A rehearsal mark, a segno or a coda.

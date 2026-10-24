@@ -121,6 +121,9 @@ pub struct MarkPlace {
 pub struct DynEl {
     /// The dynamic's letters; none for a hairpin.
     pub text: Option<String>,
+    /// A hairpin written as words, `\cresc`: "cresc." and dashes; "" on a
+    /// line it carries on to.
+    pub words: Option<String>,
     /// Its left.
     pub x0: f64,
     /// Its right.
@@ -160,6 +163,20 @@ pub struct TextPlace {
     pub dir: i64,
 }
 
+/// A text spanner on one line: its words (on the line it starts on), then
+/// a dashed line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpanPlace {
+    /// The words before the line; none on a line it carries on to.
+    pub runs: Vec<Run>,
+    /// Where the words start.
+    pub x0: f64,
+    /// Where the dashes end.
+    pub x1: f64,
+    /// The words' baseline.
+    pub y: f64,
+}
+
 /// One system's piece of a hairpin.
 #[derive(Debug, Clone)]
 pub struct HairpinPiece {
@@ -173,6 +190,9 @@ pub struct HairpinPiece {
     pub from: f64,
     /// … ends.
     pub to: f64,
+    /// `\cresc`'s words, on the piece it starts: drawn with dashes after
+    /// them instead of a wedge (a later piece: the dashes alone).
+    pub words: Option<String>,
 }
 
 struct ScriptRule {
@@ -199,6 +219,12 @@ fn script_rule(name: &str) -> ScriptRule {
         "turn" => r("ornamentTurn", "ornamentTurn", 0.2, 0, -1, false),
         "open" => r("brassMuteOpen", "brassMuteOpen", 0.2, 0, -1, false),
         "stopped" => r("brassMuteClosed", "brassMuteClosed", 0.2, 0, -1, false),
+        // The bowings and a harmonic over the note, as LilyPond's
+        // script-alist sets them; the espressivo opposite the stem.
+        "upbow" => r("stringsUpBow", "stringsUpBow", 0.2, 0, -1, false),
+        "downbow" => r("stringsDownBow", "stringsDownBow", 0.2, 0, -1, false),
+        "flageolet" => r("stringsHarmonic", "stringsHarmonic", 0.2, 0, -1, false),
+        "espressivo" => r("dynamicMessaDiVoce", "dynamicMessaDiVoce", 0.2, 0, 0, false),
         _ => r("fermataAbove", "fermataBelow", 0.4, 4000, -1, false),
     }
 }
@@ -226,6 +252,9 @@ fn atan(v: f64) -> f64 {
 
 /// A note, by its bar and its place there.
 type At = (usize, usize);
+
+/// How long a `\laissezVibrer` or `\repeatTie` tie is.
+pub(crate) const SHORT_TIE: f64 = 1.8;
 
 /// Every tie and slur of a staff, on the lines they cross.
 pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
@@ -258,6 +287,33 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
                 over = v % 2 == 1;
             }
             tie(lines, ev, hd.pos, nxt, other.pos, over);
+        }
+    }
+    // `\laissezVibrer` and `\repeatTie`: a short tie from each head to
+    // nothing, or into it from nothing, on the side a tie would take.
+    for &at in &notes {
+        let ev = ev_at(at);
+        if !(ev.lv || ev.repeat_tie) {
+            continue;
+        }
+        let count = ev.heads.len();
+        for (hi, hd) in ev.heads.iter().enumerate() {
+            let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
+            if let Some(v) = ev.voice {
+                over = v % 2 == 1;
+            }
+            let dir = if over { -1.0 } else { 1.0 };
+            let y = y_of(hd.pos) + dir * 0.35;
+            let line = &mut lines[ev.sys];
+            if ev.lv {
+                let xa = ev.x + ev.head_w.unwrap_or(0.0) + 0.15;
+                arc(line, xa, y, xa + SHORT_TIE, y, dir, 1.0, 0.333);
+            }
+            if ev.repeat_tie {
+                let acc = ev.heads.iter().filter_map(|h| h.acc_x).fold(0.0, f64::min);
+                let xb = ev.x + acc - 0.15;
+                arc(line, xb - SHORT_TIE, y, xb, y, dir, 1.0, 0.333);
+            }
         }
     }
     // Each voice's slurs close on its own notes.
@@ -581,6 +637,72 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
         line.ottavas = ottavas(bars, line);
         line.rehearsal = if line.staff_index.unwrap_or(0) == 0 { rehearsal(bars, line) } else { Vec::new() };
     }
+    text_spans(bars, lines);
+    for line in lines.iter_mut() {
+        // A movement's title over all the line holds, as LilyPond sets
+        // `scoreTitleMarkup` over its first system.
+        line.title_y = None;
+        if line.title.as_ref().is_some_and(|t| !(t.0.is_empty() && t.1.is_empty())) && line.staff_index.unwrap_or(0) == 0 {
+            let (hi, _) = reach(bars, line);
+            line.title_y = Some(hi - 1.0 - 0.25 * em(0.0));
+        }
+    }
+}
+
+/// Text spanners, `\startTextSpan` to `\stopTextSpan` (or the staff's end):
+/// over the notes they span, the words they start with on their first
+/// line, a dashed line on to the last note.
+// Each line is read, then pushed to: an index, not an iterator.
+#[allow(clippy::needless_range_loop)]
+fn text_spans(bars: &[Bar], lines: &mut [Line]) {
+    let mut flat: Vec<(usize, usize, usize)> = Vec::new();
+    for (si, line) in lines.iter_mut().enumerate() {
+        line.spans = Vec::new();
+        for b in line.bars.clone() {
+            for j in 0..bars[b].items.len() {
+                flat.push((si, b, j));
+            }
+        }
+    }
+    let ev_of = |f: (usize, usize, usize)| -> &Ev { &bars[f.1].items[f.2] };
+    let e = em(0.0);
+    for (k, &at) in flat.iter().enumerate() {
+        let Some(runs) = &ev_of(at).span_start else { continue };
+        let stop = flat.iter().enumerate().skip(k + 1).find(|(_, f)| ev_of(**f).span_stop).map_or(flat.len() - 1, |(j, _)| j);
+        let end = flat[stop];
+        let (first, last) = (at.0, end.0);
+        for si in first..=last {
+            let line = &lines[si];
+            let x0 = if si == first { ev_of(at).x } else { line.prefix };
+            let x1 = if si == last { ev_of(end).x + item_w(ev_of(end)) } else { line.right };
+            let words = if si == first { runs.clone() } else { Vec::new() };
+            let (bt, bb) = if words.is_empty() { (-0.4, 0.4) } else { runs_box(&words, e) };
+            let mut edge: f64 = -0.5;
+            for b in line.bars.clone() {
+                for ev in &bars[b].items {
+                    if ev.x + item_w(ev) >= x0 - 0.2 && ev.x <= x1 + 0.2 {
+                        edge = edge.min(ev.reach_up.unwrap_or(0.0));
+                        if ev.k == Kind::Note {
+                            edge = edge.min(ev.stem_end - 0.3);
+                        }
+                    }
+                }
+            }
+            for tx in &line.texts {
+                if tx.dir < 0 && tx.x1 > x0 && tx.x0 < x1 {
+                    edge = edge.min(tx.top - 0.3);
+                }
+            }
+            for tp in &line.tuplets {
+                if tp.up && tp.x1 > x0 && tp.x0 < x1 {
+                    edge = edge.min(tp.ya.min(tp.yb) - 0.9);
+                }
+            }
+            let y = edge - 0.6 - bb;
+            let _ = bt;
+            lines[si].spans.push(SpanPlace { runs: words, x0, x1: x1.max(x0 + 1.0), y });
+        }
+    }
 }
 
 /// The size of an ottava's words, and of a rehearsal mark's.
@@ -796,6 +918,15 @@ pub(crate) fn voice_of(ev: &Ev) -> u8 {
 /// How far a note's ink reaches up and down — its grace notes' with it,
 /// so what stands over the staff (a tempo mark, words) clears them too.
 fn item_extent(ev: &Ev) -> (f64, f64) {
+    let (up, down) = item_ink(ev);
+    // A breath over the staff after it.
+    if ev.breath.is_some() {
+        return (up.min(-1.2), down);
+    }
+    (up, down)
+}
+
+fn item_ink(ev: &Ev) -> (f64, f64) {
     if ev.mm.is_some() {
         // The count over a gathered rest: its digits, centred a space and a
         // third over the staff.
@@ -993,7 +1124,8 @@ fn hairpins(bars: &[Bar], lines: &mut [Line]) {
             let parts = (last - first + 1) as f64;
             let ka = (si - first) as f64 / parts;
             let kb = (si - first + 1) as f64 / parts;
-            line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb });
+            let words = start_ev.hairpin_text.as_ref().map(|w| if si == first { w.clone() } else { String::new() });
+            line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb, words });
         }
     }
 }
@@ -1038,7 +1170,7 @@ fn dynamics(bars: &[Bar], line: &mut Line) {
         }
     }
     for hp in &line.hairpins {
-        els.push(DynEl { text: None, x0: hp.x0, x1: hp.x1, grow: hp.grow, from: hp.from, to: hp.to, top: -0.6666, bottom: 0.6666, y: 0.0 });
+        els.push(DynEl { text: None, words: hp.words.clone(), x0: hp.x0, x1: hp.x1, grow: hp.grow, from: hp.from, to: hp.to, top: -0.6666, bottom: 0.6666, y: 0.0 });
     }
     els.sort_by(|a, b| a.x0.total_cmp(&b.x0));
     line.dynamics = Vec::new();
@@ -1074,7 +1206,7 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl) -> f64 {
                 continue;
             }
             let mut rise = -el.top;
-            if el.text.is_none() {
+            if el.text.is_none() && el.words.is_none() {
                 let span = (el.x1 - el.x0).max(0.01);
                 let at = ((ev.x - el.x0) / span).clamp(0.0, 1.0);
                 let mut open = el.from + (el.to - el.from) * at;
@@ -1312,6 +1444,13 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     }
     for mk in &line.marks {
         hi = hi.min(mk.y - 1.8);
+    }
+    for sp in &line.spans {
+        let (t, _) = if sp.runs.is_empty() { (-0.4, 0.0) } else { runs_box(&sp.runs, em(0.0)) };
+        hi = hi.min(sp.y + t - 0.2);
+    }
+    if let Some(y) = line.title_y {
+        hi = hi.min(y - 0.75 * em(0.0));
     }
     if bars[range.start].number > 1 {
         hi = hi.min(-3.0);

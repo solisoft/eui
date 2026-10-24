@@ -208,6 +208,15 @@ pub fn protocol(src: &str) -> Result<u32, ScoreError> {
     guarded(|| parse::protocol(src))
 }
 
+/// What `src` says that is read and not drawn — layout settings such as
+/// `\override` and `\stemUp`'s kin, a `\layout` block's contents, header
+/// fields no title prints, a movement whose staves are not the first's —
+/// each with the character it starts at (protocol 11). Empty for a source
+/// that says nothing of the kind; the refusal for one that is refused.
+pub fn warnings(src: &str) -> Result<Vec<parse::Warning>, ScoreError> {
+    guarded(|| parse::parse(src).map(|p| p.warnings))
+}
+
 /// Parse, lay out and place everything, `width` staff spaces wide.
 pub fn engrave(src: &str, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     guarded(|| {

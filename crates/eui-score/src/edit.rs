@@ -75,6 +75,8 @@ pub fn item(src: &str, item: usize) -> Result<Option<Item>, NotEditable> {
                 Kind::Clef => clef = ev.clef,
                 Kind::Key => fifths = ev.fifths,
                 Kind::Ottava => ottava = ev.ottava,
+                // A movement starts in LilyPond's defaults.
+                Kind::Movement => (clef, fifths, ottava) = (Clef::default(), 0, 0),
                 // A chord symbol, a drum and a `q` write no pitch to move.
                 Kind::Note if ev.i == item && (ev.pitch_at.len() != ev.pitches.len() || !ev.drums.is_empty() || !ev.chord_name.is_empty()) => return Ok(None),
                 Kind::Note if ev.i == item => {
