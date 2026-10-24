@@ -110,6 +110,11 @@ pub struct Layout {
     /// The lines spread evenly over the pages, the last one too; else each
     /// page is filled in turn.
     pub even_pages: bool,
+    /// At most so many systems a page (`systems-per-page`).
+    pub systems_per_page: Option<usize>,
+    /// The room a page's header takes over the titles and the music, in
+    /// staff spaces (0 for none): the top margin counts it.
+    pub head_room: f64,
 }
 
 /// A sheet of paper, in staff spaces.
@@ -134,7 +139,16 @@ pub struct Paper {
     /// The lines spread evenly over the pages (`page-breaking =
     /// #ly:optimal-breaking`), rather than each page filled in turn.
     pub even_pages: bool,
+    /// At most so many systems a page (`systems-per-page`).
+    pub systems_per_page: Option<usize>,
+    /// The room the header takes, in staff spaces, inside `top`: 0 with no
+    /// `oddHeaderMarkup` or `evenHeaderMarkup`.
+    pub head_room: f64,
 }
+
+/// The room a page's header takes under the top margin, in staff spaces:
+/// its words, two steps smaller than the music's, and a space under them.
+pub const HEAD_ROOM: f64 = 3.0;
 
 impl Paper {
     /// A4 at LilyPond's default staff size, 20 pt — a staff space of 5 pt —
@@ -143,7 +157,19 @@ impl Paper {
     /// PDF's footer sits on the 6 mm line, and the music stops above it.
     pub fn a4() -> Self {
         let space = 25.4 * 5.0 / 72.0;
-        Paper { w: 210.0 / space, h: 297.0 / space, left: 10.0 / space, right: 10.0 / space, top: 5.0 / space, bottom: 12.0 / space, indent: 15.0 / space, pt: 5.0, even_pages: false }
+        Paper {
+            w: 210.0 / space,
+            h: 297.0 / space,
+            left: 10.0 / space,
+            right: 10.0 / space,
+            top: 5.0 / space,
+            bottom: 12.0 / space,
+            indent: 15.0 / space,
+            pt: 5.0,
+            even_pages: false,
+            systems_per_page: None,
+            head_room: 0.0,
+        }
     }
 
     /// The page a source asks for (`\paper`, `set-global-staff-size`), A4 at
@@ -166,16 +192,19 @@ impl Paper {
             _ => (210.0, 297.0),
         };
         let (w, h) = if landscape { (h, w) } else { (w, h) };
+        let head_room = if spec.odd_header.is_some() || spec.even_header.is_some() { HEAD_ROOM } else { 0.0 };
         Paper {
             w: w / space,
             h: h / space,
             left: spec.left.unwrap_or(10.0) / space,
             right: spec.right.unwrap_or(10.0) / space,
-            top: spec.top.unwrap_or(5.0) / space,
+            top: spec.top.unwrap_or(5.0) / space + head_room,
             bottom: spec.bottom.unwrap_or(12.0).max(12.0) / space,
             indent: spec.indent.unwrap_or(15.0) / space,
             pt,
             even_pages: spec.even_pages.unwrap_or(false),
+            systems_per_page: spec.systems_per_page,
+            head_room,
         }
     }
 
@@ -191,7 +220,17 @@ impl Paper {
 
     /// The layout that sets music on it.
     pub fn layout(&self) -> Layout {
-        Layout { page_h: Some(self.h), top: Some(self.top), bottom: Some(self.bottom), left: Some(self.left), indent: Some(self.indent), gap: Some(12.0), even_pages: self.even_pages }
+        Layout {
+            page_h: Some(self.h),
+            top: Some(self.top),
+            bottom: Some(self.bottom),
+            left: Some(self.left),
+            indent: Some(self.indent),
+            gap: Some(12.0),
+            even_pages: self.even_pages,
+            systems_per_page: self.systems_per_page,
+            head_room: self.head_room,
+        }
     }
 }
 
@@ -272,13 +311,27 @@ pub fn engrave_paper(src: &str) -> Result<(Engraved, Paper), ScoreError> {
 }
 
 /// The source as a PDF, on the paper it asks for (A4 otherwise), each page's
-/// footer its title and number; `title` for one its header does not give.
+/// footer its title and number — or the headers and footers its `\paper`
+/// sets — the copyright at the foot of the first; `title` for one its header
+/// does not give. Every word is in it as text too, under its outline: a
+/// reader selects and searches it.
 pub fn pdf(src: &str, title: &str) -> Result<String, ScoreError> {
+    pdf_with(src, title, true)
+}
+
+/// [`pdf`] without the words under the outlines: the drawing alone, byte
+/// for byte what the Soli engraver writes (`tests/golden.rs`).
+#[doc(hidden)]
+pub fn pdf_outlines(src: &str, title: &str) -> Result<String, ScoreError> {
+    pdf_with(src, title, false)
+}
+
+fn pdf_with(src: &str, title: &str, text: bool) -> Result<String, ScoreError> {
     guarded(|| {
         let parsed = parse::parse(src)?;
         let paper = Paper::of(&parsed.paper);
         let eng = engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
-        Ok(pdf::pdf(&eng, title, &paper))
+        Ok(pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &parsed.paper, text }))
     })
 }

@@ -213,6 +213,8 @@ pub struct Engraved {
     pub numbered: bool,
     /// The staves' groups.
     pub groups: Vec<Group>,
+    /// The room a page's header takes over the titles (`Layout::head_room`).
+    pub head_room: f64,
 }
 
 pub(crate) fn y_of(pos: i64) -> f64 {
@@ -1681,9 +1683,12 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
         }
     };
     let next_top = |ptop: f64, pbottom: f64, si: usize| (ptop + gap).max(pbottom + 1.0 - reaches[si].0);
+    // `systems-per-page`: a page holds no more, and a system that would not
+    // fit still starts the next one.
+    let per_page = layout.systems_per_page.unwrap_or(usize::MAX).max(1);
     let starts = match page_h {
-        Some(_) if layout.even_pages => page_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
-        Some(_) => filled_starts(systems.len(), &reaches, &forced, floor_y, first_top, next_top),
+        Some(_) if layout.even_pages => page_starts(systems.len(), &reaches, &forced, floor_y, per_page, first_top, next_top),
+        Some(_) => filled_starts(systems.len(), &reaches, &forced, floor_y, per_page, first_top, next_top),
         None => vec![0],
     };
     let mut pages: Vec<Page> = Vec::new();
@@ -1741,14 +1746,15 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
 
 /// The systems that start a page when each is filled in turn: a system goes
 /// on the page it fits on, else starts the next.
-fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, per_page: usize, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
     let mut starts = vec![0];
     let mut prev: Option<(f64, f64)> = None;
     for si in 0..n {
         let top = match prev {
             Some((ptop, pbottom)) => {
                 let tp = next_top(ptop, pbottom, si);
-                if forced[si - 1] || tp + reaches[si].1 + 1.0 > floor_y {
+                let full = starts.last().is_some_and(|&s| si - s >= per_page);
+                if forced[si - 1] || full || tp + reaches[si].1 + 1.0 > floor_y {
                     starts.push(si);
                     first_top(si)
                 } else {
@@ -1767,7 +1773,7 @@ fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64
 /// most evenly full — the last one too, so that it is not left with a line
 /// on it. A system starts a page after a \pageBreak; one taller than a page
 /// has a page to itself.
-fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, per_page: usize, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
     if n == 0 {
         return vec![0];
     }
@@ -1780,6 +1786,9 @@ fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, 
         let room = (floor_y - 1.0 - top).max(1.0);
         let (mut ptop, mut pbottom) = (top, top + reaches[i].1);
         for j in i..n {
+            if j - i >= per_page {
+                break;
+            }
             if j > i {
                 ptop = next_top(ptop, pbottom, j);
                 pbottom = ptop + reaches[j].1;
@@ -1867,7 +1876,19 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     let staves = vec![bars];
     let pages = stack(&mut systems, &staves, layout, &head);
     let bottom = systems.iter().fold(0.0, |acc: f64, s| acc.max(s.bottom));
-    Ok(Engraved { staves, systems, height: bottom + 1.0, width, left, header: head, pages, paper: layout.page_h, numbered: layout.page_h.is_some() && layout.top.is_some(), groups: Vec::new() })
+    Ok(Engraved {
+        staves,
+        systems,
+        height: bottom + 1.0,
+        width,
+        left,
+        header: head,
+        pages,
+        paper: layout.page_h,
+        numbered: layout.page_h.is_some() && layout.top.is_some(),
+        groups: Vec::new(),
+        head_room: layout.head_room,
+    })
 }
 
 /// The first movement's title, `piece` and `opus` of the header, over the
@@ -2179,6 +2200,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         paper: layout.page_h,
         numbered: layout.page_h.is_some() && layout.top.is_some(),
         groups: parsed.groups.clone(),
+        head_room: layout.head_room,
     })
 }
 

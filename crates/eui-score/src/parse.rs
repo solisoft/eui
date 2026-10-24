@@ -1346,6 +1346,61 @@ pub struct PaperSpec {
     /// `page-breaking`: `#ly:optimal-breaking` spreads the lines evenly over
     /// the pages (true), `#ly:minimal-breaking` fills each in turn (false).
     pub even_pages: Option<bool>,
+    /// `systems-per-page` (or `max-systems-per-page`): at most so many
+    /// systems on a page.
+    pub systems_per_page: Option<usize>,
+    /// `oddHeaderMarkup`: the line over the music of an odd page — the
+    /// first, the third… — and of the even ones when `even_header` is none.
+    pub odd_header: Option<PageLine>,
+    /// `evenHeaderMarkup`.
+    pub even_header: Option<PageLine>,
+    /// `oddFooterMarkup`: the line at the foot of an odd page, and of the
+    /// even ones when `even_footer` is none. None: the title and the page's
+    /// number out of how many.
+    pub odd_footer: Option<PageLine>,
+    /// `evenFooterMarkup`.
+    pub even_footer: Option<PageLine>,
+}
+
+/// A page's header or footer: what `\markup \fill-line { … }` puts at the
+/// left, in the middle and at the right. One item is centred, two stand at
+/// the ends, three take the three places — as LilyPond's `\fill-line`
+/// spreads them; a markup with no `\fill-line` stands at the left.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PageLine {
+    /// At the left.
+    pub left: Vec<PagePart>,
+    /// In the middle.
+    pub centre: Vec<PagePart>,
+    /// At the right.
+    pub right: Vec<PagePart>,
+}
+
+/// A piece of a header or a footer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PagePart {
+    /// Words, as written.
+    Text(String),
+    /// `\fromproperty #'header:title`: a field of the header.
+    Field(String),
+    /// `\fromproperty #'page:page-number-string`: the page's number.
+    Page,
+    /// `\on-the-fly #first-page …` and its kin: what follows, on the pages
+    /// the condition names only.
+    Only(PageCond, Vec<PagePart>),
+}
+
+/// Which pages an `\on-the-fly` piece is drawn on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageCond {
+    /// `#first-page`.
+    First,
+    /// `#not-first-page`, `#print-page-number-check-first`.
+    NotFirst,
+    /// `#last-page`.
+    Last,
+    /// `#not-last-page`.
+    NotLast,
 }
 
 /// Lyrics sung to a voice by its name, attached once every voice is read.
@@ -2155,6 +2210,22 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
             j = scheme_end(toks, j)?;
             continue;
         }
+        // `oddHeaderMarkup = \markup \fill-line { … }`: a page's header or footer.
+        if t.t == T::Word && t.v.ends_with("Markup") && is(toks, j + 1, T::Sym('=')) && is_cmd(toks, j + 2, "markup") {
+            let slot = match t.v.as_str() {
+                "oddHeaderMarkup" => Some(&mut paper.odd_header),
+                "evenHeaderMarkup" => Some(&mut paper.even_header),
+                "oddFooterMarkup" => Some(&mut paper.odd_footer),
+                "evenFooterMarkup" => Some(&mut paper.even_footer),
+                _ => None,
+            };
+            if let Some(slot) = slot {
+                let (line, after) = page_markup(toks, j + 3)?;
+                *slot = Some(line);
+                j = after;
+                continue;
+            }
+        }
         // `page-breaking = #ly:optimal-breaking`: the lines spread over the pages.
         if t.t == T::Word && t.v == "page-breaking" && is(toks, j + 1, T::Sym('=')) && is(toks, j + 2, T::Sym('#')) {
             let name = toks.get(j + 5).filter(|w| w.t == T::Word && toks[j + 3].v == "ly" && is(toks, j + 4, T::Sym(':')));
@@ -2182,6 +2253,14 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
                     "top-margin" => Some(&mut paper.top),
                     "bottom-margin" => Some(&mut paper.bottom),
                     "indent" => Some(&mut paper.indent),
+                    "systems-per-page" | "max-systems-per-page" => {
+                        // A count, not a length.
+                        if n >= 1.0 {
+                            paper.systems_per_page = Some(n.min(100.0) as usize);
+                        }
+                        j = after;
+                        continue;
+                    }
                     _ => None,
                 };
                 match slot {
@@ -4597,6 +4676,180 @@ fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: 
         },
         _ => refuse(format!("'{}' is not markup this draws", t.v), t.at),
     }
+}
+
+// ---- Headers and footers --------------------------------------------------------
+//
+// `\paper`'s `oddHeaderMarkup`, `evenHeaderMarkup`, `oddFooterMarkup` and
+// `evenFooterMarkup`: words, the header's fields (`\fromproperty
+// #'header:title`) and the page's number (`#'page:page-number-string`), in a
+// `\fill-line` that spreads them, `\on-the-fly` naming the pages they go
+// on. A command that only styles its words is read through; any other is
+// passed over with a warning.
+
+/// A page's line from `i`, just after `\markup`, and the token after it.
+fn page_markup(toks: &[Tok], i: usize) -> Result<(PageLine, usize), ScoreError> {
+    // `\markup { \fill-line { … } }` is `\markup \fill-line { … }`.
+    let braced = is(toks, i, T::Sym('{')) && is_cmd(toks, i + 1, "fill-line");
+    let at = if braced { i + 1 } else { i };
+    if !is_cmd(toks, at, "fill-line") {
+        let mut left = Vec::new();
+        let j = page_item(toks, i, &mut left)?;
+        return Ok((PageLine { left, ..PageLine::default() }, j));
+    }
+    let mut j = at + 1;
+    let mut cells: Vec<Vec<PagePart>> = Vec::new();
+    if is(toks, j, T::Sym('{')) {
+        j += 1;
+        while j < toks.len() && !is(toks, j, T::Sym('}')) {
+            let mut cell = Vec::new();
+            j = page_item(toks, j, &mut cell)?;
+            cells.push(cell);
+        }
+        if j >= toks.len() {
+            return refuse("a \\fill-line { that is never closed", toks[at].at);
+        }
+        j += 1;
+    } else {
+        let mut cell = Vec::new();
+        j = page_item(toks, j, &mut cell)?;
+        cells.push(cell);
+    }
+    if braced {
+        if !is(toks, j, T::Sym('}')) {
+            return refuse("a \\markup { that is never closed", toks[i].at);
+        }
+        j += 1;
+    }
+    let mut line = PageLine::default();
+    match cells.len() {
+        0 => {}
+        1 => line.centre = cells.remove(0),
+        2 => {
+            line.right = cells.remove(1);
+            line.left = cells.remove(0);
+        }
+        n => {
+            line.right = cells.remove(n - 1);
+            line.left = cells.remove(0);
+            for (k, cell) in cells.into_iter().enumerate() {
+                if k > 0 {
+                    line.centre.push(PagePart::Text(" ".into()));
+                }
+                line.centre.extend(cell);
+            }
+        }
+    }
+    Ok((line, j))
+}
+
+/// The pages `#name` names, for `\on-the-fly`; none for a procedure this
+/// does not know, whose words are then drawn on every page.
+fn page_cond(name: &str) -> Option<PageCond> {
+    Some(match name {
+        "first-page" => PageCond::First,
+        "not-first-page" | "print-page-number-check-first" => PageCond::NotFirst,
+        "last-page" => PageCond::Last,
+        "not-last-page" => PageCond::NotLast,
+        _ => return None,
+    })
+}
+
+/// One item of a header's markup onto `parts`; the token after it.
+fn page_item(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>) -> Result<usize, ScoreError> {
+    let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at_of(toks, i.saturating_sub(1))) };
+    match t.t {
+        T::Sym('{') => page_group(toks, i, parts, true),
+        T::Str | T::Word | T::Num => {
+            parts.push(PagePart::Text(t.v.clone()));
+            Ok(i + 1)
+        }
+        T::Sym(c) if ".,;:!?-+=*/()[]|&".contains(c) => {
+            parts.push(PagePart::Text(c.to_string()));
+            Ok(i + 1)
+        }
+        T::Cmd => match t.v.as_str() {
+            "null" => Ok(i + 1),
+            "line" | "fill-line" => page_group(toks, i + 1, parts, true),
+            "concat" => page_group(toks, i + 1, parts, false),
+            "fromproperty" => {
+                // `#'header:title`: `#`, `'`, the group, `:`, the name.
+                let mut j = i + 1;
+                while is(toks, j, T::Sym('#')) || is(toks, j, T::Sym('\'')) {
+                    j += 1;
+                }
+                let group = toks.get(j).filter(|w| w.t == T::Word).map(|w| w.v.clone()).unwrap_or_default();
+                let name = toks.get(j + 2).filter(|w| w.t == T::Word && is(toks, j + 1, T::Sym(':'))).map(|w| w.v.clone()).unwrap_or_default();
+                match (group.as_str(), name.as_str()) {
+                    ("page", "page-number-string") => parts.push(PagePart::Page),
+                    ("header", field) if !field.is_empty() => parts.push(PagePart::Field(field.to_string())),
+                    _ => warn(format!("\\fromproperty #'{group}:{name} is not drawn"), t.at),
+                }
+                Ok(if name.is_empty() { j + 1 } else { j + 3 })
+            }
+            "on-the-fly" => {
+                let name = toks.get(i + 2).filter(|w| w.t == T::Word && is(toks, i + 1, T::Sym('#'))).map(|w| w.v.clone()).unwrap_or_default();
+                let j = if is(toks, i + 1, T::Sym('#')) { scheme_end(toks, i + 1)? } else { i + 1 };
+                let mut inner = Vec::new();
+                let j = page_item(toks, j, &mut inner)?;
+                match page_cond(&name) {
+                    Some(cond) => parts.push(PagePart::Only(cond, inner)),
+                    None => {
+                        warn(format!("\\on-the-fly #{name} is not read: its words are on every page"), t.at);
+                        parts.extend(inner);
+                    }
+                }
+                Ok(j)
+            }
+            "bold" | "italic" | "upright" | "normal-text" | "roman" | "medium" | "small" | "smaller" | "large" | "larger" | "huge" | "tiny" | "teeny" | "normalsize" | "sans" | "serif" | "caps"
+            | "smallCaps" | "box" | "center-align" | "left-align" | "right-align" | "center-column" | "column" | "underline" => page_item(toks, i + 1, parts),
+            "fontsize" | "abs-fontsize" | "raise" | "lower" | "halign" | "with-color" | "translate" | "magnify" | "override" => {
+                let mut j = i + 1;
+                if is(toks, j, T::Sym('#')) {
+                    j = scheme_end(toks, j)?;
+                } else {
+                    j += 1;
+                }
+                page_item(toks, j, parts)
+            }
+            "hspace" | "vspace" => Ok(if is(toks, i + 1, T::Sym('#')) { scheme_end(toks, i + 1)? } else { i + 2 }),
+            other => {
+                warn(format!("\\{other} in a header or footer is not drawn"), t.at);
+                markup_skip(toks, i)
+            }
+        },
+        T::Sym('#') => {
+            warn("Scheme in a header or footer is not drawn", t.at);
+            scheme_end(toks, i)
+        }
+        _ => refuse(format!("'{}' is not markup this reads", t.v), t.at),
+    }
+}
+
+/// A `{ … }` at `i` (or the one item there): its items, a space between
+/// two when `spaced` (`\line`), none when not (`\concat`).
+fn page_group(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>, spaced: bool) -> Result<usize, ScoreError> {
+    if !is(toks, i, T::Sym('{')) {
+        return page_item(toks, i, parts);
+    }
+    let mut j = i + 1;
+    let mut first = true;
+    while j < toks.len() && !is(toks, j, T::Sym('}')) {
+        let mut one = Vec::new();
+        j = page_item(toks, j, &mut one)?;
+        if one.is_empty() {
+            continue;
+        }
+        if spaced && !first {
+            parts.push(PagePart::Text(" ".into()));
+        }
+        parts.extend(one);
+        first = false;
+    }
+    if j >= toks.len() {
+        return refuse("a \\markup { that is never closed", toks[i].at);
+    }
+    Ok(j + 1)
 }
 
 // ---- Chords ---------------------------------------------------------------------

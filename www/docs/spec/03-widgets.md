@@ -1393,7 +1393,14 @@ a Standard MIDI File (`score_midi`), as a vector PDF of its A4 pages
 (`score_pdf`: each page with a footer on the line 6 mm above the paper's
 edge — the title at the left, cut short with an ellipsis before it reaches
 the number, and the page's number out of how many at the right — so the
-bottom margin is 12 mm and the PDF sets no number at the top), and several
+bottom margin is 12 mm and the PDF sets no number at the top; or, when
+`\paper` sets `oddHeaderMarkup`, `evenHeaderMarkup`, `oddFooterMarkup` or
+`evenFooterMarkup`, those lines — words, header fields, the page's number,
+left, centred and right as `\fill-line` spreads them, an even page taking
+the odd page's when it sets none — with the header's `copyright` centred
+over the first page's footer and at most `systems-per-page` systems a page;
+every word also written as invisible text under its outline, so a reader
+selects and searches it), and several
 staves (`\new PianoStaff`
 and `\new GrandStaff` under a brace, `\new StaffGroup` and `\new
 ChoirStaff` under a bracket, `<< … >>`, each `\new Staff \with {

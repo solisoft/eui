@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 
-use eui_score::{bands, engrave, engrave_a4, midi, paths, pdf, Layout, MidiOptions, Paper, Path};
+use eui_score::{bands, engrave, engrave_a4, midi, paths, pdf_outlines, Layout, MidiOptions, Paper, Path};
 use serde_json::Value;
 
 fn dir(sub: &str) -> PathBuf {
@@ -131,7 +131,7 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
         }
 
         if let Ok(want) = fs::read_to_string(dir("golden").join(format!("{name}.pdf"))) {
-            match pdf(&src, "") {
+            match pdf_outlines(&src, "") {
                 Ok(doc) if doc == want => {}
                 Ok(doc) => {
                     let at = doc.bytes().zip(want.bytes()).position(|(a, b)| a != b).unwrap_or(doc.len().min(want.len()));

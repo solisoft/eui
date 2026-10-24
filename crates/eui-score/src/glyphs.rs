@@ -108,7 +108,87 @@ fn read_letters() -> Letters {
         }
         out
     };
-    Letters { regular: face("regular"), bold: face("bold"), italic: face("italic") }
+    let mut letters = Letters { regular: face("regular"), bold: face("bold"), italic: face("italic") };
+    for face in [&mut letters.regular, &mut letters.bold, &mut letters.italic] {
+        if let Some(sign) = face.get(&'c').filter(|_| !face.contains_key(&'©')).map(copyright_sign) {
+            face.insert('©', sign);
+        }
+    }
+    letters
+}
+
+/// A circle at (`cx`, `cy`) of radius `r`, one way round (`turn` 1) or the
+/// other (-1), as fill commands.
+fn circle(cx: f64, cy: f64, r: f64, turn: f64) -> Vec<f64> {
+    let k = 0.552_284_749_830_793_4 * r;
+    let (ry, ky) = (r * turn, k * turn);
+    vec![
+        0.0,
+        cx + r,
+        cy,
+        3.0,
+        cx + r,
+        cy + ky,
+        cx + k,
+        cy + ry,
+        cx,
+        cy + ry,
+        3.0,
+        cx - k,
+        cy + ry,
+        cx - r,
+        cy + ky,
+        cx - r,
+        cy,
+        3.0,
+        cx - r,
+        cy - ky,
+        cx - k,
+        cy - ry,
+        cx,
+        cy - ry,
+        3.0,
+        cx + k,
+        cy - ry,
+        cx + r,
+        cy - ky,
+        cx + r,
+        cy,
+        4.0,
+    ]
+}
+
+/// The copyright sign, which TeX Gyre Schola's outlines here lack: the
+/// face's `c`, smaller, in a ring as tall as a capital — what a header's
+/// `copyright = "© 2026 …"` begins with.
+fn copyright_sign(c: &Letter) -> Letter {
+    let (cx, cy, outer, inner) = (410.0, -350.0, 380.0, 332.0);
+    let mut f = circle(cx, cy, outer, 1.0);
+    f.extend(circle(cx, cy, inner, -1.0));
+    // The `c`'s box, to centre it in the ring.
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let mut i = 0;
+    while i < c.f.len() {
+        let args = crate::text::args_of(c.f[i]);
+        for j in (0..args).step_by(2) {
+            let (x, y) = (c.f.get(i + 1 + j).copied().unwrap_or(0.0), c.f.get(i + 2 + j).copied().unwrap_or(0.0));
+            (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+        }
+        i += 1 + args;
+    }
+    let k = 0.62;
+    let (dx, dy) = (cx - (x0 + x1) / 2.0 * k, cy - (y0 + y1) / 2.0 * k);
+    let mut i = 0;
+    while i < c.f.len() {
+        let args = crate::text::args_of(c.f[i]);
+        f.push(c.f[i]);
+        for j in 0..args {
+            let v = c.f.get(i + 1 + j).copied().unwrap_or(0.0);
+            f.push(v * k + if j % 2 == 0 { dx } else { dy });
+        }
+        i += 1 + args;
+    }
+    Letter { a: 2.0 * cx, f }
 }
 
 /// Every music glyph, by its SMuFL name.

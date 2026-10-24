@@ -24,6 +24,26 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- The page around a score's music (score #388). `\paper`'s
+  `oddHeaderMarkup`, `evenHeaderMarkup`, `oddFooterMarkup` and
+  `evenFooterMarkup` are read and printed in the PDF — words, the header's
+  fields (`\fromproperty #'header:title`), the page's number
+  (`#'page:page-number-string`), spread by `\fill-line`, `\on-the-fly
+  #print-page-number-check-first` and its kin naming the pages — in grey,
+  two steps under the music's words; an even page takes the odd page's when
+  it sets none, and a header moves the titles and the music down 3 staff
+  spaces. A footer set replaces the title and "n / N". `systems-per-page`
+  (and `max-systems-per-page`) puts at most so many systems on a page,
+  filled or spread. The header's `copyright` is printed at the foot of the
+  first page, centred over the footer, as LilyPond's first-page footer
+  prints it; a © the text face lacks is drawn as its `c` in a ring.
+- Every word of a score's PDF — titles, lyrics, marks, numbers, header and
+  footer — is text a reader selects, copies and searches: written under its
+  outline in the invisible rendering mode, in named (not embedded) Type 0
+  fonts whose widths are the outlines' and whose ToUnicode map gives each
+  character. The drawing is unchanged; `pdf_outlines` writes it alone, which
+  is what the golden test holds to the Soli engraver's bytes.
+
 - A score opens the LilyPond files people have (score #359) — Mutopia's,
   Frescobaldi's, musicxml2ly's — where one layout command refused the
   whole file ("\X is not a command this reads"). `\override`, `\revert`,

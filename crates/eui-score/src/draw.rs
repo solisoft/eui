@@ -3,6 +3,7 @@
 //! pixels at `sp` a staff space, rounded to the hundredth
 //! (`eui_builders_score.sl`, "Drawing").
 
+use std::cell::RefCell;
 use std::ops::Range;
 
 use crate::engrave::{
@@ -83,6 +84,35 @@ fn fill(cmds: &[f64], ox: f64, oy: f64, sp: f64) -> Path {
     fill_k(cmds, ox, oy, 1.0, sp)
 }
 
+/// Words as they were drawn, in pixels: what a PDF writes under their
+/// outlines as text a reader selects, copies and searches.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Said {
+    /// The words.
+    pub text: String,
+    /// Their face.
+    pub weight: Weight,
+    /// Where they start…
+    pub x: f64,
+    /// …on this baseline, y down.
+    pub y: f64,
+    /// Their em.
+    pub size: f64,
+}
+
+thread_local! {
+    /// The words drawn while [`said`] listens; none otherwise.
+    static SAID: RefCell<Option<Vec<Said>>> = const { RefCell::new(None) };
+}
+
+/// `f`'s answer, and every word drawn while it ran.
+pub(crate) fn said<T>(f: impl FnOnce() -> T) -> (T, Vec<Said>) {
+    SAID.with(|s| *s.borrow_mut() = Some(Vec::new()));
+    let out = f();
+    let words = SAID.with(|s| s.borrow_mut().take()).unwrap_or_default();
+    (out, words)
+}
+
 struct Pen<'a> {
     paths: &'a mut Vec<Path>,
     sp: f64,
@@ -118,6 +148,14 @@ impl Pen<'_> {
 
     /// `words` on a baseline at `y` from `x`; answers where they end.
     fn text(&mut self, words: &str, weight: Weight, x: f64, y: f64, em: f64) -> f64 {
+        if !words.trim().is_empty() {
+            let sp = self.sp;
+            SAID.with(|s| {
+                if let Some(list) = s.borrow_mut().as_mut() {
+                    list.push(Said { text: words.to_string(), weight, x: x * sp, y: y * sp, size: em * sp });
+                }
+            });
+        }
         let face = letters().face(weight);
         let k = em / 1000.0;
         let mut at = x;
@@ -343,7 +381,7 @@ fn draw_titles(pen: &mut Pen, eng: &Engraved, page: usize) {
     if page != 0 {
         return;
     }
-    let margin = if !eng.pages.is_empty() && eng.paper.is_some() { 2.83 } else { 1.0 };
+    let margin = if !eng.pages.is_empty() && eng.paper.is_some() { 2.83 + eng.head_room } else { 1.0 };
     for line in &eng.header.lines {
         for cell in &line.cells {
             pen.text(&cell.text, cell.weight, eng.left + cell.x, margin + line.y, cell.em);
@@ -388,6 +426,30 @@ pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &st
     }
     pen.text(&words, Weight::Regular, eng.left, y, e);
     paths
+}
+
+/// `words` from `x` on the baseline `y`, an em of `e`: a header's, a
+/// footer's, the copyright's.
+pub(crate) fn words_paths(sp: f64, words: &str, x: f64, y: f64, e: f64) -> Vec<Path> {
+    let mut paths = Vec::new();
+    Pen { paths: &mut paths, sp, heads: None }.text(words, Weight::Regular, x, y, e);
+    paths
+}
+
+/// `words` cut short with an ellipsis where they would be wider than
+/// `room`, at an em of `e`.
+pub(crate) fn cut_to(words: &str, room: f64, e: f64) -> String {
+    if text_width(words, Weight::Regular, e) <= room {
+        return words.to_string();
+    }
+    let mut kept: Vec<char> = words.chars().collect();
+    loop {
+        kept.pop();
+        let cut = kept.iter().collect::<String>() + "\u{2026}";
+        if kept.is_empty() || text_width(&cut, Weight::Regular, e) <= room {
+            return cut;
+        }
+    }
 }
 
 /// One system with its first staff's top line at `top`.

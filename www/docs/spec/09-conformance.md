@@ -813,7 +813,10 @@ one rather than to a second description:
 the Soli engraver's to the hundredth of a pixel — the screen's bands too, a
 staff each in a system of several, their tops and heights to the pixel —
 and its MIDI file and its
-PDF to be the same bytes — but for four pieces where it follows LilyPond
+PDF's drawing (`pdf_outlines`: the PDF without the words written under the
+outlines, which `crates/eui-score/tests/pages.rs` reads back through their
+ToUnicode map with the headers, footers, copyright and `systems-per-page`)
+to be the same bytes — but for four pieces where it follows LilyPond
 (`PARTED`): `voices.ly`, `piano_voices.ly` and `voices_spacers.ly` sing two
 voices under `\relative`, which LilyPond reads each from the last pitch of
 the one before it and the Soli engraver read from the pitch before `<<`
