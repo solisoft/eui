@@ -28,6 +28,7 @@ pub mod edit;
 pub mod engrave;
 pub mod frets;
 pub mod glyphs;
+pub mod look;
 pub mod marks;
 pub mod measure;
 pub mod midi;

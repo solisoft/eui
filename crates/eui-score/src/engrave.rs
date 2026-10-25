@@ -285,9 +285,12 @@ fn beamed(kind: StaffKind) -> bool {
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
     for bar in bars.iter_mut() {
         let wins = beam_windows(bar.time);
+        // `\set Timing.beatStructure`, `baseMoment`, `beamExceptions`: the
+        // groups the beams end at, the bar's first note's settings say.
+        let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.time));
         let mut all: Vec<Vec<usize>> = Vec::new();
         for list in voice_lists(bar) {
-            all.extend(beam_voice(bar, &list, wins)?);
+            all.extend(beam_voice(bar, &list, wins, groups.as_deref())?);
         }
         // In the order of their first notes, as the drawing meets them.
         all.sort_by_key(|g| g[0]);
@@ -344,7 +347,11 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
 /// stops where the voice is silent between two notes — a second voice's
 /// spacer (`s`) is no item, and two eighths either side of one are not
 /// neighbours.
-fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
+fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64), bounds: Option<&[i64]>) -> Result<Vec<Vec<usize>>, ScoreError> {
+    let window = |pos: i64| match bounds {
+        Some(g) => crate::look::window_in(g, pos),
+        None => pos / wins.0,
+    };
     {
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
@@ -380,7 +387,7 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
             // A cadenza has no beats to beam by, and `\autoBeamOff` beams by
             // none: only `[ ]` beams there.
             let fl = if bar.cadenza || ev.no_autobeam { 0 } else { fl };
-            let w = (ev.start + bar.offset) / wins.0;
+            let w = window(ev.start + bar.offset);
             if (fl == 0 || w != win || gap) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
             }
@@ -401,7 +408,7 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
                 let mut pt: Option<i64> = None;
                 for &j in &g {
                     let ev = &bar.items[j];
-                    let w = (ev.start + bar.offset) / wins.1;
+                    let w = if bounds.is_some() { window(ev.start + bar.offset) } else { (ev.start + bar.offset) / wins.1 };
                     let tid = ev.tuplet.map(|t| t.id);
                     if (w != pw || tid != pt) && !part.is_empty() {
                         by_beat.push(std::mem::take(&mut part));
@@ -656,7 +663,8 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 continue;
             }
             let k = mag(ev);
-            let hw = glyph(head_name(ev.base)).advance * k;
+            // `\override NoteHead.style`: its head's own width.
+            let hw = glyph(crate::look::head_of(ev).unwrap_or(head_name(ev.base))).advance * k;
             ev.head_w = Some(hw);
             displace(ev);
             let mut right = hw;
@@ -991,7 +999,31 @@ pub(crate) fn key_width(fifths: i64) -> f64 {
     fifths.abs() as f64 * (g.advance + 0.1)
 }
 
+/// The room a metre takes in an opening, `gap` after it: none when it is
+/// not drawn (`\omit Staff.TimeSignature`).
+fn time_room(o: &Opening, gap: f64) -> f64 {
+    if o.time_parts[3] == crate::look::TIME_OMITTED {
+        return 0.0;
+    }
+    time_width(o.time, o.time_parts) + gap
+}
+
+/// An additive metre's own parts, without the style a setting keeps in
+/// the last slot (`look::TIME_NUMBERED` and its kin).
+fn own_parts(parts: [u8; 4]) -> [u8; 4] {
+    let mut out = parts;
+    if out[3] > 99 {
+        out[3] = 0;
+    }
+    out
+}
+
 pub(crate) fn time_glyph(time: (i64, i64), parts: [u8; 4]) -> Option<&'static str> {
+    // `\numericTimeSignature`: the figures, a 4/4 too.
+    if parts[3] == crate::look::TIME_NUMBERED || parts[3] == crate::look::TIME_SINGLE {
+        return None;
+    }
+    let parts = own_parts(parts);
     if parts[1] != 0 {
         return None;
     }
@@ -1011,6 +1043,7 @@ pub(crate) fn digits(v: i64) -> Vec<String> {
 /// A metre's numerator, as glyphs: its figure, or an additive metre's
 /// parts with a + between them.
 pub(crate) fn numerator(time: (i64, i64), parts: [u8; 4]) -> Vec<String> {
+    let parts = own_parts(parts);
     if parts[1] == 0 {
         return digits(time.0);
     }
@@ -1027,6 +1060,9 @@ pub(crate) fn numerator(time: (i64, i64), parts: [u8; 4]) -> Vec<String> {
 pub(crate) fn time_width(time: (i64, i64), parts: [u8; 4]) -> f64 {
     if let Some(one) = time_glyph(time, parts) {
         return glyph(one).advance;
+    }
+    if parts[3] == crate::look::TIME_SINGLE {
+        return numerator(time, parts).iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
     }
     let mut wide: f64 = 0.0;
     for names in [numerator(time, parts), digits(time.1)] {
@@ -1106,7 +1142,7 @@ fn prefix_width_of(o: &Opening, first: bool) -> f64 {
         w += key_width(o.fifths) + 0.8;
     }
     if first || o.changes.time {
-        w += time_width(o.time, o.time_parts) + 1.0;
+        w += time_room(o, 1.0);
     }
     w
 }
@@ -1152,7 +1188,7 @@ fn change_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        w += time_width(o.time, o.time_parts) + 1.0;
+        w += time_room(o, 1.0);
     }
     w
 }
@@ -1223,7 +1259,7 @@ fn courtesy_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        cw += time_width(o.time, o.time_parts) + 0.5;
+        cw += time_room(o, 0.5);
     }
     if cw > 0.0 {
         cw + 0.6
@@ -1625,6 +1661,11 @@ fn beam(bar: &mut Bar, gi: usize) {
     if concave {
         slope = 0.0;
     }
+    // `\override Beam.damping`: the slope that much flatter, flat at +inf.0.
+    let look = notes.first().map(|&j| bar.items[j].look.clone()).unwrap_or_default();
+    if let Some(damping) = look.num("Beam.damping").filter(|d| *d > 0.0) {
+        slope = if damping.is_infinite() { 0.0 } else { slope / damping };
+    }
     let ideal = [3.36, 3.6, 3.8][(n_beams.min(3) - 1).max(0) as usize];
     let shortest = 2.5 + (n_beams - 1) as f64 * RULE.beam_step;
     let mut b = 0.0;
@@ -1675,6 +1716,13 @@ fn beam(bar: &mut Bar, gi: usize) {
         let q = if up { q_left.min(q_right) } else { q_left.max(q_right) };
         q_left = q;
         q_right = q;
+    }
+    // `\override Beam.positions = #'(l . r)`: its ends where it says, in
+    // spaces up from the middle line, to the middle of the outer beam.
+    if let Some((l, r)) = look.pair("Beam.positions") {
+        let half = if up { -thick / 2.0 } else { thick / 2.0 };
+        q_left = 2.0 - l + half;
+        q_right = 2.0 - r + half;
     }
     let g = &mut bar.beams[gi];
     g.x0 = x0;
@@ -1888,6 +1936,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         return refuse("\\change Staff wants a second staff to go to", ev.at);
     }
     let mut bars = measures(&parsed.staves[0].events)?;
+    crate::look::renumber(std::slice::from_mut(&mut bars));
     first_title(&mut bars, parsed);
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
     for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
@@ -2142,6 +2191,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             }
         }
     }
+    crate::look::renumber(&mut all);
     cross_staff(&mut all, staves_src)?;
     for (si, bars) in all.iter_mut().enumerate() {
         lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);

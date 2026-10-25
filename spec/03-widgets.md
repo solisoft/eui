@@ -622,6 +622,26 @@ construct as LilyPond 2.25 draws it:
   spanners, and `cis!` / `cis?` accidentals drawn; several `\score` blocks
   (in `\book`/`\bookpart` or not) engraved one after another on the same
   staves, each under its `piece` and `opus`.
+- *Settings honoured* (score #403): in the music, a context's `\with`
+  and `\layout { \context { … } }`, with `\once`, `\revert`, `\unset`,
+  `\undo` and `\tweak` — the direction of stems, slurs, phrasing slurs,
+  ties, dynamics, words, articulations, fingerings and tuplets (and
+  `\slurUp`'s kin); `extra-offset`, `X-offset`, `Y-offset`, `padding`,
+  `staff-padding` and `outside-staff-padding` of words, dynamics,
+  articulations, fingerings, rehearsal and metronome marks;
+  `self-alignment-X` of words, rehearsal marks and syllables; `font-size`
+  of heads and words, `fontSize`, `\magnifyMusic`, `\large`, `\huge`;
+  `beatStructure`, `baseMoment`, `beamExceptions`, `subdivideBeams`,
+  `Beam.positions` and `Beam.damping`; the rehearsal mark formatters
+  (letters, numbers, bar numbers, boxed or circled); `TimeSignature.style`
+  (`numbered`, `single-digit`, `\numericTimeSignature`); `NoteHead.style`
+  (`cross`, `xcircle`, `diamond`, `triangle`, `slash`, `harmonic` and its
+  kin, `\xNotesOn`, `\harmonicsOn`); `\omit`/`\hide` of the metre, bar
+  numbers, stems, flags, beams, the staff's lines, clefs, keys, tuplet
+  numbers and brackets, bar lines, articulations, dynamics and words;
+  `barNumberVisibility`, `BarNumber.break-visibility` and
+  `currentBarNumber`. Any other property is still passed over with its
+  warning.
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

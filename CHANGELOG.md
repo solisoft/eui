@@ -24,6 +24,34 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- The common layout settings are honoured (score #403), where since
+  score #359 they were read and passed over with a warning: in the music,
+  in a context's `\with { }` and in `\layout { \context { \Staff … } }`,
+  with `\once`, `\temporary`, `\revert`, `\unset`, `\undo` and
+  `\tweak`. Directions (`Slur`, `PhrasingSlur`, `Tie`, `Stem`,
+  `DynamicLineSpanner`, `TextScript`, `Script`, `Fingering`,
+  `TupletBracket`, and `\slurUp`, `\tieDown`, `\dynamicUp`, `\tupletUp`
+  and their kin); `extra-offset`, `X-offset`, `Y-offset` and the paddings
+  of words, dynamics, articulations, fingerings and marks;
+  `self-alignment-X` of words, rehearsal marks and lyrics; `font-size`,
+  `fontSize`, `\magnifyMusic`, `\large`, `\huge`; beaming by
+  `beatStructure`, `baseMoment` and `beamExceptions`, `subdivideBeams`,
+  `Beam.positions` and `Beam.damping`; `rehearsalMarkFormatter` (and the
+  older `markFormatter`) with boxed and circled marks; `TimeSignature.style`
+  and `\numericTimeSignature`; `NoteHead.style` — the diamond, triangle,
+  slash and harmonic heads added to the glyph table from Emmentaler, the
+  cross and circled cross reused — and `\xNotesOn`, `\harmonicsOn`;
+  `\omit` and `\hide` of the metre (which then takes no room), bar
+  numbers, stems, flags, beams, the staff lines, clefs and keys (their
+  room kept), tuplet numbers and brackets, bar lines, articulations,
+  dynamics and words; `barNumberVisibility` (`all-bar-numbers-visible`,
+  `every-nth-bar-number-visible`, `modulo-bar-number-visible`),
+  `BarNumber.break-visibility` — numbers in the line stand over its bar
+  lines, under words and rehearsal marks — and `currentBarNumber`. Each
+  note carries the settings in force where it is written (`Ev::look`).
+  `\override` inside lyrics is read and passed over where it was refused.
+  Anything else is still passed over with its warning. Protocol 11.
+
 - `\afterGrace` (score #389): `\afterGrace c2 { d16 e }`, and LilyPond's
   `\afterGrace 7/8 c2 { … }`, where it was refused as an unknown command.
   The grace notes ride on their note (`Ev::after_graces`, `after_at`),
