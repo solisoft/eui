@@ -132,6 +132,19 @@ const GLYPHS: &[(&str, char, &[Anchor])] = &[
     ("accidentalParensLeft", '\u{E26A}', &[]),
     ("accidentalParensRight", '\u{E26B}', &[]),
     ("brassMuteClosed", '\u{E5E5}', &[]),
+    // `\override NoteHead.style`: LilyPond's diamond, triangle, slash and
+    // harmonic heads.
+    ("noteheadDiamondWhole", '\u{E0D8}', &[]),
+    ("noteheadDiamondHalf", '\u{E0D9}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadDiamondBlack", '\u{E0DB}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadTriangleUpWhole", '\u{E0BB}', &[]),
+    ("noteheadTriangleUpHalf", '\u{E0BC}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadTriangleUpBlack", '\u{E0BE}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadSlashWhiteWhole", '\u{E102}', &[]),
+    ("noteheadSlashWhiteHalf", '\u{E103}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadSlashVerticalEnds", '\u{E100}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
+    ("noteheadDiamondWhite", '\u{E0DD}', &[]),
+    ("noteheadDiamondBlackWide", '\u{E0DC}', &[("stemUpSE", 1.18, 0.168), ("stemDownNW", 0.0, -0.168)]),
 ];
 
 /// The same glyphs in a face that names them (Emmentaler): the SMuFL name,
@@ -231,6 +244,19 @@ const NAMED: &[(&str, &str, f32)] = &[
     ("dynamicMessaDiVoce", "scripts.espr", 0.0),
     ("accidentalParensLeft", "accidentals.leftparen", 0.0),
     ("accidentalParensRight", "accidentals.rightparen", 0.0),
+    ("noteheadDiamondWhole", "noteheads.s0diamond", 0.0),
+    ("noteheadDiamondHalf", "noteheads.s1diamond", 0.0),
+    ("noteheadDiamondBlack", "noteheads.s2diamond", 0.0),
+    ("noteheadTriangleUpWhole", "noteheads.s0triangle", 0.0),
+    ("noteheadTriangleUpHalf", "noteheads.s1triangle", 0.0),
+    ("noteheadTriangleUpBlack", "noteheads.s2triangle", 0.0),
+    ("noteheadSlashWhiteWhole", "noteheads.s0slash", 0.0),
+    ("noteheadSlashWhiteHalf", "noteheads.s1slash", 0.0),
+    ("noteheadSlashVerticalEnds", "noteheads.s2slash", 0.0),
+    // A harmonic's small diamond: LilyPond's `harmonic` head, open, and
+    // `harmonic-black`'s.
+    ("noteheadDiamondWhite", "noteheads.s0harmonic", 0.0),
+    ("noteheadDiamondBlackWide", "noteheads.s2harmonic", 0.0),
 ];
 
 /// Where a named face's flag meets its stem: its origin is a little in from
