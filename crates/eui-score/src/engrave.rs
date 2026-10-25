@@ -1586,126 +1586,52 @@ pub(crate) fn stem_x(ev: &Ev) -> f64 {
     }
 }
 
-fn quant(y: f64, toward: i64) -> f64 {
-    let inside = y > -0.6 && y < 4.6;
-    let mut best: Option<f64> = None;
-    let base = y.floor() as i64 - 2;
-    for i in 0..6 {
-        let line = (base + i) as f64;
-        let half_line = RULE.staff / 2.0;
-        let bt = RULE.beam;
-        let candidates: Vec<f64> = if inside { vec![line - bt - half_line, line - bt / 2.0, line + half_line] } else { vec![line, line + 0.25, line + 0.5, line + 0.75] };
-        for c in candidates {
-            let mut ok = true;
-            if toward < 0 {
-                ok = c <= y + 0.0001;
-            }
-            if toward > 0 {
-                ok = c >= y - 0.0001;
-            }
-            if ok && best.is_none_or(|b| (c - y).abs() < (b - y).abs()) {
-                best = Some(c);
-            }
-        }
-    }
-    best.unwrap_or(y)
-}
-
+/// A beam's place, as LilyPond's beam quanting chooses it
+/// ([`crate::quanting`]): its outer edge at its first and last stems.
 fn beam(bar: &mut Bar, gi: usize) {
     let notes = bar.beams[gi].notes.clone();
     let up = bar.beams[gi].up;
-    let n_beams = notes.iter().fold(0, |acc, &j| acc.max(flags(bar.items[j].base)));
-    let thick = RULE.beam * notes.first().map_or(1.0, |&j| mag(&bar.items[j]));
-    let near: Vec<f64> = notes
+    let n_beams = notes.iter().fold(0, |acc, &j| acc.max(flags(bar.items[j].base))).max(1);
+    let k = notes.first().map_or(1.0, |&j| mag(&bar.items[j]));
+    let thick = RULE.beam * k;
+    let step = RULE.beam_step * k;
+    let dir = if up { 1.0 } else { -1.0 };
+    // The staff's frame y up from its middle line, a whole space a line.
+    let stems: Vec<crate::quanting::QStem> = notes
         .iter()
         .map(|&j| {
             let ev = &bar.items[j];
-            y_of(if up { ev.heads.last().map_or(0, |h| h.pos) } else { ev.heads.first().map_or(0, |h| h.pos) })
+            let near = if up { ev.heads.last() } else { ev.heads.first() }.map_or(0, |h| h.pos);
+            crate::quanting::QStem { x: stem_x(ev), head: 2.0 - y_of(near), dir, stack: thick / 2.0 + (n_beams - 1) as f64 * step }
         })
         .collect();
-    let x0 = stem_x(&bar.items[notes[0]]);
-    let x1 = stem_x(&bar.items[notes[notes.len() - 1]]);
-    let dx = (x1 - x0).max(0.01);
-    let dy = near[near.len() - 1] - near[0];
-    let mut slope = (dy * 0.55).clamp(-1.5, 1.5) / dx;
-    let mut concave = false;
-    for (i, &y) in near.iter().enumerate() {
-        if i == 0 || i == near.len() - 1 {
-            continue;
-        }
-        if up && y < near[0].min(near[near.len() - 1]) {
-            concave = true;
-        }
-        if !up && y > near[0].max(near[near.len() - 1]) {
-            concave = true;
-        }
-    }
-    if concave {
-        slope = 0.0;
-    }
-    // `\override Beam.damping`: the slope that much flatter, flat at +inf.0.
     let look = notes.first().map(|&j| bar.items[j].look.clone()).unwrap_or_default();
-    if let Some(damping) = look.num("Beam.damping").filter(|d| *d > 0.0) {
-        slope = if damping.is_infinite() { 0.0 } else { slope / damping };
-    }
-    let ideal = [3.36, 3.6, 3.8][(n_beams.min(3) - 1).max(0) as usize];
-    let shortest = 2.5 + (n_beams - 1) as f64 * RULE.beam_step;
-    let mut b = 0.0;
-    for (i, &j) in notes.iter().enumerate() {
-        let xs = stem_x(&bar.items[j]) - x0;
-        b += if up { near[i] - ideal - slope * xs } else { near[i] + ideal - slope * xs };
-    }
-    b /= notes.len() as f64;
-    for (i, &j) in notes.iter().enumerate() {
-        let xs = stem_x(&bar.items[j]) - x0;
-        let len = if up { near[i] - (b + slope * xs) } else { (b + slope * xs) - near[i] };
-        if up && len < shortest {
-            b -= shortest - len;
-        }
-        if !up && len < shortest {
-            b += shortest - len;
-        }
-    }
-    for &j in &notes {
-        let xs = stem_x(&bar.items[j]) - x0;
-        let rim = b + slope * xs;
-        if up && rim > 2.0 {
-            b -= rim - 2.0;
-        }
-        if !up && rim < 2.0 {
-            b += 2.0 - rim;
-        }
-    }
-    let y_left = b;
-    let y_right = b + slope * dx;
-    let mut toward = 0;
-    for (i, &j) in notes.iter().enumerate() {
-        let xs = stem_x(&bar.items[j]) - x0;
-        let len = if up { near[i] - (b + slope * xs) } else { (b + slope * xs) - near[i] };
-        if len < shortest + 0.25 {
-            toward = if up { -1 } else { 1 };
-        }
-    }
-    let (mut q_left, mut q_right) = if up { (quant(y_left, toward), quant(y_right, toward)) } else { (quant(y_left - thick, toward) + thick, quant(y_right - thick, toward) + thick) };
-    if (q_right - q_left).abs() > 1.5 {
-        let held = if q_right > q_left { q_left + 1.5 } else { q_left - 1.5 };
-        let back = if q_right > q_left { -1 } else { 1 };
-        q_right = if up { quant(held, back) } else { quant(held - thick, back) + thick };
-    }
-    let turned = (q_right - q_left) * (y_right - y_left) < 0.0;
-    let levelled = slope == 0.0 && q_right != q_left;
-    if turned || levelled {
-        let q = if up { q_left.min(q_right) } else { q_left.max(q_right) };
-        q_left = q;
-        q_right = q;
-    }
+    let edge = |j: usize| flags(bar.items[j].base).max(1);
+    let spec = crate::quanting::QBeam {
+        count: n_beams,
+        edge_counts: (edge(notes[0]), edge(notes[notes.len() - 1])),
+        thick,
+        step,
+        line: RULE.staff,
+        scale: k,
+        // `\override Beam.damping`: the slope that much flatter, flat at +inf.0.
+        damping: look.num("Beam.damping").filter(|d| *d > 0.0).unwrap_or(1.0),
+        origin: 0.0,
+        lines: &[-2.0, -1.0, 0.0, 1.0, 2.0],
+        staff: Some((0.0, -2.0, 2.0)),
+    };
+    let (yl, yr) = crate::quanting::place(&stems, &spec);
+    // Back to the staff's frame, y down, at the outer edge.
+    let outer = |y: f64| 2.0 - y - dir * thick / 2.0;
+    let (mut q_left, mut q_right) = (outer(yl), outer(yr));
     // `\override Beam.positions = #'(l . r)`: its ends where it says, in
     // spaces up from the middle line, to the middle of the outer beam.
     if let Some((l, r)) = look.pair("Beam.positions") {
-        let half = if up { -thick / 2.0 } else { thick / 2.0 };
-        q_left = 2.0 - l + half;
-        q_right = 2.0 - r + half;
+        q_left = outer(l);
+        q_right = outer(r);
     }
+    let x0 = stem_x(&bar.items[notes[0]]);
+    let x1 = stem_x(&bar.items[notes[notes.len() - 1]]);
     let g = &mut bar.beams[gi];
     g.x0 = x0;
     g.x1 = x1;

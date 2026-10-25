@@ -19,7 +19,8 @@
 //! pieces that differ, and leaves the others as they are). Since score #409
 //! the distances down a page are LilyPond's springs, the ink kept apart
 //! column by column rather than by its box: the pieces that moved were
-//! looked at again, and written anew.
+//! looked at again, and written anew; since score #410, so are those whose
+//! beams LilyPond's beam quanting places otherwise.
 
 #![allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 

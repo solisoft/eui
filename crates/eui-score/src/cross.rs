@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::engrave::{beam_voice, beam_windows, flags, head_name, stem_x, voice_lists, y_of, System};
+use crate::engrave::{beam_voice, beam_windows, flag_name, flags, head_name, stem_x, voice_lists, y_of, System};
 use crate::glyphs::glyph;
 use crate::marks::{arc_cmds, curve_height, voice_of};
 use crate::measure::{clef_mid, Bar};
@@ -291,6 +291,21 @@ pub(crate) fn directions(all: &mut [Vec<Bar>], plan: &mut Plan) {
     plan.spans.retain(|s| s.1.is_some());
 }
 
+/// A fill's commands moved by `(dx, dy)`.
+fn shifted(cmds: &[f64], dx: f64, dy: f64) -> Vec<f64> {
+    let mut out = Vec::with_capacity(cmds.len());
+    let mut i = 0;
+    while i < cmds.len() {
+        let args = crate::text::args_of(cmds[i]);
+        out.push(cmds[i]);
+        for k in 0..args {
+            out.push(cmds.get(i + 1 + k).copied().unwrap_or(0.0) + if k % 2 == 0 { dx } else { dy });
+        }
+        i += 1 + args;
+    }
+    out
+}
+
 /// A rectangle as a fill's commands.
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Vec<f64> {
     vec![0.0, x, y, 1.0, x + w, y, 1.0, x + w, y + h, 1.0, x, y + h, 4.0]
@@ -345,9 +360,6 @@ pub struct KneedBeam {
     /// Each note's stem: its staff, from where to where (y down).
     pub stems: Vec<(usize, f64, f64)>,
 }
-
-/// The shortest a stem under a kneed beam is, from its head to the beam.
-const KNEE_STEM: f64 = 2.5;
 
 /// Draw what crosses between the staves, each system's in its own frame.
 pub(crate) fn ink(systems: &mut [System], all: &[Vec<Bar>], plan: &Plan) {
@@ -470,6 +482,15 @@ pub(crate) fn ink(systems: &mut [System], all: &[Vec<Bar>], plan: &Plan) {
         let (ya, yb) = (root(a, n.0), root(z, p.0));
         let x = stem_x(z) - if z.up { RULE.stem } else { 0.0 };
         out.push((si, rect(x, ya.min(yb), RULE.stem, (ya - yb).abs())));
+        // The joined stem's flag, at its far end — its partner's tip — when
+        // the note's value is an eighth or shorter and its partner draws
+        // fewer flags of its own.
+        if a.beam.is_none() && z.beam.is_none() && !z.xbeam && flags(a.base) > flags(z.base) && !a.look.omitted("Flag") && !z.look.omitted("Stem") {
+            let name = flag_name(a.base, z.up);
+            let g = glyph(&name);
+            let anchor = g.anchors.get(if z.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
+            out.push((si, shifted(&g.fill, x - anchor[0], offs[p.0] + z.stem_end - anchor[1])));
+        }
     }
     for sys in systems.iter_mut() {
         sys.cross.clear();
@@ -547,28 +568,33 @@ fn kneed(g: &[At], all: &[Vec<Bar>], offs: &[f64]) -> Option<(KneedBeam, Vec<Vec
         let towards_head = if notes[k].1.up { side[k] > 0.0 } else { side[k] < 0.0 };
         bt / 2.0 + if towards_head { extra } else { 0.0 }
     };
-    // The slope: the line through the ends' ideal places, damped.
-    let ideal = |k: usize| {
-        let (s, e) = notes[k];
-        near(s, e) + if e.up { -(3.5 + reach_in(k)) } else { 3.5 + reach_in(k) }
-    };
+    // Its place as LilyPond's beam quanting puts a kneed beam's
+    // (`crate::quanting`), y up: the stems from both sides as long as they
+    // may be, the slope damped and dear, its ends clear of the lines of
+    // both staves.
     let last = notes.len() - 1;
-    let slope = ((ideal(last) - ideal(0)) * 0.3).clamp(-1.0, 1.0) / dx;
-    let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
-    for (k, &(s, e)) in notes.iter().enumerate() {
-        let at = slope * (xs[k] - x0);
-        if e.up {
-            hi = hi.min(near(s, e) - KNEE_STEM - reach_in(k) - at);
-        } else {
-            lo = lo.max(near(s, e) + KNEE_STEM + reach_in(k) - at);
-        }
-    }
-    let b = match (lo.is_finite(), hi.is_finite()) {
-        (true, true) => (lo + hi) / 2.0,
-        (true, false) => lo,
-        (false, true) => hi,
-        _ => return None,
+    let qstems: Vec<crate::quanting::QStem> =
+        notes.iter().enumerate().map(|(k, &(s, e))| crate::quanting::QStem { x: xs[k], head: -near(s, e), dir: if e.up { 1.0 } else { -1.0 }, stack: reach_in(k) }).collect();
+    let mut staves: Vec<usize> = notes.iter().map(|n| n.0).collect();
+    staves.sort_unstable();
+    staves.dedup();
+    let lines: Vec<f64> = staves.iter().flat_map(|&s| (0..5).map(move |l| -(offs[s] + f64::from(l)))).collect();
+    let look = &notes[0].1.look;
+    let spec = crate::quanting::QBeam {
+        count: n,
+        edge_counts: (levels[0], levels[last]),
+        thick: bt,
+        step,
+        line: RULE.staff,
+        scale: 1.0,
+        damping: look.num("Beam.damping").filter(|d| *d > 0.0).unwrap_or(1.0),
+        origin: -offs[notes[0].0],
+        lines: &lines,
+        staff: None,
     };
+    let (yl, yr) = crate::quanting::place(&qstems, &spec);
+    let slope = -(yr - yl) / dx;
+    let b = -yl;
     let y_at = |x: f64| b + slope * (x - x0);
     let mut ink = Vec::new();
     let mut stems = Vec::new();

@@ -37,6 +37,7 @@ pub mod measure;
 pub mod midi;
 pub mod parse;
 mod pdf;
+mod quanting;
 pub mod text;
 mod vertical;
 
