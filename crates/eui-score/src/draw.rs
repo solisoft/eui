@@ -11,7 +11,7 @@ use crate::engrave::{
     Engraved, Line, System, GRACE_K,
 };
 use crate::glyphs::{glyph, letters, Weight};
-use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, reach, rest_lift, run_em, verse_gap, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
+use crate::marks::{dyn_letters, figure_width, glyph_run_w, mark_em, ottava_em, rest_lift, run_em, verse_gap, voice_of, DynEl, MarkPlace, OttavaPlace, TempoMark, TupletPlace, Volta};
 use crate::measure::{clef_mid, Bar, Beam, Opening};
 use crate::parse::{modulo, Clef, Ev, GraceKind, GroupKind, Kind, Run, Sign, StaffKind, Syllable};
 use crate::text::{args_of, em, text_box, text_width};
@@ -113,11 +113,59 @@ pub(crate) fn said<T>(f: impl FnOnce() -> T) -> (T, Vec<Said>) {
     (out, words)
 }
 
+/// A staff drawn at a scale (score #407): laid out at the usual size, each
+/// thing on it drawn `s` times as large — up and down from the staff's top
+/// line, and across from its own place: a note's from where it stands, so
+/// that it keeps the system's column; the clef, key and metre from the
+/// line's start. What stands between them (bar lines, the staff's lines'
+/// ends) stays where it is.
+struct Scale {
+    /// The staff's top line.
+    top: f64,
+    /// How large.
+    s: f64,
+    /// Where each thing's ink is across, `(from, to)`, and its place.
+    spans: Vec<(f64, f64, f64)>,
+}
+
+impl Scale {
+    fn x(&self, x: f64) -> f64 {
+        self.spans.iter().find(|sp| x >= sp.0 && x <= sp.1).map_or(x, |sp| sp.2 + (x - sp.2) * self.s)
+    }
+
+    fn y(&self, y: f64) -> f64 {
+        self.top + (y - self.top) * self.s
+    }
+}
+
+/// A staff's scale, and where its notes stand, for its line `line`.
+fn scale_of(bars: &[Bar], line: &Line, top: f64) -> Option<Scale> {
+    let s = line.scale?;
+    let mut spans = Vec::new();
+    for (bi, b) in line.bars.clone().enumerate() {
+        let bar = &bars[b];
+        for ev in &bar.items {
+            spans.push((ev.x - ev.left - 0.05, ev.x + ev.right + 0.05, ev.x));
+        }
+        // A clef, a key or a metre at the bar's start: from its bar line.
+        if bi > 0 && bar.changes.any() {
+            let music = bar.items.iter().map(|ev| ev.x - ev.left).fold(f64::INFINITY, f64::min);
+            if music.is_finite() {
+                spans.push((bar.x0 + 0.05, music, bar.x0));
+            }
+        }
+    }
+    spans.push((line.left, line.prefix, line.left));
+    Some(Scale { top, s, spans })
+}
+
 struct Pen<'a> {
     paths: &'a mut Vec<Path>,
     sp: f64,
     /// Where each head was drawn, when somebody asked.
     heads: Option<&'a mut HeadRanges>,
+    /// The scale of the staff being drawn, when it is not 1.
+    scale: Option<Scale>,
 }
 
 impl Pen<'_> {
@@ -127,27 +175,70 @@ impl Pen<'_> {
 
     fn rect(&mut self, x: f64, y: f64, w: f64, h: f64) {
         let sp = self.sp;
+        let (x, y, w, h) = match &self.scale {
+            Some(sc) => {
+                let (x0, y0, x1, y1) = (sc.x(x), sc.y(y), sc.x(x + w), sc.y(y + h));
+                (x0, y0, x1 - x0, y1 - y0)
+            }
+            None => (x, y, w, h),
+        };
         self.push(rect(x, y, w, h, sp));
     }
 
     fn fill(&mut self, cmds: &[f64], ox: f64, oy: f64) {
         let sp = self.sp;
-        self.push(fill(cmds, ox, oy, sp));
+        match &self.scale {
+            Some(sc) => {
+                // Each point where the staff's scale puts it.
+                let mut out = Vec::with_capacity(cmds.len());
+                let mut i = 0;
+                while i < cmds.len() {
+                    let c = cmds[i];
+                    out.push(c);
+                    let args = args_of(c);
+                    for jj in (0..args).step_by(2) {
+                        let vx = cmds.get(i + 1 + jj).copied().unwrap_or(0.0);
+                        let vy = cmds.get(i + 2 + jj).copied().unwrap_or(0.0);
+                        out.push(r(sc.x(ox + vx) * sp));
+                        out.push(r(sc.y(oy + vy) * sp));
+                    }
+                    i += 1 + args;
+                }
+                self.push(Path::Fill(out));
+            }
+            None => self.push(fill(cmds, ox, oy, sp)),
+        }
+    }
+
+    /// An outline at `k` times its size, its origin at `(x, y)`: a glyph, a
+    /// letter.
+    fn outline(&mut self, cmds: &[f64], x: f64, y: f64, k: f64) {
+        let sp = self.sp;
+        let (x, y, k) = match &self.scale {
+            Some(sc) => (sc.x(x), sc.y(y), k * sc.s),
+            None => (x, y, k),
+        };
+        self.push(fill_k(cmds, x, y, k, sp));
     }
 
     fn glyph(&mut self, name: &str, x: f64, y: f64) {
-        let sp = self.sp;
-        self.push(fill(&glyph(name).fill, x, y, sp));
+        self.outline(&glyph(name).fill, x, y, 1.0);
     }
 
     /// A glyph at `k` times its size, its origin where the full-size one's is.
     fn glyph_k(&mut self, name: &str, x: f64, y: f64, k: f64) {
-        let sp = self.sp;
-        self.push(fill_k(&glyph(name).fill, x, y, k, sp));
+        self.outline(&glyph(name).fill, x, y, k);
     }
 
     /// `words` on a baseline at `y` from `x`; answers where they end.
     fn text(&mut self, words: &str, weight: Weight, x: f64, y: f64, em: f64) -> f64 {
+        if let Some(sc) = self.scale.take() {
+            // At the staff's scale, from where its start is put.
+            let (sx, sy, s) = (sc.x(x), sc.y(y), sc.s);
+            let end = self.text(words, weight, sx, sy, em * s);
+            self.scale = Some(sc);
+            return x + (end - sx) / s;
+        }
         if !words.trim().is_empty() {
             let sp = self.sp;
             SAID.with(|s| {
@@ -280,13 +371,13 @@ fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
         }
     }
     starts.push(paths.len());
-    let mut pen = Pen { paths: &mut paths, sp, heads: None };
+    let mut pen = Pen { paths: &mut paths, sp, heads: None, scale: None };
     draw_groups(&mut pen, eng, sys, top);
     for c in &sys.cross {
         pen.fill(c, 0.0, top);
     }
     let tops: Vec<f64> = (0..n).map(|s| pad as f64 + sys.offsets.get(s).copied().unwrap_or(0.0) * sp).collect();
-    let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, line)| eng.staves.get(s).map_or((0.0, 4.0), |bars| reach(bars, line))).collect();
+    let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, line)| eng.staves.get(s).map_or((0.0, 4.0), |bars| crate::engrave::line_reach(bars, line))).collect();
     let mut cuts: Vec<i64> = vec![0];
     for s in 1..n {
         let a = tops[s - 1] + reaches[s - 1].1 * sp;
@@ -369,7 +460,7 @@ fn meets(pa: &Path, bottom: i64) -> bool {
 /// A page's titles if it is the first, its number if it is numbered.
 pub fn head_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut paths = Vec::new();
-    let mut pen = Pen { paths: &mut paths, sp, heads: None };
+    let mut pen = Pen { paths: &mut paths, sp, heads: None, scale: None };
     let left = eng.left;
     draw_titles(&mut pen, eng, page);
     if page > 0 && eng.numbered {
@@ -397,7 +488,7 @@ fn draw_titles(pen: &mut Pen, eng: &Engraved, page: usize) {
 /// systems, with no number at the top — the footer carries it.
 pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
     let mut paths = Vec::new();
-    draw_titles(&mut Pen { paths: &mut paths, sp, heads: None }, eng, page);
+    draw_titles(&mut Pen { paths: &mut paths, sp, heads: None, scale: None }, eng, page);
     for sys in &eng.systems {
         if sys.page == page {
             draw_system(&mut paths, eng, sys, sys.top, sp, &mut Vec::new());
@@ -411,7 +502,7 @@ pub fn print_paths(eng: &Engraved, sp: f64, page: usize) -> Vec<Path> {
 /// `n / count` at the right, two steps smaller than the music's words.
 pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &str, y: f64) -> Vec<Path> {
     let mut paths = Vec::new();
-    let mut pen = Pen { paths: &mut paths, sp, heads: None };
+    let mut pen = Pen { paths: &mut paths, sp, heads: None, scale: None };
     let e = em(-2.0);
     let number = format!("{} / {count}", page + 1);
     let number_w = text_width(&number, Weight::Regular, e);
@@ -436,7 +527,7 @@ pub fn foot_paths(eng: &Engraved, sp: f64, page: usize, count: usize, title: &st
 /// footer's, the copyright's.
 pub(crate) fn words_paths(sp: f64, words: &str, x: f64, y: f64, e: f64) -> Vec<Path> {
     let mut paths = Vec::new();
-    Pen { paths: &mut paths, sp, heads: None }.text(words, Weight::Regular, x, y, e);
+    Pen { paths: &mut paths, sp, heads: None, scale: None }.text(words, Weight::Regular, x, y, e);
     paths
 }
 
@@ -469,7 +560,7 @@ fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f
             }
             draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges, heads.as_deref_mut());
         }
-        let mut pen = Pen { paths, sp, heads: None };
+        let mut pen = Pen { paths, sp, heads: None, scale: None };
         draw_groups(&mut pen, eng, sys, top);
         for c in &sys.cross {
             pen.fill(c, 0.0, top);
@@ -524,7 +615,7 @@ fn draw_clef_as(pen: &mut Pen, clef: Clef, name: &str, x: f64, top: f64) {
 }
 
 fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64, ranges: &mut Ranges, heads: Option<&mut HeadRanges>) {
-    let mut pen = Pen { paths, sp, heads };
+    let mut pen = Pen { paths, sp, heads, scale: None };
     let right = line.right;
     let left = line.left;
     if line.kind == StaffKind::Figures {
@@ -554,6 +645,8 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         }
         return;
     }
+    // A smaller (or larger) staff: everything on it at its scale.
+    pen.scale = scale_of(bars, line, top);
     if line.kind == StaffKind::Ossia {
         draw_ossia(&mut pen, bars, line, top, ranges);
         return;
@@ -694,10 +787,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
                 }
                 let w: f64 = figure.chars().map(|ch| glyph(&format!("timeSig{ch}")).advance * sc.k).sum();
                 let mut x = sc.x - if sc.circled { w } else { figure_width(figure) } / 2.0;
-                let sp = pen.sp;
                 for ch in figure.chars() {
                     let g = glyph(&format!("timeSig{ch}"));
-                    pen.push(fill_k(&g.fill, x, top + sc.y, sc.k, sp));
+                    pen.outline(&g.fill, x, top + sc.y, sc.k);
                     x += g.advance * sc.k;
                 }
             }
@@ -858,8 +950,7 @@ fn draw_tempo(pen: &mut Pen, mk: &TempoMark, top: f64) {
     let k = 0.72;
     let head = glyph(head_name(mark.base));
     let hy = y - 0.35;
-    let sp = pen.sp;
-    pen.push(fill_k(&head.fill, x, hy, k, sp));
+    pen.outline(&head.fill, x, hy, k);
     if mark.base > 1 {
         let sx = x + (head.advance - RULE.stem) * k;
         let tip = hy - 3.0 * k;
@@ -867,7 +958,7 @@ fn draw_tempo(pen: &mut Pen, mk: &TempoMark, top: f64) {
         if mark.base >= 8 {
             let flag = glyph(&flag_name(mark.base, true));
             let ax = flag.anchors.get("stemUpNW").map_or(0.0, |a| a[0]);
-            pen.push(fill_k(&flag.fill, sx - ax * k, tip, k, sp));
+            pen.outline(&flag.fill, sx - ax * k, tip, k);
         }
     }
     x += head.advance * k + 0.7;
@@ -966,7 +1057,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
         (0..sys.lines.len()).filter(|&s| !sys.lines[s].hidden && !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
-            let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);
+            let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind) * sys.lines[b].scale.unwrap_or(1.0);
             pen.rect(left - 0.08, top + offsets[a] - 0.05, 0.16, bottom - offsets[a] + 0.1);
         }
     }
@@ -985,7 +1076,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
         let last = if hid_any { last } else { g.last };
         let first = if hid_any { first } else { (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first) };
         let y0 = top + offsets[first];
-        let y1 = top + offsets[last] + crate::engrave::staff_height(sys.lines[last].kind);
+        let y1 = top + offsets[last] + crate::engrave::staff_height(sys.lines[last].kind) * sys.lines[last].scale.unwrap_or(1.0);
         // A brace or a bracket shorter than LilyPond's `collapse-height`
         // (5 spaces) is not drawn: a group left with one staff loses it.
         let look = eng.staves.get(first).and_then(|bars| bars.iter().find_map(|b| b.items.first())).map(|ev| ev.look.clone()).unwrap_or_default();
@@ -1016,7 +1107,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
         if in_group {
             continue;
         }
-        draw_name(pen, name, edge, top + offsets[s] + 2.0, e);
+        draw_name(pen, name, edge, top + offsets[s] + 2.0 * sys.lines[s].scale.unwrap_or(1.0), e);
     }
     for g in &eng.groups {
         let l = label(g);
@@ -1026,7 +1117,7 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
             continue;
         }
         let (first, last) = if hid_any { (first, last) } else { (g.first, g.last) };
-        draw_name(pen, &l, edge, top + (offsets[first] + offsets[last] + 4.0) / 2.0, e);
+        draw_name(pen, &l, edge, top + (offsets[first] + offsets[last] + 4.0 * sys.lines[last].scale.unwrap_or(1.0)) / 2.0, e);
     }
 }
 
@@ -1495,8 +1586,7 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
             x += w;
         } else if r.glyph {
             let g = glyph(&r.text);
-            let sp = pen.sp;
-            pen.push(fill_k(&g.fill, x - g.bbox[0] * r.size, y - rise - g.bbox[3] * r.size, r.size, sp));
+            pen.outline(&g.fill, x - g.bbox[0] * r.size, y - rise - g.bbox[3] * r.size, r.size);
             x += glyph_run_w(r);
         } else if r.text == crate::marks::TRIANGLE {
             // An outline: the outer edge one way round, the inner the other.
@@ -1718,7 +1808,6 @@ fn next_left(bar: &Bar, ev: &Ev) -> f64 {
 fn draw_grace_group(pen: &mut Pen, ev: &Ev, graces: &[Ev], dx: f64, top: f64) {
     let Some(first) = graces.first() else { return };
     let k = GRACE_K;
-    let sp = pen.sp;
     let beamed = first.beam.is_some();
     let mut stems: Vec<f64> = Vec::new();
     for g in graces {
@@ -1740,10 +1829,10 @@ fn draw_grace_group(pen: &mut Pen, ev: &Ev, graces: &[Ev], dx: f64, top: f64) {
         }
         for hd in &g.heads {
             let y = top + y_of(hd.pos);
-            pen.push(fill_k(&glyph(hname).fill, x, y, k, sp));
+            pen.outline(&glyph(hname).fill, x, y, k);
             if let Some(acc) = hd.acc {
                 let a = glyph(acc_name(acc));
-                pen.push(fill_k(&a.fill, x - a.advance * k - 0.15, y, k, sp));
+                pen.outline(&a.fill, x - a.advance * k - 0.15, y, k);
             }
         }
         if g.base == 1 {
@@ -1763,12 +1852,12 @@ fn draw_grace_group(pen: &mut Pen, ev: &Ev, graces: &[Ev], dx: f64, top: f64) {
         if !beamed && flags(g.base) > 0 {
             let flag = flag_name(g.base, g.up);
             let anchor = glyph(&flag).anchors.get(if g.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
-            pen.push(fill_k(&glyph(&flag).fill, sx - anchor[0] * k, tip - anchor[1] * k, k, sp));
+            pen.outline(&glyph(&flag).fill, sx - anchor[0] * k, tip - anchor[1] * k, k);
         }
         let slashed = matches!(g.grace, Some(GraceKind::Acciaccatura | GraceKind::Slashed));
         if slashed && (graces.len() == 1 || std::ptr::eq(g, first)) {
             let name = if g.up { "graceNoteSlashStemUp" } else { "graceNoteSlashStemDown" };
-            pen.push(fill_k(&glyph(name).fill, sx, tip, k, sp));
+            pen.outline(&glyph(name).fill, sx, tip, k);
         }
     }
     if beamed && stems.len() > 1 {

@@ -1701,6 +1701,8 @@ struct St {
     look: crate::look::LookState,
     /// `\scaleDurations`' factor in force, (1, 1) outside one.
     scale: (i64, i64),
+    /// The first ossia's `\with`: the ossia staff's settings.
+    ossia_props: Option<Props>,
 }
 
 #[derive(Clone, Copy)]
@@ -3068,6 +3070,14 @@ fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreErr
             i = j;
             continue;
         }
+        // `\remove "Time_signature_engraver"`: a staff with no metre drawn,
+        // as a cue or an ossia staff often is.
+        if is_cmd(toks, i, "remove") && toks.get(i + 1).is_some_and(|a| matches!(a.t, T::Str | T::Word) && a.v == "Time_signature_engraver") {
+            beyond();
+            props.look.insert("TimeSignature.stencil".into(), crate::look::Val::Bool(false));
+            i += 2;
+            continue;
+        }
         match skip_setting(toks, i, " in \\with")? {
             Some(j) => i = j,
             None => return staff_prop(toks, i, props, "\\with"),
@@ -3190,6 +3200,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         span_text: Vec::new(),
         look: crate::look::LookState::default(),
         scale: (1, 1),
+        ossia_props: None,
     };
     if base.compress > 0 {
         st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
@@ -3211,7 +3222,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
     base.notes = st.notes;
     if !st.ossias.is_empty() {
         let events = ossia_events(&st.events, std::mem::take(&mut st.ossias))?;
-        staves.push(Staff { kind: StaffKind::Ossia, events, props: Props::default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
+        staves.push(Staff { kind: StaffKind::Ossia, events, props: st.ossia_props.take().unwrap_or_default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: None });
     }
     if kind == StaffKind::FretBoards {
         // Each chord's shape on the guitar, its lowest note the bass; a rest shows none.
@@ -3448,9 +3459,16 @@ fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) 
         j += 2;
     }
     let mut above = false;
+    let mut props = Props::default();
     if is_cmd(toks, j, "with") {
         let end = skip_block(toks, j + 1)?;
         above = toks[j + 1..end].iter().any(|t| t.t == T::Word && t.v == "alignAboveContext");
+        if above {
+            // What it says of its size and its metre (score #407): the
+            // rest is the ossia's own business — where it goes, its first
+            // clef, which an ossia never draws.
+            ossia_with(toks, j, &mut props)?;
+        }
         j = end;
     }
     if !above {
@@ -3468,7 +3486,41 @@ fn ossia(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) 
     st.in_part = outer_part;
     let music = std::mem::replace(&mut st.events, outer);
     st.ossias.push((start, music));
+    if st.ossia_props.is_none() {
+        st.ossia_props = Some(props);
+    }
     Ok(j)
+}
+
+/// An ossia's `\with`: its size and the settings drawn honoured, where it
+/// goes (`alignAboveContext`) and what an ossia never draws (`firstClef`,
+/// its clef's and its metre's engravers) read and passed over in silence;
+/// anything else with a warning.
+fn ossia_with(toks: &[Tok], j: usize, props: &mut Props) -> Result<(), ScoreError> {
+    let end = skip_block(toks, j + 1)? - 1;
+    let mut i = j + 2;
+    while i < end {
+        let t = &toks[i];
+        if t.t == T::Word && matches!(t.v.as_str(), "alignAboveContext" | "alignBelowContext" | "firstClef") && is(toks, i + 1, T::Sym('=')) {
+            i = value_end(toks, i + 2)?;
+            continue;
+        }
+        if (is_cmd(toks, i, "remove") || is_cmd(toks, i, "consists"))
+            && toks.get(i + 1).is_some_and(|a| matches!(a.t, T::Str | T::Word) && ["Time_signature_engraver", "Clef_engraver", "Bar_number_engraver"].contains(&a.v.as_str()))
+        {
+            i += 2;
+            continue;
+        }
+        if let Some(next) = crate::look::context_setting(toks, i, &mut props.look)? {
+            i = next;
+            continue;
+        }
+        match skip_setting(toks, i, " in \\with")? {
+            Some(next) => i = next.max(i + 1),
+            None => i += 1,
+        }
+    }
+    Ok(())
 }
 
 /// The ossias' staff: the music of each where it starts, spacers between,
@@ -4765,7 +4817,7 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             }
             Ok(skip_setting(toks, i, "")?)
         }
-        "revert" | "unset" | "hide" | "omit" | "undo" | "once" | "temporary" | "single" => {
+        "revert" | "unset" | "hide" | "omit" | "undo" | "once" | "temporary" | "single" | "magnifyStaff" => {
             if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
                 return done(end);
             }

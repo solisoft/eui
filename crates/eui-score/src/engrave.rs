@@ -95,6 +95,19 @@ pub struct Line {
     pub title_x: (f64, f64),
     /// Their baseline, once placed.
     pub title_y: Option<f64>,
+    /// A staff drawn smaller or larger (`StaffSymbol.staff-space`,
+    /// `\magnifyStaff`, score #407): laid out as a staff of the usual size,
+    /// and drawn at this scale from its top line, each note shrunk about
+    /// its own place so that the columns stay the system's. None at 1.
+    pub scale: Option<f64>,
+}
+
+/// How far a line's ink reaches above its top line and below it, on the
+/// page: a smaller staff's reaches less.
+pub(crate) fn line_reach(bars: &[Bar], line: &Line) -> (f64, f64) {
+    let (hi, lo) = reach(bars, line);
+    let s = line.scale.unwrap_or(1.0);
+    (hi * s, lo * s)
 }
 
 /// How tall a staff of a kind is, from its top line to its bottom one.
@@ -2006,7 +2019,7 @@ fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
     if let Some(r) = sys.reach {
         return r;
     }
-    reach(&staves[0], &sys.lines[0])
+    line_reach(&staves[0], &sys.lines[0])
 }
 
 // ---- The whole --------------------------------------------------------------
@@ -2056,8 +2069,10 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
         lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
     }
     place(&mut bars, &mut lines, left, indent, opts.short_indent);
+    let scale = crate::look::staff_scale(&parsed.staves[0].events);
     for line in &mut lines {
         line.kind = kind;
+        line.scale = scale;
     }
     curves(&mut bars, &mut lines);
     marks::marks(&mut bars, &mut lines);
@@ -2299,6 +2314,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     place(&mut master, &mut lines, left, indent, rest);
     let mut systems: Vec<System> = Vec::new();
     let n_lines = lines.len();
+    let scales: Vec<Option<f64>> = staves_src.iter().map(|stf| crate::look::staff_scale(&stf.events)).collect();
     for si in 0..n_lines {
         let range = lines[si].bars.clone();
         spread(&master, &mut all, range.clone());
@@ -2317,6 +2333,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
                 bar_end: line.bar_end,
                 k: line.k,
                 courtesy: line.courtesy,
+                scale: scales[s],
                 ..Line::default()
             };
             if s == 0 {
@@ -2385,7 +2402,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
 }
 
 fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[crate::parse::Staff]) {
-    let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, l)| reach(&all[s], l)).collect();
+    let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, l)| line_reach(&all[s], l)).collect();
     let mut offsets = vec![0.0];
     // An ossia with nothing in this system takes no room.
     let idle = |s: usize| sys.lines[s].kind == StaffKind::Ossia && sys.lines[s].bars.clone().all(|b| all[s][b].items.iter().all(|ev| ev.spacer));
@@ -2410,12 +2427,15 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
         // an ossia closer than another staff.
         let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         let names = words(sys.lines[p].kind) || words(sys.lines[s].kind);
+        // From top line to top line, at least: less by what a smaller staff
+        // above takes less.
+        let shrink = staff_height(sys.lines[p].kind) * (1.0 - sys.lines[p].scale.unwrap_or(1.0));
         let least: f64 = if names {
             0.0
         } else if sys.lines[p].kind == StaffKind::Ossia {
-            7.0
+            7.0 - shrink
         } else {
-            9.0
+            9.0 - shrink
         };
         let o = (offsets[p] + least).max(offsets[p] + reaches[p].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);
@@ -2429,8 +2449,10 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
         let next = (s + 1..n).find(|&t| !gone(t));
         let ss = &mut sys.lines[s];
         let through = |t: usize| groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && t <= g.last);
+        // In the staff's own spaces: a smaller staff draws its bar lines down at its scale.
+        let scale = ss.scale.unwrap_or(1.0);
         ss.connect_down = match next {
-            Some(t) if !ss.hidden && through(t) => offsets[t] - offsets[s] - staff_height(ss.kind),
+            Some(t) if !ss.hidden && through(t) => (offsets[t] - offsets[s]) / scale - staff_height(ss.kind),
             _ => 0.0,
         };
     }

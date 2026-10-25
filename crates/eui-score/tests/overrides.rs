@@ -50,6 +50,9 @@ fn honoured_settings_say_nothing_and_the_others_still_warn() {
         "{ \\slurUp \\tieDown \\dynamicUp \\tupletDown \\phrasingSlurNeutral \\numericTimeSignature \\xNotesOn c'4 }",
         "{ \\set Timing.beatStructure = 2,2,3 \\set Timing.beamExceptions = #'() \\time 7/8 c'8 d' e' f' g' a' b' }",
         "{ c'4-\\tweak extra-offset #'(1 . 0) -\"x\" \\tweak NoteHead.style #'cross d' }",
+        // A staff drawn smaller (score #407, tests/scaled_staves.rs).
+        "{ \\override Staff.StaffSymbol.staff-space = #(magstep -3) c'4 }",
+        "\\new Staff \\with { \\magnifyStaff #2/3 } { c'4 }",
     ];
     for src in honoured {
         let w = warned(src);
@@ -63,7 +66,7 @@ fn honoured_settings_say_nothing_and_the_others_still_warn() {
         ("{ \\once \\override Stem.length = #9 c'4 }", "\\override Stem.length is not drawn"),
         ("{ \\override Slur.positions = #'(1 . 2) c'4( d') }", "\\override Slur.positions is not drawn"),
         ("{ \\override TextScript.direction = #'up c'4-\"x\" }", "\\override TextScript.direction is not drawn"),
-        ("{ \\override Staff.StaffSymbol.staff-space = #(magstep -3) c'4 }", "\\override Staff.StaffSymbol.staff-space is not drawn"),
+        ("{ \\override Staff.StaffSymbol.line-count = #3 c'4 }", "\\override Staff.StaffSymbol.line-count is not drawn"),
         ("{ \\tweak color #red c'4 }", "\\tweak color is not drawn"),
         ("{ \\omit Accidental cis'4 }", "\\omit Accidental is not drawn"),
         ("{ \\override Score.SpacingSpanner.common-shortest-duration = #(ly:make-moment 1/16) c'4 }", "\\override Score.SpacingSpanner.common-shortest-duration is not drawn"),

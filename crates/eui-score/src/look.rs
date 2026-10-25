@@ -246,6 +246,9 @@ fn honoured(key: &str, v: &Val) -> bool {
         "break-visibility" => grob == "BarNumber" && matches!(v, Val::List(l) if l.len() == 3),
         "remove-empty" | "remove-first" => grob == "VerticalAxisGroup" && matches!(v, Val::Bool(_)),
         "collapse-height" => ["SystemStartBracket", "SystemStartBrace"].contains(&grob) && matches!(v, Val::Num(_)),
+        // A staff drawn smaller (score #407): its lines' distance, and their
+        // thickness, which follows it.
+        "staff-space" | "thickness" => grob == "StaffSymbol" && matches!(v, Val::Num(n) if *n >= 0.25 && *n <= 4.0),
         _ => false,
     }
 }
@@ -429,6 +432,18 @@ fn as_num(d: &Sx) -> Option<f64> {
     }
 }
 
+/// A size as a factor: `#2/3`, `#0.7`, `#(magstep -3)` — 2 to the -3/6.
+fn factor(d: &Sx) -> Option<f64> {
+    match d {
+        Sx::List(items) => match items.as_slice() {
+            [Sx::Word(f), Sx::Num(n)] if f == "magstep" => Some(2f64.powf(n / 6.0)),
+            [Sx::Word(f), x] if f == "magstep" => as_num(x).map(|n| 2f64.powf(n / 6.0)),
+            _ => as_num(d),
+        },
+        _ => as_num(d),
+    }
+}
+
 /// The value of `key` a datum stands for, typed as the key wants it.
 fn value_for(key: &str, d: &Sx) -> Option<Val> {
     let prop = key.rsplit('.').next().unwrap_or(key);
@@ -479,6 +494,8 @@ fn value_for(key: &str, d: &Sx) -> Option<Val> {
             _ => return None,
         },
         "baseMoment" => Val::Num(as_num(d)? * WHOLE as f64),
+        // A factor, `#(magstep -3)` the size six steps make smaller by half.
+        "staff-space" | "thickness" => Val::Num(factor(d)?),
         _ => Val::Num(as_num(d)?),
     })
 }
@@ -703,6 +720,16 @@ fn setting(toks: &[Tok], i: usize, state: &mut LookState, once: bool, elapsed: i
         return Ok(None);
     }
     match t.v.as_str() {
+        "magnifyStaff" => {
+            // `\magnifyStaff #2/3`: the staff's lines that much closer and
+            // thinner, and its music that much smaller (score #407).
+            let end = value_end(toks, i + 1)?;
+            let Some(r) = read(toks, i + 1, end).as_ref().and_then(factor).filter(|r| (0.25..=4.0).contains(r)) else { return Ok(None) };
+            state.set(Some("Staff"), "StaffSymbol.staff-space".into(), Val::Num(r), false);
+            state.set(Some("Staff"), "StaffSymbol.thickness".into(), Val::Num(r), false);
+            state.set(Some("Staff"), "fontSize".into(), Val::Num(6.0 * r.log2()), false);
+            Ok(Some(end))
+        }
         "once" | "single" => setting(toks, i + 1, state, true, elapsed),
         "temporary" => setting(toks, i + 1, state, once, elapsed),
         "override" => {
@@ -785,6 +812,7 @@ fn setting(toks: &[Tok], i: usize, state: &mut LookState, once: bool, elapsed: i
 fn known_probe(key: &str) -> bool {
     let probes = [
         Val::Num(0.0),
+        Val::Num(1.0),
         Val::Pair(0.0, 0.0),
         Val::Bool(false),
         Val::Bool(true),
@@ -958,6 +986,20 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
                 settle_one(g, &base, &plain, &mut cache);
             }
         }
+        // A staff drawn smaller (`StaffSymbol.staff-space`, `\magnifyStaff`):
+        // everything on it is drawn at its scale, so a note's size is its own
+        // against the staff's — the `fontSize` that goes with the staff's
+        // lines (or a cue voice's -3 on a cue-sized staff) is the staff's
+        // own size, 0 (score #407).
+        if let Some(scale) = staff_scale(&stf.events) {
+            let steps = 6.0 * scale.log2();
+            for ev in &mut stf.events {
+                rescale(ev, steps);
+                for g in ev.graces.iter_mut().chain(ev.after_graces.iter_mut()) {
+                    rescale(g, steps);
+                }
+            }
+        }
         // The style of a metre no `\time` writes: the staff's first.
         let first_note = stf.events.iter().position(|e| matches!(e.k, Kind::Note | Kind::Rest)).unwrap_or(stf.events.len());
         let timed = stf.events[..first_note].iter().any(|e| e.k == Kind::Time);
@@ -969,6 +1011,25 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
             stf.events.insert(0, t);
         }
     }
+}
+
+/// How much smaller (or larger) a staff is drawn: its first note's or
+/// rest's `StaffSymbol.staff-space` — its `\with`'s, a `\layout`'s, one
+/// written before its music. None for a staff of the usual size.
+pub fn staff_scale(events: &[Ev]) -> Option<f64> {
+    let first = events.iter().find(|e| matches!(e.k, Kind::Note | Kind::Rest)).or_else(|| events.first())?;
+    first.look.num("StaffSymbol.staff-space").filter(|s| (*s - 1.0).abs() > 1e-6 && (0.25..=4.0).contains(s))
+}
+
+/// A note's size against its staff's, `steps` the staff's own.
+fn rescale(ev: &mut Ev, steps: f64) {
+    // The `fontSize` it took, unrounded where it is the one it took.
+    let set = ev.look.num("NoteHead.font-size").or_else(|| ev.look.num("fontSize"));
+    let own = match set {
+        Some(f) if !ev.cue && f.round().clamp(-12.0, 12.0) as i8 == ev.size => f,
+        _ => f64::from(ev.size),
+    };
+    ev.size = (own - steps).round().clamp(-12.0, 12.0) as i8;
 }
 
 fn settle_one(ev: &mut Ev, base: &Map, plain: &Look, cache: &mut Vec<(*const Map, Look)>) {
