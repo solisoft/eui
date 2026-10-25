@@ -964,7 +964,7 @@ pub(crate) fn settle(staves: &mut [crate::parse::Staff], groups: &[crate::parse:
         let look = stf.events.get(first_note).map(|e| e.look.clone()).unwrap_or_else(|| plain.clone());
         let parts = time_style(&look);
         if !timed && parts != 0 && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia) {
-            let mut t = Ev { k: Kind::Time, time: (4, 4), look, at: stf.events.first().map_or(0, |e| e.at), ..Ev::default() };
+            let mut t = Ev { k: Kind::Time, time: (4, 4), look, v: crate::parse::DEFAULT_METRE.into(), at: stf.events.first().map_or(0, |e| e.at), ..Ev::default() };
             t.time_parts[3] = parts;
             stf.events.insert(0, t);
         }
@@ -1026,7 +1026,7 @@ pub(crate) const TIME_SINGLE: u8 = 254;
 /// `\omit Staff.TimeSignature`: none.
 pub(crate) const TIME_OMITTED: u8 = 253;
 
-fn time_style(look: &Look) -> u8 {
+pub(crate) fn time_style(look: &Look) -> u8 {
     if look.omitted("TimeSignature") {
         return TIME_OMITTED;
     }

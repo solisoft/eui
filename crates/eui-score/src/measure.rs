@@ -411,7 +411,7 @@ pub(crate) fn score_timing(staves: &[crate::parse::Staff], polymeter: bool) -> V
     if polymeter || n < 2 {
         return vec![None; n];
     }
-    let timing = |e: &Ev| (e.k == Kind::Time && e.v != crate::parse::SHOWN) || e.k == Kind::Partial;
+    let timing = |e: &Ev| (e.k == Kind::Time && e.v.is_empty()) || e.k == Kind::Partial;
     // Each staff's, with when they are written.
     let lists: Vec<Vec<(i64, Ev)>> = staves
         .iter()
@@ -451,7 +451,11 @@ pub(crate) fn score_timing(staves: &[crate::parse::Staff], polymeter: bool) -> V
             if missing.is_empty() {
                 return None;
             }
-            // Laid out in time with spacers, for `merge` to set them at their moments.
+            // Laid out in time with spacers, for `merge` to set them at their
+            // moments; a metre drawn as this staff draws one (its own
+            // `\numericTimeSignature`, `\omit`), not as the staff it came from.
+            let look = stf.events.iter().find(|e| matches!(e.k, Kind::Note | Kind::Rest)).map(|e| e.look.clone()).unwrap_or_default();
+            let missing_at_start = missing.iter().any(|x| x.0 == 0 && x.1.k == Kind::Time);
             let mut other = Vec::new();
             let mut t = 0;
             for (at, ev) in missing {
@@ -459,9 +463,17 @@ pub(crate) fn score_timing(staves: &[crate::parse::Staff], polymeter: bool) -> V
                     other.push(Ev { k: Kind::Rest, spacer: true, ticks: at - t, ..Ev::default() });
                     t = *at;
                 }
-                other.push(ev.clone());
+                let mut ev = ev.clone();
+                if ev.k == Kind::Time && (ev.time_parts[3] == 0 || ev.time_parts[3] >= crate::look::TIME_OMITTED) {
+                    ev.time_parts[3] = crate::look::time_style(&look);
+                    ev.look = look.clone();
+                }
+                other.push(ev);
             }
-            Some(crate::parse::merge(stf.events.clone(), other).0)
+            // The 4/4 a staff opens in by default gives way to the score's.
+            let opening = missing_at_start;
+            let events: Vec<Ev> = stf.events.iter().filter(|e| !(opening && e.k == Kind::Time && e.v == crate::parse::DEFAULT_METRE)).cloned().collect();
+            Some(crate::parse::merge(events, other).0)
         })
         .collect()
 }

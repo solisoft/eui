@@ -5143,6 +5143,11 @@ fn shown_fraction(toks: &[Tok], j: usize, st: &mut St, at: usize) -> Result<usiz
     Ok(end)
 }
 
+/// What marks the 4/4 a staff opens in when no `\time` says one and its
+/// metre is drawn otherwise (`\numericTimeSignature`, `\omit`): the
+/// score's own metre, where another staff writes one, takes its place.
+pub const DEFAULT_METRE: &str = "default";
+
 /// What marks a `\time` that changes only the metre shown
 /// (`timeSignatureFraction`), not the bars' length.
 pub const SHOWN: &str = "shown";
