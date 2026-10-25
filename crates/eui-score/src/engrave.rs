@@ -86,6 +86,8 @@ pub struct Line {
     pub kind: StaffKind,
     /// Text spanners, `\startTextSpan` … `\stopTextSpan`.
     pub spans: Vec<SpanPlace>,
+    /// Left out of its system: an empty staff `\RemoveEmptyStaves` removes.
+    pub hidden: bool,
     /// The title over it when a movement starts with it: `piece`, `opus`.
     pub title: Option<(String, String)>,
     /// Where they start: the piece's left, the opus's right.
@@ -2260,6 +2262,9 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             ss.clef_w = Some(clef_w);
             ss.key_w = Some(key_w);
         }
+        for (ss, gone) in staff_lines.iter_mut().zip(removed(staves_src, &all, &range, si == 0)) {
+            ss.hidden = gone;
+        }
         systems.push(System { lines: staff_lines, multi: true, left: line.left, right: line.right, first_line: si == 0 || master[range.start].fresh, ..System::default() });
     }
     for (s, bars) in all.iter_mut().enumerate() {
@@ -2305,34 +2310,78 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let mut offsets = vec![0.0];
     // An ossia with nothing in this system takes no room.
     let idle = |s: usize| sys.lines[s].kind == StaffKind::Ossia && sys.lines[s].bars.clone().all(|b| all[s][b].items.iter().all(|ev| ev.spacer));
+    // Nor does a staff removed from it (`\RemoveEmptyStaves`): the next one
+    // goes under the last that is drawn.
+    let hidden: Vec<bool> = sys.lines.iter().map(|l| l.hidden).collect();
+    let gone = |s: usize| hidden[s];
     for s in 1..reaches.len() {
-        if idle(s - 1) {
+        if gone(s) {
             offsets.push(offsets[s - 1]);
+            continue;
+        }
+        let Some(p) = (0..s).rev().find(|&k| !gone(k)) else {
+            offsets.push(offsets[s - 1]);
+            continue;
+        };
+        if idle(p) {
+            offsets.push(offsets[p]);
             continue;
         }
         // Chord names sit as close over their staff as their ink lets them,
         // an ossia closer than another staff.
         let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
-        let names = words(sys.lines[s - 1].kind) || words(sys.lines[s].kind);
+        let names = words(sys.lines[p].kind) || words(sys.lines[s].kind);
         let least: f64 = if names {
             0.0
-        } else if sys.lines[s - 1].kind == StaffKind::Ossia {
+        } else if sys.lines[p].kind == StaffKind::Ossia {
             7.0
         } else {
             9.0
         };
-        let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
+        let o = (offsets[p] + least).max(offsets[p] + reaches[p].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);
     }
-    let last = offsets.len() - 1;
-    let high = (0..reaches.len()).filter(|&s| !idle(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
+    let last = (0..offsets.len()).rev().find(|&s| !gone(s)).unwrap_or(offsets.len() - 1);
+    let high = (0..reaches.len()).filter(|&s| !idle(s) && !gone(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
     sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
     sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
-    for (s, ss) in sys.lines.iter_mut().enumerate() {
-        let through = groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && s < g.last);
-        ss.connect_down = if through { offsets[s + 1] - offsets[s] - staff_height(ss.kind) } else { 0.0 };
+    let n = sys.lines.len();
+    for s in 0..n {
+        let next = (s + 1..n).find(|&t| !gone(t));
+        let ss = &mut sys.lines[s];
+        let through = |t: usize| groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && t <= g.last);
+        ss.connect_down = match next {
+            Some(t) if !ss.hidden && through(t) => offsets[t] - offsets[s] - staff_height(ss.kind),
+            _ => 0.0,
+        };
     }
     sys.offsets = offsets;
+}
+
+/// The staves a system leaves out (`\RemoveEmptyStaves`, LilyPond's
+/// `VerticalAxisGroup.remove-empty`): a staff of notes whose bars on the
+/// system hold rests and spacers only — never on the first system unless
+/// `remove-first` (`\RemoveAllEmptyStaves`) says, and never every staff.
+fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize>, first: bool) -> Vec<bool> {
+    let mut out: Vec<bool> = staves
+        .iter()
+        .enumerate()
+        .map(|(s, stf)| {
+            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab) {
+                return false;
+            }
+            let look = stf.events.iter().find(|ev| !ev.look.is_empty()).map(|ev| ev.look.clone()).unwrap_or_default();
+            if look.flag("VerticalAxisGroup.remove-empty") != Some(true) || (first && look.flag("VerticalAxisGroup.remove-first") != Some(true)) {
+                return false;
+            }
+            range.clone().all(|b| all[s][b].items.iter().all(|ev| ev.k != Kind::Note))
+        })
+        .collect();
+    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab));
+    if !kept {
+        out = vec![false; staves.len()];
+    }
+    out
 }
 
 /// The tempo marks for a test's eyes: unused otherwise.

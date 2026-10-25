@@ -642,6 +642,15 @@ construct as LilyPond 2.25 draws it:
   `barNumberVisibility`, `BarNumber.break-visibility` and
   `currentBarNumber`. Any other property is still passed over with its
   warning.
+- *Empty staves hidden* (score #404): `\RemoveEmptyStaves` (in a
+  `\layout`'s `\context { \Staff }`, a staff's or a group's `\with`) and
+  `VerticalAxisGroup.remove-empty`: a staff of notes whose bars on a system
+  are all rests or spacers is not drawn on that system, and takes no room —
+  never on the first system unless `\RemoveAllEmptyStaves` or
+  `remove-first` says, and never every staff of a system. Names after the
+  first system are the short ones; a brace or bracket shrinks to the staves
+  drawn, and one left shorter than its `collapse-height` (5 spaces: one
+  staff) is not drawn, as LilyPond's. MIDI plays every staff.
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

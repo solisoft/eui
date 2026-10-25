@@ -275,7 +275,7 @@ fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
     for (s, line) in sys.lines.iter().enumerate() {
         starts.push(paths.len());
         let offset = sys.offsets.get(s).copied().unwrap_or(0.0);
-        if let Some(bars) = eng.staves.get(s) {
+        if let Some(bars) = eng.staves.get(s).filter(|_| !line.hidden) {
             draw_line(&mut paths, bars, line, top + offset, sp, &mut ranges, None);
         }
     }
@@ -460,6 +460,9 @@ pub fn draw_system(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64
 fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64, sp: f64, ranges: &mut Ranges, mut heads: Option<&mut HeadRanges>) {
     if sys.multi {
         for (s, line) in sys.lines.iter().enumerate() {
+            if line.hidden {
+                continue;
+            }
             draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges, heads.as_deref_mut());
         }
         draw_groups(&mut Pen { paths, sp, heads: None }, eng, sys, top);
@@ -949,8 +952,10 @@ fn draw_dynamic(pen: &mut Pen, dy: &DynEl, top: f64) {
 fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let offsets = &sys.offsets;
     let left = sys.left;
-    // The system's line joins its staves — not the chord names over them.
-    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
+    // The system's line joins its staves — not the chord names over them,
+    // nor a staff the system leaves out.
+    let staves: Vec<usize> =
+        (0..sys.lines.len()).filter(|&s| !sys.lines[s].hidden && !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
             let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);
@@ -959,14 +964,28 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     }
     let mut edge = left - 0.3;
     let deepest = eng.groups.iter().map(|g| g.depth).max().unwrap_or(0);
+    // A group's staves the system draws: an ossia over its first stands
+    // outside its bracket; a staff left out shrinks it.
+    let shown = |g: &crate::parse::Group| -> Vec<usize> { (g.first..=g.last).filter(|&s| !sys.lines[s].hidden && sys.lines[s].kind != StaffKind::Ossia).collect() };
+    let hid_any = sys.lines.iter().any(|l| l.hidden);
     for g in &eng.groups {
         if g.kind == GroupKind::None {
             continue;
         }
-        // An ossia over a group's first staff stands outside its bracket.
-        let first = (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first);
+        let members = shown(g);
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else { continue };
+        let last = if hid_any { last } else { g.last };
+        let first = if hid_any { first } else { (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first) };
         let y0 = top + offsets[first];
-        let y1 = top + offsets[g.last] + crate::engrave::staff_height(sys.lines[g.last].kind);
+        let y1 = top + offsets[last] + crate::engrave::staff_height(sys.lines[last].kind);
+        // A brace or a bracket shorter than LilyPond's `collapse-height`
+        // (5 spaces) is not drawn: a group left with one staff loses it.
+        let look = eng.staves.get(first).and_then(|bars| bars.iter().find_map(|b| b.items.first())).map(|ev| ev.look.clone()).unwrap_or_default();
+        let grob = if g.kind == GroupKind::Brace { "SystemStartBrace" } else { "SystemStartBracket" };
+        let collapse = look.num(&format!("{grob}.collapse-height")).unwrap_or(5.0);
+        if y1 - y0 < collapse {
+            continue;
+        }
         let x = left - 0.3 - (deepest - g.depth) as f64 * 1.6;
         if g.kind == GroupKind::Brace {
             draw_brace(pen, x, y0, y1);
@@ -982,10 +1001,10 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let e = em(0.0);
     let label = |g: &crate::parse::Group| if sys.first_line { g.name.clone() } else { g.short.clone() };
     for (s, name) in sys.names.iter().enumerate() {
-        if name.is_empty() {
+        if name.is_empty() || sys.lines[s].hidden {
             continue;
         }
-        let in_group = eng.groups.iter().any(|g| g.first <= s && s <= g.last && g.kind != GroupKind::None && g.first < g.last && !label(g).is_empty());
+        let in_group = eng.groups.iter().any(|g| g.first <= s && s <= g.last && g.kind != GroupKind::None && g.first < g.last && !label(g).is_empty() && !shown(g).is_empty());
         if in_group {
             continue;
         }
@@ -993,10 +1012,13 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     }
     for g in &eng.groups {
         let l = label(g);
+        let members = shown(g);
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else { continue };
         if l.is_empty() {
             continue;
         }
-        draw_name(pen, &l, edge, top + (offsets[g.first] + offsets[g.last] + 4.0) / 2.0, e);
+        let (first, last) = if hid_any { (first, last) } else { (g.first, g.last) };
+        draw_name(pen, &l, edge, top + (offsets[first] + offsets[last] + 4.0) / 2.0, e);
     }
 }
 
