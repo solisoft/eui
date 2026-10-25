@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use crate::engrave::{beam_voice, beam_windows, flags, head_name, stem_x, voice_lists, y_of, System};
 use crate::glyphs::glyph;
 use crate::marks::{arc_cmds, curve_height, voice_of};
-use crate::measure::{clef_mid, Bar};
-use crate::parse::{refuse, Ev, Kind, Staff};
+use crate::measure::{clef_mid, key_alters, Bar};
+use crate::parse::{modulo, refuse, Ev, Kind, Staff};
 use crate::{ScoreError, RULE};
 
 /// A note: its staff, its bar, its index among the bar's items.
@@ -94,6 +94,9 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
         return Ok(plan);
     }
     let to = |h: Home| dest.get(&h).copied().unwrap_or(h.0);
+    // The pitches each note is tied into from the note before it in its
+    // voice: what its accidentals leave out wherever it ends up.
+    let tied_in = tied_into(all);
 
     // Beams over notes that end on both staves: one beam, drawn between them.
     let mut kneed: Vec<Vec<Home>> = Vec::new();
@@ -189,6 +192,7 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
     let mut touched: Vec<(usize, usize)> = Vec::new();
     let mut moves: Vec<(&Home, &usize)> = dest.iter().collect();
     moves.sort();
+    let moves_from: Vec<(usize, usize)> = moves.iter().map(|m| (m.0 .0, m.0 .1)).collect();
     for (&(a, b, j), &t) in moves {
         let item = &all[a][b].items[j];
         let mut moved = item.clone();
@@ -229,6 +233,14 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
     }
     touched.sort_unstable();
     touched.dedup();
+    // The accidentals of the bars notes left and reached, counted again on
+    // the staff each note is drawn on (score #411).
+    let mut recounted: Vec<(usize, usize)> = moves_from.iter().copied().chain(touched.iter().copied()).collect();
+    recounted.sort_unstable();
+    recounted.dedup();
+    for &(s, b) in &recounted {
+        recount(&mut all[s][b], b, &tied_in);
+    }
     for &(t, b) in &touched {
         let bar = &mut all[t][b];
         bar.items.sort_by_key(|ev| ev.start * 8 + i64::from(ev.voice.unwrap_or(1)));
@@ -259,6 +271,109 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
     plan.follows = follows.iter().filter_map(|&(f, l)| Some((find(f)?, find(l)?))).collect();
     plan.spans = spans.iter().filter_map(|&h| Some((find(h)?, None))).collect();
     Ok(plan)
+}
+
+/// A note by who it is: its number and its bar, and where it starts there.
+type Who = (usize, usize, i64);
+
+/// For each note tied into from the note before it in its voice, the
+/// pitches tied: `(diatonic number, alteration)`.
+fn tied_into(all: &[Vec<Bar>]) -> HashMap<Who, Vec<(i64, i64)>> {
+    let mut out = HashMap::new();
+    for bars in all {
+        let mut last: HashMap<u8, (i64, Vec<(i64, i64)>)> = HashMap::new();
+        for (b, bar) in bars.iter().enumerate() {
+            for ev in bar.items.iter().filter(|e| matches!(e.k, Kind::Note | Kind::Rest) && !e.spacer) {
+                let v = voice_of(ev);
+                let at = bar.tick0 + ev.start;
+                if ev.k == Kind::Note {
+                    if let Some((ends, pitches)) = last.get(&v) {
+                        if *ends == at {
+                            out.insert((ev.i, b, ev.start), pitches.clone());
+                        }
+                    }
+                }
+                let tied: Vec<(i64, i64)> = if ev.k == Kind::Note && ev.tie { ev.pitches.iter().map(|p| (p.d, p.alter)).collect() } else { Vec::new() };
+                if tied.is_empty() {
+                    last.remove(&v);
+                } else {
+                    last.insert(v, (at + ev.ticks, tied));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A bar's accidentals counted again, once notes have come to it from
+/// another staff or left it for one: as LilyPond's Accidental_engraver
+/// counts them on the staff a note is drawn on, every voice there together
+/// — an alteration shown in the bar is not shown again on its line or space,
+/// one the bar has not shown yet is. The notes starting together are read
+/// against the bar as it stood before them; grace notes before their note,
+/// `\afterGrace`'s after it; two at once on one line, altered
+/// differently, each show theirs.
+fn recount(bar: &mut Bar, b: usize, tied_in: &HashMap<Who, Vec<(i64, i64)>>) {
+    let mut seen: HashMap<i64, i64> = HashMap::new();
+    let mut order: Vec<usize> = (0..bar.items.len()).filter(|&j| !bar.items[j].spacer && (bar.items[j].k == Kind::Note || !bar.items[j].graces.is_empty())).collect();
+    order.sort_by_key(|&j| bar.items[j].start);
+    let mut fifths = None;
+    let mut k = 0;
+    while k < order.len() {
+        let start = bar.items[order[k]].start;
+        let same: Vec<usize> = order[k..].iter().copied().take_while(|&j| bar.items[j].start == start).collect();
+        k += same.len();
+        let key = bar.clef_at(start).1;
+        if fifths.is_some_and(|f| f != key) {
+            // A new key starts the bar's accidentals afresh.
+            seen.clear();
+        }
+        fifths = Some(key);
+        let alters = key_alters(key);
+        let now = |seen: &HashMap<i64, i64>, d: i64| seen.get(&d).copied().unwrap_or(alters[modulo(d, 7) as usize]);
+        // Grace notes first, each against what came before it.
+        for &j in &same {
+            for g in &mut bar.items[j].graces {
+                for h in &mut g.heads {
+                    let paren = g.cautionary.contains(&h.d);
+                    let show = h.alter != now(&seen, h.d) || paren || g.forced.contains(&h.d);
+                    seen.insert(h.d, h.alter);
+                    h.acc = show.then_some(h.alter);
+                }
+            }
+        }
+        let before = seen.clone();
+        // Two notes on one line or space at once, altered differently: each
+        // shows its accidental, as LilyPond's engraver forces them.
+        let at_once: Vec<(i64, i64)> = same.iter().filter(|&&j| bar.items[j].k == Kind::Note).flat_map(|&j| bar.items[j].heads.iter().map(|h| (h.d, h.alter))).collect();
+        for &j in &same {
+            let ev = &mut bar.items[j];
+            if ev.k != Kind::Note {
+                continue;
+            }
+            let tied = tied_in.get(&(ev.i, b, ev.start));
+            for h in &mut ev.heads {
+                let mut show = h.alter != now(&before, h.d) || at_once.iter().any(|o| o.0 == h.d && o.1 != h.alter);
+                if tied.is_some_and(|t| t.contains(&(h.d, h.alter))) {
+                    show = false;
+                }
+                let paren = ev.cautionary.contains(&h.d);
+                show = show || paren || ev.forced.contains(&h.d);
+                seen.insert(h.d, h.alter);
+                h.acc = show.then_some(h.alter);
+            }
+        }
+        for &j in &same {
+            for g in &mut bar.items[j].after_graces {
+                for h in &mut g.heads {
+                    let paren = g.cautionary.contains(&h.d);
+                    let show = h.alter != now(&seen, h.d) || paren || g.forced.contains(&h.d);
+                    seen.insert(h.d, h.alter);
+                    h.acc = show.then_some(h.alter);
+                }
+            }
+        }
+    }
 }
 
 /// The stems' directions the staves join by, once each staff has beamed
