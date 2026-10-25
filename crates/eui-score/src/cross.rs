@@ -103,8 +103,9 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
                 continue;
             }
             let wins = beam_windows(bar.time);
+            let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.time));
             for list in voice_lists(bar) {
-                for g in beam_voice(bar, &list, wins)? {
+                for g in beam_voice(bar, &list, wins, groups.as_deref())? {
                     let first = to((a, b, g[0]));
                     if g.iter().any(|&j| to((a, b, j)) != first) {
                         kneed.push(g.iter().map(|&j| (a, b, j)).collect());

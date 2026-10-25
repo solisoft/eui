@@ -622,6 +622,44 @@ construct as LilyPond 2.25 draws it:
   spanners, and `cis!` / `cis?` accidentals drawn; several `\score` blocks
   (in `\book`/`\bookpart` or not) engraved one after another on the same
   staves, each under its `piece` and `opus`.
+- *Settings honoured* (score #403): in the music, a context's `\with`
+  and `\layout { \context { … } }`, with `\once`, `\revert`, `\unset`,
+  `\undo` and `\tweak` — the direction of stems, slurs, phrasing slurs,
+  ties, dynamics, words, articulations, fingerings and tuplets (and
+  `\slurUp`'s kin); `extra-offset`, `X-offset`, `Y-offset`, `padding`,
+  `staff-padding` and `outside-staff-padding` of words, dynamics,
+  articulations, fingerings, rehearsal and metronome marks;
+  `self-alignment-X` of words, rehearsal marks and syllables; `font-size`
+  of heads and words, `fontSize`, `\magnifyMusic`, `\large`, `\huge`;
+  `beatStructure`, `baseMoment`, `beamExceptions`, `subdivideBeams`,
+  `Beam.positions` and `Beam.damping`; the rehearsal mark formatters
+  (letters, numbers, bar numbers, boxed or circled); `TimeSignature.style`
+  (`numbered`, `single-digit`, `\numericTimeSignature`); `NoteHead.style`
+  (`cross`, `xcircle`, `diamond`, `triangle`, `slash`, `harmonic` and its
+  kin, `\xNotesOn`, `\harmonicsOn`); `\omit`/`\hide` of the metre, bar
+  numbers, stems, flags, beams, the staff's lines, clefs, keys, tuplet
+  numbers and brackets, bar lines, articulations, dynamics and words;
+  `barNumberVisibility`, `BarNumber.break-visibility` and
+  `currentBarNumber`. Any other property is still passed over with its
+  warning.
+- *Empty staves hidden* (score #404): `\RemoveEmptyStaves` (in a
+  `\layout`'s `\context { \Staff }`, a staff's or a group's `\with`) and
+  `VerticalAxisGroup.remove-empty`: a staff of notes whose bars on a system
+  are all rests or spacers is not drawn on that system, and takes no room —
+  never on the first system unless `\RemoveAllEmptyStaves` or
+  `remove-first` says, and never every staff of a system. Names after the
+  first system are the short ones; a brace or bracket shrinks to the staves
+  drawn, and one left shorter than its `collapse-height` (5 spaces: one
+  staff) is not drawn, as LilyPond's. MIDI plays every staff.
+- *Two parts on one staff* (score #405): `\partCombine` (and
+  `\partcombine`) — the same notes one note, "a2" where the parts come
+  together; the same rhythm, part I over part II and within a ninth, one
+  chord; one part resting, the other alone under "Solo" or "Solo II"; else
+  two voices, part I's stems up. `\partCombineApart`, `\partCombineChords`,
+  `\partCombineUnisono`, `\partCombineSoloI`, `\partCombineSoloII` and
+  `\partCombineAutomatic` say how from where they are written;
+  `\partCombineUp` and `\partCombineDown` set a pair's stems, two pairs
+  sharing a staff in four voices. The MIDI plays both parts.
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

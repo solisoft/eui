@@ -24,6 +24,64 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\partCombine` (score #405), and `\partcombine`, where it was refused:
+  two parts on one staff, cut where both start a note or a rest together.
+  The same notes are one note, "a2" over the first where the parts come
+  together; the same rhythm, part I over part II and within a ninth
+  (LilyPond's `chord-range`), one chord; one part resting, the other alone
+  with "Solo" or "Solo II" over it, and one rest when both rest; else two
+  voices, part I's stems up and part II's down. `\partCombineApart`,
+  `\partCombineChords`, `\partCombineUnisono`, `\partCombineSoloI`,
+  `\partCombineSoloII` and `\partCombineAutomatic`, in either part, say how
+  from where they are written. `\partCombineUp` and `\partCombineDown` turn
+  a pair's stems up or down and number its voices 1 and 3 (2 and 4), so two
+  pairs in `<< >>` share a staff in four voices. The staff's settings are
+  part I's, and part II's where part I has none of the kind. The MIDI plays
+  both parts; a pitch both sound at once, once. Protocol 11.
+
+- Empty staves hidden (score #404): `\RemoveEmptyStaves` and
+  `\RemoveAllEmptyStaves` in `\layout { \context { \Staff … } }` or a
+  staff's (or a group's) `\with`, and `\override
+  VerticalAxisGroup.remove-empty` / `remove-first`. A staff whose bars on a
+  system are all rests or spacers is left out of that system (`Line::hidden`)
+  and the staves under it move up; the first system keeps it unless
+  `remove-first`, and a system never loses every staff. The braces and
+  brackets of a group shrink to the staves drawn, the bar lines join the
+  next staff drawn, and a group left with one staff loses its brace or
+  bracket, as LilyPond's `collapse-height` (5) has it — `\override
+  StaffGroup.SystemStartBracket.collapse-height = #4` keeps it. A group of
+  one staff from the start is drawn so too. When the staff left out is the
+  top one, the bar numbers, rehearsal marks, jumps, tempo marks and endings
+  go over the topmost staff the system draws. MIDI is unchanged.
+
+- The common layout settings are honoured (score #403), where since
+  score #359 they were read and passed over with a warning: in the music,
+  in a context's `\with { }` and in `\layout { \context { \Staff … } }`,
+  with `\once`, `\temporary`, `\revert`, `\unset`, `\undo` and
+  `\tweak`. Directions (`Slur`, `PhrasingSlur`, `Tie`, `Stem`,
+  `DynamicLineSpanner`, `TextScript`, `Script`, `Fingering`,
+  `TupletBracket`, and `\slurUp`, `\tieDown`, `\dynamicUp`, `\tupletUp`
+  and their kin); `extra-offset`, `X-offset`, `Y-offset` and the paddings
+  of words, dynamics, articulations, fingerings and marks;
+  `self-alignment-X` of words, rehearsal marks and lyrics; `font-size`,
+  `fontSize`, `\magnifyMusic`, `\large`, `\huge`; beaming by
+  `beatStructure`, `baseMoment` and `beamExceptions`, `subdivideBeams`,
+  `Beam.positions` and `Beam.damping`; `rehearsalMarkFormatter` (and the
+  older `markFormatter`) with boxed and circled marks; `TimeSignature.style`
+  and `\numericTimeSignature`; `NoteHead.style` — the diamond, triangle,
+  slash and harmonic heads added to the glyph table from Emmentaler, the
+  cross and circled cross reused — and `\xNotesOn`, `\harmonicsOn`;
+  `\omit` and `\hide` of the metre (which then takes no room), bar
+  numbers, stems, flags, beams, the staff lines, clefs and keys (their
+  room kept), tuplet numbers and brackets, bar lines, articulations,
+  dynamics and words; `barNumberVisibility` (`all-bar-numbers-visible`,
+  `every-nth-bar-number-visible`, `modulo-bar-number-visible`),
+  `BarNumber.break-visibility` — numbers in the line stand over its bar
+  lines, under words and rehearsal marks — and `currentBarNumber`. Each
+  note carries the settings in force where it is written (`Ev::look`).
+  `\override` inside lyrics is read and passed over where it was refused.
+  Anything else is still passed over with its warning. Protocol 11.
+
 - `\afterGrace` (score #389): `\afterGrace c2 { d16 e }`, and LilyPond's
   `\afterGrace 7/8 c2 { … }`, where it was refused as an unknown command.
   The grace notes ride on their note (`Ev::after_graces`, `after_at`),

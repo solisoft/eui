@@ -87,6 +87,8 @@ pub struct Line {
     pub kind: StaffKind,
     /// Text spanners, `\startTextSpan` … `\stopTextSpan`.
     pub spans: Vec<SpanPlace>,
+    /// Left out of its system: an empty staff `\RemoveEmptyStaves` removes.
+    pub hidden: bool,
     /// The title over it when a movement starts with it: `piece`, `opus`.
     pub title: Option<(String, String)>,
     /// Where they start: the piece's left, the opus's right.
@@ -292,9 +294,12 @@ fn beamed(kind: StaffKind) -> bool {
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
     for bar in bars.iter_mut() {
         let wins = beam_windows(bar.time);
+        // `\set Timing.beatStructure`, `baseMoment`, `beamExceptions`: the
+        // groups the beams end at, the bar's first note's settings say.
+        let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.time));
         let mut all: Vec<Vec<usize>> = Vec::new();
         for list in voice_lists(bar) {
-            all.extend(beam_voice(bar, &list, wins)?);
+            all.extend(beam_voice(bar, &list, wins, groups.as_deref())?);
         }
         // In the order of their first notes, as the drawing meets them.
         all.sort_by_key(|g| g[0]);
@@ -318,6 +323,11 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
             // A note moved to a staff that plays nothing with it stems by its place.
             if let Some(v) = bar.items[g[0]].voice.filter(|_| !bar.items[g[0]].free) {
                 up = v % 2 == 1;
+            }
+            // `Beam.positions` set and no direction: the stems go to the beam.
+            if let Some((l, r)) = bar.items[g[0]].look.pair("Beam.positions").filter(|_| bar.items[g[0]].voice.is_none()) {
+                let mid = f64::from((lowest + highest) as i32) / 4.0;
+                up = (l + r) / 2.0 > mid;
             }
             // `\stemUp`, `\stemDown`: over the voice's direction too.
             if bar.items[g[0]].stem_dir != 0 {
@@ -352,7 +362,11 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
 /// stops where the voice is silent between two notes — a second voice's
 /// spacer (`s`) is no item, and two eighths either side of one are not
 /// neighbours.
-pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
+pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64), bounds: Option<&[i64]>) -> Result<Vec<Vec<usize>>, ScoreError> {
+    let window = |pos: i64| match bounds {
+        Some(g) => crate::look::window_in(g, pos),
+        None => pos / wins.0,
+    };
     {
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
@@ -389,7 +403,7 @@ pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<
             // A cadenza has no beats to beam by, and `\autoBeamOff` beams by
             // none: only `[ ]` beams there.
             let fl = if bar.cadenza || ev.no_autobeam { 0 } else { fl };
-            let w = (ev.start + bar.offset) / wins.0;
+            let w = window(ev.start + bar.offset);
             if (fl == 0 || w != win || gap) && !cur.is_empty() {
                 groups.push(std::mem::take(&mut cur));
             }
@@ -410,7 +424,7 @@ pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<
                 let mut pt: Option<i64> = None;
                 for &j in &g {
                     let ev = &bar.items[j];
-                    let w = (ev.start + bar.offset) / wins.1;
+                    let w = if bounds.is_some() { window(ev.start + bar.offset) } else { (ev.start + bar.offset) / wins.1 };
                     let tid = ev.tuplet.map(|t| t.id);
                     if (w != pw || tid != pt) && !part.is_empty() {
                         by_beat.push(std::mem::take(&mut part));
@@ -669,7 +683,8 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
                 continue;
             }
             let k = mag(ev);
-            let hw = glyph(head_name(ev.base)).advance * k;
+            // `\override NoteHead.style`: its head's own width.
+            let hw = glyph(crate::look::head_of(ev).unwrap_or(head_name(ev.base))).advance * k;
             ev.head_w = Some(hw);
             displace(ev);
             let mut right = hw;
@@ -1008,7 +1023,31 @@ pub(crate) fn key_width(fifths: i64) -> f64 {
     fifths.abs() as f64 * (g.advance + 0.1)
 }
 
+/// The room a metre takes in an opening, `gap` after it: none when it is
+/// not drawn (`\omit Staff.TimeSignature`).
+fn time_room(o: &Opening, gap: f64) -> f64 {
+    if o.time_parts[3] == crate::look::TIME_OMITTED {
+        return 0.0;
+    }
+    time_width(o.time, o.time_parts) + gap
+}
+
+/// An additive metre's own parts, without the style a setting keeps in
+/// the last slot (`look::TIME_NUMBERED` and its kin).
+fn own_parts(parts: [u8; 4]) -> [u8; 4] {
+    let mut out = parts;
+    if out[3] > 99 {
+        out[3] = 0;
+    }
+    out
+}
+
 pub(crate) fn time_glyph(time: (i64, i64), parts: [u8; 4]) -> Option<&'static str> {
+    // `\numericTimeSignature`: the figures, a 4/4 too.
+    if parts[3] == crate::look::TIME_NUMBERED || parts[3] == crate::look::TIME_SINGLE {
+        return None;
+    }
+    let parts = own_parts(parts);
     if parts[1] != 0 {
         return None;
     }
@@ -1028,6 +1067,7 @@ pub(crate) fn digits(v: i64) -> Vec<String> {
 /// A metre's numerator, as glyphs: its figure, or an additive metre's
 /// parts with a + between them.
 pub(crate) fn numerator(time: (i64, i64), parts: [u8; 4]) -> Vec<String> {
+    let parts = own_parts(parts);
     if parts[1] == 0 {
         return digits(time.0);
     }
@@ -1044,6 +1084,9 @@ pub(crate) fn numerator(time: (i64, i64), parts: [u8; 4]) -> Vec<String> {
 pub(crate) fn time_width(time: (i64, i64), parts: [u8; 4]) -> f64 {
     if let Some(one) = time_glyph(time, parts) {
         return glyph(one).advance;
+    }
+    if parts[3] == crate::look::TIME_SINGLE {
+        return numerator(time, parts).iter().fold(0.0, |acc, nm| acc + glyph(nm).advance);
     }
     let mut wide: f64 = 0.0;
     for names in [numerator(time, parts), digits(time.1)] {
@@ -1123,7 +1166,7 @@ fn prefix_width_of(o: &Opening, first: bool) -> f64 {
         w += key_width(o.fifths) + 0.8;
     }
     if first || o.changes.time {
-        w += time_width(o.time, o.time_parts) + 1.0;
+        w += time_room(o, 1.0);
     }
     w
 }
@@ -1169,7 +1212,7 @@ fn change_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        w += time_width(o.time, o.time_parts) + 1.0;
+        w += time_room(o, 1.0);
     }
     w
 }
@@ -1240,7 +1283,7 @@ fn courtesy_width_of(o: &Opening) -> f64 {
         }
     }
     if ch.time {
-        cw += time_width(o.time, o.time_parts) + 0.5;
+        cw += time_room(o, 0.5);
     }
     if cw > 0.0 {
         cw + 0.6
@@ -1599,6 +1642,11 @@ fn beam(bar: &mut Bar, gi: usize) {
     if concave {
         slope = 0.0;
     }
+    // `\override Beam.damping`: the slope that much flatter, flat at +inf.0.
+    let look = notes.first().map(|&j| bar.items[j].look.clone()).unwrap_or_default();
+    if let Some(damping) = look.num("Beam.damping").filter(|d| *d > 0.0) {
+        slope = if damping.is_infinite() { 0.0 } else { slope / damping };
+    }
     let ideal = [3.36, 3.6, 3.8][(n_beams.min(3) - 1).max(0) as usize];
     let shortest = 2.5 + (n_beams - 1) as f64 * RULE.beam_step;
     let mut b = 0.0;
@@ -1649,6 +1697,13 @@ fn beam(bar: &mut Bar, gi: usize) {
         let q = if up { q_left.min(q_right) } else { q_left.max(q_right) };
         q_left = q;
         q_right = q;
+    }
+    // `\override Beam.positions = #'(l . r)`: its ends where it says, in
+    // spaces up from the middle line, to the middle of the outer beam.
+    if let Some((l, r)) = look.pair("Beam.positions") {
+        let half = if up { -thick / 2.0 } else { thick / 2.0 };
+        q_left = 2.0 - l + half;
+        q_right = 2.0 - r + half;
     }
     let g = &mut bar.beams[gi];
     g.x0 = x0;
@@ -1959,6 +2014,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
     for ev in bars.iter_mut().flat_map(|b| b.items.iter_mut()) {
         ev.span_stem = false;
     }
+    crate::look::renumber(std::slice::from_mut(&mut bars));
     first_title(&mut bars, parsed);
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
     for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
@@ -2169,6 +2225,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
             }
         }
     }
+    crate::look::renumber(&mut all);
     let mut plan = crate::cross::plan(&mut all, staves_src)?;
     for (si, bars) in all.iter_mut().enumerate() {
         lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);
@@ -2238,6 +2295,10 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
             ss.clef_w = Some(clef_w);
             ss.key_w = Some(key_w);
         }
+        for (ss, gone) in staff_lines.iter_mut().zip(removed(staves_src, &all, &range, si == 0)) {
+            ss.hidden = gone;
+        }
+        top_staff_moves(&mut all, &mut staff_lines, &range);
         systems.push(System { lines: staff_lines, multi: true, left: line.left, right: line.right, first_line: si == 0 || master[range.start].fresh, ..System::default() });
     }
     for (s, bars) in all.iter_mut().enumerate() {
@@ -2284,34 +2345,127 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
     let mut offsets = vec![0.0];
     // An ossia with nothing in this system takes no room.
     let idle = |s: usize| sys.lines[s].kind == StaffKind::Ossia && sys.lines[s].bars.clone().all(|b| all[s][b].items.iter().all(|ev| ev.spacer));
+    // Nor does a staff removed from it (`\RemoveEmptyStaves`): the next one
+    // goes under the last that is drawn.
+    let hidden: Vec<bool> = sys.lines.iter().map(|l| l.hidden).collect();
+    let gone = |s: usize| hidden[s];
     for s in 1..reaches.len() {
-        if idle(s - 1) {
+        if gone(s) {
             offsets.push(offsets[s - 1]);
+            continue;
+        }
+        let Some(p) = (0..s).rev().find(|&k| !gone(k)) else {
+            offsets.push(offsets[s - 1]);
+            continue;
+        };
+        if idle(p) {
+            offsets.push(offsets[p]);
             continue;
         }
         // Chord names sit as close over their staff as their ink lets them,
         // an ossia closer than another staff.
         let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
-        let names = words(sys.lines[s - 1].kind) || words(sys.lines[s].kind);
+        let names = words(sys.lines[p].kind) || words(sys.lines[s].kind);
         let least: f64 = if names {
             0.0
-        } else if sys.lines[s - 1].kind == StaffKind::Ossia {
+        } else if sys.lines[p].kind == StaffKind::Ossia {
             7.0
         } else {
             9.0
         };
-        let o = (offsets[s - 1] + least).max(offsets[s - 1] + reaches[s - 1].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
+        let o = (offsets[p] + least).max(offsets[p] + reaches[p].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
         offsets.push(o);
     }
-    let last = offsets.len() - 1;
-    let high = (0..reaches.len()).filter(|&s| !idle(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
+    let last = (0..offsets.len()).rev().find(|&s| !gone(s)).unwrap_or(offsets.len() - 1);
+    let high = (0..reaches.len()).filter(|&s| !idle(s) && !gone(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
     sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
     sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
-    for (s, ss) in sys.lines.iter_mut().enumerate() {
-        let through = groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && s < g.last);
-        ss.connect_down = if through { offsets[s + 1] - offsets[s] - staff_height(ss.kind) } else { 0.0 };
+    let n = sys.lines.len();
+    for s in 0..n {
+        let next = (s + 1..n).find(|&t| !gone(t));
+        let ss = &mut sys.lines[s];
+        let through = |t: usize| groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && t <= g.last);
+        ss.connect_down = match next {
+            Some(t) if !ss.hidden && through(t) => offsets[t] - offsets[s] - staff_height(ss.kind),
+            _ => 0.0,
+        };
     }
     sys.offsets = offsets;
+}
+
+/// When the system leaves out the staff that carries what stands over the
+/// score — bar numbers, rehearsal marks, jumps, tempo marks, endings — the
+/// topmost staff it draws carries them on that system: their bars' marks
+/// and endings, and each tempo mark onto its note there, as LilyPond puts
+/// them over the top staff drawn.
+fn top_staff_moves(all: &mut [Vec<Bar>], lines: &mut [Line], range: &Range<usize>) {
+    let Some(z) = lines.iter().position(|l| l.kind != StaffKind::Ossia) else { return };
+    if !lines[z].hidden {
+        return;
+    }
+    let Some(top) = (0..lines.len()).find(|&s| !lines[s].hidden && lines[s].kind != StaffKind::Ossia) else { return };
+    for b in range.clone() {
+        let from = all[z][b].clone();
+        let to = &mut all[top][b];
+        if to.marks.is_empty() {
+            to.marks.clone_from(&from.marks);
+        }
+        if to.volta_in.is_none() && from.volta_in.is_some() {
+            to.volta_in.clone_from(&from.volta_in);
+            to.volta_first = from.volta_first;
+            to.volta_last = from.volta_last;
+            to.volta_closed = from.volta_closed;
+        }
+        for ev in from.items.iter().filter(|ev| ev.tempo.is_some()) {
+            if let Some(there) = to.items.iter_mut().find(|t| t.start == ev.start && t.tempo.is_none()) {
+                there.tempo.clone_from(&ev.tempo);
+            }
+        }
+        // The score's bar number settings, where the staff drawn has none.
+        if let (Some(look), Some(first)) = (from.items.first().map(|e| e.look.clone()), to.items.first_mut()) {
+            if first.look.is_empty() {
+                first.look = look;
+            }
+        }
+    }
+    let mut k = 0;
+    for l in lines.iter_mut() {
+        if l.kind == StaffKind::Ossia {
+            continue;
+        }
+        if l.hidden {
+            l.staff_index = Some(usize::MAX);
+        } else {
+            l.staff_index = Some(k);
+            k += 1;
+        }
+    }
+}
+
+/// The staves a system leaves out (`\RemoveEmptyStaves`, LilyPond's
+/// `VerticalAxisGroup.remove-empty`): a staff of notes whose bars on the
+/// system hold rests and spacers only — never on the first system unless
+/// `remove-first` (`\RemoveAllEmptyStaves`) says, and never every staff.
+fn removed(staves: &[crate::parse::Staff], all: &[Vec<Bar>], range: &Range<usize>, first: bool) -> Vec<bool> {
+    let mut out: Vec<bool> = staves
+        .iter()
+        .enumerate()
+        .map(|(s, stf)| {
+            if !matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab) {
+                return false;
+            }
+            let look = stf.events.iter().find(|ev| !ev.look.is_empty()).map(|ev| ev.look.clone()).unwrap_or_default();
+            if look.flag("VerticalAxisGroup.remove-empty") != Some(true) || (first && look.flag("VerticalAxisGroup.remove-first") != Some(true)) {
+                return false;
+            }
+            range.clone().all(|b| all[s][b].items.iter().all(|ev| ev.k != Kind::Note))
+        })
+        .collect();
+    let kept = staves.iter().enumerate().any(|(s, stf)| !out[s] && matches!(stf.kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Tab));
+    if !kept {
+        out = vec![false; staves.len()];
+    }
+    out
 }
 
 /// The tempo marks for a test's eyes: unused otherwise.

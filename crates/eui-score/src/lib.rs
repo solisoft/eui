@@ -24,12 +24,14 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 mod breaking;
+mod combine;
 pub mod cross;
 pub mod draw;
 pub mod edit;
 pub mod engrave;
 pub mod frets;
 pub mod glyphs;
+pub mod look;
 pub mod marks;
 pub mod measure;
 pub mod midi;

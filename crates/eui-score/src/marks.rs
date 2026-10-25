@@ -114,7 +114,12 @@ pub struct MarkPlace {
     pub x: f64,
     /// Its baseline.
     pub y: f64,
+    /// A frame round it, from its formatter: "box", "circle", or "".
+    pub frame: String,
 }
+
+/// How far a rehearsal mark's frame stands off its letters.
+pub(crate) const FRAME_PAD: f64 = 0.35;
 
 /// A dynamic or a hairpin on a line under the staff.
 #[derive(Debug, Clone, Default)]
@@ -161,6 +166,8 @@ pub struct TextPlace {
     pub bottom: f64,
     /// -1 above, 1 below.
     pub dir: i64,
+    /// Their size (`TextScript.font-size`).
+    pub em: f64,
 }
 
 /// A text spanner on one line: its words (on the line it starts on), then
@@ -193,6 +200,8 @@ pub struct HairpinPiece {
     /// `\cresc`'s words, on the piece it starts: drawn with dashes after
     /// them instead of a wedge (a later piece: the dashes alone).
     pub words: Option<String>,
+    /// The layout settings of the note it starts on.
+    pub look: crate::look::Look,
 }
 
 struct ScriptRule {
@@ -286,6 +295,10 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             if let Some(v) = ev.voice.filter(|_| !ev.free) {
                 over = v % 2 == 1;
             }
+            // `\tieUp`, `\override Tie.direction`: over all of it.
+            if let Some(d) = ev.look.dir("Tie") {
+                over = d > 0;
+            }
             tie(lines, ev, hd.pos, nxt, other.pos, over);
         }
     }
@@ -301,6 +314,9 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
             if let Some(v) = ev.voice.filter(|_| !ev.free) {
                 over = v % 2 == 1;
+            }
+            if let Some(d) = ev.look.dir("Tie") {
+                over = d > 0;
             }
             let dir = if over { -1.0 } else { 1.0 };
             let y = y_of(hd.pos) + dir * 0.35;
@@ -327,7 +343,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
         }
         if ev.slur_off {
             if let Some(first) = mine.pop() {
-                slur(lines, bars, &notes, first, at, 0.0);
+                slur(lines, bars, &notes, first, at, 0.0, ev_at(first).look.dir("Slur"));
                 slurs.push((first, at));
             }
         }
@@ -345,7 +361,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             if let Some(first) = mine.pop() {
                 let (a, b) = (ev_at(first).n.unwrap_or(0), ev.n.unwrap_or(0));
                 let inside = slurs.iter().any(|&(f, l)| voice_of(ev_at(f)) == voice_of(ev) && ev_at(f).n.unwrap_or(0) <= b && ev_at(l).n.unwrap_or(0) >= a);
-                slur(lines, bars, &notes, first, at, if inside { 1.2 } else { 0.0 });
+                slur(lines, bars, &notes, first, at, if inside { 1.2 } else { 0.0 }, ev_at(first).look.dir("PhrasingSlur"));
             }
         }
     }
@@ -405,7 +421,10 @@ fn tie(lines: &mut [Line], ev: &Ev, pos: i64, nxt: &Ev, other: i64, over: bool) 
     }
 }
 
-fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, extra: f64) {
+/// A slur from `first` to `last`; `forced` the direction a setting gives
+/// it (`\slurUp`: 1), over the one its notes and voice give it.
+#[allow(clippy::too_many_arguments)]
+fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, extra: f64, forced: Option<i64>) {
     let ev_at = |at: At| -> &Ev { &bars[at.0].items[at.1] };
     let (f, l) = (ev_at(first), ev_at(last));
     let (fnum, lnum) = (f.n.unwrap_or(0), l.n.unwrap_or(0));
@@ -415,6 +434,9 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, ext
     // Of two voices, the first's slurs above and the second's below.
     if let Some(v) = f.voice.filter(|_| !f.free) {
         over = v % 2 == 1;
+    }
+    if let Some(d) = forced {
+        over = d > 0;
     }
     let dir = if over { -1.0 } else { 1.0 };
     let e0 = slur_end(f, over);
@@ -631,7 +653,18 @@ pub(crate) fn marks(bars: &mut [Bar], lines: &mut [Line]) {
                         }
                     }
                 }
-                line.marks.push(TempoMark { x, y: low - 0.9, mark: mark.clone() });
+                // `padding` over what is under it; `X-offset` from the note,
+                // `Y-offset` from the middle line, `extra-offset` after it all.
+                let look = &ev.look;
+                let mut y = low - look.num("MetronomeMark.padding").map_or(0.9, |p| p + 0.4);
+                if let Some(dx) = look.num("MetronomeMark.X-offset") {
+                    x = ev.x + dx;
+                }
+                if let Some(v) = look.num("MetronomeMark.Y-offset") {
+                    y = 2.0 - v;
+                }
+                let (dx, dy) = look.extra("MetronomeMark");
+                line.marks.push(TempoMark { x: x + dx, y: y + dy, mark: mark.clone() });
             }
         }
         line.ottavas = ottavas(bars, line);
@@ -705,6 +738,30 @@ fn text_spans(bars: &[Bar], lines: &mut [Line]) {
     }
 }
 
+/// The bar numbers a line prints, as boxes: their left, right and top —
+/// what words and a rehearsal mark over the staff stand clear of, as
+/// LilyPond's BarNumber is nearer the staff than either.
+pub(crate) fn bar_number_boxes(bars: &[Bar], line: &Line) -> Vec<(f64, f64, f64)> {
+    let mut out = Vec::new();
+    if line.staff_index.unwrap_or(0) != 0 {
+        return out;
+    }
+    let e = em(-2.0);
+    for (bi, b) in line.bars.clone().enumerate() {
+        let bar = &bars[b];
+        let Some(look) = bar.items.first().map(|ev| &ev.look).filter(|l| !l.is_empty()) else { continue };
+        if bar.number < 1 || (bi == 0 && bar.first) || !crate::look::bar_number_shown(look, bar.number, bi == 0, bar.number <= 1) {
+            continue;
+        }
+        let text = bar.number.to_string();
+        let w = text_width(&text, Weight::Regular, e);
+        let (t, _) = text_box(&text, Weight::Regular, e);
+        let x0 = if bi == 0 { line.left } else { bar.x0 - barline_width(bars[b - 1].drawn()) / 2.0 - w / 2.0 };
+        out.push((x0, x0 + w, -1.6 + t));
+    }
+    out
+}
+
 /// The size of an ottava's words, and of a rehearsal mark's.
 pub(crate) fn ottava_em() -> f64 {
     em(-1.0)
@@ -764,21 +821,27 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
     for (bi, b) in line.bars.clone().enumerate() {
         let bar = &bars[b];
         for (pos, words) in &bar.marks {
-            let runs = words.pieces();
+            // Its formatter's frame, its alignment and its moves (score #403).
+            let (style, runs) = crate::look::mark_style(&words.pieces());
+            let runs = if style.bars { vec![Run::words(bar.number.to_string(), Weight::Bold)] } else { runs };
+            let framed = if style.frame.is_empty() { 0.0 } else { FRAME_PAD };
             let w = runs_width(&runs, e);
             let (_, foot) = runs_box(&runs, e);
-            let x = if *pos >= bar.length && words.dir > 0 {
+            let (anchor, align) = if *pos >= bar.length && words.dir > 0 {
                 // A jump ends at its bar line, as LilyPond right-aligns it.
-                bar.x1 + barline_width(bar.drawn()) / 2.0 - w
+                (bar.x1 + barline_width(bar.drawn()) / 2.0, 1.0)
             } else if *pos >= bar.length {
-                bar.x1 + barline_width(bar.drawn()) / 2.0 - w / 2.0
+                (bar.x1 + barline_width(bar.drawn()) / 2.0, 0.0)
             } else if *pos == 0 && bi == 0 {
-                line.left
+                (line.left, -1.0)
             } else if *pos == 0 {
-                bar.x0 - barline_width(&bars[b - 1].bar) / 2.0 - w / 2.0
+                (bar.x0 - barline_width(&bars[b - 1].bar) / 2.0, 0.0)
             } else {
-                bar.items.iter().find(|ev| ev.start >= *pos).map_or(bar.x0, |ev| ev.x) - w / 2.0
+                (bar.items.iter().find(|ev| ev.start >= *pos).map_or(bar.x0, |ev| ev.x), 0.0)
             };
+            let align = style.align.unwrap_or(align).clamp(-1.0, 1.0);
+            let anchor = anchor + style.x.unwrap_or(0.0);
+            let x = anchor - w * (align + 1.0) / 2.0 + if *pos == 0 && bi == 0 { framed } else { 0.0 };
             let mut low: f64 = -1.5;
             for ob in line.bars.clone() {
                 for other in &bars[ob].items {
@@ -804,10 +867,21 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
             // Two marks at one bar line — a D.S. ending a bar, a letter
             // starting the next — stand one over the other.
             for placed in &out {
-                let MarkPlace { runs: other, x: ox, y: oy } = placed;
+                let MarkPlace { runs: other, x: ox, y: oy, .. } = placed;
                 if *ox < x + w + 0.3 && *ox + runs_width(other, e) > x - 0.3 {
                     let (top, _) = runs_box(other, e);
                     low = low.min(oy + top - 0.4 + 0.8 + foot);
+                }
+            }
+            for (nx0, nx1, ntop) in bar_number_boxes(bars, line) {
+                if nx0 < x + w + 0.3 && nx1 > x - 0.3 {
+                    low = low.min(ntop - 0.2);
+                }
+            }
+            // Over the words above the staff, as LilyPond's priorities stack them.
+            for tx in &line.texts {
+                if tx.dir < 0 && tx.x0 < x + w + 0.3 && tx.x1 > x - 0.3 {
+                    low = low.min(tx.top - 0.2);
                 }
             }
             // An ottava's figure just after the bar line still sits under it.
@@ -816,7 +890,11 @@ fn rehearsal(bars: &[Bar], line: &Line) -> Vec<MarkPlace> {
                     low = low.min(ot.y - 1.6);
                 }
             }
-            out.push(MarkPlace { runs, x, y: low - 0.8 - foot });
+            let mut y = low - style.pad.unwrap_or(0.8) - foot - framed;
+            if let Some(v) = style.y {
+                y = 2.0 - v;
+            }
+            out.push(MarkPlace { runs, x: x + style.extra.0, y: y + style.extra.1, frame: style.frame });
         }
     }
     out
@@ -836,15 +914,33 @@ fn tuplets(bars: &[Bar], line: &Line) -> Vec<TupletPlace> {
             }
         }
     }
-    groups.iter().map(|(_, n, outer, items)| tuplet_place(bars, items, *n, *outer)).collect()
+    groups
+        .iter()
+        .map(|(_, n, outer, items)| {
+            // `\tupletUp`, `\omit TupletNumber`, `\omit TupletBracket`.
+            let look = &items[0].look;
+            let forced = look.dir("TupletBracket").or_else(|| look.dir("TupletNumber")).map(|d| d > 0);
+            let mut tp = tuplet_place(bars, items, *n, *outer, forced);
+            if look.omitted("TupletNumber") {
+                tp.label = String::new();
+            }
+            if look.omitted("TupletBracket") {
+                tp.bracket = false;
+            }
+            tp
+        })
+        .collect()
 }
 
-fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64, outer: bool) -> TupletPlace {
+fn tuplet_place(bars: &[Bar], items: &[&Ev], n: i64, outer: bool, forced: Option<bool>) -> TupletPlace {
     let notes: Vec<&Ev> = items.iter().copied().filter(|ev| ev.k == Kind::Note).collect();
     let first_beam = notes.first().and_then(|ev| ev.beam.map(|b| (ev.bar, b)));
     let beamed = notes.len() == items.len() && notes.len() > 1 && first_beam.is_some() && notes.iter().all(|ev| ev.beam.map(|b| (ev.bar, b)) == first_beam);
     let ups = notes.iter().filter(|ev| ev.up).count();
-    let up = if beamed { notes[0].beam.is_some_and(|b| bars[notes[0].bar].beams[b].up) } else { ups * 2 >= notes.len() };
+    let beam_up = beamed && notes[0].beam.is_some_and(|b| bars[notes[0].bar].beams[b].up);
+    // Set to the side away from its beam: placed as an unbeamed one is, bracket and all.
+    let beamed = beamed && forced.is_none_or(|f| f == beam_up);
+    let up = forced.unwrap_or(if beamed { beam_up } else { ups * 2 >= notes.len() });
     let last = items[items.len() - 1];
     let x0 = items[0].x - 0.2;
     let x1 = last.x + last.head_w.unwrap_or(1.2) + 0.2;
@@ -1000,27 +1096,39 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
                 (0, _) => -1,
                 (dir, _) => dir,
             };
+            // `\override Fingering.direction`: where one written with `-` goes.
+            let finger_side = ev.look.side("Fingering");
+            let finger_dir = |f: &crate::parse::Finger| if f.dir == 0 { finger_side.unwrap_or_else(|| finger_dir(f)) } else { finger_dir(f) };
             let mut fingers: Vec<(&crate::parse::Finger, i64)> = ev.fingers.iter().map(|f| (f, finger_dir(f))).collect();
             fingers.sort_by_key(|(f, dir)| f.head.unwrap_or(0) * -dir);
             let mut list: Vec<(&str, i64, Option<&str>, bool)> = ev.scripts.iter().map(|sc| (sc.name.as_str(), sc.dir, None, false)).collect();
             list.extend(fingers.iter().map(|(f, dir)| ("", *dir, Some(f.text.as_str()), f.circled)));
             list.sort_by_key(|sc| if sc.2.is_some() { 100 } else { script_rule(sc.0).prio });
+            let first_placed = line.scripts.len();
+            let finger_pad = ev.look.num("Fingering.padding").unwrap_or(0.5);
             for (name, sdir, figure, circled) in list {
                 if let Some(figure) = figure {
                     let bb = if circled { (-STRING_R - 0.05, STRING_R + 0.05) } else { figure_box(figure) };
                     let y;
                     if sdir < 0 {
-                        y = up_cursor - 0.5 - bb.1;
+                        y = up_cursor - finger_pad - bb.1;
                         up_cursor = y + bb.0;
                     } else {
-                        y = down_cursor + 0.5 - bb.0;
+                        y = down_cursor + finger_pad - bb.0;
                         down_cursor = y + bb.1;
                     }
                     line.scripts.push(ScriptPlace { glyph: "", x: xc, y, figure: Some(figure.to_owned()), k: if circled { STRING_K } else { FINGER_K }, circled });
                     continue;
                 }
-                let rule = script_rule(name);
+                let mut rule = script_rule(name);
+                if let Some(pad) = ev.look.num("Script.padding") {
+                    rule.pad = pad;
+                }
                 let mut dir = sdir;
+                // `\override Script.direction`: where one written with `-` goes.
+                if dir == 0 {
+                    dir = ev.look.side("Script").unwrap_or(0);
+                }
                 if dir == 0 && rule.side != 0 {
                     dir = rule.side;
                 }
@@ -1054,6 +1162,38 @@ fn scripts(bars: &mut [Bar], line: &mut Line) {
                     down_cursor = y + bb[3];
                 }
                 line.scripts.push(ScriptPlace { glyph: name, x: xc, y, figure: None, k: 1.0, circled: false });
+            }
+            // Moved where a setting says: `X-offset` and `Y-offset` from the
+            // note's head and the middle line, `extra-offset` from where they
+            // were placed — after the placing, as LilyPond's moves them.
+            for sc in &mut line.scripts[first_placed..] {
+                let grob = if sc.figure.is_some() { "Fingering" } else { "Script" };
+                if let Some(x) = ev.look.num(&format!("{grob}.X-offset")) {
+                    sc.x = ev.x + x;
+                }
+                if let Some(y) = ev.look.num(&format!("{grob}.Y-offset")) {
+                    let mid = match &sc.figure {
+                        Some(f) => {
+                            let bb = figure_box(f);
+                            (bb.0 + bb.1) / 2.0
+                        }
+                        None => {
+                            let bb = glyph(sc.glyph).bbox;
+                            (bb[1] + bb[3]) / 2.0
+                        }
+                    };
+                    sc.y = 2.0 - y - mid;
+                }
+                let (dx, dy) = ev.look.extra(grob);
+                sc.x += dx;
+                sc.y += dy;
+            }
+            if ev.look.omitted("Script") {
+                let mut k = 0;
+                line.scripts.retain(|sc| {
+                    k += 1;
+                    k <= first_placed || sc.figure.is_some()
+                });
             }
             ev.reach_up = Some(ext.0.min(up_cursor));
             ev.reach_down = Some(ext.1.max(down_cursor));
@@ -1125,7 +1265,7 @@ fn hairpins(bars: &[Bar], lines: &mut [Line]) {
             let ka = (si - first) as f64 / parts;
             let kb = (si - first + 1) as f64 / parts;
             let words = start_ev.hairpin_text.as_ref().map(|w| if si == first { w.clone() } else { String::new() });
-            line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb, words });
+            line.hairpins.push(HairpinPiece { x0: a, x1: b.max(a + 2.0), grow, from: ka, to: kb, words, look: start_ev.look.clone() });
         }
     }
 }
@@ -1153,12 +1293,32 @@ fn dyn_x(ev: &Ev, dynamic: &str) -> f64 {
     ev.x + item_w(ev) / 2.0 - dyn_width(dynamic) / 2.0
 }
 
+/// Whether a dynamic or a hairpin goes over the staff: `\dynamicUp`,
+/// `\override DynamicLineSpanner.direction = #UP`.
+fn dyn_up(look: &crate::look::Look) -> bool {
+    look.dir("DynamicLineSpanner").or_else(|| look.dir("DynamicText")) == Some(1)
+}
+
+/// How far a dynamic keeps from the staff and from the notes:
+/// `staff-padding` and `padding`.
+fn dyn_pads(look: &crate::look::Look) -> (f64, f64) {
+    let staff = look.num("DynamicLineSpanner.staff-padding").or_else(|| look.num("DynamicText.staff-padding")).unwrap_or(0.6);
+    let pad = look.num("DynamicLineSpanner.padding").or_else(|| look.num("DynamicText.padding")).unwrap_or(0.6);
+    (staff, pad)
+}
+
 fn dynamics(bars: &[Bar], line: &mut Line) {
-    let mut els: Vec<DynEl> = Vec::new();
+    let mut els: Vec<(DynEl, crate::look::Look)> = Vec::new();
     for b in line.bars.clone() {
         for ev in &bars[b].items {
             let Some(d) = &ev.dynamic else { continue };
-            let x = dyn_x(ev, d);
+            if ev.look.omitted("DynamicText") {
+                continue;
+            }
+            let mut x = dyn_x(ev, d);
+            if let Some(dx) = ev.look.num("DynamicText.X-offset") {
+                x = ev.x + dx;
+            }
             let mut top: f64 = 0.0;
             let mut bottom: f64 = 0.0;
             for name in dyn_letters(d) {
@@ -1166,39 +1326,56 @@ fn dynamics(bars: &[Bar], line: &mut Line) {
                 top = top.min(bb[1]);
                 bottom = bottom.max(bb[3]);
             }
-            els.push(DynEl { text: Some(d.clone()), x0: x, x1: x + dyn_width(d), top: 0.6 + top, bottom: 0.6 + bottom, ..DynEl::default() });
+            els.push((DynEl { text: Some(d.clone()), x0: x, x1: x + dyn_width(d), top: 0.6 + top, bottom: 0.6 + bottom, ..DynEl::default() }, ev.look.clone()));
         }
     }
     for hp in &line.hairpins {
-        els.push(DynEl { text: None, words: hp.words.clone(), x0: hp.x0, x1: hp.x1, grow: hp.grow, from: hp.from, to: hp.to, top: -0.6666, bottom: 0.6666, y: 0.0 });
+        els.push((DynEl { text: None, words: hp.words.clone(), x0: hp.x0, x1: hp.x1, grow: hp.grow, from: hp.from, to: hp.to, top: -0.6666, bottom: 0.6666, y: 0.0 }, hp.look.clone()));
     }
-    els.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    els.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
     line.dynamics = Vec::new();
-    let mut k = 0;
-    while k < els.len() {
-        let mut group = vec![k];
-        let mut reach = els[k].x1;
-        k += 1;
-        while k < els.len() && els[k].x0 - reach < 1.5 {
-            group.push(k);
-            reach = reach.max(els[k].x1);
+    // Under the staff, as LilyPond's DynamicLineSpanner; over it when set so.
+    for up in [false, true] {
+        let mine: Vec<&(DynEl, crate::look::Look)> = els.iter().filter(|e| dyn_up(&e.1) == up).collect();
+        let mut k = 0;
+        while k < mine.len() {
+            let mut group = vec![k];
+            let mut reach = mine[k].0.x1;
             k += 1;
-        }
-        let mut level: f64 = 0.0;
-        for &g in &group {
-            level = level.max(dyn_line(bars, line, &els[g]));
-        }
-        for &g in &group {
-            let mut el = els[g].clone();
-            el.y = level;
-            el.bottom = level + el.bottom + 0.3;
-            line.dynamics.push(el);
+            while k < mine.len() && mine[k].0.x0 - reach < 1.5 {
+                group.push(k);
+                reach = reach.max(mine[k].0.x1);
+                k += 1;
+            }
+            let pads = dyn_pads(&mine[group[0]].1);
+            let mut level: f64 = if up { f64::INFINITY } else { 0.0 };
+            for &g in &group {
+                level = if up { level.min(dyn_line_above(bars, line, &mine[g].0, pads)) } else { level.max(dyn_line(bars, line, &mine[g].0, pads)) };
+            }
+            for &g in &group {
+                let (mut el, look) = mine[g].clone();
+                el.y = level;
+                el.bottom = level + el.bottom + if up { 0.0 } else { 0.3 };
+                // `Y-offset` from the middle line, `extra-offset` from where it was put.
+                if el.text.is_some() {
+                    if let Some(v) = look.num("DynamicText.Y-offset") {
+                        el.y = 2.0 - v - 0.6;
+                    }
+                    let (dx, dy) = look.extra("DynamicText");
+                    el.x0 += dx;
+                    el.x1 += dx;
+                    el.y += dy;
+                }
+                line.dynamics.push(el);
+            }
         }
     }
+    line.dynamics.sort_by(|a, b| a.x0.total_cmp(&b.x0));
 }
 
-fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl) -> f64 {
-    let mut need = 4.0 + 0.6 - el.top;
+fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl, pads: (f64, f64)) -> f64 {
+    let (staff_pad, pad) = pads;
+    let mut need = 4.0 + staff_pad - el.top;
     for b in line.bars.clone() {
         for ev in &bars[b].items {
             let right = ev.x + item_w(ev);
@@ -1215,7 +1392,7 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl) -> f64 {
                 }
                 rise = 0.6666 * open;
             }
-            need = need.max(ev.reach_down.unwrap_or(4.0) + 0.6 + rise);
+            need = need.max(ev.reach_down.unwrap_or(4.0) + pad + rise);
         }
     }
     for tp in &line.tuplets {
@@ -1227,20 +1404,62 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl) -> f64 {
     need
 }
 
+/// The line a dynamic set over the staff stands on: clear of the notes
+/// and the articulations over it.
+fn dyn_line_above(bars: &[Bar], line: &Line, el: &DynEl, pads: (f64, f64)) -> f64 {
+    let (staff_pad, pad) = pads;
+    let mut need = -staff_pad - el.bottom;
+    for b in line.bars.clone() {
+        for ev in &bars[b].items {
+            let right = ev.x + item_w(ev);
+            if right < el.x0 - 0.2 || ev.x > el.x1 + 0.2 {
+                continue;
+            }
+            need = need.min(ev.reach_up.unwrap_or(0.0) - pad - el.bottom);
+        }
+    }
+    for tp in &line.tuplets {
+        if !tp.up || tp.x1 < el.x0 || tp.x0 > el.x1 {
+            continue;
+        }
+        need = need.min(tp.ya.min(tp.yb) - 0.9 - 0.6 - el.bottom);
+    }
+    need
+}
+
 fn texts(bars: &[Bar], line: &mut Line) {
     line.texts = Vec::new();
-    let e = em(0.0);
+    let numbers = bar_number_boxes(bars, line);
     for b in line.bars.clone() {
         for ev in &bars[b].items {
             for tx in &ev.texts {
                 let runs = tx.pieces();
+                // A pedal's "Ped." is no TextScript: the settings are the words'.
+                let pedal = runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal"));
+                let look = if pedal { crate::look::Look::default() } else { ev.look.clone() };
+                if look.omitted("TextScript") {
+                    continue;
+                }
+                let e = em(look.num("TextScript.font-size").unwrap_or(0.0));
                 let w = runs_width(&runs, e);
                 let bx = runs_box(&runs, e);
-                // Over a gathered rest the words are centred on it, over its count.
-                let x0 = if ev.mm.is_some() { (ev.span0 + ev.span1) / 2.0 - w / 2.0 } else { ev.x };
+                // Over a gathered rest the words are centred on it, over its count;
+                // else from the note's head, as `self-alignment-X` and
+                // `X-offset` say (LilyPond's default: the words' left at the head's).
+                let align = look.num("TextScript.self-alignment-X").unwrap_or(-1.0).clamp(-1.0, 1.0);
+                let anchor = match look.num("TextScript.X-offset") {
+                    Some(dx) => ev.x + dx,
+                    None => ev.x + ev.head_w.unwrap_or(0.0) * (align + 1.0) / 2.0,
+                };
+                let x0 = if ev.mm.is_some() { (ev.span0 + ev.span1) / 2.0 - w / 2.0 } else { anchor - w * (align + 1.0) / 2.0 };
                 let x1 = x0 + w;
-                let y = if tx.dir < 0 {
-                    let mut edge: f64 = -0.5;
+                let pad = look.num("TextScript.padding").unwrap_or(0.45);
+                let staff_pad = look.num("TextScript.staff-padding").unwrap_or(0.5);
+                let between = look.num("TextScript.outside-staff-padding").unwrap_or(0.0);
+                let y = if let Some(v) = look.num("TextScript.Y-offset") {
+                    2.0 - v
+                } else if tx.dir < 0 {
+                    let mut edge: f64 = -staff_pad;
                     for ob in line.bars.clone() {
                         for other in &bars[ob].items {
                             if other.x + item_w(other) < x0 - 0.2 || other.x > x1 + 0.2 {
@@ -1251,12 +1470,22 @@ fn texts(bars: &[Bar], line: &mut Line) {
                     }
                     for prev in &line.texts {
                         if prev.dir < 0 && prev.x1 > x0 && prev.x0 < x1 {
-                            edge = edge.min(prev.top);
+                            edge = edge.min(prev.top - between);
                         }
                     }
-                    edge - 0.45 - bx.1
+                    for dy in &line.dynamics {
+                        if dy.y < 2.0 && dy.x1 > x0 - 0.2 && dy.x0 < x1 + 0.2 {
+                            edge = edge.min(dy.y + dy.top);
+                        }
+                    }
+                    for (nx0, nx1, ntop) in &numbers {
+                        if *nx0 < x1 + 0.2 && *nx1 > x0 - 0.2 {
+                            edge = edge.min(ntop - 0.2);
+                        }
+                    }
+                    edge - pad - bx.1
                 } else {
-                    let mut edge: f64 = 4.5;
+                    let mut edge: f64 = 4.0 + staff_pad;
                     for ob in line.bars.clone() {
                         for other in &bars[ob].items {
                             if other.x + item_w(other) < x0 - 0.2 || other.x > x1 + 0.2 {
@@ -1272,12 +1501,15 @@ fn texts(bars: &[Bar], line: &mut Line) {
                     }
                     for prev in &line.texts {
                         if prev.dir > 0 && prev.x1 > x0 && prev.x0 < x1 {
-                            edge = edge.max(prev.bottom);
+                            edge = edge.max(prev.bottom + between);
                         }
                     }
-                    edge + 0.45 - bx.0
+                    edge + pad - bx.0
                 };
-                line.texts.push(TextPlace { text: tx.text.clone(), runs, x0, x1, y, top: y + bx.0, bottom: y + bx.1, dir: tx.dir });
+                // `extra-offset`: moved once it is placed, as LilyPond moves it —
+                // what comes after is placed against where it was.
+                let (dx, dy) = look.extra("TextScript");
+                line.texts.push(TextPlace { text: tx.text.clone(), runs, x0: x0 + dx, x1: x1 + dx, y: y + dy, top: y + bx.0, bottom: y + bx.1, dir: tx.dir, em: e });
             }
         }
     }
@@ -1455,7 +1687,15 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     if let Some(y) = line.title_y {
         hi = hi.min(y - 0.75 * em(0.0));
     }
-    if bars[range.start].number > 1 {
+    // Room for the bar numbers printed: at the line's start, and in it.
+    let numbered = range.clone().enumerate().any(|(bi, b)| {
+        let look = bars[b].items.first().map(|ev| ev.look.clone()).unwrap_or_default();
+        if look.is_empty() {
+            return bi == 0 && bars[b].number > 1;
+        }
+        line.staff_index.unwrap_or(0) == 0 && bars[b].number >= 1 && !(bi == 0 && bars[b].first) && crate::look::bar_number_shown(&look, bars[b].number, bi == 0, bars[b].first || bars[b].number <= 1)
+    });
+    if numbered {
         hi = hi.min(-3.0);
     }
     for vb in &line.voltas {
@@ -1476,6 +1716,7 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     }
     for dy in &line.dynamics {
         lo = lo.max(dy.bottom);
+        hi = hi.min(dy.y + dy.top);
     }
     for tx in &line.texts {
         if tx.dir < 0 {
@@ -1500,7 +1741,8 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
     }
     for mk in &line.rehearsal {
         let (t, _) = runs_box(&mk.runs, mark_em());
-        hi = hi.min(mk.y + t - 0.3);
+        let framed = if mk.frame.is_empty() { 0.0 } else { FRAME_PAD + 0.1 };
+        hi = hi.min(mk.y + t - 0.3 - framed);
     }
     for g in &line.glissandi {
         hi = hi.min(g[1].min(g[3]));

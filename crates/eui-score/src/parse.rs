@@ -327,7 +327,7 @@ pub(crate) fn tokens(src: &str) -> Result<Vec<Tok>, ScoreError> {
             }
             out.push(Tok::new(T::Str, word, i));
             i = jj + 1;
-        } else if "{}<>[]()~|.=*-^_!#:/+?'".contains(ch) {
+        } else if "{}<>[]()~|.=*-^_!#:/+?',".contains(ch) {
             out.push(Tok::new(T::Sym(ch), ch.to_string(), i));
             i += 1;
         } else if digit(ch) {
@@ -430,6 +430,16 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
                         continue;
                     }
                 }
+                if ["override", "revert", "once", "tweak"].contains(&word.as_str()) {
+                    // A setting among the words, `\override LyricText.self-alignment-X
+                    // = #LEFT`: read and passed over (a `\layout`'s `\Lyrics`
+                    // context is where the engraver honours it).
+                    beyond();
+                    let k = lyric_setting_end(cs, jj);
+                    warn(format!("\\{word} inside lyrics is not drawn"), i);
+                    i = k;
+                    continue;
+                }
                 return refuse("'\\' inside lyrics is not read: they are words, -- and __", i);
             }
             let mut jj = i;
@@ -443,6 +453,50 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
         }
     }
     Ok((items, i + 1))
+}
+
+/// Where a setting among lyrics ends, from just after its command: its
+/// path, `=` and its value (`#LEFT`, `#'(1 . 2)`, `##f`), or a command after it.
+fn lyric_setting_end(cs: &[char], mut i: usize) -> usize {
+    let n = cs.len();
+    i = skip_blank(cs, i);
+    if i < n && cs[i] == '\\' {
+        // `\once \override …`: the command it goes before.
+        let (_, jj) = name_at(cs, i + 1, letter);
+        return lyric_setting_end(cs, jj);
+    }
+    while i < n && (cs[i].is_ascii_alphanumeric() || ".-#'".contains(cs[i])) {
+        i += 1;
+    }
+    i = skip_blank(cs, i);
+    if i < n && cs[i] == '=' {
+        i = skip_blank(cs, i + 1);
+    } else {
+        return i;
+    }
+    while i < n && (cs[i] == '#' || cs[i] == '\'') {
+        i += 1;
+    }
+    if i < n && cs[i] == '(' {
+        let mut depth = 0;
+        while i < n {
+            if cs[i] == '(' {
+                depth += 1;
+            }
+            if cs[i] == ')' {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            i += 1;
+        }
+        return i;
+    }
+    while i < n && !blank(cs[i]) && cs[i] != '}' {
+        i += 1;
+    }
+    i
 }
 
 /// A lyric word without the duration LilyPond lets one carry: `Twin4` is
@@ -1166,6 +1220,9 @@ pub struct Ev {
     /// Under a beam that crosses from one staff to the other: its stem and
     /// the beam are the system's to draw, once the staves are stacked.
     pub xbeam: bool,
+    /// The layout settings in force where it is written: `\override`,
+    /// `\set`, `\tweak`, `\omit` and their kin (score #403).
+    pub look: crate::look::Look,
 }
 
 /// A syllable of `\addlyrics`.
@@ -1192,6 +1249,9 @@ pub struct Props {
     pub midi_maximum_volume: Option<f64>,
     /// `midiPanPosition`, -1–1.
     pub midi_pan_position: Option<f64>,
+    /// The layout settings its `\with` honours: `\override`, `\set`,
+    /// `\RemoveEmptyStaves` …
+    pub look: crate::look::Map,
 }
 
 /// What a staff is.
@@ -1621,6 +1681,8 @@ struct St {
     /// The words a text spanner starts with, from `\override
     /// TextSpanner.bound-details.left.text`.
     span_text: Vec<Run>,
+    /// The layout settings in force.
+    look: crate::look::LookState,
 }
 
 #[derive(Clone, Copy)]
@@ -1632,11 +1694,11 @@ struct TupletState {
     used: i64,
 }
 
-fn is(toks: &[Tok], i: usize, t: T) -> bool {
+pub(crate) fn is(toks: &[Tok], i: usize, t: T) -> bool {
     toks.get(i).is_some_and(|k| k.t == t)
 }
 
-fn is_cmd(toks: &[Tok], i: usize, v: &str) -> bool {
+pub(crate) fn is_cmd(toks: &[Tok], i: usize, v: &str) -> bool {
     toks.get(i).is_some_and(|k| k.t == T::Cmd && k.v == v)
 }
 
@@ -1819,9 +1881,9 @@ fn twin_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 }
 
 /// The token after a Scheme value: `#(…)`, `##t`, `#'name`, `#"…"`, `#-1`.
-fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+pub(crate) fn scheme_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
     let mut j = i + 1;
-    while is(toks, j, T::Sym('#')) || is(toks, j, T::Sym('\'')) || is(toks, j, T::Sym('-')) {
+    while is(toks, j, T::Sym('#')) || is(toks, j, T::Sym('\'')) || is(toks, j, T::Sym('-')) || is(toks, j, T::Sym('+')) {
         j += 1;
     }
     if is(toks, j, T::Sym('(')) {
@@ -1952,7 +2014,7 @@ const SWITCHES: [&str; 96] = [
 
 /// Where a property path ends: `Staff.TimeSignature.stencil`, `Stem
 /// #'direction`, `#'color`, `TextSpanner.bound-details.left.text`.
-fn path_end(toks: &[Tok], i: usize) -> usize {
+pub(crate) fn path_end(toks: &[Tok], i: usize) -> usize {
     let mut j = i;
     let mut want_word = true;
     loop {
@@ -1985,7 +2047,7 @@ fn path_words(toks: &[Tok], i: usize, end: usize) -> Vec<String> {
 /// The token after a setting's value: Scheme (`#red`, `##t`, `#'(1 . 2)`,
 /// `#(…)`), a string, a number and its unit (`2\cm`), a `\markup`, a `{ }`
 /// block, a word, or a command (`\default`).
-fn value_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+pub(crate) fn value_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
     let Some(t) = toks.get(i) else { return refuse("a setting with no value", at_of(toks, i.saturating_sub(1))) };
     match t.t {
         T::Sym('#') => scheme_end(toks, i),
@@ -2092,6 +2154,7 @@ fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, Sco
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     WARNINGS.with(|w| w.borrow_mut().clear());
     SPACING.with(|sp| *sp.borrow_mut() = SpacingSpanner::default());
+    crate::look::reset();
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
     let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0, local: None };
@@ -2179,6 +2242,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
             }
         }
     }
+    crate::look::settle(&mut staves, &groups);
     let mut warnings = WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()));
     warnings.sort_by_key(|w| w.at);
     let spacing = SPACING.with(|sp| *sp.borrow());
@@ -2539,14 +2603,53 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
 /// when it says anything.
 fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
     let end = skip_block(toks, i + 1)?;
+    if toks[i].v != "layout" {
+        if end > i + 3 {
+            warn(format!("the \\{} block's settings are not read", toks[i].v), toks[i].at);
+        }
+        return Ok(end);
+    }
     // What a `\layout` block may say of the lines — `ragged-right`,
     // `ragged-last`, `indent`, `short-indent`, `line-width` — and the
     // spacing of durations (`\override Score.SpacingSpanner …`) is read;
-    // anything else is passed over, with a warning.
+    // in a `\context { \Staff \RemoveEmptyStaves \override … }`, what the
+    // engraver draws is honoured for that context (score #403); anything
+    // else is passed over, with a warning.
     let mut unread = false;
     let mut j = i + 2;
-    while toks[i].v == "layout" && j + 1 < end {
+    while j + 1 < end {
         let t = &toks[j];
+        if is_cmd(toks, j, "context") && is(toks, j + 1, T::Sym('{')) {
+            let close = skip_block(toks, j + 1)? - 1;
+            let mut k = j + 2;
+            let mut name = String::new();
+            if toks.get(k).is_some_and(|t| t.t == T::Cmd && t.v.starts_with(|c: char| c.is_ascii_uppercase())) {
+                name = toks[k].v.clone();
+                k += 1;
+            }
+            let mut map = crate::look::Map::new();
+            while k < close {
+                if is_cmd(toks, k, "override") {
+                    let m = path_end(toks, k + 1);
+                    if is(toks, m, T::Sym('=')) && spacing_override(toks, k + 1, m) {
+                        beyond();
+                        k = value_end(toks, m + 1)?;
+                        continue;
+                    }
+                }
+                if let Some(next) = crate::look::context_setting(toks, k, &mut map)? {
+                    k = next;
+                    continue;
+                }
+                match skip_setting(toks, k, " in \\layout")? {
+                    Some(next) => k = next.max(k + 1),
+                    None => k += 1,
+                }
+            }
+            crate::look::layout_context(&name, map);
+            j = close + 1;
+            continue;
+        }
         if t.t == T::Cmd && t.v == "override" {
             let k = path_end(toks, j + 1);
             if is(toks, k, T::Sym('=')) && spacing_override(toks, j + 1, k) {
@@ -2574,18 +2677,18 @@ fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, 
                 continue;
             }
         }
-        if !matches!(t.t, T::Sym('{' | '}')) && !(t.t == T::Cmd && (t.v == "context" || t.v == "Score")) {
+        if !matches!(t.t, T::Sym('{' | '}')) {
             unread = true;
         }
         j += 1;
     }
-    if unread || (toks[i].v != "layout" && end > i + 3) {
-        warn(format!("the \\{} block's settings are not read", toks[i].v), toks[i].at);
+    if unread {
+        warn("the \\layout block's settings are not read", toks[i].at);
     }
     Ok(end)
 }
 
-fn skip_block(toks: &[Tok], mut i: usize) -> Result<usize, ScoreError> {
+pub(crate) fn skip_block(toks: &[Tok], mut i: usize) -> Result<usize, ScoreError> {
     if i >= toks.len() || toks[i].t != T::Sym('{') {
         return refuse("a { block } was expected", at_of(toks, i));
     }
@@ -2794,6 +2897,11 @@ fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, gro
     if staves.len() == first {
         return refuse("<< >> with no staff in it", at);
     }
+    // The group's `\with`, under each staff's own.
+    for stf in &mut staves[first..] {
+        let own = std::mem::replace(&mut stf.props.look, props.look.clone());
+        stf.props.look.extend(own);
+    }
     groups.push(Group { kind, first, last: staves.len() - 1, depth, name: props.instrument_name.clone().unwrap_or_default(), short: props.short_instrument_name.clone().unwrap_or_default() });
     Ok(i + 2)
 }
@@ -2917,8 +3025,14 @@ fn with(toks: &[Tok], mut i: usize, props: &mut Props) -> Result<usize, ScoreErr
             i = staff_prop(toks, i, props, "\\with")?;
             continue;
         }
-        // What else a context's `\with` says — `\consists`, `\override`,
-        // `fontSize = #-2` — is read and passed over.
+        // What the engraver draws — `\RemoveEmptyStaves`, `\override
+        // TimeSignature.style`, `fontSize = #-2` — is honoured for the
+        // context; what else it says (`\consists` …) is read and passed over.
+        if let Some(j) = crate::look::context_setting(toks, i, &mut props.look)? {
+            beyond();
+            i = j;
+            continue;
+        }
         match skip_setting(toks, i, " in \\with")? {
             Some(j) => i = j,
             None => return staff_prop(toks, i, props, "\\with"),
@@ -3039,6 +3153,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         follow_next: false,
         span_stem: false,
         span_text: Vec::new(),
+        look: crate::look::LookState::default(),
     };
     if base.compress > 0 {
         st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
@@ -3177,8 +3292,29 @@ fn expr(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -
 fn music(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
     while i < toks.len() {
         let tk = toks[i].clone();
+        // A setting written here — a clef, a metre, a mark — takes the
+        // layout settings in force, as a note does.
+        let before = st.events.len();
+        let read = music_item(toks, i, st, hd, &tk);
+        for ev in st.events.iter_mut().skip(before) {
+            if ev.look.is_empty() && !matches!(ev.k, Kind::Note | Kind::Rest) {
+                ev.look = st.look.current();
+            }
+        }
+        match read? {
+            Some(j) => i = j,
+            None => break,
+        }
+    }
+    Ok(i)
+}
+
+/// One item of [`music`] at `i`: the token after it, none at its `}`.
+fn music_item(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, String>, tk: &Tok) -> Result<Option<usize>, ScoreError> {
+    {
+        let tk = tk.clone();
         match tk.t {
-            T::Sym('}') => break,
+            T::Sym('}') => return Ok(None),
             T::Sym('{') => {
                 beyond();
                 i = expr(toks, i, st, hd)?;
@@ -3191,7 +3327,7 @@ fn music(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Strin
             _ => return refuse(format!("'{}' is not expected here", tk.v), tk.at),
         }
     }
-    Ok(i)
+    Ok(Some(i))
 }
 
 /// A sign written after a note, for it: `~`, `(` `)`, `[` `]`, or `-` `^`
@@ -3365,7 +3501,7 @@ fn ossia_events(main: &[Ev], mut ossias: Vec<(i64, Vec<Ev>)>) -> Result<Vec<Ev>,
 
 /// Where a staff's music has got to: the time of its first voice's notes
 /// and rests so far.
-fn elapsed(events: &[Ev]) -> i64 {
+pub(crate) fn elapsed(events: &[Ev]) -> i64 {
     let mut t = 0;
     let mut second = false;
     for ev in events {
@@ -3478,7 +3614,7 @@ fn sings(events: &[Ev]) -> bool {
 
 /// What belongs to the staff rather than to a voice: the staff's settings
 /// and the marks between its bars.
-fn staff_level(k: &Kind) -> bool {
+pub(crate) fn staff_level(k: &Kind) -> bool {
     matches!(
         k,
         Kind::Clef
@@ -3501,7 +3637,7 @@ fn staff_level(k: &Kind) -> bool {
 }
 
 /// The ticks an event of one voice takes.
-fn span(ev: &Ev) -> i64 {
+pub(crate) fn span(ev: &Ev) -> i64 {
     match ev.k {
         Kind::Note | Kind::Rest => ev.ticks * ev.count.max(1),
         _ => 0,
@@ -3511,7 +3647,7 @@ fn span(ev: &Ev) -> i64 {
 /// `main` with the staff's settings of `other` set in it at the moments
 /// they are written — a `\global`'s `\key` and `\time`, a second voice's
 /// `\clef` — and `other` without them.
-fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
+pub(crate) fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
     let mut put: Vec<(i64, Ev)> = Vec::new();
     let mut kept = Vec::new();
     let mut t = 0;
@@ -3557,6 +3693,43 @@ fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
     (out, kept)
 }
 
+/// `\partCombine \partI \partII` (and `\partcombine`, `\partCombineUp`,
+/// `\partCombineDown`): two parts read one after the other — under
+/// `\relative` the second from the first's last pitch, as LilyPond reads a
+/// music function's arguments — then set on one staff (`combine`).
+fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>, dir: i8) -> Result<usize, ScoreError> {
+    beyond();
+    let at = toks[i].at;
+    if !starts_expr(toks, i + 1) {
+        return refuse("\\partCombine wants two parts, each its music", at);
+    }
+    let outer = std::mem::take(&mut st.events);
+    let outer_modes = std::mem::take(&mut st.look.combine);
+    let outer_voice = st.look.voice.clone();
+    let mut parts = Vec::new();
+    let mut j = i + 1;
+    for _ in 0..2 {
+        if !starts_expr(toks, j) {
+            st.events = outer;
+            return refuse("\\partCombine wants two parts, each its music", at);
+        }
+        st.look.restore_voice(outer_voice.clone());
+        j = expr(toks, j, st, hd)?;
+        if let Some(g) = st.graces.first() {
+            return refuse("a grace note goes before a note, and none follows it in its part", g.at);
+        }
+        parts.push(std::mem::take(&mut st.events));
+    }
+    let modes = std::mem::replace(&mut st.look.combine, outer_modes);
+    st.look.restore_voice(outer_voice);
+    st.events = outer;
+    let second = parts.pop().unwrap_or_default();
+    let first = parts.pop().unwrap_or_default();
+    let combined = crate::combine::combine(first, second, modes, dir, at)?;
+    st.events.extend(combined);
+    Ok(j)
+}
+
 /// Simultaneous music on one staff, `<< … >>`: two voices written apart
 /// with `\\`, or side by side — `{ \voiceOne … } \new Voice { \voiceTwo … }`
 /// — under `\relative` each from the last pitch of the part before it, and
@@ -3576,6 +3749,8 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
     st.here += elapsed(&outer);
     let outer_cmd = st.voice_cmd;
     let outer_part = st.in_part;
+    // Each voice's own settings start from the ones before `<<`, and stay its own.
+    let outer_look = st.look.voice.clone();
     let mut parts: Vec<Part> = Vec::new();
     let mut apart = 0;
     loop {
@@ -3603,6 +3778,7 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         st.voice_cmd = None;
         st.voice_name = None;
         st.in_part = true;
+        st.look.restore_voice(outer_look.clone());
         let at = toks[i].at;
         i = expr(toks, i, st, hd)?;
         if let Some(g) = st.graces.first() {
@@ -3610,8 +3786,24 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         }
         parts.push(Part { events: std::mem::take(&mut st.events), voice: st.voice_cmd, name: st.voice_name.take(), at });
     }
+    // A `\partCombineUp` and its kin: its two voices, each a part.
+    if parts.iter().any(|p| p.voice.is_none() && crate::combine::is_pair(&p.events)) {
+        let mut flat = Vec::new();
+        for p in parts {
+            if p.voice.is_none() && crate::combine::is_pair(&p.events) {
+                let at = p.at;
+                for (v, events) in crate::combine::unnest(p.events) {
+                    flat.push(Part { events, voice: Some(v), name: None, at });
+                }
+            } else {
+                flat.push(p);
+            }
+        }
+        parts = flat;
+    }
     st.events = outer;
     st.here = outer_here;
+    st.look.restore_voice(outer_look);
     st.voice_cmd = outer_cmd;
     st.in_part = outer_part;
     let singing: Vec<usize> = (0..parts.len()).filter(|&k| sings(&parts[k].events)).collect();
@@ -3717,7 +3909,8 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     let nxt = toks[i + 1].clone();
     if nxt.t == T::Str {
         let last = last_item(&mut st.events, &tk)?;
-        last.texts.push(Words::plain(nxt.v, if dir == 0 { 1 } else { dir }));
+        // Written with `-`: the side is settled with the layout settings (`look::settle`).
+        last.texts.push(Words::plain(nxt.v, dir));
         return Ok(i + 2);
     }
     if nxt.t == T::Num && !nxt.v.contains('/') {
@@ -3730,7 +3923,7 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         let (runs, j) = markup(toks, i + 2, nxt.at)?;
         let text = runs.iter().filter(|r| !r.glyph).map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
         let last = last_item(&mut st.events, &tk)?;
-        last.texts.push(Words { text, dir: if dir == 0 { -1 } else { dir }, runs });
+        last.texts.push(Words { text, dir, runs });
         return Ok(j);
     }
     if nxt.t == T::Cmd {
@@ -3993,6 +4186,34 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "oneVoice" => return Ok(i + 1),
         "cueDuring" => return cue_during(toks, i, st, hd),
+        "partCombine" | "partcombine" | "partCombineUp" | "partcombineUp" | "partCombineDown" | "partcombineDown" => {
+            let dir = if word.ends_with("Up") {
+                1
+            } else if word.ends_with("Down") {
+                -1
+            } else {
+                0
+            };
+            return part_combine(toks, i, st, hd, dir);
+        }
+        "magnifyMusic" => {
+            // `\magnifyMusic 0.63 { … }`: the music in it that much smaller,
+            // in LilyPond's font-size steps (six to an octave of size).
+            let mut j = i + 1;
+            if is(toks, j, T::Sym('#')) {
+                j += 1;
+            }
+            let Some((ratio, after)) = number_at(toks, j).filter(|r| r.0 > 0.0) else { return refuse("\\magnifyMusic wants a ratio, like 0.63, then its music", tk.at) };
+            if !starts_expr(toks, after) {
+                return refuse("\\magnifyMusic wants a ratio, like 0.63, then its music", tk.at);
+            }
+            let saved = st.size;
+            st.size = (6.0 * ratio.log2()).round().clamp(-12.0, 12.0) as i8;
+            let end = expr(toks, after, st, hd)?;
+            st.size = saved;
+            beyond();
+            return Ok(end);
+        }
         "normalsize" | "small" | "tiny" | "teeny" => {
             // The notes after it, smaller: LilyPond's font-size steps.
             beyond();
@@ -4235,7 +4456,12 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 "codaMark" => (vec![Run::glyph("coda")], i + 1),
                 _ => mark_label(toks, i, st)?,
             };
-            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: -1, runs }], at: tk.at, ..Ev::default() });
+            // `\mark \default` and `\mark 3` keep their number, for the
+            // formatter the layout may set (`look::settle`).
+            let k = if is(toks, i + 1, T::Sym('#')) { i + 2 } else { i + 1 };
+            let numbered = word == "mark" && (is_cmd(toks, k, "default") || is(toks, k, T::Num));
+            let count = if numbered { st.marks } else { 0 };
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir: -1, runs }], count, at: tk.at, ..Ev::default() });
             return Ok(j);
         }
         _ => {}
@@ -4301,7 +4527,12 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             st.no_autobeam = toks[j + 1..end].iter().any(|t| t.t == T::Word && t.v == "f");
             return Ok(end);
         }
-        // Anything else it sets is read and passed over.
+        // What the engraver draws is honoured; anything else it sets is
+        // read and passed over.
+        if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
+            beyond();
+            return Ok(end);
+        }
         return match skip_setting(toks, i, "")? {
             Some(end) => Ok(end),
             None => refuse("\\set wants a property, = and a value", tk.at),
@@ -4387,26 +4618,38 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
                 };
                 return done(value_end(toks, j + 1)?);
             }
-            // `\override Stem.direction = #UP`: `\stemUp`.
-            if is_path(&["Stem", "direction"]) && is(toks, j + 1, T::Sym('#')) {
-                if let Some(dir) = toks.get(j + 2).map(|t| t.v.as_str()) {
-                    st.stem = match dir {
-                        "UP" | "1" => 1,
-                        "DOWN" => -1,
-                        _ => 0,
-                    };
-                    if dir == "-" {
-                        st.stem = -1;
-                    }
-                }
-                return done(value_end(toks, j + 1)?);
+            // What the engraver draws — `\override Stem.direction = #UP`,
+            // `TextScript.extra-offset` … — is honoured; the rest passed over.
+            if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
+                return done(end);
             }
             Ok(skip_setting(toks, i, "")?)
         }
-        "revert" | "unset" | "hide" | "omit" | "undo" | "once" | "temporary" | "single" => Ok(skip_setting(toks, i, "")?),
-        w if SWITCHES.contains(&w) => Ok(skip_setting(toks, i, "")?),
+        "revert" | "unset" | "hide" | "omit" | "undo" | "once" | "temporary" | "single" => {
+            if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
+                return done(end);
+            }
+            Ok(skip_setting(toks, i, "")?)
+        }
+        w if SWITCHES.contains(&w) => {
+            if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
+                return done(end);
+            }
+            Ok(skip_setting(toks, i, "")?)
+        }
         "tweak" => {
-            // `\tweak color #red`, `-\tweak Accidental.color #red`: before what it tweaks.
+            // `\tweak color #red`, `-\tweak Accidental.color #red`: before what it
+            // tweaks — the next note, or after a note the sign that follows.
+            if let Some((key, v, end)) = crate::look::tweak(toks, i)? {
+                let after_note = i > 0 && matches!(toks[i - 1].t, T::Sym('-' | '^' | '_')) && toks[i - 1].at + 1 == at;
+                if after_note {
+                    let last = last_item(&mut st.events, &tk)?;
+                    last.look = crate::look::with_one(&last.look, key, v);
+                } else {
+                    st.look.set_once(key, v);
+                }
+                return done(end);
+            }
             let j = path_end(toks, i + 1);
             warn(format!("\\tweak {} is not drawn", path_words(toks, i + 1, j).join(".")), at);
             done(value_end(toks, j)?)
@@ -4460,7 +4703,18 @@ fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, 
             last_item(&mut st.events, &tk)?.span_stop = true;
             done(i + 1)
         }
-        _ => Ok(None),
+        "large" | "huge" => {
+            // Larger notes from here, as `\small` makes them smaller.
+            st.size = if word == "large" { 1 } else { 2 };
+            done(i + 1)
+        }
+        _ => {
+            // `\RemoveEmptyStaves`, `\partCombineApart` and their kin.
+            if let Some(end) = crate::look::command(toks, i, &mut st.look, elapsed(&st.events))? {
+                return done(end);
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -4972,6 +5226,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     ev.stem_dir = st.stem;
     ev.no_autobeam = st.no_autobeam;
     ev.cue = st.cue;
+    ev.look = st.look.stamp();
     st.events.push(ev);
     Ok(i)
 }
@@ -5069,7 +5324,7 @@ fn mark_label(toks: &[Tok], i: usize, st: &mut St) -> Result<(Vec<Run>, usize), 
 }
 
 /// A rehearsal mark's letters: A … Z without I, then AA, AB …
-fn letters(n: i64) -> String {
+pub(crate) fn letters(n: i64) -> String {
     const ABC: &str = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
     let mut n = n.max(1) - 1;
     let mut out = String::new();

@@ -275,7 +275,7 @@ fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
     for (s, line) in sys.lines.iter().enumerate() {
         starts.push(paths.len());
         let offset = sys.offsets.get(s).copied().unwrap_or(0.0);
-        if let Some(bars) = eng.staves.get(s) {
+        if let Some(bars) = eng.staves.get(s).filter(|_| !line.hidden) {
             draw_line(&mut paths, bars, line, top + offset, sp, &mut ranges, None);
         }
     }
@@ -464,6 +464,9 @@ pub fn draw_system(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64
 fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f64, sp: f64, ranges: &mut Ranges, mut heads: Option<&mut HeadRanges>) {
     if sys.multi {
         for (s, line) in sys.lines.iter().enumerate() {
+            if line.hidden {
+                continue;
+            }
             draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges, heads.as_deref_mut());
         }
         let mut pen = Pen { paths, sp, heads: None };
@@ -556,15 +559,19 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         return;
     }
     let tab = line.kind == StaffKind::Tab;
+    let first = &bars[line.bars.start];
+    // The staff's settings where the line starts: `\omit Staff.StaffSymbol`,
+    // `Clef`, `KeySignature`, `BarNumber` …
+    let look = first.items.first().map(|ev| ev.look.clone()).unwrap_or_default();
     if tab {
         draw_strings(&mut pen, bars, line, top);
-    } else {
+    } else if !look.omitted("StaffSymbol") {
         for i in 0..5 {
             pen.rect(left, top + i as f64 - RULE.staff / 2.0, right - left, RULE.staff);
         }
     }
-    let first = &bars[line.bars.start];
-    if first.number > 1 && line.staff_index.unwrap_or(0) == 0 {
+    // Never over the piece's first bar, which has no bar line to stand on.
+    if line.staff_index.unwrap_or(0) == 0 && !first.first && crate::look::bar_number_shown(&look, first.number, true, first.number <= 1) && first.number >= 1 {
         let e = em(-2.0);
         let number = first.number.to_string();
         let number_x = if line.staff_index.is_some() { left } else { left - text_width(&number, Weight::Regular, e) - 0.2 };
@@ -572,19 +579,22 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     }
     let mut x = left + 0.8;
     let clef = clef_glyph(first.clef);
-    draw_clef(&mut pen, first.clef, x, top);
+    if !look.omitted("Clef") {
+        draw_clef(&mut pen, first.clef, x, top);
+    }
     x += line.clef_w.unwrap_or(glyph(clef).advance) + 1.0;
+    let keyed = !look.omitted("KeySignature");
     if tab {
         // A tablature's frets say what a key and a metre would.
     } else if let Some(key_w) = line.key_w {
-        if first.fifths != 0 {
+        if first.fifths != 0 && keyed {
             draw_key(&mut pen, first.fifths, first.clef, x, top, false, 0);
         }
         if key_w > 0.0 {
             x += key_w + 0.8;
         }
     } else if first.fifths != 0 {
-        x = draw_key(&mut pen, first.fifths, first.clef, x, top, false, 0) + 0.8;
+        x = if keyed { draw_key(&mut pen, first.fifths, first.clef, x, top, false, 0) } else { x + crate::engrave::key_width(first.fifths) } + 0.8;
     }
     if (first.first || first.changes.time) && !tab {
         draw_time(&mut pen, first.time, first.time_parts, x, top);
@@ -592,9 +602,19 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     let down = line.connect_down + crate::engrave::staff_height(line.kind) - 4.0;
     for (bi, b) in line.bars.clone().enumerate() {
         let bar = &bars[b];
+        let bar_look = bar.items.first().map(|ev| ev.look.clone()).unwrap_or_default();
         if bi > 0 && !tab {
-            draw_changes(&mut pen, &bar.opening(), bar.x0, top);
+            draw_changes(&mut pen, &bar.opening(), bar.x0, top, &bar_look);
         }
+        // A bar's number in the line, where `barNumberVisibility` and
+        // `BarNumber.break-visibility` show it: over its bar line.
+        if bi > 0 && line.staff_index.unwrap_or(0) == 0 && crate::look::bar_number_shown(&bar_look, bar.number, false, bar.first || bar.number <= 1) && bar.number >= 1 {
+            let e = em(-2.0);
+            let number = bar.number.to_string();
+            let bl = barline_width(bars[b - 1].drawn());
+            pen.text(&number, Weight::Regular, bar.x0 - bl / 2.0 - text_width(&number, Weight::Regular, e) / 2.0, top - 1.6, e);
+        }
+        let no_bar_line = bar_look.omitted("BarLine");
         if tab {
             for ev in &bar.items {
                 let from_k = pen.paths.len();
@@ -602,7 +622,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
                 ranges.push((ev.i, from_k..pen.paths.len()));
             }
             let kind = bar.drawn();
-            draw_bar(&mut pen, kind, bar.x1 + barline_width(kind), top, down);
+            if !no_bar_line {
+                draw_bar(&mut pen, kind, bar.x1 + barline_width(kind), top, down);
+            }
             continue;
         }
         for ev in &bar.items {
@@ -640,7 +662,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
             }
         }
         let kind = bar.drawn();
-        draw_bar(&mut pen, kind, bar.x1 + barline_width(kind), top, down);
+        if !no_bar_line {
+            draw_bar(&mut pen, kind, bar.x1 + barline_width(kind), top, down);
+        }
         if bi == 0 {
             if let Some(ox) = bar.open_repeat_x {
                 draw_bar(&mut pen, ".|:", ox, top, 0.0);
@@ -684,7 +708,7 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         draw_dynamic(&mut pen, dy, top);
     }
     for tx in &line.texts {
-        draw_runs(&mut pen, &tx.runs, tx.x0, top + tx.y, em(0.0));
+        draw_runs(&mut pen, &tx.runs, tx.x0, top + tx.y, tx.em);
     }
     for g in &line.glissandi {
         draw_line_seg(&mut pen, g[0], top + g[1], g[2], top + g[3], 0.1);
@@ -710,7 +734,8 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     }
     if line.courtesy > 0.0 {
         if let Some(Courtesy::Single(o)) = &line.courtesy_bar {
-            draw_courtesy(&mut pen, o, line.bar_end, top);
+            let last = bars[line.bars.end - 1].items.first().map(|ev| ev.look.clone()).unwrap_or_default();
+            draw_courtesy(&mut pen, o, line.bar_end, top, &last);
         }
     }
 }
@@ -765,7 +790,9 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
     for (k, ev) in notes.iter().enumerate() {
         let Some(lyr) = verse_of(ev, verse) else { continue };
         let w = if lyr.text.is_empty() { 0.0 } else { text_width(&lyr.text, Weight::Regular, e) };
-        let x0 = ev.x + ev.head_w.unwrap_or(0.0) / 2.0 - w / 2.0;
+        // Centred on its head, or as `LyricText.self-alignment-X` says.
+        let align = ev.look.num("LyricText.self-alignment-X").unwrap_or(0.0).clamp(-1.0, 1.0);
+        let x0 = ev.x + (ev.head_w.unwrap_or(0.0) - w) * (align + 1.0) / 2.0;
         let x1 = x0 + w;
         if w > 0.0 {
             pen.text(&lyr.text, Weight::Regular, x0, y, e);
@@ -885,7 +912,8 @@ fn draw_tuplet(pen: &mut Pen, tp: &TupletPlace, top: f64) {
         return;
     }
     let half = 0.08;
-    let gap = w / 2.0 + 0.35;
+    // No number (`\omit TupletNumber`): the bracket unbroken.
+    let gap = if tp.label.is_empty() { 0.0 } else { w / 2.0 + 0.35 };
     for seg in [(tp.x0, xm - gap), (xm + gap, tp.x1)] {
         let ya = tp.ya + slope * (seg.0 - tp.x0);
         let yb = tp.ya + slope * (seg.1 - tp.x0);
@@ -932,8 +960,10 @@ fn draw_dynamic(pen: &mut Pen, dy: &DynEl, top: f64) {
 fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let offsets = &sys.offsets;
     let left = sys.left;
-    // The system's line joins its staves — not the chord names over them.
-    let staves: Vec<usize> = (0..sys.lines.len()).filter(|&s| !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
+    // The system's line joins its staves — not the chord names over them,
+    // nor a staff the system leaves out.
+    let staves: Vec<usize> =
+        (0..sys.lines.len()).filter(|&s| !sys.lines[s].hidden && !matches!(sys.lines[s].kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards | StaffKind::Ossia)).collect();
     if let (Some(&a), Some(&b)) = (staves.first(), staves.last()) {
         if staves.len() > 1 {
             let bottom = offsets[b] + crate::engrave::staff_height(sys.lines[b].kind);
@@ -942,14 +972,28 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     }
     let mut edge = left - 0.3;
     let deepest = eng.groups.iter().map(|g| g.depth).max().unwrap_or(0);
+    // A group's staves the system draws: an ossia over its first stands
+    // outside its bracket; a staff left out shrinks it.
+    let shown = |g: &crate::parse::Group| -> Vec<usize> { (g.first..=g.last).filter(|&s| !sys.lines[s].hidden && sys.lines[s].kind != StaffKind::Ossia).collect() };
+    let hid_any = sys.lines.iter().any(|l| l.hidden);
     for g in &eng.groups {
         if g.kind == GroupKind::None {
             continue;
         }
-        // An ossia over a group's first staff stands outside its bracket.
-        let first = (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first);
+        let members = shown(g);
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else { continue };
+        let last = if hid_any { last } else { g.last };
+        let first = if hid_any { first } else { (g.first..=g.last).find(|&s| sys.lines[s].kind != StaffKind::Ossia).unwrap_or(g.first) };
         let y0 = top + offsets[first];
-        let y1 = top + offsets[g.last] + crate::engrave::staff_height(sys.lines[g.last].kind);
+        let y1 = top + offsets[last] + crate::engrave::staff_height(sys.lines[last].kind);
+        // A brace or a bracket shorter than LilyPond's `collapse-height`
+        // (5 spaces) is not drawn: a group left with one staff loses it.
+        let look = eng.staves.get(first).and_then(|bars| bars.iter().find_map(|b| b.items.first())).map(|ev| ev.look.clone()).unwrap_or_default();
+        let grob = if g.kind == GroupKind::Brace { "SystemStartBrace" } else { "SystemStartBracket" };
+        let collapse = look.num(&format!("{grob}.collapse-height")).unwrap_or(5.0);
+        if y1 - y0 < collapse {
+            continue;
+        }
         let x = left - 0.3 - (deepest - g.depth) as f64 * 1.6;
         if g.kind == GroupKind::Brace {
             draw_brace(pen, x, y0, y1);
@@ -965,10 +1009,10 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     let e = em(0.0);
     let label = |g: &crate::parse::Group| if sys.first_line { g.name.clone() } else { g.short.clone() };
     for (s, name) in sys.names.iter().enumerate() {
-        if name.is_empty() {
+        if name.is_empty() || sys.lines[s].hidden {
             continue;
         }
-        let in_group = eng.groups.iter().any(|g| g.first <= s && s <= g.last && g.kind != GroupKind::None && g.first < g.last && !label(g).is_empty());
+        let in_group = eng.groups.iter().any(|g| g.first <= s && s <= g.last && g.kind != GroupKind::None && g.first < g.last && !label(g).is_empty() && !shown(g).is_empty());
         if in_group {
             continue;
         }
@@ -976,10 +1020,13 @@ fn draw_groups(pen: &mut Pen, eng: &Engraved, sys: &System, top: f64) {
     }
     for g in &eng.groups {
         let l = label(g);
+        let members = shown(g);
+        let (Some(&first), Some(&last)) = (members.first(), members.last()) else { continue };
         if l.is_empty() {
             continue;
         }
-        draw_name(pen, &l, edge, top + (offsets[g.first] + offsets[g.last] + 4.0) / 2.0, e);
+        let (first, last) = if hid_any { (first, last) } else { (g.first, g.last) };
+        draw_name(pen, &l, edge, top + (offsets[first] + offsets[last] + 4.0) / 2.0, e);
     }
 }
 
@@ -1032,16 +1079,20 @@ fn draw_volta(pen: &mut Pen, vb: &Volta, top: f64) {
     }
 }
 
-fn draw_courtesy(pen: &mut Pen, o: &Opening, bar_end: f64, top: f64) {
+fn draw_courtesy(pen: &mut Pen, o: &Opening, bar_end: f64, top: f64, look: &crate::look::Look) {
     let ch = o.changes;
     let mut x = bar_end + 0.6;
     if ch.key {
+        let n = pen.paths.len();
         let skip = key_cancel(ch.key_from, o.fifths);
         if skip >= 0 {
             x = draw_key(pen, ch.key_from, o.clef, x, top, true, skip) + 0.5;
         }
         if o.fifths != 0 {
             x = draw_key(pen, o.fifths, o.clef, x, top, false, 0) + 0.5;
+        }
+        if look.omitted("KeySignature") {
+            pen.paths.truncate(n);
         }
     }
     if ch.time {
@@ -1076,6 +1127,18 @@ fn draw_key(pen: &mut Pen, fifths: i64, clef: Clef, mut x: f64, top: f64, cancel
 }
 
 fn draw_time(pen: &mut Pen, time: (i64, i64), parts: [u8; 4], x: f64, top: f64) {
+    if parts[3] == crate::look::TIME_OMITTED {
+        return;
+    }
+    if parts[3] == crate::look::TIME_SINGLE {
+        // `TimeSignature.style = #'single-digit`: the numerator alone, on the middle line.
+        let mut cx = x;
+        for nm in crate::engrave::numerator(time, parts) {
+            pen.glyph(&nm, cx, top + 2.0);
+            cx += glyph(&nm).advance;
+        }
+        return;
+    }
     if let Some(one) = time_glyph(time, parts) {
         pen.glyph(one, x, top + 2.0);
         return;
@@ -1110,21 +1173,30 @@ fn draw_mid_change(pen: &mut Pen, ev: &Ev, clef: Clef, mut x: f64, top: f64) {
     }
 }
 
-fn draw_changes(pen: &mut Pen, o: &Opening, x0: f64, top: f64) {
+fn draw_changes(pen: &mut Pen, o: &Opening, x0: f64, top: f64, look: &crate::look::Look) {
     let ch = o.changes;
     let mut x = x0 + 0.6;
     if ch.clef {
         let clef = clef_glyph(o.clef);
+        let n = pen.paths.len();
         draw_clef(pen, o.clef, x, top);
+        if look.omitted("Clef") {
+            pen.paths.truncate(n);
+        }
         x += glyph(clef).advance + 0.8;
     }
     if ch.key {
+        // `\omit Staff.KeySignature`: its room kept, nothing drawn in it.
+        let n = pen.paths.len();
         let skip = key_cancel(ch.key_from, o.fifths);
         if skip >= 0 {
             x = draw_key(pen, ch.key_from, o.clef, x, top, true, skip) + 0.5;
         }
         if o.fifths != 0 {
             x = draw_key(pen, o.fifths, o.clef, x, top, false, 0) + 0.8;
+        }
+        if look.omitted("KeySignature") {
+            pen.paths.truncate(n);
         }
     }
     if ch.time {
@@ -1236,7 +1308,8 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
         let from = pen.paths.len();
         let hx = ev.x + hd.side as f64 * (hw - RULE.stem);
         let y = top + y_of(hd.pos);
-        pen.glyph_k(head_glyph(ev.base, hd.style), hx, y, k);
+        let name = if hd.style.is_empty() { crate::look::head_of(ev).unwrap_or(head_glyph(ev.base, hd.style)) } else { head_glyph(ev.base, hd.style) };
+        pen.glyph_k(name, hx, y, k);
         if let Some(acc) = hd.acc {
             let ax = ev.x + hd.acc_x.unwrap_or(0.0);
             if hd.paren {
@@ -1283,16 +1356,22 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
     let g = glyph(hname);
     let sx;
     let tip = top + ev.stem_end;
+    // `\omit Stem` takes its flag with it, as LilyPond's flag hangs on the stem.
+    let no_stem = ev.look.omitted("Stem");
     if ev.up {
         let root = top + y_of(lo) + g.anchors.get("stemUpSE").map_or(0.0, |a| a[1]) * k;
         sx = stem_x(ev) - RULE.stem;
-        pen.rect(sx, tip, RULE.stem, root - tip);
+        if !no_stem {
+            pen.rect(sx, tip, RULE.stem, root - tip);
+        }
     } else {
         let root = top + y_of(hi) + g.anchors.get("stemDownNW").map_or(0.0, |a| a[1]) * k;
         sx = stem_x(ev);
-        pen.rect(sx, root, RULE.stem, tip - root);
+        if !no_stem {
+            pen.rect(sx, root, RULE.stem, tip - root);
+        }
     }
-    if ev.beam.is_none() && flags(ev.base) > 0 {
+    if ev.beam.is_none() && flags(ev.base) > 0 && !no_stem && !ev.look.omitted("Flag") {
         let flag = flag_name(ev.base, ev.up);
         let anchor = glyph(&flag).anchors.get(if ev.up { "stemUpNW" } else { "stemDownSW" }).copied().unwrap_or([0.0, 0.0]);
         pen.glyph_k(&flag, sx - anchor[0] * k, tip - anchor[1] * k, k);
@@ -1331,6 +1410,13 @@ pub(crate) fn past_flag(ev: &Ev, dot_pos: i64) -> f64 {
 
 fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
     let notes: Vec<&Ev> = g.notes.iter().map(|&j| &bar.items[j]).collect();
+    if notes.first().is_some_and(|ev| ev.look.omitted("Beam")) {
+        return;
+    }
+    // `\set subdivideBeams = ##t`: the inner beams broken at each step of
+    // `baseMoment`, the outer ones going on over the break.
+    let sub = notes.first().and_then(|ev| crate::look::subdivision(&ev.look, bar.time));
+    let breaks = |k: usize, level: i64| sub.is_some_and(|(step, keep)| level >= keep && (notes[k].start + bar.offset) % step == 0);
     let dir = if g.up { 1.0 } else { -1.0 };
     let k = notes.first().map_or(1.0, |ev| crate::engrave::mag(ev));
     for level in 0..g.n {
@@ -1342,14 +1428,16 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
                 continue;
             }
             let mut jj = i;
-            while jj + 1 < notes.len() && flags(notes[jj + 1].base) > level {
+            while jj + 1 < notes.len() && flags(notes[jj + 1].base) > level && !breaks(jj + 1, level) {
                 jj += 1;
             }
             let mut xa = stem_x(notes[i]) - if g.up { RULE.stem } else { 0.0 };
             let mut xb = stem_x(notes[jj]) + if g.up { 0.0 } else { RULE.stem };
             if i == jj {
                 let stub = 1.1;
-                if i == 0 {
+                // Of a subdivided group, a stub points into its own group.
+                let group_start = sub.is_some() && breaks(i, level);
+                if i == 0 || group_start {
                     xb = xa + stub;
                 } else {
                     xb = xa + RULE.stem;
@@ -1570,7 +1658,26 @@ fn draw_span(pen: &mut Pen, sp: &crate::marks::SpanPlace, top: f64) {
 
 /// A rehearsal mark, a segno or a coda.
 fn draw_mark(pen: &mut Pen, mk: &MarkPlace, top: f64) {
-    draw_runs(pen, &mk.runs, mk.x, top + mk.y, mark_em());
+    let e = mark_em();
+    draw_runs(pen, &mk.runs, mk.x, top + mk.y, e);
+    if mk.frame.is_empty() {
+        return;
+    }
+    // `format-mark-box-letters` and its kin: a box or a circle round it.
+    let w = crate::marks::runs_width(&mk.runs, e);
+    let (t, b) = crate::marks::runs_box(&mk.runs, e);
+    let pad = crate::marks::FRAME_PAD;
+    let line = 0.1;
+    if mk.frame == "circle" {
+        let r = (w.max(b - t)) / 2.0 + pad;
+        draw_ring(pen, mk.x + w / 2.0, top + mk.y + (t + b) / 2.0, r, line);
+        return;
+    }
+    let (x0, x1, y0, y1) = (mk.x - pad, mk.x + w + pad, top + mk.y + t - pad, top + mk.y + b.max(0.0) + pad);
+    pen.rect(x0, y0, x1 - x0, line);
+    pen.rect(x0, y1 - line, x1 - x0, line);
+    pen.rect(x0, y0, line, y1 - y0);
+    pen.rect(x1 - line, y0, line, y1 - y0);
 }
 
 /// A note's grace notes, small, before it: heads, accidentals and ledger

@@ -718,17 +718,17 @@ fn layout_settings_are_read_and_passed_over_with_a_warning() {
     use eui_score::warnings;
     // Each of these refused the whole file; now read whole, the music after it too.
     let said = [
-        "{ \\override Staff.TimeSignature.stencil = ##f c'4 d' }",
+        "{ \\override Staff.TimeSignature.color = #red c'4 d' }",
         "{ \\override Stem #'length = #5 c'4 d' }",
         "{ \\once \\override NoteHead.color = #red c'4 \\revert NoteHead.color d' }",
         "{ \\override Slur.positions = #'(1 . 2) c'4( d') }",
-        "{ \\override TextScript.extra-offset = #(cons 0 1) c'4 d' }",
+        "{ \\override TextScript.color = #(rgb-color 1 0 0) c'4 d' }",
         "{ \\tweak color #red c'4 d'-\\tweak Script.color #blue -> }",
-        "{ \\set Score.currentBarNumber = #5 \\unset Score.currentBarNumber c'4 }",
-        "{ \\slurUp \\tieDown \\dynamicUp \\dynamicNeutral \\tieNeutral \\slurNeutral c'4 }",
+        "{ \\set Staff.explicitKeySignatureVisibility = #all-invisible \\unset Staff.explicitKeySignatureVisibility c'4 }",
+        "{ \\slurDashed \\tieDotted \\textSpannerUp \\arpeggioBracket c'4 }",
         "{ \\transposition bes c'4 }",
         "\\new Staff \\with { \\consists \"Ambitus_engraver\" \\remove \"Time_signature_engraver\" fontSize = #-2 } { c'4 }",
-        "\\layout { \\context { \\Score \\override BarNumber.break-visibility = ##(#f #t #t) } } { c'4 }",
+        "\\layout { \\context { \\Score \\override BarNumber.font-size = #-2 } } { c'4 }",
         "\\midi { \\tempo 4 = 90 } { c'4 }",
         "\\paper { print-page-number = ##f top-system-spacing.basic-distance = #10 } { c'4 }",
         "\\header { encodingsoftware = \"musicxml2ly\" title = \\markup { \\bold Song } } { c'4 }",
