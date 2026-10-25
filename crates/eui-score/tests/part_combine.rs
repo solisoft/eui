@@ -215,6 +215,63 @@ fn the_midi_plays_both_parts() {
     let mut both = both;
     both.sort_unstable();
     assert_eq!(combined, both);
-    // In unison, the note once.
-    assert_eq!(ours("\\partCombine { c''4 } { c''4 }").len(), 1);
+    // In unison both parts sound, as LilyPond's MIDI plays them: the note
+    // drawn once is struck by each (score #412).
+    assert_eq!(ours("\\partCombine { c''4 } { c''4 }"), vec![(72, 0), (72, 0)]);
+}
+
+/// Notes played: `(key, on, off)`.
+type Played = Vec<(u8, u32, u32)>;
+
+/// Every note of `src`, in time order.
+fn played(src: &str) -> Played {
+    let mut all = notes(&midi(src, &MidiOptions::default()).unwrap()).1;
+    all.sort_unstable_by_key(|n| (n.1, n.0, n.2));
+    all
+}
+
+/// The two parts, combined on one staff and written on two staves of their own.
+fn both_ways(one: &str, two: &str) -> (Played, Played) {
+    (played(&format!("\\new Staff \\partCombine {{ {one} }} {{ {two} }}")), played(&format!("<< \\new Staff {{ {one} }} \\new Staff {{ {two} }} >>")))
+}
+
+#[test]
+fn what_the_staff_leaves_out_is_played_as_two_staves_play_it() {
+    // A solo forced while the other part plays: the silenced part sounds.
+    let (together, apart) = both_ways("\\partCombineSoloI c''4 d'' \\partCombineSoloII e'' f''", "a'4 b' c'' d''");
+    assert_eq!(together, apart);
+    assert_eq!(together.len(), 8, "four notes a part");
+    // The part left out has its own rhythm, and ties.
+    let (together, apart) = both_ways("\\partCombineSoloI c''2 d''", "a'8 b' c''4~ c''2");
+    assert_eq!(together, apart);
+    assert!(together.contains(&(72, 6720, 26880)), "c'' held over the tie, as one note: {together:?}");
+    // Unisono forced on different notes: part II's own notes sound.
+    let (together, apart) = both_ways("\\partCombineUnisono c''4 d''", "c''4 b'");
+    assert_eq!(together, apart);
+    assert!(together.iter().any(|n| n.0 == 71), "b' played though it is not drawn");
+    // Unisono found by the combiner: each part strikes the note.
+    let (together, apart) = both_ways("c''4 d'' e''2", "c''4 d'' e''2");
+    assert_eq!(together, apart);
+    assert_eq!(together.len(), 6);
+    // A solo over the other part's rest, and over a whole bar's.
+    let (together, apart) = both_ways("\\partCombineSoloI r4 d'' r2 R1", "c''4 r f''2 g''1");
+    assert_eq!(together, apart);
+    assert_eq!(together.iter().map(|n| n.0).collect::<Vec<_>>(), vec![72, 74, 77, 79]);
+    // A staccato of the part left out is its own.
+    let (together, apart) = both_ways("\\partCombineSoloI c''2 c''", "e''4-. f'' g''2");
+    assert_eq!(together, apart);
+    // Nothing is played twice that was written once: chords and two voices.
+    let (together, apart) = both_ways("e''4 f''2. c''4 d''", "c''4 d''2. e''8 f'' g''4");
+    assert_eq!(together, apart);
+    // What is drawn is unchanged: the solo still shows one part.
+    let p = combined("\\partCombineSoloI c''4 d''", "a'4 b'");
+    let it = items(&p);
+    assert_eq!(it.iter().map(|e| e.pitches[0].d).collect::<Vec<_>>(), vec![14, 15]);
+    assert_eq!(it[0].unseen.iter().map(|(t, e)| (*t, e.pitches[0].d)).collect::<Vec<_>>(), vec![(0, 12)], "a' kept to be played, from where it starts");
+    assert_eq!(it[1].unseen.iter().map(|(t, e)| (*t, e.pitches[0].d)).collect::<Vec<_>>(), vec![(0, 13)]);
+    // A note cut at a bar line keeps what it plays on its first piece only:
+    // played once, not once a piece.
+    let (together, apart) = both_ways("\\partCombineSoloI c''1. d''2", "a'1. b'2");
+    assert_eq!(together, apart);
+    assert_eq!(together.iter().filter(|n| n.0 == 69).count(), 1);
 }

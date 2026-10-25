@@ -13,8 +13,9 @@
 //!   voices, part I's stems up and part II's down.
 //!
 //! The staff's settings (a clef, a metre, a mark) are part I's, and part
-//! II's where part I has none of the kind there. Every note sounds: what is
-//! drawn once is played once, as the same pitch at the same time is.
+//! II's where part I has none of the kind there. Every note of both parts
+//! sounds, as in LilyPond's MIDI: what a solo or a unison leaves out of the
+//! staff is kept on the note drawn there, as [`Ev::unseen`], and played.
 
 use crate::glyphs::Weight;
 use crate::look::Combine;
@@ -271,6 +272,15 @@ pub(crate) fn combine(part_i: Vec<Ev>, part_ii: Vec<Ev>, mut modes: Vec<(i64, Co
             }
             State::Chords => vec![unite(ia[0].clone(), ib[0], true)],
         };
+        // What the stretch leaves out of the staff and still plays: the
+        // part a solo silences, part II in unison (score #412).
+        let dropped: &Part = if state == State::SoloII { &a } else { &b };
+        if matches!(state, State::SoloI | State::SoloII | State::Unisono) {
+            let unseen: Vec<(i64, Ev)> = dropped.items.iter().filter(|it| it.0 >= t0 && it.0 < t1 && it.1.k == Kind::Note && !it.1.cue).map(|it| (it.0 - t0, it.1.clone())).collect();
+            if let Some(first) = set.first_mut() {
+                first.unseen.extend(unseen);
+            }
+        }
         if state != State::Apart {
             close(&mut out, &mut apart);
         }

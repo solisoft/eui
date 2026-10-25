@@ -101,6 +101,9 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
     let mut volume: f64 = 90.0;
     let mut hairpin: Option<Hairpin> = None;
     let mut sounding: Vec<(i64, Sounding)> = Vec::new();
+    // The notes left out of the staff tie among themselves: a part's own
+    // tie, not one to the note drawn on the same key.
+    let mut sounding_unseen: Vec<(i64, Sounding)> = Vec::new();
     for (bi, bar) in bars.iter().enumerate() {
         if bi == 0 || bar.changes.time {
             ev_out.push((at, 0, vec![255, 88, 4, bar.time.0 as u8, log2(bar.time.1) as u8, 24, 8]));
@@ -163,87 +166,16 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
             }
             let t0 = t0 + stolen;
             let span = span - stolen;
+            // What `\partCombine` leaves out of the staff, played all the
+            // same (score #412).
+            for (off, u) in &ev.unseen {
+                play(&mut ev_out, &mut sounding_unseen, u, at + ev.start + off, u.ticks, volume, channel);
+            }
             // A cue is another part's notes, to read: not played.
             if ev.k != Kind::Note || ev.cue {
                 continue;
             }
-            let has = |n: &str| ev.scripts.iter().any(|sc| sc.name == n);
-            let mut vel = volume;
-            if has("accent") {
-                vel += 20.0;
-            }
-            if has("marcato") {
-                vel += 30.0;
-            }
-            let vel = (vel + 0.5).clamp(1.0, 127.0) as u8;
-            let mut length = span;
-            if has("staccato") {
-                length = span / 2;
-            }
-            if has("staccatissimo") {
-                length = span / 8;
-            }
-            if has("portato") {
-                length = span * 3 / 4;
-            }
-            // `\afterGrace`: the note gives its end, from `after_at` (3/4 of
-            // it), to its grace notes, which share that time as written.
-            if !ev.after_graces.is_empty() && span > 1 {
-                let part = if ev.after_at > 0.0 && ev.after_at < 1.0 { ev.after_at } else { crate::parse::AFTER_GRACE };
-                let from = ((span as f64 * part).round() as i64).clamp(1, span - 1);
-                let room = span - from;
-                let written: i64 = ev.after_graces.iter().map(|g| g.ticks.max(1)).sum();
-                let mut t = t0 + from;
-                for (gi, g) in ev.after_graces.iter().enumerate() {
-                    let end = if gi + 1 == ev.after_graces.len() { t0 + span } else { (t + g.ticks.max(1) * room / written).max(t + 1) };
-                    for hd in &g.heads {
-                        let key = key_of(hd.d, hd.alter);
-                        ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
-                        ev_out.push((end, 0, vec![(128 + channel) as u8, key as u8, 64]));
-                    }
-                    t = end;
-                }
-                // Tied on, the note is held under them into the next, as
-                // LilyPond plays it: unless one of them is its own key,
-                // which strikes it again.
-                let own = ev.after_graces.iter().flat_map(|g| &g.heads).any(|g| ev.heads.iter().any(|h| key_of(h.d, h.alter) == key_of(g.d, g.alter)));
-                if !ev.tie || own {
-                    length = length.min(from);
-                }
-            }
-            if ev.tremolo > 0 {
-                // `c4:16`: the note again each sixteenth of it.
-                let each = (WHOLE / ev.tremolo).max(1);
-                let mut t = t0;
-                while t < t0 + span {
-                    let len = each.min(t0 + span - t);
-                    for hd in &ev.heads {
-                        let key = key_of(hd.d, hd.alter);
-                        ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
-                        ev_out.push((t + len, 0, vec![(128 + channel) as u8, key as u8, 64]));
-                    }
-                    t += each;
-                }
-                continue;
-            }
-            for hd in &ev.heads {
-                let key = ev.drums.iter().find(|dr| dr.d == hd.d).map_or_else(|| key_of(hd.d, hd.alter), |dr| dr.key);
-                if let Some((_, held)) = sounding.iter_mut().find(|(k, _)| *k == key) {
-                    if held.until == t0 && held.tied {
-                        held.until = t0 + length;
-                        held.tied = ev.tie;
-                        ev_out[held.off].0 = t0 + length;
-                        continue;
-                    }
-                }
-                ev_out.push((t0, 1, vec![(144 + channel) as u8, key as u8, vel]));
-                ev_out.push((t0 + length, 0, vec![(128 + channel) as u8, key as u8, 64]));
-                let s = Sounding { until: t0 + length, tied: ev.tie, off: ev_out.len() - 1 };
-                match sounding.iter_mut().find(|(k, _)| *k == key) {
-                    Some(slot) => slot.1 = s,
-                    None => sounding.push((key, s)),
-                }
-            }
+            play(&mut ev_out, &mut sounding, ev, t0, span, volume, channel);
         }
         at += bar.length * bar.span.unwrap_or(1);
     }
@@ -264,6 +196,92 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
     }
     out.extend([0, 255, 47, 0]);
     out
+}
+
+/// A note's keys sounded from `t0` for `span` ticks: its scripts' lengths,
+/// its `\afterGrace` notes, its tremolo, a tie into it held on. A note not
+/// laid out in a bar (one `\partCombine` leaves out) has no heads yet:
+/// its pitches are its keys.
+#[allow(clippy::too_many_arguments)]
+fn play(ev_out: &mut Vec<(i64, i64, Vec<u8>)>, sounding: &mut Vec<(i64, Sounding)>, ev: &crate::parse::Ev, t0: i64, span: i64, volume: f64, channel: i64) {
+    let heads: Vec<(i64, i64)> = if ev.heads.is_empty() { ev.pitches.iter().map(|p| (p.d, p.alter)).collect() } else { ev.heads.iter().map(|h| (h.d, h.alter)).collect() };
+    let has = |n: &str| ev.scripts.iter().any(|sc| sc.name == n);
+    let mut vel = volume;
+    if has("accent") {
+        vel += 20.0;
+    }
+    if has("marcato") {
+        vel += 30.0;
+    }
+    let vel = (vel + 0.5).clamp(1.0, 127.0) as u8;
+    let mut length = span;
+    if has("staccato") {
+        length = span / 2;
+    }
+    if has("staccatissimo") {
+        length = span / 8;
+    }
+    if has("portato") {
+        length = span * 3 / 4;
+    }
+    // `\afterGrace`: the note gives its end, from `after_at` (3/4 of
+    // it), to its grace notes, which share that time as written.
+    if !ev.after_graces.is_empty() && span > 1 {
+        let part = if ev.after_at > 0.0 && ev.after_at < 1.0 { ev.after_at } else { crate::parse::AFTER_GRACE };
+        let from = ((span as f64 * part).round() as i64).clamp(1, span - 1);
+        let room = span - from;
+        let written: i64 = ev.after_graces.iter().map(|g| g.ticks.max(1)).sum();
+        let mut t = t0 + from;
+        for (gi, g) in ev.after_graces.iter().enumerate() {
+            let end = if gi + 1 == ev.after_graces.len() { t0 + span } else { (t + g.ticks.max(1) * room / written).max(t + 1) };
+            for hd in &g.heads {
+                let key = key_of(hd.d, hd.alter);
+                ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                ev_out.push((end, 0, vec![(128 + channel) as u8, key as u8, 64]));
+            }
+            t = end;
+        }
+        // Tied on, the note is held under them into the next, as
+        // LilyPond plays it: unless one of them is its own key,
+        // which strikes it again.
+        let own = ev.after_graces.iter().flat_map(|g| &g.heads).any(|g| heads.iter().any(|h| key_of(h.0, h.1) == key_of(g.d, g.alter)));
+        if !ev.tie || own {
+            length = length.min(from);
+        }
+    }
+    if ev.tremolo > 0 {
+        // `c4:16`: the note again each sixteenth of it.
+        let each = (WHOLE / ev.tremolo).max(1);
+        let mut t = t0;
+        while t < t0 + span {
+            let len = each.min(t0 + span - t);
+            for &(d, alter) in &heads {
+                let key = key_of(d, alter);
+                ev_out.push((t, 1, vec![(144 + channel) as u8, key as u8, vel]));
+                ev_out.push((t + len, 0, vec![(128 + channel) as u8, key as u8, 64]));
+            }
+            t += each;
+        }
+        return;
+    }
+    for &(d, alter) in &heads {
+        let key = ev.drums.iter().find(|dr| dr.d == d).map_or_else(|| key_of(d, alter), |dr| dr.key);
+        if let Some((_, held)) = sounding.iter_mut().find(|(k, _)| *k == key) {
+            if held.until == t0 && held.tied {
+                held.until = t0 + length;
+                held.tied = ev.tie;
+                ev_out[held.off].0 = t0 + length;
+                continue;
+            }
+        }
+        ev_out.push((t0, 1, vec![(144 + channel) as u8, key as u8, vel]));
+        ev_out.push((t0 + length, 0, vec![(128 + channel) as u8, key as u8, 64]));
+        let s = Sounding { until: t0 + length, tied: ev.tie, off: ev_out.len() - 1 };
+        match sounding.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = s,
+            None => sounding.push((key, s)),
+        }
+    }
 }
 
 /// Where the fermatas hold: (tick the held note ends, ticks it is held

@@ -1223,6 +1223,11 @@ pub struct Ev {
     /// The layout settings in force where it is written: `\override`,
     /// `\set`, `\tweak`, `\omit` and their kin (score #403).
     pub look: crate::look::Look,
+    /// Notes played and not drawn, each with where it starts from this
+    /// event's start: what `\partCombine` leaves out of the staff — the
+    /// other part under a solo, part II in unison — and LilyPond's MIDI
+    /// still plays (score #412).
+    pub unseen: Vec<(i64, Ev)>,
 }
 
 /// A syllable of `\addlyrics`.
