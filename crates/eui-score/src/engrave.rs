@@ -2265,6 +2265,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
         for (ss, gone) in staff_lines.iter_mut().zip(removed(staves_src, &all, &range, si == 0)) {
             ss.hidden = gone;
         }
+        top_staff_moves(&mut all, &mut staff_lines, &range);
         systems.push(System { lines: staff_lines, multi: true, left: line.left, right: line.right, first_line: si == 0 || master[range.start].fresh, ..System::default() });
     }
     for (s, bars) in all.iter_mut().enumerate() {
@@ -2356,6 +2357,55 @@ fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[
         };
     }
     sys.offsets = offsets;
+}
+
+/// When the system leaves out the staff that carries what stands over the
+/// score — bar numbers, rehearsal marks, jumps, tempo marks, endings — the
+/// topmost staff it draws carries them on that system: their bars' marks
+/// and endings, and each tempo mark onto its note there, as LilyPond puts
+/// them over the top staff drawn.
+fn top_staff_moves(all: &mut [Vec<Bar>], lines: &mut [Line], range: &Range<usize>) {
+    let Some(z) = lines.iter().position(|l| l.kind != StaffKind::Ossia) else { return };
+    if !lines[z].hidden {
+        return;
+    }
+    let Some(top) = (0..lines.len()).find(|&s| !lines[s].hidden && lines[s].kind != StaffKind::Ossia) else { return };
+    for b in range.clone() {
+        let from = all[z][b].clone();
+        let to = &mut all[top][b];
+        if to.marks.is_empty() {
+            to.marks.clone_from(&from.marks);
+        }
+        if to.volta_in.is_none() && from.volta_in.is_some() {
+            to.volta_in.clone_from(&from.volta_in);
+            to.volta_first = from.volta_first;
+            to.volta_last = from.volta_last;
+            to.volta_closed = from.volta_closed;
+        }
+        for ev in from.items.iter().filter(|ev| ev.tempo.is_some()) {
+            if let Some(there) = to.items.iter_mut().find(|t| t.start == ev.start && t.tempo.is_none()) {
+                there.tempo.clone_from(&ev.tempo);
+            }
+        }
+        // The score's bar number settings, where the staff drawn has none.
+        if let (Some(look), Some(first)) = (from.items.first().map(|e| e.look.clone()), to.items.first_mut()) {
+            if first.look.is_empty() {
+                first.look = look;
+            }
+        }
+    }
+    let mut k = 0;
+    for l in lines.iter_mut() {
+        if l.kind == StaffKind::Ossia {
+            continue;
+        }
+        if l.hidden {
+            l.staff_index = Some(usize::MAX);
+        } else {
+            l.staff_index = Some(k);
+            k += 1;
+        }
+    }
 }
 
 /// The staves a system leaves out (`\RemoveEmptyStaves`, LilyPond's

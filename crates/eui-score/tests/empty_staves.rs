@@ -102,3 +102,24 @@ fn midi_plays_every_staff_whatever_is_hidden() {
     let b = two("\\layout { \\context { \\Staff \\RemoveAllEmptyStaves } }", "", "");
     assert_eq!(midi(&a, &MidiOptions::default()).unwrap(), midi(&b, &MidiOptions::default()).unwrap());
 }
+
+#[test]
+fn what_stands_over_the_score_goes_over_the_top_staff_drawn() {
+    let src = "\\layout { \\context { \\Staff \\RemoveEmptyStaves } } << \\new Staff { c''1 c'' \\break \\mark \\default \\tempo 4 = 90 \\repeat volta 2 { R1 } \\alternative { { R1 } { R1 } } \\break c''1 c'' } \\new Staff { c'1 c' \\break c' c' c' \\break c' c' } >>";
+    let e = eng(src);
+    assert_eq!(shown(&e), vec![vec![true, true], vec![false, true], vec![true, true]]);
+    let sys = &e.systems[1];
+    assert_eq!(sys.lines[1].staff_index, Some(0), "the second staff is the system's top");
+    assert_eq!(sys.lines[1].rehearsal.len(), 1, "the mark over it");
+    assert_eq!(sys.lines[1].marks.len(), 1, "the tempo mark over it");
+    assert_eq!(sys.lines[1].voltas.len(), 2, "the two endings over it");
+    // Its bar number, 3, at the start of the line, in the drawn paths.
+    let (drawn, _) = paths(&e, 8.0, 0).unwrap();
+    let plain = eng("\\layout { \\context { \\Staff \\RemoveEmptyStaves } } << \\new Staff { c''1 c'' \\break R1 R1 \\break c''1 c'' } \\new Staff { c'1 c' \\break c' c' \\break c' c' } >>");
+    let (with_hidden, _) = paths(&plain, 8.0, 0).unwrap();
+    let unnumbered = eng("\\layout { \\context { \\Staff \\RemoveEmptyStaves } \\context { \\Score \\omit BarNumber } } << \\new Staff { c''1 c'' \\break R1 R1 \\break c''1 c'' } \\new Staff { c'1 c' \\break c' c' \\break c' c' } >>");
+    let (without, _) = paths(&unnumbered, 8.0, 0).unwrap();
+    assert_eq!(with_hidden.len(), without.len() + 2, "\"3\" over the second system, \"5\" over the third");
+    assert!(sys.reach.unwrap().0 < -2.5, "room for the number and the mark over the drawn staff");
+    assert!(drawn.len() > with_hidden.len());
+}

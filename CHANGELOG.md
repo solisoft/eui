@@ -50,7 +50,9 @@ release. A wire change lands here first, is released, and then the pin moves.
   next staff drawn, and a group left with one staff loses its brace or
   bracket, as LilyPond's `collapse-height` (5) has it — `\override
   StaffGroup.SystemStartBracket.collapse-height = #4` keeps it. A group of
-  one staff from the start is drawn so too. MIDI is unchanged.
+  one staff from the start is drawn so too. When the staff left out is the
+  top one, the bar numbers, rehearsal marks, jumps, tempo marks and endings
+  go over the topmost staff the system draws. MIDI is unchanged.
 
 - The common layout settings are honoured (score #403), where since
   score #359 they were read and passed over with a warning: in the music,
