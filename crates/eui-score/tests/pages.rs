@@ -59,10 +59,10 @@ fn systems_per_page_sets_at_most_so_many_systems_on_a_page() {
     assert!(eng_two.pages.iter().all(|p| p.systems.len() <= 2));
     assert!(eng_two.pages.iter().take(eng_two.pages.len() - 1).all(|p| p.systems.len() == 2), "each page but the last is full");
     assert_eq!(eng_two.pages.len(), eng_two.systems.len().div_ceil(2));
-    // Spread evenly, too; and LilyPond's max-systems-per-page says the same.
+    // Spread evenly, too; and LilyPond's max-systems-per-page caps them as well.
     let (even, _) = engrave_paper(&tune("systems-per-page = 3 page-breaking = #ly:optimal-breaking", "", 60)).unwrap();
     assert!(even.pages.iter().all(|p| p.systems.len() <= 3));
-    assert_eq!(parse(&tune("max-systems-per-page = 4", "", 4)).unwrap().paper.systems_per_page, Some(4));
+    assert_eq!(parse(&tune("max-systems-per-page = 4", "", 4)).unwrap().paper.max_systems_per_page, Some(4));
     // Nothing for zero.
     assert_eq!(parse(&tune("systems-per-page = 0", "", 4)).unwrap().paper.systems_per_page, None);
 }

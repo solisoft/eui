@@ -522,7 +522,9 @@ fn pages_are_cut_evenly_when_asked_and_the_last_is_not_left_with_a_line() {
     assert_eq!(pages.len(), 2, "{pages:?}");
     assert!(pages[0] - pages[1] <= 1, "{pages:?}");
     // Asked for nothing, or for pages filled in turn: each page full, the last with what is left.
-    assert_eq!(cut(room + 1, "\\break", ""), vec![room, 1]);
+    // Said nothing: filled in turn, but the last page not left with one
+    // line when the page before can spare one (score #406).
+    assert_eq!(cut(room + 1, "\\break", ""), vec![room - 1, 2]);
     assert_eq!(cut(room + 1, "\\break", "\\paper { page-breaking = #ly:minimal-breaking }\n"), vec![room, 1]);
     // Over three pages too: as few pages as before, evenly full.
     let three = per_page(2 * room + 1, "\\break");
@@ -728,7 +730,7 @@ fn layout_settings_are_read_and_passed_over_with_a_warning() {
         "\\new Staff \\with { \\consists \"Ambitus_engraver\" \\remove \"Time_signature_engraver\" fontSize = #-2 } { c'4 }",
         "\\layout { \\context { \\Score \\override BarNumber.break-visibility = ##(#f #t #t) } } { c'4 }",
         "\\midi { \\tempo 4 = 90 } { c'4 }",
-        "\\paper { ragged-right = ##t system-system-spacing.basic-distance = #10 } { c'4 }",
+        "\\paper { print-page-number = ##f top-system-spacing.basic-distance = #10 } { c'4 }",
         "\\header { encodingsoftware = \"musicxml2ly\" title = \\markup { \\bold Song } } { c'4 }",
         "<< \\set Score.proportionalNotationDuration = #(ly:make-moment 1/8) \\new Staff { c'4 } >>",
     ];

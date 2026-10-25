@@ -141,6 +141,10 @@ pub struct Bar {
     /// start, its length its end — and what they say. A jump (`\jump`,
     /// `\fine`, its `dir` 1) is at the end of the bar it follows.
     pub marks: Vec<(i64, Words)>,
+    /// `\noBreak` at its end: no line ends with it.
+    pub no_break: bool,
+    /// `\noPageBreak` at its end: no page ends with it.
+    pub no_page_break: bool,
 }
 
 impl Bar {
@@ -512,6 +516,20 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
             }
         };
         match ev.k {
+            Kind::Break if ev.v == "no" => {
+                // `\noBreak`, `\noPageBreak`: at a bar line, the bar before
+                // it may not end a line (a page); elsewhere it says nothing.
+                if pos == 0 && bars.len() >= 2 {
+                    let n = bars.len();
+                    let ending = &mut bars[n - 2];
+                    if ev.page {
+                        ending.no_page_break = true;
+                    } else {
+                        ending.no_break = true;
+                    }
+                }
+                continue;
+            }
             Kind::Break => {
                 if pos > 0 {
                     return refuse("a \\break goes at a bar line", ev.at);

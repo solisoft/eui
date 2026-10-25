@@ -1349,6 +1349,8 @@ pub struct Parsed {
     /// What the source says that was read and not drawn, in the order it
     /// is written (protocol 11).
     pub warnings: Vec<Warning>,
+    /// `\override Score.SpacingSpanner …`: how durations are spaced.
+    pub spacing: SpacingSpanner,
 }
 
 /// The page a source asks for: `\paper { #(set-paper-size "letter")
@@ -1387,6 +1389,108 @@ pub struct PaperSpec {
     pub odd_footer: Option<PageLine>,
     /// `evenFooterMarkup`.
     pub even_footer: Option<PageLine>,
+    /// `line-width`: the music's width; the margins share what is left.
+    pub line_width: Option<f64>,
+    /// `short-indent`: every system's indent but the first's.
+    pub short_indent: Option<f64>,
+    /// `ragged-right`: every line at its natural width, not stretched to the margin.
+    pub ragged_right: Option<bool>,
+    /// `ragged-last`: the last line so.
+    pub ragged_last: Option<bool>,
+    /// `ragged-bottom`: the systems of a page at their natural distance, not
+    /// spread down the page.
+    pub ragged_bottom: Option<bool>,
+    /// `ragged-last-bottom`: the last page's so (LilyPond's default: yes).
+    pub ragged_last_bottom: Option<bool>,
+    /// `system-system-spacing`: from one system to the next.
+    pub system_spacing: Spacing,
+    /// `score-system-spacing`: from a score's (a movement's) last system to
+    /// the next score's first.
+    pub score_spacing: Spacing,
+    /// `markup-system-spacing`: from the titles to the first system.
+    pub markup_spacing: Spacing,
+    /// `max-systems-per-page`: at most so many systems on a page.
+    pub max_systems_per_page: Option<usize>,
+    /// `page-count`: the music on so many pages.
+    pub page_count: Option<usize>,
+    /// `system-count`: the music on so many systems.
+    pub system_count: Option<usize>,
+}
+
+/// A flexible vertical distance, LilyPond's spacing alist: in staff spaces,
+/// none where the source says nothing (LilyPond's default then).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Spacing {
+    /// `basic-distance`: between the two items' reference points — a
+    /// staff's middle line, a title's top — when nothing is in the way.
+    pub basic: Option<f64>,
+    /// `minimum-distance`: the least, however a page is filled.
+    pub minimum: Option<f64>,
+    /// `padding`: the least clear room between the two items' ink.
+    pub padding: Option<f64>,
+    /// `stretchability`: how readily it stretches to fill a page.
+    pub stretch: Option<f64>,
+}
+
+/// LilyPond's horizontal spacing settings (`\override Score.SpacingSpanner
+/// …`): none where the source says nothing, LilyPond's defaults then.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpacingSpanner {
+    /// `spacing-increment`: the room each doubling of a duration adds (1.2).
+    pub increment: Option<f64>,
+    /// `shortest-duration-space`: the room of the commonest shortest
+    /// duration, in increments (2).
+    pub shortest_space: Option<f64>,
+    /// `base-shortest-duration`: the longest duration the shortest is taken
+    /// as, in wholes (3/16).
+    pub base_shortest: Option<f64>,
+}
+
+thread_local! {
+    /// The spacing settings read from the source being parsed.
+    static SPACING: RefCell<SpacingSpanner> = const { RefCell::new(SpacingSpanner { increment: None, shortest_space: None, base_shortest: None }) };
+}
+
+/// `\override [Score.]SpacingSpanner.<prop> = <value>` whose path ends at
+/// `j` (the `=`): read into the source's spacing; whether it was one.
+fn spacing_override(toks: &[Tok], from: usize, j: usize) -> bool {
+    let path = path_words(toks, from, j);
+    let n = path.len();
+    if n < 2 || path[n - 2] != "SpacingSpanner" {
+        return false;
+    }
+    let mut k = j + 1;
+    while is(toks, k, T::Sym('#')) {
+        k += 1;
+    }
+    let value = if is(toks, k, T::Sym('(')) && toks.get(k + 1).is_some_and(|t| t.v == "ly") {
+        // `#(ly:make-moment 1/16)`
+        toks.get(k + 4).filter(|t| t.t == T::Num).and_then(|t| fraction(&t.v))
+    } else {
+        number_at(toks, k).map(|(v, _)| v)
+    };
+    let Some(v) = value.filter(|v| *v > 0.0) else { return false };
+    SPACING.with(|sp| {
+        let mut sp = sp.borrow_mut();
+        match path[n - 1].as_str() {
+            "spacing-increment" => sp.increment = Some(v.min(10.0)),
+            "shortest-duration-space" => sp.shortest_space = Some(v.min(20.0)),
+            "base-shortest-duration" => sp.base_shortest = Some(v.min(1.0)),
+            _ => return false,
+        }
+        true
+    })
+}
+
+/// `1/16` as a number, or `2` as one.
+fn fraction(v: &str) -> Option<f64> {
+    match v.split_once('/') {
+        Some((a, b)) => {
+            let (a, b): (f64, f64) = (a.parse().ok()?, b.parse().ok()?);
+            (b > 0.0).then(|| a / b)
+        }
+        None => v.parse().ok(),
+    }
 }
 
 /// A page's header or footer: what `\markup \fill-line { … }` puts at the
@@ -1936,7 +2040,11 @@ fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, Sco
             if !is(toks, j, T::Sym('=')) {
                 return refuse("\\override wants a property, = and a value", t.at);
             }
-            warn(format!("\\override {}{what} is not drawn", named(j)), t.at);
+            if spacing_override(toks, i + 1, j) {
+                beyond();
+            } else {
+                warn(format!("\\override {}{what} is not drawn", named(j)), t.at);
+            }
             value_end(toks, j + 1)?
         }
         (T::Cmd, "set") => {
@@ -1983,6 +2091,7 @@ fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, Sco
 /// Read a source.
 pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     WARNINGS.with(|w| w.borrow_mut().clear());
+    SPACING.with(|sp| *sp.borrow_mut() = SpacingSpanner::default());
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
     let mut st = Base { header: HashMap::new(), paper: PaperSpec::default(), counter: 0, notes: 0, lang: Lang::default(), pending: Vec::new(), quotes: HashMap::new(), compress: 0, local: None };
@@ -2072,7 +2181,8 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     }
     let mut warnings = WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()));
     warnings.sort_by_key(|w| w.at);
-    Ok(Parsed { header: st.header, paper: st.paper, staves, groups, warnings })
+    let spacing = SPACING.with(|sp| *sp.borrow());
+    Ok(Parsed { header: st.header, paper: st.paper, staves, groups, warnings, spacing })
 }
 
 /// A score of the file, read: its staves and groups, its own header (a
@@ -2105,7 +2215,7 @@ fn score(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<(Vec<Staff>, Vec<G
             if toks[i].v == "header" {
                 i = header(toks, i, st)?;
             } else {
-                i = layout_block(toks, i)?;
+                i = layout_block(toks, i, &mut st.paper)?;
             }
         }
         if i >= toks.len() || toks[i].t != T::Sym('}') {
@@ -2149,7 +2259,7 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
             }
             "layout" | "midi" => {
                 beyond();
-                i = layout_block(toks, i)?;
+                i = layout_block(toks, i, &mut st.paper)?;
             }
             "markup" | "markuplist" => {
                 // Words between the scores — a title page, a dedication: not set.
@@ -2231,6 +2341,95 @@ fn number_at(toks: &[Tok], mut i: usize) -> Option<(f64, usize)> {
     Some((if negative { -n } else { n }, i))
 }
 
+/// `##t`, `#t`, `##f`, `#f` at `i`: the boolean, and where it ends.
+fn boolean_at(toks: &[Tok], mut i: usize) -> Option<(bool, usize)> {
+    let mut hashes = 0;
+    while is(toks, i, T::Sym('#')) {
+        hashes += 1;
+        i += 1;
+    }
+    let w = toks.get(i).filter(|w| w.t == T::Word && hashes > 0)?;
+    match w.v.as_str() {
+        "t" | "true" => Some((true, i + 1)),
+        "f" | "false" => Some((false, i + 1)),
+        _ => None,
+    }
+}
+
+/// A length's unit after its number `n` at `after`: `\mm` (the default),
+/// `\cm`, `\in`, `\pt`, `\staff-space` (at the staff size in force); the
+/// length in millimetres and where it ends. `* 2` after it multiplies.
+fn length_unit(toks: &[Tok], n: f64, after: usize, staff_size: Option<f64>) -> (f64, usize) {
+    let space_mm = staff_size.unwrap_or(20.0) / 4.0 * 25.4 / 72.27;
+    let unit = toks.get(after).filter(|u| u.t == T::Cmd).map(|u| u.v.as_str());
+    let (mm, end) = match unit {
+        Some("mm") => (n, after + 1),
+        Some("cm") => (n * 10.0, after + 1),
+        Some("in") => (n * 25.4, after + 1),
+        Some("pt") => (n * 25.4 / 72.27, after + 1),
+        Some("staff-space") => (n * space_mm, after + 1),
+        Some("staff") if is(toks, after + 1, T::Sym('-')) && toks.get(after + 2).is_some_and(|w| w.v == "space") => (n * space_mm, after + 3),
+        _ => (n, after),
+    };
+    if is(toks, end, T::Sym('*')) {
+        if let Some((k, e)) = number_at(toks, end + 1) {
+            return (mm * k, e);
+        }
+    }
+    (mm, end)
+}
+
+/// `system-system-spacing.basic-distance = #12`, or `system-system-spacing
+/// = #'((basic-distance . 12) (padding . 1))`, at `i`: read into `paper`
+/// (in staff spaces); where it ends, or none for anything else.
+fn spacing_setting(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Option<usize> {
+    let t = toks.get(i).filter(|t| t.t == T::Word)?;
+    let slot = match t.v.as_str() {
+        "system-system-spacing" => &mut paper.system_spacing,
+        "score-system-spacing" => &mut paper.score_spacing,
+        "markup-system-spacing" => &mut paper.markup_spacing,
+        _ => return None,
+    };
+    let put = |slot: &mut Spacing, key: &str, v: f64| match key {
+        "basic-distance" => slot.basic = Some(v.clamp(0.0, 100.0)),
+        "minimum-distance" => slot.minimum = Some(v.clamp(0.0, 100.0)),
+        "padding" => slot.padding = Some(v.clamp(-10.0, 100.0)),
+        "stretchability" => slot.stretch = Some(v.clamp(0.0, 1e6)),
+        _ => {}
+    };
+    if is(toks, i + 1, T::Sym('.')) && is(toks, i + 3, T::Sym('=')) {
+        let key = toks.get(i + 2)?.v.clone();
+        let mut k = i + 4;
+        while is(toks, k, T::Sym('#')) {
+            k += 1;
+        }
+        let (v, end) = number_at(toks, k)?;
+        put(slot, &key, v);
+        return Some(end);
+    }
+    if !is(toks, i + 1, T::Sym('=')) {
+        return None;
+    }
+    let mut k = i + 2;
+    while is(toks, k, T::Sym('#')) || is(toks, k, T::Sym('\'')) {
+        k += 1;
+    }
+    if !is(toks, k, T::Sym('(')) {
+        return None;
+    }
+    let end = balanced(toks, k, '(', ')').ok()?;
+    // `(key . value)` pairs.
+    for p in k + 1..end.saturating_sub(3) {
+        if is(toks, p, T::Sym('(')) && is(toks, p + 2, T::Sym('.')) {
+            if let Some((v, _)) = number_at(toks, p + 3) {
+                let key = toks[p + 1].v.clone();
+                put(slot, &key, v);
+            }
+        }
+    }
+    Some(end)
+}
+
 /// A `\paper { … }` block from `i` (its `{`), its sizes into `paper`;
 /// what it says that this does not lay out is passed over.
 fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
@@ -2270,26 +2469,47 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
             j += 6;
             continue;
         }
+        // `system-system-spacing.basic-distance = #12`, or the whole alist.
+        if let Some(after) = spacing_setting(toks, j, paper) {
+            j = after;
+            continue;
+        }
         if t.t == T::Word && is(toks, j + 1, T::Sym('=')) {
-            if let Some((n, after)) = number_at(toks, j + 2) {
-                // A length: millimetres unless a unit says otherwise.
-                let unit = toks.get(after).filter(|u| u.t == T::Cmd).map(|u| u.v.as_str());
-                let mm = match unit {
-                    Some("cm") => n * 10.0,
-                    Some("in") => n * 25.4,
-                    Some("pt") => n * 25.4 / 72.27,
-                    _ => n,
+            // `ragged-right = ##t`.
+            if let Some((yes, after)) = boolean_at(toks, j + 2) {
+                let slot = match t.v.as_str() {
+                    "ragged-right" => Some(&mut paper.ragged_right),
+                    "ragged-last" => Some(&mut paper.ragged_last),
+                    "ragged-bottom" => Some(&mut paper.ragged_bottom),
+                    "ragged-last-bottom" => Some(&mut paper.ragged_last_bottom),
+                    _ => None,
                 };
+                if let Some(slot) = slot {
+                    *slot = Some(yes);
+                    j = after;
+                    continue;
+                }
+            }
+            let at_number = if is(toks, j + 2, T::Sym('#')) { j + 3 } else { j + 2 };
+            if let Some((n, after)) = number_at(toks, at_number) {
+                // A length: millimetres unless a unit says otherwise.
+                let (mm, after) = length_unit(toks, n, after, paper.staff_size);
                 let slot = match t.v.as_str() {
                     "left-margin" => Some(&mut paper.left),
                     "right-margin" => Some(&mut paper.right),
                     "top-margin" => Some(&mut paper.top),
                     "bottom-margin" => Some(&mut paper.bottom),
                     "indent" => Some(&mut paper.indent),
-                    "systems-per-page" | "max-systems-per-page" => {
+                    "line-width" => Some(&mut paper.line_width),
+                    "short-indent" => Some(&mut paper.short_indent),
+                    "systems-per-page" | "max-systems-per-page" | "page-count" | "system-count" => {
                         // A count, not a length.
-                        if n >= 1.0 {
-                            paper.systems_per_page = Some(n.min(100.0) as usize);
+                        let count = (n >= 1.0).then(|| n.min(if t.v == "system-count" { 10000.0 } else { 100.0 }) as usize);
+                        match t.v.as_str() {
+                            "systems-per-page" => paper.systems_per_page = count,
+                            "max-systems-per-page" => paper.max_systems_per_page = count,
+                            "page-count" => paper.page_count = count,
+                            _ => paper.system_count = count,
                         }
                         j = after;
                         continue;
@@ -2300,7 +2520,7 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
                     Some(slot) => *slot = Some(mm.max(0.0)),
                     None => warn(format!("\\paper's {} is not read", t.v), t.at),
                 }
-                j = if unit.is_some() { after + 1 } else { after };
+                j = after;
                 continue;
             }
             // `ragged-right = ##t`, `print-page-number = ##f`: passed over.
@@ -2317,9 +2537,49 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
 
 /// `\\layout { … }` or `\\midi { … }` at `i`: passed over, with a warning
 /// when it says anything.
-fn layout_block(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
     let end = skip_block(toks, i + 1)?;
-    if end > i + 3 {
+    // What a `\layout` block may say of the lines — `ragged-right`,
+    // `ragged-last`, `indent`, `short-indent`, `line-width` — and the
+    // spacing of durations (`\override Score.SpacingSpanner …`) is read;
+    // anything else is passed over, with a warning.
+    let mut unread = false;
+    let mut j = i + 2;
+    while toks[i].v == "layout" && j + 1 < end {
+        let t = &toks[j];
+        if t.t == T::Cmd && t.v == "override" {
+            let k = path_end(toks, j + 1);
+            if is(toks, k, T::Sym('=')) && spacing_override(toks, j + 1, k) {
+                beyond();
+                j = value_end(toks, k + 1)?;
+                continue;
+            }
+        }
+        if t.t == T::Word && is(toks, j + 1, T::Sym('=')) {
+            if let Some((yes, after)) = boolean_at(toks, j + 2).filter(|_| matches!(t.v.as_str(), "ragged-right" | "ragged-last")) {
+                *(if t.v == "ragged-right" { &mut paper.ragged_right } else { &mut paper.ragged_last }) = Some(yes);
+                j = after;
+                continue;
+            }
+            let at_number = if is(toks, j + 2, T::Sym('#')) { j + 3 } else { j + 2 };
+            if let Some((n, after)) = number_at(toks, at_number).filter(|_| matches!(t.v.as_str(), "indent" | "short-indent" | "line-width")) {
+                let (mm, after) = length_unit(toks, n, after, paper.staff_size);
+                let slot = match t.v.as_str() {
+                    "indent" => &mut paper.indent,
+                    "short-indent" => &mut paper.short_indent,
+                    _ => &mut paper.line_width,
+                };
+                *slot = Some(mm.max(0.0));
+                j = after;
+                continue;
+            }
+        }
+        if !matches!(t.t, T::Sym('{' | '}')) && !(t.t == T::Cmd && (t.v == "context" || t.v == "Score")) {
+            unread = true;
+        }
+        j += 1;
+    }
+    if unread || (toks[i].v != "layout" && end > i + 3) {
         warn(format!("the \\{} block's settings are not read", toks[i].v), toks[i].at);
     }
     Ok(end)
@@ -4010,6 +4270,12 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     }
     if word == "break" || word == "pageBreak" {
         st.events.push(Ev { k: Kind::Break, page: word == "pageBreak", at: tk.at, ..Ev::default() });
+        return Ok(i + 1);
+    }
+    if word == "noBreak" || word == "noPageBreak" {
+        // No line (or page) break at the bar line it stands at.
+        beyond();
+        st.events.push(Ev { k: Kind::Break, page: word == "noPageBreak", v: "no".into(), at: tk.at, ..Ev::default() });
         return Ok(i + 1);
     }
     if word == "set" && is(toks, i + 2, T::Sym('.')) && toks.get(i + 3).is_some_and(|t| t.t == T::Word && t.v == "skipBars") && is(toks, i + 4, T::Sym('=')) && is(toks, i + 5, T::Sym('#')) {

@@ -7,6 +7,16 @@
 //! of several; `<name>.pdf` its PDF. The paths must agree to the hundredth of a
 //! pixel (one rounding step either way), the MIDI and the PDF to the byte,
 //! and every refusal in `refusals.json` word for word.
+//!
+//! Since score #406 the two part where this engraver lays music out as
+//! LilyPond does and the Soli engraver did not — every line of a score of
+//! several filled to the margin, the last too, the line breaks chosen over
+//! the whole score, a stem up before a stem down given more room, systems
+//! of several staves spaced from the lower staff's middle line, a last page
+//! not left with one system: the pieces that moved were looked at, picture
+//! by picture, and their files written anew from this engraver
+//! (`EUI_SCORE_BLESS=1 cargo test -p eui-score --test golden` writes the
+//! pieces that differ, and leaves the others as they are).
 
 #![allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
@@ -59,6 +69,37 @@ fn compare(what: &str, ours: &[Path], theirs: &Value, out: &mut Vec<String>) {
 /// drew it on the staff that wrote it.
 const PARTED: [&str; 4] = ["lyrics_choir", "piano_voices", "voices", "voices_spacers"];
 
+/// A path as the golden files write it, its ink the default.
+fn as_json(p: &Path) -> Value {
+    let (kind, nums) = as_numbers(p);
+    let mut v = vec![Value::from(kind), Value::from("text.default")];
+    v.extend(nums.into_iter().map(Value::from));
+    Value::Array(v)
+}
+
+/// `EUI_SCORE_BLESS=1 cargo test -p eui-score --test golden`: write what
+/// this engraver draws for `name` as its golden files — for a change that
+/// moves the drawing on purpose, its pictures looked at first.
+fn bless(name: &str, src: &str) {
+    let paths_of = |list: &[Path]| Value::Array(list.iter().map(as_json).collect());
+    let screen = engrave(src, 900.0 / 8.0, &Layout::default()).and_then(|e| paths(&e, 8.0, 0)).map(|(p, _)| paths_of(&p)).unwrap_or(Value::Null);
+    let bands = engrave(src, 900.0 / 8.0, &Layout::default())
+        .and_then(|e| {
+            let total = (e.height * 8.0).ceil() as i64;
+            bands(&e, 8.0, 0, total)
+        })
+        .map(|got| Value::Array(got.iter().map(|b| serde_json::json!({ "y": b.y, "h": b.h, "paths": paths_of(&b.paths) })).collect()))
+        .unwrap_or(Value::Null);
+    let sp = 600.0 / Paper::a4().w;
+    let a4 = engrave_a4(src).map(|eng| Value::Array((0..eng.pages.len()).map(|k| paths(&eng, sp, k).map(|(p, _)| paths_of(&p)).unwrap_or(Value::Null)).collect())).unwrap_or(Value::Null);
+    let midi = midi(src, &MidiOptions { bpm: 100.0, ..MidiOptions::default() }).map(|b| Value::Array(b.into_iter().map(Value::from).collect())).unwrap_or(Value::Null);
+    let doc = serde_json::json!({ "name": name, "screen": screen, "a4": a4, "midi": midi, "bands": bands });
+    fs::write(dir("golden").join(format!("{name}.json")), doc.to_string()).unwrap_or_default();
+    if let Ok(pdf) = pdf_outlines(src, "") {
+        fs::write(dir("golden").join(format!("{name}.pdf")), pdf).unwrap_or_default();
+    }
+}
+
 #[test]
 fn the_corpus_draws_as_the_soli_engraver_drew_it() {
     let mut failures = Vec::new();
@@ -72,8 +113,9 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
         if PARTED.contains(&name) {
             continue;
         }
-        let golden: Value = serde_json::from_str(&fs::read_to_string(dir("golden").join(&file)).unwrap_or_default()).unwrap_or(Value::Null);
         let src = fs::read_to_string(dir("corpus").join(format!("{name}.ly"))).unwrap_or_default();
+        let before = failures.len();
+        let golden: Value = serde_json::from_str(&fs::read_to_string(dir("golden").join(&file)).unwrap_or_default()).unwrap_or(Value::Null);
 
         match engrave(&src, 900.0 / 8.0, &Layout::default()).and_then(|e| paths(&e, 8.0, 0)) {
             Ok((p, _)) => compare(&format!("{name} screen"), &p, &golden["screen"], &mut failures),
@@ -146,6 +188,11 @@ fn the_corpus_draws_as_the_soli_engraver_drew_it() {
                 }
                 Err(e) => failures.push(format!("{name} pdf: refused: {e}")),
             }
+        }
+        // Blessed: a piece that differs is written anew, the others left as they are.
+        if failures.len() > before && std::env::var_os("EUI_SCORE_BLESS").is_some() {
+            bless(name, &src);
+            failures.truncate(before);
         }
     }
     assert!(failures.is_empty(), "{} differences:\n{}", failures.len(), failures.join("\n"));

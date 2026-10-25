@@ -23,6 +23,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+mod breaking;
 pub mod cross;
 pub mod draw;
 pub mod edit;
@@ -194,11 +195,22 @@ impl Paper {
         };
         let (w, h) = if landscape { (h, w) } else { (w, h) };
         let head_room = if spec.odd_header.is_some() || spec.even_header.is_some() { HEAD_ROOM } else { 0.0 };
+        // `line-width`: the margins take what it leaves — the one written
+        // keeps its width, and with neither the line is centred, as
+        // LilyPond centres it.
+        let (mut left, mut right) = (spec.left.unwrap_or(10.0), spec.right.unwrap_or(10.0));
+        if let Some(lw) = spec.line_width.filter(|lw| *lw > 10.0 && *lw < w) {
+            match (spec.left, spec.right) {
+                (Some(l), _) => right = (w - l - lw).max(0.0),
+                (None, Some(r)) => left = (w - r - lw).max(0.0),
+                (None, None) => (left, right) = ((w - lw) / 2.0, (w - lw) / 2.0),
+            }
+        }
         Paper {
             w: w / space,
             h: h / space,
-            left: spec.left.unwrap_or(10.0) / space,
-            right: spec.right.unwrap_or(10.0) / space,
+            left: left / space,
+            right: right / space,
             top: spec.top.unwrap_or(5.0) / space + head_room,
             bottom: spec.bottom.unwrap_or(12.0).max(12.0) / space,
             indent: spec.indent.unwrap_or(15.0) / space,

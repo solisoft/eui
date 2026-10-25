@@ -5,6 +5,7 @@
 
 use std::ops::Range;
 
+use crate::breaking::{line_starts, Opts, Widths};
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, SpanPlace, TempoMark, TextPlace, TupletPlace, Volta};
 use crate::measure::{measures, measures_keeping, Bar, Beam, Changes, Opening};
@@ -429,12 +430,16 @@ pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<
 
 // ---- Columns -----------------------------------------------------------
 
+/// The room a duration of `t` ticks wants, the commonest shortest being
+/// `shortest`: LilyPond's `get_duration_space`, `spacing-increment` a
+/// doubling and `shortest-duration-space` the shortest's, in increments.
 pub(crate) fn duration_space(t: i64, shortest: i64) -> f64 {
+    let d = crate::breaking::durations();
     let ratio = t as f64 / shortest as f64;
     if ratio < 1.0 {
-        return 1.2 * (1.0 + ratio) + 0.1;
+        return d.incr * (d.k - 1.0 + ratio) + 0.1;
     }
-    1.2 * (2.0 + log2(ratio)) + 0.1
+    d.incr * (d.k + log2(ratio)) + 0.1
 }
 
 pub(crate) fn log2(v: f64) -> f64 {
@@ -466,7 +471,7 @@ pub(crate) fn shortest<'a>(bars: impl Iterator<Item = &'a Bar>) -> i64 {
             most = c;
         }
     }
-    best.min(WHOLE * 3 / 16)
+    best.min(crate::breaking::durations().base)
 }
 
 fn space_ticks(ev: &Ev) -> i64 {
@@ -698,6 +703,10 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
             grace_layout(ev);
             change_room(ev);
             lyric_room(ev);
+        }
+        if beamed(kind) {
+            let lists = voice_lists(bar);
+            crate::breaking::optical(bar, &lists);
         }
         if bar.poly {
             rest_collisions(bar);
@@ -1294,76 +1303,31 @@ fn system_width(bars: &[Bar], k: f64) -> f64 {
     total
 }
 
-fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64) -> Vec<Line> {
+fn break_bars(bars: &mut [Bar], width: f64, indent: f64, rest: f64, opts: &Opts) -> Vec<Line> {
     bars[0].first = true;
     if bars[0].open_bar {
         bars[0].open_repeat = Some(".|:".into());
     }
     let count = bars.len();
-    let opening_w: Vec<f64> = bars.iter().map(|b| bar_width(b, 1.0, true)).collect();
-    let inner_w: Vec<f64> = bars.iter().map(|b| bar_width(b, 1.0, false)).collect();
-    let opening_min: Vec<f64> = bars.iter().map(|b| bar_width(b, 0.0, true)).collect();
-    let inner_min: Vec<f64> = bars.iter().map(|b| bar_width(b, 0.0, false)).collect();
-    let springs: Vec<f64> = bars.iter().map(bar_springs).collect();
     // A movement's first bar opens a line, indented, with its metre, and the
     // line before it announces nothing.
-    let courtesy_w: Vec<f64> = bars.iter().map(|b| if b.fresh { 0.0 } else { courtesy_width(&courtesy_of(b)) }).collect();
-    let prefix_w: Vec<f64> = (0..count).map(|t| prefix_width(&bars[t], t == 0 || bars[t].first)).collect();
-    let mut best = vec![-1.0; count + 1];
-    best[0] = 0.0;
-    let mut from_bar = vec![0usize; count + 1];
-    for i in 0..count {
-        if best[i] < 0.0 {
-            continue;
-        }
-        let room = if i == 0 || bars[i].fresh { width - indent } else { width - rest };
-        let mut w = prefix_w[i] + opening_w[i];
-        let mut tight = prefix_w[i] + opening_min[i];
-        let mut spring = springs[i];
-        let mut jj = i + 1;
-        while jj <= count {
-            if jj > i + 1 && bars[jj - 2].brk.is_some() {
-                break;
-            }
-            if jj > i + 1 {
-                w += inner_w[jj - 1];
-                tight += inner_min[jj - 1];
-                spring += springs[jj - 1];
-            }
-            let courtesy = if jj < count { courtesy_w[jj] } else { 0.0 };
-            let line_w = w + courtesy;
-            if tight + courtesy > room && jj > i + 1 {
-                break;
-            }
-            let ratio = (room - line_w) / spring.max(1.0);
-            let cost = if tight + courtesy > room {
-                1000.0
-            } else if ratio < 0.0 {
-                ratio * ratio * 40.0 + 1.0
-            } else if jj < count {
-                ratio * ratio * 10.0 + 1.0
-            } else {
-                0.0
-            };
-            let total = best[i] + cost;
-            if best[jj] < 0.0 || total < best[jj] {
-                best[jj] = total;
-                from_bar[jj] = i;
-            }
-            jj += 1;
-        }
-    }
-    let mut cuts = Vec::new();
-    let mut at = count;
-    while at > 0 {
-        cuts.push(from_bar[at]);
-        at = from_bar[at];
-    }
-    cuts.reverse();
-    break_lines(bars, width, indent, &cuts, rest)
+    let widths = Widths {
+        opening_w: bars.iter().map(|b| bar_width(b, 1.0, true)).collect(),
+        inner_w: bars.iter().map(|b| bar_width(b, 1.0, false)).collect(),
+        opening_min: bars.iter().map(|b| bar_width(b, 0.0, true)).collect(),
+        inner_min: bars.iter().map(|b| bar_width(b, 0.0, false)).collect(),
+        springs: bars.iter().map(bar_springs).collect(),
+        courtesy_w: bars.iter().map(|b| if b.fresh { 0.0 } else { courtesy_width(&courtesy_of(b)) }).collect(),
+        prefix_w: (0..count).map(|t| prefix_width(&bars[t], t == 0 || bars[t].first)).collect(),
+        forced: bars.iter().map(|b| b.brk.is_some()).collect(),
+        keep: bars.iter().map(|b| b.no_break).collect(),
+        fresh: bars.iter().map(|b| b.fresh).collect(),
+    };
+    let cuts = line_starts(&widths, |i| if i == 0 || bars[i].fresh { width - indent } else { width - rest }, opts);
+    break_lines(bars, width, indent, &cuts, rest, opts)
 }
 
-fn break_lines(bars: &mut [Bar], width: f64, indent: f64, starts: &[usize], rest: f64) -> Vec<Line> {
+fn break_lines(bars: &mut [Bar], width: f64, indent: f64, starts: &[usize], rest: f64, opts: &Opts) -> Vec<Line> {
     let count = bars.len();
     let mut lines: Vec<Line> = Vec::new();
     for (si, &start) in starts.iter().enumerate() {
@@ -1396,12 +1360,14 @@ fn break_lines(bars: &mut [Bar], width: f64, indent: f64, starts: &[usize], rest
         }
         let range = lines[si].bars.clone();
         let natural = system_width(&bars[range.clone()], 1.0);
-        let last = si == n - 1;
+        // Filled to the margin, unless ragged: the last line of a score too,
+        // as LilyPond's `ragged-last` is false; a score of one line is not.
+        let last_of_score = si == n - 1 || bars[lines[si + 1].bars.start].fresh;
         let mut k = 1.0;
         if natural > room {
             k = fit(&bars[range], room, 0.0, 1.0);
-        } else if !last || natural >= room * 0.85 {
-            k = fit(&bars[range], room, 1.0, 8.0);
+        } else if !opts.ragged(opens, last_of_score) {
+            k = fit(&bars[range], room, 1.0, 100.0);
         }
         lines[si].k = k;
     }
@@ -1707,27 +1673,33 @@ pub(crate) fn beam_y(g: &Beam, x: f64) -> f64 {
 
 // ---- Vertical spacing -----------------------------------------------------
 
-fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock) -> Vec<Page> {
+fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock, opts: &Opts) -> Vec<Page> {
     let page_h = layout.page_h;
     let margin = layout.top.unwrap_or(0.0);
     let floor_y = page_h.map_or(0.0, |h| h - layout.bottom.unwrap_or(0.0));
-    let gap = layout.gap.unwrap_or(10.0);
     let titled = !head.lines.is_empty();
     let reaches: Vec<(f64, f64)> = systems.iter().map(|sys| system_reach(sys, staves)).collect();
-    // A \pageBreak at the end of a system: the next starts a page.
-    let forced: Vec<bool> = systems
-        .iter()
-        .map(|sys| {
-            let last_bar = sys.lines[0].bars.end - 1;
-            staves[0].get(last_bar).is_some_and(|b| b.brk.as_deref() == Some("page"))
-        })
-        .collect();
-    // Where a system goes: the first under the title, the first of a later
-    // page under the margin, the others under the one before.
+    let last_bar = |sys: &System| staves[0].get(sys.lines[0].bars.end - 1);
+    // A \pageBreak at the end of a system: the next starts a page; a
+    // \noPageBreak: it does not.
+    let forced: Vec<bool> = systems.iter().map(|sys| last_bar(sys).is_some_and(|b| b.brk.as_deref() == Some("page"))).collect();
+    let keep: Vec<bool> = systems.iter().map(|sys| last_bar(sys).is_some_and(|b| b.no_page_break)).collect();
+    // A movement starts with it: the room between two scores.
+    let fresh: Vec<bool> = systems.iter().map(|sys| staves[0].get(sys.lines[0].bars.start).is_some_and(|b| b.fresh)).collect();
+    // Each system's last staff from its first: LilyPond measures the room
+    // between two systems from the middle line of the one's last staff to
+    // the middle line of the other's first.
+    let last_off: Vec<f64> = systems.iter().map(|sys| sys.offsets.last().copied().unwrap_or(0.0)).collect();
+    // Where a system goes: the first under the title (`markup-system-spacing`),
+    // the first of a later page under the margin, the others under the one
+    // before (`system-system-spacing`, `score-system-spacing` where a
+    // movement starts): their basic distance apart, their ink their
+    // padding apart at least.
+    let (m_basic, m_pad) = opts.markup;
     let first_top = |si: usize| {
         let r = reaches[si];
         if si == 0 {
-            let mut tp = if titled { (margin + head.bottom + 3.0).max(margin + head.bottom + 0.5 - r.0) } else { margin + 0.5 - r.0 };
+            let mut tp = if titled { (margin + head.bottom + m_basic - 2.0).max(margin + head.bottom + m_pad - r.0) } else { margin + 0.5 - r.0 };
             if titled && page_h.is_none() {
                 tp += 1.0;
             }
@@ -1736,13 +1708,39 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
             margin + 3.5 + 1.0 - r.0
         }
     };
-    let next_top = |ptop: f64, pbottom: f64, si: usize| (ptop + gap).max(pbottom + 1.0 - reaches[si].0);
-    // `systems-per-page`: a page holds no more, and a system that would not
-    // fit still starts the next one.
-    let per_page = layout.systems_per_page.unwrap_or(usize::MAX).max(1);
+    let next_top = |ptop: f64, pbottom: f64, si: usize| {
+        let (basic, padding, _) = if fresh[si] { opts.score } else { opts.system };
+        (ptop + last_off[si - 1] + basic).max(pbottom + padding - reaches[si].0)
+    };
+    // `systems-per-page`, `max-systems-per-page`: a page holds no more, and
+    // a system that would not fit still starts the next one.
+    let per_page = layout.systems_per_page.into_iter().chain(opts.max_per_page).min().unwrap_or(usize::MAX).max(1);
+    let n = systems.len();
     let starts = match page_h {
-        Some(_) if layout.even_pages => page_starts(systems.len(), &reaches, &forced, floor_y, per_page, first_top, next_top),
-        Some(_) => filled_starts(systems.len(), &reaches, &forced, floor_y, per_page, first_top, next_top),
+        Some(_) => {
+            let fits = |i: usize, j: usize| -> Option<f64> {
+                if j + 1 - i > per_page {
+                    return None;
+                }
+                let top = first_top(i);
+                let room = (floor_y - 1.0 - top).max(1.0);
+                let (mut ptop, mut pbottom) = (top, top + reaches[i].1);
+                for (k, r) in reaches.iter().enumerate().take(j + 1).skip(i + 1) {
+                    ptop = next_top(ptop, pbottom, k);
+                    pbottom = ptop + r.1;
+                    if pbottom + 1.0 > floor_y {
+                        return None;
+                    }
+                }
+                Some(((floor_y - 1.0 - pbottom) / room).max(0.0))
+            };
+            let counted = opts.page_count.and_then(|count| crate::breaking::counted_pages(n, count, fits, |j| !keep[j], |j| forced[j]));
+            match counted {
+                Some(starts) => starts,
+                None if layout.even_pages => page_starts(n, &reaches, &forced, &keep, floor_y, per_page, first_top, next_top),
+                None => filled_starts(n, &reaches, &forced, &keep, floor_y, per_page, !opts.minimal, first_top, next_top),
+            }
+        }
         None => vec![0],
     };
     let mut pages: Vec<Page> = Vec::new();
@@ -1767,10 +1765,12 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     if pages.is_empty() {
         pages.push(Page { index: 0, systems: Vec::new() });
     }
-    if page_h.is_some() {
-        let n = pages.len();
+    // A page's systems spread down it (`ragged-bottom` false), the last
+    // page's only under `ragged-last-bottom = ##f`.
+    if page_h.is_some() && !opts.ragged_bottom {
+        let count = pages.len();
         for (pi, pg) in pages.iter().enumerate() {
-            if pi == n - 1 || pg.systems.len() < 2 {
+            if (pi == count - 1 && !opts.fill_last) || pg.systems.len() < 2 {
                 continue;
             }
             let last = pg.systems[pg.systems.len() - 1];
@@ -1799,17 +1799,38 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
 }
 
 /// The systems that start a page when each is filled in turn: a system goes
-/// on the page it fits on, else starts the next.
-fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, per_page: usize, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+/// on the page it fits on, else starts the next — unless a `\noPageBreak`
+/// keeps it with the one before, and the page is cut where it may be,
+/// earlier. A last page left with one system takes the one before it too,
+/// when the page before keeps two or more and the last has the room.
+#[allow(clippy::too_many_arguments)]
+fn filled_starts(
+    n: usize,
+    reaches: &[(f64, f64)],
+    forced: &[bool],
+    keep: &[bool],
+    floor_y: f64,
+    per_page: usize,
+    no_lone: bool,
+    first_top: impl Fn(usize) -> f64,
+    next_top: impl Fn(f64, f64, usize) -> f64,
+) -> Vec<usize> {
     let mut starts = vec![0];
     let mut prev: Option<(f64, f64)> = None;
-    for si in 0..n {
+    let mut si = 0;
+    while si < n {
         let top = match prev {
             Some((ptop, pbottom)) => {
                 let tp = next_top(ptop, pbottom, si);
-                let full = starts.last().is_some_and(|&s| si - s >= per_page);
+                let page = starts.last().copied().unwrap_or(0);
+                let full = si - page >= per_page;
                 if forced[si - 1] || full || tp + reaches[si].1 + 1.0 > floor_y {
-                    starts.push(si);
+                    // Cut where a page may end: here, or the nearest earlier.
+                    let at = (page + 1..=si).rev().find(|&k| forced[k - 1] || !keep[k - 1]).unwrap_or(si);
+                    starts.push(at);
+                    if at < si {
+                        si = at;
+                    }
                     first_top(si)
                 } else {
                     tp
@@ -1818,6 +1839,24 @@ fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64
             None => first_top(si),
         };
         prev = Some((top, top + reaches[si].1));
+        si += 1;
+    }
+    // Not a lone system on the last page, where the one before can join it.
+    if let [.., before, last] = starts[..] {
+        let fits = |from: usize| {
+            let mut pbottom = first_top(from) + reaches[from].1;
+            let mut ptop = first_top(from);
+            for (k, r) in reaches.iter().enumerate().take(n).skip(from + 1) {
+                ptop = next_top(ptop, pbottom, k);
+                pbottom = ptop + r.1;
+            }
+            pbottom + 1.0 <= floor_y
+        };
+        if no_lone && n - last == 1 && last - before >= 3 && !forced[last - 1] && !keep[last - 2] && per_page >= 2 && fits(last - 1) {
+            if let Some(l) = starts.last_mut() {
+                *l = last - 1;
+            }
+        }
     }
     starts
 }
@@ -1825,9 +1864,19 @@ fn filled_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64
 /// The systems that start a page, the first included: as few pages as the
 /// systems need, and among those ways to cut them, the one whose pages are
 /// most evenly full — the last one too, so that it is not left with a line
-/// on it. A system starts a page after a \pageBreak; one taller than a page
-/// has a page to itself.
-fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, per_page: usize, first_top: impl Fn(usize) -> f64, next_top: impl Fn(f64, f64, usize) -> f64) -> Vec<usize> {
+/// on it. A system starts a page after a \pageBreak, never after a
+/// \noPageBreak; one taller than a page has a page to itself.
+#[allow(clippy::too_many_arguments)]
+fn page_starts(
+    n: usize,
+    reaches: &[(f64, f64)],
+    forced: &[bool],
+    keep: &[bool],
+    floor_y: f64,
+    per_page: usize,
+    first_top: impl Fn(usize) -> f64,
+    next_top: impl Fn(f64, f64, usize) -> f64,
+) -> Vec<usize> {
     if n == 0 {
         return vec![0];
     }
@@ -1849,6 +1898,9 @@ fn page_starts(n: usize, reaches: &[(f64, f64)], forced: &[bool], floor_y: f64, 
                 if pbottom + 1.0 > floor_y {
                     break;
                 }
+            }
+            if j + 1 < n && keep[j] && !forced[j] {
+                continue;
             }
             let empty = ((floor_y - 1.0 - pbottom) / room).max(0.0);
             let candidate = (pages + 1, cost + empty * empty, i);
@@ -1887,10 +1939,17 @@ fn system_reach(sys: &System, staves: &[Vec<Bar>]) -> (f64, f64) {
 
 // ---- The whole --------------------------------------------------------------
 
-pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
-    if parsed.staves.len() > 1 {
-        return engrave_many(parsed, width, layout);
-    }
+pub(crate) fn engrave_parsed(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
+    let opts = Opts::of(layout, &parsed.paper);
+    crate::breaking::with_durations(&parsed.spacing, || {
+        if parsed.staves.len() > 1 {
+            return engrave_many(parsed, width, layout, &opts);
+        }
+        engrave_one(parsed, width, layout, &opts)
+    })
+}
+
+fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) -> Result<Engraved, ScoreError> {
     let kind = parsed.staves[0].kind;
     if let Some(ev) = parsed.staves[0].events.iter().find(|ev| ev.cross.is_some()) {
         return refuse("\\change Staff wants a second staff to go to", ev.at);
@@ -1912,7 +1971,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     columns(&mut bars, sh, kind);
     let mut left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0);
-    let mut lines = break_bars(&mut bars, width, indent, 0.0);
+    let mut lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
     if layout.left.is_none() && lines.len() > 1 {
         let last_number = bars[bars.len() - 1].number;
         left = text_width(&last_number.to_string(), Weight::Regular, em(-2.0)) + 0.2;
@@ -1921,9 +1980,9 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
             bar.bar_drawn = None;
             bar.open_repeat = None;
         }
-        lines = break_bars(&mut bars, width, indent, 0.0);
+        lines = break_bars(&mut bars, width, indent, opts.short_indent, opts);
     }
-    place(&mut bars, &mut lines, left, indent, 0.0);
+    place(&mut bars, &mut lines, left, indent, opts.short_indent);
     for line in &mut lines {
         line.kind = kind;
     }
@@ -1932,7 +1991,7 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
     let head = header_lines(&parsed.header, width);
     let mut systems: Vec<System> = lines.into_iter().map(|line| System { left: line.left, right: line.right, lines: vec![line], ..System::default() }).collect();
     let staves = vec![bars];
-    let pages = stack(&mut systems, &staves, layout, &head);
+    let pages = stack(&mut systems, &staves, layout, &head, opts);
     let bottom = systems.iter().fold(0.0, |acc: f64, s| acc.max(s.bottom));
     Ok(Engraved {
         staves,
@@ -2060,7 +2119,7 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
     }
 }
 
-fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
+fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Result<Engraved, ScoreError> {
     let staves_src = &parsed.staves;
     // A line of chord names or figures that says no metre takes the one the
     // music starts in, and its pickup, as LilyPond's \time and \partial,
@@ -2134,8 +2193,8 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
     let short_w = shorts.iter().map(|nm| if nm.is_empty() { 0.0 } else { text_width(nm, Weight::Regular, e) + 1.0 }).fold(0.0, f64::max);
     let left = layout.left.unwrap_or(0.0);
     let indent = layout.indent.unwrap_or(0.0).max(deco + name_w - left);
-    let rest = deco.max(deco + short_w - left);
-    let mut lines = break_bars(&mut master, width, indent, rest);
+    let rest = deco.max(deco + short_w - left).max(opts.short_indent);
+    let mut lines = break_bars(&mut master, width, indent, rest, opts);
     place(&mut master, &mut lines, left, indent, rest);
     let mut systems: Vec<System> = Vec::new();
     let n_lines = lines.len();
@@ -2194,7 +2253,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
     }
     crate::cross::ink(&mut systems, &all, &plan);
     let head = header_lines(&parsed.header, width);
-    let pages = stack(&mut systems, &all, layout, &head);
+    let pages = stack(&mut systems, &all, layout, &head, opts);
     let mut bottom: f64 = 0.0;
     for o in &mut systems {
         let (top, page) = (o.top, o.page);
