@@ -24,6 +24,21 @@ release. A wire change lands here first, is released, and then the pin moves.
 
 ### Added
 
+- `\partCombine` (score #405), and `\partcombine`, where it was refused:
+  two parts on one staff, cut where both start a note or a rest together.
+  The same notes are one note, "a2" over the first where the parts come
+  together; the same rhythm, part I over part II and within a ninth
+  (LilyPond's `chord-range`), one chord; one part resting, the other alone
+  with "Solo" or "Solo II" over it, and one rest when both rest; else two
+  voices, part I's stems up and part II's down. `\partCombineApart`,
+  `\partCombineChords`, `\partCombineUnisono`, `\partCombineSoloI`,
+  `\partCombineSoloII` and `\partCombineAutomatic`, in either part, say how
+  from where they are written. `\partCombineUp` and `\partCombineDown` turn
+  a pair's stems up or down and number its voices 1 and 3 (2 and 4), so two
+  pairs in `<< >>` share a staff in four voices. The staff's settings are
+  part I's, and part II's where part I has none of the kind. The MIDI plays
+  both parts; a pitch both sound at once, once. Protocol 11.
+
 - Empty staves hidden (score #404): `\RemoveEmptyStaves` and
   `\RemoveAllEmptyStaves` in `\layout { \context { \Staff … } }` or a
   staff's (or a group's) `\with`, and `\override

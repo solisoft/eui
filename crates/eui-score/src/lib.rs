@@ -23,6 +23,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+mod combine;
 pub mod draw;
 pub mod edit;
 pub mod engrave;

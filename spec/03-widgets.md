@@ -651,6 +651,15 @@ construct as LilyPond 2.25 draws it:
   first system are the short ones; a brace or bracket shrinks to the staves
   drawn, and one left shorter than its `collapse-height` (5 spaces: one
   staff) is not drawn, as LilyPond's. MIDI plays every staff.
+- *Two parts on one staff* (score #405): `\partCombine` (and
+  `\partcombine`) — the same notes one note, "a2" where the parts come
+  together; the same rhythm, part I over part II and within a ninth, one
+  chord; one part resting, the other alone under "Solo" or "Solo II"; else
+  two voices, part I's stems up. `\partCombineApart`, `\partCombineChords`,
+  `\partCombineUnisono`, `\partCombineSoloI`, `\partCombineSoloII` and
+  `\partCombineAutomatic` say how from where they are written;
+  `\partCombineUp` and `\partCombineDown` set a pair's stems, two pairs
+  sharing a staff in four voices. The MIDI plays both parts.
 
 Every construct outside this is still refused with its position. A server
 knows which source needs which client: `eui_score::protocol(src)` answers 9

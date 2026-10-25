@@ -3243,7 +3243,7 @@ fn sings(events: &[Ev]) -> bool {
 
 /// What belongs to the staff rather than to a voice: the staff's settings
 /// and the marks between its bars.
-fn staff_level(k: &Kind) -> bool {
+pub(crate) fn staff_level(k: &Kind) -> bool {
     matches!(
         k,
         Kind::Clef
@@ -3266,7 +3266,7 @@ fn staff_level(k: &Kind) -> bool {
 }
 
 /// The ticks an event of one voice takes.
-fn span(ev: &Ev) -> i64 {
+pub(crate) fn span(ev: &Ev) -> i64 {
     match ev.k {
         Kind::Note | Kind::Rest => ev.ticks * ev.count.max(1),
         _ => 0,
@@ -3276,7 +3276,7 @@ fn span(ev: &Ev) -> i64 {
 /// `main` with the staff's settings of `other` set in it at the moments
 /// they are written — a `\global`'s `\key` and `\time`, a second voice's
 /// `\clef` — and `other` without them.
-fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
+pub(crate) fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
     let mut put: Vec<(i64, Ev)> = Vec::new();
     let mut kept = Vec::new();
     let mut t = 0;
@@ -3320,6 +3320,43 @@ fn merge(main: Vec<Ev>, other: Vec<Ev>) -> (Vec<Ev>, Vec<Ev>) {
     }
     out.extend(put.into_iter().skip(k).map(|p| p.1));
     (out, kept)
+}
+
+/// `\partCombine \partI \partII` (and `\partcombine`, `\partCombineUp`,
+/// `\partCombineDown`): two parts read one after the other — under
+/// `\relative` the second from the first's last pitch, as LilyPond reads a
+/// music function's arguments — then set on one staff (`combine`).
+fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>, dir: i8) -> Result<usize, ScoreError> {
+    beyond();
+    let at = toks[i].at;
+    if !starts_expr(toks, i + 1) {
+        return refuse("\\partCombine wants two parts, each its music", at);
+    }
+    let outer = std::mem::take(&mut st.events);
+    let outer_modes = std::mem::take(&mut st.look.combine);
+    let outer_voice = st.look.voice.clone();
+    let mut parts = Vec::new();
+    let mut j = i + 1;
+    for _ in 0..2 {
+        if !starts_expr(toks, j) {
+            st.events = outer;
+            return refuse("\\partCombine wants two parts, each its music", at);
+        }
+        st.look.restore_voice(outer_voice.clone());
+        j = expr(toks, j, st, hd)?;
+        if let Some(g) = st.graces.first() {
+            return refuse("a grace note goes before a note, and none follows it in its part", g.at);
+        }
+        parts.push(std::mem::take(&mut st.events));
+    }
+    let modes = std::mem::replace(&mut st.look.combine, outer_modes);
+    st.look.restore_voice(outer_voice);
+    st.events = outer;
+    let second = parts.pop().unwrap_or_default();
+    let first = parts.pop().unwrap_or_default();
+    let combined = crate::combine::combine(first, second, modes, dir, at)?;
+    st.events.extend(combined);
+    Ok(j)
 }
 
 /// Simultaneous music on one staff, `<< … >>`: two voices written apart
@@ -3377,6 +3414,21 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
             return refuse("a grace note goes before a note, and none follows it in its voice", g.at);
         }
         parts.push(Part { events: std::mem::take(&mut st.events), voice: st.voice_cmd, name: st.voice_name.take(), at });
+    }
+    // A `\partCombineUp` and its kin: its two voices, each a part.
+    if parts.iter().any(|p| p.voice.is_none() && crate::combine::is_pair(&p.events)) {
+        let mut flat = Vec::new();
+        for p in parts {
+            if p.voice.is_none() && crate::combine::is_pair(&p.events) {
+                let at = p.at;
+                for (v, events) in crate::combine::unnest(p.events) {
+                    flat.push(Part { events, voice: Some(v), name: None, at });
+                }
+            } else {
+                flat.push(p);
+            }
+        }
+        parts = flat;
     }
     st.events = outer;
     st.here = outer_here;
@@ -3763,6 +3815,16 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "oneVoice" => return Ok(i + 1),
         "cueDuring" => return cue_during(toks, i, st, hd),
+        "partCombine" | "partcombine" | "partCombineUp" | "partcombineUp" | "partCombineDown" | "partcombineDown" => {
+            let dir = if word.ends_with("Up") {
+                1
+            } else if word.ends_with("Down") {
+                -1
+            } else {
+                0
+            };
+            return part_combine(toks, i, st, hd, dir);
+        }
         "magnifyMusic" => {
             // `\magnifyMusic 0.63 { … }`: the music in it that much smaller,
             // in LilyPond's font-size steps (six to an octave of size).
