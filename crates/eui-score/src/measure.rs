@@ -145,11 +145,21 @@ pub struct Bar {
     pub no_break: bool,
     /// `\noPageBreak` at its end: no page ends with it.
     pub no_page_break: bool,
+    /// The metre its beats and its length follow, where it shows another
+    /// (`\set Staff.timeSignatureFraction`, score #408): `time` is the one
+    /// drawn.
+    pub beats: Option<(i64, i64)>,
 }
 
 impl Bar {
     pub(crate) fn opening(&self) -> Opening {
         Opening { clef: self.clef, fifths: self.fifths, time: self.time, time_parts: self.time_parts, changes: self.changes }
+    }
+
+    /// The metre the beams and a pickup follow: the one its bars keep,
+    /// which a staff may show as another.
+    pub fn metre(&self) -> (i64, i64) {
+        self.beats.unwrap_or(self.time)
     }
 
     pub(crate) fn drawn(&self) -> &str {
@@ -210,7 +220,7 @@ fn values() -> Vec<(i64, i64, i64)> {
 
 /// `ticks` as written values, as few as can be, longest first; none when
 /// no sum of them makes it.
-fn spell(mut ticks: i64) -> Option<Vec<(i64, i64, i64)>> {
+pub(crate) fn spell(mut ticks: i64) -> Option<Vec<(i64, i64, i64)>> {
     let mut out = Vec::new();
     while ticks > 0 {
         let v = values().into_iter().find(|v| v.2 <= ticks)?;
@@ -273,14 +283,6 @@ fn cut_at_bar_lines(ev: &Ev, room: i64, length: i64) -> Option<Vec<Ev>> {
     Some(out)
 }
 
-fn kind_name(k: &Kind) -> &'static str {
-    match k {
-        Kind::Clef => "clef",
-        Kind::Key => "key",
-        _ => "time",
-    }
-}
-
 /// Where the second voice of `<< \\\\ >>` is.
 struct Poly {
     /// `\ottava`'s octaves from each tick on, the first voice's.
@@ -306,7 +308,7 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
         return Ok(());
     }
     let pos = at - bars[bi].tick0;
-    if pos + ev.ticks > bars[bi].length && ev.tuplet.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
+    if pos + ev.ticks > bars[bi].length && ev.tuplet.is_none() && ev.scale.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
         // Past the bar line, cut as the first voice's notes are.
         if let Some(pieces) = cut_at_bar_lines(&ev, bars[bi].length - pos, bars[bi].length) {
             for piece in pieces {
@@ -398,6 +400,72 @@ fn grace_heads(graces: &mut [Ev], mid: i64, ottava: i64, seen: &mut HashMap<i64,
     }
 }
 
+/// The score's `\time` and `\partial`, wherever a staff writes them, set
+/// in every staff that does not write its own there: in LilyPond they are
+/// the score's (its Timing_translator), not the staff's — unless the score
+/// moves them to each staff (`\enablePolymeter`, score #408), when each
+/// keeps its own. A `\set Staff.timeSignatureFraction` is the staff's alone.
+/// None for a staff left as it is.
+pub(crate) fn score_timing(staves: &[crate::parse::Staff], polymeter: bool) -> Vec<Option<Vec<Ev>>> {
+    let n = staves.len();
+    if polymeter || n < 2 {
+        return vec![None; n];
+    }
+    let timing = |e: &Ev| (e.k == Kind::Time && e.v != crate::parse::SHOWN) || e.k == Kind::Partial;
+    // Each staff's, with when they are written.
+    let lists: Vec<Vec<(i64, Ev)>> = staves
+        .iter()
+        .map(|stf| {
+            let (mut t, mut two) = (0, false);
+            let mut out = Vec::new();
+            for ev in &stf.events {
+                match ev.k {
+                    Kind::VoiceNext => two = true,
+                    Kind::VoicesEnd => two = false,
+                    _ => {}
+                }
+                if timing(ev) {
+                    out.push((t, ev.clone()));
+                } else if !two {
+                    t += crate::parse::span(ev);
+                }
+            }
+            out
+        })
+        .collect();
+    let same = |a: &(i64, Ev), b: &(i64, Ev)| a.0 == b.0 && a.1.k == b.1.k;
+    let mut all: Vec<(i64, Ev)> = Vec::new();
+    for l in &lists {
+        for x in l {
+            if !all.iter().any(|y| same(x, y)) {
+                all.push(x.clone());
+            }
+        }
+    }
+    all.sort_by_key(|x| x.0);
+    staves
+        .iter()
+        .zip(&lists)
+        .map(|(stf, own)| {
+            let missing: Vec<&(i64, Ev)> = all.iter().filter(|x| !own.iter().any(|y| same(x, y))).collect();
+            if missing.is_empty() || !matches!(stf.kind, crate::parse::StaffKind::Notes | crate::parse::StaffKind::Drums | crate::parse::StaffKind::Tab | crate::parse::StaffKind::Ossia) {
+                return None;
+            }
+            // Laid out in time with spacers, for `merge` to set them at their moments.
+            let mut other = Vec::new();
+            let mut t = 0;
+            for (at, ev) in missing {
+                if *at > t {
+                    other.push(Ev { k: Kind::Rest, spacer: true, ticks: at - t, ..Ev::default() });
+                    t = *at;
+                }
+                other.push(ev.clone());
+            }
+            Some(crate::parse::merge(stf.events.clone(), other).0)
+        })
+        .collect()
+}
+
 /// The bars of a staff.
 pub fn measures(events: &[Ev]) -> Result<Vec<Bar>, ScoreError> {
     measures_keeping(events, None)
@@ -416,6 +484,10 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     let mut fifths = 0;
     let (mut tn, mut td) = (4, 4);
     let mut tparts = [0u8; 4];
+    // The metre shown instead (`timeSignatureFraction`), and a change of
+    // metre waiting for the bar it opens.
+    let mut shown: Option<(i64, i64)> = None;
+    let mut time_next = false;
     let mut bars: Vec<Bar> = Vec::new();
     let mut cur: Option<usize> = None;
     let mut pos = 0;
@@ -424,6 +496,9 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
     // A clef or a key changed in the middle of a bar, waiting for the note
     // or the rest it is drawn before.
     let mut change: (Option<Clef>, Option<(i64, i64)>) = (None, None);
+    // A metre changed in the middle of a bar, waiting for the note or the
+    // rest it is drawn before.
+    let mut time_mid: Option<Ev> = None;
     // A movement starting, waiting for its first bar: its title.
     let mut fresh: Option<(String, String)> = None;
     let mut tied: HashMap<i64, i64> = HashMap::new();
@@ -494,7 +569,19 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
         let ci = match cur {
             Some(ci) => ci,
             None => {
-                let mut b = Bar { clef, fifths, time: (tn, td), time_parts: tparts, bar: "|".into(), length: tn * WHOLE / td, volta_in: volta_open.clone(), tick0: tick_at, ..Bar::default() };
+                let mut b = Bar {
+                    clef,
+                    fifths,
+                    time: shown.unwrap_or((tn, td)),
+                    beats: shown.map(|_| (tn, td)),
+                    time_parts: tparts,
+                    bar: "|".into(),
+                    length: tn * WHOLE / td,
+                    volta_in: volta_open.clone(),
+                    tick0: tick_at,
+                    ..Bar::default()
+                };
+                b.changes.time = std::mem::take(&mut time_next) || time_mid.take().is_some();
                 if let Some(title) = fresh.take() {
                     b.fresh = true;
                     b.first = true;
@@ -602,10 +689,44 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 bars[ci].inline.push((pos, clef, fifths));
                 continue;
             }
-            Kind::Clef | Kind::Key | Kind::Time => {
+            Kind::Time if ev.v == crate::parse::SHOWN => {
+                // `\set Staff.timeSignatureFraction`: another metre shown, the
+                // bars as long as before; in the middle of a bar, from the next.
+                shown = Some(ev.time);
                 if pos > 0 {
-                    return refuse(format!("\\{} in the middle of a bar", kind_name(&ev.k)), ev.at);
+                    time_next = true;
+                } else {
+                    let bar = &mut bars[ci];
+                    bar.time = ev.time;
+                    bar.beats = Some((tn, td));
+                    bar.time_parts = [0; 4];
+                    bar.changes.time = true;
                 }
+                tparts = [0; 4];
+                continue;
+            }
+            Kind::Time if pos > 0 => {
+                // In the middle of a bar, as LilyPond's Timing_translator
+                // takes it: the bar goes on in the new metre, and ends when
+                // it is as long as that metre's bar — here, if it already
+                // is. The new metre is drawn before the next note, or at the
+                // next bar's start.
+                tn = ev.time.0;
+                td = ev.time.1;
+                tparts = ev.time_parts;
+                shown = None;
+                let length = tn * WHOLE / td;
+                if pos >= length {
+                    bars[ci].length = pos;
+                    cur = None;
+                    time_next = true;
+                } else {
+                    bars[ci].length = length;
+                    time_mid = Some(ev.clone());
+                }
+                continue;
+            }
+            Kind::Clef | Kind::Key | Kind::Time => {
                 let bar = &mut bars[ci];
                 match ev.k {
                     Kind::Clef => {
@@ -623,7 +744,9 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                         tn = ev.time.0;
                         td = ev.time.1;
                         tparts = ev.time_parts;
+                        shown = None;
                         bar.time = (tn, td);
+                        bar.beats = None;
                         bar.time_parts = tparts;
                         bar.length = tn * WHOLE / td;
                         bar.changes.time = true;
@@ -660,16 +783,18 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
                 continue;
             }
             Kind::Partial => {
-                if (bars.len() > 1 && !bars[ci].fresh) || pos > 0 {
-                    return refuse("\\partial goes before the first note", ev.at);
-                }
+                // At the start, a pickup; later (LilyPond 2.24 reads it
+                // anywhere), what is left of the bar from here: at a bar
+                // line, a bar that long — a section's pickup — and in the
+                // middle of one, the bar ends that much later (score #408).
                 let bar = &mut bars[ci];
-                let full = bar.time.0 * WHOLE / bar.time.1;
+                let (num, den) = bar.metre();
+                let full = num * WHOLE / den;
                 if ev.ticks >= full {
                     return refuse("a \\partial is shorter than a bar", ev.at);
                 }
-                bar.length = ev.ticks;
-                bar.offset = full - ev.ticks;
+                bar.length = pos + ev.ticks;
+                bar.offset = (full - ev.ticks - pos).max(0);
                 continue;
             }
             Kind::CadenzaOn => {
@@ -751,7 +876,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
             ev.ticks = room;
             queue.push_front(rest);
         }
-        if pos + ev.ticks > bars[ci].length && !cadenza && ev.tuplet.is_none() && ev.mm.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
+        if pos + ev.ticks > bars[ci].length && !cadenza && ev.tuplet.is_none() && ev.scale.is_none() && ev.mm.is_none() && matches!(ev.k, Kind::Note | Kind::Rest) {
             // A note longer than what is left of its bar is cut at the bar
             // lines into tied notes, as LilyPond's Completion_heads_engraver
             // cuts it; a rest into rests. Each piece is written as few
@@ -774,6 +899,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
         if !ev.spacer {
             ev.clef_change = change.0.take();
             ev.key_change = change.1.take();
+            ev.time_change = time_mid.take().map(|t| (t.time, t.time_parts));
         }
         for t in [ev.tuplet, ev.tuplet_outer].into_iter().flatten() {
             if tuplet_bar.get(&t.id).is_some_and(|b| *b != ev.bar) {

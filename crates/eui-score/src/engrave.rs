@@ -249,6 +249,20 @@ fn stem_up(ev: &Ev) -> bool {
     low + top < 0
 }
 
+/// The windows a bar's beams follow: its metre's — and where it shows
+/// another over bars of the same length (`timeSignatureFraction` with
+/// `\scaleDurations`), the shown metre's, shrunk or stretched to the bar:
+/// 9/8 over 3/4 beams its scaled eighths three by three.
+pub(crate) fn bar_windows(bar: &Bar) -> (i64, i64) {
+    let Some(real) = bar.beats else { return beam_windows(bar.time) };
+    let (a, b) = beam_windows(bar.time);
+    let (real_len, shown_len) = (real.0 * WHOLE / real.1, bar.time.0 * WHOLE / bar.time.1);
+    if shown_len == 0 || (a * real_len) % shown_len != 0 || (b * real_len) % shown_len != 0 {
+        return beam_windows(real);
+    }
+    (a * real_len / shown_len, b * real_len / shown_len)
+}
+
 pub(crate) fn beam_windows(time: (i64, i64)) -> (i64, i64) {
     let (num, den) = time;
     let beat = WHOLE / den;
@@ -293,10 +307,10 @@ fn beamed(kind: StaffKind) -> bool {
 
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
     for bar in bars.iter_mut() {
-        let wins = beam_windows(bar.time);
+        let wins = bar_windows(bar);
         // `\set Timing.beatStructure`, `baseMoment`, `beamExceptions`: the
         // groups the beams end at, the bar's first note's settings say.
-        let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.time));
+        let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.metre()));
         let mut all: Vec<Vec<usize>> = Vec::new();
         for list in voice_lists(bar) {
             all.extend(beam_voice(bar, &list, wins, groups.as_deref())?);
@@ -1109,10 +1123,10 @@ pub(crate) fn clef_change_glyph(clef: Clef) -> &'static str {
     }
 }
 
-/// The room a clef or a key changed in the middle of a bar takes before
-/// its note: the clef, then the naturals that cancel the old key and the
-/// new one.
-pub(crate) fn mid_change_width(clef: Option<Clef>, key: Option<(i64, i64)>) -> f64 {
+/// The room a clef, a key or a metre changed in the middle of a bar takes
+/// before its note: the clef, then the naturals that cancel the old key and
+/// the new one, then the metre.
+pub(crate) fn mid_change_width(clef: Option<Clef>, key: Option<(i64, i64)>, time: Option<((i64, i64), [u8; 4])>) -> f64 {
     let mut w = 0.0;
     if let Some(c) = clef {
         w += glyph(clef_change_glyph(c)).advance + 0.6;
@@ -1125,6 +1139,9 @@ pub(crate) fn mid_change_width(clef: Option<Clef>, key: Option<(i64, i64)>) -> f
         if to != 0 {
             w += key_width(to) + 0.8;
         }
+    }
+    if let Some((t, parts)) = time {
+        w += time_width(t, parts) + 0.6;
     }
     w
 }
@@ -1142,7 +1159,7 @@ fn breath_room(ev: &mut Ev) {
 /// space clear of what comes before, three tenths of what follows — and the
 /// change starts there.
 fn change_room(ev: &mut Ev) {
-    let w = mid_change_width(ev.clef_change, ev.key_change);
+    let w = mid_change_width(ev.clef_change, ev.key_change, ev.time_change);
     if w > 0.0 {
         ev.left += 0.5 + w + 0.3;
         ev.change_x = Some(0.5 - ev.left);
@@ -2187,7 +2204,9 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
         .unwrap_or_default();
     let mut all: Vec<Vec<Bar>> = Vec::new();
     let mut sources: Vec<std::borrow::Cow<'_, [Ev]>> = Vec::new();
-    for stf in staves_src {
+    // A `\time` or a `\partial` written in one staff is the score's.
+    let timed = crate::measure::score_timing(staves_src, parsed.paper.polymeter);
+    for (stf, timed) in staves_src.iter().zip(timed) {
         let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         if words && !stf.events.iter().any(|ev| matches!(ev.k, Kind::Time | Kind::Partial)) && !opening.is_empty() {
             let events: Vec<Ev> = opening.iter().cloned().chain(stf.events.iter().cloned()).collect();
@@ -2195,8 +2214,16 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
             sources.push(events.into());
             continue;
         }
-        all.push(measures(&stf.events)?);
-        sources.push(stf.events.as_slice().into());
+        match timed {
+            Some(events) => {
+                all.push(measures(&events)?);
+                sources.push(events.into());
+            }
+            None => {
+                all.push(measures(&stf.events)?);
+                sources.push(stf.events.as_slice().into());
+            }
+        }
     }
     // Bars of rest gathered in one staff and not in another: gathered only
     // where every staff rests the same bars.
@@ -2217,10 +2244,30 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     let count = all[0].len();
     for (si, bars) in all.iter().enumerate() {
         if bars.len() != count {
+            if parsed.paper.polymeter {
+                return refuse(
+                    format!(
+                        "staff {} has {} bars and the first has {count}: staves whose bars differ in length are not drawn — \\scaleDurations and \\set Staff.timeSignatureFraction line them up",
+                        si + 1,
+                        bars.len()
+                    ),
+                    0,
+                );
+            }
             return refuse(format!("staff {} has {} bars and the first has {count}: every staff has the same bars", si + 1, bars.len()), 0);
         }
         for (k, bar) in bars.iter().enumerate() {
             if bar.length * bar.span.unwrap_or(1) != all[0][k].length * all[0][k].span.unwrap_or(1) {
+                if parsed.paper.polymeter {
+                    return refuse(
+                        format!(
+                            "bar {} is not as long in staff {} as in the first: staves whose bars differ in length are not drawn — \\scaleDurations and \\set Staff.timeSignatureFraction line them up",
+                            k + 1,
+                            si + 1
+                        ),
+                        0,
+                    );
+                }
                 return refuse(format!("bar {} is not as long in staff {} as in the first", k + 1, si + 1), 0);
             }
         }

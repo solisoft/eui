@@ -29,8 +29,10 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     let parsed = parse(src)?;
     let title = parsed.header.get("title").cloned().unwrap_or_default();
     let mut measured = Vec::new();
-    for stf in &parsed.staves {
-        measured.push(measures(&stf.events)?);
+    // A `\time` or a `\partial` written in one staff is the score's.
+    let timed = crate::measure::score_timing(&parsed.staves, parsed.paper.polymeter);
+    for (stf, timed) in parsed.staves.iter().zip(&timed) {
+        measured.push(measures(timed.as_deref().unwrap_or(&stf.events))?);
     }
     let holds = holds(&measured);
     let mut tracks: Vec<Vec<u8>> = Vec::new();
@@ -105,7 +107,8 @@ fn track(bars: &[Bar], opts: &MidiOptions, holds: &[(i64, i64)], program: i64, n
     // tie, not one to the note drawn on the same key.
     let mut sounding_unseen: Vec<(i64, Sounding)> = Vec::new();
     for (bi, bar) in bars.iter().enumerate() {
-        if bi == 0 || bar.changes.time {
+        // A metre changed in the middle of the bar before shows at none.
+        if bi == 0 || bar.changes.time || bar.time != bars[bi - 1].time {
             ev_out.push((at, 0, vec![255, 88, 4, bar.time.0 as u8, log2(bar.time.1) as u8, 24, 8]));
         }
         if bi == 0 || bar.changes.key {

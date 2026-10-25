@@ -1154,8 +1154,8 @@ fn draw_time(pen: &mut Pen, time: (i64, i64), parts: [u8; 4], x: f64, top: f64) 
     }
 }
 
-/// A clef or a key changed in the middle of a bar, from `x` before its
-/// note: the clef smaller, the old key's naturals, the new key.
+/// A clef, a key or a metre changed in the middle of a bar, from `x` before
+/// its note: the clef smaller, the old key's naturals, the new key, the metre.
 fn draw_mid_change(pen: &mut Pen, ev: &Ev, clef: Clef, mut x: f64, top: f64) {
     if let Some(c) = ev.clef_change {
         let name = crate::engrave::clef_change_glyph(c);
@@ -1168,8 +1168,11 @@ fn draw_mid_change(pen: &mut Pen, ev: &Ev, clef: Clef, mut x: f64, top: f64) {
             x = draw_key(pen, from, clef, x, top, true, skip) + 0.5;
         }
         if to != 0 {
-            draw_key(pen, to, clef, x, top, false, 0);
+            x = draw_key(pen, to, clef, x, top, false, 0) + 0.8;
         }
+    }
+    if let Some((time, parts)) = ev.time_change {
+        draw_time(pen, time, parts, x, top);
     }
 }
 
@@ -1415,7 +1418,7 @@ fn draw_beam(pen: &mut Pen, bar: &Bar, g: &Beam, top: f64) {
     }
     // `\set subdivideBeams = ##t`: the inner beams broken at each step of
     // `baseMoment`, the outer ones going on over the break.
-    let sub = notes.first().and_then(|ev| crate::look::subdivision(&ev.look, bar.time));
+    let sub = notes.first().and_then(|ev| crate::look::subdivision(&ev.look, bar.metre()));
     let breaks = |k: usize, level: i64| sub.is_some_and(|(step, keep)| level >= keep && (notes[k].start + bar.offset) % step == 0);
     let dir = if g.up { 1.0 } else { -1.0 };
     let k = notes.first().map_or(1.0, |ev| crate::engrave::mag(ev));

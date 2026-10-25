@@ -707,10 +707,12 @@ fn a_clef_or_a_key_changes_in_the_middle_of_a_bar() {
     let x = |s: usize, b: usize, j: usize| e.staves[s][b].items[j].x;
     assert_eq!(x(0, 0, 2), x(1, 0, 2));
     assert!(e.staves[1][0].items[2].clef_change.is_some());
-    // After the last note of a bar, at the next one's start; \time still at a bar line.
+    // After the last note of a bar, at the next one's start.
     let e = eng("{ c'2 \\clef bass s2 | c1 }");
     assert!(e.staves[0][1].changes.clef);
-    assert!(engrave("{ c'2 \\time 3/4 c'4 }", 100.0, &Layout::default()).unwrap_err().message.contains("\\time in the middle of a bar"));
+    // \time in the middle of a bar: the bar goes on in it (score #408, tests/metre.rs).
+    let e = eng("{ c'2 \\time 3/4 c'4 }");
+    assert_eq!(e.staves[0][0].items[1].time_change, Some(((3, 4), [0; 4])));
 }
 
 #[test]

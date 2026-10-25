@@ -1103,6 +1103,9 @@ pub struct Ev {
     /// in fifths, and the new one — drawn before it, the old key's
     /// accidentals cancelled as LilyPond cancels them.
     pub key_change: Option<(i64, i64)>,
+    /// A metre changed in the middle of a bar just before it (score #408):
+    /// drawn before it, after a clef or a key changed there.
+    pub time_change: Option<((i64, i64), [u8; 4])>,
     /// Where those changes start, from its x.
     pub change_x: Option<f64>,
     /// Room before it that its duration's space does not cover: a change's
@@ -1228,6 +1231,9 @@ pub struct Ev {
     /// other part under a solo, part II in unison — and LilyPond's MIDI
     /// still plays (score #412).
     pub unseen: Vec<(i64, Ev)>,
+    /// `\scaleDurations n/d`: the note lasts n/d of its written value, with
+    /// no tuplet drawn (`ticks` is the scaled length).
+    pub scale: Option<(i64, i64)>,
 }
 
 /// A syllable of `\addlyrics`.
@@ -1480,6 +1486,11 @@ pub struct PaperSpec {
     pub page_count: Option<usize>,
     /// `system-count`: the music on so many systems.
     pub system_count: Option<usize>,
+    /// `\enablePolymeter`, or the `Timing_translator` moved from the
+    /// `\Score` to the `\Staff` in `\layout`: each staff keeps its own
+    /// `\time` and `\partial`. Otherwise they are the score's, as
+    /// LilyPond's, whatever staff writes them (score #408).
+    pub polymeter: bool,
 }
 
 /// A flexible vertical distance, LilyPond's spacing alist: in staff spaces,
@@ -1688,6 +1699,8 @@ struct St {
     span_text: Vec<Run>,
     /// The layout settings in force.
     look: crate::look::LookState,
+    /// `\scaleDurations`' factor in force, (1, 1) outside one.
+    scale: (i64, i64),
 }
 
 #[derive(Clone, Copy)]
@@ -2624,6 +2637,12 @@ fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, 
     let mut j = i + 2;
     while j + 1 < end {
         let t = &toks[j];
+        if is_cmd(toks, j, "enablePolymeter") {
+            beyond();
+            paper.polymeter = true;
+            j += 1;
+            continue;
+        }
         if is_cmd(toks, j, "context") && is(toks, j + 1, T::Sym('{')) {
             let close = skip_block(toks, j + 1)? - 1;
             let mut k = j + 2;
@@ -2634,6 +2653,17 @@ fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, 
             }
             let mut map = crate::look::Map::new();
             while k < close {
+                // LilyPond's polymetre the old way: the Timing_translator (and
+                // the bar lines' engraver) taken from the \Score and given to each
+                // \Staff, which then keeps its own metre.
+                if (is_cmd(toks, k, "remove") || is_cmd(toks, k, "consists")) && toks.get(k + 1).is_some_and(|a| a.t == T::Str && (a.v == "Timing_translator" || a.v == "Default_bar_line_engraver")) {
+                    beyond();
+                    if toks[k + 1].v == "Timing_translator" && toks[k].v == "consists" && name != "Score" {
+                        paper.polymeter = true;
+                    }
+                    k += 2;
+                    continue;
+                }
                 if is_cmd(toks, k, "override") {
                     let m = path_end(toks, k + 1);
                     if is(toks, m, T::Sym('=')) && spacing_override(toks, k + 1, m) {
@@ -3159,6 +3189,7 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         span_stem: false,
         span_text: Vec::new(),
         look: crate::look::LookState::default(),
+        scale: (1, 1),
     };
     if base.compress > 0 {
         st.events.push(Ev { k: Kind::Compress, at: toks.get(i).map_or(0, |t| t.at), ..Ev::default() });
@@ -3854,12 +3885,18 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
     }
     let mut voices: Vec<(u8, usize)> = singing.iter().zip(&numbers).map(|(&k, v)| (v.unwrap_or(1), k)).collect();
     voices.sort_by_key(|v| v.0);
-    if parts.iter().any(|p| p.events.iter().any(|ev| ev.k == Kind::Voices)) {
-        return refuse("voices inside voices are not drawn", parts[voices[0].1].at);
-    }
     let mut lists: Vec<Vec<Ev>> = Vec::new();
     for &(_, k) in &voices {
         lists.push(std::mem::take(&mut parts[k].events));
+    }
+    // The voices as written, by their names (`\new Voice = "alto"`).
+    let named = voices.clone();
+    // Voices inside a voice (score #408): each made one more voice of
+    // these, silent (spacers) where it is not written.
+    if lists.iter().any(|l| l.iter().any(|ev| ev.k == Kind::Voices)) {
+        let (flat_lists, flat_numbers) = nested_voices(lists, voices.iter().map(|v| v.0).collect())?;
+        lists = flat_lists;
+        voices = flat_numbers.into_iter().map(|v| (v, voices[0].1)).collect();
     }
     // What a voice says for the whole staff (a key, a metre) goes with the first.
     for x in 1..lists.len() {
@@ -3885,7 +3922,7 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
             }
         }
     }
-    for &(v, k) in &voices {
+    for &(v, k) in &named {
         if let Some(name) = parts[k].name.take() {
             st.voice_names.push((name, v));
         }
@@ -3899,6 +3936,93 @@ fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, Stri
     }
     st.events.push(Ev { k: Kind::VoicesEnd, at: open_at, ..Ev::default() });
     Ok(i)
+}
+
+/// The voices of a `<< \\ >>` some of which hold a `<< \\ >>` of their
+/// own: each inner one beyond its first made a voice of the outer, under the
+/// number LilyPond's `\\` gives its stems — a second (or fourth) down, a
+/// third up — where one is free, else any free one; silent before and after
+/// the passage it sings (spacers), as long as the voice it came from. The
+/// inner first goes on in its voice. Four voices at once are the most.
+fn nested_voices(lists: Vec<Vec<Ev>>, numbers: Vec<u8>) -> Result<(Vec<Vec<Ev>>, Vec<u8>), ScoreError> {
+    let mut used: Vec<u8> = numbers.clone();
+    let mut out: Vec<(u8, Vec<Ev>)> = Vec::new();
+    let mut extra: Vec<(u8, Vec<Ev>)> = Vec::new();
+    for (list, v) in lists.into_iter().zip(numbers) {
+        let total = elapsed(&list);
+        let mut main: Vec<Ev> = Vec::new();
+        let mut t = 0;
+        let mut k = 0;
+        while k < list.len() {
+            if list[k].k != Kind::Voices {
+                t += span(&list[k]);
+                main.push(list[k].clone());
+                k += 1;
+                continue;
+            }
+            // The inner voices, to their `>>`.
+            let open_at = list[k].at;
+            let mut inner: Vec<Vec<Ev>> = vec![Vec::new()];
+            k += 1;
+            while k < list.len() && list[k].k != Kind::VoicesEnd {
+                if list[k].k == Kind::VoiceNext {
+                    inner.push(Vec::new());
+                } else if let Some(last) = inner.last_mut() {
+                    last.push(list[k].clone());
+                }
+                k += 1;
+            }
+            k += 1;
+            let length = elapsed(&inner[0]);
+            if inner.iter().any(|l| elapsed(l) != length) {
+                return refuse("the voices of << \\\\ >> are not as long as each other", open_at);
+            }
+            let mut first = inner.remove(0);
+            for ev in &mut first {
+                if matches!(ev.k, Kind::Note | Kind::Rest) {
+                    ev.voice = Some(v);
+                }
+            }
+            main.extend(first);
+            for (x, mut events) in inner.into_iter().enumerate() {
+                // LilyPond's `\\` makes its second voice's stems go down,
+                // its third's up, its fourth's down.
+                let down = x % 2 == 0;
+                let want: [u8; 4] = if down { [2, 4, 3, 1] } else { [3, 1, 4, 2] };
+                let Some(n) = want.iter().copied().find(|n| !used.contains(n)) else {
+                    return refuse("four voices on a staff are what this draws, no more", open_at);
+                };
+                used.push(n);
+                for ev in &mut events {
+                    if matches!(ev.k, Kind::Note | Kind::Rest) {
+                        ev.voice = Some(n);
+                    }
+                }
+                let mut voice = silence(t, open_at);
+                voice.extend(events);
+                voice.extend(silence(total - t - length, open_at));
+                extra.push((n, voice));
+            }
+            t += length;
+        }
+        out.push((v, main));
+    }
+    out.extend(extra);
+    out.sort_by_key(|o| o.0);
+    Ok((out.iter().map(|o| o.1.clone()).collect(), out.iter().map(|o| o.0).collect()))
+}
+
+/// Spacers lasting `ticks`, each a note value the time is written in where
+/// one is: what an inner voice is silent for.
+fn silence(ticks: i64, at: usize) -> Vec<Ev> {
+    if ticks <= 0 {
+        return Vec::new();
+    }
+    let spacer = |base: i64, dots: i64, ticks: i64| Ev { k: Kind::Rest, spacer: true, base, dots, ticks, at, i: usize::MAX, ..Ev::default() };
+    match crate::measure::spell(ticks) {
+        Some(values) => values.into_iter().map(|(base, dots, t)| spacer(base, dots, t)).collect(),
+        None => vec![spacer(1, 0, ticks)],
+    }
 }
 
 fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
@@ -4518,6 +4642,14 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         return Ok(end);
     }
+    if word == "set"
+        && is(toks, i + 2, T::Sym('.'))
+        && toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff")
+        && toks.get(i + 3).is_some_and(|t| t.t == T::Word && t.v == "timeSignatureFraction")
+        && is(toks, i + 4, T::Sym('='))
+    {
+        return shown_fraction(toks, i + 5, st, tk.at);
+    }
     if word == "set" {
         let staff =
             toks.get(i + 1).is_some_and(|t| t.t == T::Word && t.v == "Staff") && is(toks, i + 2, T::Sym('.')) && toks.get(i + 3).is_some_and(|t| t.t == T::Word && STAFF_PROPS.contains(&t.v.as_str()));
@@ -4545,6 +4677,9 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
     }
     if word == "tuplet" || word == "times" {
         return tuplet(toks, i, st, word, hd);
+    }
+    if word == "scaleDurations" {
+        return scale_durations(toks, i, st, hd);
     }
     if word == "repeat" {
         return repeat(toks, i, st, hd);
@@ -4953,6 +5088,65 @@ fn tuplet(toks: &[Tok], i: usize, st: &mut St, word: &str, hd: &mut HashMap<Stri
     Ok(k + 1)
 }
 
+/// `\scaleDurations 2/3 music`: the music's durations so much shorter
+/// (or longer), drawn as written, no tuplet's number or bracket — how
+/// LilyPond lines up the bars of staves in different metres (score #408).
+fn scale_durations(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    let ratio = toks.get(i + 1).filter(|t| t.t == T::Num && t.v.contains('/')).map(|t| t.v.split('/').map(|p| p.parse::<i64>().unwrap_or(0)).collect::<Vec<_>>());
+    let Some([n, d]) = ratio.as_deref() else { return refuse("\\scaleDurations wants a ratio, like 2/3, then its music", at) };
+    let (n, d) = (*n, *d);
+    if !((1..=16).contains(&n) && (1..=16).contains(&d)) || !starts_expr(toks, i + 2) {
+        return refuse("\\scaleDurations wants a ratio, like 2/3, then its music", at);
+    }
+    let outer = st.scale;
+    let (sn, sd) = (outer.0 * n, outer.1 * d);
+    let g = gcd(sn, sd);
+    st.scale = (sn / g, sd / g);
+    let j = expr(toks, i + 2, st, hd);
+    st.scale = outer;
+    j
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 {
+        a.abs().max(1)
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+/// `\set Staff.timeSignatureFraction = 9/8` (or `#'(9 . 8)`): the metre a
+/// staff shows, its bars as long as the score's metre makes them — polymetre
+/// with bars of one length (score #408). Kept as a `\time` marked "shown".
+fn shown_fraction(toks: &[Tok], j: usize, st: &mut St, at: usize) -> Result<usize, ScoreError> {
+    let wrong = || refuse("\\set Staff.timeSignatureFraction wants a fraction, like 9/8", at);
+    let (num, den, end) = if toks.get(j).is_some_and(|t| t.t == T::Num && t.v.contains('/')) {
+        let parts: Vec<i64> = toks[j].v.split('/').map(|p| p.parse().unwrap_or(0)).collect();
+        (parts[0], parts.get(1).copied().unwrap_or(0), j + 1)
+    } else if is(toks, j, T::Sym('#')) {
+        // `#'(9 . 8)`.
+        let end = value_end(toks, j)?;
+        let nums: Vec<i64> = toks[j..end].iter().filter(|t| t.t == T::Num).filter_map(|t| t.v.parse().ok()).collect();
+        if nums.len() != 2 {
+            return wrong();
+        }
+        (nums[0], nums[1], end)
+    } else {
+        return wrong();
+    };
+    if !((1..=99).contains(&num) && [1, 2, 4, 8, 16, 32, 64].contains(&den)) {
+        return wrong();
+    }
+    beyond();
+    st.events.push(Ev { k: Kind::Time, time: (num, den), v: SHOWN.into(), at, ..Ev::default() });
+    Ok(end)
+}
+
+/// What marks a `\time` that changes only the metre shown
+/// (`timeSignatureFraction`), not the bars' length.
+pub const SHOWN: &str = "shown";
+
 fn tempo(toks: &[Tok], i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let tk = toks[i].clone();
     let mut j = i + 1;
@@ -5207,6 +5401,15 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             outer.used += ev.ticks;
             st.tuplet_outer = Some(outer);
         }
+    }
+    if st.scale != (1, 1) {
+        // `\scaleDurations 2/3`: the note that much shorter, no tuplet drawn.
+        let (n, d) = st.scale;
+        if (ev.ticks * n) % d != 0 {
+            return refuse(format!("a 1/{base} cannot be scaled by {n}/{d}"), tk.at);
+        }
+        ev.ticks = ev.ticks * n / d;
+        ev.scale = Some((n, d));
     }
     st.items += 1;
     ev.graces = std::mem::take(&mut st.graces);

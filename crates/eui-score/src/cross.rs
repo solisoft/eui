@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::engrave::{beam_voice, beam_windows, flags, head_name, stem_x, voice_lists, y_of, System};
+use crate::engrave::{bar_windows, beam_voice, flags, head_name, stem_x, voice_lists, y_of, System};
 use crate::glyphs::glyph;
 use crate::marks::{arc_cmds, curve_height, voice_of};
 use crate::measure::{clef_mid, key_alters, Bar};
@@ -105,8 +105,8 @@ pub(crate) fn plan(all: &mut [Vec<Bar>], staves: &[Staff]) -> Result<Plan, Score
             if !bar.items.iter().enumerate().any(|(j, _)| dest.contains_key(&(a, b, j))) {
                 continue;
             }
-            let wins = beam_windows(bar.time);
-            let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.time));
+            let wins = bar_windows(bar);
+            let groups = bar.items.first().and_then(|ev| crate::look::beam_groups(&ev.look, bar.metre()));
             for list in voice_lists(bar) {
                 for g in beam_voice(bar, &list, wins, groups.as_deref())? {
                     let first = to((a, b, g[0]));
