@@ -2207,6 +2207,11 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     // A `\time` or a `\partial` written in one staff is the score's.
     let timed = crate::measure::score_timing(staves_src, parsed.paper.polymeter);
     for (stf, timed) in staves_src.iter().zip(timed) {
+        if let Some(events) = timed {
+            all.push(measures(&events)?);
+            sources.push(events.into());
+            continue;
+        }
         let words = matches!(stf.kind, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
         if words && !stf.events.iter().any(|ev| matches!(ev.k, Kind::Time | Kind::Partial)) && !opening.is_empty() {
             let events: Vec<Ev> = opening.iter().cloned().chain(stf.events.iter().cloned()).collect();
@@ -2214,16 +2219,8 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
             sources.push(events.into());
             continue;
         }
-        match timed {
-            Some(events) => {
-                all.push(measures(&events)?);
-                sources.push(events.into());
-            }
-            None => {
-                all.push(measures(&stf.events)?);
-                sources.push(stf.events.as_slice().into());
-            }
-        }
+        all.push(measures(&stf.events)?);
+        sources.push(stf.events.as_slice().into());
     }
     // Bars of rest gathered in one staff and not in another: gathered only
     // where every staff rests the same bars.

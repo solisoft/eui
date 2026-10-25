@@ -448,7 +448,7 @@ pub(crate) fn score_timing(staves: &[crate::parse::Staff], polymeter: bool) -> V
         .zip(&lists)
         .map(|(stf, own)| {
             let missing: Vec<&(i64, Ev)> = all.iter().filter(|x| !own.iter().any(|y| same(x, y))).collect();
-            if missing.is_empty() || !matches!(stf.kind, crate::parse::StaffKind::Notes | crate::parse::StaffKind::Drums | crate::parse::StaffKind::Tab | crate::parse::StaffKind::Ossia) {
+            if missing.is_empty() {
                 return None;
             }
             // Laid out in time with spacers, for `merge` to set them at their moments.

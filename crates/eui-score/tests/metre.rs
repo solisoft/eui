@@ -184,6 +184,9 @@ fn a_time_or_a_partial_one_staff_writes_is_the_scores() {
     assert_eq!(quarters(&e.staves[0]), vec![3.0, 2.0, 2.0, 1.0, 2.0]);
     assert_eq!(quarters(&e.staves[1]), quarters(&e.staves[0]));
     assert!(e.staves[1][0].changes.time && e.staves[1][0].time == (3, 4), "the lower staff draws the 3/4 too");
+    // Chord names follow a change of metre they do not write.
+    let e = eng(r"<< \new ChordNames \chordmode { c2. g2 c2 } \new Staff { \time 3/4 c'2. \time 2/4 d'2 e'2 } >>");
+    assert_eq!(quarters(&e.staves[0]), vec![3.0, 2.0, 2.0]);
     // Each staff's own: kept, the first's taken where both write one.
     let e = eng(r"<< \new Staff { \time 3/4 c''2. } \new Staff { \time 6/8 c'4. c' } >>");
     assert_eq!((e.staves[0][0].time, e.staves[1][0].time), ((3, 4), (6, 8)));
