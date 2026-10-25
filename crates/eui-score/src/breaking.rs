@@ -11,7 +11,8 @@ use std::cell::Cell;
 
 use crate::engrave::y_of;
 use crate::measure::Bar;
-use crate::parse::{Ev, Kind, PaperSpec, Spacing, SpacingSpanner};
+use crate::parse::{Ev, Kind, PaperSpec, SpacingSpanner};
+use crate::vertical::Spec;
 use crate::{Layout, WHOLE};
 
 /// The spacing of durations: the room each doubling adds, the room of the
@@ -114,13 +115,18 @@ pub(crate) struct Opts {
     pub ragged_bottom: bool,
     /// `ragged-last-bottom = ##f`: the last page's are.
     pub fill_last: bool,
-    /// `system-system-spacing`: basic distance (middle line to middle line),
-    /// padding, least distance.
-    pub system: (f64, f64, f64),
+    /// `system-system-spacing`: from the middle line of a system's last
+    /// staff to the next one's first.
+    pub system: Spec,
     /// `score-system-spacing`, before a movement's first system.
-    pub score: (f64, f64, f64),
-    /// `markup-system-spacing`, from the titles to the first system.
-    pub markup: (f64, f64),
+    pub score: Spec,
+    /// `markup-system-spacing`, from the titles to the first system — its
+    /// basic distance from the titles' foot to the staff's middle line.
+    pub markup: Spec,
+    /// `top-system-spacing`, from the top of a page to its first system.
+    pub top: Spec,
+    /// `last-bottom-spacing`, from the last system to the bottom margin.
+    pub bottom: Spec,
     /// `max-systems-per-page`.
     pub max_per_page: Option<usize>,
     /// `page-count`.
@@ -139,8 +145,9 @@ impl Opts {
     pub(crate) fn of(layout: &Layout, spec: &PaperSpec) -> Self {
         let space_mm = 25.4 * spec.staff_size.unwrap_or(20.0) / 4.0 / 72.0;
         let paper = layout.left.is_some();
-        let sp = |s: &Spacing, basic: f64, padding: f64, least: f64| (s.basic.unwrap_or(basic), s.padding.unwrap_or(padding), s.minimum.unwrap_or(least).min(s.basic.unwrap_or(basic)));
-        let system = sp(&spec.system_spacing, layout.gap.unwrap_or(10.0), 1.0, 8.0);
+        // LilyPond's `\paper` defaults, the basic distance between systems
+        // the layout's (12 spaces on paper, as LilyPond's; 10 on a screen).
+        let system = Spec::new(layout.gap.unwrap_or(10.0), 8.0, 1.0, Some(60.0)).over(&spec.system_spacing);
         Opts {
             short_indent: if paper { spec.short_indent.map_or(0.0, |mm| mm / space_mm) } else { 0.0 },
             ragged_right: spec.ragged_right,
@@ -148,8 +155,10 @@ impl Opts {
             ragged_bottom: spec.ragged_bottom.unwrap_or(false),
             fill_last: spec.ragged_last_bottom == Some(false),
             system,
-            score: sp(&spec.score_spacing, system.0.max(14.0), system.1, system.2),
-            markup: (spec.markup_spacing.basic.unwrap_or(5.0), spec.markup_spacing.padding.unwrap_or(0.5)),
+            score: Spec::new(system.basic.max(14.0), system.min, system.padding, Some(120.0)).over(&spec.score_spacing),
+            markup: Spec::new(5.0, 0.0, 0.5, Some(30.0)).over(&spec.markup_spacing),
+            top: Spec::new(1.0, 0.0, 1.0, None).over(&spec.top_spacing),
+            bottom: Spec::new(1.0, 0.0, 1.0, Some(30.0)).over(&spec.last_bottom_spacing),
             max_per_page: spec.max_systems_per_page,
             page_count: spec.page_count,
             system_count: spec.system_count,

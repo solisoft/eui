@@ -11,6 +11,7 @@ use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPl
 use crate::measure::{measures, measures_keeping, Bar, Beam, Changes, Opening};
 use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
+use crate::vertical::{Skyline, Spec, Spring};
 use crate::{Layout, ScoreError, RULE, WHOLE};
 
 /// What a line ends with when the next one opens with a new key or metre.
@@ -1728,11 +1729,36 @@ pub(crate) fn beam_y(g: &Beam, x: f64) -> f64 {
 
 // ---- Vertical spacing -----------------------------------------------------
 
-fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock, opts: &Opts) -> Vec<Page> {
+/// The skyline of staff `s`'s line on a system: its ink, column by column.
+fn skyline_of(staves: &[Vec<Bar>], sys: &System, s: usize) -> Skyline {
+    let sp = 10.0;
+    let line = &sys.lines[s];
+    let mut sky = Skyline::of(&crate::draw::line_paths(&staves[s], line, sp), sp);
+    // Lyrics keep further from the staff under them than notes do
+    // (LilyPond's `nonstaff-unrelatedstaff-spacing`, padding 1.5).
+    if let Some(y) = line.lyric_y {
+        sky.lower_from(y - 1.0, 0.5);
+    }
+    sky
+}
+
+/// How far apart two things' reference points must be for their ink to
+/// keep `spec`'s padding apart: by their reaches (`boxed`, the whole width
+/// at once) where that is under the least distance anyway, else by their
+/// skylines — column by column, as LilyPond keeps them apart.
+fn ink_need(spec: &Spec, boxed: f64, skylines: impl FnOnce() -> Option<f64>) -> f64 {
+    if boxed <= spec.min + 1e-9 {
+        return boxed;
+    }
+    skylines().map_or(0.0, |d| d + spec.padding)
+}
+
+fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &HeadBlock, opts: &Opts, inner: &[Vec<Spring>]) -> Vec<Page> {
     let page_h = layout.page_h;
     let margin = layout.top.unwrap_or(0.0);
     let floor_y = page_h.map_or(0.0, |h| h - layout.bottom.unwrap_or(0.0));
     let titled = !head.lines.is_empty();
+    let n = systems.len();
     let reaches: Vec<(f64, f64)> = systems.iter().map(|sys| system_reach(sys, staves)).collect();
     let last_bar = |sys: &System| staves[0].get(sys.lines[0].bars.end - 1);
     // A \pageBreak at the end of a system: the next starts a page; a
@@ -1741,104 +1767,162 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     let keep: Vec<bool> = systems.iter().map(|sys| last_bar(sys).is_some_and(|b| b.no_page_break)).collect();
     // A movement starts with it: the room between two scores.
     let fresh: Vec<bool> = systems.iter().map(|sys| staves[0].get(sys.lines[0].bars.start).is_some_and(|b| b.fresh)).collect();
-    // Each system's last staff from its first: LilyPond measures the room
-    // between two systems from the middle line of the one's last staff to
-    // the middle line of the other's first.
+    // Each system's last staff from its first, at the staves' natural
+    // distances, and its ink under that staff's top line: LilyPond measures
+    // the room between two systems from the middle line of the one's last
+    // staff to the middle line of the other's first.
     let last_off: Vec<f64> = systems.iter().map(|sys| sys.offsets.last().copied().unwrap_or(0.0)).collect();
-    // Where a system goes: the first under the title (`markup-system-spacing`),
-    // the first of a later page under the margin, the others under the one
-    // before (`system-system-spacing`, `score-system-spacing` where a
-    // movement starts): their basic distance apart, their ink their
-    // padding apart at least.
-    let (m_basic, m_pad) = opts.markup;
-    let first_top = |si: usize| {
-        let r = reaches[si];
-        if si == 0 {
-            let mut tp = if titled { (margin + head.bottom + m_basic - 2.0).max(margin + head.bottom + m_pad - r.0) } else { margin + 0.5 - r.0 };
-            if titled && page_h.is_none() {
-                tp += 1.0;
-            }
-            tp
+    let below: Vec<f64> = (0..n).map(|k| reaches[k].1 - last_off[k]).collect();
+    let no_springs: Vec<Spring> = Vec::new();
+    let inner_of = |k: usize| inner.get(k).unwrap_or(&no_springs);
+    let inner_nat: Vec<f64> = (0..n).map(|k| inner_of(k).iter().map(|s| s.natural).sum()).collect();
+    let inner_min: Vec<f64> = (0..n).map(|k| inner_of(k).iter().map(|s| s.min).sum()).collect();
+    // Where a page's music may start: the first page's under its titles, a
+    // later one's under its number.
+    let head_y = |k: usize| {
+        if k > 0 {
+            margin + 3.5
+        } else if titled {
+            margin + head.bottom + if page_h.is_none() { 1.0 } else { 0.0 }
         } else {
-            margin + 3.5 + 1.0 - r.0
+            margin - 0.5
         }
     };
-    let next_top = |ptop: f64, pbottom: f64, si: usize| {
-        let (basic, padding, _) = if fresh[si] { opts.score } else { opts.system };
-        (ptop + last_off[si - 1] + basic).max(pbottom + padding - reaches[si].0)
+    // The springs: from where a page's music starts to its first system's
+    // top line (`markup-system-spacing` under the titles, `top-system-spacing`
+    // else, both measured to the middle line); from a system's last staff's
+    // top line to the bottom margin (`last-bottom-spacing`); between two
+    // systems (`system-system-spacing`, `score-system-spacing` where a
+    // movement starts) — never shorter than their ink and padding allow.
+    let to_top_line = |s: Spec, by: f64| Spec { basic: s.basic + by, min: s.min + by, ..s };
+    let tops: Vec<Spring> = (0..n)
+        .map(|k| {
+            let spec = if k == 0 && titled { opts.markup } else { opts.top };
+            to_top_line(spec, -2.0).spring(spec.padding - reaches[k].0)
+        })
+        .collect();
+    let bottoms: Vec<Spring> = (0..n).map(|k| to_top_line(opts.bottom, 2.0).spring(below[k] + opts.bottom.padding)).collect();
+    let first_drawn = |sys: &System| (0..sys.lines.len()).find(|&s| !sys.lines[s].hidden).unwrap_or(0);
+    let last_drawn = |sys: &System| (0..sys.lines.len()).rev().find(|&s| !sys.lines[s].hidden).unwrap_or(0);
+    // Each system's skylines, drawn once when a distance needs them: its
+    // first staff's and its last's.
+    let mut skies: Vec<[Option<std::rc::Rc<Skyline>>; 2]> = vec![[None, None]; n];
+    let mut sky = |k: usize, last: bool| -> std::rc::Rc<Skyline> {
+        let sys = &systems[k];
+        let s = if last { last_drawn(sys) } else { first_drawn(sys) };
+        let other = if last { first_drawn(sys) } else { last_drawn(sys) };
+        if let Some(have) = &skies[k][usize::from(last)] {
+            return have.clone();
+        }
+        let made = match &skies[k][usize::from(!last)] {
+            Some(have) if s == other => have.clone(),
+            _ => std::rc::Rc::new(skyline_of(staves, sys, s)),
+        };
+        skies[k][usize::from(last)] = Some(made.clone());
+        made
     };
+    let mut gaps: Vec<Spring> = Vec::with_capacity(n);
+    for k in 0..n {
+        if k == 0 {
+            gaps.push(Spring::rigid(0.0));
+            continue;
+        }
+        let spec = if fresh[k] { opts.score } else { opts.system };
+        let boxed = below[k - 1] + spec.padding - reaches[k].0;
+        gaps.push(spec.spring(ink_need(&spec, boxed, || sky(k - 1, true).clear_of(&sky(k, false)))));
+    }
     // `systems-per-page`, `max-systems-per-page`: a page holds no more, and
     // a system that would not fit still starts the next one.
     let per_page = layout.systems_per_page.into_iter().chain(opts.max_per_page).min().unwrap_or(usize::MAX).max(1);
-    let n = systems.len();
+    // A page of systems i..=j: the room its springs have, and their lengths
+    // natural and least.
+    let room = |i: usize| floor_y - head_y(i);
+    let sums = |i: usize, j: usize| {
+        let mut natural = tops[i].natural + bottoms[j].natural;
+        let mut least = tops[i].min + bottoms[j].min;
+        for k in i..=j {
+            natural += inner_nat[k];
+            least += inner_min[k];
+            if k > i {
+                natural += gaps[k].natural;
+                least += gaps[k].min;
+            }
+        }
+        (natural, least)
+    };
     let starts = match page_h {
         Some(_) => {
+            // How badly systems i..=j fill a page: none where they do not go
+            // on one, even squeezed; else how empty it is left, or how far
+            // its springs are squeezed towards their least.
             let fits = |i: usize, j: usize| -> Option<f64> {
                 if j + 1 - i > per_page {
                     return None;
                 }
-                let top = first_top(i);
-                let room = (floor_y - 1.0 - top).max(1.0);
-                let (mut ptop, mut pbottom) = (top, top + reaches[i].1);
-                for (k, r) in reaches.iter().enumerate().take(j + 1).skip(i + 1) {
-                    ptop = next_top(ptop, pbottom, k);
-                    pbottom = ptop + r.1;
-                    if pbottom + 1.0 > floor_y {
-                        return None;
-                    }
+                let (natural, least) = sums(i, j);
+                let r = room(i);
+                if least > r + 1e-9 {
+                    // One system taller than a page has a page to itself.
+                    return (i == j).then_some(1.0);
                 }
-                Some(((floor_y - 1.0 - pbottom) / room).max(0.0))
+                Some(if natural <= r { ((r - natural) / r.max(1.0)).max(0.0) } else { (natural - r) / (natural - least).max(1e-9) })
             };
             let counted = opts.page_count.and_then(|count| crate::breaking::counted_pages(n, count, fits, |j| !keep[j], |j| forced[j]));
             match counted {
                 Some(starts) => starts,
-                None if layout.even_pages => page_starts(n, &reaches, &forced, &keep, floor_y, per_page, first_top, next_top),
-                None => filled_starts(n, &reaches, &forced, &keep, floor_y, per_page, !opts.minimal, first_top, next_top),
+                None if layout.even_pages => page_starts(n, &forced, &keep, fits),
+                None => filled_starts(n, &forced, &keep, per_page, !opts.minimal, |i, j| fits(i, j).is_some()),
             }
         }
         None => vec![0],
     };
     let mut pages: Vec<Page> = Vec::new();
-    let mut prev: Option<(f64, f64)> = None;
-    for (si, sys) in systems.iter_mut().enumerate() {
-        let r = reaches[si];
-        let tp = match prev {
-            Some((ptop, pbottom)) if !starts.contains(&si) => next_top(ptop, pbottom, si),
-            _ => {
-                pages.push(Page { index: pages.len(), systems: Vec::new() });
-                first_top(si)
+    for (pi, &i) in starts.iter().enumerate() {
+        let j = starts.get(pi + 1).map_or(n, |&next| next).max(i + 1).min(n) - 1;
+        if i >= n {
+            break;
+        }
+        // The page's springs and the force that fills it: squeezed where
+        // its systems need it, stretched down the page unless it is ragged
+        // (`ragged-bottom`; the last page's unless `ragged-last-bottom = ##f`).
+        let last_page = j + 1 == n;
+        let stretch = page_h.is_some() && !opts.ragged_bottom && (!last_page || opts.fill_last);
+        let force = if page_h.is_some() {
+            let mut chain: Vec<Spring> = vec![tops[i], bottoms[j]];
+            chain.extend_from_slice(&gaps[i + 1..=j]);
+            for k in i..=j {
+                chain.extend_from_slice(inner_of(k));
             }
+            crate::vertical::solve(&chain, room(i), stretch)
+        } else {
+            0.0
         };
-        sys.top = tp;
-        sys.bottom = tp + r.1;
-        sys.reach_hi = r.0;
-        sys.page = pages.len() - 1;
-        let pi = pages.len() - 1;
-        pages[pi].systems.push(si);
-        prev = Some((sys.top, sys.bottom));
+        let mut y = head_y(i) + tops[i].at(force);
+        let mut page = Page { index: pages.len(), systems: Vec::new() };
+        for k in i..=j {
+            if k > i {
+                y += last_offset(&systems[k - 1]) + gaps[k].at(force);
+            }
+            let sys = &mut systems[k];
+            if let Some(springs) = inner.get(k).filter(|v| !v.is_empty()) {
+                let mut offsets = Vec::with_capacity(springs.len() + 1);
+                offsets.push(0.0);
+                for s in springs {
+                    offsets.push(offsets[offsets.len() - 1] + s.at(force));
+                }
+                sys.offsets = offsets;
+                sys.reach = Some((reaches[k].0, last_offset(sys) + below[k]));
+            }
+            sys.top = y;
+            sys.bottom = y + last_offset(sys) + below[k];
+            sys.reach_hi = reaches[k].0;
+            sys.page = page.index;
+            page.systems.push(k);
+        }
+        pages.push(page);
     }
     if pages.is_empty() {
         pages.push(Page { index: 0, systems: Vec::new() });
-    }
-    // A page's systems spread down it (`ragged-bottom` false), the last
-    // page's only under `ragged-last-bottom = ##f`.
-    if page_h.is_some() && !opts.ragged_bottom {
-        let count = pages.len();
-        for (pi, pg) in pages.iter().enumerate() {
-            if (pi == count - 1 && !opts.fill_last) || pg.systems.len() < 2 {
-                continue;
-            }
-            let last = pg.systems[pg.systems.len() - 1];
-            let extra = floor_y - 1.0 - systems[last].bottom;
-            let step = (extra / (pg.systems.len() - 1) as f64).min(6.0);
-            if step <= 0.0 {
-                continue;
-            }
-            for (k, &s) in pg.systems.iter().enumerate() {
-                systems[s].top += step * k as f64;
-                systems[s].bottom += step * k as f64;
-            }
-        }
     }
     for sys in systems.iter_mut() {
         if !sys.multi {
@@ -1853,61 +1937,34 @@ fn stack(systems: &mut [System], staves: &[Vec<Bar>], layout: &Layout, head: &He
     pages
 }
 
+/// A system's last staff's top line, from its first's.
+fn last_offset(sys: &System) -> f64 {
+    sys.offsets.last().copied().unwrap_or(0.0)
+}
+
 /// The systems that start a page when each is filled in turn: a system goes
-/// on the page it fits on, else starts the next — unless a `\noPageBreak`
-/// keeps it with the one before, and the page is cut where it may be,
-/// earlier. A last page left with one system takes the one before it too,
-/// when the page before keeps two or more and the last has the room.
-#[allow(clippy::too_many_arguments)]
-fn filled_starts(
-    n: usize,
-    reaches: &[(f64, f64)],
-    forced: &[bool],
-    keep: &[bool],
-    floor_y: f64,
-    per_page: usize,
-    no_lone: bool,
-    first_top: impl Fn(usize) -> f64,
-    next_top: impl Fn(f64, f64, usize) -> f64,
-) -> Vec<usize> {
+/// on the page it fits on — squeezed, if need be — else starts the next —
+/// unless a `\noPageBreak` keeps it with the one before, and the page is cut
+/// where it may be, earlier. A last page left with one system takes the one
+/// before it too, when the page before keeps two or more and the last has
+/// the room. `fits(i, j)`: systems i..=j go on one page.
+fn filled_starts(n: usize, forced: &[bool], keep: &[bool], per_page: usize, no_lone: bool, fits: impl Fn(usize, usize) -> bool) -> Vec<usize> {
     let mut starts = vec![0];
-    let mut prev: Option<(f64, f64)> = None;
-    let mut si = 0;
+    let mut si = 1;
     while si < n {
-        let top = match prev {
-            Some((ptop, pbottom)) => {
-                let tp = next_top(ptop, pbottom, si);
-                let page = starts.last().copied().unwrap_or(0);
-                let full = si - page >= per_page;
-                if forced[si - 1] || full || tp + reaches[si].1 + 1.0 > floor_y {
-                    // Cut where a page may end: here, or the nearest earlier.
-                    let at = (page + 1..=si).rev().find(|&k| forced[k - 1] || !keep[k - 1]).unwrap_or(si);
-                    starts.push(at);
-                    if at < si {
-                        si = at;
-                    }
-                    first_top(si)
-                } else {
-                    tp
-                }
-            }
-            None => first_top(si),
-        };
-        prev = Some((top, top + reaches[si].1));
+        let page = starts.last().copied().unwrap_or(0);
+        let full = si - page >= per_page;
+        if forced[si - 1] || full || !fits(page, si) {
+            // Cut where a page may end: here, or the nearest earlier.
+            let at = (page + 1..=si).rev().find(|&k| forced[k - 1] || !keep[k - 1]).unwrap_or(si);
+            starts.push(at);
+            si = at;
+        }
         si += 1;
     }
     // Not a lone system on the last page, where the one before can join it.
     if let [.., before, last] = starts[..] {
-        let fits = |from: usize| {
-            let mut pbottom = first_top(from) + reaches[from].1;
-            let mut ptop = first_top(from);
-            for (k, r) in reaches.iter().enumerate().take(n).skip(from + 1) {
-                ptop = next_top(ptop, pbottom, k);
-                pbottom = ptop + r.1;
-            }
-            pbottom + 1.0 <= floor_y
-        };
-        if no_lone && n - last == 1 && last - before >= 3 && !forced[last - 1] && !keep[last - 2] && per_page >= 2 && fits(last - 1) {
+        if no_lone && n - last == 1 && last - before >= 3 && !forced[last - 1] && !keep[last - 2] && per_page >= 2 && fits(last - 1, n - 1) {
             if let Some(l) = starts.last_mut() {
                 *l = last - 1;
             }
@@ -1919,19 +1976,11 @@ fn filled_starts(
 /// The systems that start a page, the first included: as few pages as the
 /// systems need, and among those ways to cut them, the one whose pages are
 /// most evenly full — the last one too, so that it is not left with a line
-/// on it. A system starts a page after a \pageBreak, never after a
-/// \noPageBreak; one taller than a page has a page to itself.
-#[allow(clippy::too_many_arguments)]
-fn page_starts(
-    n: usize,
-    reaches: &[(f64, f64)],
-    forced: &[bool],
-    keep: &[bool],
-    floor_y: f64,
-    per_page: usize,
-    first_top: impl Fn(usize) -> f64,
-    next_top: impl Fn(f64, f64, usize) -> f64,
-) -> Vec<usize> {
+/// on it — and least squeezed. A system starts a page after a \pageBreak,
+/// never after a \noPageBreak; one taller than a page has a page to itself.
+/// `fits(i, j)`: how badly systems i..=j fill a page, none where they do
+/// not go on one.
+fn page_starts(n: usize, forced: &[bool], keep: &[bool], fits: impl Fn(usize, usize) -> Option<f64>) -> Vec<usize> {
     if n == 0 {
         return vec![0];
     }
@@ -1940,25 +1989,16 @@ fn page_starts(
     best[0] = Some((0, 0.0, 0));
     for i in 0..n {
         let Some((pages, cost, _)) = best[i] else { continue };
-        let top = first_top(i);
-        let room = (floor_y - 1.0 - top).max(1.0);
-        let (mut ptop, mut pbottom) = (top, top + reaches[i].1);
         for j in i..n {
-            if j - i >= per_page {
-                break;
-            }
-            if j > i {
-                ptop = next_top(ptop, pbottom, j);
-                pbottom = ptop + reaches[j].1;
-                if pbottom + 1.0 > floor_y {
-                    break;
-                }
-            }
+            let bad = match fits(i, j) {
+                Some(b) => b,
+                None if j == i => 0.0,
+                None => break,
+            };
             if j + 1 < n && keep[j] && !forced[j] {
                 continue;
             }
-            let empty = ((floor_y - 1.0 - pbottom) / room).max(0.0);
-            let candidate = (pages + 1, cost + empty * empty, i);
+            let candidate = (pages + 1, cost + bad * bad, i);
             let better = match best[j + 1] {
                 None => true,
                 Some((p, c, _)) => candidate.0 < p || (candidate.0 == p && candidate.1 < c - 1e-9),
@@ -2047,7 +2087,7 @@ fn engrave_one(parsed: &Parsed, mut width: f64, layout: &Layout, opts: &Opts) ->
     let head = header_lines(&parsed.header, width);
     let mut systems: Vec<System> = lines.into_iter().map(|line| System { left: line.left, right: line.right, lines: vec![line], ..System::default() }).collect();
     let staves = vec![bars];
-    let pages = stack(&mut systems, &staves, layout, &head, opts);
+    let pages = stack(&mut systems, &staves, layout, &head, opts, &[]);
     let bottom = systems.iter().fold(0.0, |acc: f64, s| acc.max(s.bottom));
     Ok(Engraved {
         staves,
@@ -2309,12 +2349,14 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
             o.lines[s] = l;
         }
     }
+    let inner: Vec<Vec<Spring>> = systems.iter_mut().map(|o| stack_staves(o, &all, &parsed.groups, staves_src)).collect();
+    let head = header_lines(&parsed.header, width);
+    let pages = stack(&mut systems, &all, layout, &head, opts, &inner);
+    // The staves where the page put them: what joins them drawn there.
     for o in &mut systems {
-        stack_staves(o, &all, &parsed.groups, staves_src);
+        connect(o, &parsed.groups);
     }
     crate::cross::ink(&mut systems, &all, &plan);
-    let head = header_lines(&parsed.header, width);
-    let pages = stack(&mut systems, &all, layout, &head, opts);
     let mut bottom: f64 = 0.0;
     for o in &mut systems {
         let (top, page) = (o.top, o.page);
@@ -2340,57 +2382,103 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout, opts: &Opts) -> Re
     })
 }
 
-fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[crate::parse::Staff]) {
+/// The staves of a system one under the other, each at its natural
+/// distance from the one above; the springs between them (one a staff after
+/// the first: from the staff before it), which the page squeezes or
+/// stretches.
+fn stack_staves(sys: &mut System, all: &[Vec<Bar>], groups: &[Group], staves: &[crate::parse::Staff]) -> Vec<Spring> {
     let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, l)| reach(&all[s], l)).collect();
-    let mut offsets = vec![0.0];
     // An ossia with nothing in this system takes no room.
     let idle = |s: usize| sys.lines[s].kind == StaffKind::Ossia && sys.lines[s].bars.clone().all(|b| all[s][b].items.iter().all(|ev| ev.spacer));
     // Nor does a staff removed from it (`\RemoveEmptyStaves`): the next one
     // goes under the last that is drawn.
     let hidden: Vec<bool> = sys.lines.iter().map(|l| l.hidden).collect();
     let gone = |s: usize| hidden[s];
+    let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
+    let mut springs: Vec<Spring> = Vec::with_capacity(reaches.len());
+    let mut skies: Vec<Option<std::rc::Rc<Skyline>>> = vec![None; reaches.len()];
+    let mut sky = |s: usize| -> std::rc::Rc<Skyline> { skies[s].get_or_insert_with(|| std::rc::Rc::new(skyline_of(all, sys, s))).clone() };
     for s in 1..reaches.len() {
-        if gone(s) {
-            offsets.push(offsets[s - 1]);
-            continue;
-        }
-        let Some(p) = (0..s).rev().find(|&k| !gone(k)) else {
-            offsets.push(offsets[s - 1]);
+        let p = (0..s).rev().find(|&k| !gone(k));
+        let Some(p) = p.filter(|&p| !gone(s) && !idle(p)) else {
+            springs.push(Spring::rigid(0.0));
             continue;
         };
-        if idle(p) {
-            offsets.push(offsets[p]);
-            continue;
-        }
         // Chord names sit as close over their staff as their ink lets them,
-        // an ossia closer than another staff.
-        let words = |k: StaffKind| matches!(k, StaffKind::ChordNames | StaffKind::Figures | StaffKind::FretBoards);
+        // an ossia closer than another staff; the others as their spacing
+        // alists say (`staff-staff-spacing`).
         let names = words(sys.lines[p].kind) || words(sys.lines[s].kind);
-        let least: f64 = if names {
-            0.0
+        let spec = if names {
+            Spec::new(0.0, 0.0, 0.6, Some(0.0))
         } else if sys.lines[p].kind == StaffKind::Ossia {
-            7.0
+            Spec::new(7.0, 6.0, 1.0, Some(0.0))
         } else {
-            9.0
+            let start = sys.lines[p].bars.start;
+            let look = all[p].get(start).and_then(|b| b.items.first()).map(|ev| ev.look.clone()).unwrap_or_default();
+            staff_spacing(&look, groups, p, s)
         };
-        let o = (offsets[p] + least).max(offsets[p] + reaches[p].1 + if names { 0.6 } else { 1.0 } - reaches[s].0);
-        offsets.push(o);
+        let boxed = reaches[p].1 + spec.padding - reaches[s].0;
+        let need = if names { boxed } else { ink_need(&spec, boxed, || sky(p).clear_of(&sky(s))) };
+        springs.push(spec.spring(need));
+    }
+    let mut offsets = vec![0.0];
+    for sp in &springs {
+        offsets.push(offsets[offsets.len() - 1] + sp.natural);
     }
     let last = (0..offsets.len()).rev().find(|&s| !gone(s)).unwrap_or(offsets.len() - 1);
     let high = (0..reaches.len()).filter(|&s| !idle(s) && !gone(s)).map(|s| offsets[s] + reaches[s].0).fold(f64::INFINITY, f64::min);
     sys.reach = Some((if high.is_finite() { high } else { reaches[0].0 }, offsets[last] + reaches[last].1));
     sys.names = staves.iter().map(|stf| if sys.first_line { stf.props.instrument_name.clone().unwrap_or_default() } else { stf.props.short_instrument_name.clone().unwrap_or_default() }).collect();
+    sys.offsets = offsets;
+    connect(sys, groups);
+    springs
+}
+
+/// The bar lines a brace or a bracket draws down from each staff to the
+/// next one drawn, at the staves' distances.
+fn connect(sys: &mut System, groups: &[Group]) {
     let n = sys.lines.len();
     for s in 0..n {
-        let next = (s + 1..n).find(|&t| !gone(t));
-        let ss = &mut sys.lines[s];
+        let next = (s + 1..n).find(|&t| !sys.lines[t].hidden);
         let through = |t: usize| groups.iter().any(|g| (g.kind == GroupKind::Brace || g.kind == GroupKind::Bracket) && g.first <= s && t <= g.last);
-        ss.connect_down = match next {
-            Some(t) if !ss.hidden && through(t) => offsets[t] - offsets[s] - staff_height(ss.kind),
+        let down = match next {
+            Some(t) if !sys.lines[s].hidden && through(t) => sys.offsets[t] - sys.offsets[s] - staff_height(sys.lines[s].kind),
             _ => 0.0,
         };
+        sys.lines[s].connect_down = down;
     }
-    sys.offsets = offsets;
+}
+
+/// The spacing from staff `p` to the next staff drawn, `s`, as LilyPond's
+/// `VerticalAxisGroup.staff-staff-spacing` works it out: inside a group
+/// (a staff group, a piano or a choir staff), its `StaffGrouper`'s
+/// `staff-staff-spacing`; from a group's last staff to a staff outside it,
+/// its `staffgroup-staff-spacing`; between staves in no group,
+/// `default-staff-staff-spacing` — what the staff's settings say over each
+/// (`\override VerticalAxisGroup.staff-staff-spacing = #'((basic-distance . 12))`
+/// over all of them).
+fn staff_spacing(look: &crate::look::Look, groups: &[Group], p: usize, s: usize) -> Spec {
+    let set = |spec: Spec, key: &str| -> Spec {
+        let mut spec = match look.get(key) {
+            Some(crate::look::Val::List(l)) => spec.over_list(l),
+            _ => spec,
+        };
+        for (k, name) in crate::look::SPACING_KEYS.iter().enumerate() {
+            if let Some(v) = look.num(&format!("{key}.{name}")) {
+                let mut one = [f64::NAN; 4];
+                one[k] = v;
+                spec = spec.over_list(&one);
+            }
+        }
+        spec
+    };
+    let inner = groups.iter().filter(|g| g.kind != GroupKind::None && g.first <= p && p <= g.last).max_by_key(|g| g.depth);
+    let spec = match inner {
+        Some(g) if s <= g.last => set(Spec::new(9.0, 7.0, 1.0, Some(5.0)), "StaffGrouper.staff-staff-spacing"),
+        Some(_) => set(Spec::new(10.5, 8.0, 1.0, Some(9.0)), "StaffGrouper.staffgroup-staff-spacing"),
+        None => set(Spec::new(9.0, 8.0, 1.0, None), "VerticalAxisGroup.default-staff-staff-spacing"),
+    };
+    set(spec, "VerticalAxisGroup.staff-staff-spacing")
 }
 
 /// When the system leaves out the staff that carries what stands over the

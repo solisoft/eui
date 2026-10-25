@@ -1469,6 +1469,11 @@ pub struct PaperSpec {
     pub score_spacing: Spacing,
     /// `markup-system-spacing`: from the titles to the first system.
     pub markup_spacing: Spacing,
+    /// `top-system-spacing`: from the top of a page with no titles to its
+    /// first system.
+    pub top_spacing: Spacing,
+    /// `last-bottom-spacing`: from a page's last system to its bottom margin.
+    pub last_bottom_spacing: Spacing,
     /// `max-systems-per-page`: at most so many systems on a page.
     pub max_systems_per_page: Option<usize>,
     /// `page-count`: the music on so many pages.
@@ -2452,6 +2457,8 @@ fn spacing_setting(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Option<usiz
         "system-system-spacing" => &mut paper.system_spacing,
         "score-system-spacing" => &mut paper.score_spacing,
         "markup-system-spacing" => &mut paper.markup_spacing,
+        "top-system-spacing" => &mut paper.top_spacing,
+        "last-bottom-spacing" => &mut paper.last_bottom_spacing,
         _ => return None,
     };
     let put = |slot: &mut Spacing, key: &str, v: f64| match key {
