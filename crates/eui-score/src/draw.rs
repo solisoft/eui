@@ -3,7 +3,7 @@
 //! pixels at `sp` a staff space, rounded to the hundredth
 //! (`eui_builders_score.sl`, "Drawing").
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 
 use crate::engrave::{
@@ -159,6 +159,17 @@ fn scale_of(bars: &[Bar], line: &Line, top: f64) -> Option<Scale> {
     Some(Scale { top, s, spans })
 }
 
+thread_local! {
+    /// Glyphs and words drawn as their boxes, not their outlines: while a
+    /// skyline is made of them ([`line_paths`]).
+    static BOXES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A box from `(x0, y0)` to `(x1, y1)`, in spaces, at `sp` px a space.
+fn bbox_path(x0: f64, y0: f64, x1: f64, y1: f64, sp: f64) -> Path {
+    Path::Rect([x0 * sp, y0 * sp, (x1 - x0) * sp, (y1 - y0) * sp])
+}
+
 struct Pen<'a> {
     paths: &'a mut Vec<Path>,
     sp: f64,
@@ -218,6 +229,12 @@ impl Pen<'_> {
             Some(sc) => (sc.x(x), sc.y(y), k * sc.s),
             None => (x, y, k),
         };
+        if BOXES.with(Cell::get) {
+            // For a skyline: its box, not its outline.
+            let (x0, y0, x1, y1) = cmds_box(cmds);
+            self.push(bbox_path(x + x0 * k, y + y0 * k, x + x1 * k, y + y1 * k, sp));
+            return;
+        }
         self.push(fill_k(cmds, x, y, k, sp));
     }
 
@@ -255,7 +272,12 @@ impl Pen<'_> {
                 Some(g) => {
                     if !g.f.is_empty() {
                         let sp = self.sp;
-                        self.push(fill_k(&g.f, at, y, k, sp));
+                        if BOXES.with(Cell::get) {
+                            let (x0, y0, x1, y1) = cmds_box(&g.f);
+                            self.push(bbox_path(at + x0 * k, y + y0 * k, at + x1 * k, y + y1 * k, sp));
+                        } else {
+                            self.push(fill_k(&g.f, at, y, k, sp));
+                        }
                     }
                     at += g.a * k;
                 }
@@ -570,6 +592,41 @@ fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f
     draw_line(paths, &eng.staves[0], &sys.lines[0], top, sp, ranges, heads);
 }
 
+/// A staff's line alone, its top line at 0, at `sp` px a space, without the
+/// bar lines a group draws down to the next staff: what its skyline is
+/// made of (`crate::vertical`).
+pub(crate) fn line_paths(bars: &[Bar], line: &Line, sp: f64) -> Vec<Path> {
+    let mut paths = Vec::new();
+    let before = BOXES.with(|b| b.replace(true));
+    draw_line(&mut paths, bars, line, 0.0, sp, &mut Vec::new(), None);
+    BOXES.with(|b| b.set(before));
+    paths
+}
+
+/// A fill's commands' box: `(x0, y0, x1, y1)`.
+pub(crate) fn cmds_box(cmds: &[f64]) -> (f64, f64, f64, f64) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut i = 0;
+    while i < cmds.len() {
+        let args = args_of(cmds[i]);
+        let mut k = 0;
+        while k + 1 < args {
+            if let (Some(&x), Some(&y)) = (cmds.get(i + 1 + k), cmds.get(i + 2 + k)) {
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                y0 = y0.min(y);
+                y1 = y1.max(y);
+            }
+            k += 2;
+        }
+        i += 1 + args;
+    }
+    if x0 > x1 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    (x0, y0, x1, y1)
+}
+
 /// A clef's origin: the line it marks — a tablature's in the middle of its
 /// six strings.
 fn clef_y(clef: Clef) -> f64 {
@@ -692,7 +749,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     if (first.first || first.changes.time) && !tab {
         draw_time(&mut pen, first.time, first.time_parts, x, top);
     }
-    let down = line.connect_down + crate::engrave::staff_height(line.kind) - 4.0;
+    // A skyline's line stops at its own staff (`line_paths`).
+    let connect_down = if BOXES.with(Cell::get) { 0.0 } else { line.connect_down };
+    let down = connect_down + crate::engrave::staff_height(line.kind) - 4.0;
     for (bi, b) in line.bars.clone().enumerate() {
         let bar = &bars[b];
         let bar_look = bar.items.first().map(|ev| ev.look.clone()).unwrap_or_default();

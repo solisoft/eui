@@ -37,7 +37,9 @@ pub mod measure;
 pub mod midi;
 pub mod parse;
 mod pdf;
+mod quanting;
 pub mod text;
+mod vertical;
 
 pub use draw::{Band, HeadRanges, Path, Ranges};
 pub use engrave::Engraved;

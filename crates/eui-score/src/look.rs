@@ -149,7 +149,7 @@ const HEAD_STYLES: [&str; 9] = ["default", "cross", "xcircle", "diamond", "trian
 
 /// The grobs a staff (or the score) makes, not a voice: their settings hold
 /// for the staff, whatever voice writes them.
-const STAFF_GROBS: [&str; 13] = [
+const STAFF_GROBS: [&str; 14] = [
     "TimeSignature",
     "KeySignature",
     "Clef",
@@ -163,6 +163,7 @@ const STAFF_GROBS: [&str; 13] = [
     "SystemStartBrace",
     "SpanBar",
     "SpacingSpanner",
+    "StaffGrouper",
 ];
 
 /// The contexts a path may start with.
@@ -249,9 +250,34 @@ fn honoured(key: &str, v: &Val) -> bool {
         // A staff drawn smaller (score #407): its lines' distance, and their
         // thickness, which follows it.
         "staff-space" | "thickness" => grob == "StaffSymbol" && matches!(v, Val::Num(n) if *n >= 0.25 && *n <= 4.0),
-        _ => false,
+        _ => spacing_key(grob, prop, v),
     }
 }
+
+/// The vertical spacing alists between staves (score #409):
+/// `VerticalAxisGroup.staff-staff-spacing` and `default-staff-staff-spacing`,
+/// `StaffGrouper.staff-staff-spacing` and `staffgroup-staff-spacing` — the
+/// whole alist (kept as [`SPACING_KEYS`]' four numbers, NaN where it says
+/// nothing) or one of its keys (`….basic-distance = #12`).
+fn spacing_key(grob: &str, prop: &str, v: &Val) -> bool {
+    let (alist, key) = match prop.split_once('.') {
+        Some((a, k)) => (a, Some(k)),
+        None => (prop, None),
+    };
+    let known = match grob {
+        "VerticalAxisGroup" => ["staff-staff-spacing", "default-staff-staff-spacing"].contains(&alist),
+        "StaffGrouper" => ["staff-staff-spacing", "staffgroup-staff-spacing"].contains(&alist),
+        _ => false,
+    };
+    known
+        && match key {
+            Some(k) => SPACING_KEYS.contains(&k) && matches!(v, Val::Num(n) if n.is_finite()),
+            None => matches!(v, Val::List(l) if l.len() == SPACING_KEYS.len()),
+        }
+}
+
+/// A spacing alist's keys, in the order its value keeps them.
+pub const SPACING_KEYS: [&str; 4] = ["basic-distance", "minimum-distance", "padding", "stretchability"];
 
 /// Whether a setting of `key`, in context `ctx`, holds for the whole staff.
 fn wide(ctx: Option<&str>, key: &str) -> bool {
@@ -496,6 +522,18 @@ fn value_for(key: &str, d: &Sx) -> Option<Val> {
         "baseMoment" => Val::Num(as_num(d)? * WHOLE as f64),
         // A factor, `#(magstep -3)` the size six steps make smaller by half.
         "staff-space" | "thickness" => Val::Num(factor(d)?),
+        "staff-staff-spacing" | "default-staff-staff-spacing" | "staffgroup-staff-spacing" => {
+            let Sx::List(items) = d else { return None };
+            let mut out = vec![f64::NAN; SPACING_KEYS.len()];
+            for item in items {
+                let Sx::Pair(k, v) = item else { return None };
+                let Sx::Word(k) = &**k else { return None };
+                if let Some(slot) = SPACING_KEYS.iter().position(|s| s == k) {
+                    out[slot] = as_num(v)?;
+                }
+            }
+            Val::List(out)
+        }
         _ => Val::Num(as_num(d)?),
     })
 }
@@ -579,6 +617,13 @@ pub(crate) struct LookState {
 impl LookState {
     fn set(&mut self, ctx: Option<&str>, key: String, v: Val, once: bool) {
         self.cached = None;
+        if key.ends_with("-spacing") {
+            // A whole alist replaces what was set of its keys.
+            let keys = format!("{key}.");
+            for m in [&mut self.voice, &mut self.staff, &mut self.once] {
+                m.retain(|k, _| !k.starts_with(&keys));
+            }
+        }
         if once || key == "currentBarNumber" {
             self.once.insert(key, v);
         } else if wide(ctx, &key) {
@@ -817,6 +862,7 @@ fn known_probe(key: &str) -> bool {
         Val::Bool(false),
         Val::Bool(true),
         Val::List(vec![0.0, 0.0, 0.0]),
+        Val::List(vec![0.0; SPACING_KEYS.len()]),
         Val::Sym("numbered".into()),
         Val::Sym("cross".into()),
         Val::Sym("format-mark-numbers".into()),

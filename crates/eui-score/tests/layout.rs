@@ -150,24 +150,25 @@ fn system_count_sets_so_many_systems_when_it_can() {
 #[test]
 fn pages_honour_page_count_breaks_and_the_systems_per_page() {
     let per_page = |e: &Engraved| e.pages.iter().map(|p| p.systems.len()).collect::<Vec<_>>();
-    let (free, _) = paper(&tune("", 120, ""));
+    // Enough bars for two pages, squeezed as they may be (score #409).
+    let (free, _) = paper(&tune("", 240, ""));
     let pages = free.pages.len();
     assert!(pages >= 2);
     // page-count: so many pages, the systems shared evenly.
-    let (more, _) = paper(&tune(&format!("page-count = {}", pages + 1), 120, ""));
+    let (more, _) = paper(&tune(&format!("page-count = {}", pages + 1), 240, ""));
     assert_eq!(more.pages.len(), pages + 1);
     let counts = per_page(&more);
     assert!(counts.iter().max().unwrap() - counts.iter().min().unwrap() <= 1, "{counts:?}");
     // Fewer than the systems need: not to be had, the free cut stands.
-    let (fewer, _) = paper(&tune("page-count = 1", 120, ""));
+    let (fewer, _) = paper(&tune("page-count = 1", 240, ""));
     assert_eq!(fewer.pages.len(), pages);
     // max-systems-per-page caps them.
-    let (capped, _) = paper(&tune("max-systems-per-page = 3", 120, ""));
+    let (capped, _) = paper(&tune("max-systems-per-page = 3", 240, ""));
     assert!(capped.pages.iter().all(|p| p.systems.len() <= 3));
     // \noPageBreak: the page does not end with that system.
     let first_page = free.pages[0].systems.len();
     let last_bar = free.systems[first_page - 1].lines[0].bars.end - 1;
-    let mut bars: Vec<String> = vec!["c'4 d' e' f'".to_string(); 120];
+    let mut bars: Vec<String> = vec!["c'4 d' e' f'".to_string(); 240];
     bars[last_bar] = "c'4 d' e' f' \\noPageBreak".into();
     let (kept, _) = paper(&format!("{{ {} }}", bars.join(" | ")));
     let ends: Vec<usize> = kept.pages.iter().map(|p| kept.systems[*p.systems.last().unwrap()].lines[0].bars.end - 1).collect();
@@ -193,8 +194,9 @@ fn ragged_bottom_and_the_spacing_between_systems() {
     let (wide, _) = paper(&tune("system-system-spacing.basic-distance = #20 ragged-bottom = ##t", 40, ""));
     assert!((gaps(&wide, 0)[0] - 20.0).abs() < 1e-9);
     let (padded, _) = paper(&tune("system-system-spacing = #'((basic-distance . 1) (padding . 6)) ragged-bottom = ##t", 40, ""));
-    let s = &padded.systems;
-    assert!(s[1].top + s[1].reach_hi - s[0].bottom >= 6.0 - 1e-9, "six spaces clear between the ink");
+    // Six spaces clear between the ink, column by column (score #409): the
+    // staves' lines at least.
+    assert!(gaps(&padded, 0)[0] >= 4.0 + 6.0 - 1e-9, "six spaces clear between the ink");
     // On a piano's two staves, from the lower staff's middle line.
     let piano = "\\paper { ragged-bottom = ##t }\n\\new PianoStaff << \\new Staff { \\repeat unfold 40 { c''4 d'' e'' f'' } } \\new Staff { \\clef bass \\repeat unfold 40 { c4 d e f } } >>";
     let (two, _) = paper(piano);
