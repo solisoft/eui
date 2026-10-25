@@ -1149,6 +1149,23 @@ pub struct Ev {
     pub verses: Vec<Option<Syllable>>,
     /// It holds the syllable of a note before it: a melisma.
     pub lyric_held: bool,
+    /// `\showStaffSwitch` was in force when a `\change Staff` came just
+    /// before it: a line follows the voice from the note before to it.
+    pub follow: bool,
+    /// `\crossStaff`: its stem joins the stem of the note sounding with it
+    /// on the staff next to it, one stem for a chord over two staves.
+    pub span_stem: bool,
+    /// Sent to the other staff by `\autoChange`: a rest stays in its place.
+    pub rest_behind: bool,
+    /// On a note drawn on another staff than its own, `\change Staff`'s:
+    /// the staff it was written in.
+    pub moved: Option<usize>,
+    /// A note moved to a staff that plays nothing with it: its stem goes as
+    /// its place on that staff says, not as its voice's.
+    pub free: bool,
+    /// Under a beam that crosses from one staff to the other: its stem and
+    /// the beam are the system's to draw, once the staves are stacked.
+    pub xbeam: bool,
 }
 
 /// A syllable of `\addlyrics`.
@@ -1491,6 +1508,12 @@ struct St {
     stem: i8,
     /// `\autoBeamOff` in force.
     no_autobeam: bool,
+    /// `\showStaffSwitch` in force.
+    follow: bool,
+    /// A `\change Staff` read since the last note, under `\showStaffSwitch`.
+    follow_next: bool,
+    /// Inside `\crossStaff`.
+    span_stem: bool,
     /// The words a text spanner starts with, from `\override
     /// TextSpanner.bound-details.left.text`.
     span_text: Vec<Run>,
@@ -2435,6 +2458,21 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
         if let Some(sk) = staff_kind(&kind) {
             return staff_named(toks, i, st, staves, props, sk, name);
         }
+        if is_cmd(toks, i, "autoChange") || is_cmd(toks, i, "autochange") {
+            // `\new PianoStaff \autoChange { … }`: one voice over two staves.
+            let first = staves.len();
+            let j = auto_change(toks, i, st, staves)?;
+            let gk = group_kind(&kind).unwrap_or(GroupKind::None);
+            groups.push(Group {
+                kind: gk,
+                first,
+                last: staves.len() - 1,
+                depth,
+                name: props.instrument_name.clone().unwrap_or_default(),
+                short: props.short_instrument_name.clone().unwrap_or_default(),
+            });
+            return Ok(j);
+        }
         if !double(toks, i, '<') {
             return refuse(format!("\\new {kind} wants its staves between << and >>"), tk.at);
         }
@@ -2443,6 +2481,12 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
     }
     if double(toks, i, '<') && holds_staves(toks, i) {
         return group(toks, i, st, staves, groups, depth, GroupKind::None, &Props::default());
+    }
+    if tk.t == T::Cmd && (tk.v == "autoChange" || tk.v == "autochange") {
+        let first = staves.len();
+        let j = auto_change(toks, i, st, staves)?;
+        groups.push(Group { kind: GroupKind::None, first, last: staves.len() - 1, depth, name: String::new(), short: String::new() });
+        return Ok(j);
     }
     if double(toks, i, '<') {
         beyond();
@@ -2492,6 +2536,68 @@ fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, gro
     }
     groups.push(Group { kind, first, last: staves.len() - 1, depth, name: props.instrument_name.clone().unwrap_or_default(), short: props.short_instrument_name.clone().unwrap_or_default() });
     Ok(i + 2)
+}
+
+/// `\autoChange [pitch] music` at `i`: LilyPond's automatic staff
+/// changes. The music is read as one voice on a staff named "up", over a
+/// staff named "down" in the bass clef; each note under the pitch (middle
+/// C when none is written) — a chord by its lowest note — is drawn on the
+/// lower staff, and goes there as `\change Staff = "down"` sends it, a rest
+/// left in its place. The lower staff rests wherever the upper one plays,
+/// and both rest where the music does. The notes sound once, from "up".
+fn auto_change(toks: &[Tok], i: usize, st: &mut Base, staves: &mut Vec<Staff>) -> Result<usize, ScoreError> {
+    let at = toks[i].at;
+    beyond();
+    let mut j = i + 1;
+    let mut split = semitones(7, 0);
+    if let Some(t) = toks.get(j).filter(|t| t.t == T::Word && starts_expr(toks, j + 1)) {
+        let Some((step, alter)) = pitch_name_in(st.lang, &t.v) else { return refuse("\\autoChange wants a pitch, then its music", t.at) };
+        split = semitones(step + 7 * t.marks, alter);
+        j += 1;
+    }
+    if !starts_expr(toks, j) && !is(toks, j, T::Word) {
+        return refuse("\\autoChange wants its music", at);
+    }
+    let mut read = Vec::new();
+    j = staff_named(toks, j, st, &mut read, Props::default(), StaffKind::Notes, Some("up".into()))?;
+    let Some(mut up) = read.pop().filter(|s| s.kind == StaffKind::Notes) else { return refuse("\\autoChange wants its music", at) };
+    let mut down = vec![Ev { k: Kind::Clef, clef: Clef { sign: Sign::F, line: 2, octave: 0 }, at, ..Ev::default() }];
+    for ev in &mut up.events {
+        match ev.k {
+            Kind::Voices | Kind::VoiceNext | Kind::VoicesEnd => return refuse("\\autoChange splits one voice between the staves: two voices in it are not drawn", ev.at),
+            Kind::Note | Kind::Rest => {
+                if ev.cross.is_some() {
+                    return refuse("\\change Staff inside \\autoChange: the notes are already sent from one staff to the other", ev.at);
+                }
+                let low = ev.pitches.iter().map(|p| semitones(p.d, p.alter)).min();
+                let below = ev.k == Kind::Note && low.is_some_and(|l| l < split);
+                if below {
+                    ev.cross = Some("down".into());
+                    ev.rest_behind = true;
+                }
+                down.push(Ev {
+                    k: Kind::Rest,
+                    base: ev.base,
+                    dots: ev.dots,
+                    ticks: ev.ticks,
+                    full: ev.full,
+                    count: ev.count,
+                    tuplet: ev.tuplet,
+                    tuplet_outer: ev.tuplet_outer,
+                    spacer: below || ev.spacer,
+                    i: st.counter,
+                    at: ev.at,
+                    ..Ev::default()
+                });
+                st.counter += 1;
+            }
+            Kind::Clef | Kind::Tempo | Kind::Mark | Kind::Ottava => {}
+            _ => down.push(Ev { at: ev.at, ..ev.clone() }),
+        }
+    }
+    staves.push(up);
+    staves.push(Staff { kind: StaffKind::Notes, events: down, props: Props::default(), lyrics: None, verses: Vec::new(), lyrics_voice: 1, voices: Vec::new(), name: Some("down".into()) });
+    Ok(j)
 }
 
 /// `\new Lyrics [= "name"] [\with { … }] \lyricsto "voice" { … }`, or with
@@ -2669,6 +2775,9 @@ fn staff_named(toks: &[Tok], mut i: usize, base: &mut Base, staves: &mut Vec<Sta
         ossias: Vec::new(),
         stem: 0,
         no_autobeam: false,
+        follow: false,
+        follow_next: false,
+        span_stem: false,
         span_text: Vec::new(),
     };
     if base.compress > 0 {
@@ -3643,8 +3752,26 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             }
             beyond();
             let name = toks[i + 3].v.clone();
-            st.cross = if st.own.as_deref() == Some(name.as_str()) { None } else { Some(name) };
+            let to = if st.own.as_deref() == Some(name.as_str()) { None } else { Some(name) };
+            st.follow_next |= st.follow && to != st.cross;
+            st.cross = to;
             return Ok(i + 4);
+        }
+        "showStaffSwitch" | "hideStaffSwitch" => {
+            // The line that follows a voice from one staff to the other.
+            beyond();
+            st.follow = word == "showStaffSwitch";
+            return Ok(i + 1);
+        }
+        "crossStaff" => {
+            // `\crossStaff { e4 }`: each note's stem joins the one on the
+            // staff next to it (LilyPond's Span_stem_engraver).
+            beyond();
+            let saved = st.span_stem;
+            st.span_stem = true;
+            let j = expr(toks, i + 1, st, hd)?;
+            st.span_stem = saved;
+            return Ok(j);
         }
         "sequential" => return expr(toks, i + 1, st, hd),
         "chordmode" | "chords" | "drummode" | "drums" | "notemode" | "figuremode" | "figures" => {
@@ -4572,6 +4699,8 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     }
     if ev.k == Kind::Note {
         ev.cross = st.cross.clone();
+        ev.follow = std::mem::take(&mut st.follow_next);
+        ev.span_stem = st.span_stem;
     }
     ev.size = st.size;
     ev.stem_dir = st.stem;

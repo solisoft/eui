@@ -283,7 +283,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             let Some(other) = nxt.heads.iter().find(|o| o.d == hd.d) else { continue };
             let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
             // Two voices: the first's ties over, the second's under.
-            if let Some(v) = ev.voice {
+            if let Some(v) = ev.voice.filter(|_| !ev.free) {
                 over = v % 2 == 1;
             }
             tie(lines, ev, hd.pos, nxt, other.pos, over);
@@ -299,7 +299,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
         let count = ev.heads.len();
         for (hi, hd) in ev.heads.iter().enumerate() {
             let mut over = if count == 1 { !ev.up } else { hi >= count / 2 };
-            if let Some(v) = ev.voice {
+            if let Some(v) = ev.voice.filter(|_| !ev.free) {
                 over = v % 2 == 1;
             }
             let dir = if over { -1.0 } else { 1.0 };
@@ -413,7 +413,7 @@ fn slur(lines: &mut [Line], bars: &[Bar], notes: &[At], first: At, last: At, ext
     let all_up = ups.iter().all(|ev| ev.up);
     let mut over = !all_up;
     // Of two voices, the first's slurs above and the second's below.
-    if let Some(v) = f.voice {
+    if let Some(v) = f.voice.filter(|_| !f.free) {
         over = v % 2 == 1;
     }
     let dir = if over { -1.0 } else { 1.0 };
@@ -1426,8 +1426,11 @@ pub(crate) fn reach(bars: &[Bar], line: &Line) -> (f64, f64) {
                 hi = hi.min(y - pad);
                 lo = lo.max(y + pad);
             }
-            hi = hi.min(ev.stem_end - 0.6);
-            lo = lo.max(ev.stem_end + 0.6);
+            // A stem to a beam between the staves is not the staff's to make room for.
+            if !ev.xbeam {
+                hi = hi.min(ev.stem_end - 0.6);
+                lo = lo.max(ev.stem_end + 0.6);
+            }
         }
     }
     for b in range.clone() {

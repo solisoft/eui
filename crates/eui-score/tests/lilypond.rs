@@ -494,7 +494,9 @@ fn notes_sent_to_the_other_staff_are_drawn_there_and_still_sound_in_their_own() 
     assert_eq!(moved.len(), 2, "two are drawn down");
     // Middle C on the bass staff sits a space above its top line: position 6.
     assert_eq!(moved[0].heads[0].pos, 6);
-    assert!(moved.iter().all(|e| e.up), "their stems reach up, to the staff they came from");
+    // Alone on the bass staff, they stem as their place there says, as
+    // LilyPond's do: down, from over the staff.
+    assert!(moved.iter().all(|e| !e.up && e.free), "their stems go down from over the bass staff");
     assert!(!paths(&eng, 7.0, 0).unwrap().0.is_empty());
     // They still sound in the right hand's track.
     midi(src, &MidiOptions::default()).unwrap();

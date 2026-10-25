@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use crate::glyphs::{glyph, Weight};
 use crate::marks::{self, curves, reach, DynEl, HairpinPiece, MarkPlace, OttavaPlace, ScriptPlace, SpanPlace, TempoMark, TextPlace, TupletPlace, Volta};
-use crate::measure::{clef_mid, measures, measures_keeping, Bar, Beam, Changes, Opening};
+use crate::measure::{measures, measures_keeping, Bar, Beam, Changes, Opening};
 use crate::parse::{refuse, Clef, Ev, Group, GroupKind, Kind, Parsed, Sign, StaffKind, Syllable, Tempo, GUITAR};
 use crate::text::{em, header_lines, text_width, HeadBlock};
 use crate::{Layout, ScoreError, RULE, WHOLE};
@@ -178,6 +178,12 @@ pub struct System {
     pub reach_hi: f64,
     /// Its page.
     pub page: usize,
+    /// What crosses between its staves — kneed beams and their stems,
+    /// curves from one staff to the other, a voice's staff-switch line — as
+    /// fill commands in its frame: y down from its first staff's top line.
+    pub cross: Vec<Vec<f64>>,
+    /// Its kneed beams, placed.
+    pub kneed: Vec<crate::cross::KneedBeam>,
 }
 
 /// A page and its systems.
@@ -240,7 +246,7 @@ fn stem_up(ev: &Ev) -> bool {
     low + top < 0
 }
 
-fn beam_windows(time: (i64, i64)) -> (i64, i64) {
+pub(crate) fn beam_windows(time: (i64, i64)) -> (i64, i64) {
     let (num, den) = time;
     let beat = WHOLE / den;
     if den == 8 && num % 3 == 0 {
@@ -308,7 +314,8 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
                 }
             }
             let mut up = -lowest > highest;
-            if let Some(v) = bar.items[g[0]].voice {
+            // A note moved to a staff that plays nothing with it stems by its place.
+            if let Some(v) = bar.items[g[0]].voice.filter(|_| !bar.items[g[0]].free) {
                 up = v % 2 == 1;
             }
             // `\stemUp`, `\stemDown`: over the voice's direction too.
@@ -326,7 +333,7 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
             if ev.k != Kind::Note {
                 continue;
             }
-            match ev.voice {
+            match ev.voice.filter(|_| !ev.free) {
                 Some(v) => ev.up = v % 2 == 1,
                 None if ev.beam.is_none() => ev.up = stem_up(ev),
                 None => {}
@@ -344,7 +351,7 @@ pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
 /// stops where the voice is silent between two notes — a second voice's
 /// spacer (`s`) is no item, and two eighths either side of one are not
 /// neighbours.
-fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
+pub(crate) fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usize>>, ScoreError> {
     {
         let mut groups: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
@@ -355,7 +362,8 @@ fn beam_voice(bar: &Bar, list: &[usize], wins: (i64, i64)) -> Result<Vec<Vec<usi
             let ev = &bar.items[j];
             let gap = last_end >= 0 && ev.start != last_end;
             last_end = ev.start + ev.ticks;
-            let fl = if ev.k == Kind::Note { flags(ev.base) } else { 0 };
+            // A note under a beam that crosses the staves is the system's to beam.
+            let fl = if ev.k == Kind::Note && !ev.xbeam { flags(ev.base) } else { 0 };
             if manual {
                 if fl == 0 && ev.k == Kind::Note {
                     return refuse("a beam over a note that has no flag", ev.at);
@@ -666,7 +674,7 @@ fn columns(bars: &mut [Bar], shortest: i64, kind: StaffKind) {
             if ev.dots > 0 {
                 right += (0.3 + 0.6 * ev.dots as f64) * k;
             }
-            if ev.up && ev.beam.is_none() && flags(ev.base) > 0 {
+            if ev.up && ev.beam.is_none() && !ev.xbeam && !ev.span_stem && flags(ev.base) > 0 {
                 right += glyph(&flag_name(ev.base, true)).advance * k - RULE.stem;
             }
             ev.right = right;
@@ -1888,6 +1896,10 @@ pub(crate) fn engrave_parsed(parsed: &Parsed, mut width: f64, layout: &Layout) -
         return refuse("\\change Staff wants a second staff to go to", ev.at);
     }
     let mut bars = measures(&parsed.staves[0].events)?;
+    // `\crossStaff` with no staff to cross to: the note keeps its stem.
+    for ev in bars.iter_mut().flat_map(|b| b.items.iter_mut()) {
+        ev.span_stem = false;
+    }
     first_title(&mut bars, parsed);
     lyrics_assign(&mut bars, parsed.staves[0].lyrics.as_deref(), parsed.staves[0].lyrics_voice);
     for (k, verse) in parsed.staves[0].verses.iter().enumerate() {
@@ -2048,50 +2060,6 @@ fn spread(master: &[Bar], staves: &mut [Vec<Bar>], range: Range<usize>) {
     }
 }
 
-/// Notes after `\\change Staff = "…"` drawn on that staff: each moves to the
-/// same moment of the same bar there, its heads placed by that staff's clef,
-/// its stem towards the staff it came from (a third voice's up, a fourth's
-/// down); its own staff keeps a spacer in its place. They sound in their own
-/// staff, as they were written. Beams do not cross from one staff to the
-/// other: each side beams its own.
-fn cross_staff(all: &mut [Vec<Bar>], staves: &[crate::parse::Staff]) -> Result<(), ScoreError> {
-    let mut touched: Vec<(usize, usize)> = Vec::new();
-    for a in 0..all.len() {
-        for b in 0..all[a].len() {
-            for j in 0..all[a][b].items.len() {
-                let item = &all[a][b].items[j];
-                let Some(name) = item.cross.clone().filter(|_| item.k == Kind::Note) else { continue };
-                let Some(t) = staves.iter().position(|s| s.name.as_deref() == Some(name.as_str())) else {
-                    return refuse(format!("\\change Staff = \"{name}\" names no staff: a \\new Staff = \"{name}\" is what it goes to"), item.at);
-                };
-                if t == a {
-                    continue;
-                }
-                let mut moved = item.clone();
-                let lift = clef_mid(all[a][b].clef_at(item.start).0) - clef_mid(all[t][b].clef_at(item.start).0);
-                for h in &mut moved.heads {
-                    h.pos += lift;
-                }
-                moved.voice = Some(if t > a { 3 } else { 4 });
-                moved.cross = None;
-                (moved.clef_change, moved.key_change) = (None, None);
-                let ev = &mut all[a][b].items[j];
-                ev.k = Kind::Rest;
-                ev.spacer = true;
-                ev.heads.clear();
-                ev.cross = None;
-                all[t][b].items.push(moved);
-                all[t][b].poly = true;
-                touched.push((t, b));
-            }
-        }
-    }
-    for (t, b) in touched {
-        all[t][b].items.sort_by_key(|ev| ev.start * 8 + i64::from(ev.voice.unwrap_or(1)));
-    }
-    Ok(())
-}
-
 fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved, ScoreError> {
     let staves_src = &parsed.staves;
     // A line of chord names or figures that says no metre takes the one the
@@ -2142,7 +2110,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             }
         }
     }
-    cross_staff(&mut all, staves_src)?;
+    let mut plan = crate::cross::plan(&mut all, staves_src)?;
     for (si, bars) in all.iter_mut().enumerate() {
         lyrics_assign(bars, staves_src[si].lyrics.as_deref(), staves_src[si].lyrics_voice);
         for (k, verse) in staves_src[si].verses.iter().enumerate() {
@@ -2152,6 +2120,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
             beams(bars)?;
         }
     }
+    crate::cross::directions(&mut all, &mut plan);
     let sh = shortest(all.iter().flatten());
     for (si, bars) in all.iter_mut().enumerate() {
         columns(bars, sh, staves_src[si].kind);
@@ -2223,6 +2192,7 @@ fn engrave_many(parsed: &Parsed, width: f64, layout: &Layout) -> Result<Engraved
     for o in &mut systems {
         stack_staves(o, &all, &parsed.groups, staves_src);
     }
+    crate::cross::ink(&mut systems, &all, &plan);
     let head = header_lines(&parsed.header, width);
     let pages = stack(&mut systems, &all, layout, &head);
     let mut bottom: f64 = 0.0;

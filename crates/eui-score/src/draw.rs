@@ -280,7 +280,11 @@ fn staff_bands(eng: &Engraved, sys: &System, pad: i64, sp: f64) -> Vec<Piece> {
         }
     }
     starts.push(paths.len());
-    draw_groups(&mut Pen { paths: &mut paths, sp, heads: None }, eng, sys, top);
+    let mut pen = Pen { paths: &mut paths, sp, heads: None };
+    draw_groups(&mut pen, eng, sys, top);
+    for c in &sys.cross {
+        pen.fill(c, 0.0, top);
+    }
     let tops: Vec<f64> = (0..n).map(|s| pad as f64 + sys.offsets.get(s).copied().unwrap_or(0.0) * sp).collect();
     let reaches: Vec<(f64, f64)> = sys.lines.iter().enumerate().map(|(s, line)| eng.staves.get(s).map_or((0.0, 4.0), |bars| reach(bars, line))).collect();
     let mut cuts: Vec<i64> = vec![0];
@@ -462,7 +466,11 @@ fn draw_system_heads(paths: &mut Vec<Path>, eng: &Engraved, sys: &System, top: f
         for (s, line) in sys.lines.iter().enumerate() {
             draw_line(paths, &eng.staves[s], line, top + sys.offsets[s], sp, ranges, heads.as_deref_mut());
         }
-        draw_groups(&mut Pen { paths, sp, heads: None }, eng, sys, top);
+        let mut pen = Pen { paths, sp, heads: None };
+        draw_groups(&mut pen, eng, sys, top);
+        for c in &sys.cross {
+            pen.fill(c, 0.0, top);
+        }
         return;
     }
     draw_line(paths, &eng.staves[0], &sys.lines[0], top, sp, ranges, heads);
@@ -1266,6 +1274,11 @@ fn draw_note(pen: &mut Pen, ev: &Ev, top: f64) {
     if ev.tremolo > 0 {
         let sx = stem_x(ev) - if ev.up { RULE.stem / 2.0 } else { -RULE.stem / 2.0 };
         draw_tremolo(pen, ev, top, sx, top + (ev.stem_end + y_of(if ev.up { lo } else { hi })) / 2.0, ev.up);
+    }
+    if ev.xbeam || ev.span_stem {
+        // Its stem is the system's: to a beam between the staves, or one
+        // stem with a note on the other staff (`crate::cross`).
+        return;
     }
     let g = glyph(hname);
     let sx;
