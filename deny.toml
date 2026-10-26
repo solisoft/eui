@@ -22,6 +22,14 @@ ignore = [
     # nothing hostile reaches it. `notify` 8 drops it, so this exception ends
     # with that bump and not with an argument about whether it matters.
     "RUSTSEC-2024-0384",
+    # zvariant, zvariant_derive and zbus_names are unmaintained
+    # (RUSTSEC-2026-0370, -0371, -0372): zbus's D-Bus types, under
+    # accesskit_unix, the Linux screen-reader bridge winit's accessibility
+    # uses. No known vulnerability; they read what the desktop's own bus
+    # sends. Tracked here until accesskit moves off zbus 5.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
