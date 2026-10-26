@@ -273,7 +273,19 @@ fn score_info_is_sent_once_an_engraving() {
         })
         .collect();
     assert_eq!(staff0[0], 0, "the first page starts at the first note");
-    assert!(staff0.windows(2).all(|w| w[1] > w[0]), "and the pages go on through the music: {staff0:?}");
+    // A page never goes back; a written item may run over a page break —
+    // the flutes' `R2*12` holds bars 6 to 17, over two pages here — so one
+    // staff may start two pages at the same item, but some staff starts
+    // each page later than the page before.
+    assert!(staff0.windows(2).all(|w| w[1] >= w[0]), "and the pages go on through the music: {staff0:?}");
+    let lists: Vec<Vec<i64>> = starts
+        .iter()
+        .map(|p| match p {
+            Value::List(s) => s.iter().map(|v| if let Value::Int(n) = v { *n } else { -1 }).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert!(lists.windows(2).all(|w| w[0].iter().zip(&w[1]).any(|(a, b)| *a >= 0 && b > a)), "each page later than the one before: {lists:?}");
     assert!(sent(&painted(&mut d), EventKind::ScoreInfo).is_empty(), "the same engraving is not reported twice");
     set(&mut d, 2, A_PAGE_I, Value::Int(1));
     assert!(sent(&painted(&mut d), EventKind::ScoreInfo).is_empty(), "a page turned is a redraw, not an engraving");
