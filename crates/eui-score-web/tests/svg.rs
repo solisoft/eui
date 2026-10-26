@@ -54,3 +54,31 @@ fn on_a4_the_sheet_is_the_page() {
     assert!(drawn.refusal.is_empty(), "{}", drawn.refusal);
     assert!((drawn.height - (595.0_f64 * 297.0 / 210.0).floor()).abs() <= 1.0, "an A4 sheet: {}", drawn.height);
 }
+
+/// The y of each staff line `render` draws: rectangles at least `min` px wide, sorted.
+fn line_ys(svg: &str, min: f64) -> Vec<f64> {
+    let mut ys: Vec<f64> = svg
+        .split("<rect ")
+        .skip(1)
+        .filter_map(|r| {
+            let attr = |name: &str| r.split(&format!("{name}=\"")).nth(1)?.split('"').next()?.parse::<f64>().ok();
+            (attr("width")? >= min).then_some(attr("y")?)
+        })
+        .collect();
+    ys.sort_by(f64::total_cmp);
+    ys
+}
+
+#[test]
+fn a_magnified_staff_is_drawn_small_on_the_page_too() {
+    // Score #407 through the browser's way in: the small staff's lines two
+    // thirds of a space apart, the other's a space.
+    let src = r#"<< \new Staff \with { \magnifyStaff #2/3 } { \key d \major c''8 d'' e'' f'' g''4 r } \new Staff { \clef bass c4 d e f } >>"#;
+    let drawn = render(src, &Options { width: 700.0, staff_space: 6.0, ..Options::default() });
+    assert!(drawn.refusal.is_empty(), "{}", drawn.refusal);
+    let ys = line_ys(&drawn.svg, 100.0);
+    assert_eq!(ys.len(), 10, "{ys:?}");
+    let gaps: Vec<f64> = ys.windows(2).map(|w| ((w[1] - w[0]) * 10.0).round() / 10.0).collect();
+    assert_eq!(&gaps[..4], &[4.0; 4], "{gaps:?}");
+    assert_eq!(&gaps[5..], &[6.0; 4], "{gaps:?}");
+}

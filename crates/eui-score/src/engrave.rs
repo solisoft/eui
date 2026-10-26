@@ -316,7 +316,7 @@ pub(crate) fn voice_lists(bar: &Bar) -> Vec<Vec<usize>> {
 /// Whether a staff of a kind beams its notes: a tablature shows no rhythm,
 /// and chord names have no stems.
 fn beamed(kind: StaffKind) -> bool {
-    matches!(kind, StaffKind::Notes | StaffKind::Drums)
+    matches!(kind, StaffKind::Notes | StaffKind::Drums | StaffKind::Ossia)
 }
 
 pub(crate) fn beams(bars: &mut [Bar]) -> Result<(), ScoreError> {
