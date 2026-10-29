@@ -234,6 +234,9 @@ fn script_rule(name: &str) -> ScriptRule {
         "downbow" => r("stringsDownBow", "stringsDownBow", 0.2, 0, -1, false),
         "flageolet" => r("stringsHarmonic", "stringsHarmonic", 0.2, 0, -1, false),
         "espressivo" => r("dynamicMessaDiVoce", "dynamicMessaDiVoce", 0.2, 0, 0, false),
+        // `\segno`, `\coda`, `\varcoda` over a note, as LilyPond sets them.
+        "segno" => r("segno", "segno", 0.4, 0, -1, false),
+        "coda" | "varcoda" => r("coda", "coda", 0.4, 0, -1, false),
         _ => r("fermataAbove", "fermataBelow", 0.4, 4000, -1, false),
     }
 }

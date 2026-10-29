@@ -19,9 +19,30 @@ pub const DYNAMICS: [&str; 21] = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff
 
 /// The articulations a score prints, by their LilyPond names: the Soli
 /// engraver's seven, and the ornaments, the hi-hat's signs, the bowings,
-/// the harmonic's circle and the espressivo protocol 11 adds.
-pub const SCRIPTS: [&str; 17] =
-    ["staccato", "tenuto", "accent", "marcato", "staccatissimo", "portato", "fermata", "trill", "prall", "mordent", "turn", "open", "stopped", "upbow", "downbow", "flageolet", "espressivo"];
+/// the harmonic's circle and the espressivo protocol 11 adds, and the segno
+/// and coda written over a note (`c4\segno`, `\coda`, `\varcoda`).
+pub const SCRIPTS: [&str; 20] = [
+    "staccato",
+    "tenuto",
+    "accent",
+    "marcato",
+    "staccatissimo",
+    "portato",
+    "fermata",
+    "trill",
+    "prall",
+    "mordent",
+    "turn",
+    "open",
+    "stopped",
+    "upbow",
+    "downbow",
+    "flageolet",
+    "espressivo",
+    "segno",
+    "coda",
+    "varcoda",
+];
 
 /// The most tokens a source may come to once its variables are written out:
 /// a variable used in a variable used in a variable multiplies.
@@ -1144,6 +1165,8 @@ pub struct Ev {
     /// The strings a note's heads are played on: `(diatonic number, string)`,
     /// written with `\5`.
     pub strings: Vec<(i64, i64)>,
+    /// The heads written `\harmonic`, by their diatonic number: diamonds.
+    pub harmonics: Vec<i64>,
     /// On a tablature, each head's `(string, fret)`, the first string the
     /// highest.
     pub tab: Vec<(i64, i64)>,
@@ -4622,6 +4645,32 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
             st.events.push(Ev { k: Kind::Ottava, ottava: sign * n, at: tk.at, ..Ev::default() });
             return Ok(j + 1);
         }
+        "section" => {
+            // LilyPond 2.24's `\section`: a section's double bar line.
+            st.events.push(Ev { k: Kind::Bar, v: "||".into(), at: tk.at, ..Ev::default() });
+            return Ok(i + 1);
+        }
+        "sectionLabel" | "textMark" | "textEndMark" => {
+            // `\sectionLabel "Trio"` in bold over the bar line; `\textMark`'s
+            // words over it, and `\textEndMark`'s at the end of the bar, as
+            // `\jump` sets them.
+            let weight = if word == "sectionLabel" { Weight::Bold } else { Weight::Regular };
+            let (runs, j) = match toks.get(i + 1) {
+                Some(t) if t.t == T::Str => (vec![Run::words(t.v.clone(), weight)], i + 2),
+                Some(t) if t.t == T::Cmd && t.v == "markup" => markup(toks, i + 2, t.at)?,
+                _ => return refuse(format!("\\{word} wants a string or \\markup"), tk.at),
+            };
+            let dir = if word == "textEndMark" { 1 } else { -1 };
+            st.events.push(Ev { k: Kind::Mark, texts: vec![Words { text: String::new(), dir, runs }], at: tk.at, ..Ev::default() });
+            return Ok(j);
+        }
+        "harmonic" => {
+            // `c4\harmonic`: the note's heads as diamonds.
+            let last = last_note(&mut st.events, &tk)?;
+            let heads: Vec<i64> = last.pitches.iter().map(|p| p.d).collect();
+            last.harmonics.extend(heads);
+            return Ok(i + 1);
+        }
         "jump" | "fine" => {
             // LilyPond 2.24's jumps: `\jump "D.S. al Coda"`, `\fine`. Set in
             // italics at the end of the bar they are written after, against
@@ -4640,8 +4689,8 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         }
         "mark" | "segnoMark" | "codaMark" => {
             let (runs, j) = match word {
-                "segnoMark" => (vec![Run::glyph("segno")], i + 1),
-                "codaMark" => (vec![Run::glyph("coda")], i + 1),
+                "segnoMark" => (vec![Run::glyph("segno")], mark_number_end(toks, i + 1)),
+                "codaMark" => (vec![Run::glyph("coda")], mark_number_end(toks, i + 1)),
                 _ => mark_label(toks, i, st)?,
             };
             // `\mark \default` and `\mark 3` keep their number, for the
@@ -4989,6 +5038,7 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
     let mut j = expr(toks, i + 3, st, hd)?;
     let body: Vec<Ev> = st.events.split_off(before);
     let mut endings: Vec<Vec<Ev>> = Vec::new();
+    let mut passes: Vec<Vec<i64>> = Vec::new();
     if is_cmd(toks, j, "alternative") {
         if percent {
             return refuse("\\repeat percent has no \\alternative", toks[j].at);
@@ -4997,9 +5047,25 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
             return refuse("\\alternative wants a { block } of { endings }", toks[j].at);
         }
         let mut k = j + 2;
-        while starts_expr(toks, k) {
+        loop {
+            // `\volta 1,2 { … }`: the times this ending is played.
+            let mut times = Vec::new();
+            if is_cmd(toks, k, "volta") {
+                k += 1;
+                while k < toks.len() && (toks[k].t == T::Num || toks[k].t == T::Sym(',')) {
+                    times.extend(toks[k].v.split(',').filter_map(|n| n.parse::<i64>().ok()));
+                    k += 1;
+                }
+                if times.is_empty() || !starts_expr(toks, k) {
+                    return refuse("\\volta wants the passes it is played on and its ending: \\volta 1,2 { … }", toks[k - 1].at);
+                }
+            }
+            if !starts_expr(toks, k) {
+                break;
+            }
             k = expr(toks, k, st, hd)?;
             endings.push(st.events.split_off(before));
+            passes.push(times);
         }
         if !is(toks, k, T::Sym('}')) {
             return refuse("an \\alternative that is never closed", toks[j].at);
@@ -5014,7 +5080,8 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
     let mut fresh = tuplets0;
     for time in 0..count {
         tuplet_map.clear();
-        let ending = if endings.is_empty() { None } else { endings.get((time - (count - endings.len() as i64)).max(0) as usize) };
+        let named = passes.iter().position(|p| p.contains(&(time + 1)));
+        let ending = if endings.is_empty() { None } else { endings.get(named.unwrap_or((time - (count - endings.len() as i64)).max(0) as usize)) };
         let copy = percent && time > 0;
         if copy {
             st.percents += 1;
@@ -5064,7 +5131,29 @@ fn alternative(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, Str
     }
     let mut j = i + 2;
     let mut endings = Vec::new();
-    while j < toks.len() && toks[j].t == T::Sym('{') {
+    let mut labels: Vec<Option<String>> = Vec::new();
+    loop {
+        // LilyPond 2.24's `\volta 1,2 { … }`: the passes an ending is played on, its label.
+        let mut label = None;
+        if is_cmd(toks, j, "volta") {
+            let mut passes = Vec::new();
+            j += 1;
+            while j < toks.len() && (toks[j].t == T::Num || toks[j].t == T::Sym(',')) {
+                passes.extend(toks[j].v.split(',').filter(|n| !n.is_empty()).map(|n| format!("{n}.")));
+                j += 1;
+            }
+            if passes.is_empty() {
+                return refuse("\\volta wants the passes it is played on: \\volta 1,2", toks[j - 1].at);
+            }
+            label = Some(passes.join(", "));
+        }
+        if j >= toks.len() || toks[j].t != T::Sym('{') {
+            if label.is_some() {
+                return refuse("\\volta wants its ending, a { block }", toks.get(j).map_or(tk.at, |t| t.at));
+            }
+            break;
+        }
+        labels.push(label);
         endings.push(j);
         let mut depth = 0;
         let mut jj = j;
@@ -5092,7 +5181,8 @@ fn alternative(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, Str
     let count = endings.len();
     for (k, start) in endings.into_iter().enumerate() {
         let last = k == count - 1;
-        st.events.push(Ev { k: Kind::VoltaStart, v: format!("{}.", k + 1), at: toks[start].at, ..Ev::default() });
+        let label = labels[k].clone().unwrap_or_else(|| format!("{}.", k + 1));
+        st.events.push(Ev { k: Kind::VoltaStart, v: label, at: toks[start].at, ..Ev::default() });
         music(toks, start + 1, st, hd)?;
         if !last {
             st.events.push(Ev { k: Kind::RepeatEnd, at: toks[start].at, ..Ev::default() });
@@ -5245,6 +5335,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     let mut pitch_at = Vec::new();
     let mut chord_fingers = Vec::new();
     let mut strings = Vec::new();
+    let mut harmonics = Vec::new();
     let mut drums = Vec::new();
     let mut drum_scripts = Vec::new();
     let mut root: Option<Pitch> = None;
@@ -5284,6 +5375,13 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             pitch_at.push(toks[i].at);
             i += 1;
             i = reminder(toks, i, pitches.last().map_or(0, |p| p.d), &mut forced, &mut cautionary);
+            // `<c e\harmonic>`: a harmonic's head, a diamond.
+            while is_cmd(toks, i, "harmonic") {
+                if let Some(p) = pitches.last() {
+                    harmonics.push(p.d);
+                }
+                i += 1;
+            }
             // `<c\5 e\4>`: the strings of a tablature.
             while toks.get(i).is_some_and(|t| t.t == T::Cmd && !t.v.is_empty() && t.v.chars().all(|c| c.is_ascii_digit())) {
                 let n: i64 = toks[i].v.parse().unwrap_or(0);
@@ -5434,6 +5532,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
         figures,
         drums,
         strings,
+        harmonics,
         scripts,
         forced,
         cautionary,
@@ -5572,6 +5671,17 @@ fn figure_lines(toks: &[Tok], mut i: usize) -> Result<(Vec<Vec<Run>>, usize), Sc
 
 /// The rehearsal mark's label: `\mark \default` the next letter, `\mark 5`
 /// the fifth, `\mark "A"` or `\mark \markup { … }` as written.
+/// Past the number or `\default` LilyPond 2.24 lets `\segnoMark` and
+/// `\codaMark` take (`\segnoMark 2`, `\codaMark #1`): the same sign is drawn.
+fn mark_number_end(toks: &[Tok], i: usize) -> usize {
+    let k = if is(toks, i, T::Sym('#')) { i + 1 } else { i };
+    if is(toks, k, T::Num) || is_cmd(toks, k, "default") {
+        k + 1
+    } else {
+        i
+    }
+}
+
 fn mark_label(toks: &[Tok], i: usize, st: &mut St) -> Result<(Vec<Run>, usize), ScoreError> {
     let at = toks[i].at;
     let mut j = i + 1;

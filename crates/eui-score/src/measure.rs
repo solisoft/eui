@@ -352,6 +352,7 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
         heads.sort_by_key(|h| h.pos);
         ev.heads = heads;
         drum_heads(&mut ev);
+        harmonic_heads(&mut ev);
         p.tied.clear();
         if ev.tie {
             for pt in &ev.pitches {
@@ -366,6 +367,15 @@ fn voice_two(bars: &mut [Bar], mut ev: Ev, p: &mut Poly) -> Result<(), ScoreErro
     p.at = at + ev.ticks;
     bar.items.push(ev);
     Ok(())
+}
+
+/// The heads written `\harmonic`: diamonds.
+fn harmonic_heads(ev: &mut Ev) {
+    for h in &mut ev.heads {
+        if ev.harmonics.contains(&h.d) {
+            h.style = "Harmonic";
+        }
+    }
 }
 
 /// A drum note's heads, each its drum's.
@@ -945,6 +955,7 @@ pub(crate) fn measures_keeping(events: &[Ev], keep: Option<&[(i64, i64)]>) -> Re
             heads.sort_by_key(|h| h.pos);
             ev.heads = heads;
             drum_heads(&mut ev);
+            harmonic_heads(&mut ev);
             tied.clear();
             if ev.tie {
                 for p in &ev.pitches {

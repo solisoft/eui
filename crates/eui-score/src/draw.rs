@@ -643,6 +643,7 @@ fn head_glyph(base: i64, style: &str) -> &'static str {
         ("X" | "CircleX", 2) => "noteheadXHalf",
         ("X", _) => "noteheadXBlack",
         ("CircleX", _) => "noteheadCircleX",
+        ("Harmonic", _) => "noteheadDiamondWhite",
         _ => head_name(base),
     }
 }
