@@ -41,7 +41,7 @@ mod quanting;
 pub mod text;
 mod vertical;
 
-pub use draw::{Band, HeadRanges, Path, Ranges, WordRanges};
+pub use draw::{Band, FretGrids, HeadRanges, Path, Ranges, WordRanges};
 pub use engrave::Engraved;
 pub use midi::MidiOptions;
 
@@ -308,18 +308,19 @@ pub fn paths_heads(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, R
     })
 }
 
-/// Page `page`'s paths, each item's range and each head's, and each word's
-/// (`WordRanges`): what an editor hits to open a word where it is drawn.
+/// Page `page`'s paths, each item's range and each head's, each word's
+/// (`WordRanges`) and each chord diagram's grid (`FretGrids`): what an editor
+/// hits to open a word, or put a finger on a diagram, where it is drawn.
 ///
 /// # Errors
 ///
 /// The engraver's refusal.
-pub fn paths_words(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, Ranges, HeadRanges, WordRanges), ScoreError> {
+pub fn paths_words(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, Ranges, HeadRanges, WordRanges, FretGrids), ScoreError> {
     guarded(|| {
         let mut ranges = Vec::new();
         let mut heads = Vec::new();
-        let (paths, words) = draw::page_paths_words(eng, sp, page, &mut ranges, &mut heads);
-        Ok((paths, ranges, heads, words))
+        let (paths, words, grids) = draw::page_paths_words(eng, sp, page, &mut ranges, &mut heads);
+        Ok((paths, ranges, heads, words, grids))
     })
 }
 

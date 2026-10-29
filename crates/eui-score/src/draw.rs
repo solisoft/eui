@@ -41,9 +41,19 @@ pub type HeadRanges = Vec<(usize, i64, Range<usize>)>;
 /// hits to open a word where it is drawn (score #434).
 pub type WordRanges = Vec<(usize, &'static str, usize, Range<usize>)>;
 
+/// Each chord diagram's strings and frets, by the word it is: the item, the
+/// word's index, and in the page's pixels the low E string's x, the nut's y,
+/// the high E string's x and the last fret line's y, then the frets drawn and
+/// the fret of the first row (score #436).
+pub type FretGrids = Vec<(usize, usize, [f64; 6])>;
+
 thread_local! {
     /// While `paths_words` draws: the words' ranges, as they are drawn.
     static WORDS: RefCell<Option<WordRanges>> = const { RefCell::new(None) };
+    /// … and the chord diagrams' grids.
+    static GRIDS: RefCell<Option<FretGrids>> = const { RefCell::new(None) };
+    /// The grids drawn by the word being drawn, not yet given its item.
+    static DRAWN_GRIDS: RefCell<Vec<[f64; 6]>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A word drawn as `range` of the page's paths, kept while words are kept.
@@ -55,12 +65,15 @@ fn word_drawn(item: usize, kind: &'static str, index: usize, range: Range<usize>
     });
 }
 
-/// Page `page`'s paths as `page_paths_heads` draws them, with each word's range.
-pub fn page_paths_words(eng: &Engraved, sp: f64, page: usize, ranges: &mut Ranges, heads: &mut HeadRanges) -> (Vec<Path>, WordRanges) {
+/// Page `page`'s paths as `page_paths_heads` draws them, with each word's
+/// range and each chord diagram's grid.
+pub fn page_paths_words(eng: &Engraved, sp: f64, page: usize, ranges: &mut Ranges, heads: &mut HeadRanges) -> (Vec<Path>, WordRanges, FretGrids) {
     WORDS.with(|w| *w.borrow_mut() = Some(Vec::new()));
+    GRIDS.with(|g| *g.borrow_mut() = Some(Vec::new()));
     let paths = page_paths_heads(eng, sp, page, ranges, Some(heads));
     let words = WORDS.with(|w| w.borrow_mut().take()).unwrap_or_default();
-    (paths, words)
+    let grids = GRIDS.with(|g| g.borrow_mut().take()).unwrap_or_default();
+    (paths, words, grids)
 }
 
 /// To the hundredth as Soli's `Float#round(2)` does it: on the shortest
@@ -210,6 +223,14 @@ struct Pen<'a> {
 impl Pen<'_> {
     fn push(&mut self, p: Path) {
         self.paths.push(p);
+    }
+
+    /// A point of the drawing in the page's pixels, as the staff's scale puts it.
+    fn point(&self, x: f64, y: f64) -> (f64, f64) {
+        match &self.scale {
+            Some(sc) => (sc.x(x) * self.sp, sc.y(y) * self.sp),
+            None => (x * self.sp, y * self.sp),
+        }
     }
 
     fn rect(&mut self, x: f64, y: f64, w: f64, h: f64) {
@@ -889,8 +910,16 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
     }
     for tx in &line.texts {
         let from = pen.paths.len();
+        DRAWN_GRIDS.with(|d| d.borrow_mut().clear());
         draw_runs(&mut pen, &tx.runs, tx.x0, top + tx.y, tx.em);
         word_drawn(tx.item, "text", tx.index, from..pen.paths.len());
+        for grid in DRAWN_GRIDS.with(|d| std::mem::take(&mut *d.borrow_mut())) {
+            GRIDS.with(|g| {
+                if let Some(grids) = g.borrow_mut().as_mut() {
+                    grids.push((tx.item, tx.index, grid));
+                }
+            });
+        }
     }
     for g in &line.glissandi {
         draw_line_seg(&mut pen, g[0], top + g[1], g[2], top + g[3], 0.1);
@@ -1666,6 +1695,10 @@ fn draw_runs(pen: &mut Pen, runs: &[Run], mut x: f64, y: f64, e: f64) {
         if let Some(d) = crate::frets::from_spec(&r.text) {
             // A guitar's chord: its diagram standing on the baseline.
             let (w, h) = crate::frets::size(&d, re);
+            let (left, nut, right, bottom, rows, base) = crate::frets::grid(&d, x, y - rise - h, re);
+            let (x0, y0) = pen.point(left, nut);
+            let (x1, y1) = pen.point(right, bottom);
+            DRAWN_GRIDS.with(|g| g.borrow_mut().push([x0, y0, x1, y1, rows as f64, base as f64]));
             for shape in crate::frets::shapes(&d, x, y - rise - h, re) {
                 match shape {
                     crate::frets::Shape::Rect(sx, sy, sw, sh) => pen.rect(sx, sy, sw, sh),

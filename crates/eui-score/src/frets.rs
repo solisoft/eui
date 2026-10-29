@@ -286,6 +286,18 @@ fn circle(cx: f64, cy: f64, r: f64, reverse: bool) -> Vec<f64> {
     c
 }
 
+/// Where the diagram's strings and frets are, its top left corner at `(x, y)`:
+/// the low E string's x, the nut's y, the high E string's x, the last fret
+/// line's y, the frets drawn and the fret the first row is — what an editor
+/// needs to tell which string and fret a click is on (score #436).
+pub fn grid(d: &Diagram, x: f64, y: f64, e: f64) -> (f64, f64, f64, f64, i64, i64) {
+    let m = metrics(d, e);
+    let rows = d.rows();
+    let left = x + m.label + 0.15 * m.s;
+    let nut_y = y + m.top;
+    (left, nut_y, left + 5.0 * m.gap, nut_y + rows as f64 * m.fret, rows, d.base())
+}
+
 /// The diagram's shapes, its top left corner at `(x, y)`.
 pub fn shapes(d: &Diagram, x: f64, y: f64, e: f64) -> Vec<Shape> {
     let m = metrics(d, e);
