@@ -168,6 +168,10 @@ pub struct TextPlace {
     pub dir: i64,
     /// Their size (`TextScript.font-size`).
     pub em: f64,
+    /// The note or rest they are written on: its number among its staff's items.
+    pub item: usize,
+    /// Which of its words they are, in the order the source writes them.
+    pub index: usize,
 }
 
 /// A text spanner on one line: its words (on the line it starts on), then
@@ -1435,7 +1439,7 @@ fn texts(bars: &[Bar], line: &mut Line) {
     let numbers = bar_number_boxes(bars, line);
     for b in line.bars.clone() {
         for ev in &bars[b].items {
-            for tx in &ev.texts {
+            for (index, tx) in ev.texts.iter().enumerate() {
                 let runs = tx.pieces();
                 // A pedal's "Ped." is no TextScript: the settings are the words'.
                 let pedal = runs.iter().any(|r| r.glyph && r.text.starts_with("keyboardPedal"));
@@ -1512,7 +1516,7 @@ fn texts(bars: &[Bar], line: &mut Line) {
                 // `extra-offset`: moved once it is placed, as LilyPond moves it —
                 // what comes after is placed against where it was.
                 let (dx, dy) = look.extra("TextScript");
-                line.texts.push(TextPlace { text: tx.text.clone(), runs, x0: x0 + dx, x1: x1 + dx, y: y + dy, top: y + bx.0, bottom: y + bx.1, dir: tx.dir, em: e });
+                line.texts.push(TextPlace { text: tx.text.clone(), runs, x0: x0 + dx, x1: x1 + dx, y: y + dy, top: y + bx.0, bottom: y + bx.1, dir: tx.dir, em: e, item: ev.i, index });
             }
         }
     }

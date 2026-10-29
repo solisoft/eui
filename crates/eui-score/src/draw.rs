@@ -35,6 +35,34 @@ pub type Ranges = Vec<(usize, Range<usize>)>;
 /// show one note of a chord (03 §1.4).
 pub type HeadRanges = Vec<(usize, i64, Range<usize>)>;
 
+/// Each word's paths: the item it is written on, "text" (its words over or
+/// under it, `^"…"`, `\markup …`, a chord diagram) or "lyric", which of them
+/// (the word's index on the note, the verse), and the range — what an editor
+/// hits to open a word where it is drawn (score #434).
+pub type WordRanges = Vec<(usize, &'static str, usize, Range<usize>)>;
+
+thread_local! {
+    /// While `paths_words` draws: the words' ranges, as they are drawn.
+    static WORDS: RefCell<Option<WordRanges>> = const { RefCell::new(None) };
+}
+
+/// A word drawn as `range` of the page's paths, kept while words are kept.
+fn word_drawn(item: usize, kind: &'static str, index: usize, range: Range<usize>) {
+    WORDS.with(|w| {
+        if let Some(words) = w.borrow_mut().as_mut() {
+            words.push((item, kind, index, range));
+        }
+    });
+}
+
+/// Page `page`'s paths as `page_paths_heads` draws them, with each word's range.
+pub fn page_paths_words(eng: &Engraved, sp: f64, page: usize, ranges: &mut Ranges, heads: &mut HeadRanges) -> (Vec<Path>, WordRanges) {
+    WORDS.with(|w| *w.borrow_mut() = Some(Vec::new()));
+    let paths = page_paths_heads(eng, sp, page, ranges, Some(heads));
+    let words = WORDS.with(|w| w.borrow_mut().take()).unwrap_or_default();
+    (paths, words)
+}
+
 /// To the hundredth as Soli's `Float#round(2)` does it: on the shortest
 /// decimal that reads back as `v`, halves away from zero — so 22.884999…
 /// (written "22.884999999999998") is 22.88, where `(v * 100).round()`
@@ -860,7 +888,9 @@ fn draw_line(paths: &mut Vec<Path>, bars: &[Bar], line: &Line, top: f64, sp: f64
         draw_dynamic(&mut pen, dy, top);
     }
     for tx in &line.texts {
+        let from = pen.paths.len();
         draw_runs(&mut pen, &tx.runs, tx.x0, top + tx.y, tx.em);
+        word_drawn(tx.item, "text", tx.index, from..pen.paths.len());
     }
     for g in &line.glissandi {
         draw_line_seg(&mut pen, g[0], top + g[1], g[2], top + g[3], 0.1);
@@ -947,7 +977,9 @@ fn draw_lyrics(pen: &mut Pen, bars: &[Bar], line: &Line, y: f64, verse: usize) {
         let x0 = ev.x + (ev.head_w.unwrap_or(0.0) - w) * (align + 1.0) / 2.0;
         let x1 = x0 + w;
         if w > 0.0 {
+            let from = pen.paths.len();
             pen.text(&lyr.text, Weight::Regular, x0, y, e);
+            word_drawn(ev.i, "lyric", verse, from..pen.paths.len());
         }
         let mut nxt: Option<&Ev> = None;
         let mut held: Option<&Ev> = None;
