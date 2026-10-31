@@ -1049,6 +1049,9 @@ pub struct Ev {
     pub tie: bool,
     /// `(`.
     pub slur_on: bool,
+    /// `^(` 1, `_(` -1: the side its slur is forced to, over any setting;
+    /// 0 for `(`, which leaves it to the notes (and to `\slurUp`).
+    pub slur_dir: i64,
     /// `)`.
     pub slur_off: bool,
     /// `[`.
@@ -1076,6 +1079,8 @@ pub struct Ev {
     pub fingers: Vec<Finger>,
     /// `\(`: a phrasing slur starts.
     pub phrase_on: bool,
+    /// `^\(` 1, `_\(` -1, as `slur_dir`.
+    pub phrase_dir: i64,
     /// `\)`.
     pub phrase_off: bool,
     /// `\arpeggio`: the chord rolled, a wavy line before it.
@@ -3689,6 +3694,7 @@ fn cue_during(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, Stri
                 st.notes += 1;
                 (note.size, note.cue) = (-3, true);
                 (note.tie, note.slur_on, note.slur_off, note.beam_on, note.beam_off) = (false, false, false, false, false);
+                note.slur_dir = 0;
                 (note.dynamic, note.hairpin, note.hairpin_end) = (None, None, false);
                 note.texts.clear();
                 note.voice = None;
@@ -4137,6 +4143,18 @@ fn postfix(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
         last.texts.push(Words { text, dir, runs });
         return Ok(j);
     }
+    // `^(` `_(`, `^\(` `_\(`: a slur, a phrasing slur, forced above or below.
+    if dir != 0 && (nxt.t == T::Sym('(') || (nxt.t == T::Cmd && nxt.v == "(")) {
+        let last = last_note(&mut st.events, &tk)?;
+        if nxt.t == T::Sym('(') {
+            last.slur_on = true;
+            last.slur_dir = -dir;
+        } else {
+            last.phrase_on = true;
+            last.phrase_dir = -dir;
+        }
+        return Ok(i + 2);
+    }
     if nxt.t == T::Cmd {
         if SCRIPTS.contains(&nxt.v.as_str()) {
             let last = last_note(&mut st.events, &tk)?;
@@ -4545,6 +4563,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 }
                 g.grace = Some(GraceKind::Plain);
                 g.slur_on = false;
+                g.slur_dir = 0;
                 g.slur_off = false;
                 g.n = None;
                 graces.push(g);
@@ -4580,6 +4599,7 @@ fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>
                 }
                 g.grace = Some(kind);
                 g.slur_on = false;
+                g.slur_dir = 0;
                 g.slur_off = false;
                 g.n = None;
                 st.graces.push(g);

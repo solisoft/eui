@@ -350,7 +350,7 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
         }
         if ev.slur_off {
             if let Some(first) = mine.pop() {
-                slur(lines, bars, &notes, first, at, 0.0, ev_at(first).look.dir("Slur"));
+                slur(lines, bars, &notes, first, at, 0.0, forced(ev_at(first).slur_dir, ev_at(first).look.dir("Slur")));
                 slurs.push((first, at));
             }
         }
@@ -368,7 +368,8 @@ pub(crate) fn curves(bars: &mut [Bar], lines: &mut [Line]) {
             if let Some(first) = mine.pop() {
                 let (a, b) = (ev_at(first).n.unwrap_or(0), ev.n.unwrap_or(0));
                 let inside = slurs.iter().any(|&(f, l)| voice_of(ev_at(f)) == voice_of(ev) && ev_at(f).n.unwrap_or(0) <= b && ev_at(l).n.unwrap_or(0) >= a);
-                slur(lines, bars, &notes, first, at, if inside { 1.2 } else { 0.0 }, ev_at(first).look.dir("PhrasingSlur"));
+                let side = forced(ev_at(first).phrase_dir, ev_at(first).look.dir("PhrasingSlur"));
+                slur(lines, bars, &notes, first, at, if inside { 1.2 } else { 0.0 }, side);
             }
         }
     }
@@ -425,6 +426,16 @@ fn tie(lines: &mut [Line], ev: &Ev, pos: i64, nxt: &Ev, other: i64, over: bool) 
         let later = &mut lines[nxt.sys];
         let start = later.prefix - 0.6;
         arc(later, start, y2, xb, y2, dir, 1.0, 0.333);
+    }
+}
+
+/// The side a slur is forced to: its own (`^(` 1, `_(` -1) over a
+/// setting's (`\slurUp`), and none when neither says.
+fn forced(own: i64, setting: Option<i64>) -> Option<i64> {
+    if own != 0 {
+        Some(own)
+    } else {
+        setting
     }
 }
 
@@ -1408,7 +1419,50 @@ fn dyn_line(bars: &[Bar], line: &Line, el: &DynEl, pads: (f64, f64)) -> f64 {
         }
         need = need.max(tp.ya.max(tp.yb) + 0.9 + 0.6 - el.top);
     }
+    // A slur or a tie under the notes: the dynamics go under it, not over
+    // it — a hairpin under a run slurred below used to sit on the slur.
+    let open = if el.text.is_none() && el.words.is_none() { 0.6666 } else { -el.top };
+    for curve in &line.curves {
+        if let Some(low) = curve_low(curve, el.x0 - 0.2, el.x1 + 0.2) {
+            need = need.max(low + pad + open);
+        }
+    }
     need
+}
+
+/// The lowest point of a curve's outline between `x0` and `x1` (y grows
+/// downwards), or none when it does not reach there.
+pub fn curve_low(cmds: &[f64], x0: f64, x1: f64) -> Option<f64> {
+    let mut low: Option<f64> = None;
+    let mut keep = |x: f64, y: f64| {
+        if x >= x0 && x <= x1 {
+            low = Some(low.map_or(y, |l: f64| l.max(y)));
+        }
+    };
+    let (mut cx, mut cy) = (0.0, 0.0);
+    let mut ci = 0;
+    while ci < cmds.len() {
+        match cmds[ci] as i64 {
+            0 | 1 if ci + 2 < cmds.len() => {
+                (cx, cy) = (cmds[ci + 1], cmds[ci + 2]);
+                keep(cx, cy);
+                ci += 3;
+            }
+            3 if ci + 6 < cmds.len() => {
+                let c = &cmds[ci + 1..ci + 7];
+                for k in 1..=16 {
+                    let t = k as f64 / 16.0;
+                    let u = 1.0 - t;
+                    let (a, b, d, e) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    keep(a * cx + b * c[0] + d * c[2] + e * c[4], a * cy + b * c[1] + d * c[3] + e * c[5]);
+                }
+                (cx, cy) = (c[4], c[5]);
+                ci += 7;
+            }
+            _ => ci += 1,
+        }
+    }
+    low
 }
 
 /// The line a dynamic set over the staff stands on: clear of the notes

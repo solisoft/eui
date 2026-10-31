@@ -360,3 +360,51 @@ fn lyrics_aligned_and_settings_among_them_passed_over() {
     assert_eq!(p.staves[0].lyrics.as_ref().unwrap().len(), 2);
     assert!(p.warnings.iter().any(|w| w.message == "\\override inside lyrics is not drawn"));
 }
+
+#[test]
+fn a_slur_written_with_a_side_goes_there_over_any_setting() {
+    // The highest point of the first curve (y grows downwards).
+    let curve_top = |src: &str| {
+        let e = eng(src);
+        let c = &line(&e).curves[0];
+        let mut ys = Vec::new();
+        let mut k = 0;
+        while k < c.len() {
+            let args = match c[k] as i64 {
+                0 | 1 => 2,
+                3 => 6,
+                _ => 0,
+            };
+            for j in 0..args / 2 {
+                ys.push(c[k + 2 + 2 * j]);
+            }
+            k += 1 + args;
+        }
+        ys.iter().fold(f64::INFINITY, |a, b| a.min(*b))
+    };
+    let auto_low = curve_top("{ c'4( d' e' f') }");
+    let auto_high = curve_top("{ c''4( b' a' g') }");
+    assert!(curve_top("{ c'4^( d' e' f') }") < auto_low - 1.0, "^( over stem-up notes");
+    assert!(curve_top("{ c''4_( b' a' g') }") > auto_high + 1.0, "_( under stem-down notes");
+    assert_eq!(curve_top("{ c'4( d' e' f') }"), auto_low, "( leaves it to the notes");
+    assert!(curve_top("{ \\slurUp c'4_( d' e' f') }") > curve_top("{ \\slurUp c'4( d' e' f') }") + 1.0, "its own side over \\slurUp");
+    assert!(curve_top("{ c'4^\\( d' e' f'\\) }") < auto_low - 1.0, "a phrasing slur too");
+    let p = read("{ c'4^( d') e'_( f') g'( a') }");
+    let sides: Vec<i64> = notes(&p, 0).iter().filter(|n| n.slur_on).map(|n| n.slur_dir).collect();
+    assert_eq!(sides, vec![1, -1, 0]);
+}
+
+#[test]
+fn a_hairpin_goes_under_a_slur_drawn_under_the_notes() {
+    let hairpin_y = |src: &str| line(&eng(src)).dynamics.iter().find(|d| d.text.is_none()).map(|d| d.y).unwrap();
+    let alone = hairpin_y("{ \\time 2/4 d'16\\< b c' d' e' fis' g' a'\\! }");
+    let slurred = hairpin_y("{ \\time 2/4 d'16_(\\< b c' d' e' fis' g' a')\\! }");
+    assert!(slurred > alone + 0.5, "under the slur: {slurred} against {alone}");
+    let e = eng("{ \\time 2/4 d'16_(\\< b c' d' e' fis' g' a')\\! }");
+    let l = line(&e);
+    let hp = l.dynamics.iter().find(|d| d.text.is_none()).unwrap();
+    let low = eui_score::marks::curve_low(&l.curves[0], hp.x0, hp.x1).unwrap();
+    assert!(hp.y - 0.6666 > low, "the wedge's top ({}) clears the slur's bottom ({low})", hp.y - 0.6666);
+    // Over the notes, a slur leaves the hairpin where it was.
+    assert_eq!(hairpin_y("{ \\time 2/4 d'16^(\\< b c' d' e' fis' g' a')\\! }"), alone);
+}
