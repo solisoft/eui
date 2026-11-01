@@ -334,13 +334,45 @@ pub fn midi(src: &str, opts: &MidiOptions) -> Result<Vec<u8>, ScoreError> {
     guarded(|| midi::midi(src, opts))
 }
 
-/// The music on the paper its source asks for (`\paper`), A4 otherwise.
+/// The music on the paper its source asks for (`\paper`), A4 otherwise, at
+/// the staff size it asks for: the layout as written ([`pdf`] may set it a
+/// little smaller, [`fit_pages`]).
 pub fn engrave_paper(src: &str) -> Result<(Engraved, Paper), ScoreError> {
     guarded(|| {
         let parsed = parse::parse(src)?;
         let paper = Paper::of(&parsed.paper);
         Ok((engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?, paper))
     })
+}
+
+/// The smallest staff size a score is set at to save a page: 17 pt, 85 % of
+/// LilyPond's 20.
+pub const FIT_MIN_STAFF_SIZE: f64 = 17.0;
+
+/// The score laid out on its pages, with the paper and the paper settings it
+/// was laid out with. A score that does not choose its staff size
+/// (`set-global-staff-size`) and runs onto more than one page is set at the
+/// largest size, 19.5 pt down to [`FIT_MIN_STAFF_SIZE`] by half points, that
+/// fits it on a page fewer — two lines alone on a last page come back to the
+/// one before; when none does, it stays at 20 pt.
+pub fn fit_pages(parsed: &parse::Parsed) -> Result<(Engraved, Paper, parse::PaperSpec), ScoreError> {
+    let paper = Paper::of(&parsed.paper);
+    let eng = engrave::engrave_parsed(parsed, paper.line_w(), &paper.layout())?;
+    if parsed.paper.staff_size.is_some() || eng.pages.len() <= 1 {
+        return Ok((eng, paper, parsed.paper.clone()));
+    }
+    let mut smaller = parsed.clone();
+    let mut size = 19.5;
+    while size >= FIT_MIN_STAFF_SIZE {
+        smaller.paper.staff_size = Some(size);
+        let fitted = Paper::of(&smaller.paper);
+        let laid = engrave::engrave_parsed(&smaller, fitted.line_w(), &fitted.layout())?;
+        if laid.pages.len() < eng.pages.len() {
+            return Ok((laid, fitted, smaller.paper));
+        }
+        size -= 0.5;
+    }
+    Ok((eng, paper, parsed.paper.clone()))
 }
 
 /// The source as a PDF, on the paper it asks for (A4 otherwise), each page's
@@ -362,9 +394,8 @@ pub fn pdf_outlines(src: &str, title: &str) -> Result<String, ScoreError> {
 fn pdf_with(src: &str, title: &str, text: bool) -> Result<String, ScoreError> {
     guarded(|| {
         let parsed = parse::parse(src)?;
-        let paper = Paper::of(&parsed.paper);
-        let eng = engrave::engrave_parsed(&parsed, paper.line_w(), &paper.layout())?;
+        let (eng, paper, spec) = fit_pages(&parsed)?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
-        Ok(pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &parsed.paper, text }))
+        Ok(pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &spec, text }))
     })
 }

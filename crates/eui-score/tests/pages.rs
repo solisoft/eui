@@ -148,3 +148,51 @@ fn a_header_makes_room_and_nothing_said_draws_as_before() {
     assert_eq!(page_words(&bare), vec![vec!["1 / 1".to_string()]]);
     assert!(bare.contains("/F1 ") && !bare.contains("/F2 ") && !bare.contains("TeXGyreSchola-Bold"));
 }
+
+/// The page count and the last page's systems of `src` laid out as written.
+fn laid_pages(src: &str) -> (usize, usize) {
+    let (eng, _) = engrave_paper(src).unwrap();
+    (eng.pages.len(), eng.pages.last().map_or(0, |p| p.systems.len()))
+}
+
+/// The page count of `src`'s PDF, fitted ([`eui_score::fit_pages`]).
+fn pdf_pages(src: &str) -> usize {
+    eui_score::fit_pages(&parse(src).unwrap()).unwrap().0.pages.len()
+}
+
+#[test]
+fn a_last_page_of_a_few_lines_comes_back_when_a_smaller_staff_size_fits_it() {
+    // A tune long enough for one or two systems on a second page at 20 pt
+    // (set so explicitly: a staff size the score chooses is kept).
+    let at20 = |bars: usize| tune("", "", bars).replace("\\paper {  }", "#(set-global-staff-size 20)\n\\paper { }");
+    let bars = (20..400).find(|&n| matches!(laid_pages(&at20(n)), (2, 1..=2))).expect("a tune with a line or two alone on page 2");
+    assert_eq!(laid_pages(&at20(bars)).0, 2, "chosen 20 pt: kept, two pages");
+    let fitted = tune("", "", bars);
+    assert_eq!(laid_pages(&fitted).0, 2, "laid out as written: two pages");
+    assert_eq!(pdf_pages(&fitted), 1, "no size chosen: the PDF sets it smaller, one page");
+    // The PDF too, its words on a single page.
+    assert_eq!(page_words(&pdf(&fitted, "Tune").unwrap()).len(), 1);
+    let parsed = parse(&fitted).unwrap();
+    let (_, _, spec) = eui_score::fit_pages(&parsed).unwrap();
+    let size = spec.staff_size.unwrap();
+    assert!((eui_score::FIT_MIN_STAFF_SIZE..20.0).contains(&size), "a little smaller, within the limit: {size}");
+    // The largest size that fits: half a point more runs onto a second page.
+    let bigger = format!("#(set-global-staff-size {})\n{}", size + 0.5, fitted);
+    assert_eq!(pdf_pages(&bigger), 2, "{} pt would not fit", size + 0.5);
+}
+
+#[test]
+fn a_score_that_cannot_lose_a_page_stays_at_its_size() {
+    // Two full pages: 85 % is not enough to bring them onto one.
+    let at20 = |bars: usize| format!("#(set-global-staff-size 20)\n{}", tune("", "", bars));
+    let bars = (20..600).find(|&n| {
+        let (pages, last) = laid_pages(&at20(n));
+        pages == 2 && last >= 8
+    });
+    let bars = bars.expect("a tune of two full pages");
+    let plain = tune("", "", bars);
+    assert_eq!(pdf_pages(&plain), 2, "unchanged: two pages");
+    assert_eq!(eui_score::fit_pages(&parse(&plain).unwrap()).unwrap().2.staff_size, None, "left at 20 pt");
+    // One page: nothing to save.
+    assert_eq!(eui_score::fit_pages(&parse(&tune("", "", 4)).unwrap()).unwrap().2.staff_size, None);
+}
