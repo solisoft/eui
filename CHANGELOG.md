@@ -194,7 +194,9 @@ release. A wire change lands here first, is released, and then the pin moves.
 - A score is read against a budget of what it writes out (score #540):
   20,000 notes — every note, rest and skip, a chord's every head and `q`'s,
   grace notes, lyric syllables, the bars a counted rest or skip spans in
-  its metre, each staff as long as the longest — and 40,000 characters of
+  its metre, every marking drawn on a note (an articulation or ornament
+  two, a slur's start ten, a dynamic, hairpins, ties, fingerings…), each
+  staff as long as the longest — and 40,000 characters of
   words, each as often as it is drawn. Repeats are counted before they are
   written out, variables at each use, so a few lines that expand into
   hundreds of thousands of notes (a repeat in a repeat in a repeat,
@@ -203,7 +205,11 @@ release. A wire change lands here first, is released, and then the pin moves.
   than 20,000 notes; the engraver stops there" — by every entry point,
   instead of tying up the layout. `written_out(src)` answers the count
   without laying the music out. `\addQuote`'s music is shared between
-  staves, no longer copied into each.
+  staves, no longer copied into each, and counted where a cue draws it.
+- Music nested too deep — blocks, `<< >>`, repeats, commands or markups
+  inside one another a thousand times — is refused ("the music nests too
+  deep") before it runs the thread out of stack, which aborted the whole
+  process where no refusal could be given.
 
 ## [0.11.0] - 2026-10-18
 

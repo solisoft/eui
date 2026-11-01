@@ -53,6 +53,42 @@ const MAX_TOKENS: usize = 400_000;
 /// multiplies as its tokens do, and is copied before anything counts it.
 const MAX_TOKEN_TEXT: usize = 4_000_000;
 
+/// How deep music may nest — blocks, `<< >>`, repeats, tuplets, contexts,
+/// commands around music, a variable's value, a markup — counted where the
+/// reading goes one level down (a `{ }` is two, `\repeat unfold 2 { }`
+/// three). Each level is frames of the stack, and a source nested a
+/// thousand deep ran the thread out of it: an abort no `catch_unwind`
+/// catches, the server's whole process with it. At the limit — twenty
+/// repeats in one another, thirty braces, thirty markups — the reading and
+/// the printing take under 256 KB of stack in a release build. Music as it
+/// is written nests a dozen levels at most.
+const MAX_DEPTH: usize = 64;
+
+thread_local! {
+    /// How deep the reading is now.
+    static DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// One level deeper, given back when dropped; the refusal past
+/// [`MAX_DEPTH`], before the level is read.
+pub(crate) struct Deeper(());
+
+pub(crate) fn deeper(at: usize) -> Result<Deeper, ScoreError> {
+    DEPTH.with(|d| {
+        if d.get() >= MAX_DEPTH {
+            return refuse("the music nests too deep — blocks, repeats or commands inside one another; the engraver stops there", at);
+        }
+        d.set(d.get() + 1);
+        Ok(Deeper(()))
+    })
+}
+
+impl Drop for Deeper {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 /// Where `\afterGrace`'s grace notes start, as a part of their note:
 /// LilyPond's `afterGraceFraction`.
 pub const AFTER_GRACE: f64 = 0.75;
@@ -486,10 +522,11 @@ fn lyric_tokens(cs: &[char], mut i: usize, at: usize) -> Result<(Vec<LyricItem>,
 fn lyric_setting_end(cs: &[char], mut i: usize) -> usize {
     let n = cs.len();
     i = skip_blank(cs, i);
-    if i < n && cs[i] == '\\' {
-        // `\once \override …`: the command it goes before.
+    // `\once \override …`: the command it goes before (a loop: a source
+    // may write a thousand of them).
+    while i < n && cs[i] == '\\' {
         let (_, jj) = name_at(cs, i + 1, letter);
-        return lyric_setting_end(cs, jj);
+        i = skip_blank(cs, jj);
     }
     while i < n && (cs[i].is_ascii_alphanumeric() || ".-#'".contains(cs[i])) {
         i += 1;
@@ -1837,7 +1874,7 @@ fn put(from: &[Tok], defs: &HashMap<String, Vec<Tok>>, out: &mut Vec<Tok>, text:
             None => out.push(t.clone()),
         }
         if out.len() > MAX_TOKENS {
-            return refuse("the variables write out to more music than this engraves", t.at);
+            return refuse(if defs.is_empty() { "the source is longer than this engraves" } else { "the variables write out to more music than this engraves" }, t.at);
         }
     }
     Ok(())
@@ -1845,6 +1882,7 @@ fn put(from: &[Tok], defs: &HashMap<String, Vec<Tok>>, out: &mut Vec<Tok>, text:
 
 /// Where the expression that starts at `i` ends: a variable's value.
 fn expr_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else {
         return refuse("a variable with no value", at_of(toks, i.saturating_sub(1)));
     };
@@ -2143,6 +2181,7 @@ pub(crate) fn value_end(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 /// arguments and the markup it takes: how a markup this does not draw is
 /// passed over.
 fn markup_skip(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at_of(toks, i.saturating_sub(1))) };
     match t.t {
         T::Sym('{') => skip_block(toks, i),
@@ -2169,6 +2208,7 @@ fn markup_skip(toks: &[Tok], i: usize) -> Result<usize, ScoreError> {
 /// a switch (`\slurUp`), or a context's name (`\Staff` in `\context { }`).
 /// None when `i` is none of them. `what` says where, for the warning.
 fn skip_setting(toks: &[Tok], i: usize, what: &str) -> Result<Option<usize>, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return Ok(None) };
     let named = |j: usize| path_words(toks, i + 1, j).join(".");
     let end = match (t.t, t.v.as_str()) {
@@ -2231,6 +2271,7 @@ pub fn parse(src: &str) -> Result<Parsed, ScoreError> {
     SPACING.with(|sp| *sp.borrow_mut() = SpacingSpanner::default());
     crate::look::reset();
     crate::written::reset();
+    DEPTH.with(|d| d.set(0));
     let toks = expand(tokens(src)?)?;
     scan_beyond(&toks);
     let mut st =
@@ -2430,7 +2471,7 @@ fn preamble(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreErr
                 }
                 let (counter, notes) = (st.counter, st.notes);
                 let mut read = Vec::new();
-                i = staff_named(toks, i + 2, st, &mut read, Props::default(), StaffKind::Notes, None)?;
+                i = crate::written::quoting(|| staff_named(toks, i + 2, st, &mut read, Props::default(), StaffKind::Notes, None))?;
                 (st.counter, st.notes) = (counter, notes);
                 std::rc::Rc::make_mut(&mut st.quotes).insert(name, read.pop().map(|s| s.events).unwrap_or_default());
             }
@@ -2686,6 +2727,7 @@ fn paper_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, S
 /// `\\layout { … }` or `\\midi { … }` at `i`: passed over, with a warning
 /// when it says anything.
 fn layout_block(toks: &[Tok], i: usize, paper: &mut PaperSpec) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let end = skip_block(toks, i + 1)?;
     if toks[i].v != "layout" {
         if end > i + 3 {
@@ -2876,6 +2918,7 @@ fn holds_staves(toks: &[Tok], i: usize) -> bool {
 }
 
 fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, groups: &mut Vec<Group>, depth: usize) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     if i >= toks.len() {
         return refuse("there is no music", 0);
     }
@@ -2960,6 +3003,7 @@ fn part(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, grou
 
 #[allow(clippy::too_many_arguments)]
 fn group(toks: &[Tok], mut i: usize, st: &mut Base, staves: &mut Vec<Staff>, groups: &mut Vec<Group>, depth: usize, kind: GroupKind, props: &Props) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let at = toks[i].at;
     i += 2;
     let first = staves.len();
@@ -3386,6 +3430,7 @@ fn header(toks: &[Tok], mut i: usize, st: &mut Base) -> Result<usize, ScoreError
 /// One music expression: `{ … }`, `<< … >>`, a command and what it takes,
 /// or a note.
 fn expr(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return refuse("there is no music", 0) };
     match t.t {
         T::Sym('{') => {
@@ -3403,6 +3448,7 @@ fn expr(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -
 }
 
 fn music(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     while i < toks.len() {
         let tk = toks[i].clone();
         // A setting written here — a clef, a metre, a mark — takes the
@@ -3744,9 +3790,9 @@ fn cue_during(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, Stri
         cue.push(Ev { k: Kind::Rest, spacer: true, ticks: to - held, base: 4, at, i: st.items, ..Ev::default() });
         st.items += 1;
     }
-    // The quote's notes copied once more, and the bars of rest counted one by one.
-    let copied = crate::written::cost(&cue, st.bar);
-    crate::written::spend(crate::written::Written { events: copied.events.saturating_add(music.len()), text: copied.text }, at)?;
+    // The quote's notes, drawn here: counted here. The cued music was
+    // counted as it was read, its bars of rest each a bar.
+    crate::written::spend(crate::written::cost(&cue, st.bar), at)?;
     let (first, second_voice) = if up { (cue, music) } else { (music, cue) };
     st.events.push(Ev { k: Kind::Voices, at, ..Ev::default() });
     for (v, events) in [(1u8, first), (2u8, second_voice)] {
@@ -3895,6 +3941,7 @@ fn part_combine(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, St
 /// (`music_list_to_relative`). A part with no notes, a `\global` of the
 /// staff's settings, is set in the first voice where its settings fall.
 fn voices(toks: &[Tok], mut i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let open_at = toks[i].at;
     i += 2;
     // Under `\relative` the voices are read as LilyPond reads them, which
@@ -4262,6 +4309,7 @@ fn pitch_arg(st: &St, toks: &[Tok], i: usize, what: &str, at: usize) -> Result<(
 }
 
 fn command(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let tk = toks[i].clone();
     let word = tk.v.as_str();
     let arg = toks.get(i + 1).cloned();
@@ -4885,6 +4933,7 @@ const STAFF_PROPS: [&str; 5] = ["instrumentName", "shortInstrumentName", "midiIn
 /// Soli engraver's: honoured where the engraver can, else read and passed
 /// over with a warning. None for a command that is neither.
 fn layout_command(toks: &[Tok], i: usize, st: &mut St) -> Result<Option<usize>, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let tk = toks[i].clone();
     let word = tk.v.as_str();
     let at = tk.at;
@@ -5095,6 +5144,8 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
     let mut j = expr(toks, i + 3, st, hd)?;
     let body: Vec<Ev> = st.events.split_off(before);
     let mut endings: Vec<Vec<Ev>> = Vec::new();
+    // The bar each ending starts in: the metre in force where it is written.
+    let mut ending_bars: Vec<i64> = Vec::new();
     let mut passes: Vec<Vec<i64>> = Vec::new();
     if is_cmd(toks, j, "alternative") {
         if percent {
@@ -5120,6 +5171,7 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
             if !starts_expr(toks, k) {
                 break;
             }
+            ending_bars.push(st.bar);
             k = expr(toks, k, st, hd)?;
             endings.push(st.events.split_off(before));
             passes.push(times);
@@ -5144,7 +5196,7 @@ fn unfold(toks: &[Tok], i: usize, st: &mut St, hd: &mut HashMap<String, String>,
     // The copies counted before they are made: a repeat in a repeat in a
     // repeat stops here, its music never written out.
     let body_cost = crate::written::cost(&body, bar0);
-    let ending_costs: Vec<_> = endings.iter().map(|e| crate::written::cost(e, st.bar)).collect();
+    let ending_costs: Vec<_> = endings.iter().zip(&ending_bars).map(|(e, bar)| crate::written::cost(e, *bar)).collect();
     let copies = crate::written::unfolded(&body_cost, &ending_costs, usize::try_from(count).unwrap_or(0), |t| ending_of(t as i64));
     crate::written::spend(copies, tk.at)?;
     let mut out: Vec<Ev> = Vec::new();
@@ -5571,7 +5623,7 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
             return refuse("a count of bars is at least one", toks[i].at);
         }
         // `R1*1000000`: the bars it spans counted before anything is made of them.
-        let span = crate::written::note_weight(1, (WHOLE / st.base.max(1)).saturating_mul(count), st.bar);
+        let span = crate::written::span_weight(1, (WHOLE / st.base.max(1)).saturating_mul(count), st.bar);
         crate::written::Written { events: span, text: 0 }.within(toks[i].at)?;
         i += 2;
     }
@@ -5673,9 +5725,8 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     ev.no_autobeam = st.no_autobeam;
     ev.cue = st.cue;
     ev.look = st.look.stamp();
-    let span = crate::written::note_weight(ev.pitches.len(), ev.ticks.saturating_mul(ev.count.max(1)), st.bar);
-    let weight = if ev.full { span.max(usize::try_from(ev.count).unwrap_or(usize::MAX)) } else { span };
-    crate::written::spend_events(weight, tk.at)?;
+    // Its markings written after it are counted with its copies, and when the music is read whole.
+    crate::written::spend_events(crate::written::note_weight(&ev, st.bar), tk.at)?;
     st.events.push(ev);
     Ok(i)
 }
@@ -5833,6 +5884,7 @@ fn music_glyph(name: &str) -> Option<&'static str> {
 /// One item of markup — a word, a string, `{ … }` or a command and what it
 /// takes — onto `runs`, in `weight`.
 fn markup_item(toks: &[Tok], i: usize, weight: Weight, runs: &mut Vec<Run>, at: usize) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at) };
     match t.t {
         T::Sym('{') => {
@@ -5988,6 +6040,7 @@ fn page_cond(name: &str) -> Option<PageCond> {
 
 /// One item of a header's markup onto `parts`; the token after it.
 fn page_item(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     let Some(t) = toks.get(i) else { return refuse("a \\markup that is never finished", at_of(toks, i.saturating_sub(1))) };
     match t.t {
         T::Sym('{') => page_group(toks, i, parts, true),
@@ -6060,6 +6113,7 @@ fn page_item(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>) -> Result<usize,
 /// A `{ … }` at `i` (or the one item there): its items, a space between
 /// two when `spaced` (`\line`), none when not (`\concat`).
 fn page_group(toks: &[Tok], i: usize, parts: &mut Vec<PagePart>, spaced: bool) -> Result<usize, ScoreError> {
+    let _deeper = deeper(at_of(toks, i))?;
     if !is(toks, i, T::Sym('{')) {
         return page_item(toks, i, parts);
     }

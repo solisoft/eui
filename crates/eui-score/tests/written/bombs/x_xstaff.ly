@@ -1,0 +1,1 @@
+\new PianoStaff << \new Staff = "up" { \repeat unfold 64 { \repeat unfold 64 { c8[ \change Staff = "down" c,,8 \change Staff = "up" c8 c8] } } } \new Staff = "down" { \clef bass s1*1024 } >>

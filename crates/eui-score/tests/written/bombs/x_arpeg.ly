@@ -1,0 +1,1 @@
+{ \repeat unfold 64 { \repeat unfold 64 { <c e g>4\arpeggio\glissando } } \repeat unfold 64 { \repeat unfold 64 { <c e g>4\arpeggio\glissando } } \repeat unfold 64 { \repeat unfold 64 { <c e g>4\arpeggio\glissando } } \repeat unfold 64 { \repeat unfold 64 { <c e g>4\arpeggio\glissando } } }

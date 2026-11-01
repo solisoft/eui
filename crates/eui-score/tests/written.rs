@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eui_score::written::{Written, MAX_WRITTEN_EVENTS, MAX_WRITTEN_TEXT};
-use eui_score::{engrave, engrave_a4, midi, pdf, written_out, Layout, MidiOptions};
+use eui_score::{engrave, engrave_a4, engrave_paper, midi, pdf, pdf_outlines, written_out, Layout, MidiOptions};
 
 const NOTES: &str = "writes out to more than 20,000 notes; the engraver stops there";
 const WORDS: &str = "writes out to more than 40,000 characters of words; the engraver stops there";
@@ -89,11 +89,13 @@ fn every_bomb_from_the_reviews_is_refused_fast() {
         "withblk2.ly",
     ];
     let bombs = sources(&dir("bombs"));
-    assert!(bombs.len() >= 30, "the bombs are in tests/written/bombs");
+    assert!(bombs.len() >= 50, "the bombs are in tests/written/bombs");
     for (name, src) in &bombs {
         let (message, took) = refused(src);
         assert!(took < FAST, "{name}: {took:?} to refuse");
-        if by_budget.contains(&name.as_str()) {
+        // `x_*`: the second review's — markings stacked on notes, slurs,
+        // voices, a long short name — all past the budget.
+        if by_budget.contains(&name.as_str()) || name.starts_with("x_") {
             assert!(message.contains(NOTES) || message.contains(WORDS), "{name}: {message}");
         }
     }
@@ -210,12 +212,109 @@ fn every_entry_point_refuses_the_same() {
         engrave_a4(src).err().unwrap().message,
         midi(src, &MidiOptions::default()).err().unwrap().message,
         pdf(src, "").err().unwrap().message,
+        pdf_outlines(src, "").err().unwrap().message,
+        engrave_paper(src).err().unwrap().message,
         eui_score::warnings(src).err().unwrap().message,
         eui_score::protocol(src).err().unwrap().message,
     ];
     assert!(t.elapsed() < FAST * 2, "{:?}", t.elapsed());
     for m in &refusals {
         assert!(m.starts_with("score: this music writes out to more than 20,000 notes"), "{m}");
+    }
+}
+
+/// Every marking drawn on a note counts: a few characters each, stacked on
+/// a note in a repeat, were gigabytes of PDF.
+#[test]
+fn markings_on_notes_count_each_time_they_are_drawn() {
+    assert_eq!(accepted(r"{ c4-> d-. e\trill f\fermata }").events, 4 + 4 * 2);
+    assert_eq!(accepted(r"{ c4\ff d\p }").events, 2 + 3 + 2);
+    assert_eq!(accepted(r"{ c4\< d\! e~ e }").events, 4 + 2 + 1);
+    assert_eq!(accepted(r"{ c4( d) e\( f\) }").events, 4 + 2 * 10);
+    assert_eq!(accepted(r"{ <c e g>4\arpeggio c4:16 c4-1 c\glissando d }").events, 3 + 1 + 1 + 1 + 1 + 4);
+    // The same weight where the note is read and where its copies are counted.
+    let once = accepted(r"{ c4->\trill\ff( d) }").events;
+    assert_eq!(accepted(r"{ \repeat unfold 8 { c4->\trill\ff( d) } }").events, once * 8);
+    let trills = r"\trill".repeat(60);
+    too_many_notes(&format!("{{ \\repeat unfold 64 {{ \\repeat unfold 64 {{ c4{trills} }} }} }}"));
+    too_many_notes(&format!("{{ \\repeat unfold 64 {{ \\repeat unfold 64 {{ c4{} }} }} }}", "->".repeat(100)));
+    too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { c4\ffff d\pppp e\sfz f\fp } } }");
+    too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { c''4( c,4) c'''4\( c,,4\) } } }");
+    // Written once, without a repeat: counted when the music is read whole.
+    let plain = format!("{{ {} }}", vec![format!("c4{}", r"\trill".repeat(20)); 1000].join(" "));
+    too_many_notes(&plain);
+}
+
+/// Slurs at the budget lay out fast.
+#[test]
+fn slurred_music_at_the_budget_lays_out() {
+    let src = r"{ \repeat unfold 64 { \repeat unfold 26 { c''4( c,4) } } }";
+    assert_eq!(accepted(src).events, 19_968);
+    assert!(engrave_a4(src).is_ok());
+}
+
+/// Music nested ten thousand deep is refused before the stack runs out: a
+/// stack overflow is no refusal, it aborts the whole process.
+#[test]
+fn music_nested_too_deep_is_refused_on_a_small_stack() {
+    let n = 10_000;
+    let sources = [
+        format!("{{ {} c4 {} }}", r"\repeat unfold 1 { ".repeat(n), " }".repeat(n)),
+        format!("{{ {} c4 }}", r"\repeat unfold 1 ".repeat(n)),
+        format!("{} c4 {}", "{ ".repeat(n), "} ".repeat(n)),
+        format!("{} c4 {}", "<< ".repeat(n), ">> ".repeat(n)),
+        format!("{{ {} c4 {} }}", r"\tuplet 3/2 { ".repeat(n), "} ".repeat(n)),
+        format!("{} {{ c4 }}", r"\new Staff ".repeat(n)),
+        format!("{{ c4^\\markup {} x }}", r"\bold ".repeat(n)),
+        format!("{{ c4^\\markup {} x {} }}", r"\bold { ".repeat(n), "} ".repeat(n)),
+        format!("a = {} {{ c4 }}\n{{ \\a }}", r"\relative ".repeat(n)),
+        format!("{{ c4 }} \\addlyrics {{ {} la }}", r"\once ".repeat(n)),
+    ];
+    // A quarter of a server's 2 MB worker in a release build; a debug
+    // build's frames are some ten times larger.
+    let stack = if cfg!(debug_assertions) { 6 << 20 } else { 512 << 10 };
+    let run = std::thread::Builder::new()
+        .stack_size(stack)
+        .spawn(move || {
+            let mut out = Vec::new();
+            for src in &sources {
+                let t = Instant::now();
+                let r = written_out(src);
+                out.push((src.chars().take(60).collect::<String>(), r.err().map(|e| e.message), t.elapsed()));
+            }
+            // As deep as each goes, on the same stack: the deepest accepted
+            // is read and printed without running out of it, and a dozen
+            // deep is accepted. (before, one level, inside, its close, after)
+            let shapes = [
+                ("{ ", r"\repeat unfold 1 { ", "c4", " }", " }"),
+                ("{ ", r"\repeat unfold 1 ", "c4", "", " }"),
+                ("", "{ ", "c4", " }", ""),
+                ("", "<< ", "c4", " >>", ""),
+                ("{ c4^\\markup ", r"\bold { ", "x", " }", " }"),
+            ];
+            for (before, level, inside, close, after) in shapes {
+                let nested = |k: usize| format!("{before}{}{inside}{}{after}", level.repeat(k), close.repeat(k));
+                let mut k = 1;
+                while written_out(&nested(k)).is_ok() {
+                    k += 1;
+                }
+                let printed = pdf(&nested(k - 1), "").is_ok();
+                out.push((format!("{level}{} deep", k - 1), (k <= 12 || !printed).then(|| format!("only {}, printed: {printed}", k - 1)), Duration::ZERO));
+            }
+            out
+        })
+        .unwrap()
+        .join()
+        .expect("no stack overflow");
+    let (rest, deepest) = run.split_at(run.len() - 5);
+    for (what, short, _) in deepest {
+        assert!(short.is_none(), "{what}: {short:?}");
+    }
+    for (k, (src, refusal, took)) in rest.iter().enumerate() {
+        let refusal = refusal.as_deref().unwrap_or_else(|| panic!("accepted: {src}"));
+        assert!(took < &FAST, "{took:?}: {src}");
+        // The first four can only be refused for their depth.
+        assert!(k >= 4 || refusal.contains("nests too deep"), "{src}: {refusal}");
     }
 }
 
@@ -253,7 +352,7 @@ fn the_score_apps_largest_pieces_are_read_with_room_to_spare() {
         assert!(engrave_a4(src).is_ok(), "{name}");
         most = most.max(w.events);
     }
-    assert_eq!(most, 555, "symphony-5 is the largest");
+    assert_eq!(most, 765, "symphony-5 is the largest");
 }
 
 /// `SCORE_REPO=…/score cargo test -p eui-score --test written`: every
