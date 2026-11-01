@@ -17,8 +17,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use eui_score::draw::{last_drawn, MAX_DRAWN, MAX_DRAWN_POINTS};
 use eui_score::written::{Written, MAX_WRITTEN_EVENTS, MAX_WRITTEN_TEXT};
-use eui_score::{engrave, engrave_a4, engrave_paper, midi, pdf, pdf_outlines, written_out, Layout, MidiOptions};
+use eui_score::{engrave, engrave_a4, engrave_paper, midi, paths, pdf, pdf_outlines, written_out, Layout, MidiOptions};
 
 const NOTES: &str = "writes out to more than 20,000 notes; the engraver stops there";
 const WORDS: &str = "writes out to more than 40,000 characters of words; the engraver stops there";
@@ -96,7 +97,8 @@ fn every_bomb_from_the_reviews_is_refused_fast() {
         // `x_*`: the second review's — markings stacked on notes, slurs,
         // voices, a long short name — all past the budget.
         if by_budget.contains(&name.as_str()) || name.starts_with("x_") {
-            assert!(message.contains(NOTES) || message.contains(WORDS), "{name}: {message}");
+            let range = message.contains("beyond the keys of any instrument");
+            assert!(message.contains(NOTES) || message.contains(WORDS) || range, "{name}: {message}");
         }
     }
 }
@@ -124,9 +126,14 @@ fn bars_of_rest_count_as_the_bars_they_span() {
     // A bar of 1/64: R1 is 64 of them.
     too_many_notes(r"{ \time 1/64 R1*1500 }");
     too_many_notes(r"{ \time 1/64 \repeat unfold 64 { R1*300 } }");
-    assert_eq!(accepted(r"{ R1*4 }").events, 4);
-    assert_eq!(accepted(r"{ R1*19999 }").events, 19_999);
-    assert_eq!(accepted(r"{ \time 2/4 c1 }").events, 1 + 2);
+    // A `\time` is the score's: another staff's rests are bars of it too.
+    too_many_notes(r"<< \new Staff { \time 1/64 c64 } \new Staff { R1*300 } >>");
+    too_many_notes(r"<< \new Staff { \time 1/64 c64 } \new Staff { s1*300 } >>");
+    // Each count below has the clef its one system opens with: + 1.
+    assert_eq!(accepted(r"{ R1*4 }").events, 4 + 1);
+    // Each staff opens each system, a system every four bars: 3,999 + 1.
+    assert_eq!(accepted(r"{ R1*15999 }").events, 15_999 + 4_000);
+    assert_eq!(accepted(r"{ \time 2/4 c1 }").events, 1 + 2 + 1);
 }
 
 #[test]
@@ -141,7 +148,7 @@ fn variables_count_at_each_use() {
     let b = format!("b = {{ {} }}\n", ["\\a"; 16].join(" "));
     let c = format!("c = {{ {} }}\n", ["\\b"; 16].join(" "));
     let d = format!("d = {{ {} }}\n", ["\\c"; 16].join(" "));
-    assert_eq!(accepted(&format!("{a}{b}{c}{d}{{ \\d }}\n")).events, 16_384);
+    assert_eq!(accepted(&format!("{a}{b}{c}{d}{{ \\d }}\n")).events, 16_384 + 1_024);
     // Used on staves side by side, a staff each time.
     let m = "m = { \\repeat unfold 64 { \\repeat unfold 64 { c'4 } } }\n";
     too_many_notes(&format!("{m}<< {} >>\n", ["\\new Staff \\m"; 5].join(" ")));
@@ -149,16 +156,16 @@ fn variables_count_at_each_use() {
 
 #[test]
 fn chords_count_their_heads_and_q_the_chord_it_repeats() {
-    assert_eq!(accepted(r"{ <c e g>4 q q }").events, 9);
+    assert_eq!(accepted(r"{ <c e g>4 q q }").events, 9 + 1);
     let chord = "<c d e f g a b c' d' e' f' g' a' b'>4";
     too_many_notes(&format!("{{ \\repeat unfold 64 {{ \\repeat unfold 32 {{ {chord} q }} }} }}"));
 }
 
 #[test]
 fn grace_notes_lyrics_and_tuplets_count() {
-    assert_eq!(accepted(r"{ \grace { c16 d } e4 }").events, 3);
-    assert_eq!(accepted(r"{ \tuplet 3/2 { c8 d e } }").events, 3);
-    assert_eq!(accepted("{ c'4 d' e' f' } \\addlyrics { la la la la }").events, 4 + 4);
+    assert_eq!(accepted(r"{ \grace { c16 d } e4 }").events, 3 + 1);
+    assert_eq!(accepted(r"{ \tuplet 3/2 { c8 d e } }").events, 3 + 1);
+    assert_eq!(accepted("{ c'4 d' e' f' } \\addlyrics { la la la la }").events, 4 + 4 + 1);
     too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { \grace { c16 d e f } g4 } } }");
 }
 
@@ -168,7 +175,8 @@ fn staves_are_as_long_as_the_longest() {
     let staves = ["\\new Staff { c'4 }"; 60].join(" ");
     too_many_notes(&format!("<< \\new Staff {{ s1*500 }} {staves} >>"));
     let w = accepted(r"<< \new Staff { s1*100 } \new Staff { c'4 } >>");
-    assert_eq!(w.events, 200);
+    // Two staves of 100 bars, each opening 25 systems.
+    assert_eq!(w.events, 2 * (100 + 25));
 }
 
 #[test]
@@ -187,7 +195,7 @@ fn words_count_each_time_they_are_drawn() {
         assert!(took < FAST, "{took:?}");
     }
     let w = accepted(r#"{ c'4^"Allegro" d'4_\markup { "dolce" } }"#);
-    assert_eq!(w, Written { events: 2, text: 12 });
+    assert_eq!(w, Written { events: 2 + 1, text: 12 });
     // A string in a variable used in a variable used in a variable: the
     // tokens' copies stop before they are made.
     let mut src = format!("a = \"{}\"\n", "x".repeat(1000));
@@ -227,14 +235,14 @@ fn every_entry_point_refuses_the_same() {
 /// a note in a repeat, were gigabytes of PDF.
 #[test]
 fn markings_on_notes_count_each_time_they_are_drawn() {
-    assert_eq!(accepted(r"{ c4-> d-. e\trill f\fermata }").events, 4 + 4 * 2);
-    assert_eq!(accepted(r"{ c4\ff d\p }").events, 2 + 3 + 2);
-    assert_eq!(accepted(r"{ c4\< d\! e~ e }").events, 4 + 2 + 1);
-    assert_eq!(accepted(r"{ c4( d) e\( f\) }").events, 4 + 2 * 10);
-    assert_eq!(accepted(r"{ <c e g>4\arpeggio c4:16 c4-1 c\glissando d }").events, 3 + 1 + 1 + 1 + 1 + 4);
+    assert_eq!(accepted(r"{ c4-> d-. e\trill f\fermata }").events, 4 + 4 * 2 + 1);
+    assert_eq!(accepted(r"{ c4\ff d\p }").events, 2 + 3 + 2 + 1);
+    assert_eq!(accepted(r"{ c4\< d\! e~ e }").events, 4 + 2 + 1 + 1);
+    assert_eq!(accepted(r"{ c4( d) e\( f\) }").events, 4 + 2 * 10 + 1);
+    assert_eq!(accepted(r"{ <c e g>4\arpeggio c4:16 c4-1 c\glissando d }").events, 3 + 1 + 1 + 1 + 1 + 4 + 1);
     // The same weight where the note is read and where its copies are counted.
     let once = accepted(r"{ c4->\trill\ff( d) }").events;
-    assert_eq!(accepted(r"{ \repeat unfold 8 { c4->\trill\ff( d) } }").events, once * 8);
+    assert_eq!(accepted(r"{ \repeat unfold 8 { c4->\trill\ff( d) } }").events, (once - 1) * 8 + 1);
     let trills = r"\trill".repeat(60);
     too_many_notes(&format!("{{ \\repeat unfold 64 {{ \\repeat unfold 64 {{ c4{trills} }} }} }}"));
     too_many_notes(&format!("{{ \\repeat unfold 64 {{ \\repeat unfold 64 {{ c4{} }} }} }}", "->".repeat(100)));
@@ -248,8 +256,9 @@ fn markings_on_notes_count_each_time_they_are_drawn() {
 /// Slurs at the budget lay out fast.
 #[test]
 fn slurred_music_at_the_budget_lays_out() {
-    let src = r"{ \repeat unfold 64 { \repeat unfold 26 { c''4( c,4) } } }";
-    assert_eq!(accepted(src).events, 19_968);
+    let src = r"{ \repeat unfold 64 { \repeat unfold 25 { c''4( c,4) } } }";
+    // 1,600 slurs on 3,200 notes, 800 bars, 200 systems.
+    assert_eq!(accepted(src).events, 3_200 + 1_600 * 10 + 200);
     assert!(engrave_a4(src).is_ok());
 }
 
@@ -318,15 +327,16 @@ fn music_nested_too_deep_is_refused_on_a_small_stack() {
     }
 }
 
-/// Up to the budget, the music is engraved: 19,968 notes.
+/// Up to the budget, the music is engraved: 18,816 notes.
 #[test]
 fn music_just_under_the_budget_is_engraved() {
-    let src = r"{ \repeat unfold 64 { \repeat unfold 64 { c4 d e f } } \repeat unfold 56 { \repeat unfold 16 { c4 d e f } } }";
+    let src = r"{ \repeat unfold 64 { \repeat unfold 64 { c4 d e f } } \repeat unfold 38 { \repeat unfold 16 { c4 d e f } } }";
     let w = accepted(src);
-    assert_eq!(w.events, 19_968);
+    // 18,816 notes, 4,704 bars, 1,176 systems.
+    assert_eq!(w.events, 18_816 + 1_176);
     assert!(w.events <= MAX_WRITTEN_EVENTS);
     assert!(engrave_a4(src).is_ok());
-    too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { c4 d e f } } \repeat unfold 57 { \repeat unfold 16 { c4 d e f } } }");
+    too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { c4 d e f } } \repeat unfold 39 { \repeat unfold 16 { c4 d e f } } }");
 }
 
 /// The pieces, each written out to a tenth of the budget at most.
@@ -350,9 +360,15 @@ fn the_score_apps_largest_pieces_are_read_with_room_to_spare() {
             assert!(w.text * 10 <= MAX_WRITTEN_TEXT, "{name}: {w:?}");
         }
         assert!(engrave_a4(src).is_ok(), "{name}");
+        // Its PDF a small part of what any drawing may hold.
+        assert!(pdf(src, "").is_ok(), "{name}");
+        let drawn = last_drawn();
+        // The reviews' long markup is 9,000 letters of outline at once.
+        let room = if name.starts_with("long-") { 3 } else { 50 };
+        assert!(drawn.shapes * room <= MAX_DRAWN && drawn.points * room <= MAX_DRAWN_POINTS, "{name}: {drawn:?}");
         most = most.max(w.events);
     }
-    assert_eq!(most, 765, "symphony-5 is the largest");
+    assert_eq!(most, 1131, "symphony-5 is the largest");
 }
 
 /// `SCORE_REPO=…/score cargo test -p eui-score --test written`: every
@@ -380,4 +396,105 @@ fn every_piece_of_the_score_app_when_its_checkout_is_named() {
     for (name, src) in &all {
         roomy(name, src);
     }
+}
+
+/// Notes past any instrument's keys are refused: a hundred commas were a
+/// hundred ledger lines a head, `\transpose` up thirty octaves the same.
+#[test]
+fn notes_beyond_any_instruments_keys_are_refused() {
+    for src in [
+        format!("{{ c{}4 }}", ",".repeat(100)),
+        format!("{{ c{}4 }}", "'".repeat(30)),
+        format!("\\transpose c c{} {{ c4 }}", "'".repeat(30)),
+        format!("{{ <c e g{}>4 }}", "'".repeat(10)),
+        format!("\\relative c'' {{ {} }}", "c''".repeat(10)),
+    ] {
+        let (message, took) = refused(&src);
+        assert!(message.contains("beyond the keys of any instrument"), "{src}: {message}");
+        assert!(took < FAST);
+    }
+    // C-1 and G9, the ends of the keyboard MIDI has, are read.
+    accepted(r"{ c,,,,4 g4 }");
+}
+
+/// A key change counts the sharps or flats it draws and the naturals it
+/// cancels.
+#[test]
+fn key_changes_count_what_they_draw() {
+    too_many_notes(r"{ \repeat unfold 64 { \repeat unfold 64 { \key cis \major c4 \key ces \major c4 } } }");
+    let one = accepted(r"{ c4 }").events;
+    assert_eq!(accepted(r"{ \key cis \major c4 }").events, one + 1 + 7 + 7 + 7);
+}
+
+/// Scheme's parentheses nest within the music's depth: two thousand of them
+/// were a stack overflow on a 512 KB thread.
+#[test]
+fn scheme_nested_too_deep_is_refused_on_a_small_stack() {
+    let sources = sources(&dir("bombs")).into_iter().filter(|(n, _)| n.starts_with("y_sch")).map(|(_, s)| s).chain([
+        format!("{{ \\override NoteHead.color = #{}1{} c4 }}", "(".repeat(10_000), ")".repeat(10_000)),
+        format!("{{ \\tweak color #{}1{} c4 }}", "(".repeat(2_000), ")".repeat(2_000)),
+        // Under the parentheses' own limit, inside music already deep.
+        format!("{}\\override NoteHead.color = #{}1{} c4{}", "{ ".repeat(20), "(".repeat(60), ")".repeat(60), " }".repeat(20)),
+    ]);
+    let sources: Vec<String> = sources.collect();
+    assert!(sources.len() >= 4);
+    let stack = if cfg!(debug_assertions) { 6 << 20 } else { 512 << 10 };
+    let out = std::thread::Builder::new()
+        .stack_size(stack)
+        .spawn(move || {
+            sources
+                .iter()
+                .map(|s| {
+                    let t = Instant::now();
+                    (written_out(s).is_err(), t.elapsed())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+        .join()
+        .expect("no stack overflow");
+    let (last, rest) = out.split_last().unwrap();
+    for (refused, took) in rest {
+        assert!(refused);
+        assert!(*took < FAST, "{took:?}");
+    }
+    // Read or refused, but read: no overflow.
+    let _ = last;
+}
+
+/// The backstop: what the weights miss, the drawing counts. A note an
+/// octave clef sends twenty-seven ledger lines away is one note to the
+/// reading, and forty shapes to draw.
+#[test]
+fn a_drawing_past_its_shapes_or_points_is_refused() {
+    let ledgers = fs::read_to_string(dir("draws_ledgers.ly").with_extension("ly")).unwrap();
+    let w = accepted(&ledgers);
+    assert!(w.events < MAX_WRITTEN_EVENTS);
+    let t = Instant::now();
+    let e = pdf(&ledgers, "").expect_err("refused by the drawing");
+    assert!(e.message.contains("draws more than 400,000 shapes; the engraver stops there"), "{}", e.message);
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    // Dynamics on every note and words on every other, at both budgets: the
+    // outlines' points.
+    let outlines = fs::read_to_string(dir("draws_outlines.ly")).unwrap();
+    let w = accepted(&outlines);
+    assert!(w.events <= MAX_WRITTEN_EVENTS && w.text <= MAX_WRITTEN_TEXT);
+    let e = pdf(&outlines, "").expect_err("refused by the drawing");
+    assert!(e.message.contains("draws more than 6,000,000 points of outline"), "{}", e.message);
+    // A page on a screen is a drawing of its own: one page of the ledgers draws.
+    let eng = engrave_a4(&ledgers).unwrap();
+    assert!(paths(&eng, 8.0, 0).is_ok());
+}
+
+/// The quotes' music has its own budget, and its refusal says so.
+#[test]
+fn a_quote_past_its_budget_says_so() {
+    let src = r#"\addQuote "q" { \repeat unfold 64 { \repeat unfold 64 { c'4 c' c' c' c' } } }
+{ c4 }"#;
+    let (message, _) = refused(src);
+    assert!(message.contains("the \\addQuote music writes out to more than 20,000 notes"), "{message}");
+    // Under it, a quote is not drawn and not counted where it is written.
+    let src = r#"\addQuote "q" { \repeat unfold 64 { \repeat unfold 64 { c'4 } } }
+{ c4 }"#;
+    assert_eq!(accepted(src).events, 2);
 }

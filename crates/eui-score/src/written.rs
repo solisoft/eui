@@ -103,7 +103,7 @@ impl Written {
 }
 
 /// `20000` as `20,000`.
-fn grouped(n: usize) -> String {
+pub(crate) fn grouped(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (k, c) in digits.chars().enumerate() {
@@ -131,11 +131,18 @@ pub(crate) fn reset() {
 
 /// `read` run on the quotes' account instead of the music's: an
 /// `\addQuote`'s music is not drawn where it is written.
-pub(crate) fn quoting<T>(read: impl FnOnce() -> T) -> T {
+/// Past the quotes' budget, the refusal says a quote is what wrote it out.
+pub(crate) fn quoting<T>(read: impl FnOnce() -> Result<T, ScoreError>) -> Result<T, ScoreError> {
     let music = SPENT.with(|s| s.replace(QUOTED.with(Cell::get)));
     let out = read();
-    QUOTED.with(|q| q.set(SPENT.with(|s| s.replace(music))));
-    out
+    let quoted = SPENT.with(|s| s.replace(music));
+    QUOTED.with(|q| q.set(quoted));
+    out.map_err(|mut e| {
+        if quoted.within(0).is_err() {
+            e.message = e.message.replacen("score: this music", "score: the \\addQuote music", 1);
+        }
+        e
+    })
 }
 
 /// `w` more written out, the source's character `at` writing it; the
@@ -221,6 +228,12 @@ pub(crate) fn note_weight(ev: &Ev, bar: i64) -> usize {
     span.saturating_add(markings(ev))
 }
 
+/// What a `\key` counts where it changes: its sharps or flats, and the
+/// naturals cancelling the key before it — seven at most, counted as seven.
+pub(crate) fn key_weight(fifths: i64) -> usize {
+    1 + usize::try_from(fifths.unsigned_abs()).unwrap_or(7).min(7) + 7
+}
+
 /// The characters of a string.
 pub(crate) fn chars(s: &str) -> usize {
     s.chars().count()
@@ -231,6 +244,7 @@ pub(crate) fn chars(s: &str) -> usize {
 fn event(ev: &Ev, bar: i64) -> Written {
     let events = match ev.k {
         Kind::Note | Kind::Rest => note_weight(ev, bar),
+        Kind::Key => key_weight(ev.fifths),
         _ => 1,
     };
     let mut text = 0usize;
@@ -279,15 +293,15 @@ pub(crate) fn unfolded(body: &Written, endings: &[Written], count: usize, ending
     all.minus(once)
 }
 
-/// How many bars a staff's music lasts: its voices side by side, each
-/// `\time` the bars after it.
-fn bars(evs: &[Ev]) -> usize {
-    let mut bar = WHOLE;
-    let mut pos = 0.0f64;
-    let mut stack: Vec<(f64, f64)> = Vec::new();
+/// How long a staff's music lasts in ticks, its voices side by side, and
+/// where its `\time`s change the bars: (tick, a bar's ticks from there).
+fn timeline(evs: &[Ev]) -> (i64, Vec<(i64, i64)>) {
+    let mut pos = 0i64;
+    let mut changes = Vec::new();
+    let mut stack: Vec<(i64, i64)> = Vec::new();
     for ev in evs {
         match ev.k {
-            Kind::Time if ev.v != SHOWN => bar = bar_ticks(ev.time.0, ev.time.1),
+            Kind::Time if ev.v != SHOWN => changes.push((pos, bar_ticks(ev.time.0, ev.time.1))),
             Kind::Voices => stack.push((pos, pos)),
             Kind::VoiceNext => {
                 if let Some(top) = stack.last_mut() {
@@ -300,25 +314,42 @@ fn bars(evs: &[Ev]) -> usize {
                     pos = pos.max(end);
                 }
             }
-            Kind::Note | Kind::Rest if ev.grace.is_none() => {
-                #[allow(clippy::cast_precision_loss)]
-                let part = ev.ticks.saturating_mul(ev.count.max(1)) as f64 / bar as f64;
-                pos += part;
-            }
+            Kind::Note | Kind::Rest if ev.grace.is_none() => pos = pos.saturating_add(ev.ticks.saturating_mul(ev.count.max(1))),
             _ => {}
         }
     }
-    let end = stack.iter().fold(pos, |a, s| a.max(s.1));
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let n = end.ceil().min(1e15) as usize;
-    n
+    (stack.iter().fold(pos, |a, s| a.max(s.1)), changes)
+}
+
+/// How many bars the score lasts: its longest staff, in the metre any staff
+/// sets — a `\time` is the whole score's, `\time 1/64` on one staff cuts
+/// the other's `R1*300` into 19,200 bars.
+fn score_bars(p: &Parsed) -> usize {
+    let lines: Vec<(i64, Vec<(i64, i64)>)> = p.staves.iter().map(|s| timeline(&s.events)).collect();
+    let end = lines.iter().map(|l| l.0).max().unwrap_or(0);
+    let mut changes: Vec<(i64, i64)> = lines.into_iter().flat_map(|l| l.1).collect();
+    // At one tick, the shortest bar any staff sets.
+    changes.sort_unstable();
+    changes.dedup_by_key(|c| c.0);
+    let (mut bars, mut at, mut bar) = (0i64, 0i64, WHOLE);
+    for (tick, next) in changes.into_iter().filter(|c| c.0 < end) {
+        bars = bars.saturating_add(ceil_div((tick - at).max(0), bar));
+        (at, bar) = (tick, next.max(1));
+    }
+    bars = bars.saturating_add(ceil_div((end - at).max(0), bar));
+    usize::try_from(bars).unwrap_or(usize::MAX)
+}
+
+/// `a / b` rounded up, for ticks (`b` > 0).
+fn ceil_div(a: i64, b: i64) -> i64 {
+    a / b + i64::from(a % b != 0)
 }
 
 /// What the parsed source writes out, as layout gets it: each staff's
 /// events and words, as long as the longest staff (a staff is drawn across
 /// every bar of the score), its lyrics, the headers.
 pub(crate) fn finished(p: &Parsed) -> Written {
-    let longest = p.staves.iter().map(|s| bars(&s.events)).max().unwrap_or(0);
+    let longest = score_bars(p);
     let mut w = Written::default();
     for s in &p.staves {
         let mut own = cost(&s.events, WHOLE);
@@ -329,6 +360,10 @@ pub(crate) fn finished(p: &Parsed) -> Written {
         // The name before the first system, and the short one before each
         // system after it: a system for every four bars, about.
         let systems = longest.div_ceil(4).max(1);
+        // Each system opens with the staff's clef and key again (its
+        // metre only once): the most sharps or flats the staff has.
+        let fifths = s.events.iter().filter(|e| e.k == Kind::Key).map(|e| usize::try_from(e.fifths.unsigned_abs()).unwrap_or(7).min(7)).max().unwrap_or(0);
+        own.events = own.events.saturating_add(systems.saturating_mul(1 + fifths));
         own.text = own.text.saturating_add(s.props.instrument_name.as_deref().map_or(0, chars));
         own.text = own.text.saturating_add(s.props.short_instrument_name.as_deref().map_or(0, chars).saturating_mul(systems));
         w = w.plus(own);

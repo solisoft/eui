@@ -301,7 +301,7 @@ pub fn engrave_a4(src: &str) -> Result<Engraved, ScoreError> {
 pub fn paths(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, Ranges), ScoreError> {
     guarded(|| {
         let mut ranges = Vec::new();
-        let paths = draw::page_paths(eng, sp, page, &mut ranges);
+        let paths = draw::drawing(|| draw::page_paths(eng, sp, page, &mut ranges))?;
         Ok((paths, ranges))
     })
 }
@@ -312,7 +312,7 @@ pub fn paths_heads(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, R
     guarded(|| {
         let mut ranges = Vec::new();
         let mut heads = Vec::new();
-        let paths = draw::page_paths_heads(eng, sp, page, &mut ranges, Some(&mut heads));
+        let paths = draw::drawing(|| draw::page_paths_heads(eng, sp, page, &mut ranges, Some(&mut heads)))?;
         Ok((paths, ranges, heads))
     })
 }
@@ -328,14 +328,14 @@ pub fn paths_words(eng: &Engraved, sp: f64, page: usize) -> Result<(Vec<Path>, R
     guarded(|| {
         let mut ranges = Vec::new();
         let mut heads = Vec::new();
-        let (paths, words, grids) = draw::page_paths_words(eng, sp, page, &mut ranges, &mut heads);
+        let (paths, words, grids) = draw::drawing(|| draw::page_paths_words(eng, sp, page, &mut ranges, &mut heads))?;
         Ok((paths, ranges, heads, words, grids))
     })
 }
 
 /// Page `page` as bands, one canvas each, `total` px tall in all.
 pub fn bands(eng: &Engraved, sp: f64, page: usize, total: i64) -> Result<Vec<Band>, ScoreError> {
-    guarded(|| Ok(draw::bands(eng, sp, page, total)))
+    guarded(|| draw::drawing(|| draw::bands(eng, sp, page, total)))
 }
 
 /// The source as a Standard MIDI File.
@@ -405,6 +405,6 @@ fn pdf_with(src: &str, title: &str, text: bool) -> Result<String, ScoreError> {
         let parsed = parse::parse(src)?;
         let (eng, paper, spec) = fit_pages(&parsed)?;
         let title = parsed.header.get("title").map_or(title, String::as_str);
-        Ok(pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &spec, text }))
+        draw::drawing(|| pdf::pdf(&eng, title, &paper, &pdf::Pages { header: &parsed.header, spec: &spec, text }))
     })
 }

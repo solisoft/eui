@@ -210,6 +210,15 @@ release. A wire change lands here first, is released, and then the pin moves.
   inside one another a thousand times — is refused ("the music nests too
   deep") before it runs the thread out of stack, which aborted the whole
   process where no refusal could be given.
+- A Scheme value's parentheses nest 64 deep at most, a key change counts
+  the sharps, flats and naturals it draws, each system its clef and key
+  again, a `\time` is the whole score's for every staff's bars, and a note
+  past the keys of any instrument (C-1 to G9) is refused — its ledger
+  lines ran off the page. Behind the budgets, every drawing (a page's
+  paths, a PDF) holds 400,000 shapes and 6,000,000 points of outline at
+  most, counted as they are drawn: past them nothing more is made and the
+  drawing is refused, "this music draws more than 400,000 shapes; the
+  engraver stops there". `draw::last_drawn()` says what the last held.
 
 ## [0.11.0] - 2026-10-18
 

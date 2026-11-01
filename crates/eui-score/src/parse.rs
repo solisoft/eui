@@ -54,14 +54,16 @@ const MAX_TOKENS: usize = 400_000;
 const MAX_TOKEN_TEXT: usize = 4_000_000;
 
 /// How deep music may nest — blocks, `<< >>`, repeats, tuplets, contexts,
-/// commands around music, a variable's value, a markup — counted where the
-/// reading goes one level down (a `{ }` is two, `\repeat unfold 2 { }`
-/// three). Each level is frames of the stack, and a source nested a
-/// thousand deep ran the thread out of it: an abort no `catch_unwind`
-/// catches, the server's whole process with it. At the limit — twenty
-/// repeats in one another, thirty braces, thirty markups — the reading and
-/// the printing take under 256 KB of stack in a release build. Music as it
-/// is written nests a dozen levels at most.
+/// commands around music, a variable's value, a markup, a Scheme value's
+/// parentheses — counted where the reading goes one level down (a `{ }`
+/// is two, `\repeat unfold 2 { }` three). Each level is frames of the
+/// stack, and a source nested a thousand deep ran the thread out of it: an
+/// abort no `catch_unwind` catches, the server's whole process with it.
+/// Measured at the limit in a release build, each of twenty repeats in one
+/// another, thirty braces, thirty `<<`, thirty markups and sixty-four
+/// parentheses reads and prints on a 256 KB stack; `tests/written.rs`
+/// holds every such shape on a 512 KB one. Music as it is written nests a
+/// dozen levels at most.
 const MAX_DEPTH: usize = 64;
 
 thread_local! {
@@ -1959,6 +1961,10 @@ fn balanced(toks: &[Tok], i: usize, open: char, close: char) -> Result<usize, Sc
     while j < toks.len() {
         if toks[j].t == T::Sym(open) {
             depth += 1;
+            // What a block holds is read again, level by level.
+            if depth > MAX_DEPTH {
+                return refuse(format!("'{open}' inside '{open}' more than {MAX_DEPTH} deep: the engraver stops there"), toks[j].at);
+            }
         } else if toks[j].t == T::Sym(close) {
             depth -= 1;
             if depth == 0 {
@@ -5642,6 +5648,12 @@ fn note(toks: &[Tok], mut i: usize, st: &mut St) -> Result<usize, ScoreError> {
     if rest.as_deref() == Some("s") && count > 1 {
         ticks = ticks.saturating_mul(count);
         count = 1;
+    }
+    // Past MIDI's keys, C-1 to G9, a note is no note an instrument plays,
+    // and its ledger lines run off the page: a hundred commas were a
+    // hundred ledger lines a head.
+    if pitches.iter().any(|p| !(0..=127).contains(&crate::midi::key_of(p.d, p.alter))) {
+        return refuse("a note beyond the keys of any instrument (C-1 to G9) is not drawn", tk.at);
     }
     let scripts = drum_scripts.iter().map(|n| Script { name: (*n).to_owned(), dir: -1 }).collect();
     let mut ev = Ev {

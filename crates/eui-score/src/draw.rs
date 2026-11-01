@@ -47,6 +47,72 @@ pub type WordRanges = Vec<(usize, &'static str, usize, Range<usize>)>;
 /// the fret of the first row (score #436).
 pub type FretGrids = Vec<(usize, usize, [f64; 6])>;
 
+/// The most shapes one drawing may hold — a page's paths, a PDF's every
+/// page — whatever the music: the backstop behind the reading's budget
+/// (`written`), for what a weight missed. Calibrated in `tests/written.rs`.
+pub const MAX_DRAWN: usize = 400_000;
+
+/// The most coordinates those shapes may hold: what a PDF's size follows
+/// (a trill's outline is a hundred, a staff line's rectangle four).
+pub const MAX_DRAWN_POINTS: usize = 6_000_000;
+
+/// What a drawing holds so far: its shapes and their coordinates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Drawn {
+    /// Paths.
+    pub shapes: usize,
+    /// Their coordinates.
+    pub points: usize,
+}
+
+thread_local! {
+    /// The drawing being made under [`drawing`]: what it holds, and whether
+    /// it has gone past the backstop (none outside one).
+    static DRAWN: Cell<Option<(Drawn, bool)>> = const { Cell::new(None) };
+    /// What the last drawing held.
+    static LAST: Cell<Drawn> = const { Cell::new(Drawn { shapes: 0, points: 0 }) };
+}
+
+/// `draw` run as one drawing, held to [`MAX_DRAWN`] and
+/// [`MAX_DRAWN_POINTS`]: past them nothing more is kept — each shape is
+/// counted as it is drawn, and the ones after the limit are not made — and
+/// the drawing is refused.
+pub(crate) fn drawing<T>(draw: impl FnOnce() -> T) -> Result<T, crate::ScoreError> {
+    let outer = DRAWN.with(|d| d.replace(Some((Drawn::default(), false))));
+    let out = draw();
+    let (held, over) = DRAWN.with(|d| d.replace(outer)).unwrap_or_default();
+    LAST.with(|l| l.set(held));
+    if over {
+        let what = if held.shapes > MAX_DRAWN { format!("{} shapes", crate::written::grouped(MAX_DRAWN)) } else { format!("{} points of outline", crate::written::grouped(MAX_DRAWN_POINTS)) };
+        return crate::parse::refuse(format!("this music draws more than {what}; the engraver stops there"), 0);
+    }
+    Ok(out)
+}
+
+/// What the last drawing held: for a host's measurements and the tests.
+pub fn last_drawn() -> Drawn {
+    LAST.with(Cell::get)
+}
+
+/// The drawing has gone past the backstop: nothing more is made for it.
+fn full() -> bool {
+    DRAWN.with(|d| d.get().is_some_and(|(_, over)| over))
+}
+
+/// One shape of `points` coordinates more, if the drawing still has room.
+fn room_for(points: usize) -> bool {
+    DRAWN.with(|d| match d.get() {
+        None => true,
+        Some((_, true)) => false,
+        Some((held, false)) => {
+            let now = Drawn { shapes: held.shapes + 1, points: held.points.saturating_add(points) };
+            let over = now.shapes > MAX_DRAWN || now.points > MAX_DRAWN_POINTS;
+            d.set(Some((now, over)));
+            !over
+        }
+    })
+}
+
 thread_local! {
     /// While `paths_words` draws: the words' ranges, as they are drawn.
     static WORDS: RefCell<Option<WordRanges>> = const { RefCell::new(None) };
@@ -222,7 +288,13 @@ struct Pen<'a> {
 
 impl Pen<'_> {
     fn push(&mut self, p: Path) {
-        self.paths.push(p);
+        let points = match &p {
+            Path::Rect(_) => 4,
+            Path::Fill(cmds) => cmds.len(),
+        };
+        if room_for(points) {
+            self.paths.push(p);
+        }
     }
 
     /// A point of the drawing in the page's pixels, as the staff's scale puts it.
@@ -234,6 +306,9 @@ impl Pen<'_> {
     }
 
     fn rect(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        if full() {
+            return;
+        }
         let sp = self.sp;
         let (x, y, w, h) = match &self.scale {
             Some(sc) => {
@@ -246,6 +321,9 @@ impl Pen<'_> {
     }
 
     fn fill(&mut self, cmds: &[f64], ox: f64, oy: f64) {
+        if full() {
+            return;
+        }
         let sp = self.sp;
         match &self.scale {
             Some(sc) => {
@@ -273,6 +351,9 @@ impl Pen<'_> {
     /// An outline at `k` times its size, its origin at `(x, y)`: a glyph, a
     /// letter.
     fn outline(&mut self, cmds: &[f64], x: f64, y: f64, k: f64) {
+        if full() {
+            return;
+        }
         let sp = self.sp;
         let (x, y, k) = match &self.scale {
             Some(sc) => (sc.x(x), sc.y(y), k * sc.s),

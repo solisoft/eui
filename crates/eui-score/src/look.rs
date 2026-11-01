@@ -341,6 +341,9 @@ fn number(toks: &[Tok], mut i: usize, end: usize) -> Option<(f64, usize)> {
 
 /// A datum from `i`, inside a Scheme expression; and the token after it.
 fn datum(toks: &[Tok], mut i: usize, end: usize) -> Option<(Sx, usize)> {
+    // A `(` in a `(` a thousand deep would run the stack out: none past the
+    // music's own depth, and none dropped deeper either.
+    let _deeper = crate::parse::deeper(toks.get(i).map_or(0, |t| t.at)).ok()?;
     while i < end && toks[i].t == T::Sym('\'') {
         i += 1;
     }
